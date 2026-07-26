@@ -79,7 +79,7 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
         panic!("expected module root");
     };
     let ExpandedNode::Control {
-        spec: ControlSpec::Crossfader,
+        spec: ControlSpec::Crossfader { ticks: false },
         read: Some(Binding::Parameter { .. }),
         write: Some(Binding::Parameter { .. }),
         ..
@@ -87,6 +87,61 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
     else {
         panic!("expected compiled crossfader");
     };
+}
+
+#[kithara::test]
+fn meter_reads_a_scalar_and_refuses_any_other_kind() {
+    let module = |endpoint| {
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "bar",
+                root: Meter(id: "load", read: Telemetry(id: "{endpoint}")))"#
+        )
+    };
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "bar.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "bar",
+            root: Module(instance: "bar", source: "bar.kmodule.ron"))"#,
+    );
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "engine.load",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+
+    resolver.insert("bar.kmodule.ron", &module("engine.load"));
+    let ui = compile(
+        "bar.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    assert!(matches!(
+        &**root,
+        ExpandedNode::Control {
+            spec: ControlSpec::Meter,
+            read: Some(Binding::Telemetry { .. }),
+            ..
+        }
+    ));
+
+    resolver.insert("bar.kmodule.ron", &module("deck.playback.playing"));
+    let error = compile(
+        "bar.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, UiDocError::BindingType { .. }));
 }
 
 #[kithara::test]

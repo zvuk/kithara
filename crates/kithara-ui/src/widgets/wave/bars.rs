@@ -1,4 +1,4 @@
-use iced::{Point, Rectangle, Size, widget::canvas::Frame};
+use iced::{Color, Point, Rectangle, Size, widget::canvas::Frame};
 
 use crate::{
     render::{WaveBucket, theme::RenderPalette},
@@ -8,6 +8,25 @@ use crate::{
 /// Column pitch: one bar plus the gap after it.
 pub(crate) fn step(metrics: WaveSkin) -> f32 {
     metrics.bar_width + metrics.bar_gap
+}
+
+/// Dim everything left of the playhead. `played_x` is the playhead in canvas
+/// pixels, so callers own the norm-to-pixel mapping their window implies.
+pub(crate) fn draw_played(
+    frame: &mut Frame,
+    bounds: Rectangle,
+    played_x: f32,
+    alpha: f32,
+    palette: RenderPalette,
+) {
+    frame.fill_rectangle(
+        Point::ORIGIN,
+        Size::new(played_x.clamp(0.0, bounds.width), bounds.height),
+        Color {
+            a: alpha,
+            ..palette.bg_deep
+        },
+    );
 }
 
 /// One column of the waveform: the three bands share a width and nest by

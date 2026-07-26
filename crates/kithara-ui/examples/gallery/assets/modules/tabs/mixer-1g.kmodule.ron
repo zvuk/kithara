@@ -42,9 +42,9 @@
                             Column(
                                 id: "a-level",
                                 gap: Some(7.0),
-                                size: (w: Fixed(32.0), h: Fixed(258.0)),
+                                size: (w: Shrink, h: Fixed(258.0)),
                                 children: [
-                                    VuVertical(id: "a-fader", read: Telemetry(id: "mixer.channel.a.levels"), write: Parameter(id: "mixer.channel.a.fader"), size: (w: Fixed(18.0), h: Fixed(160.0))),
+                                    VuVertical(id: "a-fader", ticks: true, read: Telemetry(id: "mixer.channel.a.levels"), write: Parameter(id: "mixer.channel.a.fader"), size: (w: Fixed(38.0), h: Fixed(160.0))),
                                     Text(id: "a-deck", style: DeckLetter, label: "A", size: (w: Fixed(28.0), h: Fixed(24.0))),
                                     Button(id: "a-cue", label: "", icon: Some(Headphones), read: Model(id: "mixer.channel.a.cue"), write: Command(id: "mixer.channel.a.toggle_cue"), size: (w: Fixed(28.0), h: Fixed(30.0))),
                                 ],
@@ -82,9 +82,9 @@
                             Column(
                                 id: "b-level",
                                 gap: Some(7.0),
-                                size: (w: Fixed(32.0), h: Fixed(258.0)),
+                                size: (w: Shrink, h: Fixed(258.0)),
                                 children: [
-                                    VuVertical(id: "b-fader", read: Telemetry(id: "mixer.channel.b.levels"), write: Parameter(id: "mixer.channel.b.fader"), size: (w: Fixed(18.0), h: Fixed(160.0))),
+                                    VuVertical(id: "b-fader", ticks: true, read: Telemetry(id: "mixer.channel.b.levels"), write: Parameter(id: "mixer.channel.b.fader"), size: (w: Fixed(38.0), h: Fixed(160.0))),
                                     Text(id: "b-deck", style: DeckLetter, label: "B", size: (w: Fixed(28.0), h: Fixed(24.0))),
                                     Button(id: "b-cue", label: "", icon: Some(Headphones), read: Model(id: "mixer.channel.b.cue"), write: Command(id: "mixer.channel.b.toggle_cue"), size: (w: Fixed(28.0), h: Fixed(30.0))),
                                 ],
@@ -94,7 +94,7 @@
                 ],
             ),
             Slot(id: "xfade-spacer", size: (w: Fill, h: Fill)),
-            Crossfader(id: "xfade", read: Parameter(id: "mixer.xfade"), write: Parameter(id: "mixer.xfade"), size: (w: Fill, h: Fixed(38.0))),
+            Crossfader(id: "xfade", ticks: true, read: Parameter(id: "mixer.xfade"), write: Parameter(id: "mixer.xfade"), size: (w: Fill, h: Fixed(64.0))),
         ],
     ),
 )

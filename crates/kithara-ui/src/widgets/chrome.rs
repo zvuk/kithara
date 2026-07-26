@@ -349,6 +349,31 @@ fn panel_style(background: Color) -> ContainerStyle {
     ContainerStyle::default().background(Background::Color(background))
 }
 
+/// Border overlay for a container: hairlines on the requested sides.
+pub(crate) fn frame_overlay<'a, Message>(
+    content: Element<'a, Message>,
+    sides: FrameSides,
+    size: (Length, Length),
+    skin: &Skin,
+) -> Element<'a, Message>
+where
+    Message: 'a,
+{
+    let (width, height) = size;
+    let frame = Canvas::new(FrameChrome {
+        sides,
+        frame_color: skin.color(skin.divider.color),
+        frame_width: skin.divider.width,
+    })
+    .width(Length::Fill)
+    .height(Length::Fill);
+    let body = container(content).width(width).height(height);
+    Stack::with_children([body.into(), frame.into()])
+        .width(width)
+        .height(height)
+        .into()
+}
+
 struct FrameChrome {
     sides: FrameSides,
     frame_color: Color,

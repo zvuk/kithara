@@ -53,6 +53,23 @@ reads the visible track fraction; wheel interaction emits `SetScalar` at `<wave-
 horizontal drag emits `SetScalar` at the wave path for the host-owned playback position. The
 renderer keeps neither value and derives the centered zoom window from each read snapshot.
 
+The hero wave dims the track left of the playhead with `SkinDoc.wave.played_alpha` mapped through
+its zoom window; the bars style dims the full track with `SkinDoc.wave.overview_played_alpha`. The
+micro style carries no playhead dimming.
+
+## Text Tone Ownership
+
+`Text` renders the content its `read` binding or `label` supplies; the separate optional `active`
+binding is a Bool the host owns. `TextStyle::DeckLetter` reads it to switch to
+`SkinDoc.text.deck_letter_active`, marking the focused deck.
+
+## Meter Ownership
+
+`Meter` reads one Scalar and draws it as a horizontal fill; it accepts no write, so the value
+stays host-owned. `SkinDoc.meter` owns the track size, hairline frame, track colour and fill
+colour. The fill is inset by the frame width on every side, so a full bar stops at the frame's
+inner edge instead of covering it.
+
 ## Visualizer Ownership
 
 `Vis` reads the host-owned preset as a Scalar and emits `SelectIndex` for preset changes. Its
@@ -100,6 +117,13 @@ Controls take their size from the wrapper, not from themselves: a widget fills w
 `size::control_size` or the document gives it. A widget that pins its own height would ignore the
 document and break the row it sits in.
 
+`Dim::Shrink` is the one rule the document layer cannot compose: the toolkit measures the content,
+so `Bounds` treats it as an open axis and `Dim::from(Bounds)` never produces it. A shrunk node
+therefore has to carry `Shrink` down to its own children — `render::tree::content_size` passes it
+to the container, its frame overlay and its fill, because the first `Fill` inside a shrunk box
+claims the whole row. Text measures its glyphs and takes alignment from that wrapper; a readout
+that draws its own framed cell keeps filling the box the document gave it.
+
 `validate::value_kinds` is the single owner of control read/write endpoint kinds. Intrinsic sizes
 are selected exhaustively from `ControlSpec` and the supplied `SkinDoc` by
 `size::control_size`; this remains available in non-render and wasm builds. Renderers match
@@ -122,6 +146,15 @@ Collapse state remains host-owned. A Full module reads `Bool` from
 and Frame or Plain modules ignore that endpoint.
 
 ## Window Chrome Ownership
+
+`WindowDrag`, `TitleBar` and `WindowControls` paint no surface of their own and
+take their size from the row that holds them, so the same controls sit in a 26px
+gallery header and in the studio's 42px bar; the document declares the
+background. `WindowDrag` is the bare drag surface a bar without a title needs;
+`TitleBar` is the same surface with a label. Both emit on press, not on release
+— a window drag only takes effect while the button is still held. Their glyphs
+are canvas strokes drawn to the skin's icon size, which reads a little heavier
+than the design's font glyphs at the same nominal size.
 
 `TitleBar` and `WindowControls` are portable, binding-free controls. They emit typed
 `UiEvent::Window(WindowCommand)` values; the host that owns the native window ID executes drag,

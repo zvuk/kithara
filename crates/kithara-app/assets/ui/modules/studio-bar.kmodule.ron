@@ -3,18 +3,48 @@
     version: 1,
     id: "studio-bar",
     root: Row(
-        gap: 10.0,
-        pad: 7.0,
+        gap: 0.0,
+        pad: 0.0,
         children: [
             Brand(id: "brand"),
-            Segmented(
-                id: "decks",
-                size: (w: Fixed(56.0), h: Fixed(22.0)),
-                items: ["1", "2"],
-                read: Parameter(id: "ui.layout.decks"),
-                write: Parameter(id: "ui.layout.decks"),
+            Divider(id: "after-brand"),
+            Row(
+                id: "layout",
+                gap: 0.0,
+                pad: 12.0,
+                size: (w: Fixed(80.0), h: Fill),
+                children: [
+                    Segmented(
+                        id: "decks",
+                        size: (w: Fill, h: Fixed(26.0)),
+                        items: ["1", "2"],
+                        read: Parameter(id: "ui.layout.decks"),
+                        write: Parameter(id: "ui.layout.decks"),
+                    ),
+                ],
             ),
-            Spacer(id: "spacer"),
+            Divider(id: "after-layout"),
+            WindowDrag(id: "drag"),
+            Divider(id: "before-cpu"),
+            Row(
+                id: "cpu",
+                gap: 6.0,
+                pad: 11.0,
+                size: (w: Shrink, h: Fill),
+                children: [
+                    Text(id: "cpu-label", style: MicroLabel, label: "CPU"),
+                    Meter(id: "cpu-bar", read: Telemetry(id: "engine.load")),
+                    Scalar(
+                        id: "cpu-value",
+                        size: (w: Shrink, h: Fill),
+                        format: Percent,
+                        framed: false,
+                        read: Telemetry(id: "engine.load"),
+                    ),
+                ],
+            ),
+            Divider(id: "before-window"),
+            WindowControls(id: "window", style: Standard),
         ],
     ),
 )

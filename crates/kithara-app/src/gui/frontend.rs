@@ -28,12 +28,14 @@ mod consts {
 }
 use consts::*;
 
-/// Settings for the studio window. Close goes through `close_requests()`,
+/// Settings for the studio window. The bar draws the window chrome itself, so
+/// the system decorations stay off; close goes through `close_requests()`,
 /// whose handler exits the app.
 pub(crate) fn window_settings() -> Settings {
     Settings {
         size: Size::new(STUDIO_WIDTH, STUDIO_HEIGHT),
         min_size: Some(Size::new(STUDIO_MIN_WIDTH, STUDIO_MIN_HEIGHT)),
+        decorations: false,
         exit_on_close_request: false,
         ..Settings::default()
     }

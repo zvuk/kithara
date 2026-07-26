@@ -110,9 +110,9 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
             overlay,
             overlay_palette: OverlayPalette::new(self.skin),
             palette: self.skin.palette,
+            style: self.style,
             waveform,
             progress,
-            show_beats,
             wave_revision,
             zoom,
         })
@@ -132,9 +132,9 @@ struct MiniWaveCanvas {
     overlay: Option<OverlayData>,
     overlay_palette: OverlayPalette,
     palette: RenderPalette,
+    style: WaveStyle,
     waveform: Option<WaveformData>,
     progress: f32,
-    show_beats: bool,
     wave_revision: Option<u64>,
     zoom: f32,
 }
@@ -256,7 +256,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
         );
 
         let mut layers = vec![wave];
-        if !self.show_beats {
+        if !self.hero() {
             let mut frame = Frame::new(renderer, bounds.size());
             let head_x = self.progress.clamp(0.0, 1.0) * bounds.width;
             frame.stroke(
@@ -267,7 +267,8 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
             );
             layers.push(frame.into_geometry());
         }
-        if let Some(overlay) = self.overlay.as_ref().filter(|_| !cursor.is_over(bounds)) {
+        let header = overlay_strip(bounds, self.metrics.overlay);
+        if let Some(overlay) = self.overlay.as_ref().filter(|_| !cursor.is_over(header)) {
             let mut frame = Frame::new(renderer, bounds.size());
             draw_overlay(
                 &mut frame,
@@ -308,7 +309,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
         if !self.has_waveform() {
             return None;
         }
-        if self.show_beats {
+        if self.hero() {
             match event {
                 Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
                     if state.modifiers.shift() && cursor.is_over(bounds) =>
@@ -329,7 +330,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
                 _ => {}
             }
         }
-        if self.show_beats
+        if self.hero()
             && let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event
             && cursor.is_over(bounds)
         {
@@ -341,6 +342,10 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
 }
 
 impl MiniWaveCanvas {
+    const fn hero(&self) -> bool {
+        matches!(self.style, WaveStyle::Hero)
+    }
+
     fn has_waveform(&self) -> bool {
         self.waveform
             .as_ref()
@@ -350,10 +355,19 @@ impl MiniWaveCanvas {
     fn draw_wave(&self, frame: &mut Frame, bounds: Rectangle) {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.background);
         if let Some(waveform) = &self.waveform {
-            if self.show_beats {
+            if self.hero() {
                 self.draw_zoom_wave(frame, bounds, waveform);
             } else {
                 draw_bars(frame, bounds, &waveform.buckets, self.metrics, self.palette);
+                if self.style == WaveStyle::Default {
+                    bars::draw_played(
+                        frame,
+                        bounds,
+                        self.progress.clamp(0.0, 1.0) * bounds.width,
+                        self.metrics.overview_played_alpha,
+                        self.palette,
+                    );
+                }
             }
         }
         draw_border(frame, bounds, self.metrics.frame, self.border_color);

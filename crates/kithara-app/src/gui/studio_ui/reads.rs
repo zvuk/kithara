@@ -1,4 +1,4 @@
-use kithara_ui::render::{ReadValue, Reads, TrackRow, WaveformView};
+use kithara_ui::render::{ReadValue, Reads, StereoLevels, TrackRow, WaveformView};
 use num_traits::cast::AsPrimitive;
 
 use super::{
@@ -70,6 +70,7 @@ impl<'a> StudioReads<'a> {
                 cues: &[],
             }),
             "deck.playback.playing" => ReadValue::Bool(ui.playing),
+            "deck.focused" => ReadValue::Bool(deck.id == self.state.decks.focus()),
             "deck.playback.position_secs" => ReadValue::Scalar(head.max(0.0)),
             "deck.playback.duration_secs" => ReadValue::Scalar(duration),
             "deck.playback.remaining_secs" => ReadValue::Scalar((duration - head).max(0.0)),
@@ -95,6 +96,10 @@ impl<'a> StudioReads<'a> {
             "mixer.trim" => {
                 ReadValue::Scalar(f64::from(self.state.session.mix().strips.get(index)?.trim))
             }
+            "mixer.volume" => ReadValue::Stereo(StereoLevels {
+                volume: self.state.session.mix().strips.get(index)?.trim,
+                ..StereoLevels::default()
+            }),
             "mixer.muted" => ReadValue::Bool(self.state.session.mix().strips.get(index)?.muted),
             _ => return None,
         };
@@ -107,6 +112,7 @@ impl<'a> StudioReads<'a> {
             "mix.crossfader" => ReadValue::Scalar(f64::from(mix.position)),
             "mix.group_master" => ReadValue::Scalar(f64::from(mix.group_master)),
             "ui.layout.decks" => ReadValue::Scalar(self.state.studio.cache.layout.index().as_()),
+            "engine.load" => ReadValue::Scalar(self.state.session.engine_load().as_()),
             _ => return None,
         };
         Some(value)

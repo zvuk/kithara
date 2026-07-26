@@ -128,6 +128,16 @@ impl DeckSet {
         &self.decks
     }
 
+    /// Heaviest per-deck engine load in the session, as a fraction of realtime
+    /// (`0.05` = one deck spending 5% of realtime producing audio).
+    #[must_use]
+    pub fn engine_load(&self) -> f32 {
+        self.decks
+            .iter()
+            .map(|deck| deck.player.engine_load().load())
+            .fold(0.0, f32::max)
+    }
+
     #[must_use]
     pub fn deck(&self, id: DeckId) -> Option<&Deck> {
         self.decks.iter().find(|deck| deck.id == id)

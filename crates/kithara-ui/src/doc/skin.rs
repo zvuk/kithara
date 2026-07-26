@@ -5,6 +5,7 @@ use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
     ids::{DocId, SourceUri},
+    layout::FrameSides,
     module::WindowControlsStyle,
     size::SizeSpec,
 };
@@ -43,6 +44,8 @@ pub struct SkinDoc {
     pub wave: WaveSkin,
     pub deck: DeckSkin,
     pub global_bar: GlobalBarSkin,
+    pub divider: DividerSkin,
+    pub meter: MeterSkin,
     pub telemetry: TelemetrySkin,
     pub tree: TreeSkin,
     pub track_list: TrackListSkin,
@@ -236,7 +239,6 @@ pub struct ChromeSkin {
 pub struct WindowSkin {
     pub titlebar_height: f32,
     pub titlebar_padding_x: f32,
-    pub titlebar_background: ColorRole,
     pub titlebar_text: TextRoleSkin,
     pub icon_color: ColorRole,
     pub icon_hover_color: ColorRole,
@@ -363,15 +365,34 @@ pub struct KnobSkin {
 #[non_exhaustive]
 pub struct CrossfaderSkin {
     pub size: SizeSpec,
+    pub padding_x: f32,
+    pub padding_top: f32,
+    pub padding_bottom: f32,
     pub rail_height: f32,
     pub rail_frame: FrameSkin,
     pub rail_background: ColorRole,
     pub thumb_width: f32,
     pub thumb_height: f32,
     pub thumb_color: ColorRole,
+    pub thumb_notch_width: f32,
+    pub thumb_notch_height: f32,
+    pub thumb_notch_color: ColorRole,
+    pub tick_count: usize,
+    pub tick_width: f32,
+    pub tick_height: f32,
+    pub tick_center_height: f32,
+    pub tick_gap: f32,
+    pub tick_inset_x: f32,
+    pub tick_color: ColorRole,
+    pub tick_center_color: ColorRole,
     pub label_text: FontSkin,
     pub label_color: ColorRole,
     pub label_gap: f32,
+    pub letter_text: FontSkin,
+    pub letter_color: ColorRole,
+    pub arrow_size: f32,
+    pub arrow_color: ColorRole,
+    pub arrow_gap: f32,
     pub left_label: String,
     pub center_label: String,
     pub right_label: String,
@@ -398,11 +419,22 @@ pub struct VuStereoSkin {
 #[non_exhaustive]
 pub struct VuVerticalSkin {
     pub size: SizeSpec,
+    pub fader_width: f32,
     pub segment_gap: f32,
     pub segment_height: f32,
     pub segment_inset_x: f32,
+    pub tick_count: usize,
+    pub tick_gap: f32,
+    pub tick_height: f32,
+    pub tick_width: f32,
+    pub tick_center_width: f32,
+    pub tick_inset_y: f32,
+    pub tick_color: ColorRole,
+    pub tick_center_color: ColorRole,
     pub thumb_height: f32,
     pub thumb_color: ColorRole,
+    pub thumb_notch_offset: f32,
+    pub thumb_notch_color: ColorRole,
     pub warning_threshold: f32,
     pub danger_threshold: f32,
 }
@@ -484,6 +516,9 @@ pub struct ButtonSkin {
     pub size: SizeSpec,
     pub frame: FrameSkin,
     pub primary_frame: FrameSkin,
+    /// A transport cell draws no border of its own; these sides say where the
+    /// seam between neighbouring cells goes.
+    pub transport_sides: FrameSides,
     pub padding_x: f32,
     pub padding_y: f32,
     pub text: FontSkin,
@@ -531,6 +566,8 @@ pub struct TextSkin {
     pub size: SizeSpec,
     pub brand: TextRoleSkin,
     pub deck_letter: TextRoleSkin,
+    /// Tone the deck letter takes while its `Text.active` binding reads true.
+    pub deck_letter_active: ColorRole,
     pub track_title: TextRoleSkin,
     pub body: TextRoleSkin,
     pub telemetry: TextRoleSkin,
@@ -658,6 +695,8 @@ pub struct WaveSkin {
     pub loop_bound_width: f32,
     pub loop_fill_alpha: f32,
     pub played_alpha: f32,
+    /// Overview strips dim harder than the hero wave.
+    pub overview_played_alpha: f32,
     pub playhead_marker_height: f32,
     pub playhead_marker_width: f32,
     pub playhead_width: f32,
@@ -755,6 +794,27 @@ pub struct GlobalBarSkin {
     pub selector_padding_y: f32,
     pub brand_width: f32,
     pub selector_width: f32,
+}
+
+/// Horizontal fill bar reporting one scalar, as the design's CPU cell draws it:
+/// an inset track with a hairline frame, filled from the left.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct MeterSkin {
+    pub size: SizeSpec,
+    pub frame: FrameSkin,
+    pub background: ColorRole,
+    pub fill: ColorRole,
+}
+
+/// Hairline between adjacent cells or control sections.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct DividerSkin {
+    pub width: f32,
+    pub color: ColorRole,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

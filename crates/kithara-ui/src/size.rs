@@ -6,23 +6,27 @@ use crate::{
     skin::{SkinDoc, WindowControlSkin},
 };
 
-/// One-axis size rule. `Fill` takes available space and has no intrinsic size.
+/// One-axis size rule. `Fill` takes available space, `Shrink` takes exactly what
+/// the content measures; neither has an intrinsic size the document can compose.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub enum Dim {
     Fixed(f32),
     Range { min: f32, max: Option<f32> },
     Fill,
+    Shrink,
 }
 
 impl Dim {
-    /// Returns the lower bound in logical pixels, or zero for [`Dim::Fill`].
+    /// Returns the lower bound in logical pixels, or zero when the toolkit
+    /// decides the axis ([`Dim::Fill`], [`Dim::Shrink`]).
     #[must_use]
     pub fn min(self) -> f32 {
         Bounds::from(self).min
     }
 
-    /// Returns the upper bound, or `None` for an open range or [`Dim::Fill`].
+    /// Returns the upper bound, or `None` for an open range and for the axes
+    /// the toolkit decides ([`Dim::Fill`], [`Dim::Shrink`]).
     #[must_use]
     pub fn max(self) -> Option<f32> {
         Bounds::from(self).max
@@ -84,7 +88,7 @@ impl From<Dim> for Bounds {
                 max: Some(value),
             },
             Dim::Range { min, max } => Self { min, max },
-            Dim::Fill => Self {
+            Dim::Fill | Dim::Shrink => Self {
                 min: 0.0,
                 max: None,
             },
@@ -134,11 +138,10 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::DeckSummary { .. } => skin.deck.summary_size,
         ControlSpec::Brand => skin.global_bar.brand_size,
         ControlSpec::Spacer => skin.global_bar.spacer_size,
+        ControlSpec::Divider => SizeSpec::new(Dim::Fixed(skin.divider.width), Dim::Fill),
         ControlSpec::PresetSelector => skin.global_bar.preset_size,
         ControlSpec::SettingsButton => skin.global_bar.settings_size,
-        ControlSpec::TitleBar { .. } => {
-            SizeSpec::new(Dim::Fill, Dim::Fixed(skin.window.titlebar_height))
-        }
+        ControlSpec::WindowDrag | ControlSpec::TitleBar { .. } => SizeSpec::FILL,
         ControlSpec::WindowControls { style } => match skin.window.controls(*style) {
             WindowControlSkin::Buttons {
                 minus_icon_size,
@@ -154,10 +157,10 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
                         + gap * 2.0
                         + padding * 2.0,
                 ),
-                Dim::Fixed(skin.window.titlebar_height),
+                Dim::Fill,
             ),
             WindowControlSkin::Close { cell_size, .. } => {
-                SizeSpec::new(Dim::Fixed(cell_size), Dim::Fixed(cell_size))
+                SizeSpec::new(Dim::Fixed(cell_size), Dim::Fill)
             }
         },
         ControlSpec::Text { style, .. } => match style {
@@ -187,7 +190,7 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::Bpm { .. } => skin.deck.bpm_size,
         ControlSpec::Time => skin.deck.time_size,
         ControlSpec::Scalar { .. } => skin.telemetry.size,
-        ControlSpec::Crossfader => skin.crossfader.size,
+        ControlSpec::Crossfader { .. } => skin.crossfader.size,
         ControlSpec::Fader { .. } => skin.fader.size,
         ControlSpec::Wave { .. } => skin.wave.size,
         ControlSpec::Vis => skin.vis.size,
@@ -207,7 +210,8 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::Chip { .. } => skin.chip.size,
         ControlSpec::Knob { .. } => skin.knob.size,
         ControlSpec::VuStereo => skin.vu_stereo.size,
-        ControlSpec::VuVertical => skin.vu_vertical.size,
+        ControlSpec::Meter => skin.meter.size,
+        ControlSpec::VuVertical { .. } => skin.vu_vertical.size,
     }
 }
 
@@ -226,22 +230,30 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
 
     match node {
         ExpandedNode::Row {
-            children, gap, pad, ..
+            children,
+            gap,
+            pad,
+            pad_x,
+            pad_y,
+            ..
         } => inset(
             combine_horizontal(children.iter().map(|child| compute_size(child, skin))),
             gap_total(*gap, children.len(), skin.layout.size_gap),
             0.0,
-            *pad,
-            skin.layout.size_pad,
+            Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
         ),
         ExpandedNode::Column {
-            children, gap, pad, ..
+            children,
+            gap,
+            pad,
+            pad_x,
+            pad_y,
+            ..
         } => inset(
             combine_vertical(children.iter().map(|child| compute_size(child, skin))),
             0.0,
             gap_total(*gap, children.len(), skin.layout.size_gap),
-            *pad,
-            skin.layout.size_pad,
+            Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
         ),
         ExpandedNode::Slot { children, .. } if children.is_empty() => SizeSpec::FILL,
         ExpandedNode::Slot { children, .. } => {
@@ -265,15 +277,29 @@ fn gap_total(gap: Option<f32>, child_count: usize, default: f32) -> f32 {
     gap.unwrap_or(default) * f32::from(gaps)
 }
 
-fn inset(
-    size: SizeSpec,
-    extra_w: f32,
-    extra_h: f32,
-    pad: Option<f32>,
-    default_pad: f32,
-) -> SizeSpec {
-    let pad = pad.unwrap_or(default_pad) * 2.0;
-    SizeSpec::new(grow(size.w, extra_w + pad), grow(size.h, extra_h + pad))
+/// Padding a container adds on each axis, mirroring what the renderer applies:
+/// the per-axis override wins over `pad`, which wins over the skin default.
+#[derive(Clone, Copy)]
+struct Pad {
+    x: f32,
+    y: f32,
+}
+
+impl Pad {
+    fn new(pad: Option<f32>, pad_x: Option<f32>, pad_y: Option<f32>, default: f32) -> Self {
+        let base = pad.unwrap_or(default);
+        Self {
+            x: pad_x.unwrap_or(base),
+            y: pad_y.unwrap_or(base),
+        }
+    }
+}
+
+fn inset(size: SizeSpec, extra_w: f32, extra_h: f32, pad: Pad) -> SizeSpec {
+    SizeSpec::new(
+        grow(size.w, extra_w + pad.x * 2.0),
+        grow(size.h, extra_h + pad.y * 2.0),
+    )
 }
 
 fn grow(dim: Dim, delta: f32) -> Dim {
@@ -286,7 +312,7 @@ fn grow(dim: Dim, delta: f32) -> Dim {
             min: min + delta,
             max: max.map(|max| max + delta),
         },
-        Dim::Fill => Dim::Fill,
+        Dim::Fill | Dim::Shrink => dim,
     }
 }
 
@@ -316,6 +342,36 @@ mod tests {
 
     fn fixed(w: f32, h: f32) -> SizeSpec {
         SizeSpec::new(Dim::Fixed(w), Dim::Fixed(h))
+    }
+
+    fn row(children: Vec<ExpandedNode>, size: Option<SizeSpec>, gap: Option<f32>) -> ExpandedNode {
+        ExpandedNode::Row {
+            id: None,
+            size,
+            gap,
+            pad: None,
+            pad_x: None,
+            pad_y: None,
+            frame: None,
+            background: None,
+            background_alpha: None,
+            children,
+        }
+    }
+
+    fn column(children: Vec<ExpandedNode>, gap: Option<f32>) -> ExpandedNode {
+        ExpandedNode::Column {
+            id: None,
+            size: None,
+            gap,
+            pad: None,
+            pad_x: None,
+            pad_y: None,
+            frame: None,
+            background: None,
+            background_alpha: None,
+            children,
+        }
     }
 
     #[kithara::test]
@@ -348,12 +404,92 @@ mod tests {
         assert_eq!(Dim::Fill.max(), None);
     }
 
+    /// A shrunk axis is measured by the toolkit, so the document layer can only
+    /// say that it composes like an open range.
+    #[kithara::test]
+    fn shrink_has_no_intrinsic_bounds() {
+        assert_eq!(Dim::Shrink.min(), 0.0);
+        assert_eq!(Dim::Shrink.max(), None);
+    }
+
+    /// The declared size wins outright: a node that names its own rule is not
+    /// re-derived from its children.
+    #[kithara::test]
+    fn a_declared_size_skips_composition() {
+        let mut interner = Interner::new(1024);
+        let node = row(
+            vec![control(&mut interner, "child", fixed(10.0, 10.0))],
+            Some(SizeSpec::new(Dim::Shrink, Dim::Fixed(30.0))),
+            Some(0.0),
+        );
+
+        assert_eq!(
+            compute_size(&node, builtin::skin_doc()),
+            SizeSpec::new(Dim::Shrink, Dim::Fixed(30.0))
+        );
+    }
+
+    /// Per-axis padding must reach the composed size, or the document declares
+    /// one box and the renderer draws another.
+    #[kithara::test]
+    fn each_axis_grows_by_its_own_padding() {
+        let mut interner = Interner::new(1024);
+        let ExpandedNode::Row { children, .. } = row(
+            vec![control(&mut interner, "child", fixed(10.0, 4.0))],
+            None,
+            Some(0.0),
+        ) else {
+            panic!("expected a row");
+        };
+        let node = ExpandedNode::Row {
+            id: None,
+            size: None,
+            gap: Some(0.0),
+            pad: None,
+            pad_x: Some(11.0),
+            pad_y: Some(3.0),
+            frame: None,
+            background: None,
+            background_alpha: None,
+            children,
+        };
+
+        let size = compute_size(&node, builtin::skin_doc());
+
+        assert_eq!(size.w.min(), 32.0);
+        assert_eq!(size.h.min(), 10.0);
+    }
+
+    /// A child measured by the toolkit leaves the row's width open — the
+    /// document layer cannot add up what it does not know.
+    #[kithara::test]
+    fn shrink_child_opens_row_width() {
+        let mut interner = Interner::new(1024);
+        let node = row(
+            vec![
+                control(&mut interner, "fixed", fixed(10.0, 10.0)),
+                control(
+                    &mut interner,
+                    "shrink",
+                    SizeSpec::new(Dim::Shrink, Dim::Fixed(10.0)),
+                ),
+            ],
+            None,
+            Some(0.0),
+        );
+
+        let size = compute_size(&node, builtin::skin_doc());
+
+        assert_eq!(size.w.min(), 10.0);
+        assert_eq!(size.w.max(), None);
+    }
+
     #[kithara::test]
     fn crossfader_uses_skin_intrinsic_size() {
         let skin = builtin::skin_doc();
 
         assert_eq!(
-            control_size(&ControlSpec::Crossfader, skin),
+            control_size(&ControlSpec::Crossfader { ticks: true }, skin),
             skin.crossfader.size
         );
     }
@@ -361,16 +497,14 @@ mod tests {
     #[kithara::test]
     fn row_sums_width_and_maximizes_height() {
         let mut interner = Interner::new(1024);
-        let node = ExpandedNode::Row {
-            id: None,
-            children: vec![
+        let node = row(
+            vec![
                 control(&mut interner, "left", fixed(10.0, 4.0)),
                 control(&mut interner, "right", fixed(6.0, 8.0)),
             ],
-            size: None,
-            gap: Some(0.0),
-            pad: None,
-        };
+            None,
+            Some(0.0),
+        );
 
         let size = compute_size(&node, builtin::skin_doc());
 
@@ -381,16 +515,13 @@ mod tests {
     #[kithara::test]
     fn column_maximizes_width_and_sums_height() {
         let mut interner = Interner::new(1024);
-        let node = ExpandedNode::Column {
-            id: None,
-            children: vec![
+        let node = column(
+            vec![
                 control(&mut interner, "top", fixed(10.0, 4.0)),
                 control(&mut interner, "bottom", fixed(6.0, 8.0)),
             ],
-            size: None,
-            gap: Some(0.0),
-            pad: None,
-        };
+            Some(0.0),
+        );
 
         let size = compute_size(&node, builtin::skin_doc());
 
@@ -401,16 +532,14 @@ mod tests {
     #[kithara::test]
     fn skin_supplies_unspecified_gap_and_padding() {
         let mut interner = Interner::new(1024);
-        let node = ExpandedNode::Row {
-            id: None,
-            children: vec![
+        let node = row(
+            vec![
                 control(&mut interner, "left", fixed(10.0, 4.0)),
                 control(&mut interner, "right", fixed(6.0, 8.0)),
             ],
-            size: None,
-            gap: None,
-            pad: None,
-        };
+            None,
+            None,
+        );
         let mut skin = builtin::skin_doc().clone();
         skin.layout.size_gap = 3.0;
         skin.layout.size_pad = 2.0;
@@ -425,13 +554,11 @@ mod tests {
     fn node_override_wins_over_composed_size() {
         let mut interner = Interner::new(1024);
         let override_size = fixed(100.0, 50.0);
-        let node = ExpandedNode::Row {
-            id: None,
-            children: vec![control(&mut interner, "child", fixed(10.0, 10.0))],
-            size: Some(override_size),
-            gap: None,
-            pad: None,
-        };
+        let node = row(
+            vec![control(&mut interner, "child", fixed(10.0, 10.0))],
+            Some(override_size),
+            None,
+        );
 
         assert_eq!(compute_size(&node, builtin::skin_doc()), override_size);
     }
@@ -439,9 +566,8 @@ mod tests {
     #[kithara::test]
     fn fill_child_opens_row_width() {
         let mut interner = Interner::new(1024);
-        let node = ExpandedNode::Row {
-            id: None,
-            children: vec![
+        let node = row(
+            vec![
                 control(&mut interner, "fixed", fixed(10.0, 10.0)),
                 control(
                     &mut interner,
@@ -449,10 +575,9 @@ mod tests {
                     SizeSpec::new(Dim::Fill, Dim::Fixed(10.0)),
                 ),
             ],
-            size: None,
-            gap: Some(0.0),
-            pad: None,
-        };
+            None,
+            Some(0.0),
+        );
 
         let size = compute_size(&node, builtin::skin_doc());
 

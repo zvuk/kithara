@@ -119,6 +119,22 @@ impl<'a> Widget<'a> for Spacer<'_> {
 }
 
 #[derive(bon::Builder)]
+pub(crate) struct Divider<'skin> {
+    skin: &'skin Skin,
+}
+
+impl<'a> Widget<'a> for Divider<'_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        let color = self.skin.color(self.skin.divider.color);
+        container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_| ContainerStyle::default().background(Background::Color(color)))
+            .into()
+    }
+}
+
+#[derive(bon::Builder)]
 pub(crate) struct SettingsButton<'skin> {
     skin: &'skin Skin,
 }

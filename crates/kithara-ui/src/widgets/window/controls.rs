@@ -1,11 +1,10 @@
 use iced::{
-    Background, Border, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
+    Border, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
     widget::{
         Canvas, Row, Stack, button,
         button::Style as ButtonStyle,
         canvas::{self, Frame, Geometry, Path, Stroke},
         container,
-        container::Style as ContainerStyle,
     },
 };
 
@@ -31,45 +30,39 @@ impl<'a> Widget<'a> for WindowControls<'_> {
                 close_icon_size,
                 gap,
                 padding,
-            } => {
-                let background = self.skin.color(self.skin.window.titlebar_background);
-                container(
-                    Row::with_children([
-                        control_button(
-                            Glyph::Minus,
-                            minus_icon_size,
-                            minus_icon_size,
-                            self.skin.window.titlebar_height,
-                            None,
-                            WindowCommand::Minimize,
-                            self.skin,
-                        ),
-                        control_button(
-                            Glyph::Square,
-                            maximize_icon_size,
-                            maximize_icon_size,
-                            self.skin.window.titlebar_height,
-                            None,
-                            WindowCommand::ToggleMaximize,
-                            self.skin,
-                        ),
-                        control_button(
-                            Glyph::Close,
-                            close_icon_size,
-                            close_icon_size,
-                            self.skin.window.titlebar_height,
-                            None,
-                            WindowCommand::Close,
-                            self.skin,
-                        ),
-                    ])
-                    .spacing(gap)
-                    .padding([0.0, padding])
-                    .height(Length::Fixed(self.skin.window.titlebar_height)),
-                )
-                .style(move |_| ContainerStyle::default().background(Background::Color(background)))
-                .into()
-            }
+            } => container(
+                Row::with_children([
+                    control_button(
+                        Glyph::Minus,
+                        minus_icon_size,
+                        minus_icon_size,
+                        None,
+                        WindowCommand::Minimize,
+                        self.skin,
+                    ),
+                    control_button(
+                        Glyph::Square,
+                        maximize_icon_size,
+                        maximize_icon_size,
+                        None,
+                        WindowCommand::ToggleMaximize,
+                        self.skin,
+                    ),
+                    control_button(
+                        Glyph::Close,
+                        close_icon_size,
+                        close_icon_size,
+                        None,
+                        WindowCommand::Close,
+                        self.skin,
+                    ),
+                ])
+                .spacing(gap)
+                .padding([0.0, padding])
+                .height(Length::Fill),
+            )
+            .height(Length::Fill)
+            .into(),
             WindowControlSkin::Close {
                 cell_size,
                 icon_size,
@@ -84,12 +77,10 @@ fn control_button<'a>(
     glyph: Glyph,
     icon_size: f32,
     width: f32,
-    height: f32,
     frame: Option<FrameSkin>,
     command: WindowCommand,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
-    let background = skin.color(skin.window.titlebar_background);
     let border = frame.map_or_else(Border::default, |frame| skin.border(frame));
     button(
         Canvas::new(WindowGlyph {
@@ -104,9 +95,8 @@ fn control_button<'a>(
     )
     .padding(0.0)
     .width(Length::Fixed(width))
-    .height(Length::Fixed(height))
+    .height(Length::Fill)
     .style(move |_theme: &Theme, _status| ButtonStyle {
-        background: Some(Background::Color(background)),
         border,
         ..ButtonStyle::default()
     })
@@ -124,7 +114,6 @@ fn close_button<'a>(
     let button = control_button(
         Glyph::Close,
         icon_size,
-        cell_size,
         cell_size,
         frame,
         WindowCommand::Close,

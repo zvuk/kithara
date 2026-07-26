@@ -1,6 +1,6 @@
 use iced::{
-    Alignment, Background, Element, Length,
-    alignment::Vertical,
+    Alignment, Background, Color, Element, Length, Padding,
+    alignment::{Horizontal, Vertical},
     widget::{Column, Row, Space, container, container::Style as ContainerStyle},
 };
 use num_traits::cast::AsPrimitive;
@@ -9,7 +9,7 @@ use crate::{
     atoms::{
         chip::Chip,
         design::{
-            cell::Cell, crossfader::Crossfader, segmented::Segmented, select::Select,
+            cell::Cell, crossfader::Crossfader, meter::Meter, segmented::Segmented, select::Select,
             status_dot::StatusDot, swatch::Swatch,
         },
         knob::Knob,
@@ -21,9 +21,10 @@ use crate::{
     compile::{CompiledNode, CompiledUi},
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
-    layout::Axis,
+    layout::{Axis, FrameSides},
     module::{
-        ChromeStyle, DeckSummaryStyle, GlyphStyle, IconName, Tone, TrackColumn, WindowControlsStyle,
+        ButtonStyle, ChipStyle, ChromeStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName,
+        TextAlign, TextStyle, Tone, TrackColumn, WindowControlsStyle,
     },
     render::{Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent},
     size::{Dim, SizeSpec, control_size},
@@ -33,7 +34,8 @@ use crate::{
         button::ControlButton,
         deck::{Bpm, DeckSummary, Time},
         fader::Fader,
-        global_bar::{Brand, PresetSelector, SettingsButton, Spacer},
+        frame_overlay,
+        global_bar::{Brand, Divider, PresetSelector, SettingsButton, Spacer},
         mini_wave::MiniWave,
         nav::{ContextBar, Glyph, NavItem, TabLarge, Tree},
         telemetry::Telemetry,
@@ -41,7 +43,7 @@ use crate::{
         track_list::TrackList,
         vis::Vis,
         wave::zoom_math::DEFAULT_ZOOM,
-        window::{TitleBar, WindowControls},
+        window::{TitleBar, WindowControls, WindowDrag},
     },
 };
 
@@ -60,7 +62,6 @@ fn render_compiled<'a>(
     reads: &dyn Reads,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    let palette = skin.palette;
     match node {
         CompiledNode::Split { axis, children, .. } => match axis {
             Axis::Horizontal => container(
@@ -70,15 +71,11 @@ fn render_compiled<'a>(
                         .height(Length::Fill)
                         .into()
                 }))
-                .spacing(skin.layout.grid_gap)
                 .width(Length::Fill)
                 .height(Length::Fill),
             )
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_| {
-                ContainerStyle::default().background(Background::Color(palette.line_soft))
-            })
             .into(),
             Axis::Vertical => container(
                 Column::with_children(children.iter().map(|(weight, child)| {
@@ -87,15 +84,11 @@ fn render_compiled<'a>(
                         .height(split_length(child_size(child).h, *weight, skin))
                         .into()
                 }))
-                .spacing(skin.layout.grid_gap)
                 .width(Length::Fill)
                 .height(Length::Fill),
             )
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_| {
-                ContainerStyle::default().background(Background::Color(palette.line_soft))
-            })
             .into(),
         },
         CompiledNode::Module {
@@ -150,37 +143,75 @@ fn render_node<'a>(
     reads: &dyn Reads,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
+    let size = content_size(node, skin);
     let element = match node {
         ExpandedNode::Row {
-            children, gap, pad, ..
-        } => container(
-            Row::with_children(
-                children
-                    .iter()
-                    .map(|child| render_node(child, ui, reads, skin)),
-            )
-            .spacing(gap.unwrap_or(skin.layout.grid_gap))
-            .align_y(Alignment::Center)
-            .width(Length::Fill),
-        )
-        .padding(pad.unwrap_or(skin.layout.grid_pad))
-        .width(Length::Fill)
-        .into(),
+            children,
+            gap,
+            pad,
+            pad_x,
+            pad_y,
+            frame,
+            background,
+            background_alpha,
+            ..
+        } => bordered(
+            filled(
+                container(
+                    Row::with_children(
+                        children
+                            .iter()
+                            .map(|child| render_node(child, ui, reads, skin)),
+                    )
+                    .spacing(gap.unwrap_or(skin.layout.grid_gap))
+                    .align_y(Alignment::Center)
+                    .width(size.0)
+                    .height(size.1),
+                )
+                .padding(padding(*pad, *pad_x, *pad_y, skin))
+                .width(size.0)
+                .height(size.1),
+                *background,
+                *background_alpha,
+                skin,
+            ),
+            *frame,
+            size,
+            skin,
+        ),
         ExpandedNode::Column {
-            children, gap, pad, ..
-        } => container(
-            Column::with_children(
-                children
-                    .iter()
-                    .map(|child| render_node(child, ui, reads, skin)),
-            )
-            .spacing(gap.unwrap_or(skin.layout.grid_gap))
-            .align_x(Alignment::Center)
-            .width(Length::Fill),
-        )
-        .padding(pad.unwrap_or(skin.layout.grid_pad))
-        .width(Length::Fill)
-        .into(),
+            children,
+            gap,
+            pad,
+            pad_x,
+            pad_y,
+            frame,
+            background,
+            background_alpha,
+            ..
+        } => bordered(
+            filled(
+                container(
+                    Column::with_children(
+                        children
+                            .iter()
+                            .map(|child| render_node(child, ui, reads, skin)),
+                    )
+                    .spacing(gap.unwrap_or(skin.layout.grid_gap))
+                    .align_x(Alignment::Center)
+                    .width(size.0),
+                )
+                .padding(padding(*pad, *pad_x, *pad_y, skin))
+                .width(size.0)
+                .height(size.1),
+                *background,
+                *background_alpha,
+                skin,
+            ),
+            *frame,
+            size,
+            skin,
+        ),
         ExpandedNode::Slot { children, .. } => container(
             Column::with_children(
                 children
@@ -196,7 +227,61 @@ fn render_node<'a>(
             path, spec, read, ..
         } => render_control(*path, spec, read.as_ref(), ui, reads, skin),
     };
-    apply_size(element, effective_size(node, skin))
+    apply_size(element, effective_size(node, skin), node_align(node))
+}
+
+/// Container padding: per-axis overrides fall back to `pad`, then to the grid.
+fn padding(pad: Option<f32>, pad_x: Option<f32>, pad_y: Option<f32>, skin: &Skin) -> Padding {
+    let base = pad.unwrap_or(skin.layout.grid_pad);
+    Padding::ZERO
+        .top(pad_y.unwrap_or(base))
+        .bottom(pad_y.unwrap_or(base))
+        .left(pad_x.unwrap_or(base))
+        .right(pad_x.unwrap_or(base))
+}
+
+/// Paints the container's fill when the node asks for one.
+fn filled<'a>(
+    element: iced::widget::Container<'a, UiEvent>,
+    background: Option<ColorRole>,
+    alpha: Option<f32>,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    let Some(role) = background else {
+        return element.into();
+    };
+    let color = Color {
+        a: alpha.unwrap_or(1.0),
+        ..skin.color(role)
+    };
+    element
+        .style(move |_| ContainerStyle::default().background(Background::Color(color)))
+        .into()
+}
+
+/// Wraps a container in hairline borders when the node asks for them.
+fn bordered<'a>(
+    element: Element<'a, UiEvent>,
+    frame: Option<FrameSides>,
+    size: (Length, Length),
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    match frame {
+        Some(sides) => frame_overlay(element, sides, size, skin),
+        None => element,
+    }
+}
+
+/// The lengths a container takes, as the document declared them. A node that
+/// measures its content must carry `Shrink` all the way down, or the first
+/// `Fill` inside it claims the whole row.
+fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length) {
+    effective_size(node, skin).map_or((Length::Fill, Length::Fill), |size| {
+        (
+            length_for(size.w, Length::Fill),
+            length_for(size.h, Length::Fill),
+        )
+    })
 }
 
 fn render_control<'a>(
@@ -217,12 +302,14 @@ fn render_control<'a>(
         }
         ControlSpec::Brand => Brand::builder().skin(skin).build().view(),
         ControlSpec::Spacer => Spacer::builder().skin(skin).build().view(),
+        ControlSpec::Divider => Divider::builder().skin(skin).build().view(),
         ControlSpec::PresetSelector => PresetSelector::builder()
             .reads(reads)
             .skin(skin)
             .build()
             .view(),
         ControlSpec::SettingsButton => SettingsButton::builder().skin(skin).build().view(),
+        ControlSpec::WindowDrag => WindowDrag.view(),
         ControlSpec::TitleBar { label } => render_titlebar(*label, ui, skin),
         ControlSpec::WindowControls { style } => render_window_controls(*style, skin),
         ControlSpec::Bpm { placeholder } => Bpm::builder()
@@ -234,13 +321,18 @@ fn render_control<'a>(
             .build()
             .view(),
         ControlSpec::Time => render_time(value, scope, reads, skin),
-        ControlSpec::Text { style, label } => Text::builder()
-            .style(*style)
-            .maybe_value(value)
-            .maybe_label(label.as_ref().map(|id| ui.resolve(*id)))
-            .skin(skin)
-            .build()
-            .view(),
+        ControlSpec::Text {
+            style,
+            label,
+            active,
+            ..
+        } => render_text(
+            *style,
+            label.map(|id| ui.resolve(id)),
+            read_flag(active.as_ref(), reads, ui),
+            value,
+            skin,
+        ),
         ControlSpec::Glyph { icon, style } => render_glyph(*icon, *style, skin),
         ControlSpec::NavItem { label, icon } => {
             render_nav_item(path, ui.resolve(*label), *icon, value, skin)
@@ -251,31 +343,26 @@ fn render_control<'a>(
             icon,
             active_label,
             style,
-        } => ControlButton::builder()
-            .path(path)
-            .label(ui.resolve(*label))
-            .maybe_icon(icon.map(render_icon))
-            .maybe_active_label(active_label.map(|id| ui.resolve(id)))
-            .style(*style)
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view(),
-        ControlSpec::Scalar { format } => Telemetry::builder()
+        } => render_button(
+            path,
+            ui.resolve(*label),
+            *icon,
+            active_label.map(|id| ui.resolve(id)),
+            *style,
+            value,
+            skin,
+        ),
+        ControlSpec::Scalar { format, framed } => Telemetry::builder()
             .format(*format)
+            .framed(*framed)
             .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Crossfader => render_crossfader(path, value, skin),
-        ControlSpec::Fader { style, label } => Fader::builder()
-            .path(path)
-            .style(*style)
-            .maybe_label(label.map(|id| ui.resolve(id)))
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view(),
+        ControlSpec::Crossfader { ticks } => render_crossfader(path, *ticks, value, skin),
+        ControlSpec::Fader { style, label } => {
+            render_fader(path, *style, label.map(|id| ui.resolve(id)), value, skin)
+        }
         ControlSpec::Toggle => Toggle::builder()
             .path(path)
             .maybe_value(value)
@@ -297,37 +384,22 @@ fn render_control<'a>(
             label,
             tone,
             framed,
-        } => Readout::builder()
-            .maybe_label(label.map(|id| ui.resolve(id)))
-            .tone(*tone)
-            .framed(*framed)
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view(),
-        ControlSpec::Chip { label, style } => Chip::builder()
-            .path(path)
-            .label(ui.resolve(*label))
-            .style(*style)
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view(),
-        ControlSpec::Knob { label } => Knob::builder()
-            .path(path)
-            .maybe_label(label.map(|id| ui.resolve(id)))
-            .maybe_value(value)
-            .skin(skin)
-            .build()
-            .view(),
+        } => render_readout(*label, *tone, *framed, value, ui, skin),
+        ControlSpec::Chip { label, style } => {
+            render_chip(path, ui.resolve(*label), *style, value, skin)
+        }
+        ControlSpec::Knob { label } => {
+            render_knob(path, label.map(|id| ui.resolve(id)), value, skin)
+        }
         ControlSpec::VuStereo => StereoMeter::builder()
             .path(path)
             .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::VuVertical => VerticalVu::builder()
+        ControlSpec::VuVertical { ticks } => VerticalVu::builder()
             .path(path)
+            .ticks(*ticks)
             .maybe_value(value)
             .skin(skin)
             .build()
@@ -344,16 +416,23 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
+        ControlSpec::Meter => Meter::builder()
+            .maybe_value(value)
+            .skin(skin)
+            .build()
+            .view(),
         ControlSpec::TrackList {
             columns,
             columns_state,
             assign,
         } => render_track_list(
-            path,
-            columns,
-            columns_state.as_ref(),
-            assign,
-            value,
+            TrackListParts {
+                path,
+                columns,
+                columns_state: columns_state.as_ref(),
+                assign,
+                value,
+            },
             ui,
             reads,
             skin,
@@ -367,11 +446,13 @@ fn render_control<'a>(
 
 fn render_crossfader<'a>(
     path: &'a str,
+    ticks: bool,
     value: Option<&ReadValue<'_>>,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
     Crossfader::builder()
         .path(path)
+        .ticks(ticks)
         .maybe_value(value)
         .skin(skin)
         .build()
@@ -434,25 +515,135 @@ fn render_window_controls(style: WindowControlsStyle, skin: &Skin) -> Element<'s
         .view()
 }
 
-fn render_track_list<'a>(
+fn render_fader<'a>(
     path: &'a str,
-    columns: &[TrackColumn],
-    columns_state: Option<&Binding>,
-    assign: &[InternId],
+    style: FaderStyle,
+    label: Option<&'a str>,
     value: Option<&ReadValue<'_>>,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    Fader::builder()
+        .path(path)
+        .style(style)
+        .maybe_label(label)
+        .maybe_value(value)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_chip<'a>(
+    path: &'a str,
+    label: &'a str,
+    style: ChipStyle,
+    value: Option<&ReadValue<'_>>,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    Chip::builder()
+        .path(path)
+        .label(label)
+        .style(style)
+        .maybe_value(value)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_knob<'a>(
+    path: &'a str,
+    label: Option<&'a str>,
+    value: Option<&ReadValue<'_>>,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    Knob::builder()
+        .path(path)
+        .maybe_label(label)
+        .maybe_value(value)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+#[derive(Clone, Copy)]
+struct TrackListParts<'a, 'spec, 'value, 'data> {
+    path: &'a str,
+    columns: &'spec [TrackColumn],
+    columns_state: Option<&'spec Binding>,
+    assign: &'spec [InternId],
+    value: Option<&'value ReadValue<'data>>,
+}
+
+fn render_track_list<'a>(
+    parts: TrackListParts<'a, '_, '_, '_>,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
-    let assign: Vec<&str> = assign.iter().map(|id| ui.resolve(*id)).collect();
+    let assign: Vec<&str> = parts.assign.iter().map(|id| ui.resolve(*id)).collect();
     TrackList::builder()
-        .path(path)
-        .columns(columns)
-        .maybe_columns_state(columns_state.map(|binding| ui.resolve(binding.id())))
-        .columns_scope(read_scope(columns_state, ui))
+        .path(parts.path)
+        .columns(parts.columns)
+        .maybe_columns_state(parts.columns_state.map(|binding| ui.resolve(binding.id())))
+        .columns_scope(read_scope(parts.columns_state, ui))
         .assign(assign)
-        .maybe_value(value)
+        .maybe_value(parts.value)
         .reads(reads)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_text<'a>(
+    style: TextStyle,
+    label: Option<&'a str>,
+    active: bool,
+    value: Option<&ReadValue<'_>>,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    Text::builder()
+        .style(style)
+        .maybe_value(value)
+        .maybe_label(label)
+        .active(active)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_button<'a>(
+    path: &'a str,
+    label: &'a str,
+    icon: Option<IconName>,
+    active_label: Option<&'a str>,
+    style: ButtonStyle,
+    value: Option<&ReadValue<'_>>,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    ControlButton::builder()
+        .path(path)
+        .label(label)
+        .maybe_icon(icon.map(render_icon))
+        .maybe_active_label(active_label)
+        .style(style)
+        .maybe_value(value)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_readout<'a>(
+    label: Option<InternId>,
+    tone: Tone,
+    framed: bool,
+    value: Option<&ReadValue<'_>>,
+    ui: &'a CompiledUi,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    Readout::builder()
+        .maybe_label(label.map(|id| ui.resolve(id)))
+        .tone(tone)
+        .framed(framed)
+        .maybe_value(value)
         .skin(skin)
         .build()
         .view()
@@ -481,6 +672,13 @@ fn render_tree<'a>(
         .skin(skin)
         .build()
         .view()
+}
+
+fn read_flag(binding: Option<&Binding>, reads: &dyn Reads, ui: &CompiledUi) -> bool {
+    matches!(
+        binding.and_then(|binding| resolve(reads, binding, ui)),
+        Some(ReadValue::Bool(true))
+    )
 }
 
 fn wave_zoom(zoom: Option<&Binding>, reads: &dyn Reads, ui: &CompiledUi) -> f32 {
@@ -664,6 +862,7 @@ fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpec> {
 
 fn render_icon(icon: IconName) -> Icon {
     match icon {
+        IconName::ChevronDown => Icon::ChevronDown,
         IconName::ChevronUp => Icon::ChevronUp,
         IconName::Disc => Icon::Disc,
         IconName::Faders => Icon::Faders,
@@ -702,7 +901,11 @@ fn render_tree_icon(icon: TreeIcon) -> Icon {
     }
 }
 
-fn apply_size<'a>(element: Element<'a, UiEvent>, size: Option<SizeSpec>) -> Element<'a, UiEvent> {
+fn apply_size<'a>(
+    element: Element<'a, UiEvent>,
+    size: Option<SizeSpec>,
+    align: Horizontal,
+) -> Element<'a, UiEvent> {
     let Some(size) = size else {
         return element;
     };
@@ -710,13 +913,32 @@ fn apply_size<'a>(element: Element<'a, UiEvent>, size: Option<SizeSpec>) -> Elem
     container(element)
         .width(length_for(size.w, intrinsic.width))
         .height(length_for(size.h, intrinsic.height))
+        .align_x(align)
         .align_y(Vertical::Center)
         .into()
+}
+
+/// Where a control's content sits inside the box the document gave it. Only
+/// text declares this; everything else keeps the leading edge.
+fn node_align(node: &ExpandedNode) -> Horizontal {
+    let ExpandedNode::Control {
+        spec: ControlSpec::Text { align, .. },
+        ..
+    } = node
+    else {
+        return Horizontal::Left;
+    };
+    match align {
+        TextAlign::Start => Horizontal::Left,
+        TextAlign::Center => Horizontal::Center,
+        TextAlign::End => Horizontal::Right,
+    }
 }
 
 fn length_for(dim: Dim, intrinsic: Length) -> Length {
     match dim {
         Dim::Fixed(value) => Length::Fixed(value),
+        Dim::Shrink => Length::Shrink,
         Dim::Range { .. } => match intrinsic {
             Length::FillPortion(_) => intrinsic,
             _ => Length::Fill,
@@ -752,6 +974,11 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{
+        builtin,
+        ids::{Interner, SourceUri},
+        module::AdaptivePolicy,
+    };
 
     #[kithara::test]
     fn fixed_size_spec_sets_both_element_axes() {
@@ -759,11 +986,69 @@ mod tests {
         let element = apply_size(
             element,
             Some(SizeSpec::new(Dim::Fixed(34.0), Dim::Fixed(6.0))),
+            Horizontal::Left,
         );
 
         assert_eq!(
             element.as_widget().size(),
             Size::new(Length::Fixed(34.0), Length::Fixed(6.0))
+        );
+    }
+
+    /// A shrunk axis reaches the toolkit as `Shrink` rather than as the `Fill`
+    /// every other open axis resolves to.
+    #[kithara::test]
+    fn shrink_size_spec_reaches_the_toolkit() {
+        let element: Element<'static, UiEvent> =
+            Space::new().width(Length::Fill).height(Length::Fill).into();
+        let element = apply_size(
+            element,
+            Some(SizeSpec::new(Dim::Shrink, Dim::Fill)),
+            Horizontal::Left,
+        );
+
+        assert_eq!(
+            element.as_widget().size(),
+            Size::new(Length::Shrink, Length::Fill)
+        );
+    }
+
+    /// Both axes carry the declared rule: a container that measures its content
+    /// must pass `Shrink` to its own children, or the first `Fill` inside it
+    /// claims the row.
+    #[kithara::test]
+    fn content_size_follows_both_declared_axes() {
+        let origin = SourceUri("tree-test.ron".to_owned());
+        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
+        let mut interner = Interner::new(1024);
+        let id = interner.intern("cell", &origin).unwrap();
+        let node = |size| ExpandedNode::Control {
+            path: id,
+            id,
+            spec: ControlSpec::Time,
+            size,
+            read: None,
+            write: None,
+            adaptive: AdaptivePolicy::default(),
+        };
+
+        assert_eq!(
+            content_size(&node(Some(SizeSpec::new(Dim::Shrink, Dim::Shrink))), &skin),
+            (Length::Shrink, Length::Shrink)
+        );
+        assert_eq!(
+            content_size(
+                &node(Some(SizeSpec::new(Dim::Fixed(40.0), Dim::Shrink))),
+                &skin
+            ),
+            (Length::Fixed(40.0), Length::Shrink)
+        );
+        assert_eq!(
+            content_size(&node(None), &skin),
+            (
+                length_for(skin.document().deck.time_size.w, Length::Fill),
+                length_for(skin.document().deck.time_size.h, Length::Fill)
+            )
         );
     }
 
@@ -782,6 +1067,7 @@ mod tests {
                 },
                 Dim::Fill,
             )),
+            Horizontal::Left,
         );
 
         assert_eq!(

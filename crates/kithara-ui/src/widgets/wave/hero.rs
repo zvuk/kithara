@@ -62,7 +62,13 @@ pub(crate) fn draw(
     if let Some(region) = data.loop_region {
         draw_loop(frame, bounds, region, &window, metrics, palette.base);
     }
-    draw_played(frame, bounds, data.position, &window, metrics, palette.base);
+    bars::draw_played(
+        frame,
+        bounds,
+        norm_to_x(data.position.clamp(0.0, 1.0), &window, bounds.width),
+        metrics.played_alpha,
+        palette.base,
+    );
     draw_cues(frame, bounds, data.cues, &window, metrics, palette);
     draw_playhead(frame, bounds, data.position, &window, metrics, palette.base);
 }
@@ -176,22 +182,6 @@ fn draw_loop(
             );
         }
     }
-}
-
-fn draw_played(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    position: f32,
-    window: &Range<f32>,
-    metrics: WaveSkin,
-    palette: RenderPalette,
-) {
-    let width = norm_to_x(position.clamp(0.0, 1.0), window, bounds.width).clamp(0.0, bounds.width);
-    frame.fill_rectangle(
-        Point::ORIGIN,
-        Size::new(width, bounds.height),
-        with_alpha(palette.bg_deep, metrics.played_alpha),
-    );
 }
 
 fn draw_cues(

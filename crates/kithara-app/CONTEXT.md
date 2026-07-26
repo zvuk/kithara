@@ -24,7 +24,24 @@ a position; the session bounds it, so a letter past the last deck resolves to
 nothing rather than to a neighbour.
 
 Tempo travel is fixed at `TEMPO_RANGE` percent either way, clamped where the
-deck applies it; there is no range selector and no reset control.
+deck applies it; there is no range selector and no reset control. The knob sits
+in the mixer channel, which the design canon reserves for EQ and filter: it is
+the studio's only way to reach the timestretch, and it stays there until the
+deck grows a tempo control of its own.
+
+The studio window opens without system decorations, so the top bar is the
+window chrome: its empty middle is a `WindowDrag` surface, and the cell on its
+right carries minimise, maximise and close. `Message::Window` executes those
+against the window this app opened. What the decorations took with them has no
+replacement yet: resizing by dragging a window edge — which also puts
+`window_settings`'s `min_size` out of the user's reach — the platform's own
+window menu, and fullscreen. Undecorated windows differ per platform, so this
+bar is the only chrome on every one of them.
+
+The top bar's CPU cell reports `engine.load` — the audio engine's own load, not
+the machine's processor time. It carries the design canon's CPU label because
+that is the reading it gives, and shows the same endpoint twice: a `Meter` bar
+beside the percentage.
 
 Reads are answered per frame by `StudioReads`, which borrows the app state and
 `StudioCache`. The cache owns what the renderer borrows but the model does not

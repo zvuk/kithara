@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Background, Element, Length, Theme,
+    Alignment, Background, Border, Color, Element, Length, Theme,
     widget::{
         button,
         button::{Status as ButtonStatus, Style as IcedButtonStyle},
@@ -11,7 +11,7 @@ use crate::{
     module::ButtonStyle,
     render::{ControlAction, Icon, ReadValue, Skin, UiEvent, fonts, shaped_text},
     skin::FontSkin,
-    widgets::Widget,
+    widgets::{Widget, frame_overlay},
 };
 
 #[derive(bon::Builder)]
@@ -81,12 +81,22 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
                 action: ControlAction::Activate,
             });
         match self.style {
-            ButtonStyle::Transport => control
-                .width(Length::FillPortion(self.skin.button.transport_fill))
-                .into(),
-            ButtonStyle::TransportPrimary => control
-                .width(Length::FillPortion(self.skin.button.primary_fill))
-                .into(),
+            ButtonStyle::Transport => frame_overlay(
+                control
+                    .width(Length::FillPortion(self.skin.button.transport_fill))
+                    .into(),
+                self.skin.button.transport_sides,
+                (Length::Fill, Length::Fill),
+                self.skin,
+            ),
+            ButtonStyle::TransportPrimary => frame_overlay(
+                control
+                    .width(Length::FillPortion(self.skin.button.primary_fill))
+                    .into(),
+                self.skin.button.transport_sides,
+                (Length::Fill, Length::Fill),
+                self.skin,
+            ),
             ButtonStyle::MicroPrimary => control
                 .width(Length::Fixed(self.skin.button.micro_size))
                 .into(),
@@ -135,7 +145,7 @@ fn icon_label<'a>(
     icon: Icon,
     label: &'a str,
     font: FontSkin,
-    color: iced::Color,
+    color: Color,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
     row![
@@ -170,19 +180,21 @@ fn control_button_style(
 ) -> impl Fn(&Theme, ButtonStatus) -> IcedButtonStyle + 'static {
     let palette = skin.palette;
     let highlighted = is_filled(style, active);
-    let mut border = skin.border(if style == ButtonStyle::VisNav {
-        skin.vis.nav_frame
-    } else if is_primary(style) {
-        skin.button.primary_frame
-    } else {
-        skin.button.frame
-    });
-    if matches!(
+    let is_transport = matches!(
         style,
         ButtonStyle::Transport | ButtonStyle::TransportPrimary
-    ) {
-        border.color = palette.line_inner;
-    }
+    );
+    let border = if is_transport {
+        Border::default()
+    } else {
+        skin.border(if style == ButtonStyle::VisNav {
+            skin.vis.nav_frame
+        } else if is_primary(style) {
+            skin.button.primary_frame
+        } else {
+            skin.button.frame
+        })
+    };
     let vis_background = skin.color(skin.vis.nav_background);
     let vis_text = skin.color(skin.vis.nav_text_color);
     move |_theme, status| {
@@ -197,6 +209,12 @@ fn control_button_style(
                 ButtonStatus::Hovered => palette.accent_strong,
                 ButtonStatus::Pressed => palette.accent_soft,
                 ButtonStatus::Active | ButtonStatus::Disabled => palette.accent,
+            }
+        } else if is_transport {
+            match status {
+                ButtonStatus::Hovered => palette.bg_panel_2,
+                ButtonStatus::Pressed => palette.accent_soft,
+                ButtonStatus::Active | ButtonStatus::Disabled => Color::TRANSPARENT,
             }
         } else {
             match status {
@@ -227,48 +245,48 @@ mod tests {
     use super::*;
     use crate::{builtin, ids::SourceUri};
 
-    #[kithara::test]
-    fn transport_primary_fills_only_while_active() {
+    fn dark_skin() -> Skin {
         let origin = SourceUri("button.kskin.ron".to_owned());
-        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
-        let style = |active| {
-            control_button_style(&skin, ButtonStyle::TransportPrimary, active)(
-                &Theme::Dark,
-                ButtonStatus::Active,
-            )
-        };
-
-        assert_eq!(
-            style(false).background,
-            Some(Background::Color(skin.palette.bg_panel))
-        );
-        assert_eq!(style(false).text_color, skin.palette.text);
-        assert_eq!(
-            style(false).border.width,
-            skin.button.primary_frame.border_width
-        );
-        assert_eq!(style(false).border.color, skin.palette.line_inner);
-        assert_eq!(
-            style(true).background,
-            Some(Background::Color(skin.palette.accent))
-        );
-        assert_eq!(style(true).text_color, skin.palette.bg);
+        Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap()
     }
 
     #[kithara::test]
-    fn active_transport_keeps_line_inner_separator() {
-        let origin = SourceUri("button.kskin.ron".to_owned());
-        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
-        let style = control_button_style(&skin, ButtonStyle::Transport, true)(
-            &Theme::Dark,
-            ButtonStatus::Active,
-        );
+    fn transport_cells_fill_with_accent_only_while_active() {
+        let skin = dark_skin();
+        let style = |button, active| {
+            control_button_style(&skin, button, active)(&Theme::Dark, ButtonStatus::Active)
+        };
 
+        for button in [ButtonStyle::Transport, ButtonStyle::TransportPrimary] {
+            assert_eq!(
+                style(button, false).background,
+                Some(Background::Color(Color::TRANSPARENT)),
+                "{button:?} must let the wave through while it is off",
+            );
+            assert_eq!(style(button, false).text_color, skin.palette.text);
+            assert_eq!(
+                style(button, true).background,
+                Some(Background::Color(skin.palette.accent))
+            );
+            assert_eq!(style(button, true).text_color, skin.palette.bg);
+        }
+    }
+
+    /// A transport cell draws no border of its own: the seam between cells is
+    /// the overlay `transport_sides` describes, so two neighbours never stack
+    /// two lines.
+    #[kithara::test]
+    fn transport_cells_draw_no_border_of_their_own() {
+        let skin = dark_skin();
+        let border = |button| {
+            control_button_style(&skin, button, false)(&Theme::Dark, ButtonStatus::Active).border
+        };
+
+        assert_eq!(border(ButtonStyle::Transport).width, 0.0);
+        assert_eq!(border(ButtonStyle::TransportPrimary).width, 0.0);
         assert_eq!(
-            style.background,
-            Some(Background::Color(skin.palette.accent))
+            border(ButtonStyle::Default).width,
+            skin.button.frame.border_width
         );
-        assert_eq!(style.border.color, skin.palette.line_inner);
-        assert_eq!(style.border.width, 1.0);
     }
 }

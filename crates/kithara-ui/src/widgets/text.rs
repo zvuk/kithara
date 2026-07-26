@@ -3,6 +3,7 @@ use iced::{Element, Length, alignment::Vertical, widget::container};
 use crate::{
     module::TextStyle,
     render::{ReadValue, Skin, UiEvent, typography::styled_text},
+    skin::TextRoleSkin,
     widgets::Widget,
 };
 
@@ -11,6 +12,7 @@ pub(crate) struct Text<'value, 'data, 'skin> {
     style: TextStyle,
     value: Option<&'value ReadValue<'data>>,
     label: Option<&'data str>,
+    active: bool,
     skin: &'skin Skin,
 }
 
@@ -25,6 +27,10 @@ impl<'a> Widget<'a> for Text<'_, '_, '_> {
         };
         let role = match self.style {
             TextStyle::Brand => self.skin.text.brand,
+            TextStyle::DeckLetter if self.active => TextRoleSkin {
+                color: self.skin.text.deck_letter_active,
+                ..self.skin.text.deck_letter
+            },
             TextStyle::DeckLetter => self.skin.text.deck_letter,
             TextStyle::TrackTitle => self.skin.text.track_title,
             TextStyle::Body => self.skin.text.body,
@@ -47,7 +53,6 @@ impl<'a> Widget<'a> for Text<'_, '_, '_> {
         };
         container(styled_text(content, role, self.skin))
             .padding([0.0, padding_x])
-            .width(Length::Fill)
             .height(Length::Fill)
             .align_y(Vertical::Center)
             .into()

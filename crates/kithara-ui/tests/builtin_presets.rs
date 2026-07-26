@@ -140,20 +140,19 @@ fn player_deck_compiles_canonical_transport_row() {
             ..
         })
     ));
-    assert!(matches!(
-        children.get(10),
-        Some(ExpandedNode::Control {
-            spec: ControlSpec::Select { .. },
+    for (index, name) in [(10, "stream"), (11, "tempo")] {
+        let Some(ExpandedNode::Row {
+            id: Some(id),
+            frame: Some(frame),
             ..
-        })
-    ));
-    assert!(matches!(
-        children.get(11),
-        Some(ExpandedNode::Control {
-            spec: ControlSpec::Readout { .. },
-            ..
-        })
-    ));
+        }) = children.get(index)
+        else {
+            panic!("expected a framed cell at {index}");
+        };
+        assert_eq!(ui.resolve(*id), name);
+        assert!(frame.left, "{name} must carry its left seam");
+        assert!(!frame.top && !frame.right && !frame.bottom);
+    }
 }
 
 #[kithara::test]
@@ -194,7 +193,7 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
         panic!("expected library module");
     };
 
-    assert_eq!(global_size.h.min(), 34.0);
+    assert_eq!(global_size.h.min(), 42.0);
     assert_eq!(deck_size.h.min(), 150.0);
     assert_eq!(library_size.h.min(), 210.0);
     assert_eq!(

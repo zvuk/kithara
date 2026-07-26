@@ -42,12 +42,24 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.knob.drag_range, 140.0);
     assert_eq!(document.knob.wheel_step, 0.02);
     assert_eq!(document.crossfader.rail_height, 6.0);
+    assert_eq!(document.crossfader.padding_x, 14.0);
     assert_eq!(document.crossfader.thumb_width, 10.0);
     assert_eq!(document.crossfader.thumb_height, 16.0);
-    assert_eq!(document.crossfader.left_label, "A \u{2039}");
+    assert_eq!(document.crossfader.left_label, "A");
     assert_eq!(document.crossfader.center_label, "XFADE");
-    assert_eq!(document.crossfader.right_label, "\u{203a} B");
+    assert_eq!(document.crossfader.right_label, "B");
+    assert_eq!(
+        document.meter.size,
+        SizeSpec::new(Dim::Fixed(40.0), Dim::Fixed(7.0))
+    );
+    assert_eq!(document.meter.frame.border_width, 1.0);
+    assert_eq!(document.meter.frame.border, ColorRole::LineInner);
+    assert_eq!(document.meter.background, ColorRole::BgInset);
+    assert_eq!(document.meter.fill, ColorRole::Accent);
     assert_eq!(document.vu_stereo.segment_count, 16);
+    assert_eq!(document.vu_vertical.fader_width, 18.0);
+    assert_eq!(document.vu_vertical.tick_count, 11);
+    assert_eq!(document.vu_vertical.tick_center_width, 14.0);
     assert_eq!(document.vu_vertical.warning_threshold, 0.66);
     assert_eq!(
         document.toggle.size,

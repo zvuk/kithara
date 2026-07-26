@@ -395,6 +395,11 @@ fn row(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         size: None,
         gap: None,
         pad: None,
+        pad_x: None,
+        pad_y: None,
+        frame: None,
+        background: None,
+        background_alpha: None,
         children,
     }
 }
@@ -405,6 +410,11 @@ fn column(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         size: None,
         gap: None,
         pad: None,
+        pad_x: None,
+        pad_y: None,
+        frame: None,
+        background: None,
+        background_alpha: None,
         children,
     }
 }
@@ -450,6 +460,7 @@ fn scalar(id: &str, endpoint: &str) -> ControlNode {
         write: None,
         adaptive: AdaptivePolicy::default(),
         format: ScalarFormat::default(),
+        framed: true,
     }
 }
 

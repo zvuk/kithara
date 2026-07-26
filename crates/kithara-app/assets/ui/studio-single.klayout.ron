@@ -8,31 +8,36 @@
             (node: Module(
                 instance: "bar",
                 source: "modules/studio-bar.kmodule.ron",
-                size: (w: Fill, h: Fixed(36.0)),
+                size: (w: Fill, h: Fixed(42.0)),
+                frame: (top: false, right: false, bottom: true, left: false),
             )),
             (node: Module(
                 instance: "overview",
                 source: "modules/studio-overview-single.kmodule.ron",
                 size: (w: Fill, h: Fixed(40.0)),
+                frame: (top: false, right: false, bottom: true, left: false),
             )),
-            (weight: 2.8, node: Split(
+            (weight: 1.1, node: Split(
                 axis: Horizontal,
                 children: [
                     (weight: 1.0, node: Module(
                         instance: "deck-a",
                         source: "modules/studio-deck.kmodule.ron",
                         with: { "deck": "a", "badge": "A" },
+                        frame: (top: false, right: true, bottom: true, left: false),
                     )),
                     (node: Module(
                         instance: "mixer",
                         source: "modules/studio-mixer-single.kmodule.ron",
                         size: (w: Fixed(224.0), h: Fill),
+                        frame: (top: false, right: false, bottom: true, left: false),
                     )),
                 ],
             )),
             (weight: 1.3, node: Module(
                 instance: "library",
                 source: "modules/studio-library.kmodule.ron",
+                frame: (top: false, right: false, bottom: false, left: false),
             )),
         ],
     ),

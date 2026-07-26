@@ -1,13 +1,14 @@
-use iced::Task;
+use iced::{Task, window};
 use tracing::error;
 
 use super::{
     app::Kithara,
     deck::{self, DeckMsg},
     message::Message,
-    mix, studio_ui,
+    mix, shot, studio_ui,
 };
 use crate::{catalog, deck::DeckId};
+use kithara_ui::render::WindowCommand;
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
@@ -47,13 +48,27 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
         Message::Tick => {
             handle_tick(state);
-            Task::none()
+            shot::drive(state)
         }
+        Message::Window(command) => window_task(state, command),
+        Message::Shot(screenshot) => shot::save(state, &screenshot),
         Message::WindowCloseRequested => iced::exit(),
     };
 
     refresh_snapshots(state);
     task
+}
+
+/// The studio draws its own window chrome, so the app executes what the bar
+/// asks against the window it opened.
+fn window_task(state: &Kithara, command: WindowCommand) -> Task<Message> {
+    match command {
+        WindowCommand::Drag => window::drag(state.window_id),
+        WindowCommand::Minimize => window::minimize(state.window_id, true),
+        WindowCommand::ToggleMaximize => window::toggle_maximize(state.window_id),
+        WindowCommand::Close => window::close(state.window_id),
+        _ => Task::none(),
+    }
 }
 
 /// A deck the studio no longer lays out keeps its queue but stops playing.

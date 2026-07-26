@@ -3,16 +3,31 @@
     version: 1,
     id: "studio-overview",
     root: Column(
+        gap: 0.0,
         children: [
-            Include(
-                id: "a",
-                source: "studio-overview-row.kmodule.ron",
-                with: { "deck": "a", "letter": "A" },
+            Row(
+                id: "row-a",
+                gap: 0.0,
+                frame: (top: false, right: false, bottom: true, left: false),
+                children: [
+                    Include(
+                        id: "a",
+                        source: "studio-overview-row.kmodule.ron",
+                        with: { "deck": "a", "letter": "A" },
+                    ),
+                ],
             ),
-            Include(
-                id: "b",
-                source: "studio-overview-row.kmodule.ron",
-                with: { "deck": "b", "letter": "B" },
+            Row(
+                id: "row-b",
+                gap: 0.0,
+                frame: (top: false, right: false, bottom: true, left: false),
+                children: [
+                    Include(
+                        id: "b",
+                        source: "studio-overview-row.kmodule.ron",
+                        with: { "deck": "b", "letter": "B" },
+                    ),
+                ],
             ),
         ],
     ),

@@ -3,10 +3,11 @@ use std::collections::BTreeMap;
 use crate::{
     error::UiDocError,
     ids::{InternId, SourceUri},
+    layout::FrameSides,
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, ScalarFormat, TextStyle, Tone,
-        TrackColumn, WaveStyle, WindowControlsStyle,
+        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, ScalarFormat, TextAlign, TextStyle,
+        Tone, TrackColumn, WaveStyle, WindowControlsStyle,
     },
     size::SizeSpec,
     skin::ColorRole,
@@ -20,6 +21,11 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         gap: Option<f32>,
         pad: Option<f32>,
+        pad_x: Option<f32>,
+        pad_y: Option<f32>,
+        frame: Option<FrameSides>,
+        background: Option<ColorRole>,
+        background_alpha: Option<f32>,
         children: Vec<Self>,
     },
     Column {
@@ -27,6 +33,11 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         gap: Option<f32>,
         pad: Option<f32>,
+        pad_x: Option<f32>,
+        pad_y: Option<f32>,
+        frame: Option<FrameSides>,
+        background: Option<ColorRole>,
+        background_alpha: Option<f32>,
         children: Vec<Self>,
     },
     Slot {
@@ -53,8 +64,10 @@ pub enum ControlSpec {
     },
     Brand,
     Spacer,
+    Divider,
     PresetSelector,
     SettingsButton,
+    WindowDrag,
     TitleBar {
         label: InternId,
     },
@@ -64,6 +77,8 @@ pub enum ControlSpec {
     Text {
         style: TextStyle,
         label: Option<InternId>,
+        active: Option<Binding>,
+        align: TextAlign,
     },
     Glyph {
         icon: IconName,
@@ -88,8 +103,11 @@ pub enum ControlSpec {
     Time,
     Scalar {
         format: ScalarFormat,
+        framed: bool,
     },
-    Crossfader,
+    Crossfader {
+        ticks: bool,
+    },
     Fader {
         style: FaderStyle,
         label: Option<InternId>,
@@ -144,8 +162,11 @@ pub enum ControlSpec {
     Knob {
         label: Option<InternId>,
     },
+    Meter,
     VuStereo,
-    VuVertical,
+    VuVertical {
+        ticks: bool,
+    },
 }
 
 /// Compiled endpoint reference. `id` is the bare endpoint; `key` is the
@@ -220,6 +241,7 @@ pub(crate) struct ControlSite<'a> {
     pub(crate) query: Option<&'a BindingRef>,
     pub(crate) scope: Option<&'a BindingRef>,
     pub(crate) zoom: Option<&'a BindingRef>,
+    pub(crate) active: Option<&'a BindingRef>,
 }
 
 pub(crate) type ControlVisitor<'v> =

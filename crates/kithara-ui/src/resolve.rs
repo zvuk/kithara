@@ -105,8 +105,10 @@ fn walk_includes(
         ControlNode::DeckSummary { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
+        | ControlNode::Divider { .. }
         | ControlNode::PresetSelector { .. }
         | ControlNode::SettingsButton { .. }
+        | ControlNode::WindowDrag { .. }
         | ControlNode::TitleBar { .. }
         | ControlNode::WindowControls { .. }
         | ControlNode::Text { .. }
@@ -135,7 +137,8 @@ fn walk_includes(
         | ControlNode::Chip { .. }
         | ControlNode::Knob { .. }
         | ControlNode::VuStereo { .. }
-        | ControlNode::VuVertical { .. } => Ok(()),
+        | ControlNode::VuVertical { .. }
+        | ControlNode::Meter { .. } => Ok(()),
     }
 }
 

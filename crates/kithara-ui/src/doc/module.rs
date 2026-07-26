@@ -7,6 +7,7 @@ use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
     ids::{DocId, EndpointId, NodeId, SourceUri},
+    layout::FrameSides,
     size::SizeSpec,
     skin::ColorRole,
 };
@@ -42,6 +43,10 @@ pub enum ChromeStyle {
     Plain,
 }
 
+pub(crate) const fn default_framed() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -55,6 +60,19 @@ pub enum ControlNode {
         gap: Option<f32>,
         #[serde(default)]
         pad: Option<f32>,
+        /// Per-axis override of `pad`.
+        #[serde(default)]
+        pad_x: Option<f32>,
+        #[serde(default)]
+        pad_y: Option<f32>,
+        /// Hairlines on the requested sides; absent means no border.
+        #[serde(default)]
+        frame: Option<FrameSides>,
+        /// Fill behind the children; absent means transparent.
+        #[serde(default)]
+        background: Option<ColorRole>,
+        #[serde(default)]
+        background_alpha: Option<f32>,
         children: Vec<Self>,
     },
     Column {
@@ -66,6 +84,19 @@ pub enum ControlNode {
         gap: Option<f32>,
         #[serde(default)]
         pad: Option<f32>,
+        /// Per-axis override of `pad`.
+        #[serde(default)]
+        pad_x: Option<f32>,
+        #[serde(default)]
+        pad_y: Option<f32>,
+        /// Hairlines on the requested sides; absent means no border.
+        #[serde(default)]
+        frame: Option<FrameSides>,
+        /// Fill behind the children; absent means transparent.
+        #[serde(default)]
+        background: Option<ColorRole>,
+        #[serde(default)]
+        background_alpha: Option<f32>,
         children: Vec<Self>,
     },
     Include {
@@ -116,6 +147,30 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
     },
+    /// Horizontal fill bar reporting one scalar.
+    Meter {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
+    /// Hairline between adjacent bar cells.
+    Divider {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
     PresetSelector {
         id: NodeId,
         #[serde(default)]
@@ -135,6 +190,14 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
+    /// Bare drag surface for a window that draws its own chrome.
+    WindowDrag {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
         #[serde(default)]
         adaptive: AdaptivePolicy,
     },
@@ -169,6 +232,12 @@ pub enum ControlNode {
         style: TextStyle,
         #[serde(default)]
         label: Option<String>,
+        /// Where the glyphs sit inside the node's box.
+        #[serde(default)]
+        align: TextAlign,
+        /// Boolean binding that switches the style to its active tone.
+        #[serde(default)]
+        active: Option<BindingRef>,
     },
     Glyph {
         id: NodeId,
@@ -263,6 +332,8 @@ pub enum ControlNode {
         adaptive: AdaptivePolicy,
         #[serde(default)]
         format: ScalarFormat,
+        #[serde(default = "default_framed")]
+        framed: bool,
     },
     Crossfader {
         id: NodeId,
@@ -274,6 +345,9 @@ pub enum ControlNode {
         write: Option<BindingRef>,
         #[serde(default)]
         adaptive: AdaptivePolicy,
+        /// Draw the scale above the rail.
+        #[serde(default)]
+        ticks: bool,
     },
     Fader {
         id: NodeId,
@@ -512,12 +586,16 @@ pub enum ControlNode {
         write: Option<BindingRef>,
         #[serde(default)]
         adaptive: AdaptivePolicy,
+        /// Draw the scale left of the fader.
+        #[serde(default)]
+        ticks: bool,
     },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum IconName {
+    ChevronDown,
     ChevronUp,
     Disc,
     Faders,
@@ -535,6 +613,15 @@ pub enum IconName {
     X,
     ZoomIn,
     ZoomOut,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum TextAlign {
+    #[default]
+    Start,
+    Center,
+    End,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

@@ -113,7 +113,7 @@ impl StudioCache {
 impl DeckCache {
     fn refresh(&mut self, deck: &DeckUi) {
         let ts = deck.view.timestretch;
-        self.tempo = format!("{:+.2}%", ts.tempo);
+        self.tempo = format!("{:+.1}%", ts.tempo);
         self.remain = format_remain(&deck.ui);
         self.subtitle = track_subtitle(&deck.ui);
         self.refresh_wave(deck.ui.analysis.as_ref());

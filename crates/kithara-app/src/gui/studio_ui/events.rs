@@ -27,6 +27,7 @@ pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> 
             state.studio.cache.toggle_module(module);
             None
         }
+        UiEvent::Window(command) => Some(Message::Window(command)),
         _ => None,
     }
 }
@@ -114,7 +115,7 @@ fn strip_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
     let index = deck_index(letter)?;
     let id = deck_id(state, index)?;
     let msg = match (name, action) {
-        ("trim", ControlAction::SetScalar(trim)) => {
+        ("volume", ControlAction::SetScalar(trim)) => {
             Message::Mix(MixMsg::Trim(id, trim.clamp(0.0, 1.0).as_()))
         }
         ("mute", ControlAction::Activate) => {

@@ -164,8 +164,10 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         ControlNode::DeckSummary { id, .. }
         | ControlNode::Brand { id, .. }
         | ControlNode::Spacer { id, .. }
+        | ControlNode::Divider { id, .. }
         | ControlNode::PresetSelector { id, .. }
         | ControlNode::SettingsButton { id, .. }
+        | ControlNode::WindowDrag { id, .. }
         | ControlNode::TitleBar { id, .. }
         | ControlNode::WindowControls { id, .. }
         | ControlNode::Text { id, .. }
@@ -194,7 +196,8 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Chip { id, .. }
         | ControlNode::Knob { id, .. }
         | ControlNode::VuStereo { id, .. }
-        | ControlNode::VuVertical { id, .. } => Some(id),
+        | ControlNode::VuVertical { id, .. }
+        | ControlNode::Meter { id, .. } => Some(id),
     }
 }
 
@@ -232,6 +235,16 @@ pub(crate) fn check_controls(
             zoom,
             BindingSide::Read,
             Some(ValueKind::Scalar),
+            site.path,
+            origin,
+            endpoints,
+        )?;
+    }
+    if let Some(active) = site.active {
+        check_binding(
+            active,
+            BindingSide::Read,
+            Some(ValueKind::Bool),
             site.path,
             origin,
             endpoints,
@@ -388,7 +401,9 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
         | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
-        ControlNode::Time { .. } | ControlNode::Scalar { .. } => (Some(ValueKind::Scalar), None),
+        ControlNode::Time { .. } | ControlNode::Scalar { .. } | ControlNode::Meter { .. } => {
+            (Some(ValueKind::Scalar), None)
+        }
         ControlNode::Crossfader { .. }
         | ControlNode::Fader { .. }
         | ControlNode::Knob { .. }
@@ -406,8 +421,10 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Slot { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
+        | ControlNode::Divider { .. }
         | ControlNode::PresetSelector { .. }
         | ControlNode::SettingsButton { .. }
+        | ControlNode::WindowDrag { .. }
         | ControlNode::TitleBar { .. }
         | ControlNode::WindowControls { .. }
         | ControlNode::Glyph { .. }
@@ -640,6 +657,10 @@ mod tests {
             ControlNode::Wave { zoom, .. } => zoom.as_ref(),
             _ => None,
         };
+        let active = match &document.root {
+            ControlNode::Text { active, .. } => active.as_ref(),
+            _ => None,
+        };
         check_controls(
             ControlSite {
                 path,
@@ -650,6 +671,7 @@ mod tests {
                 query: None,
                 scope,
                 zoom,
+                active,
             },
             &origin(),
             &registry(),
@@ -719,6 +741,7 @@ mod tests {
                 query: query.as_ref(),
                 scope: None,
                 zoom: None,
+                active: None,
             },
             &origin(),
             &registry(),
@@ -886,6 +909,7 @@ mod tests {
                 query: None,
                 scope: None,
                 zoom: None,
+                active: None,
             },
             &origin(),
             &registry(),

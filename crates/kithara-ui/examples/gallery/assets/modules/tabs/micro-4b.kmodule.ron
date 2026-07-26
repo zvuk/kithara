@@ -43,7 +43,7 @@
                     Select(id: "auto", label: "AUTO·320", size: (w: Fixed(84.0), h: Fixed(26.0))),
                     Row(
                         id: "volume",
-                        size: (w: Fixed(84.0), h: Fixed(22.0)),
+                        size: (w: Shrink, h: Fixed(22.0)),
                         gap: Some(0.0),
                         children: [
                             Glyph(id: "speaker", icon: SpeakerHigh, size: (w: Fixed(20.0), h: Fixed(22.0))),

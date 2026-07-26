@@ -14,6 +14,7 @@ pub(crate) mod vis;
 pub(crate) mod wave;
 pub(crate) mod window;
 pub use chrome::ModuleChrome;
+pub(crate) use chrome::frame_overlay;
 pub use layout_preview::LayoutPreview;
 
 pub(crate) use crate::render::event::Widget;

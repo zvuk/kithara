@@ -7,7 +7,7 @@ use iced::{
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
-    deck::DeckUi, frontend::window_settings, message::Message, studio_ui::StudioUi,
+    deck::DeckUi, frontend::window_settings, message::Message, shot::ShotPlan, studio_ui::StudioUi,
     subscription::subscription_config, theme,
 };
 use crate::{
@@ -37,6 +37,10 @@ pub(crate) struct Kithara {
     pub(crate) palette: gui::GuiPalette,
     /// Highlighted catalog row, shared by every deck's load buttons.
     pub(crate) selected_track: Option<usize>,
+    /// The studio window; the screenshot pass captures it.
+    pub(crate) window_id: window::Id,
+    /// Present only under `KITHARA_SHOT_DIR`.
+    pub(crate) shot: Option<ShotPlan>,
 }
 
 /// A non-empty set of deck view-models. `focus` is fixed to the first deck
@@ -88,6 +92,8 @@ impl Kithara {
         config: AppConfig,
         palette: gui::GuiPalette,
     ) -> (Self, Task<Message>) {
+        let (window_id, open) = window::open(window_settings());
+
         let state = Self {
             session,
             decks,
@@ -96,9 +102,9 @@ impl Kithara {
             studio: StudioUi::new(),
             palette,
             selected_track: None,
+            window_id,
+            shot: ShotPlan::read(),
         };
-
-        let (_id, open) = window::open(window_settings());
 
         (state, open.discard())
     }

@@ -242,14 +242,100 @@ mod tests {
         }
     }
 
+    /// The CPU cell shows engine load twice — as a bar and as a percentage —
+    /// so both must read the same endpoint.
     #[kithara::test]
-    fn every_channel_strip_carries_the_full_control_set() {
+    fn the_cpu_cell_reads_engine_load_as_a_bar_and_a_number() {
+        for layout in LAYOUTS {
+            let ui = compile_studio(layout).unwrap();
+            let mut bars = Vec::new();
+            each_control(&ui, &mut |node| {
+                if let ExpandedNode::Control {
+                    path,
+                    spec: ControlSpec::Meter,
+                    read: Some(read),
+                    ..
+                } = node
+                {
+                    bars.push((ui.resolve(*path), ui.resolve(read.key())));
+                }
+            });
+
+            assert_eq!(bars, [("bar/cpu-bar", "engine.load")]);
+            assert!(
+                controls(&ui).contains(&("bar/cpu-value", vec!["engine.load"])),
+                "{layout:?}: the CPU readout must stay on engine.load",
+            );
+        }
+    }
+
+    /// The studio window carries no system decorations, so the bar owns the
+    /// window chrome: a drag surface and the three window commands.
+    #[kithara::test]
+    fn the_bar_owns_the_window_chrome() {
+        for layout in LAYOUTS {
+            let ui = compile_studio(layout).unwrap();
+            let mut seen = Vec::new();
+            each_control(&ui, &mut |node| {
+                if let ExpandedNode::Control { path, spec, .. } = node
+                    && matches!(
+                        spec,
+                        ControlSpec::WindowDrag | ControlSpec::WindowControls { .. }
+                    )
+                {
+                    seen.push(ui.resolve(*path));
+                }
+            });
+
+            assert_eq!(seen, ["bar/drag", "bar/window"], "{layout:?}");
+        }
+    }
+
+    #[kithara::test]
+    fn every_channel_strip_carries_the_supported_control_set() {
         let ui = compile_studio(DeckLayout::Dual).unwrap();
         let paths = control_paths(&ui);
         for letter in ["a", "b"] {
-            for name in ["trim", "low", "mid", "high", "tempo", "mute"] {
+            for name in ["low", "mid", "high", "tempo", "volume"] {
                 let want = format!("mixer/{letter}/{name}");
                 assert!(paths.contains(&want.as_str()), "missing control `{want}`");
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn studio_hides_controls_outside_the_supported_playback_contract() {
+        let ui = compile_studio(DeckLayout::Dual).unwrap();
+        let paths = control_paths(&ui);
+        for path in [
+            "deck-a/time",
+            "deck-a/keylock",
+            "deck-b/time",
+            "deck-b/keylock",
+            "mixer/a/mute",
+            "mixer/b/mute",
+            "mixer/master",
+        ] {
+            assert!(!paths.contains(&path), "unexpected control `{path}`");
+        }
+    }
+
+    #[kithara::test]
+    fn tempo_and_volume_controls_bind_to_the_deck_mixer_state() {
+        let ui = compile_studio(DeckLayout::Dual).unwrap();
+        let controls = controls(&ui);
+        for letter in ["a", "b"] {
+            for (name, endpoint) in [("tempo", "deck.ts.tempo"), ("volume", "mixer.trim")] {
+                let want = format!("mixer/{letter}/{name}");
+                let (_, keys) = controls
+                    .iter()
+                    .find(|(path, _)| *path == want)
+                    .unwrap_or_else(|| panic!("missing control `{want}`"));
+                let binding = format!("{endpoint}@deck={letter}");
+                assert!(
+                    keys.contains(&binding.as_str()),
+                    "`{want}` must bind `{binding}`, got {keys:?}"
+                );
             }
         }
     }
@@ -267,7 +353,7 @@ mod tests {
                 for path in [
                     format!("deck-{letter}/wave"),
                     format!("overview/{letter}/wave"),
-                    format!("mixer/{letter}/trim"),
+                    format!("mixer/{letter}/volume"),
                 ] {
                     assert!(paths.contains(&path.as_str()), "{layout:?}: missing {path}");
                 }
@@ -315,6 +401,7 @@ mod tests {
                         ControlSpec::Text {
                             style: TextStyle::DeckLetter,
                             label: Some(label),
+                            ..
                         },
                     ..
                 } = node

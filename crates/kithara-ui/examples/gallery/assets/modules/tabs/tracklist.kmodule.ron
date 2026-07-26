@@ -14,7 +14,7 @@
                         id: "preset-label",
                         style: MicroLabel,
                         label: "ПРЕСЕТ КОЛОНОК",
-                        size: (w: Fixed(128.0), h: Fixed(26.0)),
+                        size: (w: Shrink, h: Fixed(26.0)),
                     ),
                     Segmented(
                         id: "column-preset",

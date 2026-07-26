@@ -4,13 +4,24 @@
     id: "studio-overview-row",
     parameters: ["deck", "letter"],
     root: Row(
+        gap: 0.0,
         size: (w: Fill, h: Fixed(40.0)),
         children: [
-            Text(
-                id: "letter",
+            Row(
+                id: "letter-cell",
                 size: (w: Fixed(28.0), h: Fill),
-                style: DeckLetter,
-                label: "$letter",
+                background: BgPanel,
+                frame: (top: false, right: true, bottom: false, left: false),
+                children: [
+                    Text(
+                        id: "letter",
+                        size: (w: Fill, h: Fill),
+                        style: DeckLetter,
+                        align: Center,
+                        label: "$letter",
+                        active: Telemetry(id: "deck.focused", with: { "deck": "$deck" }),
+                    ),
+                ],
             ),
             Wave(
                 id: "wave",
@@ -18,11 +29,20 @@
                 write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
                 adaptive: (priority: Required),
             ),
-            Text(
-                id: "remain",
+            Row(
+                id: "remain-cell",
                 size: (w: Fixed(62.0), h: Fill),
-                style: Telemetry,
-                read: Telemetry(id: "deck.playback.remain", with: { "deck": "$deck" }),
+                background: BgPanel,
+                frame: (top: false, right: false, bottom: false, left: true),
+                children: [
+                    Text(
+                        id: "remain",
+                        size: (w: Fill, h: Fill),
+                        style: Telemetry,
+                        align: Center,
+                        read: Telemetry(id: "deck.playback.remain", with: { "deck": "$deck" }),
+                    ),
+                ],
             ),
         ],
     ),

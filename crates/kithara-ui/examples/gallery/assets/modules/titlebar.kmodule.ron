@@ -6,6 +6,7 @@
     root: Row(
         gap: Some(0.0),
         size: (w: Fill, h: Fixed(26.0)),
+        background: BgPanel2,
         children: [
             TitleBar(
                 id: "drag",

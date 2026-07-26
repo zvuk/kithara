@@ -4,6 +4,7 @@ use kithara_ui::{
     ids::SourceUri,
     layout::{FrameSides, LayoutNode, parse_layout},
     module::{ChipStyle, ControlNode, IconName, Priority, TextStyle, Tone, parse_module},
+    size::{Dim, SizeSpec},
 };
 use ron::extensions::Extensions;
 
@@ -62,6 +63,13 @@ const ROUNDTRIP_MODULE: &str = r#"(
                         write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
                         size: Some((w: Fixed(96.0), h: Fixed(32.0))),
                         adaptive: (priority: Required),
+                    ),
+                    Scalar(
+                        id: "load",
+                        read: Telemetry(id: "deck.playback.position_normalized", with: { "deck": "$deck" }),
+                        size: Some((w: Shrink, h: Fill)),
+                        format: Percent,
+                        framed: false,
                     ),
                     Fader(
                         id: "volume",
@@ -156,6 +164,45 @@ fn module_frame_sides_are_typed_and_default_on() {
     assert!(!frame.right);
     assert!(frame.bottom);
     assert!(frame.left);
+}
+
+#[kithara::test]
+fn every_size_rule_parses_including_content_measured_axes() {
+    let doc = parse_module(
+        r#"(schema: "kithara.module", version: 1, id: "sizes",
+            root: Row(
+                id: "row",
+                size: (w: Shrink, h: Fill),
+                children: [
+                    Text(id: "label", size: (w: Shrink, h: Fixed(18.0))),
+                    Text(id: "span", size: (w: Range(min: 20.0, max: Some(40.0)), h: Fill)),
+                ],
+            ))"#,
+        &SourceUri("sizes.kmodule.ron".into()),
+    )
+    .unwrap();
+    let ControlNode::Row { size, children, .. } = &doc.root else {
+        panic!("expected row root");
+    };
+
+    assert_eq!(*size, Some(SizeSpec::new(Dim::Shrink, Dim::Fill)));
+    let ControlNode::Text { size, .. } = &children[0] else {
+        panic!("expected text child");
+    };
+    assert_eq!(*size, Some(SizeSpec::new(Dim::Shrink, Dim::Fixed(18.0))));
+    let ControlNode::Text { size, .. } = &children[1] else {
+        panic!("expected text child");
+    };
+    assert_eq!(
+        *size,
+        Some(SizeSpec::new(
+            Dim::Range {
+                min: 20.0,
+                max: Some(40.0)
+            },
+            Dim::Fill
+        ))
+    );
 }
 
 #[kithara::test]

@@ -12,7 +12,10 @@ use crate::render::fonts;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Icon {
+    ChevronDown,
     ChevronUp,
+    ChevronsLeft,
+    ChevronsRight,
     Disc,
     Collection,
     Folder,
@@ -80,7 +83,10 @@ impl Icon {
 fn source(icon: Icon) -> IconSource {
     match icon {
         Icon::Charts => IconSource::Lucide(lucide_icons::Icon::TrendingUp),
+        Icon::ChevronDown => IconSource::Lucide(lucide_icons::Icon::ChevronDown),
         Icon::ChevronUp => IconSource::Lucide(lucide_icons::Icon::ChevronUp),
+        Icon::ChevronsLeft => IconSource::Lucide(lucide_icons::Icon::ChevronsLeft),
+        Icon::ChevronsRight => IconSource::Lucide(lucide_icons::Icon::ChevronsRight),
         Icon::Clock => IconSource::Lucide(lucide_icons::Icon::Clock),
         Icon::Collection => IconSource::Lucide(lucide_icons::Icon::CircleDot),
         Icon::Disc => IconSource::Lucide(lucide_icons::Icon::Disc),

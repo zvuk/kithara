@@ -1,5 +1,6 @@
 use iced::{
     Background, Element, Length,
+    alignment::{Horizontal, Vertical},
     widget::{Space, container, container::Style as ContainerStyle},
 };
 
@@ -12,6 +13,7 @@ use crate::{
 #[derive(bon::Builder)]
 pub(crate) struct Telemetry<'value, 'data, 'skin> {
     format: ScalarFormat,
+    framed: bool,
     value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
 }
@@ -36,18 +38,30 @@ impl<'a> Widget<'a> for Telemetry<'_, '_, '_> {
         };
         let palette = self.skin.palette;
         let border = self.skin.border(self.skin.telemetry.frame);
+        let framed = self.framed;
         container(
             shaped_text(formatted)
                 .font(fonts::mono(self.skin.telemetry.text.weight))
                 .size(self.skin.telemetry.text.size)
                 .color(palette.text),
         )
-        .padding([self.skin.telemetry.padding_y, self.skin.telemetry.padding_x])
-        .width(Length::Fill)
+        .padding(if self.framed {
+            [self.skin.telemetry.padding_y, self.skin.telemetry.padding_x]
+        } else {
+            [0.0, 0.0]
+        })
+        .width(if self.framed {
+            Length::Fill
+        } else {
+            Length::Shrink
+        })
         .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
+        .align_x(Horizontal::Center)
+        .align_y(Vertical::Center)
         .style(move |_| {
+            if !framed {
+                return ContainerStyle::default();
+            }
             ContainerStyle::default()
                 .background(Background::Color(palette.bg_inset))
                 .border(border)

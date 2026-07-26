@@ -3,9 +3,11 @@
     version: 1,
     id: "studio-mixer-single",
     root: Column(
+        size: (w: Fill, h: Fill),
         children: [
             Row(
                 id: "strips",
+                size: (w: Fill, h: Fill),
                 children: [
                     Include(
                         id: "a",
@@ -13,13 +15,6 @@
                         with: { "deck": "a", "letter": "A" },
                     ),
                 ],
-            ),
-            Text(id: "master-label", style: MicroLabel, label: "MASTER"),
-            Fader(
-                id: "master",
-                style: Volume,
-                read: Parameter(id: "mix.group_master"),
-                write: Parameter(id: "mix.group_master"),
             ),
         ],
     ),

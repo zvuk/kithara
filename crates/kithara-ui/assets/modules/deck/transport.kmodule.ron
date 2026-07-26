@@ -4,7 +4,10 @@
     id: "deck-transport",
     parameters: ["deck"],
     root: Row(
+        gap: 0.0,
         size: (w: Fill, h: Fixed(30.0)),
+        background: BgDeep,
+        background_alpha: 0.84,
         children: [
             Button(
                 id: "cue",
@@ -64,7 +67,7 @@
                 style: Transport,
                 write: Command(id: "deck.transport.jump_forward", with: { "deck": "$deck" }),
             ),
-            Spacer(id: "spacer", size: (w: Fill, h: Fixed(30.0))),
+            Slot(id: "spacer", size: (w: Fill, h: Fixed(30.0))),
             Button(
                 id: "zoom-out",
                 size: (w: Fixed(36.0), h: Fixed(30.0)),
@@ -81,18 +84,31 @@
                 style: Transport,
                 write: Command(id: "deck.view.zoom_in", with: { "deck": "$deck" }),
             ),
-            Select(
+            Row(
                 id: "stream",
-                size: (w: Fixed(178.0), h: Fixed(30.0)),
-                label: "HLS AUTO·320 BUF 18S",
+                gap: 7.0,
+                pad_x: 11.0,
+                frame: (top: false, right: false, bottom: false, left: true),
+                size: (w: Shrink, h: Fixed(30.0)),
+                children: [
+                    Text(id: "stream-label", style: MicroLabel, label: "HLS AUTO·320 BUF 18S"),
+                    Glyph(id: "stream-chevron", icon: ChevronDown),
+                ],
             ),
-            Readout(
+            Row(
                 id: "tempo",
-                size: (w: Fixed(154.0), h: Fixed(30.0)),
-                label: Some("TEMPO"),
-                tone: Accent,
-                framed: true,
-                read: Telemetry(id: "deck.playback.tempo", with: { "deck": "$deck" }),
+                gap: 7.0,
+                pad_x: 11.0,
+                frame: (top: false, right: false, bottom: false, left: true),
+                size: (w: Shrink, h: Fixed(30.0)),
+                children: [
+                    Text(id: "tempo-label", style: MicroLabel, label: "TEMPO"),
+                    Text(
+                        id: "tempo-value",
+                        style: Telemetry,
+                        read: Telemetry(id: "deck.playback.tempo", with: { "deck": "$deck" }),
+                    ),
+                ],
             ),
         ],
     ),

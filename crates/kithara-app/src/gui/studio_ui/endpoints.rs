@@ -25,6 +25,12 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
     ),
     (
         EndpointCategory::Telemetry,
+        "deck.focused",
+        ValueKind::Bool,
+        true,
+    ),
+    (
+        EndpointCategory::Telemetry,
         "deck.playback.position_secs",
         ValueKind::Scalar,
         true,
@@ -114,6 +120,12 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
         true,
     ),
     (
+        EndpointCategory::Telemetry,
+        "mixer.volume",
+        ValueKind::Stereo,
+        true,
+    ),
+    (
         EndpointCategory::Model,
         "mixer.muted",
         ValueKind::Bool,
@@ -146,6 +158,12 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
     (
         EndpointCategory::Parameter,
         "ui.layout.decks",
+        ValueKind::Scalar,
+        false,
+    ),
+    (
+        EndpointCategory::Telemetry,
+        "engine.load",
         ValueKind::Scalar,
         false,
     ),

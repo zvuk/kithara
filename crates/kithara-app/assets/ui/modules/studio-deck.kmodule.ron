@@ -4,6 +4,7 @@
     id: "studio-deck",
     parameters: ["deck", "badge"],
     root: Column(
+        background: BgInset,
         children: [
             Wave(
                 id: "wave",
@@ -16,11 +17,14 @@
             ),
             Row(
                 id: "transport",
-                size: (w: Fill, h: Fixed(36.0)),
+                gap: 0.0,
+                size: (w: Fill, h: Fixed(38.0)),
+                background: BgDeep,
+                background_alpha: 0.84,
                 children: [
                     Button(
                         id: "play",
-                        size: (w: Fixed(64.0), h: Fill),
+                        size: (w: Fixed(68.0), h: Fill),
                         label: "PLAY",
                         icon: Some(Play),
                         style: TransportPrimary,
@@ -30,7 +34,7 @@
                     ),
                     Button(
                         id: "prev",
-                        size: (w: Fixed(36.0), h: Fill),
+                        size: (w: Fixed(40.0), h: Fill),
                         label: "",
                         icon: Some(Rewind),
                         style: Transport,
@@ -38,32 +42,27 @@
                     ),
                     Button(
                         id: "next",
-                        size: (w: Fixed(36.0), h: Fill),
+                        size: (w: Fixed(40.0), h: Fill),
                         label: "",
                         icon: Some(FastForward),
                         style: Transport,
                         write: Command(id: "deck.transport.next", with: { "deck": "$deck" }),
                     ),
-                    Spacer(id: "gap"),
-                    Time(
-                        id: "time",
-                        size: (w: Fixed(144.0), h: Fill),
-                        read: Telemetry(id: "deck.playback.position_secs", with: { "deck": "$deck" }),
-                    ),
-                    Chip(
-                        id: "keylock",
-                        size: (w: Fixed(48.0), h: Fixed(24.0)),
-                        label: "KEY",
-                        style: Routing,
-                        read: Model(id: "deck.ts.keylock", with: { "deck": "$deck" }),
-                        write: Command(id: "deck.ts.toggle_keylock", with: { "deck": "$deck" }),
-                    ),
-                    Readout(
+                    Slot(id: "gap", size: (w: Fill, h: Fill)),
+                    Row(
                         id: "tempo",
-                        size: (w: Fixed(64.0), h: Fixed(26.0)),
-                        label: Some("TEMPO"),
-                        tone: Accent,
-                        read: Telemetry(id: "deck.playback.tempo", with: { "deck": "$deck" }),
+                        gap: 7.0,
+                        pad_x: 11.0,
+                        frame: (top: false, right: false, bottom: false, left: true),
+                        size: (w: Shrink, h: Fill),
+                        children: [
+                            Text(id: "tempo-label", style: MicroLabel, label: "TEMPO"),
+                            Text(
+                                id: "tempo-value",
+                                style: Telemetry,
+                                read: Telemetry(id: "deck.playback.tempo", with: { "deck": "$deck" }),
+                            ),
+                        ],
                     ),
                 ],
             ),

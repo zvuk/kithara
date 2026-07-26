@@ -9,9 +9,10 @@ use super::{
 };
 use crate::{
     error::UiDocError,
-    ids::{Interner, NodeId, SourceUri},
+    ids::{InternId, Interner, NodeId, SourceUri},
     module::{
-        AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, GlyphStyle, IconName, TextStyle,
+        AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, IconName, TextAlign, TextStyle,
+        TrackColumn, WaveStyle,
     },
     resolve::ModuleSet,
     size::SizeSpec,
@@ -173,11 +174,15 @@ fn text_spec(
     interner: &mut Interner,
     style: TextStyle,
     label: Option<&str>,
+    active: Option<&BindingRef>,
+    align: TextAlign,
     path: &str,
 ) -> Result<ControlSpec, UiDocError> {
     Ok(ControlSpec::Text {
         style,
         label: intern_optional_text(context, interner, label, path, &context.origin)?,
+        active: intern_optional_binding(interner, active, &context.origin)?,
+        align,
     })
 }
 
@@ -212,6 +217,7 @@ struct ExtraBindings {
     query: Option<BindingRef>,
     scope: Option<BindingRef>,
     zoom: Option<BindingRef>,
+    active: Option<BindingRef>,
 }
 
 #[derive(Clone, Copy)]
@@ -220,6 +226,7 @@ struct ExtraBindingRefs<'a> {
     query: Option<&'a BindingRef>,
     scope: Option<&'a BindingRef>,
     zoom: Option<&'a BindingRef>,
+    active: Option<&'a BindingRef>,
 }
 
 impl ExtraBindings {
@@ -256,11 +263,19 @@ impl ExtraBindings {
                 .transpose()?,
             _ => None,
         };
+        let active = match control {
+            ControlNode::Text { active, .. } => active
+                .as_ref()
+                .map(|binding| substitute_binding(context, binding, path))
+                .transpose()?,
+            _ => None,
+        };
         Ok(Self {
             columns_state,
             query,
             scope,
             zoom,
+            active,
         })
     }
 
@@ -270,6 +285,7 @@ impl ExtraBindings {
             query: self.query.as_ref(),
             scope: self.scope.as_ref(),
             zoom: self.zoom.as_ref(),
+            active: self.active.as_ref(),
         }
     }
 }
@@ -319,6 +335,7 @@ fn finish_control(
             query: extra.query,
             scope: extra.scope,
             zoom: extra.zoom,
+            active: extra.active,
         },
         &context.origin,
     )?;
@@ -348,24 +365,74 @@ fn expand_control(
 ) -> Result<ExpandedNode, UiDocError> {
     let path = begin_control(context, fields.id, machine)?;
     let extra = ExtraBindings::substitute(context, control, &path)?;
+    let Some(spec) = control_spec(context, control, &extra, &path, machine)? else {
+        return walk(context, control, depth, machine);
+    };
+    finish_control(
+        context,
+        control,
+        fields,
+        &path,
+        extra.as_refs(),
+        spec,
+        machine,
+    )
+}
+
+/// A container node has no spec of its own; the caller keeps walking it.
+fn control_spec(
+    context: &Context<'_>,
+    control: &ControlNode,
+    extra: &ExtraBindings,
+    path: &str,
+    machine: &mut Expander<'_, '_>,
+) -> Result<Option<ControlSpec>, UiDocError> {
     let spec = match control {
         ControlNode::DeckSummary { style, .. } => ControlSpec::DeckSummary { style: *style },
         ControlNode::Brand { .. } => ControlSpec::Brand,
         ControlNode::Spacer { .. } => ControlSpec::Spacer,
+        ControlNode::Divider { .. } => ControlSpec::Divider,
         ControlNode::PresetSelector { .. } => ControlSpec::PresetSelector,
         ControlNode::SettingsButton { .. } => ControlSpec::SettingsButton,
-        ControlNode::TitleBar { label, .. } => title_bar_spec(context, machine, label, &path)?,
+        ControlNode::WindowDrag { .. } => ControlSpec::WindowDrag,
         ControlNode::WindowControls { style, .. } => ControlSpec::WindowControls { style: *style },
-        ControlNode::Text { style, label, .. } => {
-            text_spec(context, machine.interner, *style, label.as_deref(), &path)?
-        }
-        ControlNode::Glyph { icon, style, .. } => glyph_spec(*icon, *style),
+        ControlNode::Glyph { icon, style, .. } => ControlSpec::Glyph {
+            icon: *icon,
+            style: *style,
+        },
+        ControlNode::Time { .. } => ControlSpec::Time,
+        ControlNode::Scalar { format, framed, .. } => ControlSpec::Scalar {
+            format: *format,
+            framed: *framed,
+        },
+        ControlNode::Crossfader { ticks, .. } => ControlSpec::Crossfader { ticks: *ticks },
+        ControlNode::Vis { .. } => ControlSpec::Vis,
+        ControlNode::Toggle { .. } => ControlSpec::Toggle,
+        ControlNode::Checkbox { .. } => ControlSpec::Checkbox,
+        ControlNode::Meter { .. } => ControlSpec::Meter,
+        ControlNode::VuStereo { .. } => ControlSpec::VuStereo,
+        ControlNode::VuVertical { ticks, .. } => ControlSpec::VuVertical { ticks: *ticks },
+        ControlNode::TitleBar { label, .. } => title_bar_spec(context, machine, label, path)?,
+        ControlNode::Text {
+            style,
+            label,
+            align,
+            ..
+        } => text_spec(
+            context,
+            machine.interner,
+            *style,
+            label.as_deref(),
+            extra.active.as_ref(),
+            *align,
+            path,
+        )?,
         ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
-            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+            label: intern_text(context, machine.interner, label, path, &context.origin)?,
             icon: *icon,
         },
         ControlNode::TabLarge { label, .. } => ControlSpec::TabLarge {
-            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+            label: intern_text(context, machine.interner, label, path, &context.origin)?,
         },
         ControlNode::Button {
             label,
@@ -380,53 +447,26 @@ fn expand_control(
             *icon,
             active_label.as_deref(),
             *style,
-            &path,
+            path,
         )?,
         ControlNode::Bpm { placeholder, .. } => ControlSpec::Bpm {
-            placeholder: intern_optional_text(
-                context,
-                machine.interner,
-                placeholder.as_deref(),
-                &path,
-                &context.origin,
-            )?,
+            placeholder: optional_label(context, machine, placeholder.as_deref(), path)?,
         },
-        ControlNode::Time { .. } => ControlSpec::Time,
-        ControlNode::Scalar { format, .. } => ControlSpec::Scalar { format: *format },
-        ControlNode::Crossfader { .. } => ControlSpec::Crossfader,
         ControlNode::Fader { style, label, .. } => ControlSpec::Fader {
             style: *style,
-            label: intern_optional_text(
-                context,
-                machine.interner,
-                label.as_deref(),
-                &path,
-                &context.origin,
-            )?,
+            label: optional_label(context, machine, label.as_deref(), path)?,
         },
-        ControlNode::Wave { style, badge, .. } => ControlSpec::Wave {
-            style: *style,
-            badge: intern_optional_text(
-                context,
-                machine.interner,
-                badge.as_deref(),
-                &path,
-                &context.origin,
-            )?,
-            zoom: intern_optional_binding(machine.interner, extra.zoom.as_ref(), &context.origin)?,
-        },
-        ControlNode::Vis { .. } => ControlSpec::Vis,
+        ControlNode::Wave { style, badge, .. } => wave_spec(
+            context,
+            machine,
+            *style,
+            badge.as_deref(),
+            extra.zoom.as_ref(),
+            path,
+        )?,
         ControlNode::TrackList {
             columns, assign, ..
-        } => ControlSpec::TrackList {
-            columns: columns.clone(),
-            columns_state: intern_optional_binding(
-                machine.interner,
-                extra.columns_state.as_ref(),
-                &context.origin,
-            )?,
-            assign: intern_texts(context, machine.interner, assign, &path, &context.origin)?,
-        },
+        } => track_list_spec(context, machine, columns, assign, extra, path)?,
         ControlNode::Tree { .. } => ControlSpec::Tree {
             query: intern_optional_binding(
                 machine.interner,
@@ -439,34 +479,26 @@ fn expand_control(
             machine.interner,
             scope_items,
             extra.scope.as_ref(),
-            &path,
+            path,
         )?,
-        ControlNode::Toggle { .. } => ControlSpec::Toggle,
-        ControlNode::Checkbox { .. } => ControlSpec::Checkbox,
         ControlNode::Segmented { items, .. } => ControlSpec::Segmented {
-            items: intern_texts(context, machine.interner, items, &path, &context.origin)?,
+            items: intern_texts(context, machine.interner, items, path, &context.origin)?,
         },
         ControlNode::Select { label, .. } => ControlSpec::Select {
-            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+            label: intern_text(context, machine.interner, label, path, &context.origin)?,
         },
         ControlNode::StatusDot { label, tone, .. } => ControlSpec::StatusDot {
-            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+            label: intern_text(context, machine.interner, label, path, &context.origin)?,
             tone: *tone,
         },
         ControlNode::Swatch { role, label, .. } => ControlSpec::Swatch {
             role: *role,
-            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+            label: intern_text(context, machine.interner, label, path, &context.origin)?,
         },
         ControlNode::Cell {
             label, highlighted, ..
         } => ControlSpec::Cell {
-            label: intern_optional_text(
-                context,
-                machine.interner,
-                label.as_deref(),
-                &path,
-                &context.origin,
-            )?,
+            label: optional_label(context, machine, label.as_deref(), path)?,
             highlighted: *highlighted,
         },
         ControlNode::Readout {
@@ -475,49 +507,66 @@ fn expand_control(
             framed,
             ..
         } => ControlSpec::Readout {
-            label: intern_optional_text(
-                context,
-                machine.interner,
-                label.as_deref(),
-                &path,
-                &context.origin,
-            )?,
+            label: optional_label(context, machine, label.as_deref(), path)?,
             tone: *tone,
             framed: *framed,
         },
         ControlNode::Chip { label, style, .. } => ControlSpec::Chip {
-            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+            label: intern_text(context, machine.interner, label, path, &context.origin)?,
             style: *style,
         },
         ControlNode::Knob { label, .. } => ControlSpec::Knob {
-            label: intern_optional_text(
-                context,
-                machine.interner,
-                label.as_deref(),
-                &path,
-                &context.origin,
-            )?,
+            label: optional_label(context, machine, label.as_deref(), path)?,
         },
-        ControlNode::VuStereo { .. } => ControlSpec::VuStereo,
-        ControlNode::VuVertical { .. } => ControlSpec::VuVertical,
         ControlNode::Row { .. }
         | ControlNode::Column { .. }
         | ControlNode::Include { .. }
-        | ControlNode::Slot { .. } => return walk(context, control, depth, machine),
+        | ControlNode::Slot { .. } => return Ok(None),
     };
-    finish_control(
-        context,
-        control,
-        fields,
-        &path,
-        extra.as_refs(),
-        spec,
-        machine,
-    )
+    Ok(Some(spec))
 }
 
-const fn glyph_spec(icon: IconName, style: GlyphStyle) -> ControlSpec {
-    ControlSpec::Glyph { icon, style }
+fn optional_label(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    label: Option<&str>,
+    path: &str,
+) -> Result<Option<InternId>, UiDocError> {
+    intern_optional_text(context, machine.interner, label, path, &context.origin)
+}
+
+fn wave_spec(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    style: WaveStyle,
+    badge: Option<&str>,
+    zoom: Option<&BindingRef>,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::Wave {
+        style,
+        badge: intern_optional_text(context, machine.interner, badge, path, &context.origin)?,
+        zoom: intern_optional_binding(machine.interner, zoom, &context.origin)?,
+    })
+}
+
+fn track_list_spec(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    columns: &[TrackColumn],
+    assign: &[String],
+    extra: &ExtraBindings,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::TrackList {
+        columns: columns.to_vec(),
+        columns_state: intern_optional_binding(
+            machine.interner,
+            extra.columns_state.as_ref(),
+            &context.origin,
+        )?,
+        assign: intern_texts(context, machine.interner, assign, path, &context.origin)?,
+    })
 }
 
 fn button_spec(
@@ -560,6 +609,13 @@ fn expand_header_control(
             adaptive,
         }
         | ControlNode::Spacer {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+        | ControlNode::Divider {
             id,
             size,
             read,
@@ -666,6 +722,7 @@ fn expand_value_control(
             read,
             write,
             adaptive,
+            ..
         }
         | ControlNode::Fader {
             id,
@@ -734,6 +791,7 @@ fn expand_window_control(
         control @ (ControlNode::TitleBar {
             id, size, adaptive, ..
         }
+        | ControlNode::WindowDrag { id, size, adaptive }
         | ControlNode::WindowControls {
             id, size, adaptive, ..
         }) => expand_control(
@@ -840,12 +898,20 @@ fn expand_atom_control(
             write,
             adaptive,
         }
+        | ControlNode::Meter {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
         | ControlNode::VuVertical {
             id,
             size,
             read,
             write,
             adaptive,
+            ..
         }) => expand_control(
             context,
             control,
@@ -869,6 +935,11 @@ fn walk(
             size,
             gap,
             pad,
+            pad_x,
+            pad_y,
+            frame,
+            background,
+            background_alpha,
             children,
         } => {
             machine.budget.charge(&context.origin)?;
@@ -880,6 +951,11 @@ fn walk(
                 size: *size,
                 gap: *gap,
                 pad: *pad,
+                pad_x: *pad_x,
+                pad_y: *pad_y,
+                frame: *frame,
+                background: *background,
+                background_alpha: *background_alpha,
                 children: children
                     .iter()
                     .map(|child| walk(context, child, depth, machine))
@@ -891,6 +967,11 @@ fn walk(
             size,
             gap,
             pad,
+            pad_x,
+            pad_y,
+            frame,
+            background,
+            background_alpha,
             children,
         } => {
             machine.budget.charge(&context.origin)?;
@@ -902,6 +983,11 @@ fn walk(
                 size: *size,
                 gap: *gap,
                 pad: *pad,
+                pad_x: *pad_x,
+                pad_y: *pad_y,
+                frame: *frame,
+                background: *background,
+                background_alpha: *background_alpha,
                 children: children
                     .iter()
                     .map(|child| walk(context, child, depth, machine))
@@ -934,11 +1020,14 @@ fn walk(
         control @ (ControlNode::DeckSummary { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
+        | ControlNode::Divider { .. }
         | ControlNode::PresetSelector { .. }
         | ControlNode::SettingsButton { .. }
         | ControlNode::Text { .. }
         | ControlNode::Glyph { .. }) => expand_header_control(context, control, depth, machine),
-        control @ (ControlNode::TitleBar { .. } | ControlNode::WindowControls { .. }) => {
+        control @ (ControlNode::TitleBar { .. }
+        | ControlNode::WindowDrag { .. }
+        | ControlNode::WindowControls { .. }) => {
             expand_window_control(context, control, depth, machine)
         }
         control @ (ControlNode::Button { .. }
@@ -965,7 +1054,8 @@ fn walk(
         | ControlNode::Chip { .. }
         | ControlNode::Knob { .. }
         | ControlNode::VuStereo { .. }
-        | ControlNode::VuVertical { .. }) => expand_atom_control(context, control, depth, machine),
+        | ControlNode::VuVertical { .. }
+        | ControlNode::Meter { .. }) => expand_atom_control(context, control, depth, machine),
     }
 }
 

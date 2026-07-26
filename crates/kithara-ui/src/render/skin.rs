@@ -6,10 +6,11 @@ use crate::{
     ids::SourceUri,
     skin::{
         ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, CrossfaderSkin,
-        DeckSkin, FaderSkin, FrameSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin, LayoutSkin,
-        NavSkin, ReadoutSkin, SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin,
-        TabLargeSkin, TelemetrySkin, TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin,
-        VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
+        DeckSkin, DividerSkin, FaderSkin, FrameSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin,
+        LayoutSkin, MeterSkin, NavSkin, ReadoutSkin, SegmentedSkin, SelectSkin, SkinDoc,
+        StatusDotSkin, SwatchSkin, TabLargeSkin, TelemetrySkin, TextInputSkin, TextSkin,
+        ToggleSkin, TrackListSkin, TreeSkin, VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin,
+        WindowSkin, parse_color,
     },
 };
 
@@ -45,6 +46,8 @@ pub struct Skin {
     pub wave: WaveSkin,
     pub deck: DeckSkin,
     pub global_bar: GlobalBarSkin,
+    pub divider: DividerSkin,
+    pub meter: MeterSkin,
     pub telemetry: TelemetrySkin,
     pub tree: TreeSkin,
     pub track_list: TrackListSkin,
@@ -109,6 +112,8 @@ impl Skin {
             wave: document.wave,
             deck: document.deck,
             global_bar: document.global_bar,
+            divider: document.divider,
+            meter: document.meter,
             telemetry: document.telemetry,
             tree: document.tree.clone(),
             track_list: document.track_list.clone(),

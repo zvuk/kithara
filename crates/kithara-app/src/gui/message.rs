@@ -1,4 +1,4 @@
-use kithara_ui::render::UiEvent;
+use kithara_ui::render::{UiEvent, WindowCommand};
 
 use crate::deck::DeckId;
 
@@ -28,6 +28,11 @@ pub(crate) enum Message {
     PauseHiddenDecks,
     /// Periodic tick from the subscription.
     Tick,
-    /// System close button on the studio window; exits the app.
+    /// Window chrome the studio bar draws itself; executed against the
+    /// studio window this app owns.
+    Window(WindowCommand),
+    /// Captured studio frame from the `KITHARA_SHOT_DIR` pass.
+    Shot(iced::window::Screenshot),
+    /// The window manager asked the studio window to close; exits the app.
     WindowCloseRequested,
 }
