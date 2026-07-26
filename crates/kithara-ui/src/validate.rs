@@ -381,6 +381,50 @@ pub(crate) fn check_module_footer(
     )
 }
 
+pub(crate) fn check_layout_dragged(
+    doc: &LayoutDoc,
+    origin: &SourceUri,
+    endpoints: &dyn EndpointRegistry,
+) -> Result<(), UiDocError> {
+    let Some(binding) = doc.dragged.as_ref() else {
+        return Ok(());
+    };
+    check_binding(
+        binding,
+        BindingSide::Read,
+        Some(ValueKind::Text),
+        "root/dragged",
+        origin,
+        endpoints,
+    )
+}
+
+pub(crate) fn check_module_drop(
+    doc: &ModuleDoc,
+    origin: &SourceUri,
+    endpoints: &dyn EndpointRegistry,
+) -> Result<(), UiDocError> {
+    let Some(drop) = doc.drop.as_ref() else {
+        return Ok(());
+    };
+    check_binding(
+        &drop.write,
+        BindingSide::Write,
+        Some(ValueKind::Trigger),
+        "root/drop",
+        origin,
+        endpoints,
+    )?;
+    check_binding(
+        &drop.read,
+        BindingSide::Read,
+        Some(ValueKind::Bool),
+        "root/drop",
+        origin,
+        endpoints,
+    )
+}
+
 #[derive(Clone, Copy)]
 enum BindingSide {
     Read,

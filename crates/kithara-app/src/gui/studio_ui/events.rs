@@ -1,4 +1,4 @@
-use kithara_ui::render::{ControlAction, UiEvent};
+use kithara_ui::render::{ControlAction, DragPhase, UiEvent};
 use num_traits::cast::AsPrimitive;
 
 use super::{
@@ -7,7 +7,6 @@ use super::{
     scope::deck_index,
 };
 use crate::{
-    catalog,
     deck::DeckId,
     gui::{
         app::Kithara,
@@ -59,6 +58,10 @@ fn deck_control(
 ) -> Option<Message> {
     let id = deck_id(state, index)?;
     let msg = match (control, action) {
+        ("drop", ControlAction::Drag(DragPhase::Over(over))) => {
+            state.studio.cache.set_hover_deck(index, *over);
+            return None;
+        }
         ("wave", ControlAction::SetScalar(position)) => {
             let duration = state.decks.get(id)?.ui.duration.max(0.0);
             DeckMsg::SeekTo(position.clamp(0.0, 1.0) * duration)
@@ -135,22 +138,19 @@ fn strip_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
     Some(msg)
 }
 
-/// Track-list assign chips carry the deck letter in the path; the letter is
-/// the deck's position in the session, matching the channel order. A chip is
-/// a toggle: it loads the row onto its deck, or removes it when already on.
-fn library_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+/// The library hands a row to whichever deck the pointer released it over.
+/// Neither side knows the other: the list reports the drag it started, the
+/// deck reports the pointer crossing it, and the host joins them here.
+fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
         ("tracks", ControlAction::SelectIndex(index)) => Some(Message::SelectCatalogTrack(*index)),
-        (_, ControlAction::SelectIndex(row)) => {
-            let letter = control.strip_prefix("tracks/assign/")?;
-            let id = deck_id(state, deck_index(letter)?)?;
-            let entry = state.catalog.get(*row)?;
-            let queue = state.decks.get(id)?.controller.queue();
-            if catalog::is_loaded(queue, entry) {
-                Some(Message::UnloadFromDeck(*row, id))
-            } else {
-                Some(Message::LoadOntoDeck(*row, id))
-            }
+        ("tracks", ControlAction::Drag(DragPhase::Start(row))) => {
+            state.studio.cache.drag = Some(*row);
+            None
+        }
+        ("tracks", ControlAction::Drag(DragPhase::Drop)) => {
+            let (row, deck) = state.studio.cache.take_drop()?;
+            Some(Message::LoadOntoDeck(row, deck_id(state, deck)?))
         }
         _ => None,
     }

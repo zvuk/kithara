@@ -414,7 +414,7 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             WindowCommand::Drag => window::drag(state.window_id),
             WindowCommand::Minimize => window::minimize(state.window_id, true),
             WindowCommand::ToggleMaximize => window::toggle_maximize(state.window_id),
-            WindowCommand::Close => window::close(state.window_id),
+            WindowCommand::Close => iced::exit(),
             _ => Task::none(),
         },
         Message::Ui(_) => Task::none(),

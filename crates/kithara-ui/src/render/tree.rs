@@ -26,13 +26,16 @@ use crate::{
         ButtonStyle, ChipStyle, ChromeStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName,
         TextAlign, TextStyle, Tone, TrackColumn, WindowControlsStyle,
     },
-    render::{Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent, WindowEdge},
+    render::{
+        ControlAction, DragPhase, Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent, WindowEdge,
+    },
     size::{Dim, SizeSpec, control_size},
     skin::ColorRole,
     widgets::{
-        ModuleChrome, Widget,
+        DropZone, ModuleChrome, Widget,
         button::ControlButton,
         deck::{Bpm, DeckSummary, Time},
+        drag_ghost::DragGhost,
         fader::Fader,
         frame_overlay,
         global_bar::{Brand, Divider, PresetSelector, SettingsButton, Spacer},
@@ -54,10 +57,38 @@ pub fn render<'a>(
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
     let content = render_compiled(node, ui, reads, skin);
-    if ui.resize_edges {
+    let content = if ui.resize_edges {
         framed_by_resize_edges(content, skin)
     } else {
         content
+    };
+    if ui.dragged.is_none() {
+        return content;
+    }
+    carrying(content, dragged_label(ui, reads), skin)
+}
+
+/// What the pointer carries, over everything the layout lays out. The ghost
+/// paints only, so the layers below it keep every event and their own cursor.
+/// A layout that declares one always lays it out, empty-handed when nothing is
+/// being dragged: a layer that came and went would reshape the widget tree and
+/// reset the state of the very gesture that raised it.
+fn carrying<'a>(
+    content: Element<'a, UiEvent>,
+    label: Option<String>,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    Stack::with_children([content, DragGhost::new(label, skin).view()])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+fn dragged_label(ui: &CompiledUi, reads: &dyn Reads) -> Option<String> {
+    let binding = ui.dragged.as_ref()?;
+    match resolve(reads, binding, ui)? {
+        ReadValue::Text(label) if !label.is_empty() => Some(label.to_owned()),
+        _ => None,
     }
 }
 
@@ -136,6 +167,7 @@ fn render_compiled<'a>(
             .into(),
         },
         CompiledNode::Module {
+            instance,
             module,
             title,
             chip,
@@ -143,6 +175,7 @@ fn render_compiled<'a>(
             chrome,
             frame,
             footer,
+            drop,
             collapsed,
             root,
             ..
@@ -172,6 +205,12 @@ fn render_compiled<'a>(
                 .style(*chrome)
                 .frame(*frame)
                 .maybe_footer(footer)
+                .maybe_drop(drop.as_ref().map(|drop| {
+                    module_drop_zone(
+                        ui.resolve(*instance),
+                        read_flag(Some(&drop.read), reads, ui),
+                    )
+                }))
                 .on_toggle(UiEvent::ToggleModule(ui.resolve(*module).to_owned()))
                 .collapsed(collapsed)
                 .skin(skin)
@@ -179,6 +218,16 @@ fn render_compiled<'a>(
                 .view()
         }
     }
+}
+
+/// A module that takes drops reports the pointer crossing it on
+/// `<instance>/drop`; what the drop then means is the host's to decide.
+fn module_drop_zone(instance: &str, active: bool) -> DropZone<UiEvent> {
+    let crossing = |over| UiEvent::Control {
+        path: format!("{instance}/drop"),
+        action: ControlAction::Drag(DragPhase::Over(over)),
+    };
+    DropZone::new(crossing(true), crossing(false), active)
 }
 
 fn render_node<'a>(
@@ -468,13 +517,11 @@ fn render_control<'a>(
         ControlSpec::TrackList {
             columns,
             columns_state,
-            assign,
         } => render_track_list(
             TrackListParts {
                 path,
                 columns,
                 columns_state: columns_state.as_ref(),
-                assign,
                 value,
             },
             ui,
@@ -613,7 +660,6 @@ struct TrackListParts<'a, 'spec, 'value, 'data> {
     path: &'a str,
     columns: &'spec [TrackColumn],
     columns_state: Option<&'spec Binding>,
-    assign: &'spec [InternId],
     value: Option<&'value ReadValue<'data>>,
 }
 
@@ -623,13 +669,11 @@ fn render_track_list<'a>(
     reads: &dyn Reads,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
-    let assign: Vec<&str> = parts.assign.iter().map(|id| ui.resolve(*id)).collect();
     TrackList::builder()
         .path(parts.path)
         .columns(parts.columns)
         .maybe_columns_state(parts.columns_state.map(|binding| ui.resolve(binding.id())))
         .columns_scope(read_scope(parts.columns_state, ui))
-        .assign(assign)
         .maybe_value(parts.value)
         .reads(reads)
         .skin(skin)

@@ -19,7 +19,9 @@ use num_traits::ToPrimitive;
 
 use super::{
     Widget,
-    behavior::{HorizontalPixelDrag, HorizontalPixelDragState, HoverState},
+    behavior::{
+        HorizontalPixelDrag, HorizontalPixelDragState, HoverState, ItemDrag, ItemDragState,
+    },
 };
 use crate::{
     module::TrackColumn,
@@ -43,7 +45,6 @@ struct ColumnLayout {
 struct TrackListRowData {
     artist: Option<String>,
     bpm: Option<String>,
-    current: bool,
     deck: Option<String>,
     energy: Option<u8>,
     key: Option<String>,
@@ -58,7 +59,6 @@ impl From<&TrackRow<'_>> for TrackListRowData {
         Self {
             artist: track.artist.map(str::to_owned),
             bpm: track.bpm.map(str::to_owned),
-            current: track.current,
             deck: track.deck.map(str::to_owned),
             energy: track.energy,
             key: track.key.map(str::to_owned),
@@ -106,7 +106,6 @@ pub(crate) struct TrackList<'path, 'columns, 'state, 'value, 'data, 'reads, 'ski
     columns: &'columns [TrackColumn],
     columns_state: Option<&'state str>,
     columns_scope: &'state str,
-    assign: Vec<&'columns str>,
     value: Option<&'value ReadValue<'data>>,
     reads: &'reads dyn Reads,
     skin: &'skin Skin,
@@ -123,16 +122,9 @@ impl<'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_, '_, '_> {
         let columns = column_layouts(self.columns, self.reads, state, self.skin);
         let path = self.path.to_owned();
         let style = TrackListStyle::new(self.skin);
-        let assign: Vec<String> = self
-            .assign
-            .iter()
-            .map(|label| (*label).to_owned())
-            .collect();
         let tracks: Vec<_> = tracks.iter().map(TrackListRowData::from).collect();
-        responsive(move |size| {
-            track_list_table(&path, &tracks, &columns, &assign, &style, size.width)
-        })
-        .into()
+        responsive(move |size| track_list_table(&path, &tracks, &columns, &style, size.width))
+            .into()
     }
 }
 
@@ -140,7 +132,6 @@ fn track_list_table(
     path: &str,
     tracks: &[TrackListRowData],
     columns: &[ColumnLayout],
-    assign: &[String],
     style: &TrackListStyle,
     available_width: f32,
 ) -> Element<'static, UiEvent> {
@@ -171,7 +162,6 @@ fn track_list_table(
             .index(index)
             .track(track)
             .columns(columns)
-            .assign(assign)
             .flexible_title(flexible_title)
             .build()
             .view()
@@ -259,7 +249,6 @@ struct TrackListRow<'path, 'columns, 'data, 'style> {
     index: usize,
     track: &'data TrackListRowData,
     columns: &'columns [ColumnLayout],
-    assign: &'columns [String],
     flexible_title: bool,
 }
 
@@ -276,8 +265,6 @@ impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
                     self.flexible_title,
                     self.index,
                     self.track,
-                    self.path,
-                    self.assign,
                     self.style,
                 );
                 if column_resizable(self.columns, column_index) {
@@ -286,7 +273,8 @@ impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
                     cell
                 }
             });
-        button(
+        let height = Length::Fixed(self.style.metrics.row_height);
+        let row = button(
             Row::with_children(cells)
                 .align_y(Alignment::Center)
                 .width(Length::Fill)
@@ -294,13 +282,64 @@ impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
         )
         .padding(0)
         .width(Length::Fill)
-        .height(Length::Fixed(self.style.metrics.row_height))
+        .height(height)
         .style(track_button_style(self.style, self.track.selected))
         .on_press(UiEvent::Control {
             path: self.path.to_owned(),
             action: ControlAction::SelectIndex(self.index),
+        });
+        let drag = Canvas::new(RowDrag {
+            drag: ItemDrag::new(self.path.to_owned(), self.index),
         })
-        .into()
+        .width(Length::Fill)
+        .height(height);
+        Stack::with_children([row.into(), drag.into()])
+            .width(Length::Fill)
+            .height(height)
+            .into()
+    }
+}
+
+/// Transparent overlay that turns a press and a pull on the row into a drag of
+/// its track. It paints nothing and captures nothing, so the row keeps its own
+/// click and its hover.
+struct RowDrag {
+    drag: ItemDrag,
+}
+
+impl canvas::Program<UiEvent> for RowDrag {
+    type State = ItemDragState;
+
+    fn draw(
+        &self,
+        _state: &ItemDragState,
+        _renderer: &Renderer,
+        _theme: &Theme,
+        _bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> Vec<Geometry> {
+        Vec::new()
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &ItemDragState,
+        _bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> mouse::Interaction {
+        state.interaction()
+    }
+
+    delegate::delegate! {
+        to self.drag {
+            fn update(
+                &self,
+                state: &mut ItemDragState,
+                event: &Event,
+                bounds: Rectangle,
+                cursor: Cursor,
+            ) -> Option<Action<UiEvent>>;
+        }
     }
 }
 
@@ -360,8 +399,6 @@ fn row_cell(
     flexible_title: bool,
     index: usize,
     track: &TrackListRowData,
-    path: &str,
-    assign: &[String],
     style: &TrackListStyle,
 ) -> Element<'static, UiEvent> {
     let width = column_length(column, flexible_title);
@@ -375,9 +412,6 @@ fn row_cell(
             Horizontal::Right,
             style,
         ),
-        TrackColumn::Deck if !assign.is_empty() => {
-            assign_cell(track, index, path, assign, width, style)
-        }
         TrackColumn::Deck => deck_cell(track, width, style),
         TrackColumn::Title => text_cell(
             value_or_dash(&track.title),
@@ -455,82 +489,24 @@ fn text_cell(
     .into()
 }
 
-/// One chip button per assignable deck: activating a chip targets that deck
-/// with this row. The chip lights up when the row is already on the deck.
-fn assign_cell(
-    track: &TrackListRowData,
-    index: usize,
-    path: &str,
-    assign: &[String],
-    width: Length,
-    style: &TrackListStyle,
-) -> Element<'static, UiEvent> {
-    let marks = track.deck.as_deref().unwrap_or("");
-    let chips = assign.iter().map(|label| {
-        let active = marks.contains(label.as_str());
-        let text_color = if active {
-            style.palette.bg_deep
-        } else {
-            style.palette.text_dim
-        };
-        let chip = container(
-            shaped_text(label.clone())
-                .font(fonts::mono(style.metrics.deck_text.weight))
-                .size(style.metrics.deck_text.size)
-                .color(text_color),
-        )
-        .width(Length::Fixed(style.metrics.deck_chip_width))
-        .height(Length::Fixed(style.metrics.deck_chip_height))
-        .align_x(Horizontal::Center)
-        .align_y(Vertical::Center);
-        let border = style.deck_chip_frame;
-        let background = active.then_some(Background::Color(style.palette.accent));
-        let hover = Background::Color(style.palette.bg_panel);
-        button(chip)
-            .padding(0)
-            .style(move |_theme, status| ButtonStyle {
-                background: if matches!(status, ButtonStatus::Hovered) && !active {
-                    Some(hover)
-                } else {
-                    background
-                },
-                border,
-                ..ButtonStyle::default()
-            })
-            .on_press(UiEvent::Control {
-                path: format!("{path}/assign/{}", label.to_lowercase()),
-                action: ControlAction::SelectIndex(index),
-            })
-            .into()
-    });
-    container(
-        Row::with_children(chips)
-            .spacing(style.metrics.grid_gap)
-            .align_y(Alignment::Center),
-    )
-    .width(width)
-    .height(Length::Fill)
-    .align_x(Horizontal::Center)
-    .align_y(Vertical::Center)
-    .into()
-}
-
+/// The decks the row is loaded on, as their letters. A row on no deck shows
+/// nothing: the column marks assignment, it does not offer it.
 fn deck_cell(
     track: &TrackListRowData,
     width: Length,
     style: &TrackListStyle,
 ) -> Element<'static, UiEvent> {
-    let value = optional_or_dash(track.deck.as_deref());
-    let active = track.current && track.deck.is_some();
+    let Some(marks) = track.deck.clone() else {
+        return container(Space::new())
+            .width(width)
+            .height(Length::Fill)
+            .into();
+    };
     let chip = container(
-        shaped_text(value)
+        shaped_text(marks)
             .font(fonts::mono(style.metrics.deck_text.weight))
             .size(style.metrics.deck_text.size)
-            .color(if active {
-                style.palette.bg_deep
-            } else {
-                style.palette.text_dim
-            }),
+            .color(style.palette.bg_deep),
     )
     .width(Length::Fixed(style.metrics.deck_chip_width))
     .height(Length::Fixed(style.metrics.deck_chip_height))
@@ -538,11 +514,11 @@ fn deck_cell(
     .align_y(Vertical::Center)
     .style({
         let border = style.deck_chip_frame;
-        let background = active.then_some(Background::Color(style.palette.accent));
-        move |_| ContainerStyle {
-            background,
-            border,
-            ..ContainerStyle::default()
+        let background = Background::Color(style.palette.accent);
+        move |_| {
+            ContainerStyle::default()
+                .background(background)
+                .border(border)
         }
     });
     container(chip)

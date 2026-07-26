@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::{
-    Budget, ControlSite, ControlSpec, ControlVisitor, ExpandedModule, ExpandedNode,
+    Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec, ExpandedModule, ExpandedNode,
     binding_subst::{
         intern_binding, intern_optional_binding, intern_optional_text, intern_text, intern_texts,
         substitute_binding, substitute_map,
@@ -76,6 +76,25 @@ impl<'m, 'v> Expander<'m, 'v> {
                 intern_binding(self.interner, &binding, entry)
             })
             .transpose()?;
+        let drop = doc
+            .drop
+            .as_ref()
+            .map(|drop| -> Result<DropSpec, UiDocError> {
+                let path = format!("{prefix}/drop");
+                Ok(DropSpec {
+                    write: intern_binding(
+                        self.interner,
+                        &substitute_binding(&context, &drop.write, &path)?,
+                        entry,
+                    )?,
+                    read: intern_binding(
+                        self.interner,
+                        &substitute_binding(&context, &drop.read, &path)?,
+                        entry,
+                    )?,
+                })
+            })
+            .transpose()?;
         let module = self.interner.intern(&doc.id.0, entry)?;
         let title = doc
             .title
@@ -102,6 +121,7 @@ impl<'m, 'v> Expander<'m, 'v> {
             assign,
             chrome: doc.chrome,
             footer,
+            drop,
             collapsed,
             root,
         })
@@ -464,9 +484,9 @@ fn control_spec(
             extra.zoom.as_ref(),
             path,
         )?,
-        ControlNode::TrackList {
-            columns, assign, ..
-        } => track_list_spec(context, machine, columns, assign, extra, path)?,
+        ControlNode::TrackList { columns, .. } => {
+            track_list_spec(context, machine, columns, extra)?
+        }
         ControlNode::Tree { .. } => ControlSpec::Tree {
             query: intern_optional_binding(
                 machine.interner,
@@ -554,9 +574,7 @@ fn track_list_spec(
     context: &Context<'_>,
     machine: &mut Expander<'_, '_>,
     columns: &[TrackColumn],
-    assign: &[String],
     extra: &ExtraBindings,
-    path: &str,
 ) -> Result<ControlSpec, UiDocError> {
     Ok(ControlSpec::TrackList {
         columns: columns.to_vec(),
@@ -565,7 +583,6 @@ fn track_list_spec(
             extra.columns_state.as_ref(),
             &context.origin,
         )?,
-        assign: intern_texts(context, machine.interner, assign, path, &context.origin)?,
     })
 }
 

@@ -45,6 +45,7 @@ pub struct SkinDoc {
     pub deck: DeckSkin,
     pub global_bar: GlobalBarSkin,
     pub divider: DividerSkin,
+    pub drag: DragSkin,
     pub meter: MeterSkin,
     pub telemetry: TelemetrySkin,
     pub tree: TreeSkin,
@@ -817,6 +818,19 @@ pub struct MeterSkin {
 pub struct DividerSkin {
     pub width: f32,
     pub color: ColorRole,
+}
+
+/// The label the pointer carries while it drags an item.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct DragSkin {
+    pub frame: FrameSkin,
+    pub background: ColorRole,
+    pub text: TextRoleSkin,
+    pub width: f32,
+    pub height: f32,
+    pub pad_x: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

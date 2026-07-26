@@ -121,7 +121,6 @@ pub enum ControlSpec {
     TrackList {
         columns: Vec<TrackColumn>,
         columns_state: Option<Binding>,
-        assign: Vec<InternId>,
     },
     Tree {
         query: Option<Binding>,
@@ -227,8 +226,18 @@ pub(crate) struct ExpandedModule {
     pub(crate) assign: Vec<InternId>,
     pub(crate) chrome: ChromeStyle,
     pub(crate) footer: Option<Binding>,
+    pub(crate) drop: Option<DropSpec>,
     pub(crate) collapsed: InternId,
     pub(crate) root: ExpandedNode,
+}
+
+/// Compiled drop target of a module: the command the host runs when a drag is
+/// released over it, and the flag that reads true while one hovers it.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DropSpec {
+    pub write: Binding,
+    pub read: Binding,
 }
 
 #[derive(Clone, Copy)]

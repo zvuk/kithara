@@ -7,6 +7,7 @@ use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
     ids::{DocId, InstanceId, SourceUri},
+    module::BindingRef,
     size::SizeSpec,
 };
 
@@ -21,6 +22,10 @@ pub struct LayoutDoc {
     /// the renderer frames the root with them when this is set.
     #[serde(default)]
     pub resize_edges: bool,
+    /// Names the item the pointer is carrying. While it reads as text, the
+    /// layout draws that text at the pointer, over everything it lays out.
+    #[serde(default)]
+    pub dragged: Option<BindingRef>,
     pub root: LayoutNode,
 }
 

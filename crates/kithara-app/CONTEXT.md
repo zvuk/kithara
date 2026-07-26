@@ -23,6 +23,17 @@ binding is addressed by the letter it reads. Any lowercase ASCII letter maps to
 a position; the session bounds it, so a letter past the last deck resolves to
 nothing rather than to a neighbour.
 
+A track reaches a deck by being dragged onto it. The library reports the drag
+it started on `library/tracks`, every deck module reports the pointer crossing
+it on `deck-<letter>/drop`, and `StudioCache` joins them at the release: the row
+it carried and the deck under the pointer. Neither side addresses the other.
+While the drag is in flight `ui.drag.track` names the row it carries, and the
+layout draws that name at the pointer.
+The two facts are kept apart — the dragged row and the hovered deck — because
+hover only changes on a crossing: clearing it with the drop would strand a
+second drag onto the deck the pointer never left. The library's Deck column is
+a marker, not a control: it shows the letters of the decks a row is loaded on.
+
 Tempo travel is fixed at `TEMPO_RANGE` percent either way, clamped where the
 deck applies it; there is no range selector and no reset control. The knob sits
 in the mixer channel, which the design canon reserves for EQ and filter: it is

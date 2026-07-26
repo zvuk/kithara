@@ -30,8 +30,22 @@ pub struct ModuleDoc {
     #[serde(default)]
     pub footer: Option<BindingRef>,
     #[serde(default)]
+    pub drop: Option<ModuleDrop>,
+    #[serde(default)]
     pub parameters: Vec<String>,
     pub root: ControlNode,
+}
+
+/// The module takes items dropped on it. The pointer crossing its bounds is
+/// reported to the host on `<instance>/drop`; the host holds what is being
+/// dragged and runs `write` when the drag ends over the module.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ModuleDrop {
+    pub write: BindingRef,
+    /// Reads true while a dragged item is over the module.
+    pub read: BindingRef,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -406,8 +420,6 @@ pub enum ControlNode {
         columns: Vec<TrackColumn>,
         #[serde(default)]
         columns_state: Option<BindingRef>,
-        #[serde(default)]
-        assign: Vec<String>,
     },
     Tree {
         id: NodeId,

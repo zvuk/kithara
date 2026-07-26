@@ -7,6 +7,7 @@ use iced::{
         canvas::{self, Frame, Geometry, Path, Stroke},
         column, container,
         container::Style as ContainerStyle,
+        mouse_area,
     },
 };
 
@@ -32,9 +33,31 @@ pub struct ModuleChrome<'a, 'skin, Content, Message> {
     frame: FrameSides,
     footer: Option<String>,
     on_toggle: Option<Message>,
+    drop: Option<DropZone<Message>>,
     #[builder(default)]
     collapsed: bool,
     skin: &'skin Skin,
+}
+
+/// The module takes dropped items: it reports the pointer crossing its bounds
+/// and lights its frame while `active`. It never learns what is being dragged
+/// — the host holds that and decides what a drop means.
+#[non_exhaustive]
+pub struct DropZone<Message> {
+    pub on_enter: Message,
+    pub on_exit: Message,
+    pub active: bool,
+}
+
+impl<Message> DropZone<Message> {
+    #[must_use]
+    pub const fn new(on_enter: Message, on_exit: Message, active: bool) -> Self {
+        Self {
+            on_enter,
+            on_exit,
+            active,
+        }
+    }
 }
 
 impl<'a, Content, Message> ModuleChrome<'a, '_, Content, Message>
@@ -58,13 +81,16 @@ where
 }
 
 fn module_view<'a, Content, Message>(
-    chrome: ModuleChrome<'a, '_, Content, Message>,
+    mut chrome: ModuleChrome<'a, '_, Content, Message>,
 ) -> Element<'a, Message>
 where
     Content: Into<Element<'a, Message>>,
     Message: Clone + 'a,
 {
-    match chrome.style {
+    let drop = chrome.drop.take();
+    let accent = chrome.skin.palette.accent;
+    let border_width = chrome.skin.chrome.frame.border_width;
+    let shell = match chrome.style {
         ChromeStyle::Full => full(chrome),
         ChromeStyle::Frame => framed(
             chrome.content.into(),
@@ -74,7 +100,41 @@ where
             chrome.frame,
         ),
         ChromeStyle::Plain => chrome.content.into(),
+    };
+    match drop {
+        Some(zone) => drop_zone(shell, zone, accent, border_width),
+        None => shell,
     }
+}
+
+/// Reports the pointer crossing the module and outlines it while a drag is
+/// over it. The area publishes without capturing, so the controls inside keep
+/// every event they would have had.
+fn drop_zone<'a, Message>(
+    content: Element<'a, Message>,
+    zone: DropZone<Message>,
+    accent: Color,
+    border_width: f32,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    let active = zone.active;
+    let outlined = container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_| {
+            let border = if active {
+                Border::default().color(accent).width(border_width)
+            } else {
+                Border::default()
+            };
+            ContainerStyle::default().border(border)
+        });
+    mouse_area(outlined)
+        .on_enter(zone.on_enter)
+        .on_exit(zone.on_exit)
+        .into()
 }
 
 fn full<'a, Content, Message>(

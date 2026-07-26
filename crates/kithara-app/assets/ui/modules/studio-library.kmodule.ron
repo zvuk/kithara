@@ -8,7 +8,6 @@
                 id: "tracks",
                 read: Model(id: "library.tracks"),
                 columns: [Deck, Title, Artist],
-                assign: ["A", "B"],
                 adaptive: (priority: Required),
             ),
         ],

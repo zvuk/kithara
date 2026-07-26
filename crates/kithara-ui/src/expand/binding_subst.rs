@@ -129,7 +129,7 @@ fn intern_binding_parts(
     })
 }
 
-pub(super) fn intern_binding(
+pub(crate) fn intern_binding(
     interner: &mut Interner,
     binding: &BindingRef,
     origin: &SourceUri,

@@ -114,6 +114,24 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
         true,
     ),
     (
+        EndpointCategory::Command,
+        "deck.queue.load",
+        ValueKind::Trigger,
+        true,
+    ),
+    (
+        EndpointCategory::Model,
+        "ui.drag.over",
+        ValueKind::Bool,
+        true,
+    ),
+    (
+        EndpointCategory::Model,
+        "ui.drag.track",
+        ValueKind::Text,
+        false,
+    ),
+    (
         EndpointCategory::Parameter,
         "mixer.trim",
         ValueKind::Scalar,

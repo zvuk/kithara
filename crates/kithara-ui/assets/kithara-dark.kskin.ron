@@ -65,6 +65,14 @@
         footer_text: Muted,
         inner_line: LineInner,
     ),
+    drag: (
+        frame: (radius: 2.0, border_width: 1.0, border: Accent),
+        background: BgPanel2,
+        text: (font: Mono, weight: Medium, size: 10.0, spacing: 0.0, color: Text),
+        width: 208.0,
+        height: 22.0,
+        pad_x: 8.0,
+    ),
     window: (
         titlebar_height: 26.0,
         resize_edge: 4.0,

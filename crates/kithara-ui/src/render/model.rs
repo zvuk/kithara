@@ -68,7 +68,6 @@ pub struct TrackRow<'a> {
     pub key: Option<&'a str>,
     pub energy: Option<u8>,
     pub transition: Option<&'a str>,
-    pub current: bool,
     pub selected: bool,
 }
 

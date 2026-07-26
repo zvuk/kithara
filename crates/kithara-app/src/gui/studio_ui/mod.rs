@@ -378,6 +378,56 @@ mod tests {
         }
     }
 
+    /// Every module that takes drops, as `(instance, scoped binding keys)`.
+    fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![&ui.root];
+        while let Some(node) = stack.pop() {
+            match node {
+                CompiledNode::Split { children, .. } => {
+                    stack.extend(children.iter().map(|(_, child)| child));
+                }
+                CompiledNode::Module {
+                    instance,
+                    drop: Some(drop),
+                    ..
+                } => out.push((
+                    ui.resolve(*instance),
+                    vec![ui.resolve(drop.write.key()), ui.resolve(drop.read.key())],
+                )),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// A library row reaches a deck by being dragged onto it, so every deck the
+    /// layout lays out — and nothing else — takes drops, addressing the same
+    /// deck its controls do.
+    #[kithara::test]
+    fn every_laid_out_deck_takes_dropped_tracks() {
+        for layout in LAYOUTS {
+            let ui = compile_studio(layout).unwrap();
+            let targets = drop_targets(&ui);
+
+            assert_eq!(targets.len(), layout.decks(), "{layout:?}: {targets:?}");
+            for letter in ["a", "b"].into_iter().take(layout.decks()) {
+                let want = (
+                    format!("deck-{letter}"),
+                    vec![
+                        format!("deck.queue.load@deck={letter}"),
+                        format!("ui.drag.over@deck={letter}"),
+                    ],
+                );
+                assert!(
+                    targets.iter().any(|(instance, keys)| *instance == want.0
+                        && keys.iter().copied().eq(want.1.iter().map(String::as_str))),
+                    "{layout:?}: deck {letter} must take drops, got {targets:?}",
+                );
+            }
+        }
+    }
+
     /// The top-bar switch offers exactly the layouts the host can select, in
     /// the order the host indexes them.
     #[kithara::test]

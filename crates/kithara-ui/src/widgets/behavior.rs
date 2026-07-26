@@ -5,7 +5,7 @@ use iced::{
     widget::canvas::Action,
 };
 
-use crate::render::{ControlAction, UiEvent};
+use crate::render::{ControlAction, DragPhase, UiEvent};
 
 #[derive(Clone, Copy)]
 pub(crate) struct HoverState {
@@ -27,6 +27,89 @@ impl HoverState {
             self.interaction
         } else {
             mouse::Interaction::default()
+        }
+    }
+}
+
+/// Pointer travel that turns a press on an item into a drag; below it the
+/// press stays a plain click.
+const DRAG_THRESHOLD: f32 = 4.0;
+
+/// Drag source for one item of a list. It watches the pointer without ever
+/// capturing it, so the item keeps its own click behaviour and every other
+/// control still sees the same events.
+pub(crate) struct ItemDrag {
+    path: String,
+    index: usize,
+}
+
+#[derive(Default)]
+pub(crate) struct ItemDragState {
+    held: bool,
+    /// Where the pointer was first seen after the press. The pointer leaves
+    /// the item it grabbed, and a container that no longer has it hands the
+    /// item a cursor without a position, so the gesture measures itself by the
+    /// positions the move events carry.
+    origin: Option<Point>,
+    active: bool,
+}
+
+impl ItemDragState {
+    /// Only the drag itself claims the cursor. A resting overlay must claim
+    /// nothing: an interaction on the layer above lifts the cursor off the
+    /// item below it, which would cost the item its hover and its click.
+    pub(crate) const fn interaction(&self) -> mouse::Interaction {
+        if self.active {
+            mouse::Interaction::Grabbing
+        } else {
+            mouse::Interaction::None
+        }
+    }
+}
+
+impl ItemDrag {
+    pub(crate) const fn new(path: String, index: usize) -> Self {
+        Self { path, index }
+    }
+
+    fn publish(&self, phase: DragPhase) -> Action<UiEvent> {
+        Action::publish(UiEvent::Control {
+            path: self.path.clone(),
+            action: ControlAction::Drag(phase),
+        })
+    }
+
+    pub(crate) fn update(
+        &self,
+        state: &mut ItemDragState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
+                *state = ItemDragState {
+                    held: true,
+                    ..ItemDragState::default()
+                };
+                None
+            }
+            Event::Mouse(mouse::Event::CursorMoved { position }) if state.held && !state.active => {
+                let Some(origin) = state.origin else {
+                    state.origin = Some(*position);
+                    return None;
+                };
+                if position.distance(origin) < DRAG_THRESHOLD {
+                    return None;
+                }
+                state.active = true;
+                Some(self.publish(DragPhase::Start(self.index)))
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
+                let dragging = std::mem::take(state).active;
+                dragging.then(|| self.publish(DragPhase::Drop))
+            }
+            _ => None,
         }
     }
 }
@@ -368,6 +451,149 @@ mod tests {
                 normalized_horizontal(bounds, Point::new(x, 10.0)),
                 Some(expected)
             );
+        }
+    }
+
+    const ROW: Rectangle = Rectangle {
+        x: 0.0,
+        y: 0.0,
+        width: 400.0,
+        height: 26.0,
+    };
+
+    fn moved(x: f32) -> Event {
+        Event::Mouse(mouse::Event::CursorMoved {
+            position: Point::new(x, 13.0),
+        })
+    }
+
+    fn press() -> Event {
+        Event::Mouse(mouse::Event::ButtonPressed(Button::Left))
+    }
+
+    fn release() -> Event {
+        Event::Mouse(mouse::Event::ButtonReleased(Button::Left))
+    }
+
+    fn dragged(path: &str, phase: DragPhase) -> Option<UiEvent> {
+        Some(UiEvent::Control {
+            path: path.to_owned(),
+            action: ControlAction::Drag(phase),
+        })
+    }
+
+    /// The gesture separates a click from a drag by pointer travel, reports the
+    /// start once, and ends on release. It publishes without capturing, so the
+    /// row underneath keeps its own click.
+    #[kithara::test]
+    fn item_drag_starts_past_the_threshold_and_ends_on_release() {
+        let drag = ItemDrag::new("library/tracks".to_owned(), 3);
+        let at = |x: f32| Cursor::Available(Point::new(x, 13.0));
+        let mut state = ItemDragState::default();
+
+        assert!(drag.update(&mut state, &press(), ROW, at(10.0)).is_none());
+        assert!(
+            drag.update(&mut state, &moved(11.0), ROW, at(11.0))
+                .is_none(),
+            "the first move only fixes the point the travel is measured from"
+        );
+        assert!(
+            drag.update(&mut state, &moved(13.0), ROW, at(13.0))
+                .is_none(),
+            "travel below the threshold stays a click"
+        );
+
+        let started = drag
+            .update(&mut state, &moved(40.0), ROW, at(40.0))
+            .unwrap_or_else(|| panic!("crossing the threshold must start the drag"));
+        let (message, _, status) = started.into_inner();
+        assert_eq!(message, dragged("library/tracks", DragPhase::Start(3)));
+        assert_eq!(status, iced::event::Status::Ignored);
+        assert!(
+            drag.update(&mut state, &moved(80.0), ROW, at(80.0))
+                .is_none(),
+            "a drag starts once"
+        );
+
+        let dropped = drag
+            .update(&mut state, &release(), ROW, at(80.0))
+            .unwrap_or_else(|| panic!("release must end the drag"));
+        assert_eq!(
+            dropped.into_inner().0,
+            dragged("library/tracks", DragPhase::Drop)
+        );
+    }
+
+    /// A pointer that has left the item takes its position with it: the
+    /// container that no longer holds it passes a cursor without one. The drag
+    /// still has to start, or a quick pull off the item never becomes one.
+    #[kithara::test]
+    fn item_drag_starts_after_the_pointer_has_left_the_item() {
+        let drag = ItemDrag::new("library/tracks".to_owned(), 1);
+        let gone = Cursor::Unavailable;
+        let mut state = ItemDragState::default();
+
+        assert!(
+            drag.update(
+                &mut state,
+                &press(),
+                ROW,
+                Cursor::Available(Point::new(8.0, 13.0))
+            )
+            .is_none()
+        );
+        assert!(drag.update(&mut state, &moved(300.0), ROW, gone).is_none());
+
+        let started = drag
+            .update(&mut state, &moved(340.0), ROW, gone)
+            .unwrap_or_else(|| panic!("the drag must start away from the item"));
+        assert_eq!(
+            started.into_inner().0,
+            dragged("library/tracks", DragPhase::Start(1))
+        );
+
+        let dropped = drag
+            .update(&mut state, &release(), ROW, gone)
+            .unwrap_or_else(|| panic!("release must end the drag"));
+        assert_eq!(
+            dropped.into_inner().0,
+            dragged("library/tracks", DragPhase::Drop)
+        );
+    }
+
+    /// A fresh press begins a fresh gesture, so a drag whose release went
+    /// missing cannot leave the item stuck.
+    #[kithara::test]
+    fn a_press_restarts_the_gesture() {
+        let drag = ItemDrag::new("library/tracks".to_owned(), 2);
+        let at = |x: f32| Cursor::Available(Point::new(x, 13.0));
+        let mut state = ItemDragState::default();
+
+        assert!(drag.update(&mut state, &press(), ROW, at(10.0)).is_none());
+        assert!(
+            drag.update(&mut state, &moved(10.0), ROW, at(10.0))
+                .is_none()
+        );
+        assert!(
+            drag.update(&mut state, &moved(60.0), ROW, at(60.0))
+                .is_some()
+        );
+
+        assert!(drag.update(&mut state, &press(), ROW, at(10.0)).is_none());
+        assert!(
+            drag.update(&mut state, &release(), ROW, at(10.0)).is_none(),
+            "the new gesture never became a drag, so its release is a click"
+        );
+    }
+
+    #[kithara::test]
+    fn item_drag_is_silent_without_a_press_on_the_item() {
+        let drag = ItemDrag::new("library/tracks".to_owned(), 0);
+        let away = Cursor::Available(Point::new(600.0, 13.0));
+        let mut state = ItemDragState::default();
+
+        for event in [press(), moved(620.0), release()] {
+            assert!(drag.update(&mut state, &event, ROW, away).is_none());
         }
     }
 

@@ -112,7 +112,6 @@ fn load_catalog() -> Catalog {
             key: Some(&track.key),
             energy: Some(track.energy),
             transition: Some(&track.transition),
-            current: index == 0,
             selected: index == 0,
         })
         .collect();

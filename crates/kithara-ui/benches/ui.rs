@@ -35,7 +35,6 @@ const TRACKS: [TrackRow<'static>; 3] = [
         key: Some("7m"),
         energy: Some(76),
         transition: Some("FILTER FADE"),
-        current: true,
         selected: true,
     },
     TrackRow {
@@ -48,7 +47,6 @@ const TRACKS: [TrackRow<'static>; 3] = [
         key: Some("10m"),
         energy: Some(68),
         transition: Some("EQ SWAP"),
-        current: false,
         selected: false,
     },
     TrackRow {
@@ -61,7 +59,6 @@ const TRACKS: [TrackRow<'static>; 3] = [
         key: Some("4m"),
         energy: Some(54),
         transition: Some("LOOP EXIT"),
-        current: false,
         selected: false,
     },
 ];
@@ -510,7 +507,6 @@ fn track_list(id: &str, endpoint: &str) -> ControlNode {
         adaptive: AdaptivePolicy::default(),
         columns: vec![TrackColumn::Title],
         columns_state: None,
-        assign: Vec::new(),
     }
 }
 

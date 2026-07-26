@@ -22,8 +22,6 @@ pub(crate) enum Message {
     SelectCatalogTrack(usize),
     /// Load catalog row `.0` onto deck `.1`.
     LoadOntoDeck(usize, DeckId),
-    /// Remove catalog row `.0` from deck `.1`'s queue.
-    UnloadFromDeck(usize, DeckId),
     /// Pause every deck the current studio layout does not lay out.
     PauseHiddenDecks,
     /// Periodic tick from the subscription.

@@ -3,6 +3,10 @@
     version: 1,
     id: "studio-deck",
     parameters: ["deck", "badge"],
+    drop: Some((
+        write: Command(id: "deck.queue.load", with: { "deck": "$deck" }),
+        read: Model(id: "ui.drag.over", with: { "deck": "$deck" }),
+    )),
     root: Column(
         background: BgInset,
         children: [

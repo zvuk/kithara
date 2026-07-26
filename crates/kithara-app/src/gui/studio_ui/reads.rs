@@ -40,11 +40,16 @@ impl<'a> StudioReads<'a> {
                 key: None,
                 energy: None,
                 transition: None,
-                current: false,
                 selected: state.selected_track == Some(index),
             })
             .collect();
         Self { state, rows }
+    }
+
+    /// The track the pointer is carrying out of the library, by name.
+    fn dragged_track(&self) -> Option<&'a str> {
+        let row = self.state.studio.cache.drag?;
+        Some(self.state.catalog.get(row)?.name.as_str())
     }
 
     fn deck(&self, index: usize) -> Option<(&'a DeckUi, &'a DeckCache)> {
@@ -93,6 +98,7 @@ impl<'a> StudioReads<'a> {
             "deck.eq.mid" => eq_value(ui.eq_bands.get(1))?,
             "deck.eq.high" => eq_value(ui.eq_bands.get(2))?,
             "deck.view.zoom" => ReadValue::Scalar(cache.zoom?),
+            "ui.drag.over" => ReadValue::Bool(self.state.studio.cache.drag_over(index)),
             "mixer.trim" => {
                 ReadValue::Scalar(f64::from(self.state.session.mix().strips.get(index)?.trim))
             }
@@ -109,6 +115,7 @@ impl<'a> StudioReads<'a> {
     fn global_value(&self, endpoint: &str) -> Option<ReadValue<'a>> {
         let mix = self.state.session.mix();
         let value = match endpoint {
+            "ui.drag.track" => ReadValue::Text(self.dragged_track()?),
             "mix.crossfader" => ReadValue::Scalar(f64::from(mix.position)),
             "mix.group_master" => ReadValue::Scalar(f64::from(mix.group_master)),
             "ui.layout.decks" => ReadValue::Scalar(self.state.studio.cache.layout.index().as_()),

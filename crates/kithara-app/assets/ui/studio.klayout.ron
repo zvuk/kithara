@@ -3,6 +3,7 @@
     version: 1,
     id: "studio",
     resize_edges: true,
+    dragged: Some(Model(id: "ui.drag.track")),
     root: Split(
         axis: Vertical,
         children: [

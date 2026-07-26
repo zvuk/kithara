@@ -1,4 +1,5 @@
-use iced::{Task, window};
+use iced::{Task, window, window::Direction};
+use kithara_ui::render::{WindowCommand, WindowEdge};
 use tracing::{error, warn};
 
 use super::{
@@ -8,8 +9,6 @@ use super::{
     mix, shot, studio_ui,
 };
 use crate::{catalog, deck::DeckId};
-use iced::window::Direction;
-use kithara_ui::render::{WindowCommand, WindowEdge};
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
@@ -39,10 +38,6 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             handle_load(state, index, id);
             Task::none()
         }
-        Message::UnloadFromDeck(index, id) => {
-            handle_unload(state, index, id);
-            Task::none()
-        }
         Message::PauseHiddenDecks => {
             pause_hidden_decks(state);
             Task::none()
@@ -70,7 +65,7 @@ fn window_task(state: &Kithara, command: WindowCommand) -> Task<Message> {
         }),
         WindowCommand::Minimize => window::minimize(state.window_id, true),
         WindowCommand::ToggleMaximize => window::toggle_maximize(state.window_id),
-        WindowCommand::Close => window::close(state.window_id),
+        WindowCommand::Close => iced::exit(),
         other => {
             warn!(?other, "unhandled window command");
             Task::none()
@@ -112,8 +107,8 @@ fn handle_deck(state: &mut Kithara, id: DeckId, msg: &DeckMsg) {
     }
 }
 
-/// Clicking a row highlights it; loading goes through the row's A/B assign
-/// chips so the target deck is always explicit.
+/// Clicking a row highlights it; a deck gets the row by dragging it there, so
+/// the target deck is always the one the pointer chose.
 fn handle_select_catalog(state: &mut Kithara, index: usize) {
     state.selected_track = Some(index);
 }
@@ -127,18 +122,6 @@ fn handle_load(state: &mut Kithara, index: usize, id: DeckId) {
     };
     if let Err(e) = catalog::load_onto(deck.controller.queue(), entry, &state.config) {
         error!(index, deck = id.0, error = %e, "load onto deck failed");
-    }
-}
-
-fn handle_unload(state: &mut Kithara, index: usize, id: DeckId) {
-    let Some(entry) = state.catalog.get(index) else {
-        return;
-    };
-    let Some(deck) = state.decks.get(id) else {
-        return;
-    };
-    if let Err(e) = catalog::unload_from(deck.controller.queue(), entry) {
-        error!(index, deck = id.0, error = %e, "unload from deck failed");
     }
 }
 

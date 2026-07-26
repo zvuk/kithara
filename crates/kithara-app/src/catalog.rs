@@ -88,23 +88,6 @@ pub fn load_onto(
     queue.select(id, Transition::None)
 }
 
-/// Remove `entry` from `queue`. A deck that does not hold the track is a
-/// no-op, so an assign-chip toggle never races the marker it was drawn from.
-///
-/// # Errors
-/// Returns [`QueueError`] when the queue rejects the removal.
-pub fn unload_from(queue: &Queue, entry: &CatalogEntry) -> Result<(), QueueError> {
-    let Some(id) = queue
-        .tracks()
-        .into_iter()
-        .find(|track| track.url.as_deref() == Some(entry.source.as_str()))
-        .map(|track| track.id)
-    else {
-        return Ok(());
-    };
-    queue.remove(id)
-}
-
 /// Whether this deck already holds the track — the library's per-deck marker.
 #[must_use]
 pub fn is_loaded(queue: &Queue, entry: &CatalogEntry) -> bool {

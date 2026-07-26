@@ -140,6 +140,21 @@ Each layout module instance owns which outer frame sides are rendered. These per
 let adjacent modules yield their shared edges to the layout grid, while the skin remains the
 owner of frame thickness and color.
 
+A layout that declares `dragged` names what the pointer is carrying: while that
+binding reads as text, the renderer draws it at the pointer over everything the
+layout lays out. The ghost paints only — it captures no event and claims no
+cursor — and asks for a redraw as the pointer moves, so following the pointer
+costs the host no messages. `SkinDoc.drag` owns its box and type; where the box
+sits relative to the pointer, and how much of the label fits in it, belong to
+the widget.
+
+A module that declares `drop` takes dragged items. It emits
+`ControlAction::Drag(DragPhase::Over)` on `<instance>/drop` as the pointer
+crosses its bounds and outlines itself while its `read` binding is true; the
+`write` binding names the command the host runs on a drop. The renderer never
+learns what is being dragged: the drag source reports its own start and release
+on its own path, the host holds the item and decides what a drop means.
+
 Collapse state remains host-owned. A Full module reads `Bool` from
 `ui.module.<module-doc-id>.collapsed`; an absent value means expanded. Header activation emits
 `UiEvent::ToggleModule(<module-doc-id>)`. The renderer does not retain or mutate collapse state,
@@ -175,6 +190,13 @@ renderer owns table geometry and cell presentation but not column visibility. Wh
 `<binding-id>.<column-name>`; a missing derived endpoint means that column is visible. This keeps
 one declarative column inventory while allowing library, playlist, and set-queue hosts to apply
 presets without introducing renderer-owned mutable state.
+
+The `Deck` column marks assignment and does not offer it: it shows the letters
+the host put on the row and nothing when there are none. A row is a drag source
+instead — pulling it past the gesture threshold emits
+`ControlAction::Drag(DragPhase::Start)` on the control path, and the release
+emits `DragPhase::Drop`. The gesture captures no event, so the row keeps its own
+click and whatever the drag is released over sees the same release.
 
 Column widths are host-owned through Scalar reads at `<binding-id>.width.<column-name>` and
 `SetScalar` controls emitted at `<track-list-path>/width/<column-name>`. A missing width read uses
