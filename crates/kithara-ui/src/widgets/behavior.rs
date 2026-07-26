@@ -1,3 +1,5 @@
+use std::mem;
+
 use iced::{
     Event, Point, Rectangle,
     mouse::{self, Button, Cursor, ScrollDelta},
@@ -46,18 +48,15 @@ pub(crate) struct ItemDrag {
 #[derive(Default)]
 pub(crate) struct ItemDragState {
     held: bool,
-    /// Where the pointer was first seen after the press. The pointer leaves
-    /// the item it grabbed, and a container that no longer has it hands the
-    /// item a cursor without a position, so the gesture measures itself by the
-    /// positions the move events carry.
+    /// A container that lost the pointer hands the item a cursor without a
+    /// position, so travel is measured from the positions move events carry.
     origin: Option<Point>,
     active: bool,
 }
 
 impl ItemDragState {
-    /// Only the drag itself claims the cursor. A resting overlay must claim
-    /// nothing: an interaction on the layer above lifts the cursor off the
-    /// item below it, which would cost the item its hover and its click.
+    /// Claiming the cursor at rest would lift it off the item below and cost
+    /// that item its hover and its click.
     pub(crate) const fn interaction(&self) -> mouse::Interaction {
         if self.active {
             mouse::Interaction::Grabbing
@@ -106,7 +105,7 @@ impl ItemDrag {
                 Some(self.publish(DragPhase::Start(self.index)))
             }
             Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
-                let dragging = std::mem::take(state).active;
+                let dragging = mem::take(state).active;
                 dragging.then(|| self.publish(DragPhase::Drop))
             }
             _ => None,
@@ -482,9 +481,6 @@ mod tests {
         })
     }
 
-    /// The gesture separates a click from a drag by pointer travel, reports the
-    /// start once, and ends on release. It publishes without capturing, so the
-    /// row underneath keeps its own click.
     #[kithara::test]
     fn item_drag_starts_past_the_threshold_and_ends_on_release() {
         let drag = ItemDrag::new("library/tracks".to_owned(), 3);
@@ -524,9 +520,6 @@ mod tests {
         );
     }
 
-    /// A pointer that has left the item takes its position with it: the
-    /// container that no longer holds it passes a cursor without one. The drag
-    /// still has to start, or a quick pull off the item never becomes one.
     #[kithara::test]
     fn item_drag_starts_after_the_pointer_has_left_the_item() {
         let drag = ItemDrag::new("library/tracks".to_owned(), 1);
@@ -561,8 +554,6 @@ mod tests {
         );
     }
 
-    /// A fresh press begins a fresh gesture, so a drag whose release went
-    /// missing cannot leave the item stuck.
     #[kithara::test]
     fn a_press_restarts_the_gesture() {
         let drag = ItemDrag::new("library/tracks".to_owned(), 2);

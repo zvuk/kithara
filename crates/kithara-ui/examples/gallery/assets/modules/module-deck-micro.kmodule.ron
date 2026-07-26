@@ -2,7 +2,7 @@
     schema: "kithara.module",
     version: 1,
     id: "gallery-module-deck-micro",
-    title: Some("Микро-дека"),
+    title: Some("Micro deck"),
     chip: Some("MIC"),
     chrome: Full,
     footer: Some(Model(id: "gallery.footer.deck_micro")),

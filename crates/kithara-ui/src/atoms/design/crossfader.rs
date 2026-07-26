@@ -12,7 +12,7 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     render::{Icon, ReadValue, Skin, UiEvent, fonts, shaped_text},
-    skin::FrameSkin,
+    skin::{FrameSkin, TickSkin},
     widgets::{
         Widget,
         behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
@@ -80,17 +80,10 @@ where
             ),
         ])
         .width(Length::Fill);
-        let ticks = TickRail {
-            color: self.skin.color(metrics.tick_color),
-            center_color: self.skin.color(metrics.tick_center_color),
-            count: if self.ticks { metrics.tick_count } else { 0 },
-            width: metrics.tick_width,
-            height: metrics.tick_height,
-            center_height: metrics.tick_center_height,
-            gap: metrics.tick_gap,
-            inset_x: metrics.tick_inset_x,
-        };
-        let slider_height = ticks.reserved() + metrics.thumb_height;
+        let ticks = self
+            .ticks
+            .then(|| TickRail::new(TickAxis::Horizontal, metrics.ticks, self.skin));
+        let slider_height = ticks.as_ref().map_or(0.0, TickRail::reserved) + metrics.thumb_height;
         let slider = Canvas::new(CrossfaderCanvas {
             drag: ScalarDrag::builder()
                 .path(self.path.to_owned())
@@ -146,57 +139,88 @@ struct CrossfaderCanvas {
     thumb_notch_color: Color,
     thumb_notch_height: f32,
     thumb_notch_width: f32,
-    ticks: TickRail,
+    ticks: Option<TickRail>,
     value: f32,
 }
 
-/// Scale above the rail: hairlines with a taller, brighter one at centre.
-struct TickRail {
+#[derive(Clone, Copy)]
+pub(crate) enum TickAxis {
+    Horizontal,
+    Vertical,
+}
+
+/// Scale beside a fader: hairlines aligned to the far edge of the box they are
+/// drawn in, with a longer, brighter one at centre.
+pub(crate) struct TickRail {
+    axis: TickAxis,
+    metrics: TickSkin,
     color: Color,
     center_color: Color,
-    count: usize,
-    width: f32,
-    height: f32,
-    center_height: f32,
-    gap: f32,
-    inset_x: f32,
 }
 
 impl TickRail {
-    /// Vertical space the rail and thumb are pushed down by.
-    fn reserved(&self) -> f32 {
-        if self.count < 2 {
-            return 0.0;
+    pub(crate) fn new(axis: TickAxis, metrics: TickSkin, skin: &Skin) -> Self {
+        Self {
+            axis,
+            metrics,
+            color: skin.color(metrics.color),
+            center_color: skin.color(metrics.center_color),
         }
-        self.center_height.max(self.height) + self.gap
     }
 
-    fn draw(&self, frame: &mut Frame, width: f32) {
-        if self.count < 2 {
+    fn last(&self) -> Option<usize> {
+        self.metrics.count.checked_sub(1).filter(|last| *last > 0)
+    }
+
+    /// Cross-axis room the hairlines themselves take.
+    pub(crate) fn extent(&self) -> f32 {
+        self.metrics.center_length.max(self.metrics.length)
+    }
+
+    /// Cross-axis room the scale pushes the control it belongs to by.
+    pub(crate) fn reserved(&self) -> f32 {
+        self.last()
+            .map_or(0.0, |_| self.extent() + self.metrics.gap)
+    }
+
+    pub(crate) fn draw(&self, frame: &mut Frame, rail: Rectangle) {
+        let Some(last) = self.last() else {
             return;
-        }
-        let baseline = self.center_height.max(self.height);
-        let travel = (width - self.inset_x * 2.0 - self.width).max(0.0);
-        let last = self.count - 1;
+        };
+        let (span, cross) = match self.axis {
+            TickAxis::Horizontal => (rail.width, rail.height),
+            TickAxis::Vertical => (rail.height, rail.width),
+        };
+        let cross = cross.max(0.0);
+        let travel = (span - self.metrics.inset * 2.0 - self.metrics.thickness).max(0.0);
         let center = last / 2;
-        for index in 0..self.count {
-            let is_center = self.count % 2 == 1 && index == center;
-            let height = if is_center {
-                self.center_height
+        let steps: f32 = last.as_();
+        for index in 0..self.metrics.count {
+            let is_center = self.metrics.count % 2 == 1 && index == center;
+            let length = if is_center {
+                self.metrics.center_length
             } else {
-                self.height
+                self.metrics.length
+            }
+            .min(cross);
+            let step: f32 = index.as_();
+            let offset = self.metrics.inset + step / steps * travel;
+            let color = if is_center {
+                self.center_color
+            } else {
+                self.color
             };
-            let index: f32 = index.as_();
-            let last: f32 = last.as_();
-            frame.fill_rectangle(
-                Point::new(self.inset_x + index / last * travel, baseline - height),
-                Size::new(self.width, height),
-                if is_center {
-                    self.center_color
-                } else {
-                    self.color
-                },
-            );
+            let (corner, size) = match self.axis {
+                TickAxis::Horizontal => (
+                    Point::new(rail.x + offset, rail.y + cross - length),
+                    Size::new(self.metrics.thickness, length),
+                ),
+                TickAxis::Vertical => (
+                    Point::new(rail.x + cross - length, rail.y + offset),
+                    Size::new(length, self.metrics.thickness),
+                ),
+            };
+            frame.fill_rectangle(corner, size, color);
         }
     }
 }
@@ -213,8 +237,21 @@ impl canvas::Program<UiEvent> for CrossfaderCanvas {
         _cursor: Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        self.ticks.draw(&mut frame, bounds.width);
-        let reserved = self.ticks.reserved();
+        let reserved = match &self.ticks {
+            Some(ticks) => {
+                ticks.draw(
+                    &mut frame,
+                    Rectangle {
+                        x: 0.0,
+                        y: 0.0,
+                        width: bounds.width,
+                        height: ticks.extent(),
+                    },
+                );
+                ticks.reserved()
+            }
+            None => 0.0,
+        };
         let track_height = (bounds.height - reserved).max(0.0);
         let rail_height = self.rail_height.min(track_height).max(0.0);
         let rail_point = Point::new(0.0, reserved + (track_height - rail_height) / 2.0);

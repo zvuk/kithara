@@ -18,7 +18,7 @@
                             Button(id: "play", label: "PLAY", style: TransportPrimary, read: Model(id: "mock.button.sync"), size: (w: Fixed(64.0), h: Fixed(28.0))),
                         ],
                     ),
-                    Text(id: "buttons-spec", style: MicroLabel, label: "КНОПКА: 1PX #2A2A4C · АКТИВ = GOLD + #12121F", size: (w: Fill, h: Fill)),
+                    Text(id: "buttons-spec", style: MicroLabel, label: "BUTTON: 1PX #2A2A4C / ACTIVE = GOLD + #12121F", size: (w: Fill, h: Fill)),
                 ],
             ),
             Row(
@@ -35,7 +35,7 @@
                             Chip(id: "fx-2", label: "FX2", style: Routing, read: Model(id: "mock.chip.inactive"), size: (w: Fixed(30.0), h: Fixed(18.0))),
                         ],
                     ),
-                    Text(id: "chips-spec", style: MicroLabel, label: "ЧИП: DECK 18PX · ROUTING 16PX · АКТИВ = GOLD", size: (w: Fill, h: Fill)),
+                    Text(id: "chips-spec", style: MicroLabel, label: "CHIP: DECK 18PX / ROUTING 16PX / ACTIVE = GOLD", size: (w: Fill, h: Fill)),
                 ],
             ),
             Row(
@@ -54,7 +54,7 @@
                             ),
                         ],
                     ),
-                    Text(id: "segmented-spec", style: MicroLabel, label: "СЕГМЕНТЫ: ОБЩАЯ РАМКА 1PX · БЕЗ ЗАЗОРОВ", size: (w: Fill, h: Fill)),
+                    Text(id: "segmented-spec", style: MicroLabel, label: "SEGMENTS: SHARED 1PX FRAME / NO GAPS", size: (w: Fill, h: Fill)),
                 ],
             ),
             Row(
@@ -71,7 +71,7 @@
                             Checkbox(id: "checkbox-on", read: Model(id: "mock.checkbox.on")),
                         ],
                     ),
-                    Text(id: "binary-spec", style: MicroLabel, label: "ТУМБЛЕР 26×14 · ЧЕКБОКС 10×10", size: (w: Fill, h: Fill)),
+                    Text(id: "binary-spec", style: MicroLabel, label: "TOGGLE 26x14 / CHECKBOX 10x10", size: (w: Fill, h: Fill)),
                 ],
             ),
             Row(
@@ -87,7 +87,7 @@
                             StatusDot(id: "rec", label: "REC", tone: Danger),
                         ],
                     ),
-                    Text(id: "status-spec", style: MicroLabel, label: "SELECT: #15152A + 1PX · STATUS: 6PX", size: (w: Fill, h: Fill)),
+                    Text(id: "status-spec", style: MicroLabel, label: "SELECT: #15152A + 1PX / STATUS: 6PX", size: (w: Fill, h: Fill)),
                 ],
             ),
             Row(
@@ -107,7 +107,7 @@
                             Cell(id: "cell-42", label: Some("42"), size: (w: Fixed(50.0), h: Fixed(56.0))),
                         ],
                     ),
-                    Text(id: "cells-spec", style: MicroLabel, label: "ЯЧЕЙКА: 22–42PX · РАДИУС 0PX · GOLD = 26/28", size: (w: Fill, h: Fill)),
+                    Text(id: "cells-spec", style: MicroLabel, label: "CELL: 22-42PX / RADIUS 0PX / GOLD = 26/28", size: (w: Fill, h: Fill)),
                 ],
             ),
         ],

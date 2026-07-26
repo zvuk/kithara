@@ -470,11 +470,11 @@ fn control_spec(
             path,
         )?,
         ControlNode::Bpm { placeholder, .. } => ControlSpec::Bpm {
-            placeholder: optional_label(context, machine, placeholder.as_deref(), path)?,
+            placeholder: optional_text(context, machine, placeholder.as_deref(), path)?,
         },
         ControlNode::Fader { style, label, .. } => ControlSpec::Fader {
             style: *style,
-            label: optional_label(context, machine, label.as_deref(), path)?,
+            label: optional_text(context, machine, label.as_deref(), path)?,
         },
         ControlNode::Wave { style, badge, .. } => wave_spec(
             context,
@@ -518,7 +518,7 @@ fn control_spec(
         ControlNode::Cell {
             label, highlighted, ..
         } => ControlSpec::Cell {
-            label: optional_label(context, machine, label.as_deref(), path)?,
+            label: optional_text(context, machine, label.as_deref(), path)?,
             highlighted: *highlighted,
         },
         ControlNode::Readout {
@@ -527,7 +527,7 @@ fn control_spec(
             framed,
             ..
         } => ControlSpec::Readout {
-            label: optional_label(context, machine, label.as_deref(), path)?,
+            label: optional_text(context, machine, label.as_deref(), path)?,
             tone: *tone,
             framed: *framed,
         },
@@ -536,7 +536,7 @@ fn control_spec(
             style: *style,
         },
         ControlNode::Knob { label, .. } => ControlSpec::Knob {
-            label: optional_label(context, machine, label.as_deref(), path)?,
+            label: optional_text(context, machine, label.as_deref(), path)?,
         },
         ControlNode::Row { .. }
         | ControlNode::Column { .. }
@@ -546,7 +546,7 @@ fn control_spec(
     Ok(Some(spec))
 }
 
-fn optional_label(
+fn optional_text(
     context: &Context<'_>,
     machine: &mut Expander<'_, '_>,
     label: Option<&str>,

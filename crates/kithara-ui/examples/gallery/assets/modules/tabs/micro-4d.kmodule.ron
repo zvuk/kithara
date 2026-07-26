@@ -11,7 +11,7 @@
             Text(
                 id: "label",
                 style: MicroLabel,
-                label: "4D МИНИМУМ — ПРОГРЕСС-ЛИНИЯ 2PX",
+                label: "4D MINIMUM - 2PX PROGRESS LINE",
                 size: (w: Fixed(580.0), h: Fixed(18.0)),
             ),
             Column(

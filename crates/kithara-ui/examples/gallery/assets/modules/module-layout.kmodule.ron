@@ -2,7 +2,7 @@
     schema: "kithara.module",
     version: 1,
     id: "gallery-module-layout",
-    title: Some("Раскладка"),
+    title: Some("Layout"),
     chip: Some("LAY"),
     chrome: Full,
     footer: Some(Model(id: "gallery.footer.layout")),

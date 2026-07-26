@@ -3,7 +3,6 @@ use iced::{
     mouse::Cursor,
     widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke},
 };
-
 use num_traits::cast::AsPrimitive;
 
 use crate::{

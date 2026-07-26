@@ -25,7 +25,7 @@
                             (weight: 1.0, node: Module(
                                 instance: "mixer-standard-label",
                                 source: "modules/tabs/mixer-label.kmodule.ron",
-                                with: { "label": "1D MIXER · STANDARD" },
+                                with: { "label": "1D MIXER / STANDARD" },
                                 size: (w: Fill, h: Fixed(62.0)),
                             )),
                             (weight: 1.0, node: Module(
@@ -42,7 +42,7 @@
                             (weight: 1.0, node: Module(
                                 instance: "mixer-xone-label",
                                 source: "modules/tabs/mixer-label.kmodule.ron",
-                                with: { "label": "1G MIXER · XONE 4-BAND EQ" },
+                                with: { "label": "1G MIXER / XONE 4-BAND EQ" },
                                 size: (w: Fill, h: Fixed(62.0)),
                             )),
                             (weight: 1.0, node: Module(

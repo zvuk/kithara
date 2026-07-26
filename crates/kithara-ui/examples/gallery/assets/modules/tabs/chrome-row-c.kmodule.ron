@@ -6,7 +6,7 @@
     root: Column(
         pad: Some(14.0),
         children: [
-            Text(id: "label", style: Section, label: "C · УГОЛКИ И СТОРОНЫ"),
+            Text(id: "label", style: Section, label: "C / CORNERS AND SIDES"),
         ],
     ),
 )

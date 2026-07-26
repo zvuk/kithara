@@ -188,7 +188,7 @@ impl<'a> Widget<'a> for Time<'_, '_, '_, '_, '_> {
     }
 }
 
-pub(crate) fn format_time(seconds: f64) -> String {
+fn format_time(seconds: f64) -> String {
     let total = seconds.max(0.0).floor().to_u64().unwrap_or(0);
     let minutes = total / seconds_per_minute();
     let seconds = total % seconds_per_minute();

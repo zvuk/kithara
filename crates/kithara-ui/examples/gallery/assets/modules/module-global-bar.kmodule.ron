@@ -2,7 +2,7 @@
     schema: "kithara.module",
     version: 1,
     id: "gallery-module-global-bar",
-    title: Some("Глобальная панель"),
+    title: Some("Global bar"),
     chip: Some("BAR"),
     chrome: Full,
     footer: Some(Model(id: "gallery.footer.global_bar")),

@@ -9,6 +9,7 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
+    atoms::design::crossfader::{TickAxis, TickRail},
     render::{ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
     skin::VuVerticalSkin,
     widgets::{
@@ -37,13 +38,13 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
                 .hover(HoverState::new(mouse::Interaction::ResizingVertically))
                 .build(),
             metrics: self.skin.vu_vertical,
-            ticks: self.ticks,
+            ticks: self
+                .ticks
+                .then(|| TickRail::new(TickAxis::Vertical, self.skin.vu_vertical.ticks, self.skin)),
             levels: *levels,
             palette: self.skin.palette,
             thumb_color: self.skin.color(self.skin.vu_vertical.thumb_color),
             thumb_notch_color: self.skin.color(self.skin.vu_vertical.thumb_notch_color),
-            tick_color: self.skin.color(self.skin.vu_vertical.tick_color),
-            tick_center_color: self.skin.color(self.skin.vu_vertical.tick_center_color),
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -54,13 +55,11 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
 struct VerticalVuCanvas {
     drag: ScalarDrag,
     metrics: VuVerticalSkin,
-    ticks: bool,
+    ticks: Option<TickRail>,
     levels: StereoLevels,
     palette: RenderPalette,
     thumb_color: Color,
     thumb_notch_color: Color,
-    tick_color: Color,
-    tick_center_color: Color,
 }
 
 impl canvas::Program<UiEvent> for VerticalVuCanvas {
@@ -80,19 +79,15 @@ impl canvas::Program<UiEvent> for VerticalVuCanvas {
             y: 0.0,
             ..bounds
         };
-        let fader = if self.ticks {
+        let fader = if self.ticks.is_some() {
             fader_bounds(canvas_bounds, self.metrics.fader_width)
         } else {
             canvas_bounds
         };
-        if self.ticks {
-            draw_ticks(
+        if let Some(rail) = &self.ticks {
+            rail.draw(
                 &mut frame,
-                canvas_bounds,
-                fader.x,
-                self.metrics,
-                self.tick_color,
-                self.tick_center_color,
+                tick_rail_bounds(canvas_bounds, fader.x, self.metrics.ticks.gap),
             );
         }
         draw_segments(&mut frame, fader, self.levels, self.metrics, self.palette);
@@ -135,37 +130,11 @@ fn fader_bounds(bounds: Rectangle, width: f32) -> Rectangle {
     }
 }
 
-fn draw_ticks(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    fader_x: f32,
-    metrics: VuVerticalSkin,
-    color: Color,
-    center_color: Color,
-) {
-    if metrics.tick_count < 2 {
-        return;
-    }
-    let rail_right = (fader_x - metrics.tick_gap).max(bounds.x);
-    let travel = (bounds.height - metrics.tick_height - metrics.tick_inset_y * 2.0).max(0.0);
-    let last = metrics.tick_count - 1;
-    let center = last / 2;
-    for index in 0..metrics.tick_count {
-        let is_center = metrics.tick_count % 2 == 1 && index == center;
-        let width = if is_center {
-            metrics.tick_center_width
-        } else {
-            metrics.tick_width
-        }
-        .min((rail_right - bounds.x).max(0.0));
-        let index: f32 = index.as_();
-        let last: f32 = last.as_();
-        let y = bounds.y + metrics.tick_inset_y + index / last * travel;
-        frame.fill_rectangle(
-            Point::new(rail_right - width, y),
-            Size::new(width, metrics.tick_height),
-            if is_center { center_color } else { color },
-        );
+fn tick_rail_bounds(bounds: Rectangle, fader_x: f32, gap: f32) -> Rectangle {
+    let right = (fader_x - gap).max(bounds.x);
+    Rectangle {
+        width: right - bounds.x,
+        ..bounds
     }
 }
 
@@ -225,7 +194,7 @@ fn draw_thumb(
     if metrics.thumb_notch_offset < metrics.thumb_height {
         frame.fill_rectangle(
             Point::new(bounds.x, y + metrics.thumb_notch_offset),
-            Size::new(bounds.width, 1.0),
+            Size::new(bounds.width, metrics.thumb_notch_height),
             notch_color,
         );
     }
@@ -237,8 +206,6 @@ mod tests {
 
     use super::*;
 
-    /// The fader keeps its skin width and gives the rest of the box to the tick
-    /// rail, so a wider meter moves the fader right instead of stretching it.
     #[kithara::test]
     fn the_fader_keeps_its_width_and_yields_the_rest_to_the_ticks() {
         let bare = fader_bounds(

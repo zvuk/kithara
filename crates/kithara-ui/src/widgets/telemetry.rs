@@ -37,35 +37,27 @@ impl<'a> Widget<'a> for Telemetry<'_, '_, '_> {
             )
         };
         let palette = self.skin.palette;
-        let border = self.skin.border(self.skin.telemetry.frame);
-        let framed = self.framed;
-        container(
+        let readout = container(
             shaped_text(formatted)
                 .font(fonts::mono(self.skin.telemetry.text.weight))
                 .size(self.skin.telemetry.text.size)
                 .color(palette.text),
         )
-        .padding(if self.framed {
-            [self.skin.telemetry.padding_y, self.skin.telemetry.padding_x]
-        } else {
-            [0.0, 0.0]
-        })
-        .width(if self.framed {
-            Length::Fill
-        } else {
-            Length::Shrink
-        })
         .height(Length::Fill)
         .align_x(Horizontal::Center)
-        .align_y(Vertical::Center)
-        .style(move |_| {
-            if !framed {
-                return ContainerStyle::default();
-            }
-            ContainerStyle::default()
-                .background(Background::Color(palette.bg_inset))
-                .border(border)
-        })
-        .into()
+        .align_y(Vertical::Center);
+        if !self.framed {
+            return readout.width(Length::Shrink).into();
+        }
+        let border = self.skin.border(self.skin.telemetry.frame);
+        readout
+            .padding([self.skin.telemetry.padding_y, self.skin.telemetry.padding_x])
+            .width(Length::Fill)
+            .style(move |_| {
+                ContainerStyle::default()
+                    .background(Background::Color(palette.bg_inset))
+                    .border(border)
+            })
+            .into()
     }
 }

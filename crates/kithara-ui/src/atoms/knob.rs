@@ -56,14 +56,10 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
         })
         .width(Length::Fill)
         .height(Length::Fill);
-        let Some(label) = self.label else {
-            return dial.into();
-        };
-        let caption = container(styled_text(
-            label.to_owned(),
-            self.skin.knob.label_text,
-            self.skin,
-        ))
+        let caption = container(match self.label {
+            Some(label) => styled_text(label.to_owned(), self.skin.knob.label_text, self.skin),
+            None => Space::new().into(),
+        })
         .height(Length::Fixed(self.skin.knob.label_height))
         .center_x(Length::Fill);
 
@@ -192,4 +188,34 @@ fn draw_arc(
         });
     });
     frame.stroke(&path, Stroke::default().with_color(color).with_width(width));
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{builtin, ids::SourceUri};
+
+    #[kithara::test]
+    fn the_knob_reserves_its_caption_row_with_and_without_a_label() {
+        let origin = SourceUri("knob.kskin.ron".to_owned());
+        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
+        let value = ReadValue::Scalar(0.5);
+        let rows = |label| {
+            Knob::builder()
+                .path("mixer/gain")
+                .maybe_label(label)
+                .value(&value)
+                .skin(&skin)
+                .build()
+                .view()
+                .as_widget()
+                .children()
+                .len()
+        };
+
+        assert_eq!(rows(Some("GAIN")), 2, "a captioned knob is dial plus label");
+        assert_eq!(rows(None), rows(Some("GAIN")));
+    }
 }

@@ -81,22 +81,19 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
                 action: ControlAction::Activate,
             });
         match self.style {
-            ButtonStyle::Transport => frame_overlay(
-                control
-                    .width(Length::FillPortion(self.skin.button.transport_fill))
-                    .into(),
-                self.skin.button.transport_sides,
-                (Length::Fill, Length::Fill),
-                self.skin,
-            ),
-            ButtonStyle::TransportPrimary => frame_overlay(
-                control
-                    .width(Length::FillPortion(self.skin.button.primary_fill))
-                    .into(),
-                self.skin.button.transport_sides,
-                (Length::Fill, Length::Fill),
-                self.skin,
-            ),
+            ButtonStyle::Transport | ButtonStyle::TransportPrimary => {
+                let fill = if is_primary(self.style) {
+                    self.skin.button.primary_fill
+                } else {
+                    self.skin.button.transport_fill
+                };
+                frame_overlay(
+                    control.width(Length::FillPortion(fill)).into(),
+                    self.skin.button.transport_sides,
+                    (Length::Fill, Length::Fill),
+                    self.skin,
+                )
+            }
             ButtonStyle::MicroPrimary => control
                 .width(Length::Fixed(self.skin.button.micro_size))
                 .into(),
@@ -167,7 +164,7 @@ fn is_primary(style: ButtonStyle) -> bool {
 }
 
 /// Accent fill follows the read value: a transport button is filled while its
-/// state is on. The micro play button is the exception — it is a solid accent
+/// state is on. The micro play button is the exception - it is a solid accent
 /// cell that only swaps its glyph.
 fn is_filled(style: ButtonStyle, active: bool) -> bool {
     active || style == ButtonStyle::MicroPrimary
@@ -272,9 +269,6 @@ mod tests {
         }
     }
 
-    /// A transport cell draws no border of its own: the seam between cells is
-    /// the overlay `transport_sides` describes, so two neighbours never stack
-    /// two lines.
     #[kithara::test]
     fn transport_cells_draw_no_border_of_their_own() {
         let skin = dark_skin();

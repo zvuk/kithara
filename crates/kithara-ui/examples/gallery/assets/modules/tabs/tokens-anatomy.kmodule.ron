@@ -2,7 +2,7 @@
     schema: "kithara.module",
     version: 1,
     id: "gallery-tokens-anatomy",
-    title: Some("Название модуля"),
+    title: Some("Module name"),
     chip: Some("MOD"),
     assign: ["A"],
     chrome: Full,
@@ -16,7 +16,7 @@
                 Text(
                     id: "content",
                     style: MicroLabel,
-                    label: "СОДЕРЖИМОЕ",
+                    label: "CONTENT",
                 ),
                 Spacer(id: "content-right"),
             ]),

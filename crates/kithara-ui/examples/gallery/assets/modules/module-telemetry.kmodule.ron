@@ -2,7 +2,7 @@
     schema: "kithara.module",
     version: 1,
     id: "gallery-module-telemetry",
-    title: Some("Телеметрия"),
+    title: Some("Telemetry"),
     chip: Some("TLM"),
     chrome: Full,
     footer: Some(Model(id: "gallery.footer.telemetry")),

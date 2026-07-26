@@ -21,8 +21,7 @@ use crate::{
 
 /// Framed module shell shared by renderer and application surfaces.
 #[derive(bon::Builder)]
-#[non_exhaustive]
-pub struct ModuleChrome<'a, 'skin, Content, Message> {
+pub(crate) struct ModuleChrome<'a, 'skin, Content, Message> {
     content: Content,
     title: Option<&'a str>,
     chip: Option<&'a str>,
@@ -41,17 +40,15 @@ pub struct ModuleChrome<'a, 'skin, Content, Message> {
 
 /// The module takes dropped items: it reports the pointer crossing its bounds
 /// and lights its frame while `active`. It never learns what is being dragged
-/// — the host holds that and decides what a drop means.
-#[non_exhaustive]
-pub struct DropZone<Message> {
-    pub on_enter: Message,
-    pub on_exit: Message,
-    pub active: bool,
+/// - the host holds that and decides what a drop means.
+pub(crate) struct DropZone<Message> {
+    pub(crate) on_enter: Message,
+    pub(crate) on_exit: Message,
+    pub(crate) active: bool,
 }
 
 impl<Message> DropZone<Message> {
-    #[must_use]
-    pub const fn new(on_enter: Message, on_exit: Message, active: bool) -> Self {
+    pub(crate) const fn new(on_enter: Message, on_exit: Message, active: bool) -> Self {
         Self {
             on_enter,
             on_exit,
@@ -65,8 +62,7 @@ where
     Content: Into<Element<'a, Message>>,
     Message: Clone + 'a,
 {
-    #[must_use]
-    pub fn view(self) -> Element<'a, Message> {
+    pub(crate) fn view(self) -> Element<'a, Message> {
         module_view(self)
     }
 }

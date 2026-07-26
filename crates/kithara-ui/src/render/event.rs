@@ -16,8 +16,7 @@ pub enum ControlAction {
 }
 
 /// Phase of a pointer drag that carries an item from the control it started on
-/// to the one it is released over. Source and target never learn about each
-/// other: each reports its own phase on its own path, and the host joins them.
+/// to the one it is released over.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DragPhase {

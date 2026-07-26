@@ -91,7 +91,7 @@
                 frame: (top: false, right: false, bottom: false, left: true),
                 size: (w: Shrink, h: Fixed(30.0)),
                 children: [
-                    Text(id: "stream-label", style: MicroLabel, label: "HLS AUTO·320 BUF 18S"),
+                    Text(id: "stream-label", style: MicroLabel, label: "HLS AUTO/320 BUF 18S"),
                     Glyph(id: "stream-chevron", icon: ChevronDown),
                 ],
             ),

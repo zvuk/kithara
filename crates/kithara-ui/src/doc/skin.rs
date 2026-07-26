@@ -188,6 +188,22 @@ pub struct FrameSkin {
     pub border: ColorRole,
 }
 
+/// Scale beside a fader: hairlines with a longer, brighter one at centre.
+/// `thickness` runs along the scale, `length` across it, whatever the axis.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct TickSkin {
+    pub count: usize,
+    pub thickness: f32,
+    pub length: f32,
+    pub center_length: f32,
+    pub gap: f32,
+    pub inset: f32,
+    pub color: ColorRole,
+    pub center_color: ColorRole,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -380,14 +396,7 @@ pub struct CrossfaderSkin {
     pub thumb_notch_width: f32,
     pub thumb_notch_height: f32,
     pub thumb_notch_color: ColorRole,
-    pub tick_count: usize,
-    pub tick_width: f32,
-    pub tick_height: f32,
-    pub tick_center_height: f32,
-    pub tick_gap: f32,
-    pub tick_inset_x: f32,
-    pub tick_color: ColorRole,
-    pub tick_center_color: ColorRole,
+    pub ticks: TickSkin,
     pub label_text: FontSkin,
     pub label_color: ColorRole,
     pub label_gap: f32,
@@ -426,17 +435,11 @@ pub struct VuVerticalSkin {
     pub segment_gap: f32,
     pub segment_height: f32,
     pub segment_inset_x: f32,
-    pub tick_count: usize,
-    pub tick_gap: f32,
-    pub tick_height: f32,
-    pub tick_width: f32,
-    pub tick_center_width: f32,
-    pub tick_inset_y: f32,
-    pub tick_color: ColorRole,
-    pub tick_center_color: ColorRole,
+    pub ticks: TickSkin,
     pub thumb_height: f32,
     pub thumb_color: ColorRole,
     pub thumb_notch_offset: f32,
+    pub thumb_notch_height: f32,
     pub thumb_notch_color: ColorRole,
     pub warning_threshold: f32,
     pub danger_threshold: f32,

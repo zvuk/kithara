@@ -17,6 +17,13 @@ fn builtin_skin_parses_every_required_section() {
     let document = parse_skin(builtin::DARK_SKIN, &origin()).unwrap();
 
     assert_eq!(document.id, DocId("kithara-dark".to_owned()));
+    assert_eq!(builtin::skin_doc(), &document);
+}
+
+#[kithara::test]
+fn builtin_skin_pins_the_design_canon() {
+    let document = parse_skin(builtin::DARK_SKIN, &origin()).unwrap();
+
     assert_eq!(document.palette.bg, "#12121f");
     assert_eq!(document.layout.grid_gap, 1.0);
     assert_eq!(document.layout.size_gap, 0.0);
@@ -49,6 +56,15 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.crossfader.left_label, "A");
     assert_eq!(document.crossfader.center_label, "XFADE");
     assert_eq!(document.crossfader.right_label, "B");
+    let horizontal_ticks = document.crossfader.ticks;
+    assert_eq!(horizontal_ticks.count, 11);
+    assert_eq!(horizontal_ticks.thickness, 1.0);
+    assert_eq!(horizontal_ticks.length, 6.0);
+    assert_eq!(horizontal_ticks.center_length, 10.0);
+    assert_eq!(horizontal_ticks.gap, 5.0);
+    assert_eq!(horizontal_ticks.inset, 2.0);
+    assert_eq!(horizontal_ticks.color, ColorRole::Line);
+    assert_eq!(horizontal_ticks.center_color, ColorRole::TextDim);
     assert_eq!(
         document.meter.size,
         SizeSpec::new(Dim::Fixed(40.0), Dim::Fixed(7.0))
@@ -59,8 +75,15 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.meter.fill, ColorRole::Accent);
     assert_eq!(document.vu_stereo.segment_count, 16);
     assert_eq!(document.vu_vertical.fader_width, 18.0);
-    assert_eq!(document.vu_vertical.tick_count, 11);
-    assert_eq!(document.vu_vertical.tick_center_width, 14.0);
+    let vertical_ticks = document.vu_vertical.ticks;
+    assert_eq!(vertical_ticks.count, 11);
+    assert_eq!(vertical_ticks.thickness, 1.0);
+    assert_eq!(vertical_ticks.length, 8.0);
+    assert_eq!(vertical_ticks.center_length, 14.0);
+    assert_eq!(vertical_ticks.gap, 6.0);
+    assert_eq!(vertical_ticks.inset, 2.0);
+    assert_eq!(vertical_ticks.color, ColorRole::Line);
+    assert_eq!(vertical_ticks.center_color, ColorRole::TextDim);
     assert_eq!(document.vu_vertical.warning_threshold, 0.66);
     assert_eq!(
         document.toggle.size,
@@ -112,6 +135,8 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.fader.label_width, 28.0);
     assert_eq!(document.vu_vertical.thumb_height, 9.0);
     assert_eq!(document.vu_vertical.thumb_color, ColorRole::Accent);
+    assert_eq!(document.vu_vertical.thumb_notch_offset, 4.0);
+    assert_eq!(document.vu_vertical.thumb_notch_height, 1.0);
     assert_eq!(document.vis.header_height, 26.0);
     assert_eq!(document.vis.size.h, Dim::Fixed(300.0));
     assert_eq!(document.vis.footer_height, 22.0);
@@ -149,7 +174,6 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(track_list.energy_bar_height, 4.0);
     assert_eq!(track_list.footer_text.size, 9.0);
     assert_eq!(document.layout_preview.height, 92.0);
-    assert_eq!(builtin::skin_doc(), &document);
 }
 
 #[kithara::test]

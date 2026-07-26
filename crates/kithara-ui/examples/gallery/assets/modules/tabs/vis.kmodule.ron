@@ -25,13 +25,13 @@
                     ),
                     Button(
                         id: "previous",
-                        label: "‹",
+                        label: "<",
                         style: VisNav,
                         write: Command(id: "vis.previous"),
                     ),
                     Button(
                         id: "next",
-                        label: "›",
+                        label: ">",
                         style: VisNav,
                         write: Command(id: "vis.next"),
                     ),
@@ -63,7 +63,7 @@
                     Text(
                         id: "footer-label",
                         style: VisFooter,
-                        label: "WGSL · 60 FPS · REACT: MASTER",
+                        label: "WGSL / 60 FPS / REACT: MASTER",
                     ),
                     Glyph(
                         id: "maximize",

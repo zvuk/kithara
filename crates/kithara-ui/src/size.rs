@@ -404,16 +404,12 @@ mod tests {
         assert_eq!(Dim::Fill.max(), None);
     }
 
-    /// A shrunk axis is measured by the toolkit, so the document layer can only
-    /// say that it composes like an open range.
     #[kithara::test]
     fn shrink_has_no_intrinsic_bounds() {
         assert_eq!(Dim::Shrink.min(), 0.0);
         assert_eq!(Dim::Shrink.max(), None);
     }
 
-    /// The declared size wins outright: a node that names its own rule is not
-    /// re-derived from its children.
     #[kithara::test]
     fn a_declared_size_skips_composition() {
         let mut interner = Interner::new(1024);
@@ -429,8 +425,6 @@ mod tests {
         );
     }
 
-    /// Per-axis padding must reach the composed size, or the document declares
-    /// one box and the renderer draws another.
     #[kithara::test]
     fn each_axis_grows_by_its_own_padding() {
         let mut interner = Interner::new(1024);
@@ -460,8 +454,6 @@ mod tests {
         assert_eq!(size.h.min(), 10.0);
     }
 
-    /// A child measured by the toolkit leaves the row's width open — the
-    /// document layer cannot add up what it does not know.
     #[kithara::test]
     fn shrink_child_opens_row_width() {
         let mut interner = Interner::new(1024);

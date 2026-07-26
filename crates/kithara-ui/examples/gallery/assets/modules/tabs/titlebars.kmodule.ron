@@ -9,7 +9,7 @@
             Text(
                 id: "full-label",
                 style: Section,
-                label: "ПОЛНЫЙ ЗАГОЛОВОК ОКНА",
+                label: "FULL WINDOW TITLE BAR",
             ),
             Row(
                 gap: Some(0.0),
@@ -17,7 +17,7 @@
                 children: [
                     TitleBar(
                         id: "full-title",
-                        label: "KITHARA · БИБЛИОТЕКА",
+                        label: "KITHARA / LIBRARY",
                         size: (w: Fill, h: Fixed(26.0)),
                     ),
                     WindowControls(id: "full-controls", style: Standard),
@@ -26,31 +26,31 @@
             Text(
                 id: "standard-label",
                 style: Section,
-                label: "ГЛОБАЛЬНАЯ ПАНЕЛЬ · 2 ДЕКИ",
+                label: "GLOBAL BAR / 2 DECKS",
             ),
             WindowControls(id: "standard", style: Standard),
             Text(
                 id: "compact-label",
                 style: Section,
-                label: "ВЕРХНЯЯ ПАНЕЛЬ · 1 / 4 ДЕКИ · ВКЛАДКИ",
+                label: "TOP BAR / 1 OR 4 DECKS / TABS",
             ),
             WindowControls(id: "compact", style: Compact),
             Text(
                 id: "wide-label",
                 style: Section,
-                label: "МОДАЛЬНОЕ ОКНО НАСТРОЕК",
+                label: "SETTINGS MODAL",
             ),
             WindowControls(id: "close-wide", style: CloseWide),
             Text(
                 id: "micro-label",
                 style: Section,
-                label: "МИКРО",
+                label: "MICRO",
             ),
             WindowControls(id: "close-micro", style: CloseMicro),
             Text(
                 id: "framed-label",
                 style: Section,
-                label: "НАСТРОЙКИ ВИДА",
+                label: "VIEW SETTINGS",
             ),
             WindowControls(id: "close-framed", style: CloseFramed),
         ],

@@ -13,12 +13,12 @@
                     Text(
                         id: "preset-label",
                         style: MicroLabel,
-                        label: "ПРЕСЕТ КОЛОНОК",
+                        label: "COLUMN PRESET",
                         size: (w: Shrink, h: Fixed(26.0)),
                     ),
                     Segmented(
                         id: "column-preset",
-                        items: ["БИБЛИОТЕКА", "ОЧЕРЕДЬ СЕТА", "MICRO"],
+                        items: ["LIBRARY", "SET QUEUE", "MICRO"],
                         read: Model(id: "gallery.tracklist.preset"),
                         size: (w: Fixed(420.0), h: Fixed(26.0)),
                     ),
@@ -45,7 +45,7 @@
                             Text(
                                 id: "columns-label",
                                 style: MicroLabel,
-                                label: "КОЛОНКИ ТАБЛИЦЫ",
+                                label: "TABLE COLUMNS",
                                 size: (w: Fill, h: Fixed(18.0)),
                             ),
                             Row(
@@ -61,7 +61,7 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-deck", read: Model(id: "gallery.tracklist.columns.deck")),
-                                    Text(id: "column-deck-label", style: MicroLabel, label: "ДЕКА", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-deck-label", style: MicroLabel, label: "DECK", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Row(
@@ -109,7 +109,7 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-energy", read: Model(id: "gallery.tracklist.columns.energy")),
-                                    Text(id: "column-energy-label", style: MicroLabel, label: "ЭНЕРГИЯ", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-energy-label", style: MicroLabel, label: "ENERGY", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Row(
@@ -117,12 +117,12 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-transition", read: Model(id: "gallery.tracklist.columns.transition")),
-                                    Text(id: "column-transition-label", style: MicroLabel, label: "ПЕРЕХОД", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-transition-label", style: MicroLabel, label: "TRANSITION", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Button(
                                 id: "reset-columns",
-                                label: "СБРОСИТЬ ПО УМОЛЧАНИЮ",
+                                label: "RESET TO DEFAULTS",
                                 size: (w: Fill, h: Fixed(26.0)),
                             ),
                         ],

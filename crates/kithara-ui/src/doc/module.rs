@@ -57,7 +57,7 @@ pub enum ChromeStyle {
     Plain,
 }
 
-pub(crate) const fn default_framed() -> bool {
+const fn default_framed() -> bool {
     true
 }
 

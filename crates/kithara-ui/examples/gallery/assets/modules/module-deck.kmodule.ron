@@ -2,7 +2,7 @@
     schema: "kithara.module",
     version: 1,
     id: "gallery-module-deck",
-    title: Some("Дека"),
+    title: Some("Deck"),
     chip: Some("DECK"),
     chrome: Full,
     footer: Some(Model(id: "gallery.footer.deck")),

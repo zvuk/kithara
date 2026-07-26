@@ -14,8 +14,7 @@ pub(crate) mod track_list;
 pub(crate) mod vis;
 pub(crate) mod wave;
 pub(crate) mod window;
-pub(crate) use chrome::frame_overlay;
-pub use chrome::{DropZone, ModuleChrome};
+pub(crate) use chrome::{DropZone, ModuleChrome, frame_overlay};
 pub use layout_preview::LayoutPreview;
 
 pub(crate) use crate::render::event::Widget;

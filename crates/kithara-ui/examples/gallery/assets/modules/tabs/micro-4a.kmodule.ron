@@ -11,7 +11,7 @@
             Text(
                 id: "label",
                 style: MicroLabel,
-                label: "4A ВСЁ ВКЛЮЧЕНО — WAVE + VU",
+                label: "4A EVERYTHING ON - WAVE + VU",
                 size: (w: Fixed(580.0), h: Fixed(18.0)),
             ),
             Row(
@@ -40,7 +40,7 @@
                         read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                         size: (w: Fixed(64.0), h: Fixed(40.0)),
                     ),
-                    Select(id: "auto", label: "AUTO·320", size: (w: Fixed(84.0), h: Fixed(26.0))),
+                    Select(id: "auto", label: "AUTO/320", size: (w: Fixed(84.0), h: Fixed(26.0))),
                     Row(
                         id: "volume",
                         size: (w: Shrink, h: Fixed(22.0)),
