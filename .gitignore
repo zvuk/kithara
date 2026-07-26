@@ -15,6 +15,9 @@
 # Brainstorming session artifacts (visual companion)
 .superpowers/
 
+# Design-system handoff: an untracked working copy, replaced whole per handoff
+/kithara-design-system/
+
 # macOS
 .DS_Store
 .AppleDouble

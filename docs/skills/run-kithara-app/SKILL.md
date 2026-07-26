@@ -1,6 +1,6 @@
 ---
 name: run-kithara-app
-description: Build and run Kithara. Default target is the desktop app (kithara-app, GUI). Use the iOS or Android sections ONLY when the user explicitly asks for that platform.
+description: Build and run Kithara. Default target is the desktop app (kithara-app, GUI). Use the design-system gallery, iOS, or Android sections ONLY when the user explicitly asks for that target.
 ---
 
 ## Desktop (default)
@@ -11,6 +11,15 @@ cargo run -p kithara-app -- --mode gui
 
 Add track paths/URLs as extra args to play specific tracks; without any, it
 uses the built-in defaults.
+
+## Design-system gallery — only if explicitly requested
+
+```bash
+cargo run -p kithara-ui --example gallery --features render
+```
+
+Set `KITHARA_SHOT_DIR=<dir>` to walk every tab and dump PNG screenshots
+instead of driving it by hand.
 
 ## iOS — only if explicitly requested
 

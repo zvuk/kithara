@@ -1,3 +1,4 @@
+pub mod bmp;
 pub mod event;
 pub mod fonts;
 pub mod icons;

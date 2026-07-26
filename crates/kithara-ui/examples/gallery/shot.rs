@@ -1,6 +1,7 @@
-use std::{env, fs, io, path::PathBuf};
+use std::{env, path::PathBuf};
 
 use iced::{Task, window, window::Screenshot};
+use kithara_ui::render::bmp;
 
 use super::{Gallery, Message, sections::Tab};
 
@@ -166,7 +167,7 @@ pub(super) fn save(state: &Gallery, name: &str, screenshot: &Screenshot) -> Task
         return Task::none();
     };
     let path = plan.dir.join(format!("{name}.bmp"));
-    if let Err(error) = write_bmp(
+    if let Err(error) = bmp::write(
         &path,
         screenshot.size.width,
         screenshot.size.height,
@@ -179,38 +180,4 @@ pub(super) fn save(state: &Gallery, name: &str, screenshot: &Screenshot) -> Task
     } else {
         Task::none()
     }
-}
-
-fn write_bmp(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) -> io::Result<()> {
-    let row = (w as usize) * 4;
-    let pixels = row * (h as usize);
-    if rgba.len() < pixels {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "short pixel buffer",
-        ));
-    }
-    let file_size = u32::try_from(54 + pixels).unwrap_or(u32::MAX);
-    let mut out = Vec::with_capacity(file_size as usize);
-    out.extend_from_slice(b"BM");
-    out.extend_from_slice(&file_size.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&54u32.to_le_bytes());
-    out.extend_from_slice(&40u32.to_le_bytes());
-    out.extend_from_slice(&(w as i32).to_le_bytes());
-    out.extend_from_slice(&(h as i32).to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&32u16.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&u32::try_from(pixels).unwrap_or(u32::MAX).to_le_bytes());
-    out.extend_from_slice(&2835u32.to_le_bytes());
-    out.extend_from_slice(&2835u32.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    for y in (0..h as usize).rev() {
-        for px in rgba[y * row..y * row + row].chunks_exact(4) {
-            out.extend_from_slice(&[px[2], px[1], px[0], 255]);
-        }
-    }
-    fs::write(path, out)
 }
