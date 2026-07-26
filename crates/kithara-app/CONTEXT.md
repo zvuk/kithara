@@ -17,11 +17,13 @@ and the `deck=` scope of a binding — so they must agree:
 - `mixer/<letter>/<control>` — a channel strip;
 - `overview/<letter>/<control>` — an overview row.
 
-`scope::deck_index` is the single owner of letter → position for both sides,
-and a unit test walks the compiled tree asserting that every deck-scoped
-binding is addressed by the letter it reads. Any lowercase ASCII letter maps to
-a position; the session bounds it, so a letter past the last deck resolves to
-nothing rather than to a neighbour.
+`scope` is the single owner of the mapping both ways: `deck_index` for letter
+to position, `deck_letter` for position to letter, which is what the library's
+Deck column prints. A unit test walks the compiled tree asserting that every
+deck-scoped binding is addressed by the letter it reads. Any lowercase ASCII
+letter maps to a position; the session bounds it, so a letter past the last
+deck resolves to nothing rather than to a neighbour, and a position past the
+alphabet has no letter rather than a stand-in.
 
 A track reaches a deck by being dragged onto it. The library reports the drag
 it started on `library/tracks`, every deck module reports the pointer crossing
@@ -34,30 +36,34 @@ hover only changes on a crossing: clearing it with the drop would strand a
 second drag onto the deck the pointer never left. The library's Deck column is
 a marker, not a control: it shows the letters of the decks a row is loaded on.
 
+The deck a drop lands on takes the studio focus: `deck.focused` marks it in the
+overview row and the keyboard's Delete reaches it. `StudioCache` owns the focus
+next to the hover: both name a deck by position, and the layout bounds both.
+
 Tempo travel is fixed at `TEMPO_RANGE` percent either way, clamped where the
-deck applies it; there is no range selector and no reset control. The knob sits
-in the mixer channel, which the design canon reserves for EQ and filter: it is
-the studio's only way to reach the timestretch, and it stays there until the
-deck grows a tempo control of its own.
+deck applies it. The knob sits in the mixer channel, which the design canon
+reserves for EQ and filter: the channel strip is the studio's whole reach to
+the deck's timestretch.
 
 The studio window opens without system decorations, so the top bar is the
 window chrome: its empty middle is a `WindowDrag` surface, and the cell on its
 right carries minimise, maximise and close. `Message::Window` executes those
 against the window this app opened. Resizing comes back through the layout's
-`resize_edges` flag, which lays the eight drag zones a system border would have
-given the window over its own edges. What the decorations took and nothing gives
-back: the platform's own window menu and fullscreen. Undecorated windows differ
-per platform, so this bar is the only chrome on every one of them.
+`resize_edges` flag, which lays eight drag zones over the window's own edges.
+The platform's own window menu and fullscreen stay out of reach, and the bar
+looks the same on every platform.
 
-The top bar's CPU cell reports `engine.load` — the audio engine's own load, not
-the machine's processor time. It carries the design canon's CPU label because
-that is the reading it gives, and shows the same endpoint twice: a `Meter` bar
-beside the percentage.
+The top bar's CPU cell reports `engine.load` — the heaviest deck's audio-engine
+load, not the machine's processor time. It carries the design canon's CPU label
+because that is the reading it gives, and shows the same endpoint twice: a
+`Meter` bar beside the percentage. The value comes off the same per-frame deck
+snapshots every other deck read comes off, never off the live atomics.
 
 Reads are answered per frame by `StudioReads`, which borrows the app state and
 `StudioCache`. The cache owns what the renderer borrows but the model does not
 hold: converted waveform columns, formatted strings (tempo, remaining time,
-source subtitle), per-deck zoom, collapsed modules, and the deck layout.
+source subtitle), per-deck zoom, collapsed modules, the hovered and focused
+deck, and the deck layout.
 
 Both deck layouts are compiled once at startup and the top bar picks between
 them through `ui.layout.decks`. A layout lays out a deck whole or not at all:
@@ -65,7 +71,10 @@ its body, its overview row and its channel strip appear together, and
 `DeckLayout::decks` is the single owner of how many that is. Narrowing the
 layout pauses every deck it stops laying out — a deck the user cannot see must
 not keep playing — while the session keeps the deck and its queue, so widening
-the layout brings it back where it was, paused.
+the layout brings it back where it was, paused. The same switch bounds the
+cache's two pointers into the deck list: a hover on a dropped deck clears and a
+focus on one moves to the first laid-out deck. A deck that no longer renders
+reports no pointer crossing, so nothing later would correct them.
 
 The two layout documents repeat their frame because the layout schema has no
 include: only the deck bodies, the overview rows and the mixer channels may

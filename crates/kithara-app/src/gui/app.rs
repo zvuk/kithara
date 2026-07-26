@@ -7,7 +7,7 @@ use iced::{
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
-    deck::DeckUi, frontend::window_settings, message::Message, shot::ShotPlan, studio_ui::StudioUi,
+    deck::DeckUi, frontend::window_settings, message::Message, studio_ui::StudioUi,
     subscription::subscription_config, theme,
 };
 use crate::{
@@ -22,8 +22,8 @@ use crate::{
 ///
 /// Each deck owns its shared model ([`crate::state::StateController`]) and its
 /// own snapshot; the session mix is owned by [`DeckSet`]. This struct adds only
-/// what belongs to no single deck: the highlighted catalog row and which deck
-/// the keyboard talks to.
+/// what belongs to no single deck: the highlighted catalog row and the studio
+/// window.
 pub(crate) struct Kithara {
     pub(crate) session: DeckSet,
     pub(crate) decks: Decks,
@@ -37,17 +37,14 @@ pub(crate) struct Kithara {
     pub(crate) palette: gui::GuiPalette,
     /// Highlighted catalog row, shared by every deck's load buttons.
     pub(crate) selected_track: Option<usize>,
-    /// The studio window; the screenshot pass captures it.
+    /// The studio window; window-chrome commands execute against it.
     pub(crate) window_id: window::Id,
-    /// Present only under `KITHARA_SHOT_DIR`.
-    pub(crate) shot: Option<ShotPlan>,
 }
 
-/// A non-empty set of deck view-models. `focus` is fixed to the first deck
-/// at construction and backs the keyboard Delete shortcut only.
+/// A non-empty set of deck view-models, addressed by id. Which deck the studio
+/// is focused on is view state and belongs to the studio cache.
 pub(crate) struct Decks {
     items: Vec<DeckUi>,
-    focus: DeckId,
 }
 
 impl Decks {
@@ -58,8 +55,7 @@ impl Decks {
             .into_iter()
             .map(|(id, controller)| DeckUi::new(id, controller))
             .collect();
-        let focus = items.first()?.id;
-        Some(Self { items, focus })
+        (!items.is_empty()).then_some(Self { items })
     }
 
     pub(crate) fn get(&self, id: DeckId) -> Option<&DeckUi> {
@@ -76,10 +72,6 @@ impl Decks {
 
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut DeckUi> {
         self.items.iter_mut()
-    }
-
-    pub(crate) fn focus(&self) -> DeckId {
-        self.focus
     }
 }
 
@@ -103,7 +95,6 @@ impl Kithara {
             palette,
             selected_track: None,
             window_id,
-            shot: ShotPlan::read(),
         };
 
         (state, open.discard())

@@ -13,7 +13,7 @@ pub(crate) enum Message {
     Ui(UiEvent),
     /// Event addressed to one deck.
     Deck(DeckId, super::deck::DeckMsg),
-    /// Session-mix edit (crossfader, trim, mute, master).
+    /// Session-mix edit (crossfader, trim).
     Mix(super::mix::MixMsg),
     /// Delete the current track of the focused deck (keyboard shortcut;
     /// the subscription has no access to the focus).
@@ -29,8 +29,6 @@ pub(crate) enum Message {
     /// Window chrome the studio bar draws itself; executed against the
     /// studio window this app owns.
     Window(WindowCommand),
-    /// Captured studio frame from the `KITHARA_SHOT_DIR` pass.
-    Shot(iced::window::Screenshot),
     /// The window manager asked the studio window to close; exits the app.
     WindowCloseRequested,
 }

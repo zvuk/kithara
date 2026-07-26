@@ -47,8 +47,8 @@
                             Knob(
                                 id: "tempo",
                                 label: Some("TEMPO"),
-                                read: Parameter(id: "deck.ts.tempo", with: { "deck": "$deck" }),
-                                write: Parameter(id: "deck.ts.tempo", with: { "deck": "$deck" }),
+                                read: Parameter(id: "deck.tempo.rate", with: { "deck": "$deck" }),
+                                write: Parameter(id: "deck.tempo.rate", with: { "deck": "$deck" }),
                             ),
                         ],
                     ),

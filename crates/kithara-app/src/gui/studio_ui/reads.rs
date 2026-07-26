@@ -2,13 +2,14 @@ use kithara_ui::render::{ReadValue, Reads, StereoLevels, TrackRow, WaveformView}
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    cache::{DeckCache, head},
+    cache::DeckCache,
     endpoints::{EQ_MAX_DB, EQ_MIN_DB},
     scope::deck_index,
 };
 use crate::gui::{
     app::Kithara,
     deck::{DeckUi, TEMPO_RANGE},
+    view::playhead,
 };
 
 /// Frame-local read adapter: borrows the app state and the studio cache and
@@ -63,7 +64,7 @@ impl<'a> StudioReads<'a> {
         let (deck, cache) = self.deck(index)?;
         let ui = &deck.ui;
         let ts = deck.view.timestretch;
-        let head = head(ui);
+        let head = playhead(ui);
         let duration = ui.duration.max(0.0);
         let value = match base {
             "deck.playback.waveform" => ReadValue::Waveform(WaveformView {
@@ -75,10 +76,9 @@ impl<'a> StudioReads<'a> {
                 cues: &[],
             }),
             "deck.playback.playing" => ReadValue::Bool(ui.playing),
-            "deck.focused" => ReadValue::Bool(deck.id == self.state.decks.focus()),
+            "deck.focused" => ReadValue::Bool(self.state.studio.cache.focus_deck() == index),
             "deck.playback.position_secs" => ReadValue::Scalar(head.max(0.0)),
             "deck.playback.duration_secs" => ReadValue::Scalar(duration),
-            "deck.playback.remaining_secs" => ReadValue::Scalar((duration - head).max(0.0)),
             "deck.playback.position_normalized" => {
                 let normalized = if duration > 0.0 { head / duration } else { 0.0 };
                 ReadValue::Scalar(normalized.clamp(0.0, 1.0))
@@ -89,11 +89,10 @@ impl<'a> StudioReads<'a> {
                 ReadValue::Text(&ui.track_name)
             }
             "deck.track.source_kind" => ReadValue::Text(&cache.subtitle),
-            "deck.ts.tempo" => {
+            "deck.tempo.rate" => {
                 let range = f64::from(TEMPO_RANGE);
                 ReadValue::Scalar((f64::from(ts.tempo) + range) / (range * 2.0))
             }
-            "deck.ts.keylock" => ReadValue::Bool(keylock(deck)?),
             "deck.eq.low" => eq_value(ui.eq_bands.first())?,
             "deck.eq.mid" => eq_value(ui.eq_bands.get(1))?,
             "deck.eq.high" => eq_value(ui.eq_bands.get(2))?,
@@ -106,10 +105,19 @@ impl<'a> StudioReads<'a> {
                 volume: self.state.session.mix().strips.get(index)?.trim,
                 ..StereoLevels::default()
             }),
-            "mixer.muted" => ReadValue::Bool(self.state.session.mix().strips.get(index)?.muted),
             _ => return None,
         };
         Some(value)
+    }
+
+    /// Heaviest deck load of the frame, off the per-frame snapshots the rest
+    /// of the deck reads come off.
+    fn engine_load(&self) -> f32 {
+        self.state
+            .decks
+            .iter()
+            .map(|deck| deck.ui.engine_load.load())
+            .fold(0.0, f32::max)
     }
 
     fn global_value(&self, endpoint: &str) -> Option<ReadValue<'a>> {
@@ -117,9 +125,8 @@ impl<'a> StudioReads<'a> {
         let value = match endpoint {
             "ui.drag.track" => ReadValue::Text(self.dragged_track()?),
             "mix.crossfader" => ReadValue::Scalar(f64::from(mix.position)),
-            "mix.group_master" => ReadValue::Scalar(f64::from(mix.group_master)),
-            "ui.layout.decks" => ReadValue::Scalar(self.state.studio.cache.layout.index().as_()),
-            "engine.load" => ReadValue::Scalar(self.state.session.engine_load().as_()),
+            "ui.layout.decks" => ReadValue::Scalar(self.state.studio.cache.layout().index().as_()),
+            "engine.load" => ReadValue::Scalar(self.engine_load().as_()),
             _ => return None,
         };
         Some(value)
@@ -155,14 +162,4 @@ fn eq_value(db: Option<&f32>) -> Option<ReadValue<'static>> {
 fn analysis_bpm(ui: &crate::state::UiState) -> Option<f32> {
     let bpm = ui.analysis.as_ref()?.beat()?.bpm();
     bpm.is_finite().then(|| bpm.as_())
-}
-
-/// Key lock is only actionable with a native stretch backend compiled in;
-/// without one the endpoint reads as absent and the chip stays inert.
-fn keylock(deck: &DeckUi) -> Option<bool> {
-    const KEYLOCK_UI: bool = cfg!(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee"
-    ));
-    KEYLOCK_UI.then(|| deck.controller.stretch().keylock())
 }

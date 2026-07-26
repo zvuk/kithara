@@ -18,9 +18,6 @@ uses the built-in defaults.
 cargo run -p kithara-ui --example gallery --features render
 ```
 
-Set `KITHARA_SHOT_DIR=<dir>` to walk every tab and dump PNG screenshots
-instead of driving it by hand.
-
 ## iOS — only if explicitly requested
 
 ```bash

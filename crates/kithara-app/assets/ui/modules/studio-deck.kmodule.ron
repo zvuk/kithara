@@ -2,7 +2,7 @@
     schema: "kithara.module",
     version: 1,
     id: "studio-deck",
-    parameters: ["deck", "badge"],
+    parameters: ["deck", "letter"],
     drop: Some((
         write: Command(id: "deck.queue.load", with: { "deck": "$deck" }),
         read: Model(id: "ui.drag.over", with: { "deck": "$deck" }),
@@ -13,7 +13,7 @@
             Wave(
                 id: "wave",
                 style: Hero,
-                badge: Some("$badge"),
+                badge: Some("$letter"),
                 read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
                 zoom: Model(id: "deck.view.zoom", with: { "deck": "$deck" }),

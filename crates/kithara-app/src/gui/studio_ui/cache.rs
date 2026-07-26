@@ -4,9 +4,14 @@ use kithara::audio::Waveform;
 use kithara_ui::render::WaveBucket;
 use num_traits::cast::ToPrimitive;
 
+use super::scope::deck_letter;
 use crate::{
     catalog::{Catalog, is_loaded},
-    gui::{app::Decks, deck::DeckUi, view::track_subtitle},
+    gui::{
+        app::Decks,
+        deck::DeckUi,
+        view::{playhead, track_subtitle},
+    },
     state::UiState,
     waveform::TrackAnalysis,
 };
@@ -20,17 +25,19 @@ pub(crate) struct StudioCache {
     /// Per catalog row: channel letters of the decks the row is loaded on.
     pub(super) deck_marks: Vec<String>,
     pub(super) collapsed: BTreeSet<String>,
-    pub(crate) layout: DeckLayout,
+    layout: DeckLayout,
     /// Catalog row the pointer is carrying out of the library.
     pub(super) drag: Option<usize>,
     /// Deck the pointer is over, tracked whether or not a drag is in flight.
     pub(super) hover_deck: Option<usize>,
+    /// Deck the keyboard talks to; a drop moves it.
+    focus_deck: usize,
 }
 
 /// How many decks the studio lays out. The top bar switches it; the session
 /// keeps every deck either way.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum DeckLayout {
+pub(super) enum DeckLayout {
     Single,
     #[default]
     Dual,
@@ -38,21 +45,21 @@ pub(crate) enum DeckLayout {
 
 impl DeckLayout {
     /// Deck bodies the layout lays out; the session may hold more.
-    pub(crate) const fn decks(self) -> usize {
+    pub(super) const fn decks(self) -> usize {
         match self {
             Self::Single => 1,
             Self::Dual => 2,
         }
     }
 
-    pub(crate) const fn index(self) -> usize {
+    pub(super) const fn index(self) -> usize {
         match self {
             Self::Single => 0,
             Self::Dual => 1,
         }
     }
 
-    pub(crate) const fn from_index(index: usize) -> Option<Self> {
+    pub(super) const fn from_index(index: usize) -> Option<Self> {
         match index {
             0 => Some(Self::Single),
             1 => Some(Self::Dual),
@@ -67,14 +74,15 @@ pub(super) struct DeckCache {
     /// Revision stamp of the converted waveform: the source slice address.
     wave_src: Option<usize>,
     pub(super) tempo: String,
-    /// Time left in the track, `−MM:SS`, as the overview row shows it.
+    /// Time left in the track, a minus sign and `MM:SS`, as the overview row
+    /// shows it.
     pub(super) remain: String,
     pub(super) subtitle: String,
     pub(super) zoom: Option<f64>,
 }
 
 impl StudioCache {
-    pub(crate) fn toggle_module(&mut self, module: String) {
+    pub(super) fn toggle_module(&mut self, module: String) {
         if !self.collapsed.remove(&module) {
             self.collapsed.insert(module);
         }
@@ -82,6 +90,30 @@ impl StudioCache {
 
     pub(super) fn deck(&self, index: usize) -> Option<&DeckCache> {
         self.decks.get(index)
+    }
+
+    pub(super) const fn layout(&self) -> DeckLayout {
+        self.layout
+    }
+
+    pub(crate) const fn laid_out_decks(&self) -> usize {
+        self.layout.decks()
+    }
+
+    pub(crate) const fn focus_deck(&self) -> usize {
+        self.focus_deck
+    }
+
+    /// Switch the layout. Hover and focus follow it onto a deck it lays out:
+    /// one it drops reports no crossing, so nothing later would correct them.
+    pub(super) fn set_layout(&mut self, layout: DeckLayout) {
+        self.layout = layout;
+        if self.hover_deck.is_some_and(|deck| deck >= layout.decks()) {
+            self.hover_deck = None;
+        }
+        if self.focus_deck >= layout.decks() {
+            self.focus_deck = 0;
+        }
     }
 
     /// The pointer entered or left a deck. Hover is tracked on its own: a drag
@@ -100,10 +132,13 @@ impl StudioCache {
     }
 
     /// End the drag and report where it landed: the row it carried and the
-    /// deck under the pointer, if it was released over one.
+    /// deck under the pointer, if it was released over one. That deck becomes
+    /// the focused one.
     pub(super) fn take_drop(&mut self) -> Option<(usize, usize)> {
         let track = self.drag.take()?;
-        Some((track, self.hover_deck?))
+        let deck = self.hover_deck?;
+        self.focus_deck = deck;
+        Some((track, deck))
     }
 
     pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut DeckCache> {
@@ -122,13 +157,14 @@ impl StudioCache {
     }
 
     fn refresh_deck_marks(&mut self, decks: &Decks, catalog: &Catalog) {
-        const CHANNELS: [char; 4] = ['A', 'B', 'C', 'D'];
         self.deck_marks.clear();
         for entry in catalog.entries() {
             let mut marks = String::new();
             for (at, deck) in decks.iter().enumerate() {
-                if is_loaded(deck.controller.queue(), entry) {
-                    marks.push(*CHANNELS.get(at).unwrap_or(&'\u{00b7}'));
+                if is_loaded(deck.controller.queue(), entry)
+                    && let Some(letter) = deck_letter(at)
+                {
+                    marks.push(letter.to_ascii_uppercase());
                 }
             }
             self.deck_marks.push(marks);
@@ -161,17 +197,8 @@ impl DeckCache {
     }
 }
 
-/// The playhead the UI shows: while the user drags, that is the seek target.
-pub(super) fn head(ui: &UiState) -> f64 {
-    if ui.is_seeking {
-        ui.seek_position
-    } else {
-        ui.position
-    }
-}
-
 fn format_remain(ui: &UiState) -> String {
-    let left = (ui.duration - head(ui)).max(0.0);
+    let left = (ui.duration - playhead(ui)).max(0.0);
     let total = left.floor().to_u64().unwrap_or(0);
     format!("\u{2212}{:02}:{:02}", total / 60, total % 60)
 }
@@ -190,8 +217,6 @@ mod tests {
 
     use super::*;
 
-    /// Hover outlives one drag: dropping on a deck the pointer stays inside
-    /// must not stop the next drag from landing there.
     #[kithara::test]
     fn a_drop_ends_the_drag_and_keeps_the_hover() {
         let mut cache = StudioCache::default();
@@ -218,5 +243,29 @@ mod tests {
         cache.set_hover_deck(0, false);
         assert_eq!(cache.take_drop(), None);
         assert_eq!(cache.drag, None, "a drop always ends the drag");
+    }
+
+    #[kithara::test]
+    fn a_drop_focuses_the_deck_it_landed_on() {
+        let mut cache = StudioCache::default();
+        assert_eq!(cache.focus_deck(), 0);
+
+        cache.set_hover_deck(1, true);
+        cache.drag = Some(2);
+        assert_eq!(cache.take_drop(), Some((2, 1)));
+        assert_eq!(cache.focus_deck(), 1);
+
+        cache.set_hover_deck(1, false);
+        cache.drag = Some(5);
+        assert_eq!(cache.take_drop(), None);
+        assert_eq!(cache.focus_deck(), 1, "a drop on nothing focuses nothing");
+    }
+
+    #[kithara::test]
+    fn layout_indices_round_trip() {
+        for layout in [DeckLayout::Single, DeckLayout::Dual] {
+            assert_eq!(DeckLayout::from_index(layout.index()), Some(layout));
+        }
+        assert_eq!(DeckLayout::from_index(2), None);
     }
 }

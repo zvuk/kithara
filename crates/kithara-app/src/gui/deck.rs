@@ -1,5 +1,3 @@
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use kithara::events::DjEvent;
 use kithara_platform::sync::Arc;
 use kithara_queue::{TrackId, Transition};
 use tracing::{debug, error};
@@ -64,8 +62,6 @@ pub(crate) enum DeckMsg {
     EqBandChanged(usize, f32),
     DeleteTrack,
     SetTempo(f32),
-    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-    ToggleKeyLock,
 }
 
 /// Apply a deck message to its own deck. Nothing here reaches another deck.
@@ -88,17 +84,6 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
         DeckMsg::EqBandChanged(band, db) => eq_band_changed(deck, band, db),
         DeckMsg::DeleteTrack => delete_track(deck),
         DeckMsg::SetTempo(tempo) => set_tempo(deck, tempo),
-        #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-        DeckMsg::ToggleKeyLock => {
-            // Applies live, mid-track (shared controls read each chunk).
-            let stretch = deck.controller.stretch();
-            let keylock = !stretch.keylock();
-            stretch.set_keylock(keylock);
-            deck.controller
-                .queue()
-                .bus()
-                .publish(DjEvent::KeylockChanged { on: keylock });
-        }
     }
 }
 

@@ -2,7 +2,7 @@ use kithara_ui::render::{ControlAction, DragPhase, UiEvent};
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    cache::DeckLayout,
+    cache::{DeckLayout, StudioCache},
     endpoints::{EQ_MAX_DB, EQ_MIN_DB},
     scope::deck_index,
 };
@@ -34,7 +34,7 @@ pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> 
 fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
     let (instance, rest) = path.split_once('/')?;
     match instance {
-        "bar" => bar_control(state, rest, action),
+        "bar" => bar_control(&mut state.studio.cache, rest, action),
         "mixer" => mixer_control(state, rest, action),
         "library" => library_control(state, rest, action),
         "overview" => {
@@ -73,16 +73,6 @@ fn deck_control(
         ("play", ControlAction::Activate) => DeckMsg::TogglePlayPause,
         ("prev", ControlAction::Activate) => DeckMsg::Prev,
         ("next", ControlAction::Activate) => DeckMsg::Next,
-        ("keylock", ControlAction::Activate) => {
-            #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-            {
-                DeckMsg::ToggleKeyLock
-            }
-            #[cfg(not(any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
-            {
-                return None;
-            }
-        }
         _ => return None,
     };
     Some(Message::Deck(id, msg))
@@ -91,11 +81,11 @@ fn deck_control(
 /// The top bar owns the studio's own view state. Narrowing the layout also
 /// silences the decks it stops laying out: a deck the user cannot see must
 /// not keep playing.
-fn bar_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+fn bar_control(cache: &mut StudioCache, control: &str, action: &ControlAction) -> Option<Message> {
     let ("decks", ControlAction::SelectIndex(index)) = (control, action) else {
         return None;
     };
-    state.studio.cache.layout = DeckLayout::from_index(*index)?;
+    cache.set_layout(DeckLayout::from_index(*index)?);
     Some(Message::PauseHiddenDecks)
 }
 
@@ -103,9 +93,6 @@ fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
     match (control, action) {
         ("xfade", ControlAction::SetScalar(position)) => Some(Message::Mix(MixMsg::Crossfader(
             position.clamp(0.0, 1.0).as_(),
-        ))),
-        ("master", ControlAction::SetScalar(master)) => Some(Message::Mix(MixMsg::GroupMaster(
-            master.clamp(0.0, 1.0).as_(),
         ))),
         _ => strip_control(state, control, action),
     }
@@ -120,10 +107,6 @@ fn strip_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
     let msg = match (name, action) {
         ("volume", ControlAction::SetScalar(trim)) => {
             Message::Mix(MixMsg::Trim(id, trim.clamp(0.0, 1.0).as_()))
-        }
-        ("mute", ControlAction::Activate) => {
-            let muted = state.session.mix().strips.get(index)?.muted;
-            Message::Mix(MixMsg::Mute(id, !muted))
         }
         ("low", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(0, *value)),
         ("mid", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(1, *value)),
@@ -163,4 +146,58 @@ fn deck_id(state: &Kithara, index: usize) -> Option<DeckId> {
 fn eq_msg(band: usize, normalized: f64) -> DeckMsg {
     let normalized: f32 = normalized.clamp(0.0, 1.0).as_();
     DeckMsg::EqBandChanged(band, normalized.mul_add(EQ_MAX_DB - EQ_MIN_DB, EQ_MIN_DB))
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    fn select_layout(cache: &mut StudioCache, layout: DeckLayout) -> Option<Message> {
+        bar_control(cache, "decks", &ControlAction::SelectIndex(layout.index()))
+    }
+
+    #[kithara::test]
+    fn narrowing_the_layout_drops_a_hover_it_stops_laying_out() {
+        let mut cache = StudioCache::default();
+        cache.set_hover_deck(1, true);
+
+        assert!(matches!(
+            select_layout(&mut cache, DeckLayout::Single),
+            Some(Message::PauseHiddenDecks)
+        ));
+
+        cache.drag = Some(3);
+        assert_eq!(
+            cache.take_drop(),
+            None,
+            "deck B no longer renders, so it can never report the pointer leaving"
+        );
+    }
+
+    #[kithara::test]
+    fn widening_the_layout_keeps_a_hover_it_lays_out() {
+        let mut cache = StudioCache::default();
+        cache.set_hover_deck(0, true);
+
+        select_layout(&mut cache, DeckLayout::Single);
+        select_layout(&mut cache, DeckLayout::Dual);
+
+        cache.drag = Some(3);
+        assert_eq!(cache.take_drop(), Some((3, 0)));
+    }
+
+    #[kithara::test]
+    fn narrowing_the_layout_moves_a_focus_it_stops_laying_out() {
+        let mut cache = StudioCache::default();
+        cache.set_hover_deck(1, true);
+        cache.drag = Some(3);
+        cache.take_drop();
+        assert_eq!(cache.focus_deck(), 1);
+
+        select_layout(&mut cache, DeckLayout::Single);
+
+        assert_eq!(cache.focus_deck(), 0, "the key must reach a deck on screen");
+    }
 }

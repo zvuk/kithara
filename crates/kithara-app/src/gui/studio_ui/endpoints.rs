@@ -72,21 +72,9 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
         true,
     ),
     (
-        EndpointCategory::Command,
-        "deck.ts.toggle_keylock",
-        ValueKind::Trigger,
-        true,
-    ),
-    (
         EndpointCategory::Parameter,
-        "deck.ts.tempo",
+        "deck.tempo.rate",
         ValueKind::Scalar,
-        true,
-    ),
-    (
-        EndpointCategory::Model,
-        "deck.ts.keylock",
-        ValueKind::Bool,
         true,
     ),
     (
@@ -144,26 +132,8 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
         true,
     ),
     (
-        EndpointCategory::Model,
-        "mixer.muted",
-        ValueKind::Bool,
-        true,
-    ),
-    (
-        EndpointCategory::Command,
-        "mixer.toggle_mute",
-        ValueKind::Trigger,
-        true,
-    ),
-    (
         EndpointCategory::Parameter,
         "mix.crossfader",
-        ValueKind::Scalar,
-        false,
-    ),
-    (
-        EndpointCategory::Parameter,
-        "mix.group_master",
         ValueKind::Scalar,
         false,
     ),

@@ -10,6 +10,15 @@ pub(crate) fn view(state: &Kithara, _window: iced::window::Id) -> Element<'_, Me
     super::studio_ui::view(state)
 }
 
+/// The playhead the UI shows: while the user drags, that is the seek target.
+pub(crate) fn playhead(ui: &UiState) -> f64 {
+    if ui.is_seeking {
+        ui.seek_position
+    } else {
+        ui.position
+    }
+}
+
 /// Folder-derived artist/album only makes sense for local files; a remote
 /// URL has no meaningful parent directories.
 pub(crate) fn track_subtitle(ui: &UiState) -> String {

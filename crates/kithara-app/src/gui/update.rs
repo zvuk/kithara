@@ -6,7 +6,7 @@ use super::{
     app::Kithara,
     deck::{self, DeckMsg},
     message::Message,
-    mix, shot, studio_ui,
+    mix, studio_ui,
 };
 use crate::{catalog, deck::DeckId};
 
@@ -27,7 +27,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::DeleteFocusedTrack => {
-            handle_deck(state, state.decks.focus(), &DeckMsg::DeleteTrack);
+            delete_focused_track(state);
             Task::none()
         }
         Message::SelectCatalogTrack(index) => {
@@ -44,10 +44,9 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
         Message::Tick => {
             handle_tick(state);
-            shot::drive(state)
+            Task::none()
         }
         Message::Window(command) => window_task(state, command),
-        Message::Shot(screenshot) => shot::save(state, &screenshot),
         Message::WindowCloseRequested => iced::exit(),
     };
 
@@ -93,12 +92,22 @@ fn pause_hidden_decks(state: &mut Kithara) {
         .session
         .decks()
         .iter()
-        .skip(state.studio.cache.layout.decks())
+        .skip(state.studio.cache.laid_out_decks())
         .map(|deck| deck.id)
         .collect();
     for id in hidden {
         handle_deck(state, id, &DeckMsg::Pause);
     }
+}
+
+/// The keyboard reaches the deck the studio has focused; the studio keeps that
+/// position on a deck it lays out.
+fn delete_focused_track(state: &mut Kithara) {
+    let focus = state.studio.cache.focus_deck();
+    let Some(id) = state.session.decks().get(focus).map(|deck| deck.id) else {
+        return;
+    };
+    handle_deck(state, id, &DeckMsg::DeleteTrack);
 }
 
 fn handle_deck(state: &mut Kithara, id: DeckId, msg: &DeckMsg) {

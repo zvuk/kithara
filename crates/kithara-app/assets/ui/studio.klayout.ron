@@ -25,7 +25,7 @@
                     (weight: 1.0, node: Module(
                         instance: "deck-a",
                         source: "modules/studio-deck.kmodule.ron",
-                        with: { "deck": "a", "badge": "A" },
+                        with: { "deck": "a", "letter": "A" },
                         frame: (top: false, right: true, bottom: true, left: false),
                     )),
                     (node: Module(
@@ -37,7 +37,7 @@
                     (weight: 1.0, node: Module(
                         instance: "deck-b",
                         source: "modules/studio-deck.kmodule.ron",
-                        with: { "deck": "b", "badge": "B" },
+                        with: { "deck": "b", "letter": "B" },
                         frame: (top: false, right: false, bottom: true, left: false),
                     )),
                 ],
