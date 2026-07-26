@@ -17,6 +17,8 @@ use crate::{
 pub struct CompiledUi {
     pub root: CompiledNode,
     pub size: SizeSpec,
+    /// The layout asked to be framed by its own resize edges.
+    pub resize_edges: bool,
     arena: StrArena,
 }
 
@@ -88,7 +90,12 @@ pub fn compile(
     .build(&document.root, &loaded.uri)?;
     let size = compiled_node_size(&root);
     let arena = interner.finish();
-    Ok(CompiledUi { root, size, arena })
+    Ok(CompiledUi {
+        root,
+        size,
+        resize_edges: document.resize_edges,
+        arena,
+    })
 }
 
 struct Compiler<'a> {

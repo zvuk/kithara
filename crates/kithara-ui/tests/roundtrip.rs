@@ -166,6 +166,22 @@ fn module_frame_sides_are_typed_and_default_on() {
     assert!(frame.left);
 }
 
+/// A window with system decorations needs no edges of its own, so the flag is
+/// opt-in per layout.
+#[kithara::test]
+fn resize_edges_are_off_unless_the_layout_asks() {
+    let plain = parse_layout(TWO_MODULE_SPLIT, &origin()).unwrap();
+    assert!(!plain.resize_edges);
+
+    let framed = parse_layout(
+        r#"(schema: "kithara.layout", version: 1, id: "framed", resize_edges: true,
+            root: Module(instance: "a", source: "m.ron"))"#,
+        &origin(),
+    )
+    .unwrap();
+    assert!(framed.resize_edges);
+}
+
 #[kithara::test]
 fn every_size_rule_parses_including_content_measured_axes() {
     let doc = parse_module(

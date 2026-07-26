@@ -1,5 +1,5 @@
 use iced::{Task, window};
-use tracing::error;
+use tracing::{error, warn};
 
 use super::{
     app::Kithara,
@@ -8,7 +8,8 @@ use super::{
     mix, shot, studio_ui,
 };
 use crate::{catalog, deck::DeckId};
-use kithara_ui::render::WindowCommand;
+use iced::window::Direction;
+use kithara_ui::render::{WindowCommand, WindowEdge};
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
@@ -64,11 +65,31 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
 fn window_task(state: &Kithara, command: WindowCommand) -> Task<Message> {
     match command {
         WindowCommand::Drag => window::drag(state.window_id),
+        WindowCommand::Resize(edge) => direction(edge).map_or_else(Task::none, |direction| {
+            window::drag_resize(state.window_id, direction)
+        }),
         WindowCommand::Minimize => window::minimize(state.window_id, true),
         WindowCommand::ToggleMaximize => window::toggle_maximize(state.window_id),
         WindowCommand::Close => window::close(state.window_id),
-        _ => Task::none(),
+        other => {
+            warn!(?other, "unhandled window command");
+            Task::none()
+        }
     }
+}
+
+const fn direction(edge: WindowEdge) -> Option<Direction> {
+    Some(match edge {
+        WindowEdge::North => Direction::North,
+        WindowEdge::South => Direction::South,
+        WindowEdge::East => Direction::East,
+        WindowEdge::West => Direction::West,
+        WindowEdge::NorthEast => Direction::NorthEast,
+        WindowEdge::NorthWest => Direction::NorthWest,
+        WindowEdge::SouthEast => Direction::SouthEast,
+        WindowEdge::SouthWest => Direction::SouthWest,
+        _ => return None,
+    })
 }
 
 /// A deck the studio no longer lays out keeps its queue but stops playing.

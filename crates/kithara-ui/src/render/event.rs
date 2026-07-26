@@ -19,9 +19,24 @@ pub enum ControlAction {
 #[non_exhaustive]
 pub enum WindowCommand {
     Drag,
+    Resize(WindowEdge),
     Minimize,
     ToggleMaximize,
     Close,
+}
+
+/// Which side or corner of the window a resize drag pulls.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WindowEdge {
+    North,
+    South,
+    East,
+    West,
+    NorthEast,
+    NorthWest,
+    SouthEast,
+    SouthWest,
 }
 
 /// Event emitted by the shared UI contract.

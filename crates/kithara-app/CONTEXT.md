@@ -32,11 +32,11 @@ deck grows a tempo control of its own.
 The studio window opens without system decorations, so the top bar is the
 window chrome: its empty middle is a `WindowDrag` surface, and the cell on its
 right carries minimise, maximise and close. `Message::Window` executes those
-against the window this app opened. What the decorations took with them has no
-replacement yet: resizing by dragging a window edge — which also puts
-`window_settings`'s `min_size` out of the user's reach — the platform's own
-window menu, and fullscreen. Undecorated windows differ per platform, so this
-bar is the only chrome on every one of them.
+against the window this app opened. Resizing comes back through the layout's
+`resize_edges` flag, which lays the eight drag zones a system border would have
+given the window over its own edges. What the decorations took and nothing gives
+back: the platform's own window menu and fullscreen. Undecorated windows differ
+per platform, so this bar is the only chrome on every one of them.
 
 The top bar's CPU cell reports `engine.load` — the audio engine's own load, not
 the machine's processor time. It carries the design canon's CPU label because

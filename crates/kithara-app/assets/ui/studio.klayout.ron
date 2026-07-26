@@ -2,6 +2,7 @@
     schema: "kithara.layout",
     version: 1,
     id: "studio",
+    resize_edges: true,
     root: Split(
         axis: Vertical,
         children: [

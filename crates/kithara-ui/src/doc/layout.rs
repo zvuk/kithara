@@ -17,6 +17,10 @@ pub struct LayoutDoc {
     pub schema: String,
     pub version: u32,
     pub id: DocId,
+    /// A window without system decorations has to be resized by its own edges;
+    /// the renderer frames the root with them when this is set.
+    #[serde(default)]
+    pub resize_edges: bool,
     pub root: LayoutNode,
 }
 

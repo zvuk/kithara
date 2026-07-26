@@ -1,7 +1,7 @@
 use iced::{
     Alignment, Background, Color, Element, Length, Padding,
     alignment::{Horizontal, Vertical},
-    widget::{Column, Row, Space, container, container::Style as ContainerStyle},
+    widget::{Column, Row, Space, Stack, container, container::Style as ContainerStyle},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -26,7 +26,7 @@ use crate::{
         ButtonStyle, ChipStyle, ChromeStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName,
         TextAlign, TextStyle, Tone, TrackColumn, WindowControlsStyle,
     },
-    render::{Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent},
+    render::{Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent, WindowEdge},
     size::{Dim, SizeSpec, control_size},
     skin::ColorRole,
     widgets::{
@@ -43,7 +43,7 @@ use crate::{
         track_list::TrackList,
         vis::Vis,
         wave::zoom_math::DEFAULT_ZOOM,
-        window::{TitleBar, WindowControls, WindowDrag},
+        window::{ResizeEdge, TitleBar, WindowControls, WindowDrag},
     },
 };
 
@@ -53,7 +53,51 @@ pub fn render<'a>(
     reads: &dyn Reads,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    render_compiled(node, ui, reads, skin)
+    let content = render_compiled(node, ui, reads, skin);
+    if ui.resize_edges {
+        framed_by_resize_edges(content, skin)
+    } else {
+        content
+    }
+}
+
+/// Lays the eight drag zones a system border would have given the window over
+/// its edges. They sit above the content rather than beside it, so the layout
+/// still gets the whole window; the skin owns their thickness and they paint
+/// nothing.
+fn framed_by_resize_edges<'a>(content: Element<'a, UiEvent>, skin: &Skin) -> Element<'a, UiEvent> {
+    let thickness = Length::Fixed(skin.window.resize_edge);
+    let corner = |edge| ResizeEdge::new(edge, thickness, thickness).view();
+    let side = |edge, width, height| ResizeEdge::new(edge, width, height).view();
+    let edges = Column::with_children([
+        Row::with_children([
+            corner(WindowEdge::NorthWest),
+            side(WindowEdge::North, Length::Fill, thickness),
+            corner(WindowEdge::NorthEast),
+        ])
+        .height(thickness)
+        .into(),
+        Row::with_children([
+            side(WindowEdge::West, thickness, Length::Fill),
+            Space::new().width(Length::Fill).height(Length::Fill).into(),
+            side(WindowEdge::East, thickness, Length::Fill),
+        ])
+        .height(Length::Fill)
+        .into(),
+        Row::with_children([
+            corner(WindowEdge::SouthWest),
+            side(WindowEdge::South, Length::Fill, thickness),
+            corner(WindowEdge::SouthEast),
+        ])
+        .height(thickness)
+        .into(),
+    ])
+    .width(Length::Fill)
+    .height(Length::Fill);
+    Stack::with_children([content, edges.into()])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 fn render_compiled<'a>(

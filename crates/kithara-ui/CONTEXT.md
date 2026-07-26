@@ -147,6 +147,12 @@ and Frame or Plain modules ignore that endpoint.
 
 ## Window Chrome Ownership
 
+A layout that sets `resize_edges` is framed by `render::tree` with the eight
+drag zones a system border would have given it. They are laid over the content,
+not beside it, so declaring them costs the layout no space; `SkinDoc.window`
+owns their thickness, and the host maps each `WindowEdge` to its toolkit's own
+resize direction.
+
 `WindowDrag`, `TitleBar` and `WindowControls` paint no surface of their own and
 take their size from the row that holds them, so the same controls sit in a 26px
 gallery header and in the studio's 42px bar; the document declares the

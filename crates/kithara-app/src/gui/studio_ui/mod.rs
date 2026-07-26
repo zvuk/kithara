@@ -288,6 +288,10 @@ mod tests {
             });
 
             assert_eq!(seen, ["bar/drag", "bar/window"], "{layout:?}");
+            assert!(
+                ui.resize_edges,
+                "{layout:?}: the window has no other way to be resized"
+            );
         }
     }
 

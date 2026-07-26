@@ -238,6 +238,8 @@ pub struct ChromeSkin {
 #[non_exhaustive]
 pub struct WindowSkin {
     pub titlebar_height: f32,
+    /// Thickness of the drag zones framing a window that draws its own chrome.
+    pub resize_edge: f32,
     pub titlebar_padding_x: f32,
     pub titlebar_text: TextRoleSkin,
     pub icon_color: ColorRole,

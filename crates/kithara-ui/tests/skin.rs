@@ -33,6 +33,7 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.chrome.inner_line, ColorRole::LineInner);
     assert_eq!(document.chrome.footer_background, ColorRole::BgFooter);
     assert_eq!(document.text_input.idle_border_width, 0.0);
+    assert_eq!(document.window.resize_edge, 4.0);
     assert_eq!(document.knob.body_fill, ColorRole::BgSelect);
     assert_eq!(document.knob.body_border, ColorRole::Line);
     assert_eq!(document.knob.track_color, ColorRole::Line);

@@ -67,6 +67,7 @@
     ),
     window: (
         titlebar_height: 26.0,
+        resize_edge: 4.0,
         titlebar_padding_x: 10.0,
         titlebar_text: (font: Mono, weight: Normal, size: 9.0, spacing: 0.12, color: Muted),
         icon_color: Muted,
