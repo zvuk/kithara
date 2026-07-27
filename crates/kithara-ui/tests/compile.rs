@@ -416,6 +416,7 @@ fn module_shell_metadata_compiles_into_the_module_node() {
                 source: "shell.kmodule.ron",
                 with: { "deck": "a" },
                 frame: (top: true, right: false, bottom: true, left: false),
+                corners: true,
             ))"#,
     );
     resolver.insert(
@@ -441,6 +442,7 @@ fn module_shell_metadata_compiles_into_the_module_node() {
         assign,
         chrome,
         frame,
+        corners,
         footer,
         collapsed,
         ..
@@ -461,6 +463,7 @@ fn module_shell_metadata_compiles_into_the_module_node() {
     assert!(!frame.right);
     assert!(frame.bottom);
     assert!(!frame.left);
+    assert!(*corners);
     assert_eq!(ui.resolve(*collapsed), "ui.module.deck.collapsed");
     let Some(Binding::Telemetry { id, key, with }) = footer else {
         panic!("expected telemetry footer");

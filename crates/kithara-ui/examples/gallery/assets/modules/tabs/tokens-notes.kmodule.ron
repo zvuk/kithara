@@ -8,11 +8,12 @@
         pad: Some(18.0),
         children: [
             Text(id: "heading", style: Section, label: "12E / MODULE SHELL - ANATOMY", size: (w: Fill, h: Fixed(20.0))),
-            Text(id: "note-1", style: MicroLabel, label: "1 - FRAME 1PX #3B3B67 / INNER LINES #2A2A4C", size: (w: Fill, h: Fixed(24.0))),
-            Text(id: "note-2", style: MicroLabel, label: "2 - HEADER 26PX: ID CHIP LEFT, TITLE SG 11PX, ASSIGN CHIPS, CHEVRON 26PX", size: (w: Fill, h: Fixed(38.0))),
-            Text(id: "note-3", style: MicroLabel, label: "3 - HEADER CLICK = COLLAPSE (26PX REMAINS)", size: (w: Fill, h: Fixed(24.0))),
-            Text(id: "note-4", style: MicroLabel, label: "4 - BACKGROUND: PANEL #20203A / INSETS #15152A", size: (w: Fill, h: Fixed(24.0))),
-            Text(id: "note-5", style: MicroLabel, label: "5 - FOOTER 22PX #1B1B32 / MONO 9PX MUTED", size: (w: Fill, h: Fixed(24.0))),
+            Text(id: "note-1", style: MicroLabel, label: "1 - CORNER TICKS 2X10PX GOLD, TL+BR CORNERS", size: (w: Fill, h: Fixed(24.0))),
+            Text(id: "note-2", style: MicroLabel, label: "2 - FRAME 1PX #3B3B67 / INNER LINES #2A2A4C", size: (w: Fill, h: Fixed(24.0))),
+            Text(id: "note-3", style: MicroLabel, label: "3 - HEADER 26PX: ID CHIP LEFT, TITLE SG 11PX, ASSIGN CHIPS, CHEVRON 26PX", size: (w: Fill, h: Fixed(38.0))),
+            Text(id: "note-4", style: MicroLabel, label: "4 - HEADER CLICK = COLLAPSE (26PX REMAINS)", size: (w: Fill, h: Fixed(24.0))),
+            Text(id: "note-5", style: MicroLabel, label: "5 - BACKGROUND: PANEL #20203A / INSETS #15152A", size: (w: Fill, h: Fixed(24.0))),
+            Text(id: "note-6", style: MicroLabel, label: "6 - FOOTER 22PX #1B1B32 / MONO 9PX MUTED", size: (w: Fill, h: Fixed(24.0))),
         ],
     ),
 )

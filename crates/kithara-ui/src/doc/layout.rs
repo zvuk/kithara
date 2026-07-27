@@ -46,6 +46,10 @@ pub enum LayoutNode {
         size: Option<SizeSpec>,
         #[serde(default)]
         frame: FrameSides,
+        /// Draws the decorative ticks at the top-left and bottom-right of the
+        /// module frame.
+        #[serde(default)]
+        corners: bool,
     },
 }
 

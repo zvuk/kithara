@@ -35,6 +35,7 @@
                                         instance: "tokens-anatomy",
                                         source: "modules/tabs/tokens-anatomy.kmodule.ron",
                                         frame: (left: false, right: false),
+                                        corners: true,
                                         size: (w: Fixed(500.0), h: Fill),
                                     )),
                                     (weight: 1.0, node: Module(

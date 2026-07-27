@@ -19,7 +19,6 @@ use crate::{
     widgets::Widget,
 };
 
-/// Framed module shell shared by renderer and application surfaces.
 #[derive(bon::Builder)]
 pub(crate) struct ModuleChrome<'a, 'skin, Content, Message> {
     content: Content,
@@ -30,6 +29,8 @@ pub(crate) struct ModuleChrome<'a, 'skin, Content, Message> {
     style: ChromeStyle,
     #[builder(default)]
     frame: FrameSides,
+    #[builder(default)]
+    corners: bool,
     footer: Option<String>,
     on_toggle: Option<Message>,
     drop: Option<DropZone<Message>>,
@@ -38,9 +39,6 @@ pub(crate) struct ModuleChrome<'a, 'skin, Content, Message> {
     skin: &'skin Skin,
 }
 
-/// The module takes dropped items: it reports the pointer crossing its bounds
-/// and lights its frame while `active`. It never learns what is being dragged
-/// - the host holds that and decides what a drop means.
 pub(crate) struct DropZone<Message> {
     pub(crate) on_enter: Message,
     pub(crate) on_exit: Message,
@@ -94,6 +92,7 @@ where
             chrome.skin.palette.bg_panel,
             Length::Fill,
             chrome.frame,
+            chrome.corners,
         ),
         ChromeStyle::Plain => chrome.content.into(),
     };
@@ -157,6 +156,7 @@ where
             skin.color(metrics.panel_background),
             Length::Fixed(metrics.header_height),
             chrome.frame,
+            chrome.corners,
         );
     }
 
@@ -195,6 +195,7 @@ where
         skin.color(metrics.panel_background),
         Length::Fill,
         chrome.frame,
+        chrome.corners,
     )
 }
 
@@ -304,6 +305,7 @@ fn framed<'a, Message>(
     background: Color,
     height: Length,
     sides: FrameSides,
+    corners: bool,
 ) -> Element<'a, Message>
 where
     Message: 'a,
@@ -316,6 +318,7 @@ where
         sides,
         frame_color: skin.color(skin.chrome.frame.border),
         frame_width: skin.chrome.frame.border_width,
+        corners: corners.then(|| CornerTicks::from(skin)),
     })
     .width(Length::Fill)
     .height(height);
@@ -420,6 +423,7 @@ where
         sides,
         frame_color: skin.color(skin.divider.color),
         frame_width: skin.divider.width,
+        corners: None,
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -434,6 +438,44 @@ struct FrameChrome {
     sides: FrameSides,
     frame_color: Color,
     frame_width: f32,
+    corners: Option<CornerTicks>,
+}
+
+#[derive(Clone, Copy)]
+struct CornerTicks {
+    color: Color,
+    size: f32,
+    width: f32,
+    offset: f32,
+}
+
+impl From<&Skin> for CornerTicks {
+    fn from(skin: &Skin) -> Self {
+        Self {
+            color: skin.color(skin.chrome.corner_color),
+            size: skin.chrome.corner_size,
+            width: skin.chrome.corner_width,
+            offset: skin.chrome.corner_offset,
+        }
+    }
+}
+
+impl CornerTicks {
+    fn marks(self, bounds: Rectangle) -> [(Point, Size); 4] {
+        let along = Size::new(self.size, self.width);
+        let across = Size::new(self.width, self.size);
+        let near = Point::new(self.offset, self.offset);
+        let far_x = (bounds.width - self.offset - self.width).max(0.0);
+        let far_y = (bounds.height - self.offset - self.width).max(0.0);
+        let tail_x = (bounds.width - self.offset - self.size).max(0.0);
+        let tail_y = (bounds.height - self.offset - self.size).max(0.0);
+        [
+            (near, along),
+            (near, across),
+            (Point::new(tail_x, far_y), along),
+            (Point::new(far_x, tail_y), across),
+        ]
+    }
 }
 
 impl<Message> canvas::Program<Message> for FrameChrome {
@@ -477,6 +519,11 @@ impl<Message> canvas::Program<Message> for FrameChrome {
                 Size::new(self.frame_width, bounds.height),
                 self.frame_color,
             );
+        }
+        if let Some(ticks) = self.corners {
+            for (origin, size) in ticks.marks(bounds) {
+                frame.fill_rectangle(origin, size, ticks.color);
+            }
         }
         vec![frame.into_geometry()]
     }

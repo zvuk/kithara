@@ -50,6 +50,7 @@ pub enum CompiledNode {
         assign: Vec<InternId>,
         chrome: ChromeStyle,
         frame: FrameSides,
+        corners: bool,
         footer: Option<Binding>,
         drop: Option<DropSpec>,
         collapsed: InternId,
@@ -147,6 +148,7 @@ impl Compiler<'_> {
                 with,
                 size,
                 frame,
+                corners,
             } => {
                 for value in with.values() {
                     if !value.starts_with("$$")
@@ -209,6 +211,7 @@ impl Compiler<'_> {
                     assign: expanded.assign,
                     chrome: expanded.chrome,
                     frame: *frame,
+                    corners: *corners,
                     footer: expanded.footer,
                     drop: expanded.drop,
                     collapsed: expanded.collapsed,

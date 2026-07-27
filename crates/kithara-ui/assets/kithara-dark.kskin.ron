@@ -64,6 +64,10 @@
         footer_background: BgFooter,
         footer_text: Muted,
         inner_line: LineInner,
+        corner_size: 10.0,
+        corner_width: 2.0,
+        corner_offset: 0.0,
+        corner_color: Accent,
     ),
     drag: (
         frame: (radius: 2.0, border_width: 1.0, border: Accent),

@@ -62,6 +62,7 @@ pub(super) fn render_compiled<'a>(
             assign,
             chrome,
             frame,
+            corners,
             footer,
             drop,
             collapsed,
@@ -92,6 +93,7 @@ pub(super) fn render_compiled<'a>(
                 .assign(assign.iter().map(|id| ui.resolve(*id)).collect())
                 .style(*chrome)
                 .frame(*frame)
+                .corners(*corners)
                 .maybe_footer(footer)
                 .maybe_drop(drop.as_ref().map(|drop| {
                     module_drop_zone(
@@ -108,8 +110,6 @@ pub(super) fn render_compiled<'a>(
     }
 }
 
-/// A module that takes drops reports the pointer crossing it on
-/// `<instance>/drop`; what the drop then means is the host's to decide.
 fn module_drop_zone(instance: &str, active: bool) -> DropZone<UiEvent> {
     let crossing = |over| UiEvent::Control {
         path: format!("{instance}/drop"),

@@ -248,6 +248,10 @@ pub struct ChromeSkin {
     pub footer_background: ColorRole,
     pub footer_text: ColorRole,
     pub inner_line: ColorRole,
+    pub corner_size: f32,
+    pub corner_width: f32,
+    pub corner_offset: f32,
+    pub corner_color: ColorRole,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

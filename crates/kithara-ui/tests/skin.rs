@@ -39,6 +39,10 @@ fn builtin_skin_pins_the_design_canon() {
     assert_eq!(document.chrome.footer_text_size, 9.0);
     assert_eq!(document.chrome.inner_line, ColorRole::LineInner);
     assert_eq!(document.chrome.footer_background, ColorRole::BgFooter);
+    assert_eq!(document.chrome.corner_size, 10.0);
+    assert_eq!(document.chrome.corner_width, 2.0);
+    assert_eq!(document.chrome.corner_offset, 0.0);
+    assert_eq!(document.chrome.corner_color, ColorRole::Accent);
     assert_eq!(document.text_input.idle_border_width, 0.0);
     assert_eq!(document.window.resize_edge, 4.0);
     assert_eq!(document.knob.body_fill, ColorRole::BgSelect);
