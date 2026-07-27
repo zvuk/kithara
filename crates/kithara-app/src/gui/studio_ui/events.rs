@@ -1,4 +1,4 @@
-use kithara_ui::render::{ControlAction, DragPhase, UiEvent};
+use kithara_ui::render::{ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, zoom_in, zoom_out};
 use num_traits::cast::AsPrimitive;
 
 use super::{
@@ -10,7 +10,7 @@ use crate::{
     deck::DeckId,
     gui::{
         app::Kithara,
-        deck::{DeckMsg, TEMPO_RANGE},
+        deck::{DeckMsg, TEMPO_STEP},
         message::Message,
         mix::MixMsg,
     },
@@ -56,6 +56,9 @@ fn deck_control(
     control: &str,
     action: &ControlAction,
 ) -> Option<Message> {
+    if zoom_control(&mut state.studio.cache, index, control, action).is_some() {
+        return None;
+    }
     let id = deck_id(state, index)?;
     let msg = match (control, action) {
         ("drop", ControlAction::Drag(DragPhase::Over(over))) => {
@@ -70,12 +73,32 @@ fn deck_control(
             state.studio.cache.deck_mut(index)?.zoom = Some(zoom.clamp(0.0, 1.0));
             return None;
         }
+        ("tempo", ControlAction::StepScalar(steps)) => DeckMsg::SetTempo(
+            steps.mul_add(TEMPO_STEP, state.decks.get(id)?.view.timestretch.tempo),
+        ),
+        ("tempo", ControlAction::Activate) => DeckMsg::SetTempo(0.0),
         ("play", ControlAction::Activate) => DeckMsg::TogglePlayPause,
         ("prev", ControlAction::Activate) => DeckMsg::Prev,
         ("next", ControlAction::Activate) => DeckMsg::Next,
         _ => return None,
     };
     Some(Message::Deck(id, msg))
+}
+
+fn zoom_control(
+    cache: &mut StudioCache,
+    index: usize,
+    control: &str,
+    action: &ControlAction,
+) -> Option<()> {
+    let step: fn(f32) -> f32 = match (control, action) {
+        ("zoom-in", ControlAction::Activate) => zoom_in,
+        ("zoom-out", ControlAction::Activate) => zoom_out,
+        _ => return None,
+    };
+    let deck = cache.deck_mut(index)?;
+    deck.zoom = Some(step(deck.zoom.map_or(DEFAULT_ZOOM, AsPrimitive::as_)).into());
+    Some(())
 }
 
 /// The top bar owns the studio's own view state. Narrowing the layout also
@@ -98,8 +121,8 @@ fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
     }
 }
 
-/// The channel strip owns both mix-side controls and the deck's tone and
-/// tempo, so its instance letter addresses the deck.
+/// The channel strip owns both mix-side controls and the deck's tone, so its
+/// instance letter addresses the deck.
 fn strip_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     let (letter, name) = control.split_once('/')?;
     let index = deck_index(letter)?;
@@ -111,11 +134,6 @@ fn strip_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
         ("low", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(0, *value)),
         ("mid", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(1, *value)),
         ("high", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(2, *value)),
-        ("tempo", ControlAction::SetScalar(normalized)) => {
-            let normalized: f32 = normalized.clamp(0.0, 1.0).as_();
-            let tempo = normalized.mul_add(TEMPO_RANGE * 2.0, -TEMPO_RANGE);
-            Message::Deck(id, DeckMsg::SetTempo(tempo))
-        }
         _ => return None,
     };
     Some(msg)
@@ -156,6 +174,37 @@ mod tests {
 
     fn select_layout(cache: &mut StudioCache, layout: DeckLayout) -> Option<Message> {
         bar_control(cache, "decks", &ControlAction::SelectIndex(layout.index()))
+    }
+
+    fn press_zoom(cache: &mut StudioCache, control: &str) -> f64 {
+        zoom_control(cache, 0, control, &ControlAction::Activate);
+        cache.deck_mut(0).and_then(|deck| deck.zoom).unwrap()
+    }
+
+    #[kithara::test]
+    fn the_zoom_buttons_step_the_wave_window_and_stop_at_its_bounds() {
+        const PRESSES: usize = 40;
+
+        let mut cache = StudioCache::with_decks(1);
+
+        let narrowed = press_zoom(&mut cache, "zoom-in");
+        let widened = press_zoom(&mut cache, "zoom-out");
+        assert!(narrowed < f64::from(DEFAULT_ZOOM), "zoom in must narrow");
+        assert!(widened > narrowed, "zoom out must widen");
+
+        for _ in 0..PRESSES {
+            press_zoom(&mut cache, "zoom-in");
+        }
+        let floor = press_zoom(&mut cache, "zoom-in");
+        assert!(floor > 0.0, "the window never closes");
+        assert_eq!(press_zoom(&mut cache, "zoom-in"), floor);
+
+        for _ in 0..PRESSES {
+            press_zoom(&mut cache, "zoom-out");
+        }
+        let ceiling = press_zoom(&mut cache, "zoom-out");
+        assert!(ceiling < 1.0, "the window never spans the whole track");
+        assert_eq!(press_zoom(&mut cache, "zoom-out"), ceiling);
     }
 
     #[kithara::test]

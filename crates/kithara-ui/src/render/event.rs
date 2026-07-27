@@ -11,6 +11,7 @@ pub(crate) trait Widget<'a> {
 pub enum ControlAction {
     Activate,
     SetScalar(f64),
+    StepScalar(f32),
     SelectIndex(usize),
     Drag(DragPhase),
 }

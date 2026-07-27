@@ -235,12 +235,12 @@ pub(crate) struct ScalarDrag {
 }
 
 #[derive(Default)]
-struct DoubleClickState {
+pub(crate) struct DoubleClickState {
     previous: Option<(Point, Instant)>,
 }
 
 impl DoubleClickState {
-    fn register(&mut self, position: Point) -> bool {
+    pub(crate) fn register(&mut self, position: Point) -> bool {
         let now = Instant::now();
         let consecutive = self
             .previous

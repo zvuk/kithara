@@ -133,7 +133,24 @@ fn walk_module(
     seen: &mut BTreeSet<String>,
 ) -> Result<(), UiDocError> {
     match node {
-        ControlNode::Row { id, children, .. } | ControlNode::Column { id, children, .. } => {
+        ControlNode::Row {
+            id,
+            write,
+            children,
+            ..
+        }
+        | ControlNode::Column {
+            id,
+            write,
+            children,
+            ..
+        } => {
+            if id.is_none() && write.is_some() {
+                return Err(UiDocError::UnaddressedSurface {
+                    origin: origin.clone(),
+                    path: path.render(),
+                });
+            }
             let here = match id {
                 Some(id) => {
                     let here = path.push(format!("Group({id})"));
@@ -471,9 +488,8 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         ControlNode::VuStereo { .. } | ControlNode::VuVertical { .. } => {
             (Some(ValueKind::Stereo), Some(ValueKind::Scalar))
         }
-        ControlNode::Row { .. }
-        | ControlNode::Column { .. }
-        | ControlNode::Include { .. }
+        ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
+        ControlNode::Include { .. }
         | ControlNode::Slot { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
@@ -701,6 +717,20 @@ mod tests {
             error,
             UiDocError::InvalidId { id, reason, .. }
                 if id == "studio.strip" && reason.contains("'.'")
+        ));
+    }
+
+    #[kithara::test]
+    fn a_container_that_writes_without_an_id_is_rejected() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Row(write: Parameter(id: "deck.tempo.rate"), children: [
+                Button(id: "play", label: "PLAY"),
+            ]))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::UnaddressedSurface { path, .. } if path == "root"
         ));
     }
 

@@ -35,9 +35,12 @@ pub(crate) struct DeckView {
     pub(crate) timestretch: TimestretchState,
 }
 
-/// Tempo travel either way, in percent: the TEMPO knob spans `-TEMPO_RANGE` to
+/// Tempo travel either way, in percent: tempo spans `-TEMPO_RANGE` to
 /// `+TEMPO_RANGE`.
-pub(crate) const TEMPO_RANGE: f32 = 16.0;
+pub(crate) const TEMPO_RANGE: f32 = 50.0;
+
+/// What one wheel detent over the TEMPO block is worth, in percent.
+pub(crate) const TEMPO_STEP: f32 = 1.5;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TimestretchState {
@@ -152,14 +155,25 @@ fn set_tempo(deck: &mut DeckUi, tempo: f32) {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{TEMPO_RANGE, TimestretchState};
+    use super::{TEMPO_RANGE, TEMPO_STEP, TimestretchState};
 
     #[kithara::test]
     fn speed_is_one_percent_per_tempo_point() {
         let speed = |tempo| TimestretchState { tempo }.speed();
 
         assert!((speed(0.0) - 1.0).abs() < f32::EPSILON);
-        assert!((speed(TEMPO_RANGE) - 1.16).abs() < 1e-6);
-        assert!((speed(-TEMPO_RANGE) - 0.84).abs() < 1e-6);
+        assert!((speed(TEMPO_RANGE) - 1.5).abs() < 1e-6);
+        assert!((speed(-TEMPO_RANGE) - 0.5).abs() < 1e-6);
+    }
+
+    #[kithara::test]
+    fn the_whole_travel_is_within_reach_of_a_few_detents() {
+        const REACH: f32 = 40.0;
+
+        let detents = TEMPO_RANGE / TEMPO_STEP;
+        assert!(
+            detents <= REACH,
+            "one end of the travel takes {detents} detents"
+        );
     }
 }

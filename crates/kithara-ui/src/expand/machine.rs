@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use super::{
     Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec, ExpandedModule, ExpandedNode,
+    SurfaceSpec,
     binding_subst::{
         intern_binding, intern_optional_binding, intern_optional_text, intern_text, intern_texts,
         substitute_binding, substitute_map,
@@ -11,8 +12,7 @@ use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
     module::{
-        AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, IconName, TextAlign, TextStyle,
-        TrackColumn, WaveStyle,
+        AdaptivePolicy, BindingRef, ControlNode, TextAlign, TextStyle, TrackColumn, WaveStyle,
     },
     resolve::ModuleSet,
     size::SizeSpec,
@@ -459,16 +459,15 @@ fn control_spec(
             icon,
             active_label,
             style,
+            frame,
             ..
-        } => button_spec(
-            context,
-            machine.interner,
-            label,
-            *icon,
-            active_label.as_deref(),
-            *style,
-            path,
-        )?,
+        } => ControlSpec::Button {
+            label: intern_text(context, machine.interner, label, path, &context.origin)?,
+            icon: *icon,
+            active_label: optional_text(context, machine, active_label.as_deref(), path)?,
+            style: *style,
+            frame: *frame,
+        },
         ControlNode::Bpm { placeholder, .. } => ControlSpec::Bpm {
             placeholder: optional_text(context, machine, placeholder.as_deref(), path)?,
         },
@@ -586,21 +585,36 @@ fn track_list_spec(
     })
 }
 
-fn button_spec(
+fn container_surface(
     context: &Context<'_>,
-    interner: &mut Interner,
-    label: &str,
-    icon: Option<IconName>,
-    active_label: Option<&str>,
-    style: ButtonStyle,
-    path: &str,
-) -> Result<ControlSpec, UiDocError> {
-    Ok(ControlSpec::Button {
-        label: intern_text(context, interner, label, path, &context.origin)?,
-        icon,
-        active_label: intern_optional_text(context, interner, active_label, path, &context.origin)?,
-        style,
-    })
+    node: &ControlNode,
+    id: Option<&NodeId>,
+    write: Option<&BindingRef>,
+    machine: &mut Expander<'_, '_>,
+) -> Result<Option<SurfaceSpec>, UiDocError> {
+    let Some((id, write)) = id.zip(write) else {
+        return Ok(None);
+    };
+    let path = child_path(&context.prefix, id);
+    let write = substitute_binding(context, write, &path)?;
+    (machine.visitor)(
+        ControlSite {
+            path: &path,
+            control: node,
+            read: None,
+            write: Some(&write),
+            columns_state: None,
+            query: None,
+            scope: None,
+            zoom: None,
+            active: None,
+        },
+        &context.origin,
+    )?;
+    Ok(Some(SurfaceSpec {
+        path: machine.interner.intern(&path, &context.origin)?,
+        write: intern_binding(machine.interner, &write, &context.origin)?,
+    }))
 }
 
 fn walk(
@@ -620,9 +634,11 @@ fn walk(
             frame,
             background,
             background_alpha,
+            write,
             children,
         } => {
             machine.budget.charge(&context.origin)?;
+            let surface = container_surface(context, node, id.as_ref(), write.as_ref(), machine)?;
             Ok(ExpandedNode::Row {
                 id: id
                     .as_ref()
@@ -636,6 +652,7 @@ fn walk(
                 frame: *frame,
                 background: *background,
                 background_alpha: *background_alpha,
+                surface,
                 children: children
                     .iter()
                     .map(|child| walk(context, child, depth, machine))
@@ -652,9 +669,11 @@ fn walk(
             frame,
             background,
             background_alpha,
+            write,
             children,
         } => {
             machine.budget.charge(&context.origin)?;
+            let surface = container_surface(context, node, id.as_ref(), write.as_ref(), machine)?;
             Ok(ExpandedNode::Column {
                 id: id
                     .as_ref()
@@ -668,6 +687,7 @@ fn walk(
                 frame: *frame,
                 background: *background,
                 background_alpha: *background_alpha,
+                surface,
                 children: children
                     .iter()
                     .map(|child| walk(context, child, depth, machine))

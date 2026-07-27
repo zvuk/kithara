@@ -48,9 +48,25 @@ overview row and the keyboard's Delete reaches it. `StudioCache` owns the focus
 next to the hover: both name a deck by position, and the layout bounds both.
 
 Tempo travel is fixed at `TEMPO_RANGE` percent either way, clamped where the
-deck applies it. The knob sits in the mixer channel, which the design canon
-reserves for EQ and filter: the channel strip is the studio's whole reach to
-the deck's timestretch.
+deck applies it. The deck's TEMPO block is the studio's whole reach to the
+timestretch: the block is one wheel surface, a detent over any part of it moves
+the tempo by `TEMPO_STEP` percent, a held press drags it the same way, and a
+double click returns it to zero. The step is what makes the travel reachable by
+scrolling at all, so it is bounded against `TEMPO_RANGE` rather than chosen for
+precision. The mixer channel keeps the EQ the design canon reserves it for.
+
+The block prints the playing BPM beside the tempo percent — the analysed BPM
+scaled by the tempo, an em dash while no analysis carries one. The percent is
+the accented reading and the BPM follows it dimmed. The deck's own bar prints
+the track's BPM, which the tempo does not move.
+
+Beside the block the transport carries the pair of zoom buttons the design canon
+gives it, widening then narrowing left to right. They trigger
+`deck.view.zoom_in` and `deck.view.zoom_out`, which the studio applies to the
+per-deck zoom it owns; `kithara_ui::render::zoom_in` and `zoom_out` decide what
+a press is worth and hold the scale to the bounds the wave draws within, the
+same bounds a wheel over the wave answers to. A deck no press has reached yet
+starts from `DEFAULT_ZOOM`, which is what the wave shows until then.
 
 The studio window opens without system decorations, so the top bar is the
 window chrome: its empty middle is a `WindowDrag` surface, and the cell on its
@@ -73,8 +89,9 @@ and answers only its own addresses, so no type carries the whole vocabulary.
 binding scope (`@deck=a`) selects an instance rather than naming a path segment:
 the node that owns the instances is the one that spends it. `StudioCache` owns
 what the renderer borrows but the model does not hold: converted waveform
-columns, formatted strings (tempo, remaining time, source subtitle), per-deck
-zoom, collapsed modules, the hovered and focused deck, and the deck layout.
+columns, formatted strings (tempo, playing BPM, remaining time, source
+subtitle), per-deck zoom, collapsed modules, the hovered and focused deck, and
+the deck layout.
 
 Both deck layouts are compiled once at startup and the top bar picks between
 them through `ui.layout.decks`. A layout lays out a deck whole or not at all:

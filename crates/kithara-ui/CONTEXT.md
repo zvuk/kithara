@@ -53,6 +53,12 @@ reads the visible track fraction; wheel interaction emits `SetScalar` at `<wave-
 horizontal drag emits `SetScalar` at the wave path for the host-owned playback position. The
 renderer keeps neither value and derives the centered zoom window from each read snapshot.
 
+`zoom_math` owns the zoom scale for every widget that draws a wave: the window the wave opens
+with, the bounds it clamps to, and what each gesture is worth. A wheel detent and a zoom button
+step by different factors because they are different gestures — the detent is the finer one. A
+host that drives zoom from a button rather than from the wave takes `render::zoom_in` and
+`render::zoom_out` and gets the same bounds the wave draws within.
+
 The hero wave dims the track left of the playhead with `SkinDoc.wave.played_alpha` mapped through
 its zoom window; the bars style dims the full track with `SkinDoc.wave.overview_played_alpha`. The
 micro style carries no playhead dimming.
@@ -136,12 +142,35 @@ Controls take their size from the wrapper, not from themselves: a widget fills w
 `size::control_size` or the document gives it. A widget that pins its own height would ignore the
 document and break the row it sits in.
 
+A transport cell carries its hairline on the sides `SkinDoc.button.transport_sides` names; a
+`Button` that declares `frame` names them itself. One seam stands between neighbouring cells and
+none at the strip's ends, so the cells before its flexible gap keep the skin's right seam while
+the cells after it take a left one, the side the container cells beside them already declare.
+Only the transport styles read that declaration; every other button style draws the border of its
+own style.
+
 `Dim::Shrink` is the one rule the document layer cannot compose: the toolkit measures the content,
 so `Bounds` treats it as an open axis and `Dim::from(Bounds)` never produces it. A shrunk node
 therefore has to carry `Shrink` down to its own children — `render::tree::content_size` passes it
 to the container, its frame overlay and its fill, because the first `Fill` inside a shrunk box
 claims the whole row. Text measures its glyphs and takes alignment from that wrapper; a readout
 that draws its own framed cell keeps filling the box the document gave it.
+
+A `Row` or `Column` that declares `write` is an interactive surface over its whole box: a wheel
+detent there emits one signed `ControlAction::StepScalar`, and a double click emits
+`ControlAction::Activate`, both on the container's own path. A trackpad gesture steps by the sign
+of each pixel delta, no sooner than `WHEEL_STEP_INTERVAL_MS` after the last step:
+`iced::mouse::Event::WheelScrolled` carries no scroll phase, so the momentum deltas macOS keeps
+sending after the fingers lift are indistinguishable from the gesture, and that interval is what
+bounds how far they carry the value. A held press drags the same step at `DRAG_STEPS_PER_PIXEL`
+per pixel, upward for a step up, measured from where the last step left off so the surface never
+needs the value; the press consults the double click first, so the second press of a pair resets
+rather than drags. The surface counts steps and nothing else. It reads no value and holds no range, so
+what a step is worth and what the click returns to belong to the host that owns the parameter. It
+claims the pointer over its whole box: it reports the `ResizingVertically` the knobs report, which
+in a `Stack` levitates the cursor away from everything the surface covers. Such a container needs
+an `id` to be addressed by; `validate::check_module_node_ids` rejects the document otherwise. A
+container that stays silent about `write` is presentational and carries no path.
 
 `validate::value_kinds` is the single owner of control read/write endpoint kinds. Intrinsic sizes
 are selected exhaustively from `ControlSpec` and the supplied `SkinDoc` by

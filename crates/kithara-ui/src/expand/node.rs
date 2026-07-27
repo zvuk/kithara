@@ -26,6 +26,7 @@ pub enum ExpandedNode {
         frame: Option<FrameSides>,
         background: Option<ColorRole>,
         background_alpha: Option<f32>,
+        surface: Option<SurfaceSpec>,
         children: Vec<Self>,
     },
     Column {
@@ -38,6 +39,7 @@ pub enum ExpandedNode {
         frame: Option<FrameSides>,
         background: Option<ColorRole>,
         background_alpha: Option<f32>,
+        surface: Option<SurfaceSpec>,
         children: Vec<Self>,
     },
     Slot {
@@ -96,6 +98,7 @@ pub enum ControlSpec {
         icon: Option<IconName>,
         active_label: Option<InternId>,
         style: ButtonStyle,
+        frame: Option<FrameSides>,
     },
     Bpm {
         placeholder: Option<InternId>,
@@ -229,6 +232,14 @@ pub(crate) struct ExpandedModule {
     pub(crate) drop: Option<DropSpec>,
     pub(crate) collapsed: InternId,
     pub(crate) root: ExpandedNode,
+}
+
+/// Control path a wheel detent publishes on, and the scalar it steps.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct SurfaceSpec {
+    pub path: InternId,
+    pub write: Binding,
 }
 
 /// Compiled drop target of a module: the command the host runs when a drag is

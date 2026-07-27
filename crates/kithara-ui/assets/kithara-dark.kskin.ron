@@ -303,7 +303,7 @@
         track_title: (font: Display, weight: Medium, size: 12.0, spacing: 0.0, color: Text),
         body: (font: Sans, weight: Normal, size: 11.0, spacing: 0.0, color: Text),
         telemetry: (font: Mono, weight: Medium, size: 11.0, spacing: 0.0, color: Accent),
-        micro_label: (font: Mono, weight: Normal, size: 9.0, spacing: 0.14, color: Muted),
+        micro_label: (font: Mono, weight: Normal, size: 8.0, spacing: 0.12, color: Muted),
         section: (font: Mono, weight: Normal, size: 9.0, spacing: 0.0, color: Muted),
     ),
     segmented: (

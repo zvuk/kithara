@@ -1,6 +1,6 @@
 use iced::{
     Alignment, Element, Length,
-    widget::{Column, Row, Space, container},
+    widget::{Column, Row, Space, Stack, container},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -11,12 +11,12 @@ use super::{
 };
 use crate::{
     compile::{CompiledNode, CompiledUi},
-    expand::ExpandedNode,
+    expand::{ExpandedNode, SurfaceSpec},
     layout::Axis,
     module::ChromeStyle,
     render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent},
     size::{Dim, SizeSpec},
-    widgets::{DropZone, ModuleChrome},
+    widgets::{DropZone, ModuleChrome, Widget, wheel::WheelSurface},
 };
 
 pub(super) fn render_compiled<'a>(
@@ -118,6 +118,25 @@ fn module_drop_zone(instance: &str, active: bool) -> DropZone<UiEvent> {
     DropZone::new(crossing(true), crossing(false), active)
 }
 
+fn wheeled<'a>(
+    element: Element<'a, UiEvent>,
+    surface: Option<&SurfaceSpec>,
+    size: (Length, Length),
+    ui: &'a CompiledUi,
+) -> Element<'a, UiEvent> {
+    let Some(surface) = surface else {
+        return element;
+    };
+    let wheel = WheelSurface::builder()
+        .path(ui.resolve(surface.path))
+        .build()
+        .view();
+    Stack::with_children([element, wheel])
+        .width(size.0)
+        .height(size.1)
+        .into()
+}
+
 fn render_node<'a>(
     node: &ExpandedNode,
     ui: &'a CompiledUi,
@@ -135,30 +154,36 @@ fn render_node<'a>(
             frame,
             background,
             background_alpha,
+            surface,
             ..
-        } => Rendered::leading(bordered(
-            filled(
-                container(
-                    Row::with_children(
-                        children
-                            .iter()
-                            .map(|child| render_node(child, ui, reads, skin)),
+        } => Rendered::leading(wheeled(
+            bordered(
+                filled(
+                    container(
+                        Row::with_children(
+                            children
+                                .iter()
+                                .map(|child| render_node(child, ui, reads, skin)),
+                        )
+                        .spacing(gap.unwrap_or(skin.layout.grid_gap))
+                        .align_y(Alignment::Center)
+                        .width(size.0)
+                        .height(size.1),
                     )
-                    .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                    .align_y(Alignment::Center)
+                    .padding(padding(*pad, *pad_x, *pad_y, skin))
                     .width(size.0)
                     .height(size.1),
-                )
-                .padding(padding(*pad, *pad_x, *pad_y, skin))
-                .width(size.0)
-                .height(size.1),
-                *background,
-                *background_alpha,
+                    *background,
+                    *background_alpha,
+                    skin,
+                ),
+                *frame,
+                size,
                 skin,
             ),
-            *frame,
+            surface.as_ref(),
             size,
-            skin,
+            ui,
         )),
         ExpandedNode::Column {
             children,
@@ -169,29 +194,35 @@ fn render_node<'a>(
             frame,
             background,
             background_alpha,
+            surface,
             ..
-        } => Rendered::leading(bordered(
-            filled(
-                container(
-                    Column::with_children(
-                        children
-                            .iter()
-                            .map(|child| render_node(child, ui, reads, skin)),
+        } => Rendered::leading(wheeled(
+            bordered(
+                filled(
+                    container(
+                        Column::with_children(
+                            children
+                                .iter()
+                                .map(|child| render_node(child, ui, reads, skin)),
+                        )
+                        .spacing(gap.unwrap_or(skin.layout.grid_gap))
+                        .align_x(Alignment::Center)
+                        .width(size.0),
                     )
-                    .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                    .align_x(Alignment::Center)
-                    .width(size.0),
-                )
-                .padding(padding(*pad, *pad_x, *pad_y, skin))
-                .width(size.0)
-                .height(size.1),
-                *background,
-                *background_alpha,
+                    .padding(padding(*pad, *pad_x, *pad_y, skin))
+                    .width(size.0)
+                    .height(size.1),
+                    *background,
+                    *background_alpha,
+                    skin,
+                ),
+                *frame,
+                size,
                 skin,
             ),
-            *frame,
+            surface.as_ref(),
             size,
-            skin,
+            ui,
         )),
         ExpandedNode::Slot { children, .. } => Rendered::leading(
             container(

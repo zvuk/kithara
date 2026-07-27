@@ -127,6 +127,8 @@ pub enum UiDocError {
     MissingTrackTitleColumn { origin: SourceUri, path: String },
     #[error("{origin}: ContextBar at {path} requires scope_items, scope, and write together")]
     InvalidContextScope { origin: SourceUri, path: String },
+    #[error("{origin}: container at {path} declares write but has no id to address it by")]
+    UnaddressedSurface { origin: SourceUri, path: String },
     #[error("{origin}: compiled node count {count} exceeds limit {max}")]
     NodesExceeded {
         origin: SourceUri,

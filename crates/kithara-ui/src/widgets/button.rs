@@ -8,6 +8,7 @@ use iced::{
 };
 
 use crate::{
+    layout::FrameSides,
     module::ButtonStyle,
     render::{ControlAction, Icon, ReadValue, Skin, UiEvent, fonts, shaped_text},
     skin::FontSkin,
@@ -21,6 +22,7 @@ pub(crate) struct ControlButton<'a, 'value, 'data, 'skin> {
     icon: Option<Icon>,
     active_label: Option<&'a str>,
     style: ButtonStyle,
+    frame: Option<FrameSides>,
     value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
 }
@@ -89,7 +91,7 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
                 };
                 frame_overlay(
                     control.width(Length::FillPortion(fill)).into(),
-                    self.skin.button.transport_sides,
+                    self.frame.unwrap_or(self.skin.button.transport_sides),
                     (Length::Fill, Length::Fill),
                     self.skin,
                 )

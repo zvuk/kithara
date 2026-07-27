@@ -120,26 +120,33 @@ fn player_deck_compiles_canonical_transport_row() {
 
     assert_eq!(size.h, Dim::Fixed(30.0));
     assert_eq!(children.len(), 12);
-    assert!(matches!(
-        children.get(8),
-        Some(ExpandedNode::Control {
-            spec: ControlSpec::Button {
-                icon: Some(IconName::ZoomOut),
-                ..
-            },
+    for (index, icon) in [(8, IconName::ZoomOut), (9, IconName::ZoomIn)] {
+        let Some(ExpandedNode::Control {
+            spec:
+                ControlSpec::Button {
+                    icon: Some(declared),
+                    frame: Some(frame),
+                    ..
+                },
             ..
-        })
-    ));
-    assert!(matches!(
-        children.get(9),
-        Some(ExpandedNode::Control {
-            spec: ControlSpec::Button {
-                icon: Some(IconName::ZoomIn),
-                ..
-            },
+        }) = children.get(index)
+        else {
+            panic!("expected a framed zoom cell at {index}");
+        };
+        assert_eq!(*declared, icon);
+        assert!(frame.left, "{icon:?} must carry its left seam");
+        assert!(!frame.top && !frame.right && !frame.bottom);
+    }
+    for index in 0..=6 {
+        let Some(ExpandedNode::Control {
+            spec: ControlSpec::Button { frame, .. },
             ..
-        })
-    ));
+        }) = children.get(index)
+        else {
+            panic!("expected a transport cell at {index}");
+        };
+        assert!(frame.is_none(), "cell {index} keeps the skin's own seam");
+    }
     for (index, name) in [(10, "stream"), (11, "tempo")] {
         let Some(ExpandedNode::Row {
             id: Some(id),

@@ -355,6 +355,7 @@ mod tests {
             frame: None,
             background: None,
             background_alpha: None,
+            surface: None,
             children,
         }
     }
@@ -370,6 +371,7 @@ mod tests {
             frame: None,
             background: None,
             background_alpha: None,
+            surface: None,
             children,
         }
     }
@@ -445,6 +447,7 @@ mod tests {
             frame: None,
             background: None,
             background_alpha: None,
+            surface: None,
             children,
         };
 

@@ -74,6 +74,7 @@
                 label: "",
                 icon: Some(ZoomOut),
                 style: Transport,
+                frame: (top: false, right: false, bottom: false, left: true),
                 write: Command(id: "deck.view.zoom_out", with: { "deck": "$deck" }),
             ),
             Button(
@@ -82,6 +83,7 @@
                 label: "",
                 icon: Some(ZoomIn),
                 style: Transport,
+                frame: (top: false, right: false, bottom: false, left: true),
                 write: Command(id: "deck.view.zoom_in", with: { "deck": "$deck" }),
             ),
             Row(

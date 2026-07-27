@@ -9,8 +9,9 @@ use super::{cache::DeckLayout, compile::compile_studio};
 
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
-fn each_control(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
+fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
     fn walk(node: &ExpandedNode, visit: &mut impl FnMut(&ExpandedNode)) {
+        visit(node);
         match node {
             ExpandedNode::Row { children, .. }
             | ExpandedNode::Column { children, .. }
@@ -19,7 +20,6 @@ fn each_control(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
                     walk(child, visit);
                 }
             }
-            control @ ExpandedNode::Control { .. } => visit(control),
             _ => {}
         }
     }
@@ -36,14 +36,14 @@ fn each_control(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
     }
 }
 
-/// Every control in the compiled studio, as `(path, scoped binding keys)`.
+/// Every addressed node in the compiled studio, as
+/// `(path, scoped binding keys)`.
 fn controls(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
     let mut out = Vec::new();
-    each_control(ui, &mut |node| {
-        if let ExpandedNode::Control {
+    each_node(ui, &mut |node| match node {
+        ExpandedNode::Control {
             path, read, write, ..
-        } = node
-        {
+        } => {
             let keys = [read.as_ref(), write.as_ref()]
                 .into_iter()
                 .flatten()
@@ -51,15 +51,40 @@ fn controls(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
                 .collect();
             out.push((ui.resolve(*path), keys));
         }
+        ExpandedNode::Row {
+            surface: Some(surface),
+            ..
+        }
+        | ExpandedNode::Column {
+            surface: Some(surface),
+            ..
+        } => out.push((
+            ui.resolve(surface.path),
+            vec![ui.resolve(surface.write.key())],
+        )),
+        _ => {}
     });
     out
 }
 
 fn control_paths(ui: &CompiledUi) -> Vec<&str> {
+    controls(ui).into_iter().map(|(path, _)| path).collect()
+}
+
+/// Containers that catch the wheel, as `(path, scoped write key)`.
+fn surfaces(ui: &CompiledUi) -> Vec<(&str, &str)> {
     let mut out = Vec::new();
-    each_control(ui, &mut |node| {
-        if let ExpandedNode::Control { path, .. } = node {
-            out.push(ui.resolve(*path));
+    each_node(ui, &mut |node| {
+        if let ExpandedNode::Row {
+            surface: Some(surface),
+            ..
+        }
+        | ExpandedNode::Column {
+            surface: Some(surface),
+            ..
+        } = node
+        {
+            out.push((ui.resolve(surface.path), ui.resolve(surface.write.key())));
         }
     });
     out
@@ -68,7 +93,7 @@ fn control_paths(ui: &CompiledUi) -> Vec<&str> {
 /// Labels the segmented control at `want` declares, in document order.
 fn segments<'a>(ui: &'a CompiledUi, want: &str) -> Vec<&'a str> {
     let mut found = Vec::new();
-    each_control(ui, &mut |node| {
+    each_node(ui, &mut |node| {
         if let ExpandedNode::Control {
             path,
             spec: ControlSpec::Segmented { items },
@@ -143,7 +168,7 @@ fn the_cpu_cell_reads_engine_load_as_a_bar_and_a_number() {
     for layout in LAYOUTS {
         let ui = compile_studio(layout).unwrap();
         let mut bars = Vec::new();
-        each_control(&ui, &mut |node| {
+        each_node(&ui, &mut |node| {
             if let ExpandedNode::Control {
                 path,
                 spec: ControlSpec::Meter,
@@ -168,7 +193,7 @@ fn the_bar_owns_the_window_chrome() {
     for layout in LAYOUTS {
         let ui = compile_studio(layout).unwrap();
         let mut seen = Vec::new();
-        each_control(&ui, &mut |node| {
+        each_node(&ui, &mut |node| {
             if let ExpandedNode::Control { path, spec, .. } = node
                 && matches!(
                     spec,
@@ -192,7 +217,7 @@ fn every_channel_strip_carries_the_supported_control_set() {
     let ui = compile_studio(DeckLayout::Dual).unwrap();
     let paths = control_paths(&ui);
     for letter in ["a", "b"] {
-        for name in ["low", "mid", "high", "tempo", "volume"] {
+        for name in ["low", "mid", "high", "volume"] {
             let want = format!("mixer/{letter}/{name}");
             assert!(paths.contains(&want.as_str()), "missing control `{want}`");
         }
@@ -217,15 +242,63 @@ fn studio_hides_controls_outside_the_supported_playback_contract() {
 }
 
 #[kithara::test]
-fn tempo_and_volume_controls_bind_to_the_deck_mixer_state() {
+fn tempo_and_volume_controls_bind_to_the_deck_they_address() {
     let ui = compile_studio(DeckLayout::Dual).unwrap();
     let controls = controls(&ui);
     for letter in ["a", "b"] {
-        for (name, endpoint) in [("tempo", "deck.tempo.rate"), ("volume", "mixer.trim")] {
-            let want = format!("mixer/{letter}/{name}");
+        for (want, endpoint) in [
+            (format!("deck-{letter}/tempo"), "deck.tempo.rate"),
+            (format!("mixer/{letter}/volume"), "mixer.trim"),
+        ] {
             let (_, keys) = controls
                 .iter()
-                .find(|(path, _)| *path == want)
+                .find(|(path, _)| **path == want)
+                .unwrap_or_else(|| panic!("missing control `{want}`"));
+            let binding = format!("{endpoint}@deck={letter}");
+            assert!(
+                keys.contains(&binding.as_str()),
+                "`{want}` must bind `{binding}`, got {keys:?}"
+            );
+        }
+    }
+}
+
+#[kithara::test]
+fn the_deck_tempo_block_is_the_only_writer_of_the_deck_tempo() {
+    let ui = compile_studio(DeckLayout::Dual).unwrap();
+    let mut writers: Vec<&str> = controls(&ui)
+        .into_iter()
+        .filter(|(_, keys)| keys.iter().any(|key| key.starts_with("deck.tempo.rate@")))
+        .map(|(path, _)| path)
+        .collect();
+    writers.sort_unstable();
+
+    assert_eq!(writers, ["deck-a/tempo", "deck-b/tempo"]);
+
+    let surfaces = surfaces(&ui);
+    for letter in ["a", "b"] {
+        let path = format!("deck-{letter}/tempo");
+        let key = format!("deck.tempo.rate@deck={letter}");
+        assert!(
+            surfaces.contains(&(path.as_str(), key.as_str())),
+            "the tempo block must catch the wheel for deck {letter}, got {surfaces:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn the_deck_transport_carries_the_zoom_pair() {
+    let ui = compile_studio(DeckLayout::Dual).unwrap();
+    let controls = controls(&ui);
+    for letter in ["a", "b"] {
+        for (name, endpoint) in [
+            ("zoom-out", "deck.view.zoom_out"),
+            ("zoom-in", "deck.view.zoom_in"),
+        ] {
+            let want = format!("deck-{letter}/{name}");
+            let (_, keys) = controls
+                .iter()
+                .find(|(path, _)| **path == want)
                 .unwrap_or_else(|| panic!("missing control `{want}`"));
             let binding = format!("{endpoint}@deck={letter}");
             assert!(
@@ -309,7 +382,7 @@ fn deck_letter_captions_name_their_deck() {
     for layout in LAYOUTS {
         let ui = compile_studio(layout).unwrap();
         let mut seen = 0_usize;
-        each_control(&ui, &mut |node| {
+        each_node(&ui, &mut |node| {
             if let ExpandedNode::Control {
                 path,
                 spec:

@@ -121,7 +121,8 @@ fn builtin_skin_pins_the_design_canon() {
     assert_eq!(document.text.body.size, 11.0);
     assert_eq!(document.text.telemetry.font, FontFamily::Mono);
     assert_eq!(document.text.telemetry.color, ColorRole::Accent);
-    assert_eq!(document.text.micro_label.spacing, 0.14);
+    assert_eq!(document.text.micro_label.size, 8.0);
+    assert_eq!(document.text.micro_label.spacing, 0.12);
     assert_eq!(document.text.micro_label.color, ColorRole::Muted);
     assert_eq!(document.segmented.frame.border_width, 1.0);
     assert_eq!(document.segmented.active_background, ColorRole::Accent);

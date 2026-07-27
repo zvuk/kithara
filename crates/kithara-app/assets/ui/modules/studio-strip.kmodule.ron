@@ -44,12 +44,6 @@
                                 read: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
                                 write: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
                             ),
-                            Knob(
-                                id: "tempo",
-                                label: Some("TEMPO"),
-                                read: Parameter(id: "deck.tempo.rate", with: { "deck": "$deck" }),
-                                write: Parameter(id: "deck.tempo.rate", with: { "deck": "$deck" }),
-                            ),
                         ],
                     ),
                 ],

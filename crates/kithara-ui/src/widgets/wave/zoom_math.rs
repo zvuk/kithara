@@ -4,9 +4,11 @@ use num_traits::cast::AsPrimitive;
 
 use crate::render::WaveBucket;
 
-pub(crate) const DEFAULT_ZOOM: f32 = 0.12;
+pub const DEFAULT_ZOOM: f32 = 0.12;
 pub(crate) const MAX_ZOOM: f32 = 0.5;
 pub(crate) const MIN_ZOOM: f32 = 0.015;
+
+const BUTTON_FACTOR: f32 = 0.7;
 
 pub(crate) fn clamp_zoom(zoom: f32) -> f32 {
     zoom.clamp(MIN_ZOOM, MAX_ZOOM)
@@ -97,6 +99,18 @@ pub(crate) fn window_bounds(position: f32, zoom: f32) -> Range<f32> {
 pub(crate) fn zoom_for_wheel(zoom: f32, delta_y: f32) -> f32 {
     let factor = if delta_y > 0.0 { 1.25 } else { 0.8 };
     clamp_zoom(zoom * factor)
+}
+
+/// Narrows the visible window by one button press.
+#[must_use]
+pub fn zoom_in(zoom: f32) -> f32 {
+    clamp_zoom(zoom * BUTTON_FACTOR)
+}
+
+/// Widens the visible window by one button press.
+#[must_use]
+pub fn zoom_out(zoom: f32) -> f32 {
+    clamp_zoom(zoom / BUTTON_FACTOR)
 }
 
 #[cfg(test)]
@@ -251,5 +265,13 @@ mod tests {
         assert_near(zoom_for_wheel(0.12, -1.0), 0.096);
         assert_near(zoom_for_wheel(MAX_ZOOM, 1.0), MAX_ZOOM);
         assert_near(zoom_for_wheel(MIN_ZOOM, -1.0), MIN_ZOOM);
+    }
+
+    #[kithara::test]
+    fn buttons_step_wider_than_a_detent_and_clamp() {
+        assert_near(zoom_in(DEFAULT_ZOOM), 0.084);
+        assert_near(zoom_out(DEFAULT_ZOOM), 0.171_428_57);
+        assert_near(zoom_in(MIN_ZOOM), MIN_ZOOM);
+        assert_near(zoom_out(MAX_ZOOM), MAX_ZOOM);
     }
 }

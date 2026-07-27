@@ -1,7 +1,6 @@
 use crate::render::{ReadValue, Reads};
 
-/// One owner in the address tree. It resolves its own children and reads its
-/// own value, and knows neither its siblings nor its parent.
+/// One owner in the address tree: it resolves its own children and reads its own value.
 pub trait Node<'a> {
     fn child(&self, _segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         None
@@ -12,9 +11,7 @@ pub trait Node<'a> {
     }
 }
 
-/// Values that qualify an address at read time, such as the deck a control
-/// belongs to. Supplied by the document, consumed by the owner of the
-/// instances it selects among.
+/// Values qualifying an address, spent by the owner of the instances they select.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Scope<'s>(&'s str);
 

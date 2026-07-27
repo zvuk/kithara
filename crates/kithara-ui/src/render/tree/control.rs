@@ -97,12 +97,14 @@ pub(super) fn render_control<'a>(
             icon,
             active_label,
             style,
+            frame,
         } => ControlButton::builder()
             .path(path)
             .label(ui.resolve(*label))
             .maybe_icon(icon.map(render_icon))
             .maybe_active_label(active_label.map(|id| ui.resolve(id)))
             .style(*style)
+            .maybe_frame(*frame)
             .maybe_value(value)
             .skin(skin)
             .build()

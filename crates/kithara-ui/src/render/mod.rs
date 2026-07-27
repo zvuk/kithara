@@ -16,3 +16,5 @@ pub use model::{
 };
 pub use skin::Skin;
 pub use typography::shaped_text;
+
+pub use crate::widgets::wave::zoom_math::{DEFAULT_ZOOM, zoom_in, zoom_out};

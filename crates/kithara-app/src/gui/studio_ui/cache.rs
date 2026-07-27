@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use kithara::audio::Waveform;
 use kithara_ui::render::WaveBucket;
-use num_traits::cast::ToPrimitive;
+use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::scope::deck_letter;
 use crate::{
@@ -67,6 +67,7 @@ pub(super) struct DeckCache {
     pub(super) wave: Vec<WaveBucket>,
     wave_src: Option<usize>,
     pub(super) tempo: String,
+    pub(super) bpm: String,
     pub(super) remain: String,
     pub(super) subtitle: String,
     pub(super) zoom: Option<f64>,
@@ -79,6 +80,13 @@ pub(super) struct CatalogRowMarks(Vec<String>);
 pub(super) struct CollapsedModules(BTreeSet<String>);
 
 impl StudioCache {
+    #[cfg(test)]
+    pub(super) fn with_decks(decks: usize) -> Self {
+        let mut cache = Self::default();
+        cache.decks.resize_with(decks, DeckCache::default);
+        cache
+    }
+
     pub(super) fn toggle_module(&mut self, module: String) {
         self.collapsed.toggle(module);
     }
@@ -150,6 +158,7 @@ impl DeckCache {
     fn refresh(&mut self, deck: &DeckUi) {
         let ts = deck.view.timestretch;
         self.tempo = format!("{:+.1}%", ts.tempo);
+        self.bpm = format_bpm(analysis_bpm(&deck.ui), ts.speed());
         self.remain = format_remain(&deck.ui);
         self.subtitle = track_subtitle(&deck.ui);
         self.refresh_wave(deck.ui.analysis.as_ref());
@@ -205,6 +214,17 @@ fn loaded_deck_letters(entry: &CatalogEntry, decks: &Decks) -> String {
         .filter_map(|(at, _)| deck_letter(at))
         .map(|letter| letter.to_ascii_uppercase())
         .collect()
+}
+
+pub(super) fn analysis_bpm(ui: &UiState) -> Option<f32> {
+    let bpm = ui.analysis.as_ref()?.beat()?.bpm();
+    bpm.is_finite().then(|| bpm.as_())
+}
+
+fn format_bpm(source: Option<f32>, speed: f32) -> String {
+    const EM_DASH: char = '\u{2014}';
+
+    source.map_or_else(|| EM_DASH.to_string(), |bpm| format!("{:.1}", bpm * speed))
 }
 
 fn format_remain(ui: &UiState) -> String {

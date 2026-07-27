@@ -6,7 +6,7 @@ use crate::{
     gui::{
         deck::{DeckView, TEMPO_RANGE, TimestretchState},
         studio_ui::{
-            cache::DeckCache,
+            cache::{DeckCache, analysis_bpm},
             endpoints::{EQ_MAX_DB, EQ_MIN_DB},
             scope::deck_index,
         },
@@ -116,6 +116,7 @@ impl<'a> Node<'a> for PlaybackNode<'a> {
             "duration_secs" => ReadValue::Scalar(self.ui.duration.max(0.0)),
             "position_normalized" => ReadValue::Scalar(self.normalized()),
             "tempo" => ReadValue::Text(&self.cache.tempo),
+            "bpm" => ReadValue::Text(&self.cache.bpm),
             "remain" => ReadValue::Text(&self.cache.remain),
             _ => return None,
         };
@@ -224,9 +225,4 @@ fn eq_value(db: Option<&f32>) -> Option<ReadValue<'static>> {
     let db = *db?;
     let normalized = (db - EQ_MIN_DB) / (EQ_MAX_DB - EQ_MIN_DB);
     Some(ReadValue::Scalar(f64::from(normalized.clamp(0.0, 1.0))))
-}
-
-fn analysis_bpm(ui: &UiState) -> Option<f32> {
-    let bpm = ui.analysis.as_ref()?.beat()?.bpm();
-    bpm.is_finite().then(|| bpm.as_())
 }

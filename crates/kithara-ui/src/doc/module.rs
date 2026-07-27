@@ -87,6 +87,8 @@ pub enum ControlNode {
         background: Option<ColorRole>,
         #[serde(default)]
         background_alpha: Option<f32>,
+        #[serde(default)]
+        write: Option<BindingRef>,
         children: Vec<Self>,
     },
     Column {
@@ -111,6 +113,8 @@ pub enum ControlNode {
         background: Option<ColorRole>,
         #[serde(default)]
         background_alpha: Option<f32>,
+        #[serde(default)]
+        write: Option<BindingRef>,
         children: Vec<Self>,
     },
     Include {
@@ -309,6 +313,10 @@ pub enum ControlNode {
         active_label: Option<String>,
         #[serde(default)]
         style: ButtonStyle,
+        /// Hairlines on the requested sides of a transport cell; absent leaves
+        /// the sides to the skin.
+        #[serde(default)]
+        frame: Option<FrameSides>,
     },
     Bpm {
         id: NodeId,
@@ -653,9 +661,8 @@ impl ControlNode {
 
     pub(crate) fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
         match self {
-            Self::Row { .. }
-            | Self::Column { .. }
-            | Self::Include { .. }
+            Self::Row { write, .. } | Self::Column { write, .. } => (None, write.as_ref()),
+            Self::Include { .. }
             | Self::Slot { .. }
             | Self::WindowDrag { .. }
             | Self::TitleBar { .. }

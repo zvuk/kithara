@@ -397,6 +397,7 @@ fn row(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         frame: None,
         background: None,
         background_alpha: None,
+        write: None,
         children,
     }
 }
@@ -412,6 +413,7 @@ fn column(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         frame: None,
         background: None,
         background_alpha: None,
+        write: None,
         children,
     }
 }
@@ -472,6 +474,7 @@ fn button(id: &str, endpoint: &str) -> ControlNode {
         active_label: Some("PAUSE".to_owned()),
         style: ButtonStyle::default(),
         icon: None,
+        frame: None,
     }
 }
 

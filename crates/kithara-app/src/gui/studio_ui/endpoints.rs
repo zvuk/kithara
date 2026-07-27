@@ -61,6 +61,12 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
+        id: "deck.playback.bpm",
+        value: ValueKind::Text,
+        deck_scoped: true,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
         id: "deck.playback.remain",
         value: ValueKind::Text,
         deck_scoped: true,
@@ -117,6 +123,18 @@ static ENDPOINTS: &[Endpoint] = &[
         category: EndpointCategory::Model,
         id: "deck.view.zoom",
         value: ValueKind::Scalar,
+        deck_scoped: true,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.view.zoom_in",
+        value: ValueKind::Trigger,
+        deck_scoped: true,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.view.zoom_out",
+        value: ValueKind::Trigger,
         deck_scoped: true,
     },
     Endpoint {
