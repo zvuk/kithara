@@ -83,8 +83,8 @@ impl StudioCache {
         self.collapsed.toggle(module);
     }
 
-    pub(super) fn deck(&self, index: usize) -> Option<&DeckCache> {
-        self.decks.get(index)
+    pub(super) fn decks(&self) -> &[DeckCache] {
+        &self.decks
     }
 
     pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut DeckCache> {
@@ -121,8 +121,12 @@ impl StudioCache {
         }
     }
 
-    pub(super) fn drag_over(&self, deck: usize) -> bool {
-        self.drag.is_some() && self.hover_deck == Some(deck)
+    pub(super) const fn drag_target(&self) -> Option<usize> {
+        if self.drag.is_some() {
+            self.hover_deck
+        } else {
+            None
+        }
     }
 
     pub(super) fn take_drop(&mut self) -> Option<(usize, usize)> {
@@ -231,10 +235,9 @@ mod tests {
         cache.set_hover_deck(1, true);
         cache.drag = Some(4);
 
-        assert!(cache.drag_over(1));
-        assert!(!cache.drag_over(0));
+        assert_eq!(cache.drag_target(), Some(1));
         assert_eq!(cache.take_drop(), Some((4, 1)));
-        assert!(!cache.drag_over(1), "the drag is over");
+        assert_eq!(cache.drag_target(), None, "the drag is over");
 
         cache.drag = Some(7);
         assert_eq!(cache.take_drop(), Some((7, 1)));

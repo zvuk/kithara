@@ -1,3 +1,4 @@
+pub mod address;
 pub mod event;
 pub mod fonts;
 pub mod icons;
@@ -7,6 +8,7 @@ pub mod theme;
 pub mod tree;
 pub mod typography;
 
+pub use address::{Node, Scope, Walk};
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub use icons::Icon;
 pub use model::{

@@ -175,6 +175,14 @@ static ENDPOINTS: &[Endpoint] = &[
     },
 ];
 
+#[cfg(test)]
+pub(super) fn readable_endpoints() -> impl Iterator<Item = (&'static str, bool)> {
+    ENDPOINTS
+        .iter()
+        .filter(|endpoint| endpoint.category != EndpointCategory::Command)
+        .map(|endpoint| (endpoint.id, endpoint.deck_scoped))
+}
+
 struct Registration {
     endpoint: &'static Endpoint,
     desc: EndpointDesc,

@@ -25,6 +25,13 @@ letter maps to a position; the session bounds it, so a letter past the last
 deck resolves to nothing rather than to a neighbour, and a position past the
 alphabet has no letter rather than a stand-in.
 
+One position indexes every list a deck appears in. `Decks` is built from
+`DeckSet::decks` in session order and `StudioCache` is refreshed against
+`Decks`, so the view model and the cache line up with the session by
+construction and the address tree joins them by position alone. Changing the
+session's deck list means rebuilding the view model with it; the lists carry no
+key that would survive them drifting apart.
+
 A track reaches a deck by being dragged onto it. The library reports the drag
 it started on `library/tracks`, every deck module reports the pointer crossing
 it on `deck-<letter>/drop`, and `StudioCache` joins them at the release: the row
@@ -59,11 +66,15 @@ because that is the reading it gives, and shows the same endpoint twice: a
 `Meter` bar beside the percentage. The value comes off the same per-frame deck
 snapshots every other deck read comes off, never off the live atomics.
 
-Reads are answered per frame by `StudioReads`, which borrows the app state and
-`StudioCache`. The cache owns what the renderer borrows but the model does not
-hold: converted waveform columns, formatted strings (tempo, remaining time,
-source subtitle), per-deck zoom, collapsed modules, the hovered and focused
-deck, and the deck layout.
+Reads are answered per frame by an address tree. `StudioRoot::new` is the one
+place the app state is cut into domains; each node below it holds a single slice
+and answers only its own addresses, so no type carries the whole vocabulary.
+`Walk` turns the renderer's flat endpoint key into a walk over that tree, and a
+binding scope (`@deck=a`) selects an instance rather than naming a path segment:
+the node that owns the instances is the one that spends it. `StudioCache` owns
+what the renderer borrows but the model does not hold: converted waveform
+columns, formatted strings (tempo, remaining time, source subtitle), per-deck
+zoom, collapsed modules, the hovered and focused deck, and the deck layout.
 
 Both deck layouts are compiled once at startup and the top bar picks between
 them through `ui.layout.decks`. A layout lays out a deck whole or not at all:

@@ -59,6 +59,7 @@ fn load_rec(
         return Ok(loaded.uri);
     }
     let doc = parse_module(&loaded.text, &loaded.uri)?;
+    validate::check_module_id(&doc, &loaded.uri)?;
     validate::check_module_node_ids(&doc, &loaded.uri)?;
     stack.push(loaded.uri.clone());
     walk_includes(resolver, &loaded.uri, &doc.root, limits, set, stack, depth)?;

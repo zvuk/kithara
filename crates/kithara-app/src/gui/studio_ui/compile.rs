@@ -3,14 +3,14 @@ use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
     error::UiDocError,
-    render::tree,
+    render::{Walk, tree},
     source::UiConfig,
 };
 
 use super::{
     cache::{DeckLayout, StudioCache},
     endpoints::StudioRegistry,
-    reads::StudioReads,
+    reads::StudioRoot,
 };
 use crate::gui::{app::Kithara, message::Message};
 
@@ -105,7 +105,8 @@ pub(super) fn compile_studio(layout: DeckLayout) -> Result<CompiledUi, UiDocErro
 }
 
 pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
-    let reads = StudioReads::new(state);
+    let root = StudioRoot::new(state);
+    let reads = Walk::new(&root);
     let compiled = state.studio.compiled(state.studio.cache.layout());
     tree::render(&compiled.root, compiled, &reads, builtin::skin()).map(Message::Ui)
 }

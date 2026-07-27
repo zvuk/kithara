@@ -87,7 +87,7 @@ non-render wasm schema lane does not depend on wgpu or wall-clock state.
 A read binding with a non-empty `with` map resolves through the canonical scoped key
 `<endpoint>@<scope>=<value>[,<scope2>=<value2>...]`, scope names sorted lexically. The key is
 built by `expand::scoped_key`, interned once at compile time, and carried by `Binding::key`
-(`key == id` when the scope is empty). `render/tree.rs::resolve` passes exactly this key to
+(`key == id` when the scope is empty). `render/tree/read.rs::resolve` passes exactly this key to
 `Reads::get`; hosts key their read maps by the same form.
 
 Widgets that read derived endpoints beyond their binding (`DeckSummary`, `Bpm`, `Time`,
@@ -95,6 +95,25 @@ Widgets that read derived endpoints beyond their binding (`DeckSummary`, `Bpm`, 
 and append it to each derived endpoint, so `deck.track.title@deck=b` stays addressable per deck.
 Host-global endpoints (`player.output.levels`, `ui.preset`, the visualizer clock) remain
 unscoped.
+
+## The Address Tree
+
+`Reads::get` is the renderer's boundary and stays flat: one canonical key in, one value out.
+`render::address` is how a host organises the answer behind it. A `Node` resolves one segment
+into a child and reads its own value, and knows neither its siblings nor its parent, so no type
+carries the whole vocabulary. `Walk` adapts a tree of them to `Reads`: it splits the key at `@`,
+walks the dotted path segment by segment, and reads the leaf.
+
+The scope selects an instance rather than naming a path segment, and the node that owns the
+instances is the one that spends it — a leaf that reads a scope it does not own can answer for an
+instance that does not exist. Both trait methods default to `None`, so a node answers only what
+it claims; an address nobody claims reads as absent, which the renderer shows as its default.
+
+A node whose value borrows from data built for the frame implements `Node` for `&Self`, so that
+data outlives the walk; a node that only borrows longer-lived state implements it by value.
+
+A module document id becomes a segment of `ui.module.<id>.collapsed`, so it must resolve as one:
+`validate::check_module_id` rejects a module id containing `.`.
 
 ## Typed Control Schema
 

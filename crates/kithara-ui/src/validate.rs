@@ -92,6 +92,18 @@ pub(crate) fn check_id(id: &str, origin: &SourceUri) -> Result<(), UiDocError> {
     Ok(())
 }
 
+pub(crate) fn check_module_id(doc: &ModuleDoc, origin: &SourceUri) -> Result<(), UiDocError> {
+    check_id(&doc.id.0, origin)?;
+    if doc.id.0.contains('.') {
+        return Err(UiDocError::InvalidId {
+            origin: origin.clone(),
+            id: doc.id.0.clone(),
+            reason: "module id addresses its collapsed state and must not contain '.'".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 pub(crate) fn check_module_node_ids(doc: &ModuleDoc, origin: &SourceUri) -> Result<(), UiDocError> {
     let mut seen = BTreeSet::new();
     walk_module(&doc.root, &NodePath::default(), origin, &mut seen)
@@ -676,6 +688,19 @@ mod tests {
             error,
             UiDocError::InvalidId { id, reason, .. }
                 if id == "transport/play" && reason.contains('/')
+        ));
+    }
+
+    #[kithara::test]
+    fn module_id_with_an_address_separator_is_rejected() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "studio.strip",
+            root: Button(id: "play", label: "PLAY"))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+        let error = check_module_id(&doc, &origin()).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::InvalidId { id, reason, .. }
+                if id == "studio.strip" && reason.contains("'.'")
         ));
     }
 
