@@ -5240,7 +5240,6 @@ dependencies = [
  "regex",
  "regex-automata",
  "regex-syntax",
- "reqwest",
  "ringbuf 0.4.8",
  "rustc-hash 1.1.0",
  "rustix 1.1.4",

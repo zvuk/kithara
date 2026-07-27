@@ -45,3 +45,14 @@ third-party = [
   { name = "rustfft" },
   { name = "symphonia-core" },
 ]
+
+# The HTTP backends are mutually exclusive per target: Apple and Android build
+# `client-wreq` (BoringSSL), other desktops and wasm build `client-reqwest`
+# (rustls -> aws-lc-sys). `client-reqwest` sits in the `default` of ten library
+# crates, so hakari sees it resolve for every workspace member taken as its own
+# root and lands reqwest in the hack's base `[dependencies]` — pulling a second
+# C crypto library into Apple builds that never use it. Excluding reqwest from
+# the generated manifest keeps it in traversal (so its own feature union is
+# still computed) while leaving it out of the shared surface.
+[final-excludes]
+third-party = [{ name = "reqwest" }]
