@@ -32,7 +32,7 @@ fn swatch_compiles_without_bindings() {
     let ui = compile(
         "swatch.klayout.ron",
         &resolver,
-        &common::TestRegistry::default(),
+        &common::player_registry(),
         builtin::skin_doc(),
         &UiConfig::default(),
     )

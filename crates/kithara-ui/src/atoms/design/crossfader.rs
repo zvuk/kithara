@@ -233,21 +233,18 @@ impl canvas::Program<UiEvent> for CrossfaderCanvas {
         _cursor: Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let reserved = match &self.ticks {
-            Some(ticks) => {
-                ticks.draw(
-                    &mut frame,
-                    Rectangle {
-                        x: 0.0,
-                        y: 0.0,
-                        width: bounds.width,
-                        height: ticks.extent(),
-                    },
-                );
-                ticks.reserved()
-            }
-            None => 0.0,
-        };
+        let reserved = self.ticks.as_ref().map_or(0.0, |ticks| {
+            ticks.draw(
+                &mut frame,
+                Rectangle {
+                    x: 0.0,
+                    y: 0.0,
+                    width: bounds.width,
+                    height: ticks.extent(),
+                },
+            );
+            ticks.reserved()
+        });
         let track_height = (bounds.height - reserved).max(0.0);
         let rail_height = self.rail_height.min(track_height).max(0.0);
         let rail_point = Point::new(0.0, reserved + (track_height - rail_height) / 2.0);

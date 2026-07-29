@@ -470,11 +470,11 @@ mod tests {
         Event::Mouse(mouse::Event::ButtonReleased(Button::Left))
     }
 
-    fn dragged(path: &str, phase: DragPhase) -> Option<UiEvent> {
-        Some(UiEvent::Control {
+    fn dragged(path: &str, phase: DragPhase) -> UiEvent {
+        UiEvent::Control {
             path: path.to_owned(),
             action: ControlAction::Drag(phase),
-        })
+        }
     }
 
     #[kithara::test]
@@ -499,7 +499,10 @@ mod tests {
             .update(&mut state, &moved(40.0), ROW, at(40.0))
             .unwrap_or_else(|| panic!("crossing the threshold must start the drag"));
         let (message, _, status) = started.into_inner();
-        assert_eq!(message, dragged("library/tracks", DragPhase::Start(3)));
+        assert_eq!(
+            message,
+            Some(dragged("library/tracks", DragPhase::Start(3)))
+        );
         assert_eq!(status, iced::event::Status::Ignored);
         assert!(
             drag.update(&mut state, &moved(80.0), ROW, at(80.0))
@@ -512,7 +515,7 @@ mod tests {
             .unwrap_or_else(|| panic!("release must end the drag"));
         assert_eq!(
             dropped.into_inner().0,
-            dragged("library/tracks", DragPhase::Drop)
+            Some(dragged("library/tracks", DragPhase::Drop))
         );
     }
 
@@ -538,7 +541,7 @@ mod tests {
             .unwrap_or_else(|| panic!("the drag must start away from the item"));
         assert_eq!(
             started.into_inner().0,
-            dragged("library/tracks", DragPhase::Start(1))
+            Some(dragged("library/tracks", DragPhase::Start(1)))
         );
 
         let dropped = drag
@@ -546,7 +549,7 @@ mod tests {
             .unwrap_or_else(|| panic!("release must end the drag"));
         assert_eq!(
             dropped.into_inner().0,
-            dragged("library/tracks", DragPhase::Drop)
+            Some(dragged("library/tracks", DragPhase::Drop))
         );
     }
 

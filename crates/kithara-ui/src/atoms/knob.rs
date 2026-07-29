@@ -56,10 +56,10 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
         })
         .width(Length::Fill)
         .height(Length::Fill);
-        let caption = container(match self.label {
-            Some(label) => styled_text(label.to_owned(), self.skin.knob.label_text, self.skin),
-            None => Space::new().into(),
-        })
+        let caption = container(self.label.map_or_else(
+            || Space::new().into(),
+            |label| styled_text(label.to_owned(), self.skin.knob.label_text, self.skin),
+        ))
         .height(Length::Fixed(self.skin.knob.label_height))
         .center_x(Length::Fill);
 
