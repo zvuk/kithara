@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    expand::{ControlSpec, ExpandedNode},
+    expand::{BlockSpec, ControlSpec, ExpandedNode},
     module::{ButtonStyle, ChromeStyle, TextStyle},
     skin::{SkinDoc, WindowControlSkin},
 };
@@ -215,10 +215,50 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
     }
 }
 
+/// Answers whether an optional block is hidden in the snapshot being sized.
+pub(crate) type Hidden<'a> = &'a dyn Fn(&BlockSpec) -> bool;
+
+/// Every block below `node` reads as visible.
+pub(crate) const VISIBLE: Hidden<'static> = &|_| false;
+
+/// Reports whether any optional block sits below `node`, and so whether its
+/// size can change with the visibility snapshot.
+pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
+    match node {
+        ExpandedNode::Optional { .. } => true,
+        ExpandedNode::Row { children, .. }
+        | ExpandedNode::Column { children, .. }
+        | ExpandedNode::Slot { children, .. } => children.iter().any(has_blocks),
+        ExpandedNode::Control { .. } => false,
+    }
+}
+
+/// A node that may be an optional block, whatever stage of the pipeline it
+/// belongs to. One implementation per node type, one filter over both.
+pub(crate) trait BlockNode {
+    fn block(&self) -> Option<&BlockSpec>;
+}
+
+pub(crate) fn is_hidden<N: BlockNode>(node: &N, hidden: Hidden<'_>) -> bool {
+    node.block().is_some_and(hidden)
+}
+
+/// The children a parent lays out: a hidden block occupies no slot, so it is
+/// skipped rather than sized to zero.
+pub(crate) fn visible<'a, N: BlockNode>(
+    children: &'a [N],
+    hidden: Hidden<'a>,
+) -> impl Iterator<Item = &'a N> {
+    children
+        .iter()
+        .filter(move |child| !is_hidden(*child, hidden))
+}
+
 /// Computes a node's intrinsic size from its override, children, or control specification.
 #[must_use]
-pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
+pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'_>) -> SizeSpec {
     let override_size = match node {
+        ExpandedNode::Optional { .. } => None,
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
         | ExpandedNode::Slot { size, .. }
@@ -229,6 +269,7 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
     }
 
     match node {
+        ExpandedNode::Optional { child, .. } => compute_size(child, skin, hidden),
         ExpandedNode::Row {
             children,
             gap,
@@ -236,12 +277,19 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
             pad_x,
             pad_y,
             ..
-        } => inset(
-            combine_horizontal(children.iter().map(|child| compute_size(child, skin))),
-            gap_total(*gap, children.len(), skin.layout.size_gap),
-            0.0,
-            Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
-        ),
+        } => {
+            let laid_out: Vec<_> = visible(children, hidden).collect();
+            inset(
+                combine_horizontal(
+                    laid_out
+                        .iter()
+                        .map(|child| compute_size(child, skin, hidden)),
+                ),
+                gap_total(*gap, laid_out.len(), skin.layout.size_gap),
+                0.0,
+                Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
+            )
+        }
         ExpandedNode::Column {
             children,
             gap,
@@ -249,15 +297,30 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
             pad_x,
             pad_y,
             ..
-        } => inset(
-            combine_vertical(children.iter().map(|child| compute_size(child, skin))),
-            0.0,
-            gap_total(*gap, children.len(), skin.layout.size_gap),
-            Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
-        ),
-        ExpandedNode::Slot { children, .. } if children.is_empty() => SizeSpec::FILL,
+        } => {
+            let laid_out: Vec<_> = visible(children, hidden).collect();
+            inset(
+                combine_vertical(
+                    laid_out
+                        .iter()
+                        .map(|child| compute_size(child, skin, hidden)),
+                ),
+                0.0,
+                gap_total(*gap, laid_out.len(), skin.layout.size_gap),
+                Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
+            )
+        }
         ExpandedNode::Slot { children, .. } => {
-            combine_vertical(children.iter().map(|child| compute_size(child, skin)))
+            let laid_out: Vec<_> = visible(children, hidden).collect();
+            if laid_out.is_empty() {
+                SizeSpec::FILL
+            } else {
+                combine_vertical(
+                    laid_out
+                        .iter()
+                        .map(|child| compute_size(child, skin, hidden)),
+                )
+            }
         }
         ExpandedNode::Control { spec, .. } => control_size(spec, skin),
     }
@@ -422,7 +485,7 @@ mod tests {
         );
 
         assert_eq!(
-            compute_size(&node, builtin::skin_doc()),
+            compute_size(&node, builtin::skin_doc(), VISIBLE),
             SizeSpec::new(Dim::Shrink, Dim::Fixed(30.0))
         );
     }
@@ -451,7 +514,7 @@ mod tests {
             children,
         };
 
-        let size = compute_size(&node, builtin::skin_doc());
+        let size = compute_size(&node, builtin::skin_doc(), VISIBLE);
 
         assert_eq!(size.w.min(), 32.0);
         assert_eq!(size.h.min(), 10.0);
@@ -473,7 +536,7 @@ mod tests {
             Some(0.0),
         );
 
-        let size = compute_size(&node, builtin::skin_doc());
+        let size = compute_size(&node, builtin::skin_doc(), VISIBLE);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.w.max(), None);
@@ -501,7 +564,7 @@ mod tests {
             Some(0.0),
         );
 
-        let size = compute_size(&node, builtin::skin_doc());
+        let size = compute_size(&node, builtin::skin_doc(), VISIBLE);
 
         assert_eq!(size.w.min(), 16.0);
         assert_eq!(size.h.min(), 8.0);
@@ -518,7 +581,7 @@ mod tests {
             Some(0.0),
         );
 
-        let size = compute_size(&node, builtin::skin_doc());
+        let size = compute_size(&node, builtin::skin_doc(), VISIBLE);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.h.min(), 12.0);
@@ -539,7 +602,7 @@ mod tests {
         skin.layout.size_gap = 3.0;
         skin.layout.size_pad = 2.0;
 
-        let size = compute_size(&node, &skin);
+        let size = compute_size(&node, &skin, VISIBLE);
 
         assert_eq!(size.w.min(), 23.0);
         assert_eq!(size.h.min(), 12.0);
@@ -555,7 +618,10 @@ mod tests {
             None,
         );
 
-        assert_eq!(compute_size(&node, builtin::skin_doc()), override_size);
+        assert_eq!(
+            compute_size(&node, builtin::skin_doc(), VISIBLE),
+            override_size
+        );
     }
 
     #[kithara::test]
@@ -574,7 +640,7 @@ mod tests {
             Some(0.0),
         );
 
-        let size = compute_size(&node, builtin::skin_doc());
+        let size = compute_size(&node, builtin::skin_doc(), VISIBLE);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.w.max(), None);

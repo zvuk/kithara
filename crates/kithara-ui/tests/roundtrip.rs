@@ -416,3 +416,75 @@ fn chip_style_is_typed_and_defaults_to_deck() {
         }
     ));
 }
+
+const OPTIONAL_LAYOUT: &str = r#"(
+    schema: "kithara.layout",
+    version: 1,
+    id: "optional",
+    root: Split(
+        axis: Horizontal,
+        children: [
+            (node: Optional(
+                id: "library",
+                hidden: Model(id: "ui.block.hidden"),
+                node: Module(instance: "library", source: "modules/library.kmodule.ron"),
+            )),
+            (node: Module(instance: "deck-a", source: "modules/deck.kmodule.ron", with: { "deck": "a" })),
+        ],
+    ),
+)"#;
+
+const OPTIONAL_MODULE: &str = r#"(
+    schema: "kithara.module",
+    version: 1,
+    id: "optional",
+    root: Column(
+        children: [
+            Optional(
+                id: "eq",
+                hidden: Model(id: "ui.block.hidden"),
+                child: Row(
+                    children: [
+                        Knob(id: "low", label: Some("LOW")),
+                        Knob(id: "high", label: Some("HIGH")),
+                    ],
+                ),
+            ),
+            Knob(id: "volume"),
+        ],
+    ),
+)"#;
+
+#[kithara::test]
+fn an_optional_layout_block_roundtrips() {
+    let doc = parse_layout(OPTIONAL_LAYOUT, &origin()).unwrap();
+    let printed = to_ron_pretty(&doc);
+    let reparsed = parse_layout(&printed, &origin()).unwrap();
+
+    assert_eq!(doc, reparsed);
+    assert_eq!(printed, to_ron_pretty(&reparsed));
+}
+
+#[kithara::test]
+fn an_optional_module_block_roundtrips() {
+    let doc = parse_module(OPTIONAL_MODULE, &module_origin()).unwrap();
+    let printed = to_ron_pretty(&doc);
+    let reparsed = parse_module(&printed, &module_origin()).unwrap();
+
+    assert_eq!(doc, reparsed);
+    assert_eq!(printed, to_ron_pretty(&reparsed));
+}
+
+#[kithara::test]
+fn an_optional_block_wraps_exactly_one_child() {
+    let doc = parse_module(OPTIONAL_MODULE, &module_origin()).unwrap();
+    let ControlNode::Column { children, .. } = &doc.root else {
+        panic!("expected column root");
+    };
+    let ControlNode::Optional { id, child, .. } = &children[0] else {
+        panic!("expected an optional block");
+    };
+
+    assert_eq!(id.0, "eq");
+    assert!(matches!(**child, ControlNode::Row { .. }));
+}

@@ -91,6 +91,9 @@ fn walk_includes(
             }
             Ok(())
         }
+        ControlNode::Optional { child, .. } => {
+            walk_includes(resolver, origin, child, limits, set, stack, depth)
+        }
         ControlNode::Include { source, .. } => {
             load_rec(
                 resolver,

@@ -7,8 +7,12 @@ use crate::{
     module::BindingRef,
 };
 
-pub(super) fn substitute(
-    context: &Context<'_>,
+/// Resolves one `$name` against the parameters in scope. `$$name` escapes a
+/// literal `$name`. A layout declares no parameters and so substitutes an
+/// empty set, where every `$name` is a document error.
+pub(crate) fn substitute(
+    args: &BTreeMap<String, String>,
+    origin: &SourceUri,
     value: &str,
     path: &str,
 ) -> Result<String, UiDocError> {
@@ -18,48 +22,48 @@ pub(super) fn substitute(
     let Some(name) = value.strip_prefix('$') else {
         return Ok(value.to_owned());
     };
-    context
-        .args
-        .get(name)
+    args.get(name)
         .cloned()
         .ok_or_else(|| UiDocError::UnresolvedParam {
-            origin: context.origin.clone(),
+            origin: origin.clone(),
             name: name.to_owned(),
             path: path.to_owned(),
         })
 }
 
-pub(super) fn substitute_map(
-    context: &Context<'_>,
+pub(crate) fn substitute_map(
+    args: &BTreeMap<String, String>,
+    origin: &SourceUri,
     map: &BTreeMap<String, String>,
     path: &str,
 ) -> Result<BTreeMap<String, String>, UiDocError> {
     map.iter()
-        .map(|(key, value)| Ok((key.clone(), substitute(context, value, path)?)))
+        .map(|(key, value)| Ok((key.clone(), substitute(args, origin, value, path)?)))
         .collect()
 }
 
-pub(super) fn substitute_binding(
-    context: &Context<'_>,
+pub(crate) fn substitute_binding(
+    args: &BTreeMap<String, String>,
+    origin: &SourceUri,
     binding: &BindingRef,
     path: &str,
 ) -> Result<BindingRef, UiDocError> {
     let binding = match binding {
         BindingRef::Command { id, with } => BindingRef::Command {
             id: id.clone(),
-            with: substitute_map(context, with, path)?,
+            with: substitute_map(args, origin, with, path)?,
         },
         BindingRef::Parameter { id, with } => BindingRef::Parameter {
             id: id.clone(),
-            with: substitute_map(context, with, path)?,
+            with: substitute_map(args, origin, with, path)?,
         },
         BindingRef::Telemetry { id, with } => BindingRef::Telemetry {
             id: id.clone(),
-            with: substitute_map(context, with, path)?,
+            with: substitute_map(args, origin, with, path)?,
         },
         BindingRef::Model { id, with } => BindingRef::Model {
             id: id.clone(),
-            with: substitute_map(context, with, path)?,
+            with: substitute_map(args, origin, with, path)?,
         },
     };
     Ok(binding)
@@ -175,7 +179,10 @@ pub(super) fn intern_text(
     path: &str,
     origin: &SourceUri,
 ) -> Result<InternId, UiDocError> {
-    interner.intern(&substitute(context, value, path)?, origin)
+    interner.intern(
+        &substitute(&context.args, &context.origin, value, path)?,
+        origin,
+    )
 }
 
 pub(super) fn intern_optional_text(

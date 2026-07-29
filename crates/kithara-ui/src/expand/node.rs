@@ -9,7 +9,7 @@ use crate::{
         DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, ScalarFormat, TextAlign, TextStyle,
         Tone, TrackColumn, WaveStyle, WindowControlsStyle,
     },
-    size::SizeSpec,
+    size::{BlockNode, SizeSpec},
     skin::ColorRole,
 };
 
@@ -41,6 +41,10 @@ pub enum ExpandedNode {
         background_alpha: Option<f32>,
         surface: Option<SurfaceSpec>,
         children: Vec<Self>,
+    },
+    Optional {
+        block: BlockSpec,
+        child: Box<Self>,
     },
     Slot {
         id: InternId,
@@ -232,6 +236,24 @@ pub(crate) struct ExpandedModule {
     pub(crate) drop: Option<DropSpec>,
     pub(crate) collapsed: InternId,
     pub(crate) root: ExpandedNode,
+}
+
+/// A block the host may hide: the path that addresses it, and the Bool it
+/// reads. While that read is true the block is not laid out.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct BlockSpec {
+    pub path: InternId,
+    pub hidden: Binding,
+}
+
+impl BlockNode for ExpandedNode {
+    fn block(&self) -> Option<&BlockSpec> {
+        match self {
+            Self::Optional { block, .. } => Some(block),
+            _ => None,
+        }
+    }
 }
 
 /// Control path a wheel detent publishes on, and the scalar it steps.

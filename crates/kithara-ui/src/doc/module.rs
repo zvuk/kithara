@@ -123,6 +123,13 @@ pub enum ControlNode {
         #[serde(default)]
         with: BTreeMap<String, String>,
     },
+    /// Marks its child as a block the host may hide. While `hidden` reads
+    /// true the child is not laid out.
+    Optional {
+        id: NodeId,
+        hidden: BindingRef,
+        child: Box<Self>,
+    },
     Slot {
         id: NodeId,
         #[serde(default)]
@@ -615,7 +622,7 @@ pub enum ControlNode {
 impl ControlNode {
     pub(crate) fn size(&self) -> Option<SizeSpec> {
         match self {
-            Self::Include { .. } => None,
+            Self::Include { .. } | Self::Optional { .. } => None,
             Self::Row { size, .. }
             | Self::Column { size, .. }
             | Self::Slot { size, .. }
@@ -662,6 +669,7 @@ impl ControlNode {
     pub(crate) fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
         match self {
             Self::Row { write, .. } | Self::Column { write, .. } => (None, write.as_ref()),
+            Self::Optional { hidden, .. } => (Some(hidden), None),
             Self::Include { .. }
             | Self::Slot { .. }
             | Self::WindowDrag { .. }

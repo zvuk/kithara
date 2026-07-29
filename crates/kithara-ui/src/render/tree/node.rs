@@ -10,12 +10,12 @@ use super::{
     read::{read_flag, resolve},
 };
 use crate::{
-    compile::{CompiledNode, CompiledUi},
+    compile::{CompiledNode, CompiledUi, node_size, visible_children},
     expand::{ExpandedNode, SurfaceSpec},
     layout::Axis,
     module::ChromeStyle,
     render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent},
-    size::{Dim, SizeSpec},
+    size::{Dim, Hidden, visible},
     widgets::{DropZone, ModuleChrome, Widget, wheel::WheelSurface},
 };
 
@@ -25,12 +25,18 @@ pub(super) fn render_compiled<'a>(
     reads: &dyn Reads,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
+    let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), reads, ui);
     match node {
+        CompiledNode::Optional { child, .. } => render_compiled(child, ui, reads, skin),
         CompiledNode::Split { axis, children, .. } => match axis {
             Axis::Horizontal => container(
-                Row::with_children(children.iter().map(|(weight, child)| {
+                Row::with_children(visible_children(children, hidden).map(|(weight, child)| {
                     container(render_compiled(child, ui, reads, skin))
-                        .width(split_length(child_size(child).w, *weight, skin))
+                        .width(split_length(
+                            node_size(child, skin.document(), hidden).w,
+                            weight,
+                            skin,
+                        ))
                         .height(Length::Fill)
                         .into()
                 }))
@@ -41,10 +47,14 @@ pub(super) fn render_compiled<'a>(
             .height(Length::Fill)
             .into(),
             Axis::Vertical => container(
-                Column::with_children(children.iter().map(|(weight, child)| {
+                Column::with_children(visible_children(children, hidden).map(|(weight, child)| {
                     container(render_compiled(child, ui, reads, skin))
                         .width(Length::Fill)
-                        .height(split_length(child_size(child).h, *weight, skin))
+                        .height(split_length(
+                            node_size(child, skin.document(), hidden).h,
+                            weight,
+                            skin,
+                        ))
                         .into()
                 }))
                 .width(Length::Fill)
@@ -144,7 +154,9 @@ fn render_node<'a>(
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
     let size = content_size(node, skin);
+    let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), reads, ui);
     let rendered = match node {
+        ExpandedNode::Optional { child, .. } => return render_node(child, ui, reads, skin),
         ExpandedNode::Row {
             children,
             gap,
@@ -161,8 +173,7 @@ fn render_node<'a>(
                 filled(
                     container(
                         Row::with_children(
-                            children
-                                .iter()
+                            visible(children, hidden)
                                 .map(|child| render_node(child, ui, reads, skin)),
                         )
                         .spacing(gap.unwrap_or(skin.layout.grid_gap))
@@ -201,8 +212,7 @@ fn render_node<'a>(
                 filled(
                     container(
                         Column::with_children(
-                            children
-                                .iter()
+                            visible(children, hidden)
                                 .map(|child| render_node(child, ui, reads, skin)),
                         )
                         .spacing(gap.unwrap_or(skin.layout.grid_gap))
@@ -227,9 +237,7 @@ fn render_node<'a>(
         ExpandedNode::Slot { children, .. } => Rendered::leading(
             container(
                 Column::with_children(
-                    children
-                        .iter()
-                        .map(|child| render_node(child, ui, reads, skin)),
+                    visible(children, hidden).map(|child| render_node(child, ui, reads, skin)),
                 )
                 .spacing(skin.layout.grid_gap)
                 .width(Length::Fill),
@@ -242,12 +250,6 @@ fn render_node<'a>(
         } => render_control(*path, spec, read.as_ref(), ui, reads, skin),
     };
     apply_size(rendered, effective_size(node, skin))
-}
-
-fn child_size(node: &CompiledNode) -> SizeSpec {
-    match node {
-        CompiledNode::Split { size, .. } | CompiledNode::Module { size, .. } => *size,
-    }
 }
 
 fn split_length(dim: Dim, weight: f32, skin: &Skin) -> Length {

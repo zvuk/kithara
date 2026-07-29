@@ -3,7 +3,7 @@ mod common;
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
-    compile::{CompiledNode, compile},
+    compile::{CompiledNode, CompiledUi, compile},
     error::UiDocError,
     expand::{Binding, ControlSpec, ExpandedNode},
     module::{ChromeStyle, TrackColumn},
@@ -737,4 +737,452 @@ fn knob_caption_is_document_text_and_optional() {
         .collect();
 
     assert_eq!(captions, vec![Some("LOW"), None]);
+}
+
+fn block_registry() -> common::TestRegistry {
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.block.hidden",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.block.deck_hidden",
+        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+    );
+    registry
+}
+
+fn block_resolver(module: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "blocks.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "blocks",
+            root: Module(instance: "mixer", source: "blocks.kmodule.ron"))"#,
+    );
+    resolver.insert("blocks.kmodule.ron", module);
+    resolver
+}
+
+fn compile_blocks(resolver: &MemResolver, entry: &str) -> Result<CompiledUi, UiDocError> {
+    compile(
+        entry,
+        resolver,
+        &block_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+}
+
+#[kithara::test]
+fn a_duplicate_block_id_is_rejected() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                    child: Knob(id: "low")),
+                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                    child: Knob(id: "high")),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "eq"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_block_id_collides_with_a_control_id_in_the_same_module() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
+                    child: Knob(id: "high")),
+                Knob(id: "low"),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "low"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_control_under_a_block_keeps_its_id_checked() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                    child: Row(children: [
+                        Knob(id: "low"),
+                        Knob(id: "low"),
+                    ])),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "low"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_block_id_carrying_an_address_separator_is_rejected() {
+    for id in ["mixer.eq", "eq@deck=a"] {
+        let resolver = block_resolver(&format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Column(children: [
+                    Optional(id: "{id}", hidden: Model(id: "ui.block.hidden"),
+                        child: Knob(id: "low")),
+                ]))"#
+        ));
+
+        let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::InvalidId { id: invalid, .. } if invalid == id),
+            "`{id}`: {error:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn a_layout_block_id_may_not_collide_with_an_instance() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "collide.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "collide",
+            root: Split(axis: Horizontal, children: [
+                (node: Module(instance: "mixer", source: "blocks.kmodule.ron")),
+                (node: Optional(id: "mixer", hidden: Model(id: "ui.block.hidden"),
+                    node: Module(instance: "other", source: "blocks.kmodule.ron"))),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "collide.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "mixer"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_module_block_compiles_to_its_expanded_path_and_binding() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Column { children, .. } = &**root else {
+        panic!("expected a column");
+    };
+    let ExpandedNode::Optional { block, child } = &children[0] else {
+        panic!("expected an optional block");
+    };
+
+    assert_eq!(ui.resolve(block.path), "mixer/eq");
+    assert_eq!(ui.resolve(block.hidden.id()), "ui.block.hidden");
+    assert!(matches!(**child, ExpandedNode::Control { .. }));
+}
+
+#[kithara::test]
+fn a_layout_block_compiles_around_the_node_it_wraps() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "wrapped.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "wrapped",
+            root: Split(axis: Horizontal, children: [
+                (node: Optional(id: "sidebar", hidden: Model(id: "ui.block.hidden"),
+                    node: Module(instance: "mixer", source: "blocks.kmodule.ron"))),
+            ]))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "wrapped.klayout.ron").unwrap();
+
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected a split root");
+    };
+    let CompiledNode::Optional { block, child } = &children[0].1 else {
+        panic!("expected an optional block");
+    };
+
+    assert_eq!(ui.resolve(block.path), "sidebar");
+    assert_eq!(ui.resolve(block.hidden.id()), "ui.block.hidden");
+    assert!(matches!(**child, CompiledNode::Module { .. }));
+}
+
+#[kithara::test]
+fn an_unknown_hidden_endpoint_is_rejected() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Model(id: "ui.block.absent"),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::UnknownEndpoint { id, path, .. }
+            if id == "ui.block.absent" && path == "mixer/eq"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_hidden_endpoint_that_is_not_a_bool_is_rejected() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Model(id: "deck.view.zoom"),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
+            if expected == "Bool" && got == "Scalar" && path == "mixer/eq"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_command_endpoint_on_hidden_is_a_direction_error() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Command(id: "deck.view.zoom_in", with: { "deck": "a" }),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::BindingDirection { id, .. } if id == "deck.view.zoom_in"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn parameter_substitution_reaches_the_hidden_binding() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "decks.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "decks",
+            root: Module(instance: "deck-b", source: "deck.kmodule.ron", with: { "deck": "b" }))"#,
+    );
+    resolver.insert(
+        "deck.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "deck", parameters: ["deck"],
+            root: Column(children: [
+                Optional(id: "eq", hidden: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "decks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Column { children, .. } = &**root else {
+        panic!("expected a column");
+    };
+    let ExpandedNode::Optional { block, .. } = &children[0] else {
+        panic!("expected an optional block");
+    };
+
+    assert_eq!(ui.resolve(block.path), "deck-b/eq");
+    assert_eq!(
+        ui.resolve(block.hidden.key()),
+        "deck.playback.playing@deck=b"
+    );
+}
+
+#[kithara::test]
+fn an_optional_at_a_layout_root_is_rejected() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "root.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "root",
+            root: Optional(id: "sidebar", hidden: Model(id: "ui.block.hidden"),
+                node: Module(instance: "mixer", source: "blocks.kmodule.ron")))"#,
+    );
+
+    let error = compile_blocks(&resolver, "root.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RootBlock { id, .. } if id == "sidebar"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn an_optional_at_a_module_root_is_rejected() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Knob(id: "low")))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RootBlock { id, .. } if id == "eq"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn an_optional_directly_under_an_optional_is_rejected() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                    child: Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
+                        child: Knob(id: "gain"))),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RootBlock { id, .. } if id == "low"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_layout_optional_directly_under_an_optional_is_rejected() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "nested.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "nested",
+            root: Split(axis: Horizontal, children: [
+                (node: Optional(id: "outer", hidden: Model(id: "ui.block.hidden"),
+                    node: Optional(id: "inner", hidden: Model(id: "ui.block.hidden"),
+                        node: Module(instance: "mixer", source: "blocks.kmodule.ron")))),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "nested.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RootBlock { id, .. } if id == "inner"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn an_address_separator_in_a_block_prefix_is_rejected() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "prefixed.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "prefixed",
+            root: Module(instance: "mixer.a", source: "blocks.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "blocks.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "prefixed.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::InvalidId { id, .. } if id == "mixer.a/eq"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn an_unresolved_parameter_in_a_layout_block_binding_is_rejected() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "scoped.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "scoped",
+            root: Split(axis: Horizontal, children: [
+                (node: Optional(id: "sidebar",
+                    hidden: Model(id: "ui.block.deck_hidden", with: { "deck": "$deck" }),
+                    node: Module(instance: "mixer", source: "blocks.kmodule.ron"))),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "scoped.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::UnresolvedParam { name, .. } if name == "deck"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn an_escaped_dollar_in_a_layout_block_binding_stays_a_literal() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "escaped.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "escaped",
+            root: Split(axis: Horizontal, children: [
+                (node: Optional(id: "sidebar",
+                    hidden: Model(id: "ui.block.deck_hidden", with: { "deck": "$$deck" }),
+                    node: Module(instance: "mixer", source: "blocks.kmodule.ron"))),
+            ]))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "escaped.klayout.ron").unwrap();
+
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected a split root");
+    };
+    let CompiledNode::Optional { block, .. } = &children[0].1 else {
+        panic!("expected an optional block");
+    };
+
+    assert_eq!(
+        ui.resolve(block.hidden.key()),
+        "ui.block.deck_hidden@deck=$deck"
+    );
 }

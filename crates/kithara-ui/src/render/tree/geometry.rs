@@ -83,6 +83,7 @@ pub(super) fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length)
 
 pub(super) fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpec> {
     let declared = match node {
+        ExpandedNode::Optional { child, .. } => return effective_size(child, skin),
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
         | ExpandedNode::Slot { size, .. }

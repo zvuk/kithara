@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec, ExpandedModule, ExpandedNode,
-    SurfaceSpec,
+    BlockSpec, Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec, ExpandedModule,
+    ExpandedNode, SurfaceSpec,
     binding_subst::{
         intern_binding, intern_optional_binding, intern_optional_text, intern_text, intern_texts,
         substitute_binding, substitute_map,
@@ -16,6 +16,7 @@ use crate::{
     },
     resolve::ModuleSet,
     size::SizeSpec,
+    validate,
 };
 
 pub(super) struct Context<'a> {
@@ -23,6 +24,12 @@ pub(super) struct Context<'a> {
     pub(super) origin: SourceUri,
     pub(super) args: BTreeMap<String, String>,
     pub(super) prefix: String,
+}
+
+impl Context<'_> {
+    fn substitute(&self, binding: &BindingRef, path: &str) -> Result<BindingRef, UiDocError> {
+        substitute_binding(&self.args, &self.origin, binding, path)
+    }
 }
 
 /// Cross-cutting expansion state threaded through the recursion: the include
@@ -72,7 +79,7 @@ impl<'m, 'v> Expander<'m, 'v> {
             .as_ref()
             .map(|binding| {
                 let path = format!("{prefix}/footer");
-                let binding = substitute_binding(&context, binding, &path)?;
+                let binding = context.substitute(binding, &path)?;
                 intern_binding(self.interner, &binding, entry)
             })
             .transpose()?;
@@ -84,12 +91,12 @@ impl<'m, 'v> Expander<'m, 'v> {
                 Ok(DropSpec {
                     write: intern_binding(
                         self.interner,
-                        &substitute_binding(&context, &drop.write, &path)?,
+                        &context.substitute(&drop.write, &path)?,
                         entry,
                     )?,
                     read: intern_binding(
                         self.interner,
-                        &substitute_binding(&context, &drop.read, &path)?,
+                        &context.substitute(&drop.read, &path)?,
                         entry,
                     )?,
                 })
@@ -258,35 +265,35 @@ impl ExtraBindings {
         let columns_state = match control {
             ControlNode::TrackList { columns_state, .. } => columns_state
                 .as_ref()
-                .map(|binding| substitute_binding(context, binding, path))
+                .map(|binding| context.substitute(binding, path))
                 .transpose()?,
             _ => None,
         };
         let query = match control {
             ControlNode::Tree { query, .. } => query
                 .as_ref()
-                .map(|binding| substitute_binding(context, binding, path))
+                .map(|binding| context.substitute(binding, path))
                 .transpose()?,
             _ => None,
         };
         let scope = match control {
             ControlNode::ContextBar { scope, .. } => scope
                 .as_ref()
-                .map(|binding| substitute_binding(context, binding, path))
+                .map(|binding| context.substitute(binding, path))
                 .transpose()?,
             _ => None,
         };
         let zoom = match control {
             ControlNode::Wave { zoom, .. } => zoom
                 .as_ref()
-                .map(|binding| substitute_binding(context, binding, path))
+                .map(|binding| context.substitute(binding, path))
                 .transpose()?,
             _ => None,
         };
         let active = match control {
             ControlNode::Text { active, .. } => active
                 .as_ref()
-                .map(|binding| substitute_binding(context, binding, path))
+                .map(|binding| context.substitute(binding, path))
                 .transpose()?,
             _ => None,
         };
@@ -339,11 +346,11 @@ fn finish_control(
 ) -> Result<ExpandedNode, UiDocError> {
     let read = fields
         .read
-        .map(|binding| substitute_binding(context, binding, path))
+        .map(|binding| context.substitute(binding, path))
         .transpose()?;
     let write = fields
         .write
-        .map(|binding| substitute_binding(context, binding, path))
+        .map(|binding| context.substitute(binding, path))
         .transpose()?;
     (machine.visitor)(
         ControlSite {
@@ -540,6 +547,7 @@ fn control_spec(
         ControlNode::Row { .. }
         | ControlNode::Column { .. }
         | ControlNode::Include { .. }
+        | ControlNode::Optional { .. }
         | ControlNode::Slot { .. } => return Ok(None),
     };
     Ok(Some(spec))
@@ -596,7 +604,7 @@ fn container_surface(
         return Ok(None);
     };
     let path = child_path(&context.prefix, id);
-    let write = substitute_binding(context, write, &path)?;
+    let write = context.substitute(write, &path)?;
     (machine.visitor)(
         ControlSite {
             path: &path,
@@ -615,6 +623,45 @@ fn container_surface(
         path: machine.interner.intern(&path, &context.origin)?,
         write: intern_binding(machine.interner, &write, &context.origin)?,
     }))
+}
+
+/// The wrapper is charged and validated like any addressed node; its child is
+/// expanded whatever the block currently reads, so visibility stays a render
+/// concern.
+fn expand_optional(
+    context: &Context<'_>,
+    node: &ControlNode,
+    id: &NodeId,
+    hidden: &BindingRef,
+    child: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    let path = child_path(&context.prefix, id);
+    validate::check_block_path(&path, &context.origin)?;
+    let hidden = context.substitute(hidden, &path)?;
+    (machine.visitor)(
+        ControlSite {
+            path: &path,
+            control: node,
+            read: Some(&hidden),
+            write: None,
+            columns_state: None,
+            query: None,
+            scope: None,
+            zoom: None,
+            active: None,
+        },
+        &context.origin,
+    )?;
+    Ok(ExpandedNode::Optional {
+        block: BlockSpec {
+            path: machine.interner.intern(&path, &context.origin)?,
+            hidden: intern_binding(machine.interner, &hidden, &context.origin)?,
+        },
+        child: Box::new(walk(context, child, depth, machine)?),
+    })
 }
 
 fn walk(
@@ -705,9 +752,12 @@ fn walk(
                     .collect::<Result<_, _>>()?,
             })
         }
+        ControlNode::Optional { id, hidden, child } => {
+            expand_optional(context, node, id, hidden, child, depth, machine)
+        }
         ControlNode::Include { id, source, with } => {
             let path = child_path(&context.prefix, id);
-            let args = substitute_map(context, with, &path)?;
+            let args = substitute_map(&context.args, &context.origin, with, &path)?;
             let target =
                 crate::source::join_rel(crate::source::base_dir(Some(&context.origin)), source)
                     .map(SourceUri)

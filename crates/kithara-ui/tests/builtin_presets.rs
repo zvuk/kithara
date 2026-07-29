@@ -176,6 +176,7 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
         axis,
         children,
         size,
+        ..
     } = &ui.root
     else {
         panic!("expected split root");

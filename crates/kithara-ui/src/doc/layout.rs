@@ -6,7 +6,7 @@ use super::ron_io;
 use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
-    ids::{DocId, InstanceId, SourceUri},
+    ids::{DocId, InstanceId, NodeId, SourceUri},
     module::BindingRef,
     size::SizeSpec,
 };
@@ -36,6 +36,13 @@ pub enum LayoutNode {
     Split {
         axis: Axis,
         children: Vec<SplitChild>,
+    },
+    /// Marks its node as a block the host may hide. While `hidden` reads true
+    /// the node is not laid out.
+    Optional {
+        id: NodeId,
+        hidden: BindingRef,
+        node: Box<Self>,
     },
     Module {
         instance: InstanceId,

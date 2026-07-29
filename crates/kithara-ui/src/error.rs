@@ -40,6 +40,12 @@ pub enum UiDocError {
         id: String,
         reason: String,
     },
+    #[error("{origin}: optional block {id:?} at {path} has no parent to hide it")]
+    RootBlock {
+        origin: SourceUri,
+        id: String,
+        path: String,
+    },
     #[error("{origin}: invalid split weight {value} at {path}")]
     InvalidWeight {
         origin: SourceUri,

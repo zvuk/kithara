@@ -210,6 +210,59 @@ Collapse state remains host-owned. A Full module reads `Bool` from
 `UiEvent::ToggleModule(<module-doc-id>)`. The renderer does not retain or mutate collapse state,
 and Frame or Plain modules ignore that endpoint.
 
+## Optional Block Ownership
+
+`Optional` wraps exactly one node in a module tree or a layout tree and marks it a block
+the host may hide. It is a wrapper rather than a field on `Row`, `Column`, `Include` or
+`Module`: those own layout, and optionality is a separate responsibility.
+
+Visibility is host-owned. The document names the endpoint through `hidden` and kithara-ui
+invents none; the binding is read as `Bool` exactly like `Text.active` and `ModuleDrop.read`,
+and an absent read means visible. `validate::value_kinds` owns that kind for a module-level
+wrapper and `validate::check_layout_block` applies the same kind at the layout level. The
+binding takes `$`-substitution and scoped-key resolution like every other, so
+`with: { "deck": "$deck" }` gives per-deck visibility without a crate-level scoping rule.
+
+A block is hidden by the parent skipping it while iterating its children, so a block only
+ever occupies a position some parent iterates: a `Split` child, or a `Row`, `Column` or
+`Slot` child. `validate` rejects it anywhere else — at a layout root, at a module root, and
+directly under another `Optional` — because in those positions nothing iterates past it and
+the block could never be hidden at all. The rule is total, so the renderer and the sizer
+need no case for a hidden node they were handed directly.
+
+A block address names read state, so neither `.` nor `@` may appear in it. The address is
+composed from every id enclosing the block, so `validate::check_block_path` applies that rule
+to the whole chain — a `mixer.a` module instance may not enclose a block, however clean the
+block's own id is. The id also shares the one namespace its siblings use: a module block id
+collides with a control id, and a layout block id collides with a module instance. The
+compiled block keeps the expanded path — `mixer/eq`, `deck-a/transport/eq` — so it is
+addressable by the same form a control is.
+
+A layout declares no parameters, so `expand::substitute` owns what `$` means at both levels:
+`$name` in a layout-level `hidden` scope or in `Module.with` is a document error, and `$$name`
+escapes a literal `$name`. Inside a module the same function resolves `$name` against the
+arguments the instance was given.
+
+A visible wrapper is fully transparent and delegates to its child, `content_size` and
+`effective_size` included, so it never reaches the `None -> (Fill, Fill)` mapping in
+`content_size`. A container decides emptiness over the children it actually lays out: a
+`Slot` whose only child is hidden has the `SizeSpec::FILL` of an empty one, and a gap is
+charged between visible children only. An all-hidden `Split` folds to `Dim::Fixed(0.0)`.
+
+`size::BlockNode` is the single owner of "which block does this node declare", implemented
+once for `ExpandedNode` and once for `CompiledNode`, so `size::visible` filters both stages
+through one predicate. The renderer builds that predicate from `read::read_flag`, the one
+path every binding read takes, which is what makes a `Command` endpoint resolve to nothing.
+
+A subtree's intrinsic size is a function of the node and the visibility snapshot, and
+constant when no optional block sits below it. `CompiledNode` records that at compile time
+in `blocks`, and `compile::node_size` returns the precomputed size for such subtrees rather
+than walking them once a frame; this is memoization of a pure function, not a fallback path.
+`CompiledUi.size` is that function evaluated with every block visible, which is the layout's
+size whenever no document below it declares a block. `size::compute_size` takes the snapshot
+as a predicate over `BlockSpec`, so visibility-aware sizing stays toolkit-independent and
+available in non-render and wasm builds.
+
 ## Window Chrome Ownership
 
 A layout that sets `resize_edges` is framed by `render::tree` with the eight
