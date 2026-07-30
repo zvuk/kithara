@@ -131,8 +131,11 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
     SizeSpec::new(Dim::from(width), Dim::from(height))
 }
 
-fn square(side: f32) -> SizeSpec {
-    SizeSpec::new(Dim::Fixed(side), Dim::Fixed(side))
+/// An icon renders as a text glyph, whose line box is taller than the icon
+/// size; the row it sits in owns the height so the glyph centres against its
+/// siblings.
+fn icon_cell(side: f32) -> SizeSpec {
+    SizeSpec::new(Dim::Fixed(side), Dim::Fill)
 }
 
 /// Returns the intrinsic size for a typed control specification.
@@ -184,10 +187,10 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
             | TextStyle::Section => skin.text.size,
         },
         ControlSpec::Glyph { style, .. } => match style {
-            GlyphStyle::Menu => square(skin.menu.icon_size),
-            GlyphStyle::MenuBurger => square(skin.menu.burger_icon_size),
-            GlyphStyle::MenuSmall => square(skin.menu.small_icon_size),
-            GlyphStyle::MenuCell => square(skin.menu.cell_icon_size),
+            GlyphStyle::Menu => icon_cell(skin.menu.icon_size),
+            GlyphStyle::MenuBurger => icon_cell(skin.menu.burger_icon_size),
+            GlyphStyle::MenuSmall => icon_cell(skin.menu.small_icon_size),
+            GlyphStyle::MenuCell => icon_cell(skin.menu.cell_icon_size),
             GlyphStyle::Default | GlyphStyle::Vis => SizeSpec::new(
                 Dim::Fixed(skin.nav.header_icon_size),
                 Dim::Fixed(skin.nav.header_height),
@@ -582,7 +585,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn each_menu_glyph_style_takes_its_own_skin_icon_size() {
+    fn a_menu_glyph_takes_its_width_from_the_skin_and_its_height_from_the_row() {
         let skin = builtin::skin_doc();
         let glyph = |style| {
             control_size(
@@ -604,7 +607,11 @@ mod tests {
             (GlyphStyle::MenuSmall, skin.menu.small_icon_size),
             (GlyphStyle::MenuCell, skin.menu.cell_icon_size),
         ] {
-            assert_eq!(glyph(style), fixed(size, size), "{style:?}");
+            assert_eq!(
+                glyph(style),
+                SizeSpec::new(Dim::Fixed(size), Dim::Fill),
+                "{style:?}"
+            );
         }
     }
 

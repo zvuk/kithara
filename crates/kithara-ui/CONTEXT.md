@@ -230,6 +230,13 @@ caption row sits inside it whether or not a label fills it, and the dial is what
 declares no size takes `skin.knob.size`, which is the one place those two numbers are kept
 together.
 
+A menu glyph is the one control whose declared size names one axis only. It draws as a text
+glyph, so its box is the icon size wide and a line box tall — `1.3` times the size, the iced
+default — and a square declaration is shorter than what it draws. The paragraph then sits at the
+top of the box it overflows, which reads as an icon sunk below the label beside it. `icon_cell`
+therefore fixes the width and leaves the height to the row, which is what centres the glyph
+against its siblings.
+
 A transport cell carries its hairline on the sides `SkinDoc.button.transport_sides` names; a
 `Button` that declares `frame` names them itself. One seam stands between neighbouring cells and
 none at the strip's ends, so the cells before its flexible gap keep the skin's right seam while
