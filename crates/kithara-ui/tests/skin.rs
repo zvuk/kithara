@@ -86,15 +86,19 @@ fn palette_carries_every_design_token() {
 fn menu_skin_pins_the_design_canon() {
     let menu = parse_skin(builtin::DARK_SKIN, &origin()).unwrap().menu;
 
-    assert_eq!(role(menu.row), mono(10.0, 0.0, ColorRole::TextDim));
-    assert_eq!(role(menu.hint), mono(8.0, 0.04, ColorRole::Muted));
-    assert_eq!(role(menu.section), mono(8.0, 0.16, ColorRole::Muted));
-    assert_eq!(role(menu.count), mono(8.0, 0.0, ColorRole::Muted));
-    assert_eq!(role(menu.caption), mono(7.0, 0.08, ColorRole::Muted));
     assert_eq!(menu.icon_size, 11.0);
     assert_eq!(menu.burger_icon_size, 13.0);
     assert_eq!(menu.small_icon_size, 10.0);
     assert_eq!(menu.cell_icon_size, 9.0);
+}
+
+#[kithara::test]
+fn the_mono_text_roles_pin_the_design_canon() {
+    let text = parse_skin(builtin::DARK_SKIN, &origin()).unwrap().text;
+
+    assert_eq!(role(text.mono), mono(10.0, 0.0, ColorRole::TextDim));
+    assert_eq!(role(text.micro_label), mono(8.0, 0.12, ColorRole::Muted));
+    assert_eq!(role(text.caption), mono(7.0, 0.08, ColorRole::Muted));
 }
 
 #[kithara::test]

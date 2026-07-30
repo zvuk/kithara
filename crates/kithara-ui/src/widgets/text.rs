@@ -69,11 +69,8 @@ fn text_role(
         TextStyle::Telemetry => (skin.text.telemetry, None),
         TextStyle::MicroLabel => (skin.text.micro_label, None),
         TextStyle::Section => (skin.text.section, None),
-        TextStyle::MenuRow => (skin.menu.row, None),
-        TextStyle::MenuHint => (skin.menu.hint, None),
-        TextStyle::MenuSection => (skin.menu.section, None),
-        TextStyle::MenuCount => (skin.menu.count, None),
-        TextStyle::MenuCaption => (skin.menu.caption, None),
+        TextStyle::Mono => (skin.text.mono, None),
+        TextStyle::Caption => (skin.text.caption, None),
         TextStyle::VisFooter | TextStyle::VisMeta => (skin.vis.meta, None),
         TextStyle::VisTitle => (skin.vis.title, None),
     };
@@ -103,11 +100,8 @@ mod tests {
             (TextStyle::Telemetry, skin.text.telemetry),
             (TextStyle::MicroLabel, skin.text.micro_label),
             (TextStyle::Section, skin.text.section),
-            (TextStyle::MenuRow, skin.menu.row),
-            (TextStyle::MenuHint, skin.menu.hint),
-            (TextStyle::MenuSection, skin.menu.section),
-            (TextStyle::MenuCount, skin.menu.count),
-            (TextStyle::MenuCaption, skin.menu.caption),
+            (TextStyle::Mono, skin.text.mono),
+            (TextStyle::Caption, skin.text.caption),
             (TextStyle::VisFooter, skin.vis.meta),
             (TextStyle::VisMeta, skin.vis.meta),
             (TextStyle::VisTitle, skin.vis.title),
@@ -121,10 +115,10 @@ mod tests {
         let skin = builtin::skin();
 
         assert_eq!(
-            text_role(TextStyle::MenuRow, Some(ColorRole::Text), None, false, skin),
+            text_role(TextStyle::Mono, Some(ColorRole::Text), None, false, skin),
             TextRoleSkin {
                 color: ColorRole::Text,
-                ..skin.menu.row
+                ..skin.text.mono
             }
         );
     }
@@ -134,7 +128,7 @@ mod tests {
         let skin = builtin::skin();
         let role = |active| {
             text_role(
-                TextStyle::MenuRow,
+                TextStyle::Mono,
                 Some(ColorRole::Muted),
                 Some(ColorRole::Accent),
                 active,
@@ -146,14 +140,14 @@ mod tests {
             role(true),
             TextRoleSkin {
                 color: ColorRole::Accent,
-                ..skin.menu.row
+                ..skin.text.mono
             }
         );
         assert_eq!(
             role(false),
             TextRoleSkin {
                 color: ColorRole::Muted,
-                ..skin.menu.row
+                ..skin.text.mono
             }
         );
     }
@@ -164,7 +158,7 @@ mod tests {
 
         assert_eq!(
             text_role(
-                TextStyle::MenuHint,
+                TextStyle::Caption,
                 Some(ColorRole::Accent),
                 None,
                 true,
@@ -172,7 +166,7 @@ mod tests {
             ),
             TextRoleSkin {
                 color: ColorRole::Accent,
-                ..skin.menu.hint
+                ..skin.text.caption
             }
         );
     }
@@ -206,7 +200,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn brand_small_resolves_under_text_and_never_under_menu() {
+    fn brand_small_resolves_under_the_display_family_and_never_the_mono_one() {
         let skin = builtin::skin();
         let role = text_role(TextStyle::BrandSmall, None, None, false, skin);
 
@@ -216,8 +210,8 @@ mod tests {
             role
         );
         assert_ne!(
-            role.font, skin.menu.row.font,
-            "the menu family is Mono and the brand pair is Display"
+            role.font, skin.text.mono.font,
+            "the mono micro roles are Mono and the brand pair is Display"
         );
     }
 
@@ -232,11 +226,8 @@ mod tests {
             TextStyle::Telemetry,
             TextStyle::MicroLabel,
             TextStyle::Section,
-            TextStyle::MenuRow,
-            TextStyle::MenuHint,
-            TextStyle::MenuSection,
-            TextStyle::MenuCount,
-            TextStyle::MenuCaption,
+            TextStyle::Mono,
+            TextStyle::Caption,
             TextStyle::VisFooter,
             TextStyle::VisMeta,
             TextStyle::VisTitle,

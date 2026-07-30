@@ -1205,7 +1205,7 @@ const POPOVER_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "app-
             content: Column(id: "pop", size: (w: Fixed(298.0), h: Shrink), children: [
                 Text(id: "brand", style: BrandSmall, label: "KITHARA"),
                 Optional(id: "modules", hidden: Model(id: "ui.block.hidden"),
-                    child: Text(id: "modules-label", style: MenuRow, color: Text, label: "MODULES")),
+                    child: Text(id: "modules-label", style: Mono, color: Text, label: "MODULES")),
             ]),
         ),
     ]))"#;

@@ -172,12 +172,9 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
             TextStyle::VisMeta | TextStyle::VisTitle => {
                 SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.header_height))
             }
-            TextStyle::BrandSmall
-            | TextStyle::MenuRow
-            | TextStyle::MenuHint
-            | TextStyle::MenuSection
-            | TextStyle::MenuCount
-            | TextStyle::MenuCaption => SizeSpec::new(Dim::Shrink, Dim::Fill),
+            TextStyle::BrandSmall | TextStyle::Mono | TextStyle::Caption => {
+                SizeSpec::new(Dim::Shrink, Dim::Fill)
+            }
             TextStyle::Body
             | TextStyle::Brand
             | TextStyle::DeckLetter
@@ -612,7 +609,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_menu_text_role_takes_its_height_from_the_row_that_holds_it() {
+    fn a_shrinking_text_role_takes_its_height_from_the_row_that_holds_it() {
         let skin = builtin::skin_doc();
         let text = |style| {
             control_size(
@@ -628,20 +625,14 @@ mod tests {
             )
         };
 
-        for style in [
-            TextStyle::MenuRow,
-            TextStyle::MenuHint,
-            TextStyle::MenuSection,
-            TextStyle::MenuCount,
-            TextStyle::MenuCaption,
-            TextStyle::BrandSmall,
-        ] {
+        for style in [TextStyle::Mono, TextStyle::Caption, TextStyle::BrandSmall] {
             assert_eq!(
                 text(style),
                 SizeSpec::new(Dim::Shrink, Dim::Fill),
                 "{style:?}"
             );
         }
+        assert_eq!(text(TextStyle::MicroLabel), skin.text.size);
     }
 
     #[kithara::test]

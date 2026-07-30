@@ -526,7 +526,7 @@ const POPOVER_MODULE: &str = r#"(
                             id: "header",
                             children: [
                                 Text(id: "brand", style: BrandSmall, label: "KITHARA"),
-                                Text(id: "version", style: MenuCount, label: "2.4.1"),
+                                Text(id: "version", style: MicroLabel, label: "2.4.1"),
                             ],
                         ),
                         Pressable(
@@ -546,7 +546,7 @@ const POPOVER_MODULE: &str = r#"(
                                     ),
                                     Text(
                                         id: "modules-label",
-                                        style: MenuRow,
+                                        style: Mono,
                                         color: Muted,
                                         active_color: Text,
                                         label: "MODULES",
@@ -591,7 +591,7 @@ const POINTER_POPOVER_MODULE: &str = r#"(
                     id: "pop",
                     size: (w: Fixed(180.0), h: Shrink),
                     children: [
-                        Text(id: "play", style: MenuRow, color: Text, label: "PLAY"),
+                        Text(id: "play", style: Mono, color: Text, label: "PLAY"),
                     ],
                 ),
             ),
@@ -729,7 +729,7 @@ fn a_glyph_and_a_text_carry_the_tones_flags_and_icons_they_name() {
         panic!("expected the modules label");
     };
 
-    assert_eq!(*style, TextStyle::MenuRow);
+    assert_eq!(*style, TextStyle::Mono);
     assert_eq!(*color, Some(ColorRole::Muted));
     assert_eq!(*active_color, Some(ColorRole::Text));
     assert!(active.is_some());

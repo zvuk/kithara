@@ -244,20 +244,17 @@ pub struct TextSkin {
     pub track_title: TextRoleSkin,
     pub body: TextRoleSkin,
     pub telemetry: TextRoleSkin,
-    pub micro_label: TextRoleSkin,
+    pub mono: TextRoleSkin,
     pub section: TextRoleSkin,
+    pub micro_label: TextRoleSkin,
+    pub caption: TextRoleSkin,
 }
 
-/// Menu typography and icon sizes. Row geometry lives in the markup.
+/// Menu icon sizes. Row geometry lives in the markup and menu typography in [`TextSkin`].
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct MenuSkin {
-    pub row: TextRoleSkin,
-    pub hint: TextRoleSkin,
-    pub section: TextRoleSkin,
-    pub count: TextRoleSkin,
-    pub caption: TextRoleSkin,
     pub icon_size: f32,
     pub burger_icon_size: f32,
     pub small_icon_size: f32,
@@ -382,20 +379,23 @@ mod tests {
     }
 
     #[kithara::test]
-    fn menu_holds_exactly_the_declared_roles() {
+    fn menu_holds_exactly_the_declared_glyph_sizes() {
         assert_eq!(
             builtin::skin_doc().menu,
             MenuSkin {
-                row: mono(10.0, 0.0, ColorRole::TextDim),
-                hint: mono(8.0, 0.04, ColorRole::Muted),
-                section: mono(8.0, 0.16, ColorRole::Muted),
-                count: mono(8.0, 0.0, ColorRole::Muted),
-                caption: mono(7.0, 0.08, ColorRole::Muted),
                 icon_size: 11.0,
                 burger_icon_size: 13.0,
                 small_icon_size: 10.0,
                 cell_icon_size: 9.0,
             }
         );
+    }
+
+    #[kithara::test]
+    fn the_mono_pair_transcribes_the_design_defaults() {
+        let text = builtin::skin_doc().text;
+
+        assert_eq!(text.mono, mono(10.0, 0.0, ColorRole::TextDim));
+        assert_eq!(text.caption, mono(7.0, 0.08, ColorRole::Muted));
     }
 }
