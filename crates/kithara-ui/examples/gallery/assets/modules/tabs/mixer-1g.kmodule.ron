@@ -19,15 +19,15 @@
                             Column(
                                 id: "a-eq",
                                 gap: Some(5.0),
-                                size: (w: Fixed(64.0), h: Fixed(236.0)),
+                                size: (w: Fixed(64.0), h: Fixed(262.0)),
                                 children: [
-                                    Knob(id: "a-hi", read: Parameter(id: "mixer.xone.a.hi"), write: Parameter(id: "mixer.xone.a.hi"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Knob(id: "a-hi", read: Parameter(id: "mixer.xone.a.hi"), write: Parameter(id: "mixer.xone.a.hi")),
                                     Text(id: "a-hi-label", style: MicroLabel, label: "HI", size: (w: Fixed(54.0), h: Fixed(12.0))),
-                                    Knob(id: "a-hi-mid", read: Parameter(id: "mixer.xone.a.hi_mid"), write: Parameter(id: "mixer.xone.a.hi_mid"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Knob(id: "a-hi-mid", read: Parameter(id: "mixer.xone.a.hi_mid"), write: Parameter(id: "mixer.xone.a.hi_mid")),
                                     Text(id: "a-hi-mid-label", style: MicroLabel, label: "HI-MID", size: (w: Fixed(54.0), h: Fixed(12.0))),
-                                    Knob(id: "a-lo-mid", read: Parameter(id: "mixer.xone.a.lo_mid"), write: Parameter(id: "mixer.xone.a.lo_mid"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Knob(id: "a-lo-mid", read: Parameter(id: "mixer.xone.a.lo_mid"), write: Parameter(id: "mixer.xone.a.lo_mid")),
                                     Text(id: "a-lo-mid-label", style: MicroLabel, label: "LO-MID", size: (w: Fixed(54.0), h: Fixed(12.0))),
-                                    Knob(id: "a-lo", read: Parameter(id: "mixer.xone.a.lo"), write: Parameter(id: "mixer.xone.a.lo"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Knob(id: "a-lo", read: Parameter(id: "mixer.xone.a.lo"), write: Parameter(id: "mixer.xone.a.lo")),
                                     Text(id: "a-lo-label", style: MicroLabel, label: "LO", size: (w: Fixed(54.0), h: Fixed(12.0))),
                                     Row(
                                         id: "a-fx",
@@ -59,15 +59,15 @@
                             Column(
                                 id: "b-eq",
                                 gap: Some(5.0),
-                                size: (w: Fixed(64.0), h: Fixed(236.0)),
+                                size: (w: Fixed(64.0), h: Fixed(262.0)),
                                 children: [
-                                    Knob(id: "b-hi", read: Parameter(id: "mixer.xone.b.hi"), write: Parameter(id: "mixer.xone.b.hi"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Knob(id: "b-hi", read: Parameter(id: "mixer.xone.b.hi"), write: Parameter(id: "mixer.xone.b.hi")),
                                     Text(id: "b-hi-label", style: MicroLabel, label: "HI", size: (w: Fixed(54.0), h: Fixed(12.0))),
-                                    Knob(id: "b-hi-mid", read: Parameter(id: "mixer.xone.b.hi_mid"), write: Parameter(id: "mixer.xone.b.hi_mid"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Knob(id: "b-hi-mid", read: Parameter(id: "mixer.xone.b.hi_mid"), write: Parameter(id: "mixer.xone.b.hi_mid")),
                                     Text(id: "b-hi-mid-label", style: MicroLabel, label: "HI-MID", size: (w: Fixed(54.0), h: Fixed(12.0))),
-                                    Knob(id: "b-lo-mid", read: Parameter(id: "mixer.xone.b.lo_mid"), write: Parameter(id: "mixer.xone.b.lo_mid"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Knob(id: "b-lo-mid", read: Parameter(id: "mixer.xone.b.lo_mid"), write: Parameter(id: "mixer.xone.b.lo_mid")),
                                     Text(id: "b-lo-mid-label", style: MicroLabel, label: "LO-MID", size: (w: Fixed(54.0), h: Fixed(12.0))),
-                                    Knob(id: "b-lo", read: Parameter(id: "mixer.xone.b.lo"), write: Parameter(id: "mixer.xone.b.lo"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Knob(id: "b-lo", read: Parameter(id: "mixer.xone.b.lo"), write: Parameter(id: "mixer.xone.b.lo")),
                                     Text(id: "b-lo-label", style: MicroLabel, label: "LO", size: (w: Fixed(54.0), h: Fixed(12.0))),
                                     Row(
                                         id: "b-fx",

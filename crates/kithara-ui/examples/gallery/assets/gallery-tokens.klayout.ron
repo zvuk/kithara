@@ -16,6 +16,7 @@
                     (weight: 1.0, node: Module(
                         instance: "gallery",
                         source: "modules/nav.kmodule.ron",
+                        corners: true,
                         frame: (right: false),
                         size: (w: Fixed(198.0), h: Fill),
                     )),
@@ -25,6 +26,7 @@
                             (weight: 1.0, node: Module(
                                 instance: "tokens",
                                 source: "modules/tabs/tokens.kmodule.ron",
+                                corners: true,
                                 frame: (left: false),
                                 size: (w: Fill, h: Fixed(436.0)),
                             )),
@@ -41,6 +43,7 @@
                                     (weight: 1.0, node: Module(
                                         instance: "tokens-notes",
                                         source: "modules/tabs/tokens-notes.kmodule.ron",
+                                        corners: true,
                                         frame: (left: false),
                                         size: (w: Fill, h: Fill),
                                     )),

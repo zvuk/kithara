@@ -16,6 +16,7 @@
                     (weight: 1.0, node: Module(
                         instance: "gallery",
                         source: "modules/nav.kmodule.ron",
+                        corners: true,
                         frame: (right: false),
                         size: (w: Fixed(198.0), h: Fill),
                     )),
@@ -25,6 +26,7 @@
                             (weight: 1.0, node: Module(
                                 instance: "vis-top",
                                 source: "modules/tabs/vis-spacer.kmodule.ron",
+                                corners: true,
                                 frame: (top: false, right: false, bottom: false, left: false),
                                 size: (w: Fill, h: Fill),
                             )),
@@ -34,17 +36,20 @@
                                     (weight: 1.0, node: Module(
                                         instance: "vis-left",
                                         source: "modules/tabs/vis-spacer.kmodule.ron",
+                                        corners: true,
                                         frame: (top: false, right: false, bottom: false, left: false),
                                         size: (w: Fill, h: Fixed(350.0)),
                                     )),
                                     (weight: 1.0, node: Module(
                                         instance: "vis",
                                         source: "modules/tabs/vis.kmodule.ron",
+                                        corners: true,
                                         size: (w: Fixed(560.0), h: Fixed(350.0)),
                                     )),
                                     (weight: 1.0, node: Module(
                                         instance: "vis-right",
                                         source: "modules/tabs/vis-spacer.kmodule.ron",
+                                        corners: true,
                                         frame: (top: false, right: false, bottom: false, left: false),
                                         size: (w: Fill, h: Fixed(350.0)),
                                     )),
@@ -53,6 +58,7 @@
                             (weight: 1.0, node: Module(
                                 instance: "vis-bottom",
                                 source: "modules/tabs/vis-spacer.kmodule.ron",
+                                corners: true,
                                 frame: (top: false, right: false, bottom: false, left: false),
                                 size: (w: Fill, h: Fill),
                             )),

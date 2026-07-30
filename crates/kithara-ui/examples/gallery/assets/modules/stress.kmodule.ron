@@ -7,6 +7,7 @@
         pad: Some(14.0),
         children: [
             Row(
+                size: (w: Fill, h: Shrink),
                 gap: Some(8.0),
                 children: [
                     Readout(id: "fps", label: Some("FPS"), read: Model(id: "bench.fps")),
@@ -23,6 +24,7 @@
                 ],
             ),
             Row(
+                size: (w: Fill, h: Shrink),
                 gap: Some(8.0),
                 children: [
                     Wave(
@@ -48,6 +50,7 @@
                 ],
             ),
             Row(
+                size: (w: Fill, h: Shrink),
                 gap: Some(8.0),
                 children: [
                     VuStereo(id: "vu-1", read: Model(id: "bench.level.0")),

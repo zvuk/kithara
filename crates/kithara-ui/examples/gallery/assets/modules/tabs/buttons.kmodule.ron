@@ -8,6 +8,7 @@
         children: [
             Text(id: "transport-title", style: Section, read: Model(id: "gallery.label.transport")),
             Row(
+                size: (w: Fill, h: Shrink),
                 gap: Some(1.0),
                 children: [
                     Button(
@@ -36,6 +37,7 @@
             ),
             Text(id: "regular-title", style: Section, read: Model(id: "gallery.label.regular")),
             Row(
+                size: (w: Fill, h: Shrink),
                 gap: Some(12.0),
                 children: [
                     Button(

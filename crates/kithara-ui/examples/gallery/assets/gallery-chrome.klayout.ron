@@ -16,6 +16,7 @@
                     (weight: 1.0, node: Module(
                         instance: "gallery",
                         source: "modules/nav.kmodule.ron",
+                        corners: true,
                         frame: (right: false),
                         size: (w: Fixed(198.0), h: Fill),
                     )),
@@ -28,6 +29,7 @@
                                     (weight: 1.0, node: Module(
                                         instance: "chrome-row-a",
                                         source: "modules/tabs/chrome-row-a.kmodule.ron",
+                                        corners: true,
                                         size: (w: Fixed(180.0), h: Fill),
                                     )),
                                     (weight: 1.0, node: Module(
@@ -44,17 +46,20 @@
                                     (weight: 1.0, node: Module(
                                         instance: "chrome-row-b",
                                         source: "modules/tabs/chrome-row-b.kmodule.ron",
+                                        corners: true,
                                         size: (w: Fixed(180.0), h: Fill),
                                     )),
                                     (weight: 1.0, node: Module(
                                         instance: "chrome-join-left",
                                         source: "modules/tabs/chrome-join-left.kmodule.ron",
+                                        corners: true,
                                         frame: (right: false),
                                         size: (w: Fill, h: Fill),
                                     )),
                                     (weight: 1.0, node: Module(
                                         instance: "chrome-join-right",
                                         source: "modules/tabs/chrome-join-right.kmodule.ron",
+                                        corners: true,
                                         frame: (left: false),
                                         size: (w: Fill, h: Fill),
                                     )),
@@ -66,11 +71,13 @@
                                     (weight: 1.0, node: Module(
                                         instance: "chrome-row-c",
                                         source: "modules/tabs/chrome-row-c.kmodule.ron",
+                                        corners: true,
                                         size: (w: Fixed(180.0), h: Fill),
                                     )),
                                     (weight: 1.0, node: Module(
                                         instance: "chrome-open-top",
                                         source: "modules/tabs/chrome-open-top.kmodule.ron",
+                                        corners: true,
                                         frame: (top: false, left: false),
                                         size: (w: Fill, h: Fill),
                                     )),

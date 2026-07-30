@@ -1,0 +1,72 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-menu-notes",
+    root: Column(
+        gap: Some(12.0),
+        pad: Some(14.0),
+        children: [
+            Text(id: "title", style: Section, label: "APP MENU"),
+            Text(
+                id: "note",
+                style: MicroLabel,
+                label: "ONE MODULE DOCUMENT MOUNTED FROM THE CRATE ASSET. THE BURGER ABOVE IS THE POPOVER ANCHOR.",
+                size: (w: Fill, h: Fixed(38.0)),
+            ),
+            Text(id: "axes-title", style: Section, label: "EVERY STATE AXIS IS A CONTROL"),
+            Column(
+                gap: Some(6.0),
+                children: [
+                    Text(
+                        id: "axis-open",
+                        style: MicroLabel,
+                        label: "OPEN - BURGER, HEADER X, OUTSIDE PRESS, ESC",
+                        size: (w: Fill, h: Fixed(18.0)),
+                    ),
+                    Text(
+                        id: "axis-group",
+                        style: MicroLabel,
+                        label: "GROUP - THE MODULES AND LAYOUTS HEADERS",
+                        size: (w: Fill, h: Fixed(18.0)),
+                    ),
+                    Text(
+                        id: "axis-count",
+                        style: MicroLabel,
+                        label: "WINDOW COUNT - NEW WINDOW ROW AND CLOSE CELLS",
+                        size: (w: Fill, h: Fixed(18.0)),
+                    ),
+                    Text(
+                        id: "axis-active",
+                        style: MicroLabel,
+                        label: "ACTIVE WINDOW - PRESS A WINDOW ROW",
+                        size: (w: Fill, h: Fixed(18.0)),
+                    ),
+                    Text(
+                        id: "axis-display",
+                        style: MicroLabel,
+                        label: "DISPLAY - THE REFRESH CELL ON A WINDOW ROW",
+                        size: (w: Fill, h: Fixed(18.0)),
+                    ),
+                    Text(
+                        id: "axis-modules",
+                        style: MicroLabel,
+                        label: "MODULE FLAGS - THE ELEVEN GRID CELLS",
+                        size: (w: Fill, h: Fixed(18.0)),
+                    ),
+                    Text(
+                        id: "axis-layout",
+                        style: MicroLabel,
+                        label: "LAYOUT - THE FOUR SAVED ROWS",
+                        size: (w: Fill, h: Fixed(18.0)),
+                    ),
+                    Text(
+                        id: "axis-flags",
+                        style: MicroLabel,
+                        label: "PREFS AND SET - THE FIVE INDICATOR ROWS",
+                        size: (w: Fill, h: Fixed(18.0)),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

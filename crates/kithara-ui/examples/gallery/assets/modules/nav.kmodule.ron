@@ -5,6 +5,7 @@
     root: Column(
         children: [
             Row(
+                size: (w: Fill, h: Shrink),
                 gap: Some(8.0),
                 pad: Some(10.0),
                 children: [
@@ -122,6 +123,12 @@
                 label: "STRESS",
                 icon: SpeakerHigh,
                 read: Model(id: "gallery.tab.stress"),
+            ),
+            NavItem(
+                id: "menu",
+                label: "MENU",
+                icon: Menu,
+                read: Model(id: "gallery.tab.menu"),
             ),
         ],
     ),

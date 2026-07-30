@@ -17,10 +17,11 @@ pub(super) enum Tab {
     Tree,
     Library2,
     Stress,
+    Menu,
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 17] = [
+    pub(super) const ALL: [Self; 18] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -38,6 +39,7 @@ impl Tab {
         Self::Tree,
         Self::Library2,
         Self::Stress,
+        Self::Menu,
     ];
 
     pub(super) const fn entry(self) -> &'static str {
@@ -59,6 +61,7 @@ impl Tab {
             Self::Tree => "gallery-tree.klayout.ron",
             Self::Library2 => "gallery-library2.klayout.ron",
             Self::Stress => "gallery-stress.klayout.ron",
+            Self::Menu => "gallery-menu.klayout.ron",
         }
     }
 
@@ -81,6 +84,7 @@ impl Tab {
             Self::Tree => 14,
             Self::Library2 => 15,
             Self::Stress => 16,
+            Self::Menu => 17,
         }
     }
 }
@@ -107,6 +111,7 @@ impl TryFrom<&str> for Tab {
             "gallery/tree" => Ok(Self::Tree),
             "gallery/library2" => Ok(Self::Library2),
             "gallery/stress" => Ok(Self::Stress),
+            "gallery/menu" => Ok(Self::Menu),
             _ => Err(()),
         }
     }

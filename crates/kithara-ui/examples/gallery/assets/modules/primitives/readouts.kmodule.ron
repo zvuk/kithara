@@ -3,10 +3,12 @@
     version: 1,
     id: "gallery-readouts",
     root: Column(
+        size: (w: Fill, h: Shrink),
         gap: Some(8.0),
         children: [
             Text(id: "title", style: Section, read: Model(id: "gallery.label.readouts")),
             Row(
+                size: (w: Fill, h: Shrink),
                 gap: Some(18.0),
                 children: [
                     Readout(

@@ -1,7 +1,7 @@
 (
     schema: "kithara.layout",
     version: 1,
-    id: "gallery-modules-deck-micro",
+    id: "gallery-menu",
     root: Split(
         axis: Vertical,
         children: [
@@ -24,17 +24,26 @@
                         axis: Vertical,
                         children: [
                             (weight: 1.0, node: Module(
-                                instance: "modules-tabs",
-                                source: "modules/module-tabs.kmodule.ron",
-                                size: (w: Fill, h: Fixed(28.0)),
+                                instance: "app-menu",
+                                source: "modules/app-menu.kmodule.ron",
+                                frame: (left: false, right: false, top: false),
+                                size: (w: Fixed(340.0), h: Fixed(42.0)),
                             )),
                             (weight: 1.0, node: Module(
-                                instance: "modules",
-                                source: "modules/module-deck-micro.kmodule.ron",
-                                frame: (left: false),
-                                size: (w: Fill, h: Fill),
+                                instance: "menu-notes",
+                                source: "modules/tabs/menu-notes.kmodule.ron",
+                                corners: true,
+                                frame: (left: false, right: false, top: false),
+                                size: (w: Fixed(340.0), h: Fill),
                             )),
                         ],
+                    )),
+                    (weight: 1.0, node: Module(
+                        instance: "ctx",
+                        source: "modules/tabs/menu-context.kmodule.ron",
+                        corners: true,
+                        frame: (left: false),
+                        size: (w: Fill, h: Fill),
                     )),
                 ],
             )),

@@ -3,10 +3,12 @@
     version: 1,
     id: "gallery-toggles",
     root: Column(
+        size: (w: Fill, h: Shrink),
         gap: Some(8.0),
         children: [
             Text(id: "title", style: Section, read: Model(id: "gallery.label.toggles")),
             Row(
+                size: (w: Fill, h: Shrink),
                 gap: Some(12.0),
                 children: [
                     Toggle(id: "toggle-on", read: Model(id: "mock.toggle.on")),

@@ -53,6 +53,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-library2.klayout.ron"),
     ),
     (
+        "gallery-menu.klayout.ron",
+        include_str!("assets/gallery-menu.klayout.ron"),
+    ),
+    (
         "gallery-micro.klayout.ron",
         include_str!("assets/gallery-micro.klayout.ron"),
     ),
@@ -111,6 +115,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "gallery-vis.klayout.ron",
         include_str!("assets/gallery-vis.klayout.ron"),
+    ),
+    (
+        "modules/app-menu.kmodule.ron",
+        include_str!("../../assets/modules/app-menu.kmodule.ron"),
     ),
     (
         "modules/module-deck-micro.kmodule.ron",
@@ -211,6 +219,14 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/library2.kmodule.ron",
         include_str!("assets/modules/tabs/library2.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/menu-context.kmodule.ron",
+        include_str!("assets/modules/tabs/menu-context.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/menu-notes.kmodule.ron",
+        include_str!("assets/modules/tabs/menu-notes.kmodule.ron"),
     ),
     (
         "modules/tabs/micro-4a.kmodule.ron",
@@ -467,7 +483,7 @@ mod tests {
         compile::CompiledNode,
         expand::{Binding, ControlSpec, ExpandedNode},
         module::ChromeStyle,
-        render::ControlAction,
+        render::{ControlAction, Reads},
     };
 
     use super::*;
@@ -562,6 +578,77 @@ mod tests {
     }
 
     #[kithara::test]
+    fn menu_tab_carries_the_app_menu_and_one_popover_per_track() {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+        let ui = compile(
+            Tab::Menu.entry(),
+            &resolver,
+            &endpoints,
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap();
+        let mut found = MenuTab::default();
+        collect_menu_tab(&ui.root, &ui, &mut found);
+
+        assert_eq!(
+            found.popovers,
+            [
+                ("app-menu/pop", "ui.menu.open"),
+                ("ctx/track-1-menu", "gallery.menu.context@row=1"),
+                ("ctx/track-2-menu", "gallery.menu.context@row=2"),
+                ("ctx/track-3-menu", "gallery.menu.context@row=3"),
+                ("ctx/track-4-menu", "gallery.menu.context@row=4"),
+            ]
+        );
+
+        let track_one: Vec<_> = found
+            .pressables
+            .iter()
+            .copied()
+            .filter(|path| path.starts_with("ctx/track-1"))
+            .collect();
+        assert_eq!(
+            track_one,
+            [
+                "ctx/track-1",
+                "ctx/track-1-deck-a",
+                "ctx/track-1-deck-b",
+                "ctx/track-1-queue",
+            ]
+        );
+        assert!(found.pressables.contains(&"app-menu/burger"));
+    }
+
+    #[kithara::test]
+    fn the_mock_answers_every_read_the_menu_tab_names() {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+        let ui = compile(
+            Tab::Menu.entry(),
+            &resolver,
+            &endpoints,
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap();
+        let mut keys = Vec::new();
+        collect_menu_reads(&ui.root, &ui, &mut keys);
+        assert!(!keys.is_empty());
+
+        let mut reads = MockReads::default();
+        reads.apply("app-menu/new-window", &ControlAction::Activate);
+        let unanswered: Vec<_> = keys
+            .iter()
+            .copied()
+            .filter(|key| reads.get(key).is_none())
+            .collect();
+
+        assert_eq!(unanswered, [""; 0]);
+    }
+
+    #[kithara::test]
     fn tree_query_binding_reaches_the_compiled_control() {
         let resolver = resolver();
         let endpoints = mock::registry();
@@ -628,6 +715,133 @@ mod tests {
             } => paths.push(ui.resolve(*path).to_owned()),
             ExpandedNode::Control { .. } => {}
             _ => {}
+        }
+    }
+
+    #[derive(Default)]
+    struct MenuTab<'a> {
+        popovers: Vec<(&'a str, &'a str)>,
+        pressables: Vec<&'a str>,
+    }
+
+    fn collect_menu_tab<'a>(node: &'a CompiledNode, ui: &'a CompiledUi, found: &mut MenuTab<'a>) {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                for (_, child) in children {
+                    collect_menu_tab(child, ui, found);
+                }
+            }
+            CompiledNode::Optional { child, .. } => collect_menu_tab(child, ui, found),
+            CompiledNode::Module { root, .. } => collect_menu_tab_module(root, ui, found),
+            node => panic!("the menu walker does not know {node:?}"),
+        }
+    }
+
+    fn collect_menu_tab_module<'a>(
+        node: &'a ExpandedNode,
+        ui: &'a CompiledUi,
+        found: &mut MenuTab<'a>,
+    ) {
+        match node {
+            ExpandedNode::Row { children, .. }
+            | ExpandedNode::Column { children, .. }
+            | ExpandedNode::Slot { children, .. } => {
+                for child in children {
+                    collect_menu_tab_module(child, ui, found);
+                }
+            }
+            ExpandedNode::Optional { child, .. } => collect_menu_tab_module(child, ui, found),
+            ExpandedNode::Popover {
+                path,
+                open,
+                anchor,
+                content,
+                ..
+            } => {
+                found
+                    .popovers
+                    .push((ui.resolve(*path), ui.resolve(open.key())));
+                collect_menu_tab_module(anchor, ui, found);
+                collect_menu_tab_module(content, ui, found);
+            }
+            ExpandedNode::Pressable { path, child, .. } => {
+                found.pressables.push(ui.resolve(*path));
+                collect_menu_tab_module(child, ui, found);
+            }
+            ExpandedNode::Control { .. } => {}
+            node => panic!("the menu walker does not know {node:?}"),
+        }
+    }
+
+    fn collect_menu_reads<'a>(node: &'a CompiledNode, ui: &'a CompiledUi, keys: &mut Vec<&'a str>) {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                for (_, child) in children {
+                    collect_menu_reads(child, ui, keys);
+                }
+            }
+            CompiledNode::Optional { block, child } => {
+                keys.push(ui.resolve(block.hidden.key()));
+                collect_menu_reads(child, ui, keys);
+            }
+            CompiledNode::Module { root, .. } => collect_menu_module_reads(root, ui, keys),
+            node => panic!("the menu walker does not know {node:?}"),
+        }
+    }
+
+    fn collect_menu_module_reads<'a>(
+        node: &'a ExpandedNode,
+        ui: &'a CompiledUi,
+        keys: &mut Vec<&'a str>,
+    ) {
+        match node {
+            ExpandedNode::Row {
+                active, children, ..
+            } => {
+                if let Some(binding) = active {
+                    keys.push(ui.resolve(binding.key()));
+                }
+                for child in children {
+                    collect_menu_module_reads(child, ui, keys);
+                }
+            }
+            ExpandedNode::Column { children, .. } | ExpandedNode::Slot { children, .. } => {
+                for child in children {
+                    collect_menu_module_reads(child, ui, keys);
+                }
+            }
+            ExpandedNode::Optional { block, child } => {
+                keys.push(ui.resolve(block.hidden.key()));
+                collect_menu_module_reads(child, ui, keys);
+            }
+            ExpandedNode::Popover {
+                open,
+                anchor,
+                content,
+                ..
+            } => {
+                keys.push(ui.resolve(open.key()));
+                collect_menu_module_reads(anchor, ui, keys);
+                collect_menu_module_reads(content, ui, keys);
+            }
+            ExpandedNode::Pressable { child, .. } => collect_menu_module_reads(child, ui, keys),
+            ExpandedNode::Control { spec, read, .. } => {
+                if let Some(binding) = read {
+                    keys.push(ui.resolve(binding.key()));
+                }
+                if let ControlSpec::Text {
+                    active: Some(binding),
+                    ..
+                }
+                | ControlSpec::Glyph {
+                    active: Some(binding),
+                    ..
+                } = spec
+                {
+                    keys.push(ui.resolve(binding.key()));
+                }
+            }
+            node => panic!("the menu walker does not know {node:?}"),
         }
     }
 

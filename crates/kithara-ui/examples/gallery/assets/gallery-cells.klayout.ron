@@ -16,12 +16,14 @@
                     (weight: 1.0, node: Module(
                         instance: "gallery",
                         source: "modules/nav.kmodule.ron",
+                        corners: true,
                         frame: (right: false),
                         size: (w: Fixed(198.0), h: Fill),
                     )),
                     (weight: 1.0, node: Module(
                         instance: "cells",
                         source: "modules/tabs/cells.kmodule.ron",
+                        corners: true,
                         frame: (left: false),
                         size: (w: Fill, h: Fill),
                     )),

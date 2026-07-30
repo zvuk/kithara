@@ -3,30 +3,32 @@
     version: 1,
     id: "gallery-knobs",
     root: Column(
+        size: (w: Fill, h: Shrink),
         gap: Some(8.0),
         children: [
             Text(id: "title", style: Section, read: Model(id: "gallery.label.knobs")),
             Row(
+                size: (w: Fill, h: Shrink),
                 gap: Some(24.0),
                 children: [
                     Knob(
                         id: "size-26",
-                        size: (w: Fixed(26.0), h: Fixed(26.0)),
+                        size: (w: Fixed(26.0), h: Fixed(37.0)),
                         read: Model(id: "mock.knob.26"),
                     ),
                     Knob(
                         id: "size-28",
-                        size: (w: Fixed(28.0), h: Fixed(28.0)),
+                        size: (w: Fixed(28.0), h: Fixed(39.0)),
                         read: Model(id: "mock.knob.28"),
                     ),
                     Knob(
                         id: "size-34",
-                        size: (w: Fixed(34.0), h: Fixed(34.0)),
+                        size: (w: Fixed(34.0), h: Fixed(45.0)),
                         read: Model(id: "mock.knob.34"),
                     ),
                     Knob(
                         id: "size-38",
-                        size: (w: Fixed(38.0), h: Fixed(38.0)),
+                        size: (w: Fixed(38.0), h: Fixed(49.0)),
                         read: Model(id: "mock.knob.38"),
                     ),
                 ],

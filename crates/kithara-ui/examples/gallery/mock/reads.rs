@@ -1,55 +1,24 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kithara_ui::{
-    ids::EndpointId,
     module::TrackColumn,
-    registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{ControlAction, ReadValue, Reads, StereoLevels, TreeRow, WaveBucket, WaveformView},
 };
 use num_traits::cast::AsPrimitive;
 
+use super::{
+    consts::Consts,
+    menu::{ContextState, MenuState},
+};
 use crate::{
     mock_data::CATALOG,
-    mock_mixer::{self, MixerState},
-    mock_stress::{self, StressState},
+    mock_mixer::MixerState,
+    mock_stress::StressState,
     mock_transport::DeckTransport,
     sections::{ModuleDemo, Tab},
 };
 
-struct Consts;
-
-impl Consts {
-    const BPM: &str = "70.00";
-    const BPM_VALUE: f32 = 70.0;
-    const CUES: &[f32] = &[0.27, 0.31];
-    const DURATION_SECS: f64 = 360.0;
-    const KEY: &str = "4m";
-    const LOOP_REGION: [f32; 2] = [0.30, 0.34];
-    const POSITION_SECS: f64 = 103.0;
-    const REMAIN: &str = "−04:17";
-    const TEMPO: &str = "+0.0%";
-    const TRACK_COLUMNS: [TrackColumn; 9] = [
-        TrackColumn::Index,
-        TrackColumn::Deck,
-        TrackColumn::Title,
-        TrackColumn::Artist,
-        TrackColumn::Bpm,
-        TrackColumn::Key,
-        TrackColumn::Time,
-        TrackColumn::Energy,
-        TrackColumn::Transition,
-    ];
-    const TRACKLIST_LIBRARY: [bool; 9] = [true, true, true, true, true, true, true, false, false];
-    const TRACKLIST_MICRO: [bool; 9] =
-        [false, false, true, false, false, false, true, false, false];
-    const TRACKLIST_QUEUE: [bool; 9] = [true, true, true, false, true, true, false, true, true];
-    const TRACKLIST_QUEUE_PRESET: usize = 1;
-    const VIS_TICK_SECS: f64 = 0.016;
-    const WAVE_BUCKETS: u32 = 4_096;
-    const ZOOM: f64 = 0.12;
-}
-
-pub(super) struct MockReads {
+pub(crate) struct MockReads {
     active_module: ModuleDemo,
     active_tab: Tab,
     button_cue: bool,
@@ -60,10 +29,12 @@ pub(super) struct MockReads {
     chip_active: bool,
     chip_inactive: bool,
     collapsed: BTreeSet<String>,
+    context: ContextState,
     knobs: [f64; 4],
     levels_volume: f64,
     library_query: String,
     library_scope: usize,
+    menu: MenuState,
     mixer: MixerState,
     segmented_index: f64,
     stress: StressState,
@@ -112,10 +83,12 @@ impl Default for MockReads {
             chip_active: true,
             chip_inactive: false,
             collapsed: BTreeSet::new(),
+            context: ContextState::default(),
             knobs: [0.35, 0.5, 0.65, 0.8],
             levels_volume: 0.7,
             library_query: String::new(),
             library_scope: 0,
+            menu: MenuState::default(),
             mixer: MixerState::default(),
             segmented_index: 2.0,
             stress: StressState::default(),
@@ -152,22 +125,22 @@ impl Default for MockReads {
 }
 
 impl MockReads {
-    pub(super) const fn active_module(&self) -> ModuleDemo {
+    pub(crate) const fn active_module(&self) -> ModuleDemo {
         self.active_module
     }
 
-    pub(super) const fn active_tab(&self) -> Tab {
+    pub(crate) const fn active_tab(&self) -> Tab {
         self.active_tab
     }
 
-    pub(super) fn select_tab(&mut self, tab: Tab) {
+    pub(crate) fn select_tab(&mut self, tab: Tab) {
         if self.active_tab != tab {
             self.stress.reset_clock();
         }
         self.active_tab = tab;
     }
 
-    pub(super) fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         match self.active_tab {
             Tab::Stress => self.stress.tick(),
             Tab::Vis => self.tick_vis(),
@@ -175,20 +148,21 @@ impl MockReads {
         }
     }
 
-    pub(super) fn set_library_query(&mut self, query: String) {
+    pub(crate) fn set_library_query(&mut self, query: String) {
         self.library_query = query;
     }
 
-    pub(super) fn toggle_module(&mut self, module: String) {
+    pub(crate) fn toggle_module(&mut self, module: String) {
         if !self.collapsed.remove(&module) {
             self.collapsed.insert(module);
         }
     }
 
-    pub(super) fn apply(&mut self, path: &str, action: &ControlAction) {
+    pub(crate) fn apply(&mut self, path: &str, action: &ControlAction) {
         match action {
             ControlAction::SetScalar(value) => self.set_scalar(path, *value),
             ControlAction::Activate => self.activate(path),
+            ControlAction::SecondaryActivate => self.context.secondary(path),
             ControlAction::SelectIndex(index) => self.select_index(path, *index),
             _ => {}
         }
@@ -324,6 +298,12 @@ impl MockReads {
     }
 
     fn activate(&mut self, path: &str) {
+        if self.menu.activate(path) {
+            return;
+        }
+        if self.context.activate(path) {
+            return;
+        }
         if self.mixer.activate(path) {
             return;
         }
@@ -366,6 +346,36 @@ impl MockReads {
         }
     }
 
+    fn shell(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let value = match endpoint {
+            "gallery.tab.atoms" => self.active_tab == Tab::Atoms,
+            "gallery.tab.buttons" => self.active_tab == Tab::Buttons,
+            "gallery.tab.faders" => self.active_tab == Tab::Faders,
+            "gallery.tab.modules" => self.active_tab == Tab::Modules,
+            "gallery.tab.typography" => self.active_tab == Tab::Typography,
+            "gallery.tab.cells" => self.active_tab == Tab::Cells,
+            "gallery.tab.sizes" => self.active_tab == Tab::Sizes,
+            "gallery.tab.tokens" => self.active_tab == Tab::Tokens,
+            "gallery.tab.micro" => self.active_tab == Tab::Micro,
+            "gallery.tab.mixer" => self.active_tab == Tab::Mixer,
+            "gallery.tab.vis" => self.active_tab == Tab::Vis,
+            "gallery.tab.chrome" => self.active_tab == Tab::Chrome,
+            "gallery.tab.titlebars" => self.active_tab == Tab::Titlebars,
+            "gallery.tab.tracklist" => self.active_tab == Tab::Tracklist,
+            "gallery.tab.tree" => self.active_tab == Tab::Tree,
+            "gallery.tab.library2" => self.active_tab == Tab::Library2,
+            "gallery.tab.stress" => self.active_tab == Tab::Stress,
+            "gallery.tab.menu" => self.active_tab == Tab::Menu,
+            "gallery.module.deck" => self.active_module == ModuleDemo::Deck,
+            "gallery.module.deck_micro" => self.active_module == ModuleDemo::DeckMicro,
+            "gallery.module.global_bar" => self.active_module == ModuleDemo::GlobalBar,
+            "gallery.module.telemetry" => self.active_module == ModuleDemo::Telemetry,
+            "gallery.module.layout" => self.active_module == ModuleDemo::Layout,
+            _ => return None,
+        };
+        Some(ReadValue::Bool(value))
+    }
+
     fn tick_vis(&mut self) {
         self.vis_time_secs += Consts::VIS_TICK_SECS;
         self.vis_phase += 0.17;
@@ -386,6 +396,14 @@ impl MockReads {
 
 impl Reads for MockReads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        // The menu axes are genuinely per-window, per-module and per-row, so
+        // they answer the scoped key before it is dropped below.
+        if let Some(value) = self.menu.get(endpoint) {
+            return Some(value);
+        }
+        if let Some(value) = self.context.get(endpoint) {
+            return Some(value);
+        }
         // The gallery hosts one virtual deck: every scope suffix resolves to
         // the same state, so the canonical `@scope` qualifier is dropped here.
         let endpoint = endpoint.split_once('@').map_or(endpoint, |(base, _)| base);
@@ -393,6 +411,9 @@ impl Reads for MockReads {
             return Some(value);
         }
         if let Some(value) = self.stress.get(endpoint) {
+            return Some(value);
+        }
+        if let Some(value) = self.shell(endpoint) {
             return Some(value);
         }
         if let Some(module) = endpoint
@@ -429,34 +450,6 @@ impl Reads for MockReads {
             "gallery.label.faders" => ReadValue::Text("HORIZONTAL FADERS"),
             "gallery.label.scalar" => ReadValue::Text("SCALAR TELEMETRY"),
             "vis.badge" => ReadValue::Bool(true),
-            "gallery.tab.atoms" => ReadValue::Bool(self.active_tab == Tab::Atoms),
-            "gallery.tab.buttons" => ReadValue::Bool(self.active_tab == Tab::Buttons),
-            "gallery.tab.faders" => ReadValue::Bool(self.active_tab == Tab::Faders),
-            "gallery.tab.modules" => ReadValue::Bool(self.active_tab == Tab::Modules),
-            "gallery.tab.typography" => ReadValue::Bool(self.active_tab == Tab::Typography),
-            "gallery.tab.cells" => ReadValue::Bool(self.active_tab == Tab::Cells),
-            "gallery.tab.sizes" => ReadValue::Bool(self.active_tab == Tab::Sizes),
-            "gallery.tab.tokens" => ReadValue::Bool(self.active_tab == Tab::Tokens),
-            "gallery.tab.micro" => ReadValue::Bool(self.active_tab == Tab::Micro),
-            "gallery.tab.mixer" => ReadValue::Bool(self.active_tab == Tab::Mixer),
-            "gallery.tab.vis" => ReadValue::Bool(self.active_tab == Tab::Vis),
-            "gallery.tab.chrome" => ReadValue::Bool(self.active_tab == Tab::Chrome),
-            "gallery.tab.titlebars" => ReadValue::Bool(self.active_tab == Tab::Titlebars),
-            "gallery.tab.tracklist" => ReadValue::Bool(self.active_tab == Tab::Tracklist),
-            "gallery.tab.tree" => ReadValue::Bool(self.active_tab == Tab::Tree),
-            "gallery.tab.library2" => ReadValue::Bool(self.active_tab == Tab::Library2),
-            "gallery.tab.stress" => ReadValue::Bool(self.active_tab == Tab::Stress),
-            "gallery.module.deck" => ReadValue::Bool(self.active_module == ModuleDemo::Deck),
-            "gallery.module.deck_micro" => {
-                ReadValue::Bool(self.active_module == ModuleDemo::DeckMicro)
-            }
-            "gallery.module.global_bar" => {
-                ReadValue::Bool(self.active_module == ModuleDemo::GlobalBar)
-            }
-            "gallery.module.telemetry" => {
-                ReadValue::Bool(self.active_module == ModuleDemo::Telemetry)
-            }
-            "gallery.module.layout" => ReadValue::Bool(self.active_module == ModuleDemo::Layout),
             "vis.preset" => ReadValue::Scalar(self.vis_preset.as_()),
             "vis.time" => ReadValue::Scalar(self.vis_time_secs),
             "vis.preset_index" => ReadValue::Text(CATALOG.vis_indices[self.vis_preset]),
@@ -572,230 +565,6 @@ fn beat_grid() -> (Vec<f32>, Vec<f32>) {
         .collect();
     let downbeats = beats.iter().step_by(4).copied().collect();
     (beats, downbeats)
-}
-
-#[derive(Default)]
-pub(super) struct MockRegistry {
-    endpoints: BTreeMap<(EndpointCategory, EndpointId), EndpointDesc>,
-}
-
-impl MockRegistry {
-    pub(super) fn insert(
-        &mut self,
-        category: EndpointCategory,
-        id: &str,
-        description: EndpointDesc,
-    ) {
-        self.endpoints
-            .insert((category, EndpointId(id.to_owned())), description);
-    }
-}
-
-impl EndpointRegistry for MockRegistry {
-    fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
-        self.endpoints.get(&(category, id.clone()))
-    }
-}
-
-fn insert_output_levels(registry: &mut MockRegistry) {
-    registry.insert(
-        EndpointCategory::Telemetry,
-        "player.output.levels",
-        EndpointDesc::new(ValueKind::Stereo),
-    );
-}
-
-fn insert_deck_endpoints(registry: &mut MockRegistry) {
-    for (id, kind) in [
-        ("deck.transport.jump_back", ValueKind::Trigger),
-        ("deck.transport.jump_forward", ValueKind::Trigger),
-        ("deck.transport.set_cue", ValueKind::Trigger),
-        ("deck.transport.toggle_loop", ValueKind::Trigger),
-        ("deck.transport.toggle_play", ValueKind::Trigger),
-        ("deck.transport.toggle_reverse", ValueKind::Trigger),
-        ("deck.transport.toggle_sync", ValueKind::Trigger),
-        ("deck.transport.seek_normalized", ValueKind::Scalar),
-        ("deck.view.zoom_in", ValueKind::Trigger),
-        ("deck.view.zoom_out", ValueKind::Trigger),
-    ] {
-        registry.insert(
-            EndpointCategory::Command,
-            id,
-            EndpointDesc::new(kind).with_scope("deck"),
-        );
-    }
-    for (id, kind) in [
-        ("deck.playback.playing", ValueKind::Bool),
-        ("deck.playback.position_normalized", ValueKind::Scalar),
-        ("deck.playback.remaining_secs", ValueKind::Scalar),
-        ("deck.playback.remain", ValueKind::Text),
-        ("deck.playback.position_secs", ValueKind::Scalar),
-        ("deck.playback.duration_secs", ValueKind::Scalar),
-        ("deck.playback.looping", ValueKind::Bool),
-        ("deck.playback.reverse", ValueKind::Bool),
-        ("deck.playback.synced", ValueKind::Bool),
-        ("deck.playback.tempo", ValueKind::Text),
-        ("deck.playback.waveform", ValueKind::Waveform),
-        ("deck.track.title", ValueKind::Text),
-        ("deck.track.source_kind", ValueKind::Text),
-        ("deck.track.key", ValueKind::Text),
-    ] {
-        registry.insert(
-            EndpointCategory::Telemetry,
-            id,
-            EndpointDesc::new(kind).with_scope("deck"),
-        );
-    }
-}
-
-pub(super) fn registry() -> impl EndpointRegistry {
-    let mut registry = MockRegistry::default();
-    insert_deck_endpoints(&mut registry);
-    mock_mixer::insert_endpoints(&mut registry);
-    mock_stress::insert_endpoints(&mut registry);
-    insert_output_levels(&mut registry);
-    for id in ["player.output.volume", "mock.cells.segmented", "vis.preset"] {
-        registry.insert(
-            EndpointCategory::Parameter,
-            id,
-            EndpointDesc::new(ValueKind::Scalar),
-        );
-    }
-    for id in ["vis.next", "vis.previous"] {
-        registry.insert(
-            EndpointCategory::Command,
-            id,
-            EndpointDesc::new(ValueKind::Trigger),
-        );
-    }
-    insert_library_endpoints(&mut registry);
-    for id in [
-        "gallery.label.knobs",
-        "gallery.label.meters",
-        "gallery.label.toggles",
-        "gallery.label.readouts",
-        "gallery.label.chips",
-        "gallery.label.transport",
-        "gallery.label.regular",
-        "gallery.label.text",
-        "gallery.label.faders",
-        "gallery.label.scalar",
-        "mock.track.title",
-        "mock.track.artist",
-        "mock.bpm",
-        "mock.key",
-        "mock.remain",
-        "gallery.footer.deck",
-        "gallery.footer.deck_micro",
-        "gallery.footer.global_bar",
-        "gallery.footer.telemetry",
-        "gallery.footer.layout",
-        "gallery.footer.tokens_anatomy",
-        "vis.preset_index",
-        "vis.preset_name",
-    ] {
-        registry.insert(
-            EndpointCategory::Model,
-            id,
-            EndpointDesc::new(ValueKind::Text),
-        );
-    }
-    for id in [
-        "gallery.tab.atoms",
-        "gallery.tab.buttons",
-        "gallery.tab.faders",
-        "gallery.tab.modules",
-        "gallery.tab.typography",
-        "gallery.tab.cells",
-        "gallery.tab.sizes",
-        "gallery.tab.tokens",
-        "gallery.tab.micro",
-        "gallery.tab.mixer",
-        "gallery.tab.vis",
-        "gallery.tab.chrome",
-        "gallery.tab.titlebars",
-        "gallery.tab.tracklist",
-        "gallery.tab.tree",
-        "gallery.tab.library2",
-        "gallery.tab.stress",
-        "gallery.module.deck",
-        "gallery.module.deck_micro",
-        "gallery.module.global_bar",
-        "gallery.module.telemetry",
-        "gallery.module.layout",
-        "mock.toggle.on",
-        "mock.toggle.off",
-        "mock.checkbox.on",
-        "mock.checkbox.off",
-        "mock.chip.active",
-        "mock.chip.inactive",
-        "mock.button.play",
-        "mock.button.cue",
-        "mock.button.sync",
-        "vis.badge",
-    ] {
-        registry.insert(
-            EndpointCategory::Model,
-            id,
-            EndpointDesc::new(ValueKind::Bool),
-        );
-    }
-    for id in [
-        "deck.view.zoom",
-        "mock.knob.26",
-        "mock.knob.28",
-        "mock.knob.34",
-        "mock.knob.38",
-        "mock.volume",
-        "mock.cells.segmented",
-        "vis.preset",
-    ] {
-        registry.insert(
-            EndpointCategory::Model,
-            id,
-            EndpointDesc::new(ValueKind::Scalar),
-        );
-    }
-    insert_tracklist_endpoints(&mut registry);
-    registry.insert(
-        EndpointCategory::Model,
-        "mock.levels",
-        EndpointDesc::new(ValueKind::Stereo),
-    );
-    registry
-}
-
-fn insert_tracklist_endpoints(registry: &mut MockRegistry) {
-    registry.insert(
-        EndpointCategory::Model,
-        "gallery.tracklist.preset",
-        EndpointDesc::new(ValueKind::Scalar),
-    );
-    for column in Consts::TRACK_COLUMNS {
-        registry.insert(
-            EndpointCategory::Model,
-            &format!("gallery.tracklist.columns.{}", column.endpoint_name()),
-            EndpointDesc::new(ValueKind::Bool),
-        );
-        registry.insert(
-            EndpointCategory::Model,
-            &format!("gallery.tracklist.columns.width.{}", column.endpoint_name()),
-            EndpointDesc::new(ValueKind::Scalar),
-        );
-    }
-}
-
-fn insert_library_endpoints(registry: &mut MockRegistry) {
-    for (id, kind) in [
-        ("library.visible_tracks", ValueKind::TrackList),
-        ("library.tree", ValueKind::Tree),
-        ("library.breadcrumb", ValueKind::Text),
-        ("library.query", ValueKind::Text),
-        ("library.scope", ValueKind::Scalar),
-        ("ui.preset", ValueKind::Text),
-    ] {
-        registry.insert(EndpointCategory::Model, id, EndpointDesc::new(kind));
-    }
 }
 
 #[cfg(test)]
@@ -1104,6 +873,328 @@ mod tests {
         assert_eq!(reads.get("library.scope"), Some(ReadValue::Scalar(0.0)));
         reads.apply("library2/context", &ControlAction::SelectIndex(1));
         assert_eq!(reads.get("library.scope"), Some(ReadValue::Scalar(1.0)));
+    }
+
+    #[kithara::test]
+    fn default_menu_state_is_the_frozen_design_snapshot() {
+        let reads = MockReads::default();
+
+        assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(true)));
+        assert_eq!(
+            reads.get("ui.window.count"),
+            Some(ReadValue::Text("2 ОКНА"))
+        );
+        assert_eq!(
+            reads.get("ui.window.title@window=1"),
+            Some(ReadValue::Text("ОКНО 1 · КЛУБ · 2 ДЕКИ"))
+        );
+        assert_eq!(
+            reads.get("ui.window.caption@window=1"),
+            Some(ReadValue::Text("MACBOOK PRO 16\" · 8 МОД."))
+        );
+        assert_eq!(
+            reads.get("ui.window.title@window=2"),
+            Some(ReadValue::Text("ОКНО 2 · ВИЗУАЛ + ТАЙМЛАЙН"))
+        );
+        assert_eq!(
+            reads.get("ui.window.caption@window=2"),
+            Some(ReadValue::Text("DELL U2720Q · 2 МОД."))
+        );
+        assert_eq!(
+            reads.get("ui.modules.title"),
+            Some(ReadValue::Text("Модули · ОКНО 1"))
+        );
+        assert_eq!(
+            reads.get("ui.modules.count"),
+            Some(ReadValue::Text("8 ИЗ 11"))
+        );
+        assert_eq!(
+            reads.get("ui.layouts.active"),
+            Some(ReadValue::Text("КЛУБ · 2 ДЕКИ"))
+        );
+        assert_eq!(
+            reads.get("ui.prefs.wave_follow"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(reads.get("ui.prefs.autogain"), Some(ReadValue::Bool(true)));
+        assert_eq!(reads.get("ui.prefs.mono"), Some(ReadValue::Bool(false)));
+        assert_eq!(reads.get("ui.set.recording"), Some(ReadValue::Bool(false)));
+        assert_eq!(reads.get("ui.set.casting"), Some(ReadValue::Bool(true)));
+    }
+
+    #[kithara::test]
+    fn the_popover_path_only_closes_while_the_burger_toggles() {
+        let mut reads = MockReads::default();
+
+        reads.apply("app-menu/pop", &ControlAction::Activate);
+        assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
+        reads.apply("app-menu/pop", &ControlAction::Activate);
+        assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
+
+        reads.apply("app-menu/burger", &ControlAction::Activate);
+        assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(true)));
+        reads.apply("app-menu/burger", &ControlAction::Activate);
+        assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
+
+        reads.apply("app-menu/burger", &ControlAction::Activate);
+        reads.apply("app-menu/header-close", &ControlAction::Activate);
+        assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
+    }
+
+    #[kithara::test]
+    fn the_window_list_refuses_a_fourth_window_and_never_closes_the_first() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(reads.get("ui.window.can_open"), Some(ReadValue::Bool(true)));
+        assert_eq!(
+            reads.get("ui.window.hidden@window=3"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("ui.window.close_hidden@window=1"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("ui.window.close_hidden@window=2"),
+            Some(ReadValue::Bool(false))
+        );
+
+        reads.apply("app-menu/new-window", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("ui.window.count"),
+            Some(ReadValue::Text("3 ОКНА"))
+        );
+        assert_eq!(
+            reads.get("ui.window.can_open"),
+            Some(ReadValue::Bool(false))
+        );
+        assert_eq!(
+            reads.get("ui.window.hidden@window=3"),
+            Some(ReadValue::Bool(false))
+        );
+
+        reads.apply("app-menu/new-window", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("ui.window.count"),
+            Some(ReadValue::Text("3 ОКНА"))
+        );
+
+        reads.apply("app-menu/window-1-close", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("ui.window.count"),
+            Some(ReadValue::Text("3 ОКНА"))
+        );
+
+        reads.apply("app-menu/window-3-close", &ControlAction::Activate);
+        reads.apply("app-menu/window-2-close", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("ui.window.count"),
+            Some(ReadValue::Text("1 ОКНО"))
+        );
+        assert_eq!(
+            reads.get("ui.window.close_hidden@window=2"),
+            Some(ReadValue::Bool(true))
+        );
+    }
+
+    #[kithara::test]
+    fn focusing_a_window_moves_the_module_grid_and_the_layout_hint() {
+        let mut reads = MockReads::default();
+
+        reads.apply("app-menu/window-2", &ControlAction::Activate);
+
+        assert_eq!(
+            reads.get("ui.window.active@window=2"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("ui.modules.title"),
+            Some(ReadValue::Text("Модули · ОКНО 2"))
+        );
+        assert_eq!(
+            reads.get("ui.modules.count"),
+            Some(ReadValue::Text("2 ИЗ 11"))
+        );
+        assert_eq!(
+            reads.get("ui.layouts.active"),
+            Some(ReadValue::Text("ВИЗУАЛ + ТАЙМЛАЙН"))
+        );
+        assert_eq!(
+            reads.get("ui.module.on@module=vis"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("ui.module.on@module=ov"),
+            Some(ReadValue::Bool(false))
+        );
+
+        reads.apply("app-menu/module-ov", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("ui.module.on@module=ov"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("ui.window.caption@window=2"),
+            Some(ReadValue::Text("DELL U2720Q · 3 МОД."))
+        );
+    }
+
+    #[kithara::test]
+    fn opening_one_menu_group_closes_the_other() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(
+            reads.get("ui.menu.group_hidden@group=mod"),
+            Some(ReadValue::Bool(true))
+        );
+        reads.apply("app-menu/modules-head", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("ui.menu.group_open@group=mod"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("ui.menu.group_hidden@group=lay"),
+            Some(ReadValue::Bool(true))
+        );
+
+        reads.apply("app-menu/layouts-head", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("ui.menu.group_hidden@group=mod"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("ui.menu.group_open@group=lay"),
+            Some(ReadValue::Bool(true))
+        );
+
+        reads.apply("app-menu/layouts-head", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("ui.menu.group_hidden@group=lay"),
+            Some(ReadValue::Bool(true))
+        );
+    }
+
+    #[kithara::test]
+    fn applying_a_layout_renames_the_active_window() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(
+            reads.get("ui.layout.selected@layout=1"),
+            Some(ReadValue::Bool(true))
+        );
+        reads.apply("app-menu/layout-2", &ControlAction::Activate);
+
+        assert_eq!(
+            reads.get("ui.layout.selected@layout=1"),
+            Some(ReadValue::Bool(false))
+        );
+        assert_eq!(
+            reads.get("ui.layout.selected@layout=2"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("ui.window.title@window=1"),
+            Some(ReadValue::Text("ОКНО 1 · СТУДИЯ · 4 ДЕКИ + VST"))
+        );
+        assert_eq!(
+            reads.get("ui.layouts.active"),
+            Some(ReadValue::Text("СТУДИЯ · 4 ДЕКИ + VST"))
+        );
+    }
+
+    #[kithara::test]
+    fn the_record_and_cast_hints_follow_their_own_flags() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(reads.get("ui.set.record_hint"), Some(ReadValue::Text("⌘R")));
+        assert_eq!(
+            reads.get("ui.set.cast_hint"),
+            Some(ReadValue::Text("ЗВУК LIVE"))
+        );
+
+        reads.apply("app-menu/record", &ControlAction::Activate);
+        reads.apply("app-menu/cast", &ControlAction::Activate);
+
+        assert_eq!(
+            reads.get("ui.set.record_hint"),
+            Some(ReadValue::Text("ИДЁТ ЗАПИСЬ"))
+        );
+        assert_eq!(reads.get("ui.set.cast_hint"), Some(ReadValue::Text("ВЫКЛ")));
+    }
+
+    #[kithara::test]
+    fn a_secondary_click_opens_one_track_menu_at_a_time() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(
+            reads.get("gallery.menu.context@row=2"),
+            Some(ReadValue::Bool(false))
+        );
+        reads.apply("ctx/track-2", &ControlAction::SecondaryActivate);
+        assert_eq!(
+            reads.get("gallery.menu.context@row=2"),
+            Some(ReadValue::Bool(true))
+        );
+
+        reads.apply("ctx/track-1", &ControlAction::SecondaryActivate);
+        assert_eq!(
+            reads.get("gallery.menu.context@row=2"),
+            Some(ReadValue::Bool(false))
+        );
+        assert_eq!(
+            reads.get("gallery.menu.context@row=1"),
+            Some(ReadValue::Bool(true))
+        );
+
+        reads.apply("ctx/track-1-menu", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("gallery.menu.context@row=1"),
+            Some(ReadValue::Bool(false))
+        );
+    }
+
+    #[kithara::test]
+    fn a_primary_click_selects_a_track_without_opening_its_menu() {
+        let mut reads = MockReads::default();
+
+        reads.apply("ctx/track-3", &ControlAction::Activate);
+
+        assert_eq!(
+            reads.get("gallery.menu.selected@row=3"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("gallery.menu.selected@row=1"),
+            Some(ReadValue::Bool(false))
+        );
+        assert_eq!(
+            reads.get("gallery.menu.context@row=3"),
+            Some(ReadValue::Bool(false))
+        );
+    }
+
+    #[kithara::test]
+    fn a_track_menu_action_closes_the_menu_and_reports_itself() {
+        let mut reads = MockReads::default();
+
+        reads.apply("ctx/track-2", &ControlAction::SecondaryActivate);
+        reads.apply("ctx/track-2-deck-b", &ControlAction::Activate);
+
+        assert_eq!(
+            reads.get("gallery.menu.context@row=2"),
+            Some(ReadValue::Bool(false))
+        );
+        assert_eq!(
+            reads.get("gallery.menu.action"),
+            Some(ReadValue::Text("ДЕКА B · 2"))
+        );
+
+        reads.apply("ctx/track-4", &ControlAction::SecondaryActivate);
+        reads.apply("ctx/track-4-queue", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("gallery.menu.action"),
+            Some(ReadValue::Text("В ОЧЕРЕДЬ · 4"))
+        );
     }
 
     #[kithara::test]
