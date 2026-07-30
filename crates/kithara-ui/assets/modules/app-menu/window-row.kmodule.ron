@@ -1,0 +1,91 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "app-menu-window-row",
+    parameters: ["window"],
+    root: Pressable(
+        id: "focus",
+        press: Command(id: "ui.window.focus", with: { "window": "$window" }),
+        child: Row(
+            size: (w: Fill, h: Fixed(30.0)),
+            pad_x: 10.0,
+            gap: 8.0,
+            active: Model(id: "ui.window.active", with: { "window": "$window" }),
+            active_background: BgSelect,
+            children: [
+                Glyph(
+                    id: "icon",
+                    icon: Monitor,
+                    style: Menu,
+                    color: Muted,
+                    active_color: Accent,
+                    active: Model(id: "ui.window.active", with: { "window": "$window" }),
+                ),
+                Column(
+                    id: "text",
+                    size: (w: Fill, h: Shrink),
+                    gap: 1.0,
+                    children: [
+                        Text(
+                            id: "title",
+                            size: (w: Fill, h: Fixed(13.0)),
+                            style: Mono,
+                            active_color: Text,
+                            align: Start,
+                            read: Model(id: "ui.window.title", with: { "window": "$window" }),
+                            active: Model(id: "ui.window.active", with: { "window": "$window" }),
+                        ),
+                        Text(
+                            id: "caption",
+                            size: (w: Fill, h: Fixed(9.0)),
+                            style: Caption,
+                            align: Start,
+                            read: Model(id: "ui.window.caption", with: { "window": "$window" }),
+                        ),
+                    ],
+                ),
+                Pressable(
+                    id: "display",
+                    press: Command(id: "ui.window.cycle_display", with: { "window": "$window" }),
+                    child: Row(
+                        size: (w: Fixed(18.0), h: Fixed(18.0)),
+                        gap: 0.0,
+                        children: [
+                            Row(size: (w: Fill, h: Fill), gap: 0.0, children: []),
+                            Glyph(
+                                id: "display-icon",
+                                icon: RefreshCw,
+                                style: MenuCell,
+                                color: Muted,
+                            ),
+                            Row(size: (w: Fill, h: Fill), gap: 0.0, children: []),
+                        ],
+                    ),
+                ),
+                Row(
+                    id: "close-cell",
+                    size: (w: Fixed(18.0), h: Fixed(18.0)),
+                    gap: 0.0,
+                    children: [
+                        Row(size: (w: Fill, h: Fill), gap: 0.0, children: []),
+                        Optional(
+                            id: "close-block",
+                            hidden: Model(id: "ui.window.close_hidden", with: { "window": "$window" }),
+                            child: Pressable(
+                                id: "close",
+                                press: Command(id: "ui.window.close", with: { "window": "$window" }),
+                                child: Glyph(
+                                    id: "close-icon",
+                                    icon: X,
+                                    style: MenuCell,
+                                    color: Muted,
+                                ),
+                            ),
+                        ),
+                        Row(size: (w: Fill, h: Fill), gap: 0.0, children: []),
+                    ],
+                ),
+            ],
+        ),
+    ),
+)

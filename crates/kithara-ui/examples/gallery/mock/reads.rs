@@ -979,14 +979,14 @@ mod tests {
             Some(ReadValue::Text("3 ОКНА"))
         );
 
-        reads.apply("app-menu/window-1-close", &ControlAction::Activate);
+        reads.apply("app-menu/window-1/close", &ControlAction::Activate);
         assert_eq!(
             reads.get("ui.window.count"),
             Some(ReadValue::Text("3 ОКНА"))
         );
 
-        reads.apply("app-menu/window-3-close", &ControlAction::Activate);
-        reads.apply("app-menu/window-2-close", &ControlAction::Activate);
+        reads.apply("app-menu/window-3/close", &ControlAction::Activate);
+        reads.apply("app-menu/window-2/close", &ControlAction::Activate);
         assert_eq!(
             reads.get("ui.window.count"),
             Some(ReadValue::Text("1 ОКНО"))
@@ -1001,7 +1001,7 @@ mod tests {
     fn focusing_a_window_moves_the_module_grid_and_the_layout_hint() {
         let mut reads = MockReads::default();
 
-        reads.apply("app-menu/window-2", &ControlAction::Activate);
+        reads.apply("app-menu/window-2/focus", &ControlAction::Activate);
 
         assert_eq!(
             reads.get("ui.window.active@window=2"),
@@ -1028,7 +1028,7 @@ mod tests {
             Some(ReadValue::Bool(false))
         );
 
-        reads.apply("app-menu/module-ov", &ControlAction::Activate);
+        reads.apply("app-menu/module-ov/cell", &ControlAction::Activate);
         assert_eq!(
             reads.get("ui.module.on@module=ov"),
             Some(ReadValue::Bool(true))
@@ -1082,7 +1082,7 @@ mod tests {
             reads.get("ui.layout.selected@layout=1"),
             Some(ReadValue::Bool(true))
         );
-        reads.apply("app-menu/layout-2", &ControlAction::Activate);
+        reads.apply("app-menu/layout-2/apply", &ControlAction::Activate);
 
         assert_eq!(
             reads.get("ui.layout.selected@layout=1"),
@@ -1130,13 +1130,13 @@ mod tests {
             reads.get("gallery.menu.context@row=2"),
             Some(ReadValue::Bool(false))
         );
-        reads.apply("ctx/track-2", &ControlAction::SecondaryActivate);
+        reads.apply("ctx/track-2/row", &ControlAction::SecondaryActivate);
         assert_eq!(
             reads.get("gallery.menu.context@row=2"),
             Some(ReadValue::Bool(true))
         );
 
-        reads.apply("ctx/track-1", &ControlAction::SecondaryActivate);
+        reads.apply("ctx/track-1/row", &ControlAction::SecondaryActivate);
         assert_eq!(
             reads.get("gallery.menu.context@row=2"),
             Some(ReadValue::Bool(false))
@@ -1146,7 +1146,7 @@ mod tests {
             Some(ReadValue::Bool(true))
         );
 
-        reads.apply("ctx/track-1-menu", &ControlAction::Activate);
+        reads.apply("ctx/track-1/menu", &ControlAction::Activate);
         assert_eq!(
             reads.get("gallery.menu.context@row=1"),
             Some(ReadValue::Bool(false))
@@ -1157,7 +1157,7 @@ mod tests {
     fn a_primary_click_selects_a_track_without_opening_its_menu() {
         let mut reads = MockReads::default();
 
-        reads.apply("ctx/track-3", &ControlAction::Activate);
+        reads.apply("ctx/track-3/row", &ControlAction::Activate);
 
         assert_eq!(
             reads.get("gallery.menu.selected@row=3"),
@@ -1177,8 +1177,8 @@ mod tests {
     fn a_track_menu_action_closes_the_menu_and_reports_itself() {
         let mut reads = MockReads::default();
 
-        reads.apply("ctx/track-2", &ControlAction::SecondaryActivate);
-        reads.apply("ctx/track-2-deck-b", &ControlAction::Activate);
+        reads.apply("ctx/track-2/row", &ControlAction::SecondaryActivate);
+        reads.apply("ctx/track-2/deck-b", &ControlAction::Activate);
 
         assert_eq!(
             reads.get("gallery.menu.context@row=2"),
@@ -1189,8 +1189,8 @@ mod tests {
             Some(ReadValue::Text("ДЕКА B · 2"))
         );
 
-        reads.apply("ctx/track-4", &ControlAction::SecondaryActivate);
-        reads.apply("ctx/track-4-queue", &ControlAction::Activate);
+        reads.apply("ctx/track-4/row", &ControlAction::SecondaryActivate);
+        reads.apply("ctx/track-4/queue", &ControlAction::Activate);
         assert_eq!(
             reads.get("gallery.menu.action"),
             Some(ReadValue::Text("В ОЧЕРЕДЬ · 4"))

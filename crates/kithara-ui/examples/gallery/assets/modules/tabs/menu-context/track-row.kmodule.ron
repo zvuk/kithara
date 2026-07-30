@@ -1,0 +1,155 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-menu-context-track-row",
+    parameters: ["row"],
+    root: Popover(
+        id: "menu",
+        open: Model(id: "gallery.menu.context", with: { "row": "$row" }),
+        at: Pointer,
+        anchor: Pressable(
+            id: "row",
+            press: Command(id: "gallery.menu.select", with: { "row": "$row" }),
+            child: Row(
+                size: (w: Fill, h: Fixed(30.0)),
+                pad_x: 10.0,
+                gap: 8.0,
+                frame: (top: false, right: false, bottom: true, left: false),
+                frame_color: LineInner,
+                active: Model(id: "gallery.menu.selected", with: { "row": "$row" }),
+                active_background: BgSelect,
+                children: [
+                    Glyph(
+                        id: "icon",
+                        icon: Disc,
+                        style: Menu,
+                        color: Muted,
+                        active_color: Accent,
+                        active: Model(id: "gallery.menu.selected", with: { "row": "$row" }),
+                    ),
+                    Text(
+                        id: "title",
+                        size: (w: Fill, h: Fill),
+                        style: Mono,
+                        active_color: Text,
+                        read: Model(id: "gallery.menu.track", with: { "row": "$row" }),
+                        active: Model(id: "gallery.menu.selected", with: { "row": "$row" }),
+                    ),
+                    Text(id: "meta", style: MicroLabel, read: Model(id: "gallery.menu.bpm", with: { "row": "$row" })),
+                ],
+            ),
+        ),
+        content: Column(
+            id: "pop",
+            size: (w: Fixed(220.0), h: Shrink),
+            gap: 0.0,
+            children: [
+                Row(
+                    id: "pop-head",
+                    size: (w: Fill, h: Fixed(22.0)),
+                    pad_x: 10.0,
+                    gap: 8.0,
+                    frame: (top: false, right: false, bottom: true, left: false),
+                    frame_color: LinePop,
+                    children: [
+                        Text(
+                            id: "pop-title",
+                            size: (w: Fill, h: Fill),
+                            style: MicroLabel,
+                            label: "ТРЕК",
+                        ),
+                        Text(id: "pop-meta", style: MicroLabel, read: Model(id: "gallery.menu.bpm", with: { "row": "$row" })),
+                    ],
+                ),
+                Pressable(
+                    id: "deck-a",
+                    press: Command(id: "gallery.menu.load", with: { "deck": "a", "row": "$row" }),
+                    child: Row(
+                        size: (w: Fill, h: Fixed(26.0)),
+                        pad_x: 10.0,
+                        gap: 8.0,
+                        children: [
+                            Glyph(id: "deck-a-icon", icon: Play, style: Menu, color: Muted),
+                            Text(
+                                id: "deck-a-label",
+                                size: (w: Fill, h: Fill),
+                                style: Mono,
+                                label: "Загрузить в деку A",
+                            ),
+                            Text(id: "deck-a-hint", style: MicroLabel, label: "⌘1"),
+                        ],
+                    ),
+                ),
+                Pressable(
+                    id: "deck-b",
+                    press: Command(id: "gallery.menu.load", with: { "deck": "b", "row": "$row" }),
+                    child: Row(
+                        size: (w: Fill, h: Fixed(26.0)),
+                        pad_x: 10.0,
+                        gap: 8.0,
+                        children: [
+                            Glyph(id: "deck-b-icon", icon: PlayReverse, style: Menu, color: Muted),
+                            Text(
+                                id: "deck-b-label",
+                                size: (w: Fill, h: Fill),
+                                style: Mono,
+                                label: "Загрузить в деку B",
+                            ),
+                            Text(id: "deck-b-hint", style: MicroLabel, label: "⌘2"),
+                        ],
+                    ),
+                ),
+                Pressable(
+                    id: "queue",
+                    press: Command(id: "gallery.menu.queue", with: { "row": "$row" }),
+                    child: Row(
+                        size: (w: Fill, h: Fixed(26.0)),
+                        pad_x: 10.0,
+                        gap: 8.0,
+                        children: [
+                            Glyph(id: "queue-icon", icon: Playlist, style: Menu, color: Muted),
+                            Text(
+                                id: "queue-label",
+                                size: (w: Fill, h: Fill),
+                                style: Mono,
+                                label: "Добавить в очередь",
+                            ),
+                            Text(id: "queue-hint", style: MicroLabel, label: "⌘Q"),
+                        ],
+                    ),
+                ),
+                Row(
+                    id: "band",
+                    size: (w: Fill, h: Fixed(22.0)),
+                    pad_x: 10.0,
+                    gap: 0.0,
+                    background: BgFooter,
+                    frame: (top: true, right: false, bottom: true, left: false),
+                    frame_color: LineInner,
+                    children: [
+                        Text(
+                            id: "band-label",
+                            size: (w: Fill, h: Fill),
+                            style: MicroLabel,
+                            label: "ЭНЕРГИЯ",
+                        ),
+                    ],
+                ),
+                Row(
+                    id: "energy-row",
+                    size: (w: Fill, h: Fixed(26.0)),
+                    pad_x: 10.0,
+                    gap: 8.0,
+                    children: [
+                        Text(id: "energy-label", style: MicroLabel, label: "ПИК"),
+                        Meter(
+                            id: "energy",
+                            size: (w: Fill, h: Fixed(6.0)),
+                            read: Model(id: "gallery.menu.energy", with: { "row": "$row" }),
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ),
+)

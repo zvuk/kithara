@@ -220,13 +220,14 @@ impl MenuState {
         let Some(id) = path.strip_prefix("app-menu/") else {
             return false;
         };
-        if let Some(rest) = id.strip_prefix("window-") {
-            return self.window_row(rest);
+        let (instance, node) = id.split_once('/').unwrap_or((id, ""));
+        if let Some(number) = instance.strip_prefix("window-") {
+            return self.window_row(number, node);
         }
-        if let Some(key) = id.strip_prefix("module-") {
+        if let Some(key) = instance.strip_prefix("module-") {
             return self.toggle_module(key);
         }
-        if let Some(number) = id.strip_prefix("layout-") {
+        if let Some(number) = instance.strip_prefix("layout-") {
             return self.apply_layout(number);
         }
         match id {
@@ -248,13 +249,12 @@ impl MenuState {
         true
     }
 
-    fn window_row(&mut self, rest: &str) -> bool {
-        let (number, action) = rest.split_once('-').unwrap_or((rest, ""));
+    fn window_row(&mut self, number: &str, node: &str) -> bool {
         let Some(index) = row_index(number) else {
             return false;
         };
-        match action {
-            "" => self.focus(index),
+        match node {
+            "focus" => self.focus(index),
             "display" => self.cycle_display(index),
             "close" => self.close(index),
             _ => return false,
@@ -371,7 +371,7 @@ impl ContextState {
             return false;
         };
         match action {
-            "" => self.selected = row,
+            "row" => self.selected = row,
             "menu" => {
                 if self.open == Some(row) {
                     self.open = None;
@@ -386,7 +386,7 @@ impl ContextState {
     }
 
     pub(super) fn secondary(&mut self, path: &str) {
-        if let Some((row, "")) = track_address(path) {
+        if let Some((row, "row")) = track_address(path) {
             self.open = Some(row);
         }
     }
@@ -400,9 +400,9 @@ impl ContextState {
 
 fn track_address(path: &str) -> Option<(usize, &str)> {
     let rest = path.strip_prefix("ctx/")?.strip_prefix("track-")?;
-    let (number, action) = rest.split_once('-').unwrap_or((rest, ""));
+    let (number, node) = rest.split_once('/')?;
     let row = row_index(number).filter(|row| *row < MenuConsts::TRACKS.len())?;
-    Some((row, action))
+    Some((row, node))
 }
 
 fn row_index(number: &str) -> Option<usize> {

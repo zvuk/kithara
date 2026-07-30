@@ -121,6 +121,18 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("../../assets/modules/app-menu.kmodule.ron"),
     ),
     (
+        "modules/app-menu/layout-row.kmodule.ron",
+        include_str!("../../assets/modules/app-menu/layout-row.kmodule.ron"),
+    ),
+    (
+        "modules/app-menu/module-cell.kmodule.ron",
+        include_str!("../../assets/modules/app-menu/module-cell.kmodule.ron"),
+    ),
+    (
+        "modules/app-menu/window-row.kmodule.ron",
+        include_str!("../../assets/modules/app-menu/window-row.kmodule.ron"),
+    ),
+    (
         "modules/module-deck-micro.kmodule.ron",
         include_str!("assets/modules/module-deck-micro.kmodule.ron"),
     ),
@@ -223,6 +235,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/menu-context.kmodule.ron",
         include_str!("assets/modules/tabs/menu-context.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/menu-context/track-row.kmodule.ron",
+        include_str!("assets/modules/tabs/menu-context/track-row.kmodule.ron"),
     ),
     (
         "modules/tabs/menu-notes.kmodule.ron",
@@ -596,10 +612,10 @@ mod tests {
             found.popovers,
             [
                 ("app-menu/pop", "ui.menu.open"),
-                ("ctx/track-1-menu", "gallery.menu.context@row=1"),
-                ("ctx/track-2-menu", "gallery.menu.context@row=2"),
-                ("ctx/track-3-menu", "gallery.menu.context@row=3"),
-                ("ctx/track-4-menu", "gallery.menu.context@row=4"),
+                ("ctx/track-1/menu", "gallery.menu.context@row=1"),
+                ("ctx/track-2/menu", "gallery.menu.context@row=2"),
+                ("ctx/track-3/menu", "gallery.menu.context@row=3"),
+                ("ctx/track-4/menu", "gallery.menu.context@row=4"),
             ]
         );
 
@@ -612,10 +628,10 @@ mod tests {
         assert_eq!(
             track_one,
             [
-                "ctx/track-1",
-                "ctx/track-1-deck-a",
-                "ctx/track-1-deck-b",
-                "ctx/track-1-queue",
+                "ctx/track-1/row",
+                "ctx/track-1/deck-a",
+                "ctx/track-1/deck-b",
+                "ctx/track-1/queue",
             ]
         );
         assert!(found.pressables.contains(&"app-menu/burger"));

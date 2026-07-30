@@ -75,9 +75,9 @@ token name rather than by hex. It covers the fields that carry a token — `bg_p
 written list against the table rather than against the struct, so a new field takes a token row by
 review and never by the assert.
 
-`SkinDoc.menu` owns menu typography and the four menu icon sizes, and deliberately owns no row
-geometry. It holds one entry per type spec — family, weight, size, letter-spacing and the colour
-that spec carries by default — so a tone that differs from the default is named on the node and
+`SkinDoc.menu` owns the four menu icon sizes. Menu typography resolves through `SkinDoc.text`,
+which holds one entry per type spec — family, weight, size, letter-spacing and the colour that
+spec carries by default — so a tone that differs from the default is named on the node and
 mints no second entry. A `Dim` is a literal with no role indirection, so a `.kmodule.ron` cannot
 name a skin metric; menu row heights live in the markup, which is where the renderer reads them,
 and a second home in the skin would be a number nothing consults.
@@ -137,12 +137,13 @@ arguments and reads no skin section — which is what lets one surface carry two
 
 An `active` binding needs no `id`, and the shipped App Menu relies on that. `validate` requires an
 id only for a container that declares `write`, and `expand::machine::container_bindings` addresses
-an id-less container as its own module: its `ControlSite` path is the module-instance prefix, which
-every id-less sibling shares. That sharing is sound while the visitor body stays validation only —
-`validate::check_controls` spends the path on error context and keys nothing by it, and a container
-without `write` yields no `SurfaceSpec`, so no shared path reaches the compiled tree. Every binding
-resolves by its own scoped key and never by the node path; a visitor that kept state per
-`ControlSite.path` would need the id rule widened first.
+an id-less container as its own module: its `ControlSite` path is the enclosing prefix — the
+module instance, or the `Include` chain above it — which every id-less sibling shares. That
+sharing is sound while the visitor body stays validation only — `validate::check_controls` spends
+the path on error context and keys nothing by it, and a container without `write` yields no
+`SurfaceSpec`, so no shared path reaches the compiled tree. Every binding resolves by its own
+scoped key and never by the node path; a visitor that kept state per `ControlSite.path` would need
+the id rule widened first.
 
 `text_role` lives in `widgets/text.rs`, `glyph_tone` in `render/tree/atom.rs`, and `frame_tone` in
 `render/tree/geometry.rs` beside `active_tone`, the rule it routes through: `render/tree/mod.rs`
@@ -504,11 +505,18 @@ so the anchor's press cannot also fire. Because the two paths differ, the host's
 popover path is set-false and never a toggle, and the anchor's press stays the only toggle — which
 is what makes an outside press and Escape idempotent.
 
-`assets/modules/app-menu.kmodule.ron` is a shipped asset that `builtin::resolver()` deliberately
-does not answer for. Its window-manager endpoints — the window list, per-window module flags,
-saved layouts — are host state no crate owns, so the document must not become canonical preset
-surface the studio can resolve. Exactly one copy exists and every consumer reaches it with
+`assets/modules/app-menu.kmodule.ron` and the row templates it includes from
+`assets/modules/app-menu/` are shipped assets that `builtin::resolver()` deliberately does not
+answer for. Their window-manager endpoints — the window list, per-window module flags, saved
+layouts — are host state no crate owns, so the documents must not become canonical preset surface
+the studio can resolve. Exactly one copy of each exists and every consumer reaches it with
 `include_str!`.
+
+The window row, the module-grid cell and the saved-layout row are one template each, taken
+`$window`, `$module` or `$layout` times through `Include`. Each instance's control paths are
+`app-menu/<include id>/<node id>`, so the template's own ids stay plain. A `Glyph`'s `icon` is an
+`IconName`, and `expand::substitute` rewrites `String` fields only, so a row whose glyph differs
+from its siblings' is written out in full.
 
 ## Window Chrome Ownership
 
