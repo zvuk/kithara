@@ -93,7 +93,8 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
                     control.width(Length::FillPortion(fill)).into(),
                     self.frame.unwrap_or(self.skin.button.transport_sides),
                     (Length::Fill, Length::Fill),
-                    self.skin,
+                    self.skin.color(self.skin.divider.color),
+                    self.skin.divider.width,
                 )
             }
             ButtonStyle::MicroPrimary => control

@@ -63,13 +63,40 @@ pub(super) fn filled<'a>(
 pub(super) fn bordered<'a>(
     element: Element<'a, UiEvent>,
     frame: Option<FrameSides>,
+    tone: (ColorRole, f32),
     size: (Length, Length),
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
+    let (role, width) = tone;
     match frame {
-        Some(sides) => frame_overlay(element, sides, size, skin),
+        Some(sides) => frame_overlay(element, sides, size, skin.color(role), width),
         None => element,
     }
+}
+
+/// Selects between the role a node carries and the one it takes while its
+/// `active` binding reads true. An active node naming no active role keeps its
+/// base one.
+pub(super) fn active_tone(
+    base: Option<ColorRole>,
+    active: Option<ColorRole>,
+    on: bool,
+) -> Option<ColorRole> {
+    on.then_some(active).flatten().or(base)
+}
+
+/// Joins the frame colours a container declares to the palette. A node that
+/// names none takes the skin divider.
+pub(super) fn frame_tone(
+    frame_color: Option<ColorRole>,
+    active_frame_color: Option<ColorRole>,
+    active: bool,
+    skin: &Skin,
+) -> (ColorRole, f32) {
+    (
+        active_tone(frame_color, active_frame_color, active).unwrap_or(skin.divider.color),
+        skin.divider.width,
+    )
 }
 
 pub(super) fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length) {
@@ -83,7 +110,10 @@ pub(super) fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length)
 
 pub(super) fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpec> {
     let declared = match node {
-        ExpandedNode::Optional { child, .. } => return effective_size(child, skin),
+        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+            return effective_size(child, skin);
+        }
+        ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin),
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
         | ExpandedNode::Slot { size, .. }
@@ -130,14 +160,17 @@ pub(super) fn length_for(dim: Dim, intrinsic: Length) -> Length {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use iced::{Size, widget::Space};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
         builtin,
-        ids::{Interner, SourceUri},
-        module::AdaptivePolicy,
+        expand::Binding,
+        ids::{InternId, Interner, SourceUri},
+        module::{AdaptivePolicy, PopoverAt},
     };
 
     #[kithara::test]
@@ -202,6 +235,104 @@ mod tests {
                 length_for(skin.document().deck.time_size.w, Length::Fill),
                 length_for(skin.document().deck.time_size.h, Length::Fill)
             )
+        );
+    }
+
+    fn control(
+        interner: &mut Interner,
+        origin: &SourceUri,
+        name: &str,
+        size: SizeSpec,
+    ) -> ExpandedNode {
+        let id = interner.intern(name, origin).unwrap();
+        ExpandedNode::Control {
+            path: id,
+            id,
+            spec: ControlSpec::Time,
+            size: Some(size),
+            read: None,
+            write: None,
+            adaptive: AdaptivePolicy::default(),
+        }
+    }
+
+    fn model(id: InternId) -> Binding {
+        Binding::Model {
+            id,
+            key: id,
+            with: BTreeMap::new(),
+        }
+    }
+
+    #[kithara::test]
+    fn a_popover_measures_its_anchor_and_a_pressable_its_child() {
+        let origin = SourceUri("tree-test.ron".to_owned());
+        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
+        let mut interner = Interner::new(1024);
+        let anchor = SizeSpec::new(Dim::Fixed(36.0), Dim::Fixed(36.0));
+        let content = SizeSpec::new(Dim::Fixed(298.0), Dim::Fixed(400.0));
+        let popover = ExpandedNode::Popover {
+            path: interner.intern("menu", &origin).unwrap(),
+            open: model(interner.intern("ui.menu.open", &origin).unwrap()),
+            at: PopoverAt::Anchor,
+            anchor: Box::new(control(&mut interner, &origin, "burger", anchor)),
+            content: Box::new(control(&mut interner, &origin, "pop", content)),
+        };
+        let pressable = ExpandedNode::Pressable {
+            path: interner.intern("row", &origin).unwrap(),
+            press: model(interner.intern("ui.menu.toggle", &origin).unwrap()),
+            child: Box::new(control(&mut interner, &origin, "cell", content)),
+        };
+
+        assert_eq!(
+            effective_size(&popover, &skin),
+            Some(anchor),
+            "the content is laid out in the overlay and never in flow"
+        );
+        assert_eq!(effective_size(&pressable, &skin), Some(content));
+    }
+
+    #[kithara::test]
+    fn active_tone_takes_the_active_role_only_while_the_flag_is_set() {
+        let pair =
+            |active| active_tone(Some(ColorRole::LineInner), Some(ColorRole::Accent), active);
+
+        assert_eq!(pair(true), Some(ColorRole::Accent));
+        assert_eq!(pair(false), Some(ColorRole::LineInner));
+        assert_eq!(
+            active_tone(Some(ColorRole::LineHi), None, true),
+            Some(ColorRole::LineHi)
+        );
+        assert_eq!(active_tone(None, None, true), None);
+    }
+
+    #[kithara::test]
+    fn a_node_naming_no_frame_colour_takes_the_skin_divider() {
+        let skin = builtin::skin();
+
+        assert_eq!(
+            frame_tone(None, None, false, skin),
+            (skin.divider.color, skin.divider.width)
+        );
+    }
+
+    #[kithara::test]
+    fn a_declared_frame_pair_switches_on_the_active_flag() {
+        let skin = builtin::skin();
+        let pair = |active| {
+            frame_tone(
+                Some(ColorRole::LineInner),
+                Some(ColorRole::Accent),
+                active,
+                skin,
+            )
+        };
+
+        assert_eq!(pair(true), (ColorRole::Accent, skin.divider.width));
+        assert_eq!(pair(false), (ColorRole::LineInner, skin.divider.width));
+        assert_eq!(
+            frame_tone(Some(ColorRole::LineHi), None, true, skin),
+            (ColorRole::LineHi, skin.divider.width)
         );
     }
 

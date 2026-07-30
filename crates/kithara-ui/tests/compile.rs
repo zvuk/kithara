@@ -6,7 +6,7 @@ use kithara_ui::{
     compile::{CompiledNode, CompiledUi, compile},
     error::UiDocError,
     expand::{Binding, ControlSpec, ExpandedNode},
-    module::{ChromeStyle, TrackColumn},
+    module::{ChromeStyle, PopoverAt, TrackColumn},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     size::{Dim, SizeSpec},
     source::{Limits, MemResolver, UiConfig},
@@ -751,6 +751,16 @@ fn block_registry() -> common::TestRegistry {
         "ui.block.deck_hidden",
         EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
     );
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.menu.open",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "ui.menu.toggle",
+        EndpointDesc::new(ValueKind::Trigger),
+    );
     registry
 }
 
@@ -1154,6 +1164,223 @@ fn an_unresolved_parameter_in_a_layout_block_binding_is_rejected() {
         matches!(&error, UiDocError::UnresolvedParam { name, .. } if name == "deck"),
         "{error:?}"
     );
+}
+
+const POPOVER_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "app-menu",
+    root: Row(children: [
+        Popover(
+            id: "menu",
+            open: Model(id: "ui.menu.open"),
+            anchor: Pressable(
+                id: "burger",
+                press: Command(id: "ui.menu.toggle"),
+                child: Row(id: "burger-cell", size: (w: Fixed(36.0), h: Fill), children: [
+                    Glyph(id: "burger-icon", icon: Menu, style: MenuBurger, color: TextDim),
+                ]),
+            ),
+            content: Column(id: "pop", size: (w: Fixed(298.0), h: Shrink), children: [
+                Text(id: "brand", style: BrandSmall, label: "KITHARA"),
+                Optional(id: "modules", hidden: Model(id: "ui.block.hidden"),
+                    child: Text(id: "modules-label", style: MenuRowStrong, label: "MODULES")),
+            ]),
+        ),
+    ]))"#;
+
+#[kithara::test]
+fn a_popover_compiles_with_its_anchor_and_its_content_subtree() {
+    let resolver = block_resolver(POPOVER_MODULE);
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Row { children, .. } = &**root else {
+        panic!("expected a row");
+    };
+    let ExpandedNode::Popover {
+        path,
+        open,
+        anchor,
+        content,
+        ..
+    } = &children[0]
+    else {
+        panic!("expected a popover");
+    };
+
+    assert_eq!(ui.resolve(*path), "mixer/menu");
+    assert_eq!(ui.resolve(open.id()), "ui.menu.open");
+
+    let ExpandedNode::Pressable { path, press, child } = &**anchor else {
+        panic!("expected a pressable anchor");
+    };
+    assert_eq!(ui.resolve(*path), "mixer/burger");
+    assert_eq!(ui.resolve(press.id()), "ui.menu.toggle");
+    assert!(matches!(**child, ExpandedNode::Row { .. }));
+
+    let ExpandedNode::Column { children, .. } = &**content else {
+        panic!("expected the pop column");
+    };
+    assert!(matches!(children[1], ExpandedNode::Optional { .. }));
+}
+
+#[kithara::test]
+fn a_popover_carries_its_declared_geometry_into_the_compiled_tree() {
+    let pointer = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Row(children: [
+                Popover(id: "menu", open: Model(id: "ui.menu.open"), at: Pointer,
+                    anchor: Row(id: "row", children: []),
+                    content: Row(id: "pop", children: [])),
+            ]))"#,
+    );
+
+    for (resolver, want) in [
+        (block_resolver(POPOVER_MODULE), PopoverAt::Anchor),
+        (pointer, PopoverAt::Pointer),
+    ] {
+        let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+        let CompiledNode::Module { root, .. } = &ui.root else {
+            panic!("expected a module root");
+        };
+        let ExpandedNode::Row { children, .. } = &**root else {
+            panic!("expected a row");
+        };
+        let ExpandedNode::Popover { at, .. } = &children[0] else {
+            panic!("expected a popover");
+        };
+
+        assert_eq!(*at, want);
+    }
+}
+
+#[kithara::test]
+fn a_popover_open_endpoint_must_be_a_bool() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Row(children: [
+                Popover(id: "menu", open: Model(id: "deck.view.zoom"),
+                    anchor: Row(id: "burger", children: []),
+                    content: Row(id: "pop", children: [])),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
+            if expected == "Bool" && got == "Scalar" && path == "mixer/menu"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_popover_inside_another_popovers_content_is_rejected() {
+    let direct = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Row(children: [
+                Popover(id: "menu", open: Model(id: "ui.menu.open"),
+                    anchor: Row(id: "burger", children: []),
+                    content: Popover(id: "submenu", open: Model(id: "ui.menu.open"),
+                        anchor: Row(id: "sub-anchor", children: []),
+                        content: Row(id: "sub-pop", children: []))),
+            ]))"#,
+    );
+    let mut included = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Row(children: [
+                Popover(id: "menu", open: Model(id: "ui.menu.open"),
+                    anchor: Row(id: "burger", children: []),
+                    content: Include(id: "sub", source: "sub.kmodule.ron")),
+            ]))"#,
+    );
+    included.insert(
+        "sub.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "sub",
+            root: Popover(id: "submenu", open: Model(id: "ui.menu.open"),
+                anchor: Row(id: "sub-anchor", children: []),
+                content: Row(id: "sub-pop", children: [])))"#,
+    );
+
+    for (resolver, nested) in [(direct, "mixer/submenu"), (included, "mixer/sub/submenu")] {
+        let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::InvalidId { id, reason, .. }
+                if id == nested && reason.contains("popover")),
+            "{nested}: {error:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn a_pressable_press_endpoint_must_be_a_trigger() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Row(children: [
+                Pressable(id: "row", press: Parameter(id: "player.output.volume"),
+                    child: Row(id: "inner", children: [])),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
+            if expected == "Trigger" && got == "Scalar" && path == "mixer/row"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_popover_takes_the_size_of_its_anchor_alone() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Popover(id: "menu", open: Model(id: "ui.menu.open"),
+                anchor: Row(id: "burger", size: (w: Fixed(36.0), h: Fixed(36.0)), children: []),
+                content: Row(id: "pop", size: (w: Fixed(300.0), h: Fixed(400.0)), children: [])))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { size, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    assert_eq!(*size, SizeSpec::new(Dim::Fixed(36.0), Dim::Fixed(36.0)));
+}
+
+#[kithara::test]
+fn an_active_binding_on_a_row_or_a_glyph_must_be_a_bool() {
+    let cases = [
+        (
+            r#"Row(id: "row", active: Model(id: "deck.view.zoom"), children: [])"#,
+            "mixer/row",
+        ),
+        (
+            r#"Row(active: Model(id: "deck.view.zoom"), children: [])"#,
+            "mixer",
+        ),
+        (
+            r#"Glyph(id: "icon", icon: Menu, style: Menu, active: Model(id: "deck.view.zoom"))"#,
+            "mixer/icon",
+        ),
+    ];
+
+    for (node, at) in cases {
+        let resolver = block_resolver(&format!(
+            r#"(schema: "kithara.module", version: 1, id: "app-menu",
+                root: Column(children: [{node}]))"#
+        ));
+
+        let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::BindingType { expected, got, path, .. }
+                if expected == "Bool" && got == "Scalar" && path == at),
+            "{node}: {error:?}"
+        );
+    }
 }
 
 #[kithara::test]

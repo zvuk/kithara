@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     expand::{BlockSpec, ControlSpec, ExpandedNode},
-    module::{ButtonStyle, ChromeStyle, TextStyle},
+    module::{ButtonStyle, ChromeStyle, GlyphStyle, TextStyle},
     skin::{SkinDoc, WindowControlSkin},
 };
 
@@ -131,6 +131,10 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
     SizeSpec::new(Dim::from(width), Dim::from(height))
 }
 
+fn square(side: f32) -> SizeSpec {
+    SizeSpec::new(Dim::Fixed(side), Dim::Fixed(side))
+}
+
 /// Returns the intrinsic size for a typed control specification.
 #[must_use]
 pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
@@ -168,12 +172,35 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
             TextStyle::VisMeta | TextStyle::VisTitle => {
                 SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.header_height))
             }
-            _ => skin.text.size,
+            TextStyle::BrandSmall
+            | TextStyle::MenuRow
+            | TextStyle::MenuRowStrong
+            | TextStyle::MenuRowAccent
+            | TextStyle::MenuHint
+            | TextStyle::MenuHintAccent
+            | TextStyle::MenuSection
+            | TextStyle::MenuCount
+            | TextStyle::MenuCaption
+            | TextStyle::MenuList
+            | TextStyle::MenuCell => SizeSpec::new(Dim::Shrink, Dim::Fill),
+            TextStyle::Body
+            | TextStyle::Brand
+            | TextStyle::DeckLetter
+            | TextStyle::TrackTitle
+            | TextStyle::Telemetry
+            | TextStyle::MicroLabel
+            | TextStyle::Section => skin.text.size,
         },
-        ControlSpec::Glyph { .. } => SizeSpec::new(
-            Dim::Fixed(skin.nav.header_icon_size),
-            Dim::Fixed(skin.nav.header_height),
-        ),
+        ControlSpec::Glyph { style, .. } => match style {
+            GlyphStyle::Menu => square(skin.menu.icon_size),
+            GlyphStyle::MenuBurger => square(skin.menu.burger_icon_size),
+            GlyphStyle::MenuSmall => square(skin.menu.small_icon_size),
+            GlyphStyle::MenuCell => square(skin.menu.cell_icon_size),
+            GlyphStyle::Default | GlyphStyle::Vis => SizeSpec::new(
+                Dim::Fixed(skin.nav.header_icon_size),
+                Dim::Fixed(skin.nav.header_height),
+            ),
+        },
         ControlSpec::NavItem { .. } => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.nav.item_height)),
         ControlSpec::TabLarge { .. } => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tab_large.height)),
         ControlSpec::Button { style, .. } => match style {
@@ -229,6 +256,8 @@ pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
         ExpandedNode::Row { children, .. }
         | ExpandedNode::Column { children, .. }
         | ExpandedNode::Slot { children, .. } => children.iter().any(has_blocks),
+        ExpandedNode::Popover { anchor, .. } => has_blocks(anchor),
+        ExpandedNode::Pressable { child, .. } => has_blocks(child),
         ExpandedNode::Control { .. } => false,
     }
 }
@@ -258,7 +287,9 @@ pub(crate) fn visible<'a, N: BlockNode>(
 #[must_use]
 pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'_>) -> SizeSpec {
     let override_size = match node {
-        ExpandedNode::Optional { .. } => None,
+        ExpandedNode::Optional { .. }
+        | ExpandedNode::Popover { .. }
+        | ExpandedNode::Pressable { .. } => None,
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
         | ExpandedNode::Slot { size, .. }
@@ -269,7 +300,10 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
     }
 
     match node {
-        ExpandedNode::Optional { child, .. } => compute_size(child, skin, hidden),
+        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+            compute_size(child, skin, hidden)
+        }
+        ExpandedNode::Popover { anchor, .. } => compute_size(anchor, skin, hidden),
         ExpandedNode::Row {
             children,
             gap,
@@ -381,13 +415,16 @@ fn grow(dim: Dim, delta: f32) -> Dim {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
         builtin,
+        expand::Binding,
         ids::{Interner, SourceUri},
-        module::AdaptivePolicy,
+        module::{AdaptivePolicy, GlyphStyle, IconName, PopoverAt, TextAlign},
     };
 
     fn control(interner: &mut Interner, id: &str, size: SizeSpec) -> ExpandedNode {
@@ -418,6 +455,10 @@ mod tests {
             frame: None,
             background: None,
             background_alpha: None,
+            active: None,
+            active_background: None,
+            frame_color: None,
+            active_frame_color: None,
             surface: None,
             children,
         }
@@ -510,6 +551,10 @@ mod tests {
             frame: None,
             background: None,
             background_alpha: None,
+            active: None,
+            active_background: None,
+            frame_color: None,
+            active_frame_color: None,
             surface: None,
             children,
         };
@@ -549,6 +594,91 @@ mod tests {
         assert_eq!(
             control_size(&ControlSpec::Crossfader { ticks: true }, skin),
             skin.crossfader.size
+        );
+    }
+
+    #[kithara::test]
+    fn each_menu_glyph_style_takes_its_own_skin_icon_size() {
+        let skin = builtin::skin_doc();
+        let glyph = |style| {
+            control_size(
+                &ControlSpec::Glyph {
+                    icon: IconName::Menu,
+                    style,
+                    color: None,
+                    active_color: None,
+                    active: None,
+                    active_icon: None,
+                },
+                skin,
+            )
+        };
+
+        for (style, size) in [
+            (GlyphStyle::Menu, skin.menu.icon_size),
+            (GlyphStyle::MenuBurger, skin.menu.burger_icon_size),
+            (GlyphStyle::MenuSmall, skin.menu.small_icon_size),
+            (GlyphStyle::MenuCell, skin.menu.cell_icon_size),
+        ] {
+            assert_eq!(glyph(style), fixed(size, size), "{style:?}");
+        }
+    }
+
+    #[kithara::test]
+    fn a_menu_text_role_takes_its_height_from_the_row_that_holds_it() {
+        let skin = builtin::skin_doc();
+        let text = |style| {
+            control_size(
+                &ControlSpec::Text {
+                    style,
+                    label: None,
+                    active: None,
+                    align: TextAlign::Start,
+                },
+                skin,
+            )
+        };
+
+        for style in [
+            TextStyle::MenuRow,
+            TextStyle::MenuRowStrong,
+            TextStyle::MenuRowAccent,
+            TextStyle::MenuHint,
+            TextStyle::MenuHintAccent,
+            TextStyle::MenuSection,
+            TextStyle::MenuCount,
+            TextStyle::MenuCaption,
+            TextStyle::MenuList,
+            TextStyle::MenuCell,
+            TextStyle::BrandSmall,
+        ] {
+            assert_eq!(
+                text(style),
+                SizeSpec::new(Dim::Shrink, Dim::Fill),
+                "{style:?}"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_popover_is_the_size_of_its_anchor_and_its_content_never_counts() {
+        let mut interner = Interner::new(1024);
+        let origin = SourceUri("size-test.ron".to_owned());
+        let node = ExpandedNode::Popover {
+            path: interner.intern("menu", &origin).unwrap(),
+            open: Binding::Model {
+                id: interner.intern("ui.menu.open", &origin).unwrap(),
+                key: interner.intern("ui.menu.open", &origin).unwrap(),
+                with: BTreeMap::new(),
+            },
+            at: PopoverAt::Anchor,
+            anchor: Box::new(control(&mut interner, "burger", fixed(36.0, 36.0))),
+            content: Box::new(control(&mut interner, "pop", fixed(300.0, 400.0))),
+        };
+
+        assert_eq!(
+            compute_size(&node, builtin::skin_doc(), VISIBLE),
+            fixed(36.0, 36.0)
         );
     }
 

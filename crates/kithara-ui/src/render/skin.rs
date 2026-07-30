@@ -7,10 +7,10 @@ use crate::{
     skin::{
         ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, CrossfaderSkin,
         DeckSkin, DividerSkin, DragSkin, FaderSkin, FrameSkin, GlobalBarSkin, KnobSkin,
-        LayoutPreviewSkin, LayoutSkin, MeterSkin, NavSkin, ReadoutSkin, SegmentedSkin, SelectSkin,
-        SkinDoc, StatusDotSkin, SwatchSkin, TabLargeSkin, TelemetrySkin, TextInputSkin, TextSkin,
-        ToggleSkin, TrackListSkin, TreeSkin, VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin,
-        WindowSkin, parse_color,
+        LayoutPreviewSkin, LayoutSkin, MenuSkin, MeterSkin, NavSkin, PopSkin, ReadoutSkin,
+        SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin, TabLargeSkin, TelemetrySkin,
+        TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin, VisSkin, VuStereoSkin,
+        VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
     },
 };
 
@@ -37,6 +37,8 @@ pub struct Skin {
     pub nav: NavSkin,
     pub tab_large: TabLargeSkin,
     pub text: TextSkin,
+    pub menu: MenuSkin,
+    pub pop: PopSkin,
     pub segmented: SegmentedSkin,
     pub select: SelectSkin,
     pub status_dot: StatusDotSkin,
@@ -74,6 +76,8 @@ impl Skin {
                 line_dim: color(&document.palette.line_dim, origin)?,
                 line_inner: color(&document.palette.line_inner, origin)?,
                 line_soft: color(&document.palette.line_soft, origin)?,
+                line_hi: color(&document.palette.line_hi, origin)?,
+                line_pop: color(&document.palette.line_pop, origin)?,
                 text: color(&document.palette.text, origin)?,
                 text_dim: color(&document.palette.text_dim, origin)?,
                 muted: color(&document.palette.muted, origin)?,
@@ -86,6 +90,7 @@ impl Skin {
                 wave_low: color(&document.palette.wave_low, origin)?,
                 wave_mid: color(&document.palette.wave_mid, origin)?,
                 wave_high: color(&document.palette.wave_high, origin)?,
+                shadow: color(&document.palette.shadow, origin)?,
             },
             layout: document.layout,
             chrome: document.chrome,
@@ -104,6 +109,8 @@ impl Skin {
             nav: document.nav,
             tab_large: document.tab_large,
             text: document.text,
+            menu: document.menu,
+            pop: document.pop,
             segmented: document.segmented,
             select: document.select,
             status_dot: document.status_dot,
@@ -141,6 +148,8 @@ impl Skin {
             ColorRole::LineDim => self.palette.line_dim,
             ColorRole::LineInner => self.palette.line_inner,
             ColorRole::LineSoft => self.palette.line_soft,
+            ColorRole::LineHi => self.palette.line_hi,
+            ColorRole::LinePop => self.palette.line_pop,
             ColorRole::Text => self.palette.text,
             ColorRole::TextDim => self.palette.text_dim,
             ColorRole::Muted => self.palette.muted,
@@ -153,6 +162,7 @@ impl Skin {
             ColorRole::WaveLow => self.palette.wave_low,
             ColorRole::WaveMid => self.palette.wave_mid,
             ColorRole::WaveHigh => self.palette.wave_high,
+            ColorRole::Shadow => self.palette.shadow,
         }
     }
 

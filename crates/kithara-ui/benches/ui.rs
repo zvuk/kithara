@@ -397,6 +397,10 @@ fn row(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         frame: None,
         background: None,
         background_alpha: None,
+        active: None,
+        active_background: None,
+        frame_color: None,
+        active_frame_color: None,
         write: None,
         children,
     }

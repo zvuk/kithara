@@ -35,6 +35,8 @@ pub struct SkinDoc {
     pub nav: NavSkin,
     pub tab_large: TabLargeSkin,
     pub text: TextSkin,
+    pub menu: MenuSkin,
+    pub pop: PopSkin,
     pub segmented: SegmentedSkin,
     pub select: SelectSkin,
     pub status_dot: StatusDotSkin,
@@ -68,6 +70,8 @@ pub struct PaletteDoc {
     pub line_dim: String,
     pub line_inner: String,
     pub line_soft: String,
+    pub line_hi: String,
+    pub line_pop: String,
     pub text: String,
     pub text_dim: String,
     pub muted: String,
@@ -80,6 +84,7 @@ pub struct PaletteDoc {
     pub wave_low: String,
     pub wave_mid: String,
     pub wave_high: String,
+    pub shadow: String,
 }
 
 impl PaletteDoc {
@@ -96,6 +101,8 @@ impl PaletteDoc {
             &self.line_dim,
             &self.line_inner,
             &self.line_soft,
+            &self.line_hi,
+            &self.line_pop,
             &self.text,
             &self.text_dim,
             &self.muted,
@@ -108,6 +115,7 @@ impl PaletteDoc {
             &self.wave_low,
             &self.wave_mid,
             &self.wave_high,
+            &self.shadow,
         ] {
             parse_color(value, origin)?;
         }
@@ -129,6 +137,8 @@ pub enum ColorRole {
     LineDim,
     LineInner,
     LineSoft,
+    LineHi,
+    LinePop,
     Text,
     TextDim,
     Muted,
@@ -141,6 +151,7 @@ pub enum ColorRole {
     WaveLow,
     WaveMid,
     WaveHigh,
+    Shadow,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -575,6 +586,7 @@ pub struct TabLargeSkin {
 pub struct TextSkin {
     pub size: SizeSpec,
     pub brand: TextRoleSkin,
+    pub brand_small: TextRoleSkin,
     pub deck_letter: TextRoleSkin,
     /// Tone the deck letter takes while its `Text.active` binding reads true.
     pub deck_letter_active: ColorRole,
@@ -583,6 +595,55 @@ pub struct TextSkin {
     pub telemetry: TextRoleSkin,
     pub micro_label: TextRoleSkin,
     pub section: TextRoleSkin,
+}
+
+/// Menu typography and icon sizes. Row geometry lives in the markup.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct MenuSkin {
+    pub row: TextRoleSkin,
+    /// Tone `row` takes while its `Text.active` binding reads true.
+    pub row_active: ColorRole,
+    pub row_strong: TextRoleSkin,
+    pub row_accent: TextRoleSkin,
+    pub row_accent_active: ColorRole,
+    pub hint: TextRoleSkin,
+    pub hint_accent: TextRoleSkin,
+    pub section: TextRoleSkin,
+    pub count: TextRoleSkin,
+    pub caption: TextRoleSkin,
+    pub list: TextRoleSkin,
+    pub list_active: ColorRole,
+    pub cell: TextRoleSkin,
+    pub cell_active: ColorRole,
+    pub icon_size: f32,
+    pub burger_icon_size: f32,
+    pub small_icon_size: f32,
+    pub cell_icon_size: f32,
+}
+
+/// Pop-over chrome; the frame and the cap draw outward of the content column.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct PopSkin {
+    pub background: ColorRole,
+    pub frame: FrameSkin,
+    pub cap_height: f32,
+    pub cap_color: ColorRole,
+    pub shadow: ShadowSkin,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ShadowSkin {
+    pub color: ColorRole,
+    pub alpha: f32,
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -1042,5 +1103,109 @@ fn bad_color(origin: &SourceUri, value: &str) -> UiDocError {
     UiDocError::BadColor {
         origin: origin.clone(),
         value: value.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::builtin;
+
+    const fn mono(size: f32, spacing: f32, color: ColorRole) -> TextRoleSkin {
+        TextRoleSkin {
+            font: FontFamily::Mono,
+            weight: FontWeight::Normal,
+            size,
+            spacing,
+            color,
+        }
+    }
+
+    #[kithara::test]
+    fn palette_holds_exactly_the_declared_roles() {
+        assert_eq!(
+            builtin::skin_doc().palette,
+            PaletteDoc {
+                bg: "#12121f".to_owned(),
+                bg_deep: "#0b0b16".to_owned(),
+                bg_inset: "#15152a".to_owned(),
+                bg_panel: "#20203a".to_owned(),
+                bg_footer: "#1b1b32".to_owned(),
+                bg_panel_2: "#26264a".to_owned(),
+                bg_select: "#26264a".to_owned(),
+                line: "#3b3b67".to_owned(),
+                line_dim: "#242442".to_owned(),
+                line_inner: "#2a2a4c".to_owned(),
+                line_soft: "#2a2a4c".to_owned(),
+                line_hi: "#4a4a7a".to_owned(),
+                line_pop: "#2f2f57".to_owned(),
+                text: "#e6e6e6".to_owned(),
+                text_dim: "#a7aac2".to_owned(),
+                muted: "#6f7189".to_owned(),
+                accent: "#bb9442".to_owned(),
+                accent_strong: "#d6ad59".to_owned(),
+                accent_soft: "#bb94422e".to_owned(),
+                danger: "#e64d4d".to_owned(),
+                success: "#66cc66".to_owned(),
+                warning: "#e6b333".to_owned(),
+                wave_low: "#eb298c".to_owned(),
+                wave_mid: "#f2d129".to_owned(),
+                wave_high: "#2ec7eb".to_owned(),
+                shadow: "#000000".to_owned(),
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn menu_holds_exactly_the_declared_roles() {
+        assert_eq!(
+            builtin::skin_doc().menu,
+            MenuSkin {
+                row: mono(10.0, 0.0, ColorRole::TextDim),
+                row_active: ColorRole::Text,
+                row_strong: mono(10.0, 0.0, ColorRole::Text),
+                row_accent: mono(10.0, 0.0, ColorRole::Muted),
+                row_accent_active: ColorRole::Accent,
+                hint: mono(8.0, 0.04, ColorRole::Muted),
+                hint_accent: mono(8.0, 0.04, ColorRole::Accent),
+                section: mono(8.0, 0.16, ColorRole::Muted),
+                count: mono(8.0, 0.0, ColorRole::Muted),
+                caption: mono(7.0, 0.08, ColorRole::Muted),
+                list: mono(9.0, 0.0, ColorRole::TextDim),
+                list_active: ColorRole::Text,
+                cell: mono(8.0, 0.04, ColorRole::Muted),
+                cell_active: ColorRole::Text,
+                icon_size: 11.0,
+                burger_icon_size: 13.0,
+                small_icon_size: 10.0,
+                cell_icon_size: 9.0,
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn pop_holds_exactly_the_declared_chrome() {
+        assert_eq!(
+            builtin::skin_doc().pop,
+            PopSkin {
+                background: ColorRole::BgFooter,
+                frame: FrameSkin {
+                    radius: 0.0,
+                    border_width: 1.0,
+                    border: ColorRole::LineHi,
+                },
+                cap_height: 2.0,
+                cap_color: ColorRole::Accent,
+                shadow: ShadowSkin {
+                    color: ColorRole::Shadow,
+                    alpha: 0.6,
+                    offset_x: 0.0,
+                    offset_y: 16.0,
+                    blur: 40.0,
+                },
+            }
+        );
     }
 }

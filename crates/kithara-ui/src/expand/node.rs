@@ -6,8 +6,8 @@ use crate::{
     layout::FrameSides,
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, ScalarFormat, TextAlign, TextStyle,
-        Tone, TrackColumn, WaveStyle, WindowControlsStyle,
+        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAt, ScalarFormat, TextAlign,
+        TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
     },
     size::{BlockNode, SizeSpec},
     skin::ColorRole,
@@ -26,6 +26,10 @@ pub enum ExpandedNode {
         frame: Option<FrameSides>,
         background: Option<ColorRole>,
         background_alpha: Option<f32>,
+        active: Option<Binding>,
+        active_background: Option<ColorRole>,
+        frame_color: Option<ColorRole>,
+        active_frame_color: Option<ColorRole>,
         surface: Option<SurfaceSpec>,
         children: Vec<Self>,
     },
@@ -44,6 +48,20 @@ pub enum ExpandedNode {
     },
     Optional {
         block: BlockSpec,
+        child: Box<Self>,
+    },
+    /// `content` is laid out only inside the overlay, so the node's intrinsic
+    /// size is the anchor's alone.
+    Popover {
+        path: InternId,
+        open: Binding,
+        at: PopoverAt,
+        anchor: Box<Self>,
+        content: Box<Self>,
+    },
+    Pressable {
+        path: InternId,
+        press: Binding,
         child: Box<Self>,
     },
     Slot {
@@ -88,7 +106,11 @@ pub enum ControlSpec {
     },
     Glyph {
         icon: IconName,
+        active_icon: Option<IconName>,
         style: GlyphStyle,
+        color: Option<ColorRole>,
+        active_color: Option<ColorRole>,
+        active: Option<Binding>,
     },
     NavItem {
         label: InternId,

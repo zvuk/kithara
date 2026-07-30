@@ -3,8 +3,12 @@ use kithara_ui::{
     error::UiDocError,
     ids::SourceUri,
     layout::{FrameSides, LayoutNode, parse_layout},
-    module::{ChipStyle, ControlNode, IconName, Priority, TextStyle, Tone, parse_module},
+    module::{
+        ChipStyle, ControlNode, GlyphStyle, IconName, PopoverAt, Priority, TextStyle, Tone,
+        parse_module,
+    },
     size::{Dim, SizeSpec},
+    skin::ColorRole,
 };
 use ron::extensions::Extensions;
 
@@ -487,4 +491,223 @@ fn an_optional_block_wraps_exactly_one_child() {
 
     assert_eq!(id.0, "eq");
     assert!(matches!(**child, ControlNode::Row { .. }));
+}
+
+const POPOVER_MODULE: &str = r#"(
+    schema: "kithara.module",
+    version: 1,
+    id: "app-menu",
+    root: Row(
+        children: [
+            Popover(
+                id: "menu",
+                open: Model(id: "ui.menu.open"),
+                anchor: Pressable(
+                    id: "burger",
+                    press: Command(id: "ui.menu.toggle"),
+                    child: Row(
+                        id: "burger-cell",
+                        size: (w: Fixed(36.0), h: Fill),
+                        background: BgSelect,
+                        active: Model(id: "ui.menu.open"),
+                        active_background: BgPanel,
+                        frame_color: LineInner,
+                        active_frame_color: Accent,
+                        children: [
+                            Glyph(id: "burger-icon", icon: Menu, style: MenuBurger, color: TextDim),
+                        ],
+                    ),
+                ),
+                content: Column(
+                    id: "pop",
+                    size: (w: Fixed(298.0), h: Shrink),
+                    children: [
+                        Row(
+                            id: "header",
+                            children: [
+                                Text(id: "brand", style: BrandSmall, label: "KITHARA"),
+                                Text(id: "version", style: MenuCount, label: "2.4.1"),
+                            ],
+                        ),
+                        Pressable(
+                            id: "modules",
+                            press: Command(id: "ui.menu.toggle"),
+                            child: Row(
+                                id: "modules-row",
+                                children: [
+                                    Glyph(
+                                        id: "modules-caret",
+                                        icon: ChevronRight,
+                                        active_icon: ChevronDown,
+                                        style: Menu,
+                                        color: Muted,
+                                        active_color: Accent,
+                                        active: Model(id: "ui.menu.open"),
+                                    ),
+                                    Text(id: "modules-label", style: MenuRowStrong, label: "MODULES"),
+                                ],
+                            ),
+                        ),
+                    ],
+                ),
+            ),
+        ],
+    ),
+)"#;
+
+#[kithara::test]
+fn a_popover_with_a_pressable_anchor_roundtrips() {
+    let doc = parse_module(POPOVER_MODULE, &module_origin()).unwrap();
+    let printed = to_ron_pretty(&doc);
+    let reparsed = parse_module(&printed, &module_origin()).unwrap();
+
+    assert_eq!(doc, reparsed);
+    assert_eq!(printed, to_ron_pretty(&reparsed));
+}
+
+const POINTER_POPOVER_MODULE: &str = r#"(
+    schema: "kithara.module",
+    version: 1,
+    id: "context-menu",
+    root: Column(
+        children: [
+            Popover(
+                id: "row-1-menu",
+                open: Model(id: "library.menu.open", with: { "row": "1" }),
+                at: Pointer,
+                anchor: Pressable(
+                    id: "row-1",
+                    press: Command(id: "library.menu.select", with: { "row": "1" }),
+                    child: Row(id: "row-1-cell", size: (w: Fill, h: Fixed(30.0)), children: []),
+                ),
+                content: Column(
+                    id: "pop",
+                    size: (w: Fixed(180.0), h: Shrink),
+                    children: [
+                        Text(id: "play", style: MenuRowStrong, label: "PLAY"),
+                    ],
+                ),
+            ),
+        ],
+    ),
+)"#;
+
+#[kithara::test]
+fn a_popover_opening_at_the_pointer_roundtrips() {
+    let doc = parse_module(POINTER_POPOVER_MODULE, &module_origin()).unwrap();
+    let printed = to_ron_pretty(&doc);
+    let reparsed = parse_module(&printed, &module_origin()).unwrap();
+
+    assert_eq!(doc, reparsed);
+    assert_eq!(printed, to_ron_pretty(&reparsed));
+
+    let ControlNode::Column { children, .. } = &doc.root else {
+        panic!("expected column root");
+    };
+    let ControlNode::Popover { at, .. } = &children[0] else {
+        panic!("expected a popover");
+    };
+
+    assert_eq!(*at, PopoverAt::Pointer);
+}
+
+#[kithara::test]
+fn a_popover_carries_an_anchor_and_an_arbitrary_content_subtree() {
+    let doc = parse_module(POPOVER_MODULE, &module_origin()).unwrap();
+    let ControlNode::Row { children, .. } = &doc.root else {
+        panic!("expected row root");
+    };
+    let ControlNode::Popover {
+        id,
+        at,
+        anchor,
+        content,
+        ..
+    } = &children[0]
+    else {
+        panic!("expected a popover");
+    };
+
+    assert_eq!(id.0, "menu");
+    assert_eq!(
+        *at,
+        PopoverAt::Anchor,
+        "a popover that declares no geometry opens from its anchor"
+    );
+    let ControlNode::Pressable { id, child, .. } = &**anchor else {
+        panic!("expected a pressable anchor");
+    };
+    assert_eq!(id.0, "burger");
+    assert!(matches!(**child, ControlNode::Row { .. }));
+    assert!(matches!(**content, ControlNode::Column { .. }));
+}
+
+#[kithara::test]
+fn a_row_carries_its_active_tone_and_frame_roles() {
+    let doc = parse_module(POPOVER_MODULE, &module_origin()).unwrap();
+    let ControlNode::Row { children, .. } = &doc.root else {
+        panic!("expected row root");
+    };
+    let ControlNode::Popover { anchor, .. } = &children[0] else {
+        panic!("expected a popover");
+    };
+    let ControlNode::Pressable { child, .. } = &**anchor else {
+        panic!("expected a pressable anchor");
+    };
+    let ControlNode::Row {
+        active,
+        background,
+        active_background,
+        frame_color,
+        active_frame_color,
+        ..
+    } = &**child
+    else {
+        panic!("expected the burger cell");
+    };
+
+    assert!(active.is_some());
+    assert_eq!(*background, Some(ColorRole::BgSelect));
+    assert_eq!(*active_background, Some(ColorRole::BgPanel));
+    assert_eq!(*frame_color, Some(ColorRole::LineInner));
+    assert_eq!(*active_frame_color, Some(ColorRole::Accent));
+}
+
+#[kithara::test]
+fn a_glyph_carries_its_tones_its_active_flag_and_its_active_icon() {
+    let doc = parse_module(POPOVER_MODULE, &module_origin()).unwrap();
+    let ControlNode::Row { children, .. } = &doc.root else {
+        panic!("expected row root");
+    };
+    let ControlNode::Popover { content, .. } = &children[0] else {
+        panic!("expected a popover");
+    };
+    let ControlNode::Column { children, .. } = &**content else {
+        panic!("expected the pop column");
+    };
+    let ControlNode::Pressable { child, .. } = &children[1] else {
+        panic!("expected the modules row");
+    };
+    let ControlNode::Row { children, .. } = &**child else {
+        panic!("expected a row");
+    };
+    let ControlNode::Glyph {
+        icon,
+        active_icon,
+        style,
+        color,
+        active_color,
+        active,
+        ..
+    } = &children[0]
+    else {
+        panic!("expected the caret glyph");
+    };
+
+    assert_eq!(*icon, IconName::ChevronRight);
+    assert_eq!(*active_icon, Some(IconName::ChevronDown));
+    assert_eq!(*style, GlyphStyle::Menu);
+    assert_eq!(*color, Some(ColorRole::Muted));
+    assert_eq!(*active_color, Some(ColorRole::Accent));
+    assert!(active.is_some());
 }

@@ -1,3 +1,4 @@
+pub(crate) mod anchored;
 pub(crate) mod behavior;
 pub(crate) mod button;
 mod chrome;

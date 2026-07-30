@@ -2,6 +2,7 @@ use iced::Color;
 
 /// Resolved color palette consumed by renderers.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct RenderPalette {
     pub bg: Color,
     pub bg_deep: Color,
@@ -14,6 +15,8 @@ pub struct RenderPalette {
     pub line_dim: Color,
     pub line_inner: Color,
     pub line_soft: Color,
+    pub line_hi: Color,
+    pub line_pop: Color,
     pub text: Color,
     pub text_dim: Color,
     pub muted: Color,
@@ -26,4 +29,5 @@ pub struct RenderPalette {
     pub wave_low: Color,
     pub wave_mid: Color,
     pub wave_high: Color,
+    pub shadow: Color,
 }

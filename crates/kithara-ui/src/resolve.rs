@@ -91,8 +91,14 @@ fn walk_includes(
             }
             Ok(())
         }
-        ControlNode::Optional { child, .. } => {
+        ControlNode::Optional { child, .. } | ControlNode::Pressable { child, .. } => {
             walk_includes(resolver, origin, child, limits, set, stack, depth)
+        }
+        ControlNode::Popover {
+            anchor, content, ..
+        } => {
+            walk_includes(resolver, origin, anchor, limits, set, stack, depth)?;
+            walk_includes(resolver, origin, content, limits, set, stack, depth)
         }
         ControlNode::Include { source, .. } => {
             load_rec(

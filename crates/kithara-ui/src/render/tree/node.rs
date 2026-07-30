@@ -1,22 +1,26 @@
 use iced::{
     Alignment, Element, Length,
-    widget::{Column, Row, Space, Stack, container},
+    widget::{Column, Row, Space, Stack, container, mouse_area},
 };
 use num_traits::cast::AsPrimitive;
 
 use super::{
     control::render_control,
-    geometry::{Rendered, apply_size, bordered, content_size, effective_size, filled, padding},
+    geometry::{
+        Rendered, active_tone, apply_size, bordered, content_size, effective_size, filled,
+        frame_tone, padding,
+    },
     read::{read_flag, resolve},
+    size::{node_size, visible_children},
 };
 use crate::{
-    compile::{CompiledNode, CompiledUi, node_size, visible_children},
+    compile::{CompiledNode, CompiledUi},
     expand::{ExpandedNode, SurfaceSpec},
     layout::Axis,
     module::ChromeStyle,
     render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent},
     size::{Dim, Hidden, visible},
-    widgets::{DropZone, ModuleChrome, Widget, wheel::WheelSurface},
+    widgets::{DropZone, ModuleChrome, Widget, anchored::Anchored, wheel::WheelSurface},
 };
 
 pub(super) fn render_compiled<'a>(
@@ -166,36 +170,44 @@ fn render_node<'a>(
             frame,
             background,
             background_alpha,
+            active,
+            active_background,
+            frame_color,
+            active_frame_color,
             surface,
             ..
-        } => Rendered::leading(wheeled(
-            bordered(
-                filled(
-                    container(
-                        Row::with_children(
-                            visible(children, hidden)
-                                .map(|child| render_node(child, ui, reads, skin)),
+        } => {
+            let active = read_flag(active.as_ref(), reads, ui);
+            Rendered::leading(wheeled(
+                bordered(
+                    filled(
+                        container(
+                            Row::with_children(
+                                visible(children, hidden)
+                                    .map(|child| render_node(child, ui, reads, skin)),
+                            )
+                            .spacing(gap.unwrap_or(skin.layout.grid_gap))
+                            .align_y(Alignment::Center)
+                            .width(size.0)
+                            .height(size.1),
                         )
-                        .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                        .align_y(Alignment::Center)
+                        .padding(padding(*pad, *pad_x, *pad_y, skin))
                         .width(size.0)
                         .height(size.1),
-                    )
-                    .padding(padding(*pad, *pad_x, *pad_y, skin))
-                    .width(size.0)
-                    .height(size.1),
-                    *background,
-                    *background_alpha,
+                        active_tone(*background, *active_background, active),
+                        *background_alpha,
+                        skin,
+                    ),
+                    *frame,
+                    frame_tone(*frame_color, *active_frame_color, active, skin),
+                    size,
                     skin,
                 ),
-                *frame,
+                surface.as_ref(),
                 size,
-                skin,
-            ),
-            surface.as_ref(),
-            size,
-            ui,
-        )),
+                ui,
+            ))
+        }
         ExpandedNode::Column {
             children,
             gap,
@@ -216,7 +228,7 @@ fn render_node<'a>(
                                 .map(|child| render_node(child, ui, reads, skin)),
                         )
                         .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                        .align_x(Alignment::Center)
+                        .align_x(Alignment::Start)
                         .width(size.0),
                     )
                     .padding(padding(*pad, *pad_x, *pad_y, skin))
@@ -227,6 +239,7 @@ fn render_node<'a>(
                     skin,
                 ),
                 *frame,
+                frame_tone(None, None, false, skin),
                 size,
                 skin,
             ),
@@ -234,6 +247,40 @@ fn render_node<'a>(
             size,
             ui,
         )),
+        ExpandedNode::Popover {
+            path,
+            open,
+            at,
+            anchor,
+            content,
+        } => {
+            let open = read_flag(Some(open), reads, ui);
+            let content: Element<'a, UiEvent> = if open {
+                render_node(content, ui, reads, skin)
+            } else {
+                Space::new().into()
+            };
+            Rendered::leading(
+                Anchored::new(
+                    render_node(anchor, ui, reads, skin),
+                    content,
+                    open,
+                    *at,
+                    control_event(ui.resolve(*path), ControlAction::Activate),
+                    skin,
+                )
+                .into(),
+            )
+        }
+        ExpandedNode::Pressable { path, child, .. } => {
+            let path = ui.resolve(*path);
+            Rendered::leading(
+                mouse_area(render_node(child, ui, reads, skin))
+                    .on_press(control_event(path, ControlAction::Activate))
+                    .on_right_press(control_event(path, ControlAction::SecondaryActivate))
+                    .into(),
+            )
+        }
         ExpandedNode::Slot { children, .. } => Rendered::leading(
             container(
                 Column::with_children(
@@ -250,6 +297,15 @@ fn render_node<'a>(
         } => render_control(*path, spec, read.as_ref(), ui, reads, skin),
     };
     apply_size(rendered, effective_size(node, skin))
+}
+
+/// Addresses a node by its own path: a `Pressable` on both buttons, the
+/// popover's dismissal on the popover itself.
+fn control_event(path: &str, action: ControlAction) -> UiEvent {
+    UiEvent::Control {
+        path: path.to_owned(),
+        action,
+    }
 }
 
 fn split_length(dim: Dim, weight: f32, skin: &Skin) -> Length {

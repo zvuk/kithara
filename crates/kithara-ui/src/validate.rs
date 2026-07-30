@@ -266,6 +266,22 @@ fn walk_module(
             record_block(id, &here, origin, seen)?;
             walk_module(child, &here, origin, seen, Sibling::Only)
         }
+        ControlNode::Popover {
+            id,
+            anchor,
+            content,
+            ..
+        } => {
+            let here = path.push(format!("Popover({id})"));
+            record(&id.0, &here, origin, seen)?;
+            walk_module(anchor, &here, origin, seen, Sibling::Only)?;
+            walk_module(content, &here, origin, seen, Sibling::Only)
+        }
+        ControlNode::Pressable { id, child, .. } => {
+            let here = path.push(format!("Pressable({id})"));
+            record(&id.0, &here, origin, seen)?;
+            walk_module(child, &here, origin, seen, Sibling::Only)
+        }
         ControlNode::Slot { id, default, .. } => {
             let here = path.push(format!("Slot({id})"));
             record(&id.0, &here, origin, seen)?;
@@ -295,6 +311,8 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Column { .. }
         | ControlNode::Include { .. }
         | ControlNode::Optional { .. }
+        | ControlNode::Popover { .. }
+        | ControlNode::Pressable { .. }
         | ControlNode::Slot { .. } => None,
         ControlNode::DeckSummary { id, .. }
         | ControlNode::Brand { id, .. }
@@ -594,6 +612,8 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Readout { .. } => (Some(ValueKind::Text), None),
         ControlNode::ContextBar { .. } => (Some(ValueKind::Text), Some(ValueKind::Scalar)),
         ControlNode::Optional { .. } => (Some(BLOCK_HIDDEN), None),
+        ControlNode::Popover { .. } => (Some(ValueKind::Bool), None),
+        ControlNode::Pressable { .. } => (None, Some(ValueKind::Trigger)),
         ControlNode::Button { .. }
         | ControlNode::NavItem { .. }
         | ControlNode::TabLarge { .. }

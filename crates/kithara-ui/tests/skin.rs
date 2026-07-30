@@ -5,11 +5,123 @@ use kithara_ui::{
     error::UiDocError,
     ids::{DocId, SourceUri},
     size::{Dim, SizeSpec},
-    skin::{ColorRole, FontFamily, FontWeight, parse_skin},
+    skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin, parse_skin},
 };
+
+/// Design token name, hex, and the [`ColorRole`] that aliases it.
+const TOKENS: [(&str, &str, ColorRole); 22] = [
+    ("bg", "#12121f", ColorRole::Bg),
+    ("deep", "#0b0b16", ColorRole::BgDeep),
+    ("inset", "#15152a", ColorRole::BgInset),
+    ("panel", "#20203a", ColorRole::BgPanel),
+    ("panel2", "#1b1b32", ColorRole::BgFooter),
+    ("select", "#26264a", ColorRole::BgSelect),
+    ("line", "#3b3b67", ColorRole::Line),
+    ("lineDim", "#2a2a4c", ColorRole::LineInner),
+    ("lineHi", "#4a4a7a", ColorRole::LineHi),
+    ("linePop", "#2f2f57", ColorRole::LinePop),
+    ("text", "#e6e6e6", ColorRole::Text),
+    ("dim", "#a7aac2", ColorRole::TextDim),
+    ("muted", "#6f7189", ColorRole::Muted),
+    ("gold", "#bb9442", ColorRole::Accent),
+    ("goldHi", "#d6ad59", ColorRole::AccentStrong),
+    ("ok", "#66cc66", ColorRole::Success),
+    ("warn", "#e6b333", ColorRole::Warning),
+    ("alert", "#e64d4d", ColorRole::Danger),
+    ("waveLow", "#eb298c", ColorRole::WaveLow),
+    ("waveMid", "#f2d129", ColorRole::WaveMid),
+    ("waveHigh", "#2ec7eb", ColorRole::WaveHigh),
+    ("shadow", "#000000", ColorRole::Shadow),
+];
+
+type Role = (FontFamily, FontWeight, f32, f32, ColorRole);
 
 fn origin() -> SourceUri {
     SourceUri("kithara-dark.kskin.ron".to_owned())
+}
+
+const fn role(skin: TextRoleSkin) -> Role {
+    (skin.font, skin.weight, skin.size, skin.spacing, skin.color)
+}
+
+const fn mono(size: f32, spacing: f32, color: ColorRole) -> Role {
+    (FontFamily::Mono, FontWeight::Normal, size, spacing, color)
+}
+
+#[kithara::test]
+fn palette_carries_every_design_token() {
+    let document = parse_skin(builtin::DARK_SKIN, &origin()).unwrap();
+    let palette = &document.palette;
+    let values = [
+        palette.bg.as_str(),
+        palette.bg_deep.as_str(),
+        palette.bg_inset.as_str(),
+        palette.bg_panel.as_str(),
+        palette.bg_footer.as_str(),
+        palette.bg_select.as_str(),
+        palette.line.as_str(),
+        palette.line_inner.as_str(),
+        palette.line_hi.as_str(),
+        palette.line_pop.as_str(),
+        palette.text.as_str(),
+        palette.text_dim.as_str(),
+        palette.muted.as_str(),
+        palette.accent.as_str(),
+        palette.accent_strong.as_str(),
+        palette.success.as_str(),
+        palette.warning.as_str(),
+        palette.danger.as_str(),
+        palette.wave_low.as_str(),
+        palette.wave_mid.as_str(),
+        palette.wave_high.as_str(),
+        palette.shadow.as_str(),
+    ];
+
+    assert_eq!(values.len(), TOKENS.len());
+    for ((token, hex, alias), value) in TOKENS.into_iter().zip(values) {
+        assert_eq!(value, hex, "design token {token} / {alias:?}");
+    }
+}
+
+#[kithara::test]
+fn menu_skin_pins_the_design_canon() {
+    let menu = parse_skin(builtin::DARK_SKIN, &origin()).unwrap().menu;
+
+    assert_eq!(role(menu.row), mono(10.0, 0.0, ColorRole::TextDim));
+    assert_eq!(menu.row_active, ColorRole::Text);
+    assert_eq!(role(menu.row_strong), mono(10.0, 0.0, ColorRole::Text));
+    assert_eq!(role(menu.row_accent), mono(10.0, 0.0, ColorRole::Muted));
+    assert_eq!(menu.row_accent_active, ColorRole::Accent);
+    assert_eq!(role(menu.hint), mono(8.0, 0.04, ColorRole::Muted));
+    assert_eq!(role(menu.hint_accent), mono(8.0, 0.04, ColorRole::Accent));
+    assert_eq!(role(menu.section), mono(8.0, 0.16, ColorRole::Muted));
+    assert_eq!(role(menu.count), mono(8.0, 0.0, ColorRole::Muted));
+    assert_eq!(role(menu.caption), mono(7.0, 0.08, ColorRole::Muted));
+    assert_eq!(role(menu.list), mono(9.0, 0.0, ColorRole::TextDim));
+    assert_eq!(menu.list_active, ColorRole::Text);
+    assert_eq!(role(menu.cell), mono(8.0, 0.04, ColorRole::Muted));
+    assert_eq!(menu.cell_active, ColorRole::Text);
+    assert_eq!(menu.icon_size, 11.0);
+    assert_eq!(menu.burger_icon_size, 13.0);
+    assert_eq!(menu.small_icon_size, 10.0);
+    assert_eq!(menu.cell_icon_size, 9.0);
+}
+
+#[kithara::test]
+fn pop_skin_pins_the_design_canon() {
+    let pop = parse_skin(builtin::DARK_SKIN, &origin()).unwrap().pop;
+
+    assert_eq!(pop.background, ColorRole::BgFooter);
+    assert_eq!(pop.frame.radius, 0.0);
+    assert_eq!(pop.frame.border_width, 1.0);
+    assert_eq!(pop.frame.border, ColorRole::LineHi);
+    assert_eq!(pop.cap_height, 2.0);
+    assert_eq!(pop.cap_color, ColorRole::Accent);
+    assert_eq!(pop.shadow.color, ColorRole::Shadow);
+    assert_eq!(pop.shadow.alpha, 0.6);
+    assert_eq!(pop.shadow.offset_x, 0.0);
+    assert_eq!(pop.shadow.offset_y, 16.0);
+    assert_eq!(pop.shadow.blur, 40.0);
 }
 
 #[kithara::test]
@@ -115,6 +227,11 @@ fn builtin_skin_pins_the_design_canon() {
     assert_eq!(document.text.brand.font, FontFamily::Display);
     assert_eq!(document.text.brand.weight, FontWeight::Bold);
     assert_eq!(document.text.brand.spacing, 0.3);
+    assert_eq!(document.text.brand_small.font, FontFamily::Display);
+    assert_eq!(document.text.brand_small.weight, FontWeight::Bold);
+    assert_eq!(document.text.brand_small.size, 10.0);
+    assert_eq!(document.text.brand_small.spacing, 0.3);
+    assert_eq!(document.text.brand_small.color, ColorRole::Text);
     assert_eq!(document.text.deck_letter.size, 12.0);
     assert_eq!(document.text.track_title.weight, FontWeight::Medium);
     assert_eq!(document.text.track_title.size, 12.0);

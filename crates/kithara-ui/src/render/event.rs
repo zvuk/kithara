@@ -10,6 +10,8 @@ pub(crate) trait Widget<'a> {
 #[non_exhaustive]
 pub enum ControlAction {
     Activate,
+    /// A secondary click on the control's own path.
+    SecondaryActivate,
     SetScalar(f64),
     StepScalar(f32),
     SelectIndex(usize),
@@ -62,13 +64,6 @@ pub enum UiEvent {
     SelectPreset(String),
     ToggleModule(String),
     OpenSettings,
-    CloseSettings,
-    SettingsShowLayout,
-    SettingsShowModules,
-    SettingsSelectPreset(String),
-    SettingsToggleModule(String),
-    SettingsReset,
-    SettingsDone,
     LibraryQuery(String),
     Window(WindowCommand),
 }
