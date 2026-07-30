@@ -2,8 +2,8 @@ use iced::{Element, Length, alignment::Vertical, widget::container};
 
 use crate::{
     module::TextStyle,
-    render::{ReadValue, Skin, UiEvent, typography::styled_text},
-    skin::TextRoleSkin,
+    render::{ReadValue, Skin, UiEvent, tree::active_tone, typography::styled_text},
+    skin::{ColorRole, TextRoleSkin},
     widgets::Widget,
 };
 
@@ -12,6 +12,8 @@ pub(crate) struct Text<'value, 'data, 'skin> {
     style: TextStyle,
     value: Option<&'value ReadValue<'data>>,
     label: Option<&'data str>,
+    color: Option<ColorRole>,
+    active_color: Option<ColorRole>,
     active: bool,
     skin: &'skin Skin,
 }
@@ -25,7 +27,13 @@ impl<'a> Widget<'a> for Text<'_, '_, '_> {
         let Some(value) = value else {
             return iced::widget::Space::new().into();
         };
-        let role = text_role(self.style, self.active, self.skin);
+        let role = text_role(
+            self.style,
+            self.color,
+            self.active_color,
+            self.active,
+            self.skin,
+        );
         let content = if self.style == TextStyle::MicroLabel {
             value.to_uppercase()
         } else {
@@ -45,10 +53,14 @@ impl<'a> Widget<'a> for Text<'_, '_, '_> {
     }
 }
 
-/// Joins a text style to its skin entry. A role that declares an active colour
-/// takes it while the node's `active` binding reads true.
-fn text_role(style: TextStyle, active: bool, skin: &Skin) -> TextRoleSkin {
-    let (role, active_color) = match style {
+fn text_role(
+    style: TextStyle,
+    color: Option<ColorRole>,
+    active_color: Option<ColorRole>,
+    active: bool,
+    skin: &Skin,
+) -> TextRoleSkin {
+    let (role, skin_active) = match style {
         TextStyle::Body => (skin.text.body, None),
         TextStyle::Brand => (skin.text.brand, None),
         TextStyle::BrandSmall => (skin.text.brand_small, None),
@@ -57,23 +69,18 @@ fn text_role(style: TextStyle, active: bool, skin: &Skin) -> TextRoleSkin {
         TextStyle::Telemetry => (skin.text.telemetry, None),
         TextStyle::MicroLabel => (skin.text.micro_label, None),
         TextStyle::Section => (skin.text.section, None),
-        TextStyle::MenuRow => (skin.menu.row, Some(skin.menu.row_active)),
-        TextStyle::MenuRowStrong => (skin.menu.row_strong, None),
-        TextStyle::MenuRowAccent => (skin.menu.row_accent, Some(skin.menu.row_accent_active)),
+        TextStyle::MenuRow => (skin.menu.row, None),
         TextStyle::MenuHint => (skin.menu.hint, None),
-        TextStyle::MenuHintAccent => (skin.menu.hint_accent, None),
         TextStyle::MenuSection => (skin.menu.section, None),
         TextStyle::MenuCount => (skin.menu.count, None),
         TextStyle::MenuCaption => (skin.menu.caption, None),
-        TextStyle::MenuList => (skin.menu.list, Some(skin.menu.list_active)),
-        TextStyle::MenuCell => (skin.menu.cell, Some(skin.menu.cell_active)),
         TextStyle::VisFooter | TextStyle::VisMeta => (skin.vis.meta, None),
         TextStyle::VisTitle => (skin.vis.title, None),
     };
-    active
-        .then_some(active_color)
-        .flatten()
-        .map_or(role, |color| TextRoleSkin { color, ..role })
+    TextRoleSkin {
+        color: active_tone(color, active_color.or(skin_active), active).unwrap_or(role.color),
+        ..role
+    }
 }
 
 #[cfg(test)]
@@ -81,7 +88,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::builtin;
+    use crate::{builtin, skin::ColorRole};
 
     #[kithara::test]
     fn every_text_style_resolves_to_its_own_skin_role() {
@@ -97,59 +104,125 @@ mod tests {
             (TextStyle::MicroLabel, skin.text.micro_label),
             (TextStyle::Section, skin.text.section),
             (TextStyle::MenuRow, skin.menu.row),
-            (TextStyle::MenuRowStrong, skin.menu.row_strong),
-            (TextStyle::MenuRowAccent, skin.menu.row_accent),
             (TextStyle::MenuHint, skin.menu.hint),
-            (TextStyle::MenuHintAccent, skin.menu.hint_accent),
             (TextStyle::MenuSection, skin.menu.section),
             (TextStyle::MenuCount, skin.menu.count),
             (TextStyle::MenuCaption, skin.menu.caption),
-            (TextStyle::MenuList, skin.menu.list),
-            (TextStyle::MenuCell, skin.menu.cell),
             (TextStyle::VisFooter, skin.vis.meta),
             (TextStyle::VisMeta, skin.vis.meta),
             (TextStyle::VisTitle, skin.vis.title),
         ] {
-            assert_eq!(text_role(style, false, skin), role, "{style:?}");
+            assert_eq!(text_role(style, None, None, false, skin), role, "{style:?}");
         }
+    }
+
+    #[kithara::test]
+    fn a_node_colour_stands_in_for_the_one_the_role_carries() {
+        let skin = builtin::skin();
+
+        assert_eq!(
+            text_role(TextStyle::MenuRow, Some(ColorRole::Text), None, false, skin),
+            TextRoleSkin {
+                color: ColorRole::Text,
+                ..skin.menu.row
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn a_node_switches_between_the_two_colours_it_names() {
+        let skin = builtin::skin();
+        let role = |active| {
+            text_role(
+                TextStyle::MenuRow,
+                Some(ColorRole::Muted),
+                Some(ColorRole::Accent),
+                active,
+                skin,
+            )
+        };
+
+        assert_eq!(
+            role(true),
+            TextRoleSkin {
+                color: ColorRole::Accent,
+                ..skin.menu.row
+            }
+        );
+        assert_eq!(
+            role(false),
+            TextRoleSkin {
+                color: ColorRole::Muted,
+                ..skin.menu.row
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn an_active_node_naming_one_colour_keeps_it() {
+        let skin = builtin::skin();
+
+        assert_eq!(
+            text_role(
+                TextStyle::MenuHint,
+                Some(ColorRole::Accent),
+                None,
+                true,
+                skin
+            ),
+            TextRoleSkin {
+                color: ColorRole::Accent,
+                ..skin.menu.hint
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn the_deck_letter_takes_the_active_colour_its_skin_entry_declares() {
+        let skin = builtin::skin();
+        let base = text_role(TextStyle::DeckLetter, None, None, false, skin);
+
+        assert_eq!(base, skin.text.deck_letter);
+        assert_eq!(
+            text_role(TextStyle::DeckLetter, None, None, true, skin),
+            TextRoleSkin {
+                color: skin.text.deck_letter_active,
+                ..base
+            }
+        );
+        assert_eq!(
+            text_role(
+                TextStyle::DeckLetter,
+                None,
+                Some(ColorRole::Warning),
+                true,
+                skin
+            ),
+            TextRoleSkin {
+                color: ColorRole::Warning,
+                ..base
+            }
+        );
     }
 
     #[kithara::test]
     fn brand_small_resolves_under_text_and_never_under_menu() {
         let skin = builtin::skin();
-        let role = text_role(TextStyle::BrandSmall, false, skin);
+        let role = text_role(TextStyle::BrandSmall, None, None, false, skin);
 
         assert_eq!(role, skin.text.brand_small);
-        assert_eq!(text_role(TextStyle::BrandSmall, true, skin), role);
+        assert_eq!(
+            text_role(TextStyle::BrandSmall, None, None, true, skin),
+            role
+        );
         assert_ne!(
             role.font, skin.menu.row.font,
-            "every menu role shares one family, and the brand pair is not in it"
+            "the menu family is Mono and the brand pair is Display"
         );
     }
 
     #[kithara::test]
-    fn a_role_takes_the_active_colour_its_skin_entry_declares() {
-        let skin = builtin::skin();
-
-        for (style, color) in [
-            (TextStyle::DeckLetter, skin.text.deck_letter_active),
-            (TextStyle::MenuRow, skin.menu.row_active),
-            (TextStyle::MenuRowAccent, skin.menu.row_accent_active),
-            (TextStyle::MenuList, skin.menu.list_active),
-            (TextStyle::MenuCell, skin.menu.cell_active),
-        ] {
-            let base = text_role(style, false, skin);
-
-            assert_eq!(
-                text_role(style, true, skin),
-                TextRoleSkin { color, ..base },
-                "{style:?}"
-            );
-        }
-    }
-
-    #[kithara::test]
-    fn a_role_declaring_no_active_colour_ignores_the_flag() {
+    fn a_style_declaring_no_active_colour_ignores_the_flag() {
         let skin = builtin::skin();
 
         for style in [
@@ -159,9 +232,8 @@ mod tests {
             TextStyle::Telemetry,
             TextStyle::MicroLabel,
             TextStyle::Section,
-            TextStyle::MenuRowStrong,
+            TextStyle::MenuRow,
             TextStyle::MenuHint,
-            TextStyle::MenuHintAccent,
             TextStyle::MenuSection,
             TextStyle::MenuCount,
             TextStyle::MenuCaption,
@@ -170,8 +242,8 @@ mod tests {
             TextStyle::VisTitle,
         ] {
             assert_eq!(
-                text_role(style, true, skin),
-                text_role(style, false, skin),
+                text_role(style, None, None, true, skin),
+                text_role(style, None, None, false, skin),
                 "{style:?}"
             );
         }

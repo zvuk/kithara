@@ -87,13 +87,10 @@ pub enum ControlNode {
         background: Option<ColorRole>,
         #[serde(default)]
         background_alpha: Option<f32>,
-        /// Boolean binding that switches the fill and the hairlines to their
-        /// active tones.
         #[serde(default)]
         active: Option<BindingRef>,
         #[serde(default)]
         active_background: Option<ColorRole>,
-        /// Hairline tone; absent leaves the sides to the skin divider.
         #[serde(default)]
         frame_color: Option<ColorRole>,
         #[serde(default)]
@@ -146,7 +143,6 @@ pub enum ControlNode {
     Popover {
         id: NodeId,
         open: BindingRef,
-        /// Which geometry the surface opens from.
         #[serde(default)]
         at: PopoverAt,
         anchor: Box<Self>,
@@ -288,7 +284,10 @@ pub enum ControlNode {
         /// Where the glyphs sit inside the node's box.
         #[serde(default)]
         align: TextAlign,
-        /// Boolean binding that switches the style to its active tone.
+        #[serde(default)]
+        color: Option<ColorRole>,
+        #[serde(default)]
+        active_color: Option<ColorRole>,
         #[serde(default)]
         active: Option<BindingRef>,
     },
@@ -303,7 +302,6 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
         icon: IconName,
-        /// Icon drawn instead of `icon` while `active` reads true.
         #[serde(default)]
         active_icon: Option<IconName>,
         #[serde(default)]
@@ -312,7 +310,6 @@ pub enum ControlNode {
         color: Option<ColorRole>,
         #[serde(default)]
         active_color: Option<ColorRole>,
-        /// Boolean binding that switches to the active icon and tone.
         #[serde(default)]
         active: Option<BindingRef>,
     },
@@ -851,15 +848,10 @@ pub enum TextStyle {
     MicroLabel,
     Section,
     MenuRow,
-    MenuRowStrong,
-    MenuRowAccent,
     MenuHint,
-    MenuHintAccent,
     MenuSection,
     MenuCount,
     MenuCaption,
-    MenuList,
-    MenuCell,
     VisFooter,
     VisMeta,
     VisTitle,

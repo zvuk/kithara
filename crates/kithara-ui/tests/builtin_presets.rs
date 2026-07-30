@@ -4,11 +4,12 @@ use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
     compile::{CompiledNode, compile},
+    error::UiDocError,
     expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
     layout::Axis,
     module::{IconName, WaveStyle},
     size::Dim,
-    source::UiConfig,
+    source::{SourceResolver, UiConfig},
 };
 
 #[kithara::test]
@@ -214,4 +215,16 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
         global_size.h.min() + deck_size.h.min() + library_size.h.min()
     );
     assert_eq!(ui.size, *size);
+}
+
+#[kithara::test]
+fn the_app_menu_is_a_shipped_asset_outside_builtin_preset_surface() {
+    let error = builtin::resolver()
+        .load(None, "modules/app-menu.kmodule.ron")
+        .unwrap_err();
+
+    assert!(
+        matches!(error, UiDocError::NotFound { ref rel, .. } if rel == "modules/app-menu.kmodule.ron"),
+        "{error}"
+    );
 }

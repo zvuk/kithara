@@ -42,14 +42,9 @@ pub(crate) fn check_layout_instances(
     )
 }
 
-/// Whether the position a node occupies is one its parent iterates over. A
-/// block is hidden by being skipped there, so a block anywhere else could
-/// never be hidden at all.
 #[derive(Clone, Copy, PartialEq)]
 enum Sibling {
-    /// One of several children a container lays out.
     Among,
-    /// A document root or a wrapper's single child; no parent iterates it.
     Only,
 }
 
@@ -110,9 +105,6 @@ fn walk_layout(
     }
 }
 
-/// A block address is composed from every id enclosing it, so the read-key
-/// separator `.` and the scope separator `@` are barred over the whole chain,
-/// not only over the block's own id.
 pub(crate) fn check_block_path(path: &str, origin: &SourceUri) -> Result<(), UiDocError> {
     let reason = if path.contains('.') {
         "block address must not contain '.'"
@@ -534,7 +526,6 @@ pub(crate) fn check_module_footer(
     )
 }
 
-/// Kind every optional block reads through its `hidden` binding.
 const BLOCK_HIDDEN: ValueKind = ValueKind::Bool;
 
 pub(crate) fn check_layout_block(

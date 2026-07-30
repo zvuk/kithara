@@ -255,7 +255,6 @@ pub(super) fn glyph(
         .view()
 }
 
-/// Icon side, in logical pixels, for the style the node declares.
 fn glyph_size(style: GlyphStyle, skin: &Skin) -> f32 {
     match style {
         GlyphStyle::Default => skin.nav.header_icon_size,
@@ -267,7 +266,6 @@ fn glyph_size(style: GlyphStyle, skin: &Skin) -> f32 {
     }
 }
 
-/// Tone a style carries when the node names no colour of its own.
 fn glyph_base(style: GlyphStyle, skin: &Skin) -> Color {
     match style {
         GlyphStyle::Vis => skin.color(skin.vis.icon_color),
@@ -279,8 +277,6 @@ fn glyph_base(style: GlyphStyle, skin: &Skin) -> Color {
     }
 }
 
-/// Joins the colour pair a glyph declares to the palette. `None` leaves the
-/// tone to the style.
 fn glyph_tone(
     color: Option<ColorRole>,
     active_color: Option<ColorRole>,

@@ -8,4 +8,5 @@ mod read;
 mod size;
 mod window;
 
+pub(crate) use geometry::active_tone;
 pub use window::render;

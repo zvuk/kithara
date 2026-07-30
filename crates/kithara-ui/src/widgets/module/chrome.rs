@@ -408,8 +408,6 @@ fn panel_style(background: Color) -> ContainerStyle {
     ContainerStyle::default().background(Background::Color(background))
 }
 
-/// Border overlay for a container: hairlines on the requested sides, in the
-/// colour and width the caller selected.
 pub(crate) fn frame_overlay<'a, Message>(
     content: Element<'a, Message>,
     sides: FrameSides,

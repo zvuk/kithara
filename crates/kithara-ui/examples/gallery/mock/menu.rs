@@ -54,8 +54,6 @@ struct MenuTrack {
     energy: f64,
 }
 
-/// Single-valued group axis. `Win` is the seed and is not reachable again:
-/// the design gives it no control and renders it exactly like `None`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MenuGroup {
     Win,

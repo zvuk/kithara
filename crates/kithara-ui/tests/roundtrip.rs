@@ -544,7 +544,14 @@ const POPOVER_MODULE: &str = r#"(
                                         active_color: Accent,
                                         active: Model(id: "ui.menu.open"),
                                     ),
-                                    Text(id: "modules-label", style: MenuRowStrong, label: "MODULES"),
+                                    Text(
+                                        id: "modules-label",
+                                        style: MenuRow,
+                                        color: Muted,
+                                        active_color: Text,
+                                        label: "MODULES",
+                                        active: Model(id: "ui.menu.open"),
+                                    ),
                                 ],
                             ),
                         ),
@@ -584,7 +591,7 @@ const POINTER_POPOVER_MODULE: &str = r#"(
                     id: "pop",
                     size: (w: Fixed(180.0), h: Shrink),
                     children: [
-                        Text(id: "play", style: MenuRowStrong, label: "PLAY"),
+                        Text(id: "play", style: MenuRow, color: Text, label: "PLAY"),
                     ],
                 ),
             ),
@@ -674,7 +681,7 @@ fn a_row_carries_its_active_tone_and_frame_roles() {
 }
 
 #[kithara::test]
-fn a_glyph_carries_its_tones_its_active_flag_and_its_active_icon() {
+fn a_glyph_and_a_text_carry_the_tones_flags_and_icons_they_name() {
     let doc = parse_module(POPOVER_MODULE, &module_origin()).unwrap();
     let ControlNode::Row { children, .. } = &doc.root else {
         panic!("expected row root");
@@ -709,5 +716,21 @@ fn a_glyph_carries_its_tones_its_active_flag_and_its_active_icon() {
     assert_eq!(*style, GlyphStyle::Menu);
     assert_eq!(*color, Some(ColorRole::Muted));
     assert_eq!(*active_color, Some(ColorRole::Accent));
+    assert!(active.is_some());
+
+    let ControlNode::Text {
+        style,
+        color,
+        active_color,
+        active,
+        ..
+    } = &children[1]
+    else {
+        panic!("expected the modules label");
+    };
+
+    assert_eq!(*style, TextStyle::MenuRow);
+    assert_eq!(*color, Some(ColorRole::Muted));
+    assert_eq!(*active_color, Some(ColorRole::Text));
     assert!(active.is_some());
 }

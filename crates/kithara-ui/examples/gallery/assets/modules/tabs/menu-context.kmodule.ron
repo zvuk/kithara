@@ -46,6 +46,7 @@
                                         id: "track-1-title",
                                         size: (w: Fill, h: Fill),
                                         style: MenuRow,
+                                        active_color: Text,
                                         read: Model(id: "gallery.menu.track", with: { "row": "1" }),
                                         active: Model(id: "gallery.menu.selected", with: { "row": "1" }),
                                     ),
@@ -155,7 +156,7 @@
                                     pad_x: 10.0,
                                     gap: 8.0,
                                     children: [
-                                        Text(id: "track-1-energy-label", style: MenuCell, label: "ПИК"),
+                                        Text(id: "track-1-energy-label", style: MenuHint, label: "ПИК"),
                                         Meter(
                                             id: "track-1-energy",
                                             size: (w: Fill, h: Fixed(6.0)),
@@ -194,6 +195,7 @@
                                         id: "track-2-title",
                                         size: (w: Fill, h: Fill),
                                         style: MenuRow,
+                                        active_color: Text,
                                         read: Model(id: "gallery.menu.track", with: { "row": "2" }),
                                         active: Model(id: "gallery.menu.selected", with: { "row": "2" }),
                                     ),
@@ -303,7 +305,7 @@
                                     pad_x: 10.0,
                                     gap: 8.0,
                                     children: [
-                                        Text(id: "track-2-energy-label", style: MenuCell, label: "ПИК"),
+                                        Text(id: "track-2-energy-label", style: MenuHint, label: "ПИК"),
                                         Meter(
                                             id: "track-2-energy",
                                             size: (w: Fill, h: Fixed(6.0)),
@@ -342,6 +344,7 @@
                                         id: "track-3-title",
                                         size: (w: Fill, h: Fill),
                                         style: MenuRow,
+                                        active_color: Text,
                                         read: Model(id: "gallery.menu.track", with: { "row": "3" }),
                                         active: Model(id: "gallery.menu.selected", with: { "row": "3" }),
                                     ),
@@ -451,7 +454,7 @@
                                     pad_x: 10.0,
                                     gap: 8.0,
                                     children: [
-                                        Text(id: "track-3-energy-label", style: MenuCell, label: "ПИК"),
+                                        Text(id: "track-3-energy-label", style: MenuHint, label: "ПИК"),
                                         Meter(
                                             id: "track-3-energy",
                                             size: (w: Fill, h: Fixed(6.0)),
@@ -490,6 +493,7 @@
                                         id: "track-4-title",
                                         size: (w: Fill, h: Fill),
                                         style: MenuRow,
+                                        active_color: Text,
                                         read: Model(id: "gallery.menu.track", with: { "row": "4" }),
                                         active: Model(id: "gallery.menu.selected", with: { "row": "4" }),
                                     ),
@@ -599,7 +603,7 @@
                                     pad_x: 10.0,
                                     gap: 8.0,
                                     children: [
-                                        Text(id: "track-4-energy-label", style: MenuCell, label: "ПИК"),
+                                        Text(id: "track-4-energy-label", style: MenuHint, label: "ПИК"),
                                         Meter(
                                             id: "track-4-energy",
                                             size: (w: Fill, h: Fixed(6.0)),
@@ -625,7 +629,7 @@
                         style: MenuSection,
                         label: "ПОСЛЕДНЕЕ ДЕЙСТВИЕ",
                     ),
-                    Text(id: "status-value", style: MenuHintAccent, read: Model(id: "gallery.menu.action")),
+                    Text(id: "status-value", style: MenuHint, color: Accent, read: Model(id: "gallery.menu.action")),
                 ],
             ),
         ],

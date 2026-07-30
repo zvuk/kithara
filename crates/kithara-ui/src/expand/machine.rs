@@ -11,10 +11,7 @@ use super::{
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
-    module::{
-        AdaptivePolicy, BindingRef, ControlNode, PopoverAt, TextAlign, TextStyle, TrackColumn,
-        WaveStyle,
-    },
+    module::{AdaptivePolicy, BindingRef, ControlNode, PopoverAt, TrackColumn, WaveStyle},
     resolve::ModuleSet,
     size::SizeSpec,
     validate,
@@ -196,23 +193,6 @@ fn title_bar_spec(
 ) -> Result<ControlSpec, UiDocError> {
     Ok(ControlSpec::TitleBar {
         label: intern_text(context, machine.interner, label, path, &context.origin)?,
-    })
-}
-
-fn text_spec(
-    context: &Context<'_>,
-    interner: &mut Interner,
-    style: TextStyle,
-    label: Option<&str>,
-    active: Option<&BindingRef>,
-    align: TextAlign,
-    path: &str,
-) -> Result<ControlSpec, UiDocError> {
-    Ok(ControlSpec::Text {
-        style,
-        label: intern_optional_text(context, interner, label, path, &context.origin)?,
-        active: intern_optional_binding(interner, active, &context.origin)?,
-        align,
     })
 }
 
@@ -458,16 +438,17 @@ fn control_spec(
             style,
             label,
             align,
+            color,
+            active_color,
             ..
-        } => text_spec(
-            context,
-            machine.interner,
-            *style,
-            label.as_deref(),
-            extra.active.as_ref(),
-            *align,
-            path,
-        )?,
+        } => ControlSpec::Text {
+            style: *style,
+            label: optional_text(context, machine, label.as_deref(), path)?,
+            color: *color,
+            active_color: *active_color,
+            active: optional_binding(context, machine, extra.active.as_ref())?,
+            align: *align,
+        },
         ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
             icon: *icon,
@@ -613,8 +594,6 @@ fn track_list_spec(
     })
 }
 
-/// The wheel surface a container declares and the Bool that switches its
-/// active tones, both validated on the container's own path.
 fn container_bindings(
     context: &Context<'_>,
     node: &ControlNode,
@@ -663,9 +642,6 @@ fn container_bindings(
     Ok((surface, active))
 }
 
-/// The wrapper is charged and validated like any addressed node; its child is
-/// expanded whatever the block currently reads, so visibility stays a render
-/// concern.
 fn expand_optional(
     context: &Context<'_>,
     node: &ControlNode,
@@ -702,8 +678,6 @@ fn expand_optional(
     })
 }
 
-/// The anchor is walked in flow; the content is walked with the submenu guard
-/// raised, so a popover anywhere below it is rejected.
 fn expand_popover(
     context: &Context<'_>,
     node: &ControlNode,

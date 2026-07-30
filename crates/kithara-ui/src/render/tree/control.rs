@@ -68,6 +68,8 @@ pub(super) fn render_control<'a>(
         ControlSpec::Text {
             style,
             label,
+            color,
+            active_color,
             active,
             align: declared,
         } => {
@@ -76,6 +78,8 @@ pub(super) fn render_control<'a>(
                 .style(*style)
                 .maybe_value(value)
                 .maybe_label(label.map(|id| ui.resolve(id)))
+                .maybe_color(*color)
+                .maybe_active_color(*active_color)
                 .active(read_flag(active.as_ref(), reads, ui))
                 .skin(skin)
                 .build()

@@ -174,15 +174,10 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
             }
             TextStyle::BrandSmall
             | TextStyle::MenuRow
-            | TextStyle::MenuRowStrong
-            | TextStyle::MenuRowAccent
             | TextStyle::MenuHint
-            | TextStyle::MenuHintAccent
             | TextStyle::MenuSection
             | TextStyle::MenuCount
-            | TextStyle::MenuCaption
-            | TextStyle::MenuList
-            | TextStyle::MenuCell => SizeSpec::new(Dim::Shrink, Dim::Fill),
+            | TextStyle::MenuCaption => SizeSpec::new(Dim::Shrink, Dim::Fill),
             TextStyle::Body
             | TextStyle::Brand
             | TextStyle::DeckLetter
@@ -242,14 +237,10 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
     }
 }
 
-/// Answers whether an optional block is hidden in the snapshot being sized.
 pub(crate) type Hidden<'a> = &'a dyn Fn(&BlockSpec) -> bool;
 
-/// Every block below `node` reads as visible.
 pub(crate) const VISIBLE: Hidden<'static> = &|_| false;
 
-/// Reports whether any optional block sits below `node`, and so whether its
-/// size can change with the visibility snapshot.
 pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
     match node {
         ExpandedNode::Optional { .. } => true,
@@ -262,8 +253,6 @@ pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
     }
 }
 
-/// A node that may be an optional block, whatever stage of the pipeline it
-/// belongs to. One implementation per node type, one filter over both.
 pub(crate) trait BlockNode {
     fn block(&self) -> Option<&BlockSpec>;
 }
@@ -272,8 +261,6 @@ pub(crate) fn is_hidden<N: BlockNode>(node: &N, hidden: Hidden<'_>) -> bool {
     node.block().is_some_and(hidden)
 }
 
-/// The children a parent lays out: a hidden block occupies no slot, so it is
-/// skipped rather than sized to zero.
 pub(crate) fn visible<'a, N: BlockNode>(
     children: &'a [N],
     hidden: Hidden<'a>,
@@ -632,6 +619,8 @@ mod tests {
                 &ControlSpec::Text {
                     style,
                     label: None,
+                    color: None,
+                    active_color: None,
                     active: None,
                     align: TextAlign::Start,
                 },
@@ -641,15 +630,10 @@ mod tests {
 
         for style in [
             TextStyle::MenuRow,
-            TextStyle::MenuRowStrong,
-            TextStyle::MenuRowAccent,
             TextStyle::MenuHint,
-            TextStyle::MenuHintAccent,
             TextStyle::MenuSection,
             TextStyle::MenuCount,
             TextStyle::MenuCaption,
-            TextStyle::MenuList,
-            TextStyle::MenuCell,
             TextStyle::BrandSmall,
         ] {
             assert_eq!(

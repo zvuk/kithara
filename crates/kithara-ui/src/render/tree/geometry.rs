@@ -74,10 +74,7 @@ pub(super) fn bordered<'a>(
     }
 }
 
-/// Selects between the role a node carries and the one it takes while its
-/// `active` binding reads true. An active node naming no active role keeps its
-/// base one.
-pub(super) fn active_tone(
+pub(crate) fn active_tone(
     base: Option<ColorRole>,
     active: Option<ColorRole>,
     on: bool,
@@ -85,8 +82,6 @@ pub(super) fn active_tone(
     on.then_some(active).flatten().or(base)
 }
 
-/// Joins the frame colours a container declares to the palette. A node that
-/// names none takes the skin divider.
 pub(super) fn frame_tone(
     frame_color: Option<ColorRole>,
     active_frame_color: Option<ColorRole>,

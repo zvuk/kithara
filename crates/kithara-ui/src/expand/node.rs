@@ -101,6 +101,8 @@ pub enum ControlSpec {
     Text {
         style: TextStyle,
         label: Option<InternId>,
+        color: Option<ColorRole>,
+        active_color: Option<ColorRole>,
         active: Option<Binding>,
         align: TextAlign,
     },

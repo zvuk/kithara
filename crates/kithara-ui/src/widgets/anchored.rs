@@ -13,12 +13,8 @@ use iced::{
 
 use crate::{module::PopoverAt, render::Skin, skin::PopSkin};
 
-/// The surface hangs this far past the anchor's left edge, so the content
-/// column it frames starts flush with the anchor.
 const OVERHANG: f32 = 1.0;
 
-/// A floating surface anchored to a node laid out in flow. The anchor owns the
-/// intrinsic size; the content is laid out only inside the overlay.
 pub(crate) struct Anchored<'a, Message> {
     anchor: Element<'a, Message>,
     content: Element<'a, Message>,
@@ -48,7 +44,6 @@ impl<'a, Message> Anchored<'a, Message> {
     }
 }
 
-/// Frame, cap and shadow the widget paints outward of the content column.
 #[derive(Clone, Copy)]
 struct PopChrome {
     background: Color,
@@ -84,7 +79,6 @@ impl PopChrome {
         }
     }
 
-    /// Where the content column sits inside the surface.
     fn offset(self) -> Vector {
         Vector::new(self.border.width, self.border.width + self.cap_height)
     }
@@ -113,9 +107,6 @@ fn open_point(at: PopoverAt, latched: Option<Point>, translation: Vector) -> Opt
     }
 }
 
-/// Puts the surface below `pointer`, or below the anchor when there is none,
-/// flipping above when the room below runs out, and keeps it inside the
-/// viewport on both axes.
 fn place(anchor: Rectangle, pointer: Option<Point>, surface: Size, viewport: Size) -> Rectangle {
     let from = pointer.map_or(anchor, |point| Rectangle::new(point, Size::ZERO));
     let below = from.y + from.height;
@@ -341,8 +332,6 @@ where
     }
 }
 
-/// The floating half. Its layout node is the whole surface; the content column
-/// is its single child, inset by the chrome.
 struct Popover<'a, 'b, Message> {
     content: &'b mut Element<'a, Message>,
     tree: &'b mut Tree,
@@ -482,7 +471,6 @@ mod tests {
         }
     }
 
-    /// A full-width list row: the anchor a context menu must not open from.
     const fn row(x: f32, y: f32) -> Rectangle {
         Rectangle {
             x,

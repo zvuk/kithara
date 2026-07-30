@@ -49,8 +49,6 @@ pub enum CompiledNode {
         axis: Axis,
         children: Vec<(f32, Self)>,
         size: SizeSpec,
-        /// An optional block sits below, so `size` holds only while every one
-        /// of them reads visible.
         blocks: bool,
     },
     Optional {
@@ -71,14 +69,11 @@ pub enum CompiledNode {
         collapsed: InternId,
         root: Box<ExpandedNode>,
         size: SizeSpec,
-        /// An optional block sits below, so `size` holds only while every one
-        /// of them reads visible.
         blocks: bool,
     },
 }
 
 impl CompiledNode {
-    /// Whether this node's recorded `size` can change with the snapshot.
     pub(crate) const fn blocks(&self) -> bool {
         match self {
             Self::Split { blocks, .. } | Self::Module { blocks, .. } => *blocks,
@@ -270,7 +265,6 @@ pub(crate) fn module_size(
     with_module_chrome(compute_size(root, skin, hidden), chrome, skin)
 }
 
-/// A layout declares no parameters, so every `$name` it writes is unresolvable.
 fn no_args() -> BTreeMap<String, String> {
     BTreeMap::new()
 }

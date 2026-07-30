@@ -10,7 +10,6 @@ pub(crate) trait Widget<'a> {
 #[non_exhaustive]
 pub enum ControlAction {
     Activate,
-    /// A secondary click on the control's own path.
     SecondaryActivate,
     SetScalar(f64),
     StepScalar(f32),

@@ -76,9 +76,11 @@ written list against the table rather than against the struct, so a new field ta
 review and never by the assert.
 
 `SkinDoc.menu` owns menu typography and the four menu icon sizes, and deliberately owns no row
-geometry. A `Dim` is a literal with no role indirection, so a `.kmodule.ron` cannot name a skin
-metric; menu row heights live in the markup, which is where the renderer reads them, and a second
-home in the skin would be a number nothing consults.
+geometry. It holds one entry per type spec — family, weight, size, letter-spacing and the colour
+that spec carries by default — so a tone that differs from the default is named on the node and
+mints no second entry. A `Dim` is a literal with no role indirection, so a `.kmodule.ron` cannot
+name a skin metric; menu row heights live in the markup, which is where the renderer reads them,
+and a second home in the skin would be a number nothing consults.
 
 A frame a document declares is a `Canvas` stacked over the container's background, which is what
 lets one node draw a hairline on chosen sides in a colour of its own; the background underneath it
@@ -114,20 +116,18 @@ absent read means inactive. `Text` renders the content its `read` binding or `la
 
 `render/tree/geometry.rs::active_tone` is the single selection rule: the active role when the node
 is active and declares one, otherwise the base role. A node that binds `active` while naming no
-active role therefore keeps its base tone instead of dropping to a style default.
+active role therefore keeps its base tone.
 
-A text role takes its active colour from the skin rather than from the document.
-`widgets/text.rs::text_role` is the one `TextStyle` to `TextRoleSkin` join, and a role switches
-tone exactly when its skin entry declares an active colour — `text.deck_letter_active`, which
-marks the focused deck, and the `<role>_active` fields `SkinDoc.menu` declares beside their roles.
-A role that declares none ignores `active`. The match carries no wildcard arm, so a new role must
-be given a skin entry rather than silently inherit one.
+A `Text` and a `Glyph` each name their own `ColorRole` pair through `color` and `active_color`,
+selecting among palette roles the way `Row.background` does, while the skin keeps every metric and
+the palette stays the single colour vocabulary. A node that names no colour takes the one its skin
+entry carries. `Glyph` sizing stays skin-owned through `GlyphStyle`, and `active_icon` switches the
+glyph itself, which is how one caret is one node with one path and one style declaration.
 
-A `Glyph` names its own `ColorRole` pair through `color` and `active_color` while its size stays
-skin-owned through `GlyphStyle`: the node selects among palette roles exactly as `Row.background`
-does, so `SkinDoc` keeps every metric and the palette stays the single colour vocabulary.
-`active_icon` switches the glyph itself, which is how one caret is one node with one path and one
-style declaration rather than two mutually hidden ones.
+`widgets/text.rs::text_role` is the one `TextStyle` to `TextRoleSkin` join, and it feeds
+`active_tone` the node's pair with the skin entry's active colour behind it —
+`text.deck_letter_active`, which marks the focused deck. The match carries no wildcard arm, so a
+new style must be given a skin entry.
 
 `Row` alone carries `active`, `active_background`, `frame_color` and `active_frame_color`;
 `Column` carries none of them, because nothing declares them on a column and a pop-over's frame

@@ -5,9 +5,6 @@ use crate::{
     skin::SkinDoc,
 };
 
-/// Intrinsic size of a compiled node under a visibility snapshot. A subtree
-/// that carries no optional block returns the size recorded for it at compile
-/// time.
 pub(super) fn node_size(node: &CompiledNode, skin: &SkinDoc, hidden: Hidden<'_>) -> SizeSpec {
     match node {
         CompiledNode::Optional { child, .. } => node_size(child, skin, hidden),
@@ -24,7 +21,6 @@ pub(super) fn node_size(node: &CompiledNode, skin: &SkinDoc, hidden: Hidden<'_>)
     }
 }
 
-/// The split children a layout lays out; a hidden block claims no share.
 pub(super) fn visible_children<'a>(
     children: &'a [(f32, CompiledNode)],
     hidden: Hidden<'a>,

@@ -7,9 +7,6 @@ use crate::{
     module::BindingRef,
 };
 
-/// Resolves one `$name` against the parameters in scope. `$$name` escapes a
-/// literal `$name`. A layout declares no parameters and so substitutes an
-/// empty set, where every `$name` is a document error.
 pub(crate) fn substitute(
     args: &BTreeMap<String, String>,
     origin: &SourceUri,
