@@ -80,8 +80,14 @@ features = []
 [test.net_backends.apple]
 features = ["kithara-integration-tests/apple-net"]
 
+# `kithara-ui/render` is named here, not in `[test] features`: the base list
+# reaches every lane, and the `-p kithara-integration-tests` lanes reject a
+# feature of a package they do not depend on. Only the `--workspace` lanes run
+# the render-gated kithara-ui test binaries, and `kithara-app`'s default `gui`
+# already turns the feature on, so naming it costs no build.
 [test.lanes.workspace]
 program = "cargo"
+default_features = ["kithara-ui/render"]
 prefix_args = [
   "nextest",
   "run",
@@ -94,6 +100,7 @@ prefix_args = [
 
 [test.lanes.cached]
 program = "cargo"
+default_features = ["kithara-ui/render"]
 prefix_args = [
   "nextest",
   "run",

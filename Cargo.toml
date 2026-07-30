@@ -290,7 +290,6 @@ hotpath = "0.19.1"
 
 # UI frameworks
 iced = { version = "0.14", features = ["tokio", "svg", "canvas"] }
-iced_aw = { version = "0.14.1", default-features = false, features = ["tabs", "tab_bar", "selection_list"] }
 
 # FFI
 jni = "0.22"
