@@ -8,6 +8,7 @@ use crate::{
     error::UiDocError,
     ids::{DocId, EndpointId, NodeId, SourceUri},
     layout::FrameSides,
+    param::Param,
     size::SizeSpec,
     skin::ColorRole,
 };
@@ -301,9 +302,9 @@ pub enum ControlNode {
         write: Option<BindingRef>,
         #[serde(default)]
         adaptive: AdaptivePolicy,
-        icon: IconName,
+        icon: Param<IconName>,
         #[serde(default)]
-        active_icon: Option<IconName>,
+        active_icon: Option<Param<IconName>>,
         #[serde(default)]
         style: GlyphStyle,
         #[serde(default)]
@@ -324,7 +325,7 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
         label: String,
-        icon: IconName,
+        icon: Param<IconName>,
     },
     TabLarge {
         id: NodeId,
@@ -350,7 +351,7 @@ pub enum ControlNode {
         adaptive: AdaptivePolicy,
         label: String,
         #[serde(default)]
-        icon: Option<IconName>,
+        icon: Option<Param<IconName>>,
         #[serde(default)]
         active_label: Option<String>,
         #[serde(default)]

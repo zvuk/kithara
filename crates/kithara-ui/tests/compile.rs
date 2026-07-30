@@ -6,7 +6,7 @@ use kithara_ui::{
     compile::{CompiledNode, CompiledUi, compile},
     error::UiDocError,
     expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
-    module::{ChromeStyle, PopoverAt, TrackColumn},
+    module::{ChromeStyle, IconName, PopoverAt, TrackColumn},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     size::{Dim, SizeSpec},
     source::{Limits, MemResolver, UiConfig},
@@ -1435,5 +1435,181 @@ fn an_escaped_dollar_in_a_layout_block_binding_stays_a_literal() {
     assert_eq!(
         ui.resolve(block.hidden.key),
         "ui.block.deck_hidden@deck=$deck"
+    );
+}
+
+fn glyph_resolver(row: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "menu.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "menu",
+            root: Module(instance: "menu", source: "menu.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "menu.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "menu",
+            root: Row(children: [
+                Include(id: "one", source: "row.kmodule.ron", with: { "glyph": "Monitor" }),
+                Include(id: "two", source: "row.kmodule.ron", with: { "glyph": "Disc" }),
+            ]))"#,
+    );
+    resolver.insert("row.kmodule.ron", row);
+    resolver
+}
+
+fn compile_glyphs(resolver: &MemResolver) -> Result<CompiledUi, UiDocError> {
+    compile(
+        "menu.klayout.ron",
+        resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+}
+
+fn glyph_icons(ui: &CompiledUi) -> Vec<IconName> {
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Row { children, .. } = &**root else {
+        panic!("expected a row root");
+    };
+    children
+        .iter()
+        .map(|child| {
+            let ExpandedNode::Control {
+                spec: ControlSpec::Glyph { icon, .. },
+                ..
+            } = child
+            else {
+                panic!("expected a glyph");
+            };
+            *icon
+        })
+        .collect()
+}
+
+#[kithara::test]
+fn one_template_carries_a_different_glyph_per_include() {
+    let ui = compile_glyphs(&glyph_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "row", parameters: ["glyph"],
+            root: Glyph(id: "icon", icon: "$glyph"))"#,
+    ))
+    .unwrap();
+
+    assert_eq!(glyph_icons(&ui), [IconName::Monitor, IconName::Disc]);
+}
+
+#[kithara::test]
+fn a_misspelled_icon_is_rejected_and_never_read_as_a_parameter() {
+    let error = compile_glyphs(&glyph_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "row", parameters: ["glyph"],
+            root: Glyph(id: "icon", icon: Loudspeaker))"#,
+    ))
+    .unwrap_err();
+
+    let message = error.to_string();
+    assert!(message.contains("Loudspeaker"), "{message}");
+}
+
+#[kithara::test]
+fn an_argument_that_names_no_icon_is_rejected_where_it_is_spent() {
+    let mut resolver = glyph_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "row", parameters: ["glyph"],
+            root: Glyph(id: "icon", icon: "$glyph"))"#,
+    );
+    resolver.insert(
+        "menu.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "menu",
+            root: Row(children: [
+                Include(id: "one", source: "row.kmodule.ron", with: { "glyph": "Trombone" }),
+            ]))"#,
+    );
+
+    let error = compile_glyphs(&resolver).unwrap_err();
+
+    let message = error.to_string();
+    assert!(message.contains("Trombone"), "{message}");
+    assert!(message.contains("menu/one/icon"), "{message}");
+}
+
+#[kithara::test]
+fn one_template_reads_a_different_endpoint_per_include() {
+    let mut resolver = glyph_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "row", parameters: ["endpoint"],
+            root: Glyph(id: "icon", icon: Disc, active: Model(id: "$endpoint")))"#,
+    );
+    resolver.insert(
+        "menu.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "menu",
+            root: Row(children: [
+                Include(id: "one", source: "row.kmodule.ron", with: { "endpoint": "ui.prefs.mono" }),
+                Include(id: "two", source: "row.kmodule.ron", with: { "endpoint": "ui.prefs.autogain" }),
+            ]))"#,
+    );
+    let mut registry = common::player_registry();
+    for id in ["ui.prefs.mono", "ui.prefs.autogain"] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(ValueKind::Bool),
+        );
+    }
+
+    let ui = compile(
+        "menu.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Row { children, .. } = &**root else {
+        panic!("expected a row root");
+    };
+    let keys: Vec<_> = children
+        .iter()
+        .map(|child| {
+            let ExpandedNode::Control {
+                spec:
+                    ControlSpec::Glyph {
+                        active: Some(active),
+                        ..
+                    },
+                ..
+            } = child
+            else {
+                panic!("expected a glyph with an active binding");
+            };
+            ui.resolve(active.key)
+        })
+        .collect();
+
+    assert_eq!(keys, ["ui.prefs.mono", "ui.prefs.autogain"]);
+}
+
+#[kithara::test]
+fn a_template_may_not_read_an_endpoint_the_registry_does_not_know() {
+    let mut resolver = glyph_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "row", parameters: ["endpoint"],
+            root: Glyph(id: "icon", icon: Disc, active: Model(id: "$endpoint")))"#,
+    );
+    resolver.insert(
+        "menu.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "menu",
+            root: Row(children: [
+                Include(id: "one", source: "row.kmodule.ron", with: { "endpoint": "ui.prefs.nope" }),
+            ]))"#,
+    );
+
+    let error = compile_glyphs(&resolver).unwrap_err();
+
+    assert!(
+        matches!(error, UiDocError::UnknownEndpoint { .. }),
+        "{error}"
     );
 }

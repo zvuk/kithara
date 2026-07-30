@@ -129,6 +129,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("../../assets/modules/app-menu/module-cell.kmodule.ron"),
     ),
     (
+        "modules/app-menu/toggle-row.kmodule.ron",
+        include_str!("../../assets/modules/app-menu/toggle-row.kmodule.ron"),
+    ),
+    (
         "modules/app-menu/window-row.kmodule.ron",
         include_str!("../../assets/modules/app-menu/window-row.kmodule.ron"),
     ),

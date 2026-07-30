@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 
+use serde::de::DeserializeOwned;
+
 use super::{Binding, BindingKind, machine::Context};
 use crate::{
     error::UiDocError,
-    ids::{InternId, Interner, SourceUri},
+    ids::{EndpointId, InternId, Interner, SourceUri},
     module::BindingRef,
+    param::Param,
 };
 
 pub(crate) fn substitute(
@@ -28,6 +31,43 @@ pub(crate) fn substitute(
         })
 }
 
+pub(crate) fn resolve_param<T: Clone + DeserializeOwned>(
+    args: &BTreeMap<String, String>,
+    origin: &SourceUri,
+    param: &Param<T>,
+    path: &str,
+) -> Result<T, UiDocError> {
+    let reference = match param {
+        Param::Fixed(value) => return Ok(value.clone()),
+        Param::Ref(reference) => reference,
+    };
+    let name = reference
+        .strip_prefix('$')
+        .ok_or_else(|| UiDocError::BadVariant {
+            origin: origin.clone(),
+            value: reference.clone(),
+            path: path.to_owned(),
+        })?;
+    let value = substitute(args, origin, reference, path)?;
+    ron::from_str::<T>(&value).map_err(|_| UiDocError::BadParamVariant {
+        origin: origin.clone(),
+        name: name.to_owned(),
+        value,
+        path: path.to_owned(),
+    })
+}
+
+pub(crate) fn resolve_optional_param<T: Clone + DeserializeOwned>(
+    args: &BTreeMap<String, String>,
+    origin: &SourceUri,
+    param: Option<&Param<T>>,
+    path: &str,
+) -> Result<Option<T>, UiDocError> {
+    param
+        .map(|param| resolve_param(args, origin, param, path))
+        .transpose()
+}
+
 pub(crate) fn substitute_map(
     args: &BTreeMap<String, String>,
     origin: &SourceUri,
@@ -45,25 +85,18 @@ pub(crate) fn substitute_binding(
     binding: &BindingRef,
     path: &str,
 ) -> Result<BindingRef, UiDocError> {
-    let binding = match binding {
-        BindingRef::Command { id, with } => BindingRef::Command {
-            id: id.clone(),
-            with: substitute_map(args, origin, with, path)?,
-        },
-        BindingRef::Parameter { id, with } => BindingRef::Parameter {
-            id: id.clone(),
-            with: substitute_map(args, origin, with, path)?,
-        },
-        BindingRef::Telemetry { id, with } => BindingRef::Telemetry {
-            id: id.clone(),
-            with: substitute_map(args, origin, with, path)?,
-        },
-        BindingRef::Model { id, with } => BindingRef::Model {
-            id: id.clone(),
-            with: substitute_map(args, origin, with, path)?,
-        },
-    };
-    Ok(binding)
+    let (BindingRef::Command { id, with }
+    | BindingRef::Parameter { id, with }
+    | BindingRef::Telemetry { id, with }
+    | BindingRef::Model { id, with }) = binding;
+    let id = EndpointId(substitute(args, origin, &id.0, path)?);
+    let with = substitute_map(args, origin, with, path)?;
+    Ok(match binding {
+        BindingRef::Command { .. } => BindingRef::Command { id, with },
+        BindingRef::Parameter { .. } => BindingRef::Parameter { id, with },
+        BindingRef::Telemetry { .. } => BindingRef::Telemetry { id, with },
+        BindingRef::Model { .. } => BindingRef::Model { id, with },
+    })
 }
 
 pub(super) fn intern_map(

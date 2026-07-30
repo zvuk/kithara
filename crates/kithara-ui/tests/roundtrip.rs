@@ -7,6 +7,7 @@ use kithara_ui::{
         ChipStyle, ControlNode, GlyphStyle, IconName, PopoverAt, Priority, TextStyle, Tone,
         parse_module,
     },
+    param::Param,
     size::{Dim, SizeSpec},
     skin::ColorRole,
 };
@@ -322,14 +323,14 @@ fn navigation_controls_roundtrip_with_typed_icons() {
     assert!(matches!(
         &children[0],
         ControlNode::Glyph {
-            icon: IconName::Gear,
+            icon: Param::Fixed(IconName::Gear),
             ..
         }
     ));
     assert!(matches!(
         &children[1],
         ControlNode::NavItem {
-            icon: IconName::Playlist,
+            icon: Param::Fixed(IconName::Playlist),
             ..
         }
     ));
@@ -711,8 +712,8 @@ fn a_glyph_and_a_text_carry_the_tones_flags_and_icons_they_name() {
         panic!("expected the caret glyph");
     };
 
-    assert_eq!(*icon, IconName::ChevronRight);
-    assert_eq!(*active_icon, Some(IconName::ChevronDown));
+    assert_eq!(*icon, Param::Fixed(IconName::ChevronRight));
+    assert_eq!(*active_icon, Some(Param::Fixed(IconName::ChevronDown)));
     assert_eq!(*style, GlyphStyle::Menu);
     assert_eq!(*color, Some(ColorRole::Muted));
     assert_eq!(*active_color, Some(ColorRole::Accent));

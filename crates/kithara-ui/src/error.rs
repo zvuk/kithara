@@ -85,6 +85,19 @@ pub enum UiDocError {
         name: String,
         path: String,
     },
+    #[error("{origin}: {value:?} names no variant and is no ${{parameter}} at {path}")]
+    BadVariant {
+        origin: SourceUri,
+        value: String,
+        path: String,
+    },
+    #[error("{origin}: argument ${name} at {path} carries {value:?}, which names no variant")]
+    BadParamVariant {
+        origin: SourceUri,
+        name: String,
+        value: String,
+        path: String,
+    },
     #[error("{origin}: argument {name:?} is not declared in module parameters (at {path})")]
     UnknownParam {
         origin: SourceUri,

@@ -359,6 +359,16 @@ A layout declares no parameters, so `expand::substitute` owns what `$` means at 
 escapes a literal `$name`. Inside a module the same function resolves `$name` against the
 arguments the instance was given.
 
+An argument reaches three kinds of field. A `String` field takes it through `substitute`. An
+endpoint id takes it through the same call in `substitute_binding`, so a template names the
+endpoint it reads; the substituted id is what the visitor hands `validate::check_controls`, and
+the registry still answers for it. A typed field takes it through `param::Param<T>`, which reads
+either the variant itself or a `"$name"` string — serde tries the variant first, so a spelled-out
+one never reads as a reference. The cost of that order is that a misspelt variant parses as a
+reference instead of failing on the spot, so `resolve_param` spends the missing `$` on
+`BadVariant` and an argument that names no variant on `BadParamVariant`, both carrying the node
+path.
+
 A visible wrapper is fully transparent and delegates to its child, `content_size` and
 `effective_size` included, so it never reaches the undeclared-size mapping in `content_size`.
 A container decides emptiness over the children it actually lays out: a
@@ -512,11 +522,10 @@ layouts — are host state no crate owns, so the documents must not become canon
 the studio can resolve. Exactly one copy of each exists and every consumer reaches it with
 `include_str!`.
 
-The window row, the module-grid cell and the saved-layout row are one template each, taken
-`$window`, `$module` or `$layout` times through `Include`. Each instance's control paths are
-`app-menu/<include id>/<node id>`, so the template's own ids stay plain. A `Glyph`'s `icon` is an
-`IconName`, and `expand::substitute` rewrites `String` fields only, so a row whose glyph differs
-from its siblings' is written out in full.
+The window row, the module-grid cell, the saved-layout row and the preference toggle are one
+template each, taken as many times as the menu needs through `Include`. Each instance's control
+paths are `app-menu/<include id>/<node id>`, so the template's own ids stay plain. The three rows
+that carry a shortcut hint and the settings row keep their own geometry and stay written out.
 
 ## Window Chrome Ownership
 

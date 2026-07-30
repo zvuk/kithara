@@ -230,7 +230,7 @@ impl MenuState {
         if let Some(number) = instance.strip_prefix("layout-") {
             return self.apply_layout(number);
         }
-        match id {
+        match instance {
             // The widget publishes the dismissal on the popover's own path, so
             // this handler sets false; the burger stays the only toggle.
             "pop" | "header-close" => self.open = false,

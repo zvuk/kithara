@@ -323,31 +323,7 @@
                                 ],
                             ),
                         ),
-                        Pressable(
-                            id: "wave-follow",
-                            press: Command(id: "ui.prefs.toggle_wave_follow"),
-                            child: Row(
-                                size: (w: Fill, h: Fixed(26.0)),
-                                pad_x: 10.0,
-                                gap: 8.0,
-                                children: [
-                                    Glyph(
-                                        id: "wave-follow-icon",
-                                        icon: Activity,
-                                        style: Menu,
-                                        color: Line,
-                                        active_color: Accent,
-                                        active: Model(id: "ui.prefs.wave_follow"),
-                                    ),
-                                    Text(
-                                        id: "wave-follow-label",
-                                        size: (w: Fill, h: Fill),
-                                        style: Mono,
-                                        label: "Волна следует за плейхедом",
-                                    ),
-                                ],
-                            ),
-                        ),
+                        Include(id: "wave-follow", source: "app-menu/toggle-row.kmodule.ron", with: { "command": "ui.prefs.toggle_wave_follow", "icon": "Activity", "label": "Волна следует за плейхедом", "state": "ui.prefs.wave_follow" }),
                         Row(
                             id: "mixing-label",
                             size: (w: Fill, h: Fixed(22.0)),
@@ -365,56 +341,8 @@
                                 ),
                             ],
                         ),
-                        Pressable(
-                            id: "autogain",
-                            press: Command(id: "ui.prefs.toggle_autogain"),
-                            child: Row(
-                                size: (w: Fill, h: Fixed(26.0)),
-                                pad_x: 10.0,
-                                gap: 8.0,
-                                children: [
-                                    Glyph(
-                                        id: "autogain-icon",
-                                        icon: SlidersHorizontal,
-                                        style: Menu,
-                                        color: Line,
-                                        active_color: Accent,
-                                        active: Model(id: "ui.prefs.autogain"),
-                                    ),
-                                    Text(
-                                        id: "autogain-label",
-                                        size: (w: Fill, h: Fill),
-                                        style: Mono,
-                                        label: "Автогейн по треку",
-                                    ),
-                                ],
-                            ),
-                        ),
-                        Pressable(
-                            id: "mono",
-                            press: Command(id: "ui.prefs.toggle_mono"),
-                            child: Row(
-                                size: (w: Fill, h: Fixed(26.0)),
-                                pad_x: 10.0,
-                                gap: 8.0,
-                                children: [
-                                    Glyph(
-                                        id: "mono-icon",
-                                        icon: Circle,
-                                        style: Menu,
-                                        color: Line,
-                                        active_color: Accent,
-                                        active: Model(id: "ui.prefs.mono"),
-                                    ),
-                                    Text(
-                                        id: "mono-label",
-                                        size: (w: Fill, h: Fill),
-                                        style: Mono,
-                                        label: "Моно-выход",
-                                    ),
-                                ],
-                            ),
-                        ),
+                        Include(id: "autogain", source: "app-menu/toggle-row.kmodule.ron", with: { "command": "ui.prefs.toggle_autogain", "icon": "SlidersHorizontal", "label": "Автогейн по треку", "state": "ui.prefs.autogain" }),
+                        Include(id: "mono", source: "app-menu/toggle-row.kmodule.ron", with: { "command": "ui.prefs.toggle_mono", "icon": "Circle", "label": "Моно-выход", "state": "ui.prefs.mono" }),
                         Row(
                             id: "set-label",
                             size: (w: Fill, h: Fixed(22.0)),

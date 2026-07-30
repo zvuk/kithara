@@ -1,17 +1,20 @@
 use std::collections::BTreeMap;
 
+use serde::de::DeserializeOwned;
+
 use super::{
     Binding, BlockSpec, Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec, ExpandedModule,
     ExpandedNode, SurfaceSpec,
     binding_subst::{
         intern_binding, intern_optional_binding, intern_optional_text, intern_text, intern_texts,
-        substitute_binding, substitute_map,
+        resolve_optional_param, resolve_param, substitute_binding, substitute_map,
     },
 };
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
     module::{AdaptivePolicy, BindingRef, ControlNode, PopoverAt, TrackColumn, WaveStyle},
+    param::Param,
     resolve::ModuleSet,
     size::SizeSpec,
     validate,
@@ -27,6 +30,22 @@ pub(super) struct Context<'a> {
 impl Context<'_> {
     fn substitute(&self, binding: &BindingRef, path: &str) -> Result<BindingRef, UiDocError> {
         substitute_binding(&self.args, &self.origin, binding, path)
+    }
+
+    fn param<T: Clone + DeserializeOwned>(
+        &self,
+        param: &Param<T>,
+        path: &str,
+    ) -> Result<T, UiDocError> {
+        resolve_param(&self.args, &self.origin, param, path)
+    }
+
+    fn optional_param<T: Clone + DeserializeOwned>(
+        &self,
+        param: Option<&Param<T>>,
+        path: &str,
+    ) -> Result<Option<T>, UiDocError> {
+        resolve_optional_param(&self.args, &self.origin, param, path)
     }
 }
 
@@ -414,8 +433,8 @@ fn control_spec(
             active_color,
             ..
         } => ControlSpec::Glyph {
-            icon: *icon,
-            active_icon: *active_icon,
+            icon: context.param(icon, path)?,
+            active_icon: context.optional_param(active_icon.as_ref(), path)?,
             style: *style,
             color: *color,
             active_color: *active_color,
@@ -451,7 +470,7 @@ fn control_spec(
         },
         ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
-            icon: *icon,
+            icon: context.param(icon, path)?,
         },
         ControlNode::TabLarge { label, .. } => ControlSpec::TabLarge {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
@@ -465,7 +484,7 @@ fn control_spec(
             ..
         } => ControlSpec::Button {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
-            icon: *icon,
+            icon: context.optional_param(icon.as_ref(), path)?,
             active_label: optional_text(context, machine, active_label.as_deref(), path)?,
             style: *style,
             frame: *frame,
