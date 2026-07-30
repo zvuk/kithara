@@ -165,6 +165,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/nav.kmodule.ron"),
     ),
     (
+        "modules/nav/item.kmodule.ron",
+        include_str!("assets/modules/nav/item.kmodule.ron"),
+    ),
+    (
         "modules/primitives/chips.kmodule.ron",
         include_str!("assets/modules/primitives/chips.kmodule.ron"),
     ),
@@ -571,6 +575,58 @@ mod tests {
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| panic!("{} must compile: {error}", tab.entry()));
+        }
+    }
+
+    #[kithara::test]
+    fn every_nav_item_path_selects_its_tab() {
+        let ui = compile(
+            Tab::Atoms.entry(),
+            &resolver(),
+            &mock::registry(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap();
+        let mut paths = Vec::new();
+        collect_nav_item_paths(&ui.root, &ui, &mut paths);
+
+        assert_eq!(paths.len(), Tab::ALL.len());
+        let selected: Vec<_> = paths
+            .iter()
+            .map(|path| Tab::try_from(path.as_str()).unwrap_or_else(|()| panic!("{path}")))
+            .collect();
+        assert_eq!(selected, Tab::ALL);
+    }
+
+    fn collect_nav_item_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                for (_, child) in children {
+                    collect_nav_item_paths(child, ui, paths);
+                }
+            }
+            CompiledNode::Optional { child, .. } => collect_nav_item_paths(child, ui, paths),
+            CompiledNode::Module { root, .. } => collect_expanded_nav_paths(root, ui, paths),
+            _ => {}
+        }
+    }
+
+    fn collect_expanded_nav_paths(node: &ExpandedNode, ui: &CompiledUi, paths: &mut Vec<String>) {
+        match node {
+            ExpandedNode::Row { children, .. }
+            | ExpandedNode::Column { children, .. }
+            | ExpandedNode::Slot { children, .. } => {
+                for child in children {
+                    collect_expanded_nav_paths(child, ui, paths);
+                }
+            }
+            ExpandedNode::Control {
+                path,
+                spec: ControlSpec::NavItem { .. },
+                ..
+            } => paths.push(ui.resolve(*path).to_owned()),
+            _ => {}
         }
     }
 
