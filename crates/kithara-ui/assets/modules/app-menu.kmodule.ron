@@ -360,66 +360,8 @@
                                 ),
                             ],
                         ),
-                        Pressable(
-                            id: "record",
-                            press: Command(id: "ui.set.toggle_record"),
-                            child: Row(
-                                size: (w: Fill, h: Fixed(26.0)),
-                                pad_x: 10.0,
-                                gap: 8.0,
-                                children: [
-                                    Glyph(
-                                        id: "record-icon",
-                                        icon: Disc,
-                                        style: Menu,
-                                        color: Line,
-                                        active_color: Danger,
-                                        active: Model(id: "ui.set.recording"),
-                                    ),
-                                    Text(
-                                        id: "record-label",
-                                        size: (w: Fill, h: Fill),
-                                        style: Mono,
-                                        label: "Запись сета",
-                                    ),
-                                    Text(
-                                        id: "record-hint",
-                                        style: MicroLabel,
-                                        read: Model(id: "ui.set.record_hint"),
-                                    ),
-                                ],
-                            ),
-                        ),
-                        Pressable(
-                            id: "cast",
-                            press: Command(id: "ui.set.toggle_cast"),
-                            child: Row(
-                                size: (w: Fill, h: Fixed(26.0)),
-                                pad_x: 10.0,
-                                gap: 8.0,
-                                children: [
-                                    Glyph(
-                                        id: "cast-icon",
-                                        icon: Radio,
-                                        style: Menu,
-                                        color: Line,
-                                        active_color: Accent,
-                                        active: Model(id: "ui.set.casting"),
-                                    ),
-                                    Text(
-                                        id: "cast-label",
-                                        size: (w: Fill, h: Fill),
-                                        style: Mono,
-                                        label: "Трансляция",
-                                    ),
-                                    Text(
-                                        id: "cast-hint",
-                                        style: MicroLabel,
-                                        read: Model(id: "ui.set.cast_hint"),
-                                    ),
-                                ],
-                            ),
-                        ),
+                        Include(id: "record", source: "app-menu/hint-row.kmodule.ron", with: { "command": "ui.set.toggle_record", "hint": "ui.set.record_hint", "icon": "Disc", "label": "Запись сета", "state": "ui.set.recording", "tone": "Danger" }),
+                        Include(id: "cast", source: "app-menu/hint-row.kmodule.ron", with: { "command": "ui.set.toggle_cast", "hint": "ui.set.cast_hint", "icon": "Radio", "label": "Трансляция", "state": "ui.set.casting", "tone": "Accent" }),
                         Pressable(
                             id: "add-folder",
                             press: Command(id: "ui.library.add_folder"),

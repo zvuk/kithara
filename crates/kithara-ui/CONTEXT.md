@@ -522,10 +522,11 @@ layouts — are host state no crate owns, so the documents must not become canon
 the studio can resolve. Exactly one copy of each exists and every consumer reaches it with
 `include_str!`.
 
-The window row, the module-grid cell, the saved-layout row and the preference toggle are one
-template each, taken as many times as the menu needs through `Include`. Each instance's control
-paths are `app-menu/<include id>/<node id>`, so the template's own ids stay plain. The three rows
-that carry a shortcut hint and the settings row keep their own geometry and stay written out.
+The window row, the module-grid cell, the saved-layout row, the preference toggle and the toggle
+that reports a hint are one template each, taken as many times as the menu needs through
+`Include`. Each instance's control paths are `app-menu/<include id>/<node id>`, so the template's
+own ids stay plain. The three rows carrying a literal shortcut and the settings row keep their own
+geometry and stay written out.
 
 ## Window Chrome Ownership
 

@@ -1112,8 +1112,8 @@ mod tests {
             Some(ReadValue::Text("ЗВУК LIVE"))
         );
 
-        reads.apply("app-menu/record", &ControlAction::Activate);
-        reads.apply("app-menu/cast", &ControlAction::Activate);
+        reads.apply("app-menu/record/toggle", &ControlAction::Activate);
+        reads.apply("app-menu/cast/toggle", &ControlAction::Activate);
 
         assert_eq!(
             reads.get("ui.set.record_hint"),

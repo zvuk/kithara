@@ -715,8 +715,8 @@ fn a_glyph_and_a_text_carry_the_tones_flags_and_icons_they_name() {
     assert_eq!(*icon, Param::Fixed(IconName::ChevronRight));
     assert_eq!(*active_icon, Some(Param::Fixed(IconName::ChevronDown)));
     assert_eq!(*style, GlyphStyle::Menu);
-    assert_eq!(*color, Some(ColorRole::Muted));
-    assert_eq!(*active_color, Some(ColorRole::Accent));
+    assert_eq!(*color, Some(Param::Fixed(ColorRole::Muted)));
+    assert_eq!(*active_color, Some(Param::Fixed(ColorRole::Accent)));
     assert!(active.is_some());
 
     let ControlNode::Text {

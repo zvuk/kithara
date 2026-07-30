@@ -308,9 +308,9 @@ pub enum ControlNode {
         #[serde(default)]
         style: GlyphStyle,
         #[serde(default)]
-        color: Option<ColorRole>,
+        color: Option<Param<ColorRole>>,
         #[serde(default)]
-        active_color: Option<ColorRole>,
+        active_color: Option<Param<ColorRole>>,
         #[serde(default)]
         active: Option<BindingRef>,
     },
