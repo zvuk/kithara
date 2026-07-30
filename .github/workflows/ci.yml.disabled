@@ -44,7 +44,7 @@ jobs:
         run: cargo install ast-grep --locked
 
       - name: Run lint checks
-        run: just lint-full
+        run: just lint full
 
   test:
     name: Test (${{ matrix.os }})
@@ -83,7 +83,7 @@ jobs:
         run: ${{ matrix.deps }}
 
       - name: Run tests
-        run: just test-all
+        run: just test all
 
   msrv:
     name: MSRV (1.88)
@@ -146,7 +146,7 @@ jobs:
         run: cargo install cargo-machete --locked
 
       - name: Run cargo-machete
-        run: just machete
+        run: just deps machete
 
   arch:
     name: Architecture checks
@@ -160,7 +160,7 @@ jobs:
         uses: taiki-e/install-action@just
 
       - name: Run architecture checks
-        run: just arch
+        run: just lint arch
 
   wasm:
     name: WASM checks
@@ -186,7 +186,7 @@ jobs:
         uses: taiki-e/install-action@just
 
       - name: Run wasm checks
-        run: just wasm-check
+        run: just platform wasm
 
   wasm-size:
     name: WASM size budget (advisory)
@@ -213,7 +213,7 @@ jobs:
         run: cargo install --git https://github.com/vitalratel/wasm-slim --rev 437c0accaccf37fe16e75991046076c5c1ee1fa7 wasm-slim --locked
 
       - name: Run wasm-slim check
-        run: WASM_SLIM_TOOLCHAIN=nightly just wasm-size-check
+        run: WASM_SLIM_TOOLCHAIN=nightly just platform wasm size-check
 
       - name: Upload wasm-slim report
         if: always()
@@ -250,7 +250,7 @@ jobs:
         run: cargo install cargo-hack --locked
 
       - name: Run cargo-hack
-        run: just hack
+        run: just deps hack
 
   semver:
     name: Semver checks (advisory)
@@ -280,4 +280,4 @@ jobs:
         run: cargo install cargo-semver-checks --locked
 
       - name: Run semver checks
-        run: just semver
+        run: just deps semver

@@ -35,7 +35,7 @@ pub(crate) fn run(check: bool, docgen: &DocgenConfig) -> Result<()> {
 
     let pages = render_pages(&krate, docgen)?;
     // Completeness gate runs on every invocation, so a plain `docgen` (as
-    // `just apple doc` calls it) also refuses to build docs for an
+    // `just platform apple doc` calls it) also refuses to build docs for an
     // undocumented public API; `--check` only skips writing the files.
     let documented = check_swift_docs(&root, &docgen.swift_dirs)?;
 

@@ -8,6 +8,10 @@ use portable_atomic::{AtomicF64, AtomicU32};
 pub struct PlaybackSnapshot {
     /// Whether playback is active.
     pub(crate) playing: bool,
+    /// Cached span in seconds: how much of the source is on disk. Independent
+    /// of `frontier` — bytes land ahead of the decoder, and the decoder can run
+    /// ahead of what the download side has reported.
+    pub(crate) cached: f64,
     /// Total media duration in seconds; `0.0` when unknown.
     pub(crate) duration: f64,
     /// Decoded-ahead frontier in seconds. Always `>= position`.
@@ -28,6 +32,8 @@ pub struct PlaybackShared {
     pub position: AtomicF64,
     /// Decoded-ahead frontier in seconds.
     pub frontier: AtomicF64,
+    /// Cached span in seconds: how much of the source is on disk.
+    pub cached: AtomicF64,
     /// Total media duration in seconds; `0.0` when unknown.
     pub duration: AtomicF64,
     /// Current output sample rate.
@@ -55,6 +61,13 @@ impl PlaybackSnapshot {
     #[must_use]
     pub fn frontier(&self) -> f64 {
         self.frontier
+    }
+
+    /// Cached span in seconds: how much of the source is on disk and needs no
+    /// further network.
+    #[must_use]
+    pub fn cached(&self) -> f64 {
+        self.cached
     }
 
     /// Playback position in seconds.
@@ -85,6 +98,7 @@ impl PlaybackShared {
         PlaybackSnapshot {
             position,
             frontier,
+            cached: self.cached.load(Ordering::Relaxed),
             duration: self.duration.load(Ordering::Relaxed),
             sample_rate: self.sample_rate.load(Ordering::Relaxed),
             playing: self.playing.load(Ordering::Relaxed),

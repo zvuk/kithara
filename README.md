@@ -41,7 +41,7 @@ full player.
 ```bash
 cargo install just --locked
 cargo build --workspace
-just test-all
+just test all
 ```
 
 Full environment setup, lint commands, and mobile (Android / Apple) build flows

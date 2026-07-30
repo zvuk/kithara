@@ -63,6 +63,33 @@ Re-exports: `AbrMode` from `kithara-abr`; `KeyProcessor`, `KeyProcessorRegistry`
 - Throughput samples are fed to ABR after each completed segment.
 - Manual ABR (`AbrMode::Manual`) overrides automatic selection — the next fetch picks the requested variant immediately.
 
+### Variant fence: read gate and ack are separate
+
+`HlsCoord` keeps two watermarks against `variant_generation`, because "the
+candidate decoder may read" and "a decoder for the new variant exists" are
+different facts that end at different times.
+
+- `read_gate_at` — moved by `open_variant_read_gate`. `read_at` / `wait_range`
+  short-circuit with `Pending(VariantChange)` / `Interrupted` until it catches
+  up. The audio rebuild port opens it before submitting the rebuild job so the
+  new decoder's own construction reads are not blocked by the switch they exist
+  to resolve, and the seek engine opens it before anchor resolution.
+- `fence_at` — moved by `clear_variant_fence`, which is the acknowledgement and
+  runs **only** where a decoder built against the new variant becomes the
+  session's decoder: `kithara-audio` `finish_rebuild`'s install site, or
+  `apply_anchor` when the running decoder carries across by byte continuity.
+  `has_variant_change_pending` / `variant_change_target` report on this one.
+
+The distinction is load-bearing. Acking at gate-open time (what
+`RebuildPort::prepare` used to do) makes a rebuild that returns `Interrupted`
+look like a completed switch: the session keeps running the old variant while
+the only signal saying otherwise is gone, so neither the decode loop's
+`Pending(_)`-with-fence branch nor `rebuild::policy::superseded` can consume it,
+and the FSM parks on a `WaitContext::Recreation` snapshot nothing invalidates.
+Because the fence now stays up for the whole rebuild, `superseded` compares the
+outstanding **target** against the variant the rebuild built rather than
+treating any raised fence as supersession.
+
 ### Decoder-probe rebuild
 
 On a post-ABR switch into mid-playback, `rebuild_with_decoder_probe` rebuilds the active variant's fetch queue like `rebuild` but also enqueues `seg 0` when `from_seg > 0`. The decoder factory's probe (Symphonia format reader) reads the container's first ~1 KB to construct the codec; without `seg 0` the queue would start at `target_seg`, leaving `[0..PROBE)` unfetched and the probe hanging on `wait_range budget exceeded`.

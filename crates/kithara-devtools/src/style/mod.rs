@@ -1,6 +1,6 @@
 //! Code-style fitness functions for the workspace.
 //!
-//! Run via `cargo xtask style`. Reads declarative rules from `.config/style/*.toml`,
+//! Run via `just lint style`. Reads declarative rules from `.config/style/*.toml`,
 //! evaluates them against the workspace, and ratchets results against
 //! `.config/style/baseline.toml`. Same shape as `arch`, but with a separate
 //! baseline and config tree to keep topological and stylistic concerns split.

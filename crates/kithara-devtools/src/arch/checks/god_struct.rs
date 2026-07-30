@@ -218,7 +218,7 @@ fn self_ty_name(im: &ItemImpl) -> Option<String> {
 fn trait_name(im: &ItemImpl) -> Option<String> {
     im.trait_
         .as_ref()
-        .and_then(|(_, path, _)| path.segments.last())
+        .and_then(|(path, _)| path.segments.last())
         .map(|s| s.ident.to_string())
 }
 

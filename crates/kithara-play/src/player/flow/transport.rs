@@ -34,16 +34,16 @@ impl PlayerImpl {
 
     /// Apply autoplay: resume at the default rate (and move to `Playing`) or
     /// hold at rate 0 (and move to `Paused`).
+    ///
+    /// Resuming goes through [`Self::set_rate`] rather than a bare value
+    /// store: the default rate has to reach the stretch slot and the
+    /// processor's media clock, or the player reports a rate it is not
+    /// playing at.
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
-            let default_rate = self.default_rate();
-            self.core.params.set_rate_value(default_rate);
+            self.set_rate(self.default_rate());
             let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
             self.enter_playing();
-            self.core
-                .engine
-                .bus()
-                .publish(PlayerEvent::RateChanged { rate: default_rate });
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
             self.core.params.set_paused_rate();
@@ -60,12 +60,17 @@ impl PlayerImpl {
     ///
     /// Takes the resource out of the queue (replacing with `None`), wraps it
     /// in `PlayerResource`, and sends `LoadTrack` + `FadeIn` to the processor.
-    fn load_current_item(&self) {
+    ///
+    /// `false` means the slot held no resource, so nothing reached the
+    /// processor and the item is not current.
+    fn load_current_item(&self) -> bool {
         let index = self.current_index();
-        if let Some((src, duration_seconds)) = self.enqueue_to_processor(index) {
-            self.publish_current_track_snapshot(duration_seconds);
-            self.start_playback(src);
-        }
+        let Some((src, duration_seconds)) = self.enqueue_to_processor(index) else {
+            return false;
+        };
+        self.publish_current_track_snapshot(duration_seconds);
+        self.start_playback(src);
+        true
     }
 
     /// Pause playback (sets rate to 0.0).
@@ -97,14 +102,20 @@ impl PlayerImpl {
 
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
-        self.load_current_item();
+        let loaded = self.load_current_item();
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
         let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
 
         self.enter_playing();
         self.set_status(PlayerStatus::ReadyToPlay);
         // Resuming the same item is not a track change; announce gates on it.
-        self.announce_current_item(self.current_index());
+        // An empty slot means the item's load is still in flight: announcing it
+        // would mark the index current, and the select that plants the arriving
+        // resource would then take `select_item_with_crossfade`'s
+        // reselecting-current path and never enqueue it.
+        if loaded {
+            self.announce_current_item(self.current_index());
+        }
         self.core
             .engine
             .bus()

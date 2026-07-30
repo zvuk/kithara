@@ -100,4 +100,4 @@ Wasm builds use the web-audio backend and no native stretch backend. The shared
 
 ## Build flow internals
 
-- `cargo xtask wasm postbuild` — post-build patches for COEP/COOP, polyfills, and the `checkRuntime()` helper appended to `kithara-ffi.js`.
+- `just tooling xtask wasm postbuild` — post-build patches for COEP/COOP, polyfills, and the `checkRuntime()` helper appended to `kithara-ffi.js`.

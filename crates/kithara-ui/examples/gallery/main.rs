@@ -481,7 +481,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_ui::{
         compile::CompiledNode,
-        expand::{Binding, ControlSpec, ExpandedNode},
+        expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
         module::ChromeStyle,
         render::{ControlAction, Reads},
     };
@@ -760,7 +760,7 @@ mod tests {
             } => {
                 found
                     .popovers
-                    .push((ui.resolve(*path), ui.resolve(open.key())));
+                    .push((ui.resolve(*path), ui.resolve(open.key)));
                 collect_menu_tab_module(anchor, ui, found);
                 collect_menu_tab_module(content, ui, found);
             }
@@ -781,7 +781,7 @@ mod tests {
                 }
             }
             CompiledNode::Optional { block, child } => {
-                keys.push(ui.resolve(block.hidden.key()));
+                keys.push(ui.resolve(block.hidden.key));
                 collect_menu_reads(child, ui, keys);
             }
             CompiledNode::Module { root, .. } => collect_menu_module_reads(root, ui, keys),
@@ -799,7 +799,7 @@ mod tests {
                 active, children, ..
             } => {
                 if let Some(binding) = active {
-                    keys.push(ui.resolve(binding.key()));
+                    keys.push(ui.resolve(binding.key));
                 }
                 for child in children {
                     collect_menu_module_reads(child, ui, keys);
@@ -811,7 +811,7 @@ mod tests {
                 }
             }
             ExpandedNode::Optional { block, child } => {
-                keys.push(ui.resolve(block.hidden.key()));
+                keys.push(ui.resolve(block.hidden.key));
                 collect_menu_module_reads(child, ui, keys);
             }
             ExpandedNode::Popover {
@@ -820,14 +820,14 @@ mod tests {
                 content,
                 ..
             } => {
-                keys.push(ui.resolve(open.key()));
+                keys.push(ui.resolve(open.key));
                 collect_menu_module_reads(anchor, ui, keys);
                 collect_menu_module_reads(content, ui, keys);
             }
             ExpandedNode::Pressable { child, .. } => collect_menu_module_reads(child, ui, keys),
             ExpandedNode::Control { spec, read, .. } => {
                 if let Some(binding) = read {
-                    keys.push(ui.resolve(binding.key()));
+                    keys.push(ui.resolve(binding.key));
                 }
                 if let ControlSpec::Text {
                     active: Some(binding),
@@ -838,7 +838,7 @@ mod tests {
                     ..
                 } = spec
                 {
-                    keys.push(ui.resolve(binding.key()));
+                    keys.push(ui.resolve(binding.key));
                 }
             }
             node => panic!("the menu walker does not know {node:?}"),
@@ -877,7 +877,12 @@ mod tests {
             ExpandedNode::Control {
                 spec:
                     ControlSpec::Tree {
-                        query: Some(Binding::Model { id, .. }),
+                        query:
+                            Some(Binding {
+                                kind: BindingKind::Model,
+                                id,
+                                ..
+                            }),
                     },
                 ..
             } => queries.push(ui.resolve(*id)),
@@ -922,9 +927,19 @@ mod tests {
                 spec:
                     ControlSpec::ContextBar {
                         scope_items,
-                        scope: Some(Binding::Model { id: scope, .. }),
+                        scope:
+                            Some(Binding {
+                                kind: BindingKind::Model,
+                                id: scope,
+                                ..
+                            }),
                     },
-                write: Some(Binding::Model { id: write, .. }),
+                write:
+                    Some(Binding {
+                        kind: BindingKind::Model,
+                        id: write,
+                        ..
+                    }),
                 ..
             } => contexts.push((
                 ui.resolve(*path),

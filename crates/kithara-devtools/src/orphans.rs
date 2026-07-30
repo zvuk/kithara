@@ -24,8 +24,8 @@ pub struct OrphansArgs {
     #[arg(long = "package", short = 'p', value_name = "NAME")]
     pub packages: Vec<String>,
     /// In audit mode, skip the run when no packages are given (avoids
-    /// the ~90s workspace sweep on every pre-commit `just audit`).
-    /// `just orphans` and `just health` leave this off.
+    /// the ~90s workspace sweep on every pre-commit `just ci audit`).
+    /// `just arch orphans` and `just ci health` leave this off.
     #[arg(long = "audit-mode")]
     pub audit_mode: bool,
     /// Treat orphans as a hard failure (exit non-zero). Without it the
@@ -46,7 +46,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
         if args.audit_mode {
             println!(
                 "orphans: workspace-wide run skipped in audit mode \
-                 (run `just orphans` or `just health` for full sweep)"
+                 (run `just arch orphans` or `just ci health` for full sweep)"
             );
             return Ok(());
         }

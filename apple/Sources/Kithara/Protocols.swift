@@ -111,6 +111,9 @@ public protocol KitharaPlayerProtocol: AnyObject, Sendable {
     /// Mirrors iOS `playingRate`.
     var playingRate: Float { get set }
 
+    /// Queue behavior after the current item reaches its end.
+    var repeatMode: RepeatMode { get set }
+
     /// Synchronous current playback time in seconds. Drops to `0`
     /// when the current item is removed. Mirrors iOS sync
     /// `currentTime: Double`.

@@ -1,9 +1,8 @@
-mod cache;
+pub(super) mod cache;
 mod compile;
-mod endpoints;
+pub(super) mod endpoints;
 mod events;
-mod reads;
-mod scope;
+pub(super) mod scope;
 #[cfg(test)]
 mod tests;
 

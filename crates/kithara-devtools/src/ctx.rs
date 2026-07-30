@@ -3,14 +3,27 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use cargo_metadata::Metadata;
 
-use crate::common::project::ProjectConfig;
+use crate::{common::project::ProjectConfig, similarity::SimilarityConfig};
 
 pub struct Ctx {
     pub root: PathBuf,
     pub config: ProjectConfig,
+    pub(crate) similarity: SimilarityConfig,
+    metadata: Option<Metadata>,
 }
 
 impl Ctx {
+    /// Creates a context for commands that do not require Cargo metadata.
+    #[must_use]
+    pub fn new(root: PathBuf, config: ProjectConfig) -> Self {
+        Self {
+            root,
+            config,
+            similarity: SimilarityConfig::default(),
+            metadata: None,
+        }
+    }
+
     /// Loads the xtask context for the current Cargo workspace.
     ///
     /// # Errors
@@ -18,7 +31,23 @@ impl Ctx {
     /// Returns an error if Cargo metadata cannot be resolved for the current
     /// working directory or the project config cannot be loaded.
     pub fn load() -> Result<Self> {
-        let metadata = cargo_metadata::MetadataCommand::new()
+        Self::load_with_metadata(cargo_metadata::MetadataCommand::new())
+    }
+
+    /// Loads an xtask context from a specific Cargo manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Cargo metadata or the project config cannot be
+    /// loaded for the selected manifest.
+    pub fn load_from_manifest(manifest_path: &Path) -> Result<Self> {
+        let mut command = cargo_metadata::MetadataCommand::new();
+        command.manifest_path(manifest_path);
+        Self::load_with_metadata(command)
+    }
+
+    fn load_with_metadata(mut command: cargo_metadata::MetadataCommand) -> Result<Self> {
+        let metadata = command
             .no_deps()
             .exec()
             .context("resolving workspace root via cargo metadata")?;
@@ -26,10 +55,22 @@ impl Ctx {
         let config_path = root.join(".config/xtask.toml");
         let mut config = ProjectConfig::load(&root)
             .with_context(|| format!("loading {}", config_path.display()))?;
+        let similarity = SimilarityConfig::load(&root)?;
         if config.project.name.is_empty() {
             config.project.name = derive_project_name(&metadata, &root);
         }
-        Ok(Self { root, config })
+        Ok(Self {
+            root,
+            config,
+            similarity,
+            metadata: Some(metadata),
+        })
+    }
+
+    pub(crate) fn metadata(&self) -> Result<&Metadata> {
+        self.metadata
+            .as_ref()
+            .context("workspace metadata is unavailable in this xtask context")
     }
 }
 

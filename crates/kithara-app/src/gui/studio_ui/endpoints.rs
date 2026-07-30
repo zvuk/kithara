@@ -4,8 +4,8 @@ use kithara_ui::{
 };
 
 /// EQ knob travel in dB: knob `0.0` is `EQ_MIN_DB`, knob `1.0` is `EQ_MAX_DB`.
-pub(super) const EQ_MIN_DB: f32 = -24.0;
-pub(super) const EQ_MAX_DB: f32 = 6.0;
+pub(in crate::gui) const EQ_MIN_DB: f32 = -24.0;
+pub(in crate::gui) const EQ_MAX_DB: f32 = 6.0;
 
 struct Endpoint {
     category: EndpointCategory,
@@ -194,7 +194,7 @@ static ENDPOINTS: &[Endpoint] = &[
 ];
 
 #[cfg(test)]
-pub(super) fn readable_endpoints() -> impl Iterator<Item = (&'static str, bool)> {
+pub(in crate::gui) fn readable_endpoints() -> impl Iterator<Item = (&'static str, bool)> {
     ENDPOINTS
         .iter()
         .filter(|endpoint| endpoint.category != EndpointCategory::Command)
@@ -211,8 +211,8 @@ pub(super) struct StudioRegistry {
     endpoints: Vec<Registration>,
 }
 
-impl StudioRegistry {
-    pub(super) fn new() -> Self {
+impl Default for StudioRegistry {
+    fn default() -> Self {
         let endpoints = ENDPOINTS
             .iter()
             .map(|endpoint| Registration {

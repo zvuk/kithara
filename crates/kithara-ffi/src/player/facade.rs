@@ -6,7 +6,7 @@ use crate::{
     Inner,
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
-    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot},
+    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiRepeatMode},
 };
 
 /// FFI-facing audio player. A thin facade over the platform-selected
@@ -178,6 +178,12 @@ impl AudioPlayer {
         self.inner.remove_all_items();
     }
 
+    /// Current queue repeat mode.
+    #[must_use]
+    pub fn repeat_mode(&self) -> FfiRepeatMode {
+        self.inner.repeat_mode()
+    }
+
     /// Replace the item at `index` with a freshly-configured one.
     ///
     /// # Errors
@@ -275,6 +281,16 @@ impl AudioPlayer {
         self.inner.set_playing_rate(rate);
     }
 
+    /// Change the queue repeat mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError::InvalidArgument`] if `mode` has no queue-level
+    /// meaning.
+    pub fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {
+        self.inner.set_repeat_mode(mode)
+    }
+
     pub fn set_volume(&self, volume: f32) {
         self.inner.set_volume(volume);
     }
@@ -337,5 +353,52 @@ impl AudioPlayer {
 
     pub fn volume(&self) -> f32 {
         self.inner.volume()
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::sync::mpsc::{Receiver, Sender, channel};
+
+    use super::*;
+    use crate::types::FfiPlayerEvent;
+
+    struct ChannelObserver {
+        sender: Sender<FfiPlayerEvent>,
+    }
+
+    impl PlayerObserver for ChannelObserver {
+        fn on_event(&self, event: FfiPlayerEvent) {
+            let _ = self.sender.send(event);
+        }
+    }
+
+    /// Blocks on the fact rather than on a deadline: the observer runs on the
+    /// event-bridge thread, so a local timeout would race it. A mode change
+    /// that never arrives is a hang, and the harness bounds hangs.
+    fn received_repeat_mode(receiver: &Receiver<FfiPlayerEvent>, expected: FfiRepeatMode) -> bool {
+        while let Ok(event) = receiver.recv() {
+            if matches!(
+                event,
+                FfiPlayerEvent::RepeatModeChanged { mode } if mode == expected
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[kithara::test]
+    fn repeat_mode_round_trips_and_notifies_observer() {
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        let (sender, receiver) = channel();
+        player.set_observer(Arc::new(ChannelObserver { sender }));
+
+        player
+            .set_repeat_mode(FfiRepeatMode::All)
+            .expect("valid repeat mode");
+
+        assert_eq!(player.repeat_mode(), FfiRepeatMode::All);
+        assert!(received_repeat_mode(&receiver, FfiRepeatMode::All));
     }
 }

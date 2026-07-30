@@ -2,7 +2,7 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     compile::CompiledUi,
-    expand::Binding,
+    expand::{Binding, BindingKind},
     render::{ReadValue, Reads},
     widgets::wave::zoom_math::DEFAULT_ZOOM,
 };
@@ -12,16 +12,16 @@ pub(super) fn resolve<'a>(
     binding: &Binding,
     ui: &CompiledUi,
 ) -> Option<ReadValue<'a>> {
-    match binding {
-        Binding::Command { .. } => None,
-        binding => reads.get(ui.resolve(binding.key())),
+    match binding.kind {
+        BindingKind::Command => None,
+        _ => reads.get(ui.resolve(binding.key)),
     }
 }
 
 pub(super) fn read_scope<'a>(read: Option<&Binding>, ui: &'a CompiledUi) -> &'a str {
     read.map_or("", |binding| {
-        let key = ui.resolve(binding.key());
-        let id_len = ui.resolve(binding.id()).len();
+        let key = ui.resolve(binding.key);
+        let id_len = ui.resolve(binding.id).len();
         key.get(id_len..).unwrap_or("")
     })
 }

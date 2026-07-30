@@ -47,6 +47,15 @@ impl Fixture {
             .parent()
             .context("resolve repository root")?;
         fs::copy(repository.join("justfile"), &justfile)?;
+        let module_source = repository.join(".config/just");
+        let module_target = root.join(".config/just");
+        fs::create_dir_all(&module_target)?;
+        for entry in fs::read_dir(&module_source)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                fs::copy(entry.path(), module_target.join(entry.file_name()))?;
+            }
+        }
         fs::write(
             root.join("Cargo.toml"),
             "[workspace]\nresolver = \"3\"\nmembers = [\"xtask\"]\n",
@@ -316,7 +325,7 @@ fn warm_public_just_runner_and_hook_are_cargo_and_git_free() -> Result<()> {
     let fixture = Fixture::new()?;
     assert_success(&fixture.bootstrap()?);
 
-    let help = fixture.just(&fixture.root, &["xtask", "--help"], None)?;
+    let help = fixture.just(&fixture.root, &["tooling", "xtask", "--help"], None)?;
     assert_success(&help);
     assert!(String::from_utf8_lossy(&help.stdout).contains("Usage: xtask"));
 
@@ -330,7 +339,7 @@ fn warm_public_just_runner_and_hook_are_cargo_and_git_free() -> Result<()> {
         String::from_utf8_lossy(&direct.stdout),
         String::from_utf8_lossy(&direct.stderr)
     );
-    let hook = fixture.just(&fixture.root, &["agent-hook"], Some(payload))?;
+    let hook = fixture.just(&fixture.root, &["_agent-hook"], Some(payload))?;
     assert_success(&hook);
     assert!(
         String::from_utf8_lossy(&hook.stdout).contains("\"permissionDecision\":\"deny\""),
@@ -399,7 +408,7 @@ fn cached_just_transport_preserves_arguments_stdin_and_exit_codes() -> Result<()
 fn optional_transport_fails_open_before_policy_starts() -> Result<()> {
     let fixture = Fixture::new()?;
 
-    let missing = fixture.just(&fixture.root, &["agent-hook"], Some(b"ignored"))?;
+    let missing = fixture.just(&fixture.root, &["_agent-hook"], Some(b"ignored"))?;
 
     assert_success(&missing);
     assert!(
@@ -431,7 +440,7 @@ fn source_changes_stale_but_hook_routes_do_not() -> Result<()> {
     assert_eq!(source.stdout, b"stale\n");
 
     let payload = br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test"}}"#;
-    let hook = fixture.just(&fixture.root, &["agent-hook"], Some(payload))?;
+    let hook = fixture.just(&fixture.root, &["_agent-hook"], Some(payload))?;
     assert_success(&hook);
     assert!(
         String::from_utf8_lossy(&hook.stdout).contains("\"permissionDecision\":\"deny\""),
@@ -480,7 +489,7 @@ fn public_status_errors_do_not_start_cargo() -> Result<()> {
         "this is not valid TOML\n",
     )?;
 
-    let output = fixture.just(&fixture.root, &["xtask", "--help"], None)?;
+    let output = fixture.just(&fixture.root, &["tooling", "xtask", "--help"], None)?;
 
     assert!(!output.status.success());
     assert!(
@@ -516,7 +525,7 @@ printf '%s\n' "$SELF_CACHE_BOOTSTRAP_ARTIFACT"
             let fixture = Arc::clone(&fixture);
             thread::spawn(move || {
                 barrier.wait();
-                fixture.just(&fixture.root, &["xtask", "--help"], None)
+                fixture.just(&fixture.root, &["tooling", "xtask", "--help"], None)
             })
         })
         .collect::<Vec<_>>();
@@ -564,7 +573,7 @@ fn corrupt_executable_is_repaired_by_public_just_runner() -> Result<()> {
     fs::write(fixture.active_binary()?, b"not an executable format\n")?;
     fixture.install_outer_bootstrap_cargo()?;
 
-    let help = fixture.just(&fixture.root, &["xtask", "--help"], None)?;
+    let help = fixture.just(&fixture.root, &["tooling", "xtask", "--help"], None)?;
 
     assert_success(&help);
     assert!(String::from_utf8_lossy(&help.stdout).contains("Usage: xtask"));

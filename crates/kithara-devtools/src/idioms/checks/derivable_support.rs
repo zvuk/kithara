@@ -309,7 +309,7 @@ pub(super) fn cfg_tokens(attrs: &[Attribute]) -> Vec<String> {
 }
 
 fn impl_trait(impl_block: &ItemImpl) -> Option<&Path> {
-    impl_block.trait_.as_ref().map(|(_, path, _)| path)
+    impl_block.trait_.as_ref().map(|(path, _)| path)
 }
 
 fn path_ends(path: &Path, expected: &str) -> bool {

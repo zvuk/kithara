@@ -82,6 +82,7 @@ fn check_impl(
             let synth = ItemFn {
                 attrs: method.attrs.clone(),
                 vis: method.vis.clone(),
+                modifiers: method.modifiers.clone(),
                 sig: method.sig.clone(),
                 block: Box::new(method.block.clone()),
             };

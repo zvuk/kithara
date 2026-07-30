@@ -62,7 +62,7 @@ inserted: Mutex<bool>,
 // good: atomic when the flag stands alone (not coupled with other guarded state)
 inserted: AtomicBool,   // store(Release) / load(Acquire)
 ```
-*tier: cold | detector: opt-in `cargo xtask audit-clippy` (`mutex_atomic`) | present in kithara (kithara-ffi `item.rs`)*
+*tier: cold | detector: opt-in `just lint audit-clippy` (`mutex_atomic`) | present in kithara (kithara-ffi `item.rs`)*
 
 ## Async/tokio deep
 
@@ -93,7 +93,7 @@ async fn push(&self, buf: Vec<f32>) { self.sink.send(buf).await; }
 async fn push(&self, buf: Bytes) { self.sink.send(buf).await; }
 ```
 Drop large locals before the first await; `Box::pin` only at spawn/recursion boundaries.
-*tier: hot | detector: opt-in `cargo xtask audit-clippy` (`large_futures`) | preventive*
+*tier: hot | detector: opt-in `just lint audit-clippy` (`large_futures`) | preventive*
 
 **`select!` loop recreating stateful futures each turn**
 ```rust

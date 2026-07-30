@@ -243,6 +243,10 @@ pub(super) fn finish_rebuild<T: StreamType>(
         recreate.offset,
         src.seek_obs.epoch(),
     );
+    // A decoder built against the new variant is now the session's decoder:
+    // this is the moment `clear_variant_fence` documents, and the only place
+    // the switch may be acknowledged.
+    src.shared_stream.clear_variant_fence();
     src.retired.retire(old);
     debug!(
         ?duration,

@@ -1,6 +1,6 @@
 //! Idiomatic-construction fitness functions for the workspace.
 //!
-//! Run via `cargo xtask idioms`. Same shape as `arch` and `style`: declarative
+//! Run via `just lint idioms`. Same shape as `arch` and `style`: declarative
 //! rules from `.config/idioms/*.toml`, ratchet baseline at
 //! `.config/idioms/baseline.toml`. The namespace flags constructions that
 //! compile and pass clippy but suggest a better Rust pattern (performance,

@@ -18,7 +18,7 @@ use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
 };
-use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource, Transition};
+use kithara_queue::{Queue, QueueConfig, QueueError, RepeatMode, TrackSource, Transition};
 
 use super::salt;
 use crate::{
@@ -28,7 +28,7 @@ use crate::{
     item::AudioPlayerItem,
     observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
     registry::ItemRegistry,
-    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus},
+    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode},
 };
 
 fn build_processor_closure(
@@ -266,6 +266,8 @@ impl NativeInner {
             #[call(default_rate)]
             pub(crate) fn playing_rate(&self) -> f32;
             pub(crate) fn rate(&self) -> f32;
+            #[expr($.into())]
+            pub(crate) fn repeat_mode(&self) -> FfiRepeatMode;
             #[expr($.map_err(FfiError::from))]
             pub(crate) fn reset_eq(&self) -> Result<(), FfiError>;
             pub(crate) fn set_crossfade_duration(&self, seconds: f32);
@@ -476,6 +478,14 @@ impl NativeInner {
         *obs = Some(observer);
         drop(obs);
         drop(eb);
+    }
+
+    pub(crate) fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {
+        let mode = RepeatMode::try_from(mode).map_err(|rejected| FfiError::InvalidArgument {
+            reason: format!("repeat mode {rejected:?} is not supported"),
+        })?;
+        self.queue.set_repeat(mode);
+        Ok(())
     }
 
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {

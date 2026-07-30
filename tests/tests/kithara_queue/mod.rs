@@ -8,6 +8,7 @@ mod source_helper;
 use source_helper::app_track_source;
 
 mod advance_boundary_provenance;
+mod architecture_flow;
 mod auto_advance;
 mod cold_seek_middle;
 mod cpal_cold_seek_synthetic;
@@ -22,6 +23,7 @@ mod loader_lanes;
 mod loader_starvation;
 mod local_track_plays;
 mod packaged_drm_seek;
+mod play_before_the_load_lands;
 mod playlist_stall_fails_load;
 mod rapid_scrub_decode_failure;
 mod real_playlist;

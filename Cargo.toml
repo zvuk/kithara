@@ -349,7 +349,7 @@ stats_alloc = "0.1"
 symphonia = { version = "0.6.0", features = ["all", "opt-simd"] }
 symphonia-core = "0.6.0"
 symphonia-format-isomp4 = "0.6.0"
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 tempfile = "3.27.0"
 thirtyfour = "0.37.1"
 thiserror = "2.0.18"
@@ -369,7 +369,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 tracing-wasm = "0.2"
 uniffi = { version = "0.31.2", default-features = false }
 unimock = { version = "0.6", features = ["std"] }
-url = "2.5.8"
+url = { version = "2.5.8", features = ["serde"] }
 usdt = { version = "0.6", default-features = false, features = ["asm"] }
 uuid = { version = "1", features = ["v5"] }
 wasm-bindgen = "0.2"

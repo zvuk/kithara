@@ -4,7 +4,7 @@ use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
     compile::{CompiledNode, compile},
-    expand::{Binding, ControlSpec, ExpandedNode},
+    expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
     layout::Axis,
     module::{IconName, WaveStyle},
     size::Dim,
@@ -79,7 +79,12 @@ fn player_deck_starts_with_one_hero_wave() {
         spec:
             ControlSpec::Wave {
                 style: WaveStyle::Hero,
-                zoom: Some(Binding::Model { id, .. }),
+                zoom:
+                    Some(Binding {
+                        kind: BindingKind::Model,
+                        id,
+                        ..
+                    }),
                 ..
             },
         ..

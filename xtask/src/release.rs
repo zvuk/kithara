@@ -35,7 +35,7 @@ enum ReleaseCommand {
     Prepare {
         /// Version to release, without the `v` prefix (e.g. 0.0.2).
         version: String,
-        /// Pre-built `XCFramework` zip. When omitted, `cargo xtask apple
+        /// Pre-built `XCFramework` zip. When omitted, `just platform apple
         /// release` is run to produce /tmp/KitharaFFIInternal.xcframework.zip.
         #[arg(long)]
         zip: Option<PathBuf>,
@@ -73,11 +73,11 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
     let zip = if let Some(path) = zip {
         path
     } else {
-        check_tool("cargo", &["--version"], "https://rustup.rs")?;
-        println!("Building XCFramework (cargo xtask apple release)...");
+        check_tool("just", &["--version"], "brew install just")?;
+        println!("Building XCFramework (just platform apple release)...");
         run_step(
-            Command::new("cargo").args(["xtask", "apple", "release"]),
-            "cargo xtask apple release",
+            Command::new("just").args(["platform", "apple", "release"]),
+            "just platform apple release",
         )?;
         built = env::temp_dir().join(&cfg.asset);
         built.as_path()
@@ -133,9 +133,9 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
     println!();
     println!("Next steps:");
     println!("  1. Commit {manifest_path} in the release PR.");
-    println!("  2. After merge: cargo xtask release publish");
+    println!("  2. After merge: just release publish");
     if !cfg.pages_branch.is_empty() && !cfg.wasm_asset.is_empty() {
-        println!("  3. Deploy wasm to Pages: cargo xtask release pages");
+        println!("  3. Deploy wasm to Pages: just release pages");
     }
     Ok(())
 }
@@ -203,7 +203,7 @@ fn publish(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
             if actual != checksum {
                 bail!(
                     "cached {} sha256 {actual} does not match {} checksum {checksum}; \
-                     re-run `cargo xtask release prepare` and release a new version",
+                     re-run `just release artifacts <version>` and release a new version",
                     zip.display(),
                     cfg.manifest
                 );
@@ -419,7 +419,7 @@ fn upload_extra_asset(cfg: &ReleaseConfig, tag: &str, name: &str, required: bool
     if !zip.is_file() {
         if required {
             bail!(
-                "cached {name} not found at {}; re-run `cargo xtask release prepare`",
+                "cached {name} not found at {}; re-run `just release artifacts <version>`",
                 zip.display()
             );
         }
@@ -449,7 +449,7 @@ fn pages(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
     let zip = cache_named(&tag, &cfg.wasm_asset)?;
     if !zip.is_file() {
         bail!(
-            "cached {} not found at {}; run `just release-artifacts {version}` first",
+            "cached {} not found at {}; run `just release artifacts {version}` first",
             cfg.wasm_asset,
             zip.display()
         );
@@ -1097,7 +1097,7 @@ fn cache_named(tag: &str, name: &str) -> Result<PathBuf> {
 fn zip_required<'a>(zip: Option<&'a Path>, cfg: &ReleaseConfig, tag: &str) -> Result<&'a Path> {
     zip.with_context(|| {
         format!(
-            "artifact for {tag} not found at {}; run `cargo xtask release prepare` \
+            "artifact for {tag} not found at {}; run `just release artifacts <version>` \
              on the machine that built the release zip",
             cache_path(cfg, tag).map_or_else(|_| cfg.asset.clone(), |p| p.display().to_string()),
         )

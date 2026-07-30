@@ -29,7 +29,7 @@ Only two constructors mint a fresh tree root instead of deriving from a parent:
 owner's own subtree, never an implicit cancel of a potentially foreign master.
 
 Hard-coded `CancelToken::root()` and `CancelToken::never()` are forbidden in
-production code outside the allowlist enforced by `cargo xtask lint arch`
+production code outside the allowlist enforced by `just lint arch`
 (`cancel_root_sites`):
 
 - consumer-crate tops in `kithara-app` / `kithara-ffi`;

@@ -313,6 +313,11 @@ pub(crate) struct TestServerState {
     /// `Audio::new()` versus the lazy per-segment resolve that probes only
     /// the active prefix.
     size_probes: RwLock<HashMap<String, AtomicU64>>,
+    /// Server-wide reachability switch. While `false`, every data route returns
+    /// `503`, modeling a total network outage rather than one failed URL.
+    /// Because it covers the whole server, only a server private to one test
+    /// may be taken offline — see `PrivateTestServer`.
+    network_online: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -333,6 +338,7 @@ impl TestServerState {
             init_gates: RwLock::new(HashMap::new()),
             delay_gates: RwLock::new(HashMap::new()),
             size_probes: RwLock::new(HashMap::new()),
+            network_online: AtomicBool::new(true),
         })
     }
 
@@ -365,6 +371,14 @@ impl TestServerState {
     pub(crate) fn behavior_hits(&self, token: &str) -> Option<u64> {
         let map = self.behaviors.read().expect("behaviors poisoned");
         map.get(token).map(|e| e.hits.load(Ordering::Relaxed))
+    }
+
+    pub(crate) fn network_online(&self) -> bool {
+        self.network_online.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_network_online(&self, online: bool) {
+        self.network_online.store(online, Ordering::Relaxed);
     }
 
     /// Register a withhold gate for one `(hls token, variant, segment)` and

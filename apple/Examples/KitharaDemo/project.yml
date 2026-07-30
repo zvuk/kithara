@@ -154,6 +154,26 @@ targets:
         CODE_SIGN_STYLE: Automatic
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
+  KitharaDemoUnitTests_iOS:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - UnitTests
+    dependencies:
+      - target: KitharaDemo_iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kithara.demo.unittests
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/KitharaDemo.app/KitharaDemo"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_TARGET_NAME: KitharaDemo_iOS
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
   KitharaDemoUITests_macOS:
     type: bundle.ui-testing
     platform: macOS
@@ -186,6 +206,15 @@ schemes:
       config: Debug
       targets:
         - KitharaDemoUITests_iOS
+  KitharaDemoUnitTests_iOS:
+    build:
+      targets:
+        KitharaDemo_iOS: [run, test]
+        KitharaDemoUnitTests_iOS: [test]
+    test:
+      config: Debug
+      targets:
+        - KitharaDemoUnitTests_iOS
   KitharaDemoUITests_macOS:
     build:
       targets:

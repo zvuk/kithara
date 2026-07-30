@@ -658,7 +658,7 @@ pub enum ControlNode {
 }
 
 impl ControlNode {
-    pub(crate) fn size(&self) -> Option<SizeSpec> {
+    pub(crate) fn size(&self) -> Option<&SizeSpec> {
         match self {
             Self::Include { .. }
             | Self::Optional { .. }
@@ -703,7 +703,7 @@ impl ControlNode {
             | Self::Chip { size, .. }
             | Self::Knob { size, .. }
             | Self::VuStereo { size, .. }
-            | Self::VuVertical { size, .. } => *size,
+            | Self::VuVertical { size, .. } => size.as_ref(),
         }
     }
 

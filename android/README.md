@@ -40,9 +40,9 @@ rustup target add aarch64-linux-android x86_64-linux-android
 **Build JNI libraries and generate Kotlin UniFFI bindings:**
 
 ```bash
-just android                              # debug (default)
-cargo xtask android build                 # equivalent
-cargo xtask android build --profile release
+just platform android                     # debug (default)
+just platform android build              # equivalent
+just platform android build --profile release
 ```
 
 Output:
@@ -237,8 +237,8 @@ cd android
 Builds the Rust core for all supported ABIs and packages it into a release AAR:
 
 ```bash
-just android aar
-cargo xtask android aar
+just platform android aar
+just platform android aar
 ```
 
 Outputs in `android/lib/build/outputs/aar/`:

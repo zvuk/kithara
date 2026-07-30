@@ -16,3 +16,4 @@ pub(crate) mod flac;
 
 pub(crate) use audio_file_demuxer::{AppleAudioFileDemuxer, SourceOpenMode};
 pub(crate) use codec::AppleCodec;
+pub(crate) use converter::embedded_target_output_rate;

@@ -4657,9 +4657,10 @@ dependencies = [
  "roxmltree",
  "serde",
  "serde_json",
- "syn 2.0.118",
+ "syn 3.0.3",
  "tempfile",
  "toml 1.1.2+spec-1.1.0",
+ "url",
 ]
 
 [[package]]
@@ -4854,6 +4855,7 @@ name = "kithara-integration-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "aes",
+ "anyhow",
  "assert_no_alloc",
  "async-trait",
  "axum",
@@ -4871,6 +4873,7 @@ dependencies = [
  "js-sys",
  "kithara",
  "kithara-app",
+ "kithara-devtools",
  "kithara-encode",
  "kithara-test-utils",
  "memory-stats",
@@ -5129,7 +5132,7 @@ dependencies = [
  "kithara-workspace-hack",
  "proc-macro2",
  "quote",
- "syn 2.0.118",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -5246,6 +5249,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_core",
+ "serde_derive",
  "serde_json",
  "simd-adler32",
  "slab",
@@ -5261,6 +5265,7 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-subscriber",
+ "url",
  "web-sys",
  "winnow 1.0.3",
  "zerocopy",
@@ -9009,6 +9014,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "syn"
+version = "3.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
 name = "sync_wrapper"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10145,6 +10161,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+ "serde_derive",
 ]
 
 [[package]]
@@ -11689,7 +11706,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "signal-hook",
- "syn 2.0.118",
+ "syn 3.0.3",
  "tempfile",
  "toml 1.1.2+spec-1.1.0",
 ]

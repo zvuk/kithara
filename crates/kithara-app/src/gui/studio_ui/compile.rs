@@ -10,9 +10,8 @@ use kithara_ui::{
 use super::{
     cache::{DeckLayout, StudioCache},
     endpoints::StudioRegistry,
-    reads::StudioRoot,
 };
-use crate::gui::{app::Kithara, message::Message};
+use crate::gui::{app::Kithara, message::Message, studio_reads::StudioRoot};
 
 const DOCS: &[(&str, &str)] = &[
     (
@@ -98,7 +97,7 @@ pub(super) fn compile_studio(layout: DeckLayout) -> Result<CompiledUi, UiDocErro
     compile(
         entry,
         &resolver,
-        &StudioRegistry::new(),
+        &StudioRegistry::default(),
         builtin::skin_doc(),
         &UiConfig::default(),
     )

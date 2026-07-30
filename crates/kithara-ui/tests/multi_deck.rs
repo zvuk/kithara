@@ -31,14 +31,8 @@ fn collect_instances(ui: &CompiledUi, node: &CompiledNode, instances: &mut Vec<S
     }
 }
 
-fn binding_scopes(binding: &Binding) -> Option<&BTreeMap<InternId, InternId>> {
-    match binding {
-        Binding::Command { with, .. }
-        | Binding::Parameter { with, .. }
-        | Binding::Telemetry { with, .. }
-        | Binding::Model { with, .. } => Some(with),
-        _ => None,
-    }
+fn binding_scopes(binding: &Binding) -> &BTreeMap<InternId, InternId> {
+    &binding.with
 }
 
 fn collect_control_decks(ui: &CompiledUi, node: &ExpandedNode, decks: &mut Vec<String>) {
@@ -52,11 +46,11 @@ fn collect_control_decks(ui: &CompiledUi, node: &ExpandedNode, decks: &mut Vec<S
         }
         ExpandedNode::Control { read, write, .. } => {
             for binding in read.iter().chain(write.iter()) {
-                if let Some(deck) = binding_scopes(binding).and_then(|with| {
-                    with.iter()
-                        .find(|(key, _)| ui.resolve(**key) == "deck")
-                        .map(|(_, value)| ui.resolve(*value))
-                }) {
+                if let Some(deck) = binding_scopes(binding)
+                    .iter()
+                    .find(|(key, _)| ui.resolve(**key) == "deck")
+                    .map(|(_, value)| ui.resolve(*value))
+                {
                     decks.push(deck.to_owned());
                 }
             }
@@ -149,7 +143,7 @@ fn collect_read_keys(ui: &CompiledUi, node: &ExpandedNode, keys: &mut Vec<String
         ExpandedNode::Control {
             read: Some(binding),
             ..
-        } => keys.push(ui.resolve(binding.key()).to_owned()),
+        } => keys.push(ui.resolve(binding.key).to_owned()),
         _ => {}
     }
 }

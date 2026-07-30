@@ -124,10 +124,10 @@ cargo test -p kithara-integration-tests --test suite_heavy live_stress_real_stre
 
 ```bash
 just test                                          # default nextest run
-just test --profile fast                           # fast profile: skips suite_heavy
-just test --profile stress -E 'binary(suite_heavy)' # only suite_heavy, stress profile
-just test-doc                                      # doc tests only
-just test-all                                      # both unit and doc tests
+just test run --profile fast                           # fast profile: skips suite_heavy
+just test run --profile stress -E 'binary(suite_heavy)' # only suite_heavy, stress profile
+just test run --lane=doc                               # doc tests only
+just test all                                          # both unit and doc tests
 ```
 
 ## WASM Tests
@@ -136,7 +136,7 @@ WASM tests run via `wasm-bindgen-test` in headless Chrome. The `wasm_test_runner
 
 ```bash
 # Recommended entrypoint (handles everything)
-just wasm test
+just platform wasm test
 
 # Manual run (wasm_test_runner auto-starts test_server)
 cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
@@ -228,7 +228,7 @@ Local compare flow:
 
 ```bash
 just perf
-cargo xtask perf-compare perf-results.txt saved-baseline.txt --threshold 10
+just perf compare perf-results.txt saved-baseline.txt --threshold 10
 ```
 
 ## Benchmarks (`tests/benches`)
@@ -249,8 +249,8 @@ cargo bench -p kithara-integration-tests --bench refactor_hotpaths
 Or with project shortcuts:
 
 ```bash
-just bench               # build benches only (default mode)
-RUN_BENCHMARKS=1 BENCH_CANDIDATE_NAME=local just bench ci
+just perf bench               # build benches only (default mode)
+RUN_BENCHMARKS=1 BENCH_CANDIDATE_NAME=local just perf bench ci
 ```
 
 
@@ -311,9 +311,9 @@ Fuzz targets:
 | Profile | Command | Description |
 |---------|---------|-------------|
 | `default` | `just test` | All tests, 4 threads |
-| `fast` | `just test --profile fast` | Skips `suite_heavy` (stress/selenium) |
-| `stress` | `just test --profile stress -E 'binary(suite_heavy)'` | Only `suite_heavy`, 1 thread, 60s slow-timeout |
-| `ci` | `just test --profile ci --no-fail-fast` | CI mode, no fast-fail |
+| `fast` | `just test run --profile fast` | Skips `suite_heavy` (stress/selenium) |
+| `stress` | `just test run --profile stress -E 'binary(suite_heavy)'` | Only `suite_heavy`, 1 thread, 60s slow-timeout |
+| `ci` | `just test run --profile ci --no-fail-fast` | CI mode, no fast-fail |
 
 Profiles are defined in `.config/nextest.toml`.
 

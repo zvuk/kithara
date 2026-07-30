@@ -1,0 +1,26 @@
+exclude_files = ["target/**", "fuzz/**", "examples/**", "benches/**"]
+max_suppression_ratio = 0.0
+
+[complexity]
+enabled = false
+
+[duplicates]
+enabled = false
+
+[boilerplate]
+enabled = false
+
+[srp]
+enabled = false
+
+[coupling]
+enabled = false
+
+[structural]
+enabled = false
+
+[test_quality]
+enabled = true
+
+[architecture]
+enabled = false

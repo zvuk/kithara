@@ -89,6 +89,9 @@ impl Resource {
             /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
             #[must_use]
             pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            /// Cached span of the underlying reader: how much of the source is on disk.
+            #[must_use]
+            pub fn cached_span(&self) -> Duration;
             /// Decoded-ahead frontier of the underlying reader (always `>=` position).
             #[must_use]
             pub fn decoded_frontier(&self) -> Duration;

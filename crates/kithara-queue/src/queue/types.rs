@@ -17,8 +17,9 @@ use crate::track::TrackSource;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct PlaybackView {
-    /// Decoded-ahead buffered/playable seconds; `None` when no track is
-    /// active. Always `>=` `position`.
+    /// Seconds playable without further network — the wider of the cached
+    /// span and the decoded-ahead frontier. `None` when no track is active.
+    /// Always `>=` `position`.
     pub buffered: Option<f64>,
     /// Total media duration in seconds; `None` while unknown.
     pub duration: Option<f64>,
@@ -31,15 +32,21 @@ pub struct PlaybackView {
 
 impl From<PlaybackSnapshot> for PlaybackView {
     /// Resolve a raw player snapshot into the queue-level view: an unknown
-    /// duration (`0.0`) collapses to `None`, and the decoded `frontier`
-    /// becomes the buffered window. `position` is carried through raw here —
-    /// [`Queue::playback_view`](super::Queue::playback_view) then overrides
-    /// it with the cached/smoothed value it owns.
+    /// duration (`0.0`) collapses to `None`, and the buffered window is the
+    /// union of the cached span and the decoded `frontier`. `position` is
+    /// carried through raw here — [`Queue::playback_view`](super::Queue::playback_view)
+    /// then overrides it with the cached/smoothed value it owns.
+    ///
+    /// The union, not a replacement: the cached span is what a host progress
+    /// bar means by "available", but the frontier stays a floor because a
+    /// decoder that has run ahead of what the download side reported still
+    /// holds playable audio, and a window falling behind the playhead makes the
+    /// host pause into a buffering deadlock.
     fn from(snapshot: PlaybackSnapshot) -> Self {
         Self {
             position: Some(snapshot.position()),
             duration: (snapshot.duration() > 0.0).then_some(snapshot.duration()),
-            buffered: Some(snapshot.frontier()),
+            buffered: Some(snapshot.frontier().max(snapshot.cached())),
             playing: snapshot.is_playing(),
         }
     }
@@ -328,6 +335,8 @@ fn name_from_raw(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
+
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -388,6 +397,35 @@ mod tests {
             CachedPosition::known(f64::NAN),
             CachedPosition::Unknown
         ));
+    }
+
+    fn view_of(frontier: f64, cached: f64) -> PlaybackView {
+        let shared = kithara_play::PlaybackShared::default();
+        shared.duration.store(200.0, Ordering::Relaxed);
+        shared.frontier.store(frontier, Ordering::Relaxed);
+        shared.cached.store(cached, Ordering::Relaxed);
+        PlaybackView::from(shared.snapshot())
+    }
+
+    /// A fully downloaded track must report its cached span, not the sliver
+    /// the decoder has produced — that span is what a host progress bar and
+    /// `loadedTimeRanges` mean by "available without more network".
+    #[kithara::test]
+    fn buffered_covers_the_cached_span() {
+        assert_eq!(view_of(4.0, 120.0).buffered, Some(120.0));
+    }
+
+    /// The frontier is a floor, not a value the cached span replaces: a
+    /// reported window that falls behind the playhead makes the host pause
+    /// into a buffering deadlock.
+    #[kithara::test]
+    fn buffered_never_falls_behind_the_decoded_frontier() {
+        assert_eq!(view_of(90.0, 12.0).buffered, Some(90.0));
+    }
+
+    #[kithara::test]
+    fn buffered_is_zero_when_nothing_is_available() {
+        assert_eq!(view_of(0.0, 0.0).buffered, Some(0.0));
     }
 
     #[kithara::test]

@@ -1,0 +1,34 @@
+schema_version = 1
+output_dir = "target/quality-lab"
+
+[profiles.coverage]
+timeout_secs = 1800
+tools = ["cargo-crap"]
+
+[profiles.scheduled]
+timeout_secs = 900
+tools = ["cha", "rustqual", "cargo-dupes"]
+
+[profiles.manual]
+timeout_secs = 1800
+tools = ["cha", "rustqual", "cargo-dupes", "pmat"]
+
+[tools.cargo-crap]
+version = "0.3.1"
+timeout_secs = 300
+
+[tools.cha]
+version = "1.20.0"
+timeout_secs = 300
+
+[tools.rustqual]
+version = "1.8.1"
+timeout_secs = 300
+
+[tools.cargo-dupes]
+version = "0.2.1"
+timeout_secs = 300
+
+[tools.pmat]
+version = "3.24.2"
+timeout_secs = 1800

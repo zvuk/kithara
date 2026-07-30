@@ -298,6 +298,10 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
     fn decoded_frontier(&self) -> Duration {
         self.session.playhead.decoded_frontier()
     }
+
+    fn cached_span(&self) -> Duration {
+        self.session.playhead.cached()
+    }
 }
 
 impl<S: kithara_platform::maybe_send::MaybeSend> PcmSession for Audio<S> {

@@ -1,6 +1,6 @@
 //! Architectural fitness functions for the workspace.
 //!
-//! Run via `cargo xtask arch`. Reads declarative rules from `.config/arch/*.toml`,
+//! Run via `just lint arch`. Reads declarative rules from `.config/arch/*.toml`,
 //! evaluates them against the workspace, and ratchets results against
 //! `.config/arch/baseline.toml`.
 

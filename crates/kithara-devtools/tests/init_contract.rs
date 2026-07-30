@@ -10,10 +10,7 @@ use tempfile::tempdir;
 fn ctx(root: &Path, name: &str) -> Ctx {
     let mut config = ProjectConfig::default();
     config.project.name = name.to_string();
-    Ctx {
-        config,
-        root: root.to_path_buf(),
-    }
+    Ctx::new(root.to_path_buf(), config)
 }
 
 fn run_init(root: &Path, force: bool) -> anyhow::Result<()> {

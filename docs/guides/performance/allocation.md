@@ -23,7 +23,7 @@ dst = src.clone();         // in a reuse loop: reallocates every pass
 sink.push(&item);          // or move once if truly consumed
 dst.clone_from(&src);      // reuses dst's existing allocation
 ```
-*tier: warm | detector: opt-in `cargo xtask audit-clippy` (redundant_clone / assigning_clones) | preventive*
+*tier: warm | detector: opt-in `just lint audit-clippy` (redundant_clone / assigning_clones) | preventive*
 
 **Grow without reserve**
 ```rust
@@ -129,7 +129,7 @@ for e in events { seen.push(e.id); }  // seen never read
 // good
 // delete seen and the loop that fills it
 ```
-*tier: warm | detector: opt-in `cargo xtask audit-clippy` (collection_is_never_read) | preventive*
+*tier: warm | detector: opt-in `just lint audit-clippy` (collection_is_never_read) | preventive*
 
 **SmallVec/array micro-swap** - watch for: swap `Vec` for `SmallVec`/array only after a benchmark proves the collection is genuinely usually-small; it is frequently cargo-culted and copies on spill. *tier: n/a | detector: manual | preventive*
 

@@ -146,7 +146,7 @@ fn box_entry<'a>(
         background: inner.background,
         active_background: inner.active_background,
         press: None,
-        active: inner.active.map(|binding| ui.resolve(binding.key())),
+        active: inner.active.map(|binding| ui.resolve(binding.key)),
     }
 }
 
@@ -177,7 +177,7 @@ fn walk<'a>(node: &'a ExpandedNode, ui: &'a CompiledUi, skin: &SkinDoc, spec: &m
             content,
             ..
         } => {
-            let key = ui.resolve(open.key());
+            let key = ui.resolve(open.key);
             spec.reads.insert(key);
             spec.boxes.push(Box::bare(short(ui, *path)).active(key));
             walk(anchor, ui, skin, spec);
@@ -185,7 +185,7 @@ fn walk<'a>(node: &'a ExpandedNode, ui: &'a CompiledUi, skin: &SkinDoc, spec: &m
         }
         ExpandedNode::Pressable { path, press, child } => {
             let id = short(ui, *path);
-            let key = ui.resolve(press.key());
+            let key = ui.resolve(press.key);
             if let Some(inner) = container(child) {
                 let entry = box_entry(id, &inner, ui, skin).press(key);
                 spec.reads.extend(entry.active);
@@ -199,7 +199,7 @@ fn walk<'a>(node: &'a ExpandedNode, ui: &'a CompiledUi, skin: &SkinDoc, spec: &m
             }
         }
         ExpandedNode::Optional { block, child } => {
-            let hidden = ui.resolve(block.hidden.key());
+            let hidden = ui.resolve(block.hidden.key);
             spec.reads.insert(hidden);
             spec.blocks.push(Block {
                 id: short(ui, block.path),
@@ -215,7 +215,7 @@ fn walk<'a>(node: &'a ExpandedNode, ui: &'a CompiledUi, skin: &SkinDoc, spec: &m
             read,
             ..
         } => {
-            let read = read.as_ref().map(|binding| ui.resolve(binding.key()));
+            let read = read.as_ref().map(|binding| ui.resolve(binding.key));
             spec.reads.extend(read);
             match control {
                 ControlSpec::Text {
@@ -224,7 +224,7 @@ fn walk<'a>(node: &'a ExpandedNode, ui: &'a CompiledUi, skin: &SkinDoc, spec: &m
                     active,
                     align,
                 } => {
-                    let active = active.as_ref().map(|binding| ui.resolve(binding.key()));
+                    let active = active.as_ref().map(|binding| ui.resolve(binding.key));
                     spec.reads.extend(active);
                     spec.runs.push(Run {
                         id: ui.resolve(*id),
@@ -244,7 +244,7 @@ fn walk<'a>(node: &'a ExpandedNode, ui: &'a CompiledUi, skin: &SkinDoc, spec: &m
                     active_color,
                     active,
                 } => {
-                    let active = active.as_ref().map(|binding| ui.resolve(binding.key()));
+                    let active = active.as_ref().map(|binding| ui.resolve(binding.key));
                     spec.reads.extend(active);
                     spec.marks.push(Mark {
                         id: ui.resolve(*id),

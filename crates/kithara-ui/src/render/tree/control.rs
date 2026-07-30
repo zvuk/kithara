@@ -22,9 +22,9 @@ use crate::{
         button::ControlButton,
         deck::Bpm,
         global_bar::{Brand, Divider, PresetSelector, SettingsButton, Spacer},
-        mini_wave::MiniWave,
         telemetry::Telemetry,
         text::Text,
+        wave::mini::MiniWave,
         window::WindowSurface,
     },
 };

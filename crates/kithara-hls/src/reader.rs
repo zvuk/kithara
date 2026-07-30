@@ -100,6 +100,13 @@ impl HlsReaderEventSink {
         });
     }
 
+    fn maybe_publish_end_of_stream(&mut self) {
+        if self.last_segment.take().is_none() {
+            return;
+        }
+        self.bus.enqueue(HlsEvent::EndOfStream);
+    }
+
     fn publish_initial_seek(&mut self, cursor: u64) {
         if self.initial_seek_published {
             return;
@@ -147,9 +154,7 @@ impl ReaderEventSink for HlsReaderEventSink {
                 self.maybe_publish_read_progress(cursor);
                 self.last_cursor = cursor;
             }
-            ReaderChunkSignal::Eof if self.last_segment.take().is_some() => {
-                self.bus.enqueue(HlsEvent::EndOfStream);
-            }
+            ReaderChunkSignal::Eof => self.maybe_publish_end_of_stream(),
             _ => {}
         }
     }

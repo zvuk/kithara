@@ -171,16 +171,6 @@ impl DeckSet {
         self.commit(next)
     }
 
-    /// Set the group master applied to every deck.
-    ///
-    /// # Errors
-    /// See [`DeckSet::commit`].
-    pub fn set_group_master(&mut self, master: f32) -> Result<(), PlayError> {
-        let mut next = self.mix.clone();
-        next.group_master = master;
-        self.commit(next)
-    }
-
     /// The deck's output fader: session-input gain, never content volume.
     ///
     /// # Errors

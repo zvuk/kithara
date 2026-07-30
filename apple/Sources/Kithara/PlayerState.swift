@@ -131,6 +131,17 @@ public enum AbrMode: Sendable {
     case manual(variantIndex: Int)
 }
 
+/// Queue behavior after the current item reaches its end.
+public enum RepeatMode: Sendable, Equatable {
+    case off
+    case one
+    case all
+    /// A mode this version of the framework does not model. Reading it means
+    /// the queue gained a mode the Swift surface has not caught up with;
+    /// assigning it is rejected rather than silently treated as ``off``.
+    case unknown
+}
+
 // MARK: - Public type aliases (avoid `import KitharaFFI` in consumer code)
 
 /// Item event from Rust — use with ``KitharaPlayerItem/eventPublisher``.
@@ -167,6 +178,7 @@ public enum PlayerEvent: Sendable, Equatable {
     case queueEnded
     case crossfadeStarted(durationSeconds: Float)
     case crossfadeDurationChanged(seconds: Float)
+    case repeatModeChanged(mode: RepeatMode)
 }
 
 // MARK: - Transition
@@ -248,6 +260,34 @@ extension TimeControlStatus {
         case .paused: self = .paused
         case .waitingToPlay: self = .waitingToPlay
         case .playing: self = .playing
+        }
+    }
+}
+
+extension RepeatMode {
+    init(ffi: FfiRepeatMode) {
+        switch ffi {
+        case .off:
+            self = .off
+        case .one:
+            self = .one
+        case .all:
+            self = .all
+        case .unknown:
+            self = .unknown
+        }
+    }
+
+    var ffi: FfiRepeatMode {
+        switch self {
+        case .off:
+            .off
+        case .one:
+            .one
+        case .all:
+            .all
+        case .unknown:
+            .unknown
         }
     }
 }

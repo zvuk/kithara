@@ -35,7 +35,7 @@ fn registry() -> &'static CodecRegistry { CODEC_REGISTRY.get_or_init(CodecRegist
 ```
 *tier: hot | detector: manual | present in kithara (symphonia `CODEC_REGISTRY: OnceLock`)*
 
-**`Box<dyn T>` return where `impl Trait` fits** - watch for boxing a single concrete return type; absent here - every `Box<dyn>` return (`build_backend`, `create_decoder`) is a runtime-selected, *stored* trait object that `impl Trait` cannot express. *tier: hot | detector: opt-in `cargo xtask audit-clippy` (`unnecessary_box_returns`, pedantic) | already clean*
+**`Box<dyn T>` return where `impl Trait` fits** - watch for boxing a single concrete return type; absent here - every `Box<dyn>` return (`build_backend`, `create_decoder`) is a runtime-selected, *stored* trait object that `impl Trait` cannot express. *tier: hot | detector: opt-in `just lint audit-clippy` (`unnecessary_box_returns`, pedantic) | already clean*
 
 ## Build/codegen/LTO
 

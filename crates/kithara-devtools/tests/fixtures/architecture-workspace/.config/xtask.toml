@@ -1,0 +1,10 @@
+[project]
+name = "portable-flow"
+
+[[architecture.runtime.scenarios]]
+name = "flow-runtime"
+command = "test"
+package = "flow"
+test = "architecture"
+filter = "writes_architecture_trace"
+timeout_secs = 30

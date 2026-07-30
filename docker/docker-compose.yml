@@ -13,7 +13,7 @@ services:
       CARGO_INCREMENTAL: "0"
       RUST_BACKTRACE: "1"
       CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT: "300"
-    command: just ci-full-run /ci-out
+    command: just ci full /ci-out
     restart: "no"
 
   # Same pipeline, but every rustc invocation goes through sccache so per-mutant
@@ -48,7 +48,7 @@ services:
       SCCACHE_IDLE_TIMEOUT: "0"
       # Cap cargo-mutants parallelism to match host headroom.
       MUTANTS_JOBS: "8"
-    command: just ci-full-run /ci-out
+    command: just ci full /ci-out
     restart: "no"
 
 volumes:

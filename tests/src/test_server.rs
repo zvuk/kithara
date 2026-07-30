@@ -29,7 +29,8 @@ mod wasm;
 pub(crate) use native::router;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{
-    BehaviorHandle, InitGateHandle, SegmentGateHandle, TestServerHelper, run_test_server,
+    BehaviorHandle, InitGateHandle, PrivateTestServer, SegmentGateHandle, TestServerHelper,
+    run_test_server,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use shared::shared;

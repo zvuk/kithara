@@ -5,9 +5,10 @@ use std::num::NonZeroU32;
 use kithara::{
     self,
     decode::PcmSpec,
+    events::{AdvanceReason, Event, QueueEvent},
     platform::sync::Arc,
     play::Resource,
-    queue::{Queue, QueueConfig, Transition},
+    queue::{Queue, QueueConfig, RepeatMode, Transition},
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader, offline::resource_from_reader_with_src,
@@ -66,6 +67,71 @@ fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usiz
         pcm.extend(block);
     }
     pcm
+}
+
+#[kithara::test(tokio)]
+async fn repeat_one_natural_advance_keeps_current_track() {
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    );
+    let queue = Queue::new(with_autoplay(
+        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        false,
+    ));
+    let id = queue.insert_loaded_for_test(make_resource("one", 1.0, 0.3));
+    queue
+        .select(id, Transition::None)
+        .expect("select repeat-one track");
+    let mut receiver = queue.subscribe();
+    queue.set_repeat(RepeatMode::One);
+
+    assert!(matches!(
+        receiver.try_recv().map(|envelope| envelope.event),
+        Ok(Event::Queue(QueueEvent::RepeatModeChanged {
+            mode: kithara::events::QueueRepeatMode::One,
+        }))
+    ));
+    assert_eq!(
+        queue.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof),
+        Some(id)
+    );
+    assert_eq!(queue.current().map(|entry| entry.id), Some(id));
+}
+
+#[kithara::test(tokio)]
+async fn repeat_all_natural_advance_wraps_last_track_to_first() {
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    );
+    let queue = Queue::new(with_autoplay(
+        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        false,
+    ));
+    let first = queue.insert_loaded_for_test(make_resource("first", 1.0, 0.2));
+    let last = queue.insert_loaded_for_test(make_resource("last", 1.0, 0.8));
+    queue
+        .select(last, Transition::None)
+        .expect("select last repeat-all track");
+    let mut receiver = queue.subscribe();
+    queue.set_repeat(RepeatMode::All);
+
+    assert!(matches!(
+        receiver.try_recv().map(|envelope| envelope.event),
+        Ok(Event::Queue(QueueEvent::RepeatModeChanged {
+            mode: kithara::events::QueueRepeatMode::All,
+        }))
+    ));
+    assert_eq!(
+        queue.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof),
+        Some(first)
+    );
+    assert_eq!(queue.current().map(|entry| entry.id), Some(first));
 }
 
 /// cf=0: queue.tick must drive `process_notifications`, the audio thread

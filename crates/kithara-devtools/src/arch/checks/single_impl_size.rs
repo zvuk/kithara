@@ -85,7 +85,7 @@ fn collect_impls<'a>(items: &'a [Item], out: &mut Vec<&'a ItemImpl>) {
 
 fn describe_impl(im: &ItemImpl) -> String {
     let target = type_label(&im.self_ty);
-    if let Some((_, path, _)) = &im.trait_ {
+    if let Some((path, _)) = &im.trait_ {
         let trait_name = path
             .segments
             .last()

@@ -393,6 +393,7 @@ mod tests {
             },
         );
         ProjectConfig {
+            architecture: crate::common::project::ArchitectureConfig::default(),
             project: ProjectIdentity {
                 name: "demo".to_owned(),
             },

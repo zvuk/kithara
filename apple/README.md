@@ -54,8 +54,8 @@ assets and add the unpacked `Kithara.xcframework` to the app target.
 For local development, clone the repo and use the `KITHARA_LOCAL_DEV` environment variable to build against the local XCFramework:
 
 ```bash
-cargo xtask apple build                    # build XCFramework (release)
-cargo xtask apple build --profile debug    # build XCFramework (debug)
+just platform apple xcframework                    # build XCFramework (release)
+just platform apple xcframework --profile debug    # build XCFramework (debug)
 KITHARA_LOCAL_DEV=1 swift build            # build Swift package with local binary
 ```
 
@@ -253,7 +253,7 @@ Open `apple/Package.swift` in Xcode, then open the playground from the Project n
 For local Rust changes, build a local XCFramework first:
 
 ```bash
-cargo xtask apple build --profile debug
+just platform apple xcframework --profile debug
 cd apple
 KITHARA_LOCAL_DEV=1 open Package.swift
 ```
@@ -262,14 +262,14 @@ KITHARA_LOCAL_DEV=1 open Package.swift
 An iOS/macOS demo player is included in [`Examples/KitharaDemo`](Examples/KitharaDemo). It plays audio from any URL (MP3, AAC, FLAC, HLS) with transport controls, seek, volume, playback rate, and error reporting.
 
 ```bash
-cargo xtask apple run
-just apple demo
+just platform apple demo
+just platform apple demo
 ```
 
 To open the generated Xcode project instead of launching a simulator:
 
 ```bash
-just apple xcode
+just platform apple xcode
 ```
 
 Features: URL input with Cmd+V, play/pause with auto-reload after track ends, seek slider, volume with mute, rate selector (0.5x–2.0x), status badge, and error display.
@@ -279,11 +279,11 @@ Features: URL input with Cmd+V, play/pause with auto-reload after track ends, se
 The XCFramework bundles the Rust core for all supported Apple platforms:
 
 ```bash
-just apple xcframework                       # release (optimized)
-just apple xcframework --profile debug       # debug (faster builds)
+just platform apple xcframework                       # release (optimized)
+just platform apple xcframework --profile debug       # debug (faster builds)
 # Equivalent direct xtask invocations:
-cargo xtask apple build
-cargo xtask apple build --profile debug
+just platform apple xcframework
+just platform apple xcframework --profile debug
 ```
 
 Output: `apple/KitharaFFIInternal.xcframework` with slices for:

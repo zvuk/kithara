@@ -7,10 +7,13 @@
 # feature sets don't thrash one cache; keep them out of git AND out of
 # lint / ast-grep scans (generated build code would otherwise trip style rules).
 /target-flash*/
+/target-audit-clippy/
 # Note: Cargo.lock is tracked for reproducible builds in workspace with examples
 
 # Rustfmt / Clippy / IDE noise
 **/*.rs.bk
+# Generated SCIP index used by cargo-workspace-unused-pub.
+/index.scip
 
 # Brainstorming session artifacts (visual companion)
 .superpowers/

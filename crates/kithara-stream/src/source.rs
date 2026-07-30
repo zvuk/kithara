@@ -348,8 +348,16 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
 /// mutability, so callers hold an `Arc<dyn VariantControl>` and never
 /// need `&mut`.
 pub trait VariantControl: Send + Sync + 'static {
-    /// Clear the variant fence after a decoder recreate acks an ABR switch.
+    /// Acknowledge an ABR switch: a decoder built against the new variant
+    /// is installed. Call at the install site only — see
+    /// [`Self::open_variant_read_gate`] for the reads that precede it.
     fn clear_variant_fence(&self);
+
+    /// Let reads through for a decoder that is being built against the new
+    /// variant, without acknowledging the switch. The switch stays pending
+    /// until a decoder actually arrives, so a rebuild that fails leaves the
+    /// signal intact for the next consumer.
+    fn open_variant_read_gate(&self);
 
     /// Byte range of the header the decoder must re-read after a format
     /// change (HLS ABR cross-codec switch).
@@ -360,9 +368,14 @@ pub trait VariantControl: Send + Sync + 'static {
     /// outside the virtual range.
     fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
 
-    /// Whether a cross-variant transition is in-flight (reads/waits are
-    /// short-circuited until the decoder acks via `clear_variant_fence`).
+    /// Whether a committed cross-variant transition still has no decoder
+    /// behind it (cleared by `clear_variant_fence`, not by opening the read
+    /// gate).
     fn has_variant_change_pending(&self) -> bool;
+
+    /// Whether reads are still short-circuited by the transition — true
+    /// until `open_variant_read_gate` (or `clear_variant_fence`) runs.
+    fn variant_read_pending(&self) -> bool;
 
     /// Target variant index of the in-flight transition, `None` when no
     /// fence is pending. Published before the fence is raised, so any

@@ -5,8 +5,8 @@ use cargo_metadata::{Metadata, Package};
 use clap::ValueEnum;
 
 /// Downstream tool whose flag dialect `Scope::flags_for` emits. Used by
-/// `cargo xtask scope --for=<TOOL>` for shell-substitution in justfile
-/// recipes (`just audit`, etc.).
+/// `just tooling xtask scope --for=<TOOL>` for shell substitution in Just
+/// recipes (`just ci audit`, etc.).
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum Tool {
     Xtask,
@@ -92,7 +92,7 @@ impl Scope {
     }
 
     /// Emit space-separated flag tokens for the requested downstream tool.
-    /// See `cargo xtask scope` documentation for the full output table.
+    /// See `just tooling xtask scope` documentation for the full output table.
     #[must_use]
     pub fn flags_for(&self, tool: Tool) -> Vec<String> {
         let is_empty = self.is_empty();
@@ -224,7 +224,7 @@ impl Scope {
     }
 
     /// Resolve a list of user-supplied scope tokens (typically from
-    /// positional `cargo xtask scope` args) into a `Scope`. Each token is
+    /// positional `just tooling xtask scope` args) into a `Scope`. Each token is
     /// classified as a bare crate name, a `crates/<name>[/...]` path, or
     /// a non-crate workspace path (`tests/`, `xtask/`, …).
     ///

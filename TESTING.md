@@ -14,13 +14,13 @@ compiled-in decoder.
 
 ```sh
 just test                  # whole workspace, flash ON (default), all backends
-just test --flash=off      # real wall clock — the regression baseline
-just test -p kithara-hls   # one package
-just test --profile ci     # a specific nextest profile
-just test EXPR             # a nextest filter expression, e.g. test(seek)
-just test --lane=doc       # doc-tests (nextest does not run them)
-just test --lane=e2e       # gated by the `e2e` feature (suite_e2e)
-just test --lane=cached    # opt-in ephemeral L2 fixture cache (profile `cache`)
+just test run --flash=off      # real wall clock — the regression baseline
+just test run -p kithara-hls   # one package
+just test run --profile ci     # a specific nextest profile
+just test run EXPR             # a nextest filter expression, e.g. test(seek)
+just test run --lane=doc       # doc-tests (nextest does not run them)
+just test run --lane=e2e       # gated by the `e2e` feature (suite_e2e)
+just test run --lane=cached    # opt-in ephemeral L2 fixture cache (profile `cache`)
 ```
 
 The `--flash=*` token is stripped before reaching nextest; every other argument
@@ -35,12 +35,12 @@ concurrently — so neither mode's load perturbs the other (load contention is a
 common source of false "flake" signals):
 
 ```sh
-just test --flash=on    # virtual clock (the primary, default mode)
-just test --flash=off   # real wall clock (regression baseline)
+just test run --flash=on    # virtual clock (the primary, default mode)
+just test run --flash=off   # real wall clock (regression baseline)
 ```
 
 A change is considered certified for a mode only after consecutive clean runs;
-a single failure resets the count. Reach for isolation (`just test <filter>`) to
+a single failure resets the count. Reach for isolation (`just test run <filter>`) to
 tell a deterministic failure from a load-correlated one: a test that fails under
 the full suite but passes alone is load-correlated, not deterministic.
 

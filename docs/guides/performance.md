@@ -1,6 +1,6 @@
 # Performance
 
-Lazy-loaded performance-antipattern reference, split by theme. Open only the sub-file that matches your task. Every entry is bad -> good with the detector that catches it (enforced ast-grep/clippy lint, the opt-in `cargo xtask audit-clippy` sweep, or manual).
+Lazy-loaded performance-antipattern reference, split by theme. Open only the sub-file that matches your task. Every entry is bad -> good with the detector that catches it (enforced ast-grep/clippy lint, the opt-in `just lint audit-clippy` sweep, or manual).
 
 *Tiers: hot = audio/decode/resampler/stretch/beat/bufpool; warm = stream/hls/file/net/storage/assets/abr/drm/queue/events/play; cold = platform/app/apple/ffi/encode.*
 

@@ -7,7 +7,8 @@ mod support;
 use std::{fs, num::NonZeroUsize, path::Path};
 
 use kithara_assets::{
-    AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend, WriteSide,
+    AcquisitionResult, AssetStore, AssetStoreBuilder, FlushHub, FlushPolicy, ResourceKey,
+    StorageBackend, WriteSide,
 };
 use kithara_platform::{
     CancelToken, thread,
@@ -34,19 +35,41 @@ fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
     w
 }
 
-fn wait_for_snapshot_change(path: &Path, previous: Option<&[u8]>) -> Vec<u8> {
+/// Block until the snapshot at `path` names `key_name`. Resource keys are
+/// archived as plain UTF-8, so their presence in the file is what proves the
+/// flush worker wrote the committed resource out.
+fn wait_for_snapshot_naming(path: &Path, key_name: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
+    let needle = key_name.as_bytes();
     loop {
-        if let Ok(bytes) = fs::read(path)
-            && !bytes.is_empty()
-            && previous.is_none_or(|old| old != bytes)
-        {
-            return bytes;
+        if fs::read(path).is_ok_and(|bytes| bytes.windows(needle.len()).any(|w| w == needle)) {
+            return;
         }
         assert!(
             Instant::now() < deadline,
-            "availability worker did not publish a changed snapshot at {}",
+            "availability worker never wrote a snapshot naming {key_name} at {}",
             path.display()
+        );
+        thread::yield_now();
+    }
+}
+
+/// Rebuild a store on `root` until its hydrated availability index has dropped
+/// `key`, then hand that store back. A snapshot that still carries the resource
+/// wins over the on-disk scan, so this only clears once the deletion is durable.
+fn wait_for_persisted_deletion(root: &Path, key: &ResourceKey) -> AssetStore {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let reopened = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk { root: root.into() })
+            .build();
+        if reopened.final_len(key).is_none() {
+            return reopened;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "availability worker never persisted the deletion under {}",
+            root.display()
         );
         thread::yield_now();
     }
@@ -207,19 +230,18 @@ fn worker_persists_resource_deletion_without_checkpoint() {
     drop(writer.commit(Some(0)).unwrap());
 
     let availability_path = dir.path().join("_index/availability.bin");
-    let before = wait_for_snapshot_change(&availability_path, None);
     assert!(resource_path.is_file());
+
+    // The worker flushes asynchronously, so the snapshot on disk goes through
+    // several revisions and a single "the bytes changed" rendezvous can land on
+    // one that predates the deletion. Pin both ends of the property instead:
+    // the resource must reach the snapshot, and it must then leave it.
+    wait_for_snapshot_naming(&availability_path, key_name);
 
     store.remove_resource(&key).unwrap();
     assert!(!resource_path.exists());
-    let after = wait_for_snapshot_change(&availability_path, Some(&before));
-    assert_ne!(before, after);
 
-    let reopened = AssetStoreBuilder::default()
-        .backend(StorageBackend::Disk {
-            root: dir.path().into(),
-        })
-        .build();
+    let reopened = wait_for_persisted_deletion(dir.path(), &key);
     assert_eq!(reopened.final_len(&key), None);
     assert!(reopened.available_ranges(&key).is_empty());
 }

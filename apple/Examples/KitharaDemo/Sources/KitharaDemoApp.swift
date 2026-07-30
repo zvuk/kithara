@@ -11,9 +11,20 @@ struct KitharaDemoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     #endif
 
+    /// Hosted unit tests need this process and its audio session, not its UI.
+    /// Building `PlayerView` would start a second player against the demo's own
+    /// stream, which competes with the tests for the shared asset cache.
+    private static var isHostingTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+
     var body: some Scene {
         WindowGroup {
-            PlayerView()
+            if Self.isHostingTests {
+                Color.clear
+            } else {
+                PlayerView()
                 #if os(macOS)
                 .onAppear {
                     // CLI-launched executables (not .app bundles) don't
@@ -23,6 +34,7 @@ struct KitharaDemoApp: App {
                     NSApplication.shared.activate(ignoringOtherApps: true)
                 }
                 #endif
+            }
         }
         #if os(macOS)
         .commands {

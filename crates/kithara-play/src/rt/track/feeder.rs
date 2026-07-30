@@ -116,6 +116,13 @@ impl PlayerResource {
         self.resource.get().decoded_frontier().as_secs_f64()
     }
 
+    /// Cached span in seconds: how much of the source is on disk and needs no
+    /// further network.
+    #[must_use]
+    pub fn cached_span(&self) -> f64 {
+        self.resource.get().cached_span().as_secs_f64()
+    }
+
     fn fill_scratch(&mut self, target_frames: usize) -> bool {
         let mut eof_reached = self.eof_seen;
 

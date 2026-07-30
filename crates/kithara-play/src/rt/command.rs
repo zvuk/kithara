@@ -18,6 +18,13 @@ impl PlayerNodeProcessor {
         }
     }
 
+    fn apply_playback_rate(&mut self, rate: f32) {
+        self.playback_rate = rate;
+        for (_, track) in self.tracks.iter_mut() {
+            track.set_playback_rate(rate);
+        }
+    }
+
     fn apply_prefetch_duration(&mut self, duration: f32) {
         self.prefetch_duration = duration.max(0.0);
         for (_, track) in self.tracks.iter_mut() {
@@ -66,6 +73,7 @@ impl PlayerNodeProcessor {
         self.playback.playing.store(false, Ordering::SeqCst);
         self.playback.position.store(0.0, Ordering::Relaxed);
         self.playback.frontier.store(0.0, Ordering::Relaxed);
+        self.playback.cached.store(0.0, Ordering::Relaxed);
         self.playback.duration.store(0.0, Ordering::Relaxed);
     }
 
@@ -102,9 +110,7 @@ impl PlayerNodeProcessor {
                     self.apply_prefetch_duration(duration);
                 }
                 PlayerCmd::SetPlaybackRate(rate) => {
-                    self.tracks
-                        .iter()
-                        .for_each(|(_, track)| track.resource().set_playback_rate(rate));
+                    self.apply_playback_rate(rate);
                 }
             }
         }
@@ -188,6 +194,7 @@ impl PlayerNodeProcessor {
             .fade_duration(self.crossfade.duration)
             .prefetch_duration(self.prefetch_duration)
             .fade_curve(self.crossfade.fade_curve())
+            .playback_rate(self.playback_rate)
             .build();
         let track = PlayerTrack::new(resource, params);
         self.tracks.insert(src, track);

@@ -29,7 +29,7 @@ use tracing_subscriber::EnvFilter;
 /// pointless without `KITHARA_DRM_KEY` + `KITHARA_DRM_AUTH_TOKEN`
 /// baked at build time (`option_env!`).
 #[kithara::test(tokio)]
-#[ignore = "requires zvq.me VPN + .env-baked DRM creds — `just zvuk-drm-trace`"]
+#[ignore = "requires zvq.me VPN + .env-baked DRM creds - use the e2e test lane"]
 async fn zvuk_drm_master_playlist_trace() {
     install_tracing();
 

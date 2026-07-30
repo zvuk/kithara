@@ -29,7 +29,7 @@ fn depth(buf: &mut RingCons) -> usize { buf.len() }
 // good
 fn depth(buf: &RingCons) -> usize { buf.len() }
 ```
-*tier: warm | detector: opt-in `cargo xtask audit-clippy` (`needless_pass_by_ref_mut`) | preventive*
+*tier: warm | detector: opt-in `just lint audit-clippy` (`needless_pass_by_ref_mut`) | preventive*
 
 **Allocate an owned return to satisfy the borrow checker.**
 ```rust
@@ -71,7 +71,7 @@ frames.iter().cloned().filter(|f| f.voiced).take(8)
 // good
 frames.iter().filter(|f| f.voiced).take(8).cloned()   // clone only the survivors
 ```
-*tier: hot | detector: opt-in `cargo xtask audit-clippy` (`iter_overeager_cloned`) | preventive*
+*tier: hot | detector: opt-in `just lint audit-clippy` (`iter_overeager_cloned`) | preventive*
 
 **`.map(|x| x.clone())` instead of `.cloned()`/`.copied()`.**
 Watch for: `iter.map(|x| x.clone())` - `.copied()` for `Copy`, `.cloned()` otherwise.

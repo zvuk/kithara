@@ -295,6 +295,30 @@ impl From<QueueRepeatMode> for FfiRepeatMode {
     }
 }
 
+impl From<kithara_queue::RepeatMode> for FfiRepeatMode {
+    fn from(value: kithara_queue::RepeatMode) -> Self {
+        match value {
+            kithara_queue::RepeatMode::Off => Self::Off,
+            kithara_queue::RepeatMode::One => Self::One,
+            kithara_queue::RepeatMode::All => Self::All,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl TryFrom<FfiRepeatMode> for kithara_queue::RepeatMode {
+    type Error = FfiRepeatMode;
+
+    fn try_from(value: FfiRepeatMode) -> Result<Self, Self::Error> {
+        match value {
+            FfiRepeatMode::Off => Ok(Self::Off),
+            FfiRepeatMode::One => Ok(Self::One),
+            FfiRepeatMode::All => Ok(Self::All),
+            FfiRepeatMode::Unknown => Err(FfiRepeatMode::Unknown),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiRouteChangeReason {
@@ -1135,6 +1159,26 @@ mod tests {
         assert_eq!(
             FfiTimeControlStatus::from(TimeControlStatus::Playing),
             FfiTimeControlStatus::Playing
+        );
+    }
+
+    #[kithara::test]
+    fn queue_repeat_mode_round_trips_through_ffi() {
+        for expected in [
+            kithara_queue::RepeatMode::Off,
+            kithara_queue::RepeatMode::One,
+            kithara_queue::RepeatMode::All,
+        ] {
+            let ffi = FfiRepeatMode::from(expected);
+            assert_eq!(kithara_queue::RepeatMode::try_from(ffi), Ok(expected));
+        }
+    }
+
+    #[kithara::test]
+    fn unknown_ffi_repeat_mode_is_rejected() {
+        assert_eq!(
+            kithara_queue::RepeatMode::try_from(FfiRepeatMode::Unknown),
+            Err(FfiRepeatMode::Unknown)
         );
     }
 

@@ -71,7 +71,7 @@ pub(super) fn track_list<'a>(
     TrackList::builder()
         .path(path)
         .columns(columns)
-        .maybe_columns_state(columns_state.map(|binding| ui.resolve(binding.id())))
+        .maybe_columns_state(columns_state.map(|binding| ui.resolve(binding.id)))
         .columns_scope(read_scope(columns_state, ui))
         .maybe_value(value)
         .reads(reads)

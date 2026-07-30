@@ -79,20 +79,22 @@ impl<T: StreamType> RebuildPort<T> {
         recreate: RecreateState,
         started_seek_epoch: u64,
     ) -> Result<RebuildState, (RecreateState, RecreateOutcome)> {
+        // Open the read gate so the rebuild's own construction reads are not
+        // short-circuited by the switch they exist to resolve. The switch
+        // itself stays outstanding until the rebuilt decoder is installed —
+        // this call must never ack it, or a rebuild that comes back
+        // interrupted leaves the session on the old variant with the signal
+        // already consumed.
+        stream.open_variant_read_gate();
         if recreate.cause == RecreateCause::FormatBoundary
             && matches!(recreate.next, RecreateNext::Decode)
         {
-            stream.clear_variant_fence();
             if let Err(error) = stream.probe_seek(SeekFrom::Start(recreate.offset)) {
                 let outcome = classify(&kithara_decode::DecodeError::from(error));
                 return Err((recreate, outcome));
             }
-        } else {
-            stream.clear_variant_fence();
-            if stream.probe_seek(SeekFrom::Start(recreate.offset)).is_err() {
-                return Err((recreate, RecreateOutcome::SoftFailed));
-            }
-            stream.clear_variant_fence();
+        } else if stream.probe_seek(SeekFrom::Start(recreate.offset)).is_err() {
+            return Err((recreate, RecreateOutcome::SoftFailed));
         }
         let ticket = self.next_ticket;
         self.next_ticket = self.next_ticket.wrapping_add(1);

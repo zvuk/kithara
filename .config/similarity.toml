@@ -1,8 +1,16 @@
-# Crates excluded from similarity-rs duplicate-detection scans (run by
-# `just similarity` / `just health`): the generated workspace-hack crate
-# and test-only infra crates that legitimately share boilerplate.
+# Crates excluded from native and similarity-rs scans (run by
+# `just lint similarity` / `just ci health`): the generated workspace-hack
+# crate and test-only infra crates that legitimately share boilerplate.
 excluded_crates = [
   "kithara-workspace-hack",
   "kithara-test-utils",
   "kithara-test-macros",
 ]
+
+[[types.relations]]
+left = "Vec"
+right = "SmallVec"
+similarity = 0.86
+substitution = "conditional"
+direction = "bidirectional"
+caveats = ["inline capacity changes layout", "heap allocation behavior differs"]

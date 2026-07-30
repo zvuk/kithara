@@ -35,7 +35,60 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 - Prefer clean, maintainable code over clever shortcuts or speculative abstractions.
 - Keep code readable and easy to understand.
 - Optimize for performance in hot paths.
-- Use repo harnesses for acceptance and formatting: `cargo xtask test` / `just test` and `cargo xtask format`. Raw `cargo test`, `cargo nextest`, or direct formatter commands are scoped probes only, not final validation claims.
+- Use repo harnesses for acceptance and formatting: `just test` and `just fmt`. Raw `cargo test`, `cargo nextest`, or direct formatter commands are scoped probes only, not final validation claims.
+
+## Command Routing
+
+Use these exact Just paths. Do not spend an agent turn on `just --list` for
+routine work:
+
+- `just fmt`; check-only: `just fmt check`.
+- `just check`; Clippy: `just check clippy`.
+- `just lint`; fast gate: `just lint fast`; full gate: `just lint full`.
+- Structural and behavioral duplication report: `just lint similarity`; scope
+  it by appending crate `src/` paths. Read
+  `target/similarity/<revision>/report.md` for the crate-level Mermaid map and
+  explainable candidates, and `report.json` for exhaustive evidence.
+- `just test`; parameterized harness: `just test run <args>`; tests plus
+  doc-tests: `just test all`.
+- `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:
+  `just ci health`.
+- Architecture diagram, linked contour reports, and complexity profile:
+  `just arch viz` (workspace, automatic LOD 0 plus crate/hotspot-subsystem pages);
+  crate subsystems: `just arch viz --crate <package>` (automatic LOD 1);
+  module abstractions: `just arch viz --crate <package> --module <path>`
+  (automatic LOD 2);
+  crate boundaries/resources: `just arch viz --crate <package> --lod 3`;
+  complete module call graph: `just arch viz --crate <package> --module <path>
+  --lod 4`. A crate view isolates the selected crate, hides Cargo dependencies
+  and incoming callers, and terminates concrete outgoing interactions at
+  compact public external ports. Use `--view ownership` for the ownership lens and
+  `--scenario <name>` for one configured runtime flow. Project defaults under
+  `[architecture.filters]` and repeatable `--exclude-crate <glob>` /
+  `--exclude-module <glob>` remove non-product contours from semantic
+  selection, diagrams, projections, and findings without disabling runtime
+  evidence producers. Read `metrics.json` for the resolved-static profile,
+  candidate comparison, per-contour metrics, and experimental ACI; runtime
+  observations are a separate overlay and do not change the stable score.
+- `just quality lab list`; manual/scheduled analyzer run:
+  `just quality lab run <profile-or-tool>`; coverage risk:
+  `just quality coverage-risk`.
+- Decision-oriented repository assessment: `just quality assess`; every source
+  surface: `just quality assess --profile complete`; heavyweight evidence:
+  `just quality assess --depth deep`; one crate:
+  `just quality assess --crate <package>`; one module:
+  `just quality assess --module <package>::<module>`. Read the printed
+  `manifest.json` before the report. For contextual interpretation follow
+  `docs/skills/quality-assessment/SKILL.md`; do not rediscover these routes.
+- Platform entrypoints are `just platform apple ...`,
+  `just platform android ...`, and `just platform wasm ...`.
+- Direct cached xtask access is exceptional and uses
+  `just tooling xtask <subcommand>`. Agent hooks use the hidden
+  `just _agent-hook` transport configured in adapter JSON.
+
+The root `justfile` exposes only domain modules. Exact recipes live under
+`.config/just/`; `just --list` is an optional human overview, not an agent
+discovery requirement.
 
 ## Agent Red-Flag Gate
 

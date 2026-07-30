@@ -197,54 +197,26 @@ pub enum ControlSpec {
     },
 }
 
+/// Which side of the host contract a [`Binding`] addresses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BindingKind {
+    Command,
+    Parameter,
+    Telemetry,
+    Model,
+}
+
 /// Compiled endpoint reference. `id` is the bare endpoint; `key` is the
 /// canonical scope-qualified form `<id>@<scope>=<value>[,...]` (equal to `id`
 /// when the binding has no scope). Renderers and hosts address reads by `key`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-pub enum Binding {
-    Command {
-        id: InternId,
-        key: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Parameter {
-        id: InternId,
-        key: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Telemetry {
-        id: InternId,
-        key: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Model {
-        id: InternId,
-        key: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-}
-
-impl Binding {
-    #[must_use]
-    pub fn id(&self) -> InternId {
-        match self {
-            Self::Command { id, .. }
-            | Self::Parameter { id, .. }
-            | Self::Telemetry { id, .. }
-            | Self::Model { id, .. } => *id,
-        }
-    }
-
-    #[must_use]
-    pub fn key(&self) -> InternId {
-        match self {
-            Self::Command { key, .. }
-            | Self::Parameter { key, .. }
-            | Self::Telemetry { key, .. }
-            | Self::Model { key, .. } => *key,
-        }
-    }
+pub struct Binding {
+    pub kind: BindingKind,
+    pub id: InternId,
+    pub key: InternId,
+    pub with: BTreeMap<InternId, InternId>,
 }
 
 #[derive(Debug)]

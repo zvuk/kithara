@@ -273,7 +273,7 @@
         // --- Init WASM ---
         // `AudioPlayer` is the wasm-bindgen class generated from the
         // #[wasm_bindgen] impl in src/web/surface.rs. `checkRuntime()` is
-        // appended to kithara-ffi.js by `cargo xtask wasm postbuild`.
+        // appended to kithara-ffi.js by `just tooling xtask wasm postbuild`.
         const wasm = await import('./kithara-ffi.js');
 
         const runtime = wasm.checkRuntime();

@@ -47,7 +47,7 @@ fn controls(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
             let keys = [read.as_ref(), write.as_ref()]
                 .into_iter()
                 .flatten()
-                .map(|binding| ui.resolve(binding.key()))
+                .map(|binding| ui.resolve(binding.key))
                 .collect();
             out.push((ui.resolve(*path), keys));
         }
@@ -60,7 +60,7 @@ fn controls(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
             ..
         } => out.push((
             ui.resolve(surface.path),
-            vec![ui.resolve(surface.write.key())],
+            vec![ui.resolve(surface.write.key)],
         )),
         _ => {}
     });
@@ -84,7 +84,7 @@ fn surfaces(ui: &CompiledUi) -> Vec<(&str, &str)> {
             ..
         } = node
         {
-            out.push((ui.resolve(surface.path), ui.resolve(surface.write.key())));
+            out.push((ui.resolve(surface.path), ui.resolve(surface.write.key)));
         }
     });
     out
@@ -122,7 +122,7 @@ fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
                 ..
             } => out.push((
                 ui.resolve(*instance),
-                vec![ui.resolve(drop.write.key()), ui.resolve(drop.read.key())],
+                vec![ui.resolve(drop.write.key), ui.resolve(drop.read.key)],
             )),
             _ => {}
         }
@@ -176,7 +176,7 @@ fn the_cpu_cell_reads_engine_load_as_a_bar_and_a_number() {
                 ..
             } = node
             {
-                bars.push((ui.resolve(*path), ui.resolve(read.key())));
+                bars.push((ui.resolve(*path), ui.resolve(read.key)));
             }
         });
 

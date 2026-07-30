@@ -422,7 +422,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        expand::Binding,
+        expand::{Binding, BindingKind},
         ids::{Interner, SourceUri},
         module::{AdaptivePolicy, GlyphStyle, IconName, PopoverAt, TextAlign},
     };
@@ -666,7 +666,8 @@ mod tests {
         let origin = SourceUri("size-test.ron".to_owned());
         let node = ExpandedNode::Popover {
             path: interner.intern("menu", &origin).unwrap(),
-            open: Binding::Model {
+            open: Binding {
+                kind: BindingKind::Model,
                 id: interner.intern("ui.menu.open", &origin).unwrap(),
                 key: interner.intern("ui.menu.open", &origin).unwrap(),
                 with: BTreeMap::new(),

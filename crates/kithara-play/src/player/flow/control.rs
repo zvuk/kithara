@@ -4,6 +4,7 @@ use super::super::core::PlayerImpl;
 use crate::{
     api::{RouteChangeReason, SessionEvent, SlotId},
     error::PlayError,
+    player::state::phase::PlayerPhaseKind,
 };
 
 impl PlayerImpl {
@@ -57,9 +58,16 @@ impl PlayerImpl {
             .set_crossfade_duration(seconds, |cmd| self.send_to_slot(cmd));
     }
 
-    /// Set the default playback rate used by `play()` and `select_item()`.
+    /// Set the playback rate used by `play()` and `select_item()`, and apply it
+    /// to playback that is already running.
+    ///
+    /// While paused the live rate is 0.0 and must stay there — a rate change is
+    /// not a resume. The new value takes effect on the next `play()`.
     pub fn set_default_rate(&self, rate: f32) {
         self.core.params.set_default_rate(rate);
+        if self.phase_kind() == PlayerPhaseKind::Playing {
+            self.set_rate(rate);
+        }
     }
 
     /// Set EQ gain for a band in dB.

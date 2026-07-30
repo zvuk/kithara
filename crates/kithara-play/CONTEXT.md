@@ -134,7 +134,7 @@ that cancels the player's own subtree - it never implicitly cancels a
 potentially-foreign master passed in from above (the previous `Drop`-cancel of
 the passed token is gone). Hard-coded `CancelToken::root()` and
 `CancelToken::never()` outside the allowlist are forbidden, enforced by
-`cargo xtask lint arch` (`cancel_root_sites`).
+`just lint arch` (`cancel_root_sites`).
 
 ## Real-Time Audio Thread
 
@@ -164,8 +164,9 @@ the forbid path - like the reader-hooks. The produce-core read/seek path is
 verified kevent/yield-free; the CI lane stays advisory (soak) until that holds
 across the full lane set.
 
-**Lanes.** `just rtsan` (mock decoder, fast tripwire), `just rtsan-file`
-(real-decoder file-offline), `just rtsan-hls` (real-decoder HLS-offline). The
+**Lanes.** `just test rtsan` (mock decoder, fast tripwire),
+`just test rtsan-file` (real-decoder file-offline), `just test rtsan-hls`
+(real-decoder HLS-offline). The
 nightly `.github/workflows/rtsan.yml.disabled` runs all three on linux+macos
 (pinned nightly + `rust-src`), `continue-on-error` until the produce-core lanes
 are green.

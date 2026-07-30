@@ -65,6 +65,7 @@ struct SpliceState {
     active: AtomicUsize,
     media_info: Mutex<Option<MediaInfo>>,
     pending_variant_change: AtomicBool,
+    read_gate_open: AtomicBool,
     target_variant: Mutex<Option<usize>>,
     variants: Vec<VariantLayout>,
     warmup_landing: Mutex<Option<SegmentDescriptor>>,
@@ -76,6 +77,7 @@ impl SpliceState {
             active: AtomicUsize::new(Consts::SLQ_VARIANT),
             media_info: Mutex::new(Some(media_info(Consts::SLQ_VARIANT))),
             pending_variant_change: AtomicBool::new(false),
+            read_gate_open: AtomicBool::new(true),
             target_variant: Mutex::new(None),
             variants,
             warmup_landing: Mutex::new(None),
@@ -96,6 +98,7 @@ impl SpliceState {
         self.active.store(variant, Ordering::Release);
         *self.media_info.lock() = Some(media_info(variant));
         *self.target_variant.lock() = Some(variant);
+        self.read_gate_open.store(false, Ordering::Release);
         self.pending_variant_change.store(true, Ordering::Release);
     }
 
@@ -107,6 +110,7 @@ impl SpliceState {
 impl VariantControl for SpliceState {
     fn clear_variant_fence(&self) {
         self.pending_variant_change.store(false, Ordering::Release);
+        self.read_gate_open.store(true, Ordering::Release);
         *self.target_variant.lock() = None;
     }
 
@@ -123,8 +127,19 @@ impl VariantControl for SpliceState {
         self.pending_variant_change.load(Ordering::Acquire)
     }
 
+    fn open_variant_read_gate(&self) {
+        self.read_gate_open.store(true, Ordering::Release);
+    }
+
     fn variant_change_target(&self) -> Option<usize> {
-        *self.target_variant.lock()
+        self.has_variant_change_pending()
+            .then(|| *self.target_variant.lock())
+            .flatten()
+    }
+
+    fn variant_read_pending(&self) -> bool {
+        self.pending_variant_change.load(Ordering::Acquire)
+            && !self.read_gate_open.load(Ordering::Acquire)
     }
 }
 

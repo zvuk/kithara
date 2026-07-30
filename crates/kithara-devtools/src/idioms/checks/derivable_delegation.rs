@@ -925,7 +925,7 @@ fn method_signature(
         let offset = input.span().byte_range().start.checked_sub(start)?;
         inserts.push((offset, attr));
     }
-    inserts.sort_unstable_by_key(|entry| Reverse(entry.0));
+    inserts.sort_unstable_by_key(|insert| Reverse(insert.0));
     for (offset, attr) in inserts {
         if !signature.is_char_boundary(offset) {
             return None;

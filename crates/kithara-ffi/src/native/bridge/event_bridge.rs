@@ -153,21 +153,22 @@ impl EventBridge {
     }
 
     /// Push refreshed loaded ranges to the current item's observer when the
-    /// polled frontier moves. Using the polled decoded frontier (not the
-    /// lossy byte-ratio telemetry that under-reported a VBR-FLAC quiet
-    /// intro) keeps loaded ranges always covering the playhead, so the
-    /// host never wrongly pauses into a buffering deadlock.
+    /// polled buffered window moves. The window is the queue view's union of
+    /// the cached span and the decoded frontier: `loadedTimeRanges` means
+    /// "available without more network", which is the cached span, while the
+    /// frontier stays a floor so the reported window never falls behind the
+    /// playhead and pushes the host into a buffering deadlock.
     fn emit_loaded_ranges(
         items: &Arc<Mutex<ItemRegistry>>,
         last_current: &Mutex<Option<TrackId>>,
-        frontier: Option<f64>,
+        available: Option<f64>,
         last: &mut Option<f64>,
     ) {
-        let Some(frontier) = frontier else {
+        let Some(available) = available else {
             *last = None;
             return;
         };
-        if last.is_some_and(|prev| (prev - frontier).abs() <= Self::TIME_UPDATE_THRESHOLD) {
+        if last.is_some_and(|prev| (prev - available).abs() <= Self::TIME_UPDATE_THRESHOLD) {
             return;
         }
         let Some(track_id) = *last_current.lock() else {
@@ -179,22 +180,21 @@ impl EventBridge {
         let Some(item_obs) = item.observer() else {
             return;
         };
-        *last = Some(frontier);
+        *last = Some(available);
         item_obs.on_event(FfiItemEvent::LoadedRangesChanged {
-            ranges: Self::loaded_ranges_from_frontier(frontier),
+            ranges: Self::loaded_ranges(available),
         });
     }
 
-    /// Build loaded ranges from the decoded-ahead frontier.
+    /// Build loaded ranges from the available window.
     ///
-    /// The frontier is the authoritative buffered/playable window (always
-    /// `>=` the playhead), so it is reported as a single range `[0,
-    /// frontier]`. An empty vec means nothing is decoded yet.
-    fn loaded_ranges_from_frontier(frontier: f64) -> Vec<FfiTimeRange> {
-        if frontier > 0.0 {
+    /// Reported as a single range `[0, available]`. An empty vec means
+    /// nothing is available yet.
+    fn loaded_ranges(available: f64) -> Vec<FfiTimeRange> {
+        if available > 0.0 {
             vec![FfiTimeRange {
                 start_seconds: 0.0,
-                duration_seconds: frontier,
+                duration_seconds: available,
             }]
         } else {
             Vec::new()
@@ -411,21 +411,29 @@ mod tests {
         assert_send::<EventBridge>();
     }
 
-    /// The decoded-ahead frontier covers the playhead, so loaded ranges
-    /// built from it keep the item playable — unlike the old byte-ratio
-    /// telemetry that under-reported a VBR-FLAC quiet intro (~0.66s decoded
-    /// byte-ratio at a 0.917s playhead) and made the host pause into a
-    /// buffering deadlock.
+    /// The available window covers the playhead, so loaded ranges built from
+    /// it keep the item playable — unlike the old byte-ratio telemetry that
+    /// under-reported a VBR-FLAC quiet intro (~0.66s decoded byte-ratio at a
+    /// 0.917s playhead) and made the host pause into a buffering deadlock.
     #[kithara::test]
-    fn loaded_ranges_from_frontier_cover_playhead() {
+    fn loaded_ranges_cover_playhead() {
         let item = AudioPlayerItem::new(item_config());
-        let ranges = EventBridge::loaded_ranges_from_frontier(4.0);
+        let ranges = EventBridge::loaded_ranges(4.0);
         assert!(item.is_playable(0.917, ranges));
     }
 
+    /// A fully cached track reports its whole span, not just what a decoder
+    /// running a few seconds ahead of the playhead has produced.
     #[kithara::test]
-    fn loaded_ranges_empty_when_nothing_decoded() {
-        assert!(EventBridge::loaded_ranges_from_frontier(0.0).is_empty());
+    fn loaded_ranges_cover_the_cached_span() {
+        let ranges = EventBridge::loaded_ranges(120.0);
+        assert_eq!(ranges.len(), 1);
+        assert!((ranges[0].duration_seconds - 120.0).abs() < f64::EPSILON);
+    }
+
+    #[kithara::test]
+    fn loaded_ranges_empty_when_nothing_is_available() {
+        assert!(EventBridge::loaded_ranges(0.0).is_empty());
     }
 
     #[kithara::test]

@@ -5,7 +5,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledNode, CompiledUi, compile},
     error::UiDocError,
-    expand::{Binding, ControlSpec, ExpandedNode},
+    expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
     module::{ChromeStyle, PopoverAt, TrackColumn},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     size::{Dim, SizeSpec},
@@ -80,8 +80,14 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
     };
     let ExpandedNode::Control {
         spec: ControlSpec::Crossfader { ticks: false },
-        read: Some(Binding::Parameter { .. }),
-        write: Some(Binding::Parameter { .. }),
+        read: Some(Binding {
+            kind: BindingKind::Parameter,
+            ..
+        }),
+        write: Some(Binding {
+            kind: BindingKind::Parameter,
+            ..
+        }),
         ..
     } = &**root
     else {
@@ -126,7 +132,10 @@ fn meter_reads_a_scalar_and_refuses_any_other_kind() {
         &**root,
         ExpandedNode::Control {
             spec: ControlSpec::Meter,
-            read: Some(Binding::Telemetry { .. }),
+            read: Some(Binding {
+                kind: BindingKind::Telemetry,
+                ..
+            }),
             ..
         }
     ));
@@ -186,8 +195,14 @@ fn vis_compiles_with_scalar_read_and_select_index_write() {
     };
     let ExpandedNode::Control {
         spec: ControlSpec::Vis,
-        read: Some(Binding::Model { .. }),
-        write: Some(Binding::Parameter { .. }),
+        read: Some(Binding {
+            kind: BindingKind::Model,
+            ..
+        }),
+        write: Some(Binding {
+            kind: BindingKind::Parameter,
+            ..
+        }),
         ..
     } = &**root
     else {
@@ -330,7 +345,12 @@ fn track_list_compiles_typed_columns_and_optional_state_prefix() {
         columns,
         &[TrackColumn::Index, TrackColumn::Title, TrackColumn::Bpm]
     );
-    let Some(Binding::Model { id, .. }) = columns_state else {
+    let Some(Binding {
+        kind: BindingKind::Model,
+        id,
+        ..
+    }) = columns_state
+    else {
         panic!("expected model state prefix");
     };
     assert_eq!(ui.resolve(*id), "ui.tracklist.columns");
@@ -465,7 +485,14 @@ fn module_shell_metadata_compiles_into_the_module_node() {
     assert!(!frame.left);
     assert!(*corners);
     assert_eq!(ui.resolve(*collapsed), "ui.module.deck.collapsed");
-    let Some(Binding::Telemetry { id, key, with }) = footer else {
+    let Some(Binding {
+        kind: BindingKind::Telemetry,
+        id,
+        key,
+        with,
+        ..
+    }) = footer
+    else {
         panic!("expected telemetry footer");
     };
     assert_eq!(ui.resolve(*id), "deck.track.title");
@@ -912,7 +939,7 @@ fn a_module_block_compiles_to_its_expanded_path_and_binding() {
     };
 
     assert_eq!(ui.resolve(block.path), "mixer/eq");
-    assert_eq!(ui.resolve(block.hidden.id()), "ui.block.hidden");
+    assert_eq!(ui.resolve(block.hidden.id), "ui.block.hidden");
     assert!(matches!(**child, ExpandedNode::Control { .. }));
 }
 
@@ -941,7 +968,7 @@ fn a_layout_block_compiles_around_the_node_it_wraps() {
     };
 
     assert_eq!(ui.resolve(block.path), "sidebar");
-    assert_eq!(ui.resolve(block.hidden.id()), "ui.block.hidden");
+    assert_eq!(ui.resolve(block.hidden.id), "ui.block.hidden");
     assert!(matches!(**child, CompiledNode::Module { .. }));
 }
 
@@ -1031,10 +1058,7 @@ fn parameter_substitution_reaches_the_hidden_binding() {
     };
 
     assert_eq!(ui.resolve(block.path), "deck-b/eq");
-    assert_eq!(
-        ui.resolve(block.hidden.key()),
-        "deck.playback.playing@deck=b"
-    );
+    assert_eq!(ui.resolve(block.hidden.key), "deck.playback.playing@deck=b");
 }
 
 #[kithara::test]
@@ -1210,13 +1234,13 @@ fn a_popover_compiles_with_its_anchor_and_its_content_subtree() {
     };
 
     assert_eq!(ui.resolve(*path), "mixer/menu");
-    assert_eq!(ui.resolve(open.id()), "ui.menu.open");
+    assert_eq!(ui.resolve(open.id), "ui.menu.open");
 
     let ExpandedNode::Pressable { path, press, child } = &**anchor else {
         panic!("expected a pressable anchor");
     };
     assert_eq!(ui.resolve(*path), "mixer/burger");
-    assert_eq!(ui.resolve(press.id()), "ui.menu.toggle");
+    assert_eq!(ui.resolve(press.id), "ui.menu.toggle");
     assert!(matches!(**child, ExpandedNode::Row { .. }));
 
     let ExpandedNode::Column { children, .. } = &**content else {
@@ -1409,7 +1433,7 @@ fn an_escaped_dollar_in_a_layout_block_binding_stays_a_literal() {
     };
 
     assert_eq!(
-        ui.resolve(block.hidden.key()),
+        ui.resolve(block.hidden.key),
         "ui.block.deck_hidden@deck=$deck"
     );
 }

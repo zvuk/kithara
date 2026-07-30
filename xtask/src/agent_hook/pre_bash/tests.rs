@@ -122,6 +122,7 @@ fn allows_formatter_version_probes() {
 #[test]
 fn denies_timeout_around_full_harness() {
     assert!(denied("timeout 120s just test"));
+    assert!(denied("timeout 120s just test run --lane=e2e"));
     assert!(denied(
         "timeout --kill-after=5s 120s cargo xtask test --lane workspace"
     ));

@@ -396,7 +396,7 @@ fn emit(sev: AccessorSeverity, key: String, message: String) -> Violation {
 }
 
 fn is_deref_impl(im: &syn::ItemImpl) -> bool {
-    let Some((_, path, _)) = &im.trait_ else {
+    let Some((path, _)) = &im.trait_ else {
         return false;
     };
     let Some(last) = path.segments.last() else {

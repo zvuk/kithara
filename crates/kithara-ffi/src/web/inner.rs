@@ -1,12 +1,12 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use kithara_platform::sync::{Arc, Mutex};
-use kithara_queue::Transition;
+use kithara_queue::{RepeatMode, Transition};
 
 use crate::{
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
-    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus},
+    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode},
     web::{bridge::WorkerBridge, commands::WorkerCmd},
 };
 
@@ -43,6 +43,7 @@ pub(crate) struct WasmInner {
     volume: AtomicU32,
     muted: Mutex<bool>,
     observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
+    repeat_mode: Mutex<FfiRepeatMode>,
     bridge: WorkerBridge,
     eq_gains: [AtomicU32; EQ_BANDS],
 }
@@ -56,6 +57,7 @@ impl Default for WasmInner {
             volume: AtomicU32::new(Self::DEFAULT_VOLUME.to_bits()),
             crossfade_secs: AtomicU32::new(Self::DEFAULT_CROSSFADE_SECONDS.to_bits()),
             playing_rate: AtomicU32::new(Self::DEFAULT_PLAYING_RATE.to_bits()),
+            repeat_mode: Mutex::new(FfiRepeatMode::Off),
             muted: Mutex::default(),
             eq_gains: [const { AtomicU32::new(0) }; EQ_BANDS],
         }
@@ -267,6 +269,10 @@ impl WasmInner {
         }
     }
 
+    pub(crate) fn repeat_mode(&self) -> FfiRepeatMode {
+        *self.repeat_mode.lock()
+    }
+
     pub(crate) fn replace_item(
         &self,
         index: u32,
@@ -386,6 +392,15 @@ impl WasmInner {
 
     pub(crate) fn set_playing_rate(&self, rate: f32) {
         store_f32(&self.playing_rate, rate);
+    }
+
+    pub(crate) fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {
+        let mode = RepeatMode::try_from(mode).map_err(|rejected| FfiError::InvalidArgument {
+            reason: format!("repeat mode {rejected:?} is not supported"),
+        })?;
+        self.try_send(WorkerCmd::SetRepeat(mode))?;
+        *self.repeat_mode.lock() = mode.into();
+        Ok(())
     }
 
     pub(crate) fn set_volume(&self, volume: f32) {

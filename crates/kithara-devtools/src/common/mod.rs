@@ -11,6 +11,7 @@ pub mod baseline;
 pub mod exclude;
 pub mod fix;
 pub mod parse;
+pub(crate) mod process;
 pub mod project;
 pub mod report;
 pub mod scope;

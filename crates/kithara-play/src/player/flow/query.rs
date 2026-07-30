@@ -60,6 +60,18 @@ impl PlayerImpl {
         self.core.items.current_index()
     }
 
+    /// Whether the queue slot at `index` still holds a resource.
+    ///
+    /// Loading an item into the processor empties its slot, so this is the
+    /// owning answer to "has this item been consumed" — the same fact
+    /// [`select_item`](Self::select_item) refuses to guess at. Callers that
+    /// mirror item state read it here instead of inferring the consumption
+    /// from their own bookkeeping.
+    #[must_use]
+    pub fn item_has_resource(&self, index: usize) -> bool {
+        self.core.items.has_resource(index)
+    }
+
     /// ABR handle of the currently loaded item, if any.
     ///
     /// Reads the stash populated by `enqueue_to_processor` — stays valid for

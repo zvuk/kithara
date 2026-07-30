@@ -32,6 +32,10 @@ impl HlsVariant {
             .look_ahead_bytes
             .map(|n| prefetch_base.saturating_add(n));
         let prefetch_segment_cap = self.prefetch_segment_cap(ctx, prefetch_base);
+        // Cursor byte at which the segment a cap turned away enters the window.
+        // Published after the pass so the reader crossing it wakes the peer for
+        // exactly that segment; `None` leaves the deferral cleared.
+        let mut resume_at: Option<u64> = None;
         while remaining > 0 {
             hang_tick!();
             let planned = {
@@ -44,11 +48,15 @@ impl HlsVariant {
                             && let Some(seg_off) = self.segment_byte_offset(seg_idx)
                             && seg_off > cap
                         {
+                            resume_at = ctx
+                                .look_ahead_bytes
+                                .map(|window| seg_off.saturating_sub(window));
                             break;
                         }
                         if let Some(cap) = prefetch_segment_cap
                             && seg_idx > cap
                         {
+                            resume_at = self.segment_window_entry_byte(ctx, seg_idx);
                             break;
                         }
                         queue.pop_front()
@@ -128,6 +136,7 @@ impl HlsVariant {
                 queue.push_front(planned);
             }
         }
+        self.defer_prefetch_until(resume_at.unwrap_or(u64::MAX));
         out
     }
 
@@ -168,10 +177,23 @@ impl HlsVariant {
         )
     }
 
+    /// First byte of the segment the cursor must reach for `seg_idx` to fall
+    /// inside a `look_ahead_segments` window — the segment-count counterpart of
+    /// `seg_off - look_ahead_bytes`.
+    fn segment_window_entry_byte(&self, ctx: &PlanCtx, seg_idx: u32) -> Option<u64> {
+        let window = look_ahead_segments(ctx)?;
+        self.segment_byte_offset(seg_idx.saturating_sub(window.saturating_sub(1)))
+    }
+
     fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {
-        let window = ctx.look_ahead_segments?;
-        let window = u32::try_from(window.max(1)).unwrap_or(u32::MAX);
+        let window = look_ahead_segments(ctx)?;
         let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
         Some(base.saturating_add(window.saturating_sub(1)))
     }
+}
+
+/// Media-segment look-ahead width, normalised to at least one segment.
+fn look_ahead_segments(ctx: &PlanCtx) -> Option<u32> {
+    let window = ctx.look_ahead_segments?;
+    Some(u32::try_from(window.max(1)).unwrap_or(u32::MAX))
 }

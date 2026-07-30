@@ -24,36 +24,36 @@ pub(crate) struct StudioCache {
     hover_deck: Option<usize>,
     focus_deck: usize,
 
-    pub(super) deck_marks: CatalogRowMarks,
-    pub(super) drag: Option<usize>,
+    pub(in crate::gui) deck_marks: CatalogRowMarks,
+    pub(in crate::gui) drag: Option<usize>,
 
-    pub(super) collapsed: CollapsedModules,
+    pub(in crate::gui) collapsed: CollapsedModules,
 }
 
 /// Deck bodies the studio lays out; the session keeps every deck either way.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum DeckLayout {
+pub(in crate::gui) enum DeckLayout {
     Single,
     #[default]
     Dual,
 }
 
 impl DeckLayout {
-    pub(super) const fn decks(self) -> usize {
+    pub(in crate::gui) const fn decks(self) -> usize {
         match self {
             Self::Single => 1,
             Self::Dual => 2,
         }
     }
 
-    pub(super) const fn index(self) -> usize {
+    pub(in crate::gui) const fn index(self) -> usize {
         match self {
             Self::Single => 0,
             Self::Dual => 1,
         }
     }
 
-    pub(super) const fn from_index(index: usize) -> Option<Self> {
+    pub(in crate::gui) const fn from_index(index: usize) -> Option<Self> {
         match index {
             0 => Some(Self::Single),
             1 => Some(Self::Dual),
@@ -63,43 +63,43 @@ impl DeckLayout {
 }
 
 #[derive(Default)]
-pub(super) struct DeckCache {
-    pub(super) wave: Vec<WaveBucket>,
+pub(in crate::gui) struct DeckCache {
+    pub(in crate::gui) wave: Vec<WaveBucket>,
     wave_src: Option<usize>,
-    pub(super) tempo: String,
-    pub(super) bpm: String,
-    pub(super) remain: String,
-    pub(super) subtitle: String,
-    pub(super) zoom: Option<f64>,
+    pub(in crate::gui) tempo: String,
+    pub(in crate::gui) bpm: String,
+    pub(in crate::gui) remain: String,
+    pub(in crate::gui) subtitle: String,
+    pub(in crate::gui) zoom: Option<f64>,
 }
 
 #[derive(Default)]
-pub(super) struct CatalogRowMarks(Vec<String>);
+pub(in crate::gui) struct CatalogRowMarks(Vec<String>);
 
 #[derive(Default)]
-pub(super) struct CollapsedModules(BTreeSet<String>);
+pub(in crate::gui) struct CollapsedModules(BTreeSet<String>);
 
 impl StudioCache {
     #[cfg(test)]
-    pub(super) fn with_decks(decks: usize) -> Self {
+    pub(in crate::gui) fn with_decks(decks: usize) -> Self {
         let mut cache = Self::default();
         cache.decks.resize_with(decks, DeckCache::default);
         cache
     }
 
-    pub(super) fn toggle_module(&mut self, module: String) {
+    pub(in crate::gui) fn toggle_module(&mut self, module: String) {
         self.collapsed.toggle(module);
     }
 
-    pub(super) fn decks(&self) -> &[DeckCache] {
+    pub(in crate::gui) fn decks(&self) -> &[DeckCache] {
         &self.decks
     }
 
-    pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut DeckCache> {
+    pub(in crate::gui) fn deck_mut(&mut self, index: usize) -> Option<&mut DeckCache> {
         self.decks.get_mut(index)
     }
 
-    pub(super) const fn layout(&self) -> DeckLayout {
+    pub(in crate::gui) const fn layout(&self) -> DeckLayout {
         self.layout
     }
 
@@ -111,7 +111,7 @@ impl StudioCache {
         self.focus_deck
     }
 
-    pub(super) fn set_layout(&mut self, layout: DeckLayout) {
+    pub(in crate::gui) fn set_layout(&mut self, layout: DeckLayout) {
         self.layout = layout;
         if self.hover_deck.is_some_and(|deck| deck >= layout.decks()) {
             self.hover_deck = None;
@@ -121,7 +121,7 @@ impl StudioCache {
         }
     }
 
-    pub(super) fn set_hover_deck(&mut self, deck: usize, over: bool) {
+    pub(in crate::gui) fn set_hover_deck(&mut self, deck: usize, over: bool) {
         if over {
             self.hover_deck = Some(deck);
         } else if self.hover_deck == Some(deck) {
@@ -129,7 +129,7 @@ impl StudioCache {
         }
     }
 
-    pub(super) const fn drag_target(&self) -> Option<usize> {
+    pub(in crate::gui) const fn drag_target(&self) -> Option<usize> {
         if self.drag.is_some() {
             self.hover_deck
         } else {
@@ -137,7 +137,7 @@ impl StudioCache {
         }
     }
 
-    pub(super) fn take_drop(&mut self) -> Option<(usize, usize)> {
+    pub(in crate::gui) fn take_drop(&mut self) -> Option<(usize, usize)> {
         let row = self.drag.take()?;
         let deck = self.hover_deck?;
         self.focus_deck = deck;
@@ -179,7 +179,7 @@ impl DeckCache {
 }
 
 impl CatalogRowMarks {
-    pub(super) fn get(&self, row: usize) -> Option<&String> {
+    pub(in crate::gui) fn get(&self, row: usize) -> Option<&String> {
         self.0.get(row)
     }
 
@@ -195,7 +195,7 @@ impl CatalogRowMarks {
 }
 
 impl CollapsedModules {
-    pub(super) fn contains(&self, module: &str) -> bool {
+    pub(in crate::gui) fn contains(&self, module: &str) -> bool {
         self.0.contains(module)
     }
 
@@ -216,7 +216,7 @@ fn loaded_deck_letters(entry: &CatalogEntry, decks: &Decks) -> String {
         .collect()
 }
 
-pub(super) fn analysis_bpm(ui: &UiState) -> Option<f32> {
+pub(in crate::gui) fn analysis_bpm(ui: &UiState) -> Option<f32> {
     let bpm = ui.analysis.as_ref()?.beat()?.bpm();
     bpm.is_finite().then(|| bpm.as_())
 }

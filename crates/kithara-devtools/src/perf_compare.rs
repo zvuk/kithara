@@ -59,18 +59,20 @@ fn extract_metrics(content: &str) -> Vec<(String, String)> {
     metrics
 }
 
+/// Suffix to nanosecond factor. Order matters: the bare `s` must come last so
+/// it does not shadow `ns`, `us`, and `ms`.
+const TIME_UNITS: [(&str, f64); 4] = [
+    ("ns", 1.0),
+    ("us", 1_000.0),
+    ("ms", 1_000_000.0),
+    ("s", 1_000_000_000.0),
+];
+
 /// Convert a time string like `1.00ms`, `200.00us`, `50ns`, `2.5s` to nanoseconds.
 fn to_nanoseconds(value: &str) -> Option<f64> {
-    let (num_str, factor) = if let Some(num) = value.strip_suffix("ns") {
-        (num, 1.0)
-    } else if let Some(num) = value.strip_suffix("us") {
-        (num, 1_000.0)
-    } else if let Some(num) = value.strip_suffix("ms") {
-        (num, 1_000_000.0)
-    } else {
-        let num = value.strip_suffix('s')?;
-        (num, 1_000_000_000.0)
-    };
+    let (num_str, factor) = TIME_UNITS
+        .iter()
+        .find_map(|&(suffix, factor)| Some((value.strip_suffix(suffix)?, factor)))?;
 
     let num: f64 = num_str.parse().ok()?;
     Some(num * factor)

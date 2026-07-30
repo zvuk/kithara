@@ -106,12 +106,18 @@ impl FileCoord {
         Arc::clone(&self.seek) as Arc<dyn SeekObserve>
     }
 
-    /// Report the current download byte position. The value is not stored
-    /// on the coord — it exists only as a USDT probe point
+    /// Report the current download byte position: the contiguous prefix the
+    /// peer has landed in the asset store. Doubles as a USDT probe point
     /// (`#[kithara::probe]`) for download-progress observability.
+    ///
+    /// The peer always fetches forward from the first gap, so this position is
+    /// the cached prefix — the playhead turns it into the timeline span a host
+    /// progress bar reads.
     #[kithara::probe(value)]
     pub(crate) fn set_download_pos(&self, value: u64) {
-        let _ = value;
+        if let Some(total) = self.total_bytes() {
+            self.playhead.set_cached(value, total);
+        }
     }
 
     pub(crate) fn set_position(&self, pos: u64) {

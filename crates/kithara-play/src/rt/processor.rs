@@ -70,6 +70,9 @@ pub struct PlayerNodeProcessor {
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) render: RenderPass,
     pub(super) prefetch_duration: f32,
+    /// Media seconds consumed per output second, applied to every track the
+    /// processor owns and seeded into every track it loads.
+    pub(super) playback_rate: f32,
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
@@ -98,6 +101,7 @@ impl PlayerNodeProcessor {
             render: RenderPass::new(pool, shape.max_block_frames.get().as_()),
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
+            playback_rate: 1.0,
             tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
         }
@@ -276,14 +280,18 @@ impl PlayerNodeProcessor {
     /// the first render block, or every active track was a non-leading
     /// fade-in).
     fn update_position_duration(&self, leading_outcome: Option<(f64, f64)>) {
-        // Decoded-ahead frontier comes from the leading track's lock-free
-        // snapshot (always `>=` position) — the authoritative buffered/playable
-        // window the FFI polls for loaded ranges.
+        // Both windows come from the leading track's lock-free snapshots: the
+        // decoded frontier (always `>=` position) and the cached span the
+        // download side published. The queue view unions them into the
+        // buffered window the FFI polls for loaded ranges.
         for (_, track) in self.tracks.iter() {
             if track.state().is_leading() {
                 self.playback
                     .frontier
                     .store(track.decoded_frontier(), Ordering::Relaxed);
+                self.playback
+                    .cached
+                    .store(track.cached_span(), Ordering::Relaxed);
                 break;
             }
         }

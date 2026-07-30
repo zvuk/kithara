@@ -14,6 +14,7 @@
 //! - [`mod@passthrough`] — `delegate!`-forwarded `PlayerImpl` controls.
 
 mod access;
+mod engine_events;
 mod lifecycle;
 mod passthrough;
 mod playback;

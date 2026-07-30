@@ -83,18 +83,25 @@ pub(crate) struct HlsCoord {
     /// Narrow seek-observe handle — derived from `seek` at construction.
     /// Used by internal methods that only need epoch/target/pending reads.
     seek_obs: Arc<dyn SeekObserve>,
-    /// Last generation acknowledged by the reader. When `<
-    /// variant_generation` the read gate is closed; when equal the gate
-    /// is open. [`Self::clear_variant_fence`] copies the current
-    /// generation here.
+    /// Last generation whose switch a decoder actually reached — set by
+    /// [`Self::clear_variant_fence`] once a decoder built against the new
+    /// variant is installed. While `< variant_generation` the switch is
+    /// outstanding ([`Self::has_variant_change_pending`]).
     fence_at: AtomicU64,
+    /// Last generation the reader is allowed to read across — set by
+    /// [`Self::open_variant_read_gate`] when a decoder rebuild for the new
+    /// variant starts, so its construction reads are not short-circuited by
+    /// the switch they are there to resolve. Distinct from
+    /// [`Self::fence_at`]: opening the gate lets the *candidate* decoder
+    /// read, acking records that a decoder *arrived*. A rebuild that never
+    /// produces one therefore leaves the switch outstanding.
+    read_gate_at: AtomicU64,
     /// Monotonic counter bumped by [`Self::commit_variant_switch`] on
     /// every decoder-recreate switch. Same-codec switches use byte
     /// continuity and do not raise this fence. `read_at` / `wait_range`
-    /// compare against [`Self::fence_at`] and short-circuit with
-    /// `Pending(VariantChange)` / `Interrupted` until the audio FSM acks via
-    /// [`Self::clear_variant_fence`]. Byte-continuity switches do not raise
-    /// a fence.
+    /// compare against [`Self::read_gate_at`] and short-circuit with
+    /// `Pending(VariantChange)` / `Interrupted` until the rebuild opens the
+    /// gate. Byte-continuity switches do not raise a fence.
     variant_generation: AtomicU64,
     /// Target variant index of the in-flight fence. Stored (`Release`)
     /// BEFORE [`Self::variant_generation`] is bumped, so an observer of
@@ -156,6 +163,7 @@ impl HlsCoord {
             emit: env.emit,
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),
+            read_gate_at: AtomicU64::new(0),
             fence_target: AtomicUsize::new(0),
             signal: env.signal,
         }
@@ -201,19 +209,35 @@ impl HlsCoord {
         }
     }
 
-    /// Notify the audio FSM that the cross-codec switch is acknowledged
-    /// — opens the read gate by aligning `fence_at` to the current
-    /// generation. Called from `HlsSource::clear_variant_fence` after
-    /// the decoder has been recreated against the new variant.
+    /// Acknowledge the cross-codec switch: a decoder built against the new
+    /// variant is installed. Called from `HlsSource::clear_variant_fence`
+    /// at the install site, never before — an unacknowledged generation is
+    /// how every reader of [`Self::has_variant_change_pending`] learns the
+    /// switch still needs a decoder. Acking also opens the read gate, so a
+    /// byte-continuity decoder that crosses the variant without a rebuild
+    /// does not have to open it separately.
     pub(crate) fn clear_variant_fence(&self) {
         let current_gen = self.variant_generation.load(Ordering::Acquire);
-        self.fence_at.swap(current_gen, Ordering::AcqRel);
+        self.fence_at.fetch_max(current_gen, Ordering::AcqRel);
+        self.read_gate_at.fetch_max(current_gen, Ordering::AcqRel);
         self.emit.enqueue(HlsEvent::VariantSwitchAcked {
             variant: self.variant_index(),
             generation: current_gen,
         });
-        // The fence gate opened: wake a reader parked in `wait_range(_, None)`
-        // (it short-circuited on `variant_change_pending`) so it re-probes.
+        // The read gate opened: wake a reader parked in `wait_range(_, None)`
+        // (it short-circuited on `variant_read_pending`) so it re-probes.
+        self.signal.fire_ready_only();
+    }
+
+    /// Let reads through for a decoder that is being built against the new
+    /// variant. The switch stays outstanding until that decoder is actually
+    /// installed and calls [`Self::clear_variant_fence`]; a rebuild that
+    /// comes back interrupted has recreated nothing, and burning the ack
+    /// here would leave the old decoder running with no signal left for the
+    /// decode loop or the rebuild-supersession check to consume.
+    pub(crate) fn open_variant_read_gate(&self) {
+        let current_gen = self.variant_generation.load(Ordering::Acquire);
+        self.read_gate_at.fetch_max(current_gen, Ordering::AcqRel);
         self.signal.fire_ready_only();
     }
 
@@ -377,11 +401,14 @@ impl HlsCoord {
         None
     }
 
-    /// Public-API mirror of [`Self::variant_change_pending`] used by the
-    /// audio decode loop to bail out of an `Ok(Pending(_))` spin when
-    /// the underlying `VariantChangeError` was absorbed by the demuxer.
+    /// A committed switch still has no decoder behind it. Used by the audio
+    /// decode loop to bail out of an `Ok(Pending(_))` spin when the
+    /// underlying `VariantChangeError` was absorbed by the demuxer, and by
+    /// the rebuild-supersession check to see which variant is owed a
+    /// decoder. Stays true across a failed rebuild — only an install clears
+    /// it.
     pub(crate) fn has_variant_change_pending(&self) -> bool {
-        self.variant_change_pending()
+        self.variant_generation.load(Ordering::Acquire) > self.fence_at.load(Ordering::Acquire)
     }
 
     /// Total bytes are >0 — the value used by `Source::len` accessor.
@@ -456,7 +483,7 @@ impl HlsCoord {
         if self.cancel.is_cancelled() {
             return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
         }
-        if self.variant_change_pending() {
+        if self.variant_read_pending() {
             return Ok(WaitOutcome::Interrupted);
         }
         self.variant_serving(range.start).wait_range(range, timeout)
@@ -466,7 +493,7 @@ impl HlsCoord {
         if self.cancel.is_cancelled() {
             return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
         }
-        if self.variant_change_pending() {
+        if self.variant_read_pending() {
             return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
         }
         self.variant_serving(offset).read_at(offset, buf)
@@ -626,17 +653,19 @@ impl HlsCoord {
         Some(head.saturating_sub(1))
     }
 
-    fn variant_change_pending(&self) -> bool {
-        self.variant_generation.load(Ordering::Acquire) > self.fence_at.load(Ordering::Acquire)
+    /// Reads across the switch are still short-circuited — no decoder for
+    /// the new variant has started building yet.
+    pub(crate) fn variant_read_pending(&self) -> bool {
+        self.variant_generation.load(Ordering::Acquire) > self.read_gate_at.load(Ordering::Acquire)
     }
 
-    /// Target variant of the pending fence; `None` when no fence is up.
-    /// The target store happens-before the generation bump, so a caller
-    /// that observed the fence reads the variant that fence (or a newer
-    /// one — latest wins, matching `clear_variant_fence` absorbing all
-    /// outstanding generations) demands.
+    /// Target variant of the outstanding switch; `None` once a decoder for
+    /// it is installed. The target store happens-before the generation
+    /// bump, so a caller that observed the fence reads the variant that
+    /// fence (or a newer one — latest wins, matching `clear_variant_fence`
+    /// absorbing all outstanding generations) demands.
     pub(crate) fn variant_change_target(&self) -> Option<usize> {
-        self.variant_change_pending()
+        self.has_variant_change_pending()
             .then(|| self.fence_target.load(Ordering::Acquire))
     }
 
@@ -756,6 +785,7 @@ impl HlsCoord {
             #[call(get_position)]
             pub(crate) fn position(&self) -> u64;
             pub(crate) fn advance(&self, n: u64);
+            pub(crate) fn take_prefetch_resume(&self) -> bool;
             pub(crate) fn set_position(&self, pos: u64);
             pub(crate) fn download_head(&self) -> u32;
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
@@ -819,8 +849,16 @@ impl VariantControl for HlsCoord {
         Self::has_variant_change_pending(self)
     }
 
+    fn open_variant_read_gate(&self) {
+        Self::open_variant_read_gate(self);
+    }
+
     fn variant_change_target(&self) -> Option<usize> {
         Self::variant_change_target(self)
+    }
+
+    fn variant_read_pending(&self) -> bool {
+        Self::variant_read_pending(self)
     }
 }
 

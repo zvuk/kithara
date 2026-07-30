@@ -21,12 +21,12 @@ cargo run -p kithara-ui --example gallery --features render
 ## iOS — only if explicitly requested
 
 ```bash
-just apple demo
+just platform apple demo
 ```
 
 ## Android — only if explicitly requested
 
 ```bash
-just android build
+just platform android build
 cd android && ./gradlew :example:installDebug
 ```

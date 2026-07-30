@@ -48,7 +48,7 @@ deadlines use `flash,loom`.
 Model tests opt in with `#[kithara::test(loom)]`. The macro invokes a hidden
 platform hook; no Loom type or module is public. Ordinary `just test` does not
 enable the `loom` feature, so a marked test runs once against the system
-backend. `just test --loom=on` enables the feature and selects only marked
+backend. `just test run --loom=on` enables the feature and selects only marked
 tests. Add `--flash=on` to run the same models through the Flash decorator.
 Unmarked tests are never run under the Loom backend.
 
@@ -256,7 +256,8 @@ divergence.
 ## Blocking Detection (`no_block`)
 
 Poll-scoped async blocking detection, feature `no-block` (test lanes only; enabled
-by `just test --no-block=on`, off for normal runs, and kept ON by `just gate` lane
+by `just test run --no-block=on`, off for normal runs, and kept ON by the
+`just ci gate` lane
 1; the inert twin `common/no_block_inert.rs` keeps prod builds byte-identical).
 Real tree: `src/no_block/` — cfg-free inside, selected in `lib.rs` like
 `flash`/`flash_inert`.
@@ -300,7 +301,7 @@ async poll, see `flash/system/credit.rs`) reports through `forbid_bridged`
 BEFORE the engine wait; the engine's own `Token::wait` runs under a permit,
 so engine coordination neither trips level 1 nor counts against the budget.
 
-Deepening lane: `just rtsan-async` compiles every watched poll as an RTSan
+Deepening lane: `just test rtsan-async` compiles every watched poll as an RTSan
 nonblocking context (nightly, `--cfg rtsan`); suppressions taxonomy in
 `.config/rtsan/async-suppressions.txt` — waits intercepted, instantaneous
 classes (alloc, spawn, lock calls, wakes, fd setup/teardown, panic-hook
@@ -346,7 +347,7 @@ Two constructors mint a **fresh subtree root** instead of deriving from a parent
   cancellation source exists.
 
 Both root a fresh hierarchy, so they are restricted to owner/sentinel sites, enforced by
-`cargo xtask lint arch` (`cancel_root_sites`) via a per-file allowlist in
+`just lint arch` (`cancel_root_sites`) via a per-file allowlist in
 `.config/arch/thresholds.toml`. Everywhere else, derive a child with `.child()` or take a
 `CancelToken` from your caller.
 

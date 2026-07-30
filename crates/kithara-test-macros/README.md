@@ -43,7 +43,7 @@ A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
 include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`, `env(...)`,
 `tracing(...)`, `soft_fail(...)`, `serial`, `multi_thread`, `selenium`, and
 `loom`, and `flash(true|false)`. `loom` is a synchronous, unit-returning,
-opt-in model marker run by `just test --loom=on`; ordinary test lanes execute it once
+opt-in model marker run by `just test run --loom=on`; ordinary test lanes execute it once
 without Loom exploration. Supports `#[case]` / `#[case::name]` parameterization and
 fixture injection. See [CONTEXT.md](CONTEXT.md) for per-flag semantics and the
 Flash/Loom debugging rules.

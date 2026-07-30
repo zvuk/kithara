@@ -33,7 +33,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     private let _currentItemSubject = CurrentValueSubject<KitharaPlayerItem?, Never>(nil)
     private var _eventCancellable: AnyCancellable?
 #if canImport(AVFoundation) && (os(iOS) || os(tvOS) || os(watchOS) || targetEnvironment(macCatalyst))
-    private var _audioRouteCancellables = Set<AnyCancellable>()
+    private var _audioSessionCancellables = Set<AnyCancellable>()
+    private let _pausedByInterruption = LockedValue(false)
 #endif
 
     // MARK: - Event stream
@@ -80,10 +81,11 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             return .crossfadeStarted(durationSeconds: durationSeconds)
         case .crossfadeDurationChanged(let seconds):
             return .crossfadeDurationChanged(seconds: seconds)
+        case .repeatModeChanged(let mode):
+            return .repeatModeChanged(mode: RepeatMode(ffi: mode))
         case .trackAdded,
              .trackRemoved,
              .trackLoadFailed,
-             .repeatModeChanged,
              .nextTrackReady,
              .currentItemAdvanced,
              .engineStarted,
@@ -203,6 +205,20 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// the queue is empty.
     public var currentAudioItem: KitharaPlayerItem? {
         _currentItemSubject.value
+    }
+
+    // MARK: - Repeat
+
+    /// Queue behavior after the current item reaches its end.
+    public var repeatMode: RepeatMode {
+        get { RepeatMode(ffi: _inner.repeatMode()) }
+        set {
+            do {
+                try _inner.setRepeatMode(mode: newValue.ffi)
+            } catch {
+                _eventSubject.send(.error(error: String(describing: error)))
+            }
+        }
     }
 
     // MARK: - Rate
@@ -353,7 +369,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         _eventCancellable = _eventSubject.sink { [weak self] event in
             self?.syncCurrentItem(with: event)
         }
-        bindPlatformAudioRouteInvalidation()
+        bindPlatformAudioSession()
     }
 
     // MARK: - Playback control
@@ -378,21 +394,65 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     }
 
 #if canImport(AVFoundation) && (os(iOS) || os(tvOS) || os(watchOS) || targetEnvironment(macCatalyst))
-    private func bindPlatformAudioRouteInvalidation() {
+    private func bindPlatformAudioSession() {
         NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
             .sink { [weak self] _ in
                 self?.notifyAudioRouteChanged(reason: "AVAudioSession.routeChange")
             }
-            .store(in: &_audioRouteCancellables)
+            .store(in: &_audioSessionCancellables)
 
         NotificationCenter.default.publisher(for: AVAudioSession.mediaServicesWereResetNotification)
             .sink { [weak self] _ in
                 self?.notifyAudioRouteChanged(reason: "AVAudioSession.mediaServicesWereReset")
             }
-            .store(in: &_audioRouteCancellables)
+            .store(in: &_audioSessionCancellables)
+
+        NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+            .sink { [weak self] notification in
+                self?.handleInterruption(notification)
+            }
+            .store(in: &_audioSessionCancellables)
+    }
+
+    private func handleInterruption(_ notification: Notification) {
+        guard
+            let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+            let type = AVAudioSession.InterruptionType(rawValue: rawType)
+        else {
+            return
+        }
+
+        switch type {
+        case .began:
+            let wasPlaying = currentRate > 0
+            _pausedByInterruption.withLock { $0 = wasPlaying }
+            if wasPlaying {
+                pause()
+            }
+        case .ended:
+            let armed = _pausedByInterruption.withLock { paused -> Bool in
+                let armed = paused
+                paused = false
+                return armed
+            }
+            if armed && interruptionAllowsResume(notification) {
+                play()
+            }
+        @unknown default:
+            return
+        }
+    }
+
+    private func interruptionAllowsResume(_ notification: Notification) -> Bool {
+        guard
+            let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt
+        else {
+            return false
+        }
+        return AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume)
     }
 #else
-    private func bindPlatformAudioRouteInvalidation() {}
+    private func bindPlatformAudioSession() {}
 #endif
 
     /// Seek to a position in the current item.

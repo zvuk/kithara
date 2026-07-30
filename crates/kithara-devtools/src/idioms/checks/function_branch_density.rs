@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use syn::{
-    BinOp, ExprBinary, ExprIf, ExprMatch, ImplItem, Item, ItemImpl, Local, Stmt,
+    BinOp, ExprBinary, ExprIf, ExprMatch, ImplItem, Item, ItemImpl, Local, Pat, Stmt,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -166,7 +166,11 @@ impl<'ast> Visit<'ast> for BranchCounter {
         if node.arms.len() > 1 {
             self.own_branches += 1;
         }
-        self.own_branches += node.arms.iter().filter(|arm| arm.guard.is_some()).count();
+        self.own_branches += node
+            .arms
+            .iter()
+            .filter(|arm| matches!(&arm.pat, Pat::Guard(_)))
+            .count();
         visit::visit_expr_match(self, node);
     }
 

@@ -412,7 +412,9 @@ fn should_skip_dir(path: &Path) -> bool {
     {
         return true;
     }
-    if first.to_string_lossy().starts_with("target-flash") {
+    if first.to_string_lossy().starts_with("target-flash")
+        || *first == OsStr::new("target-audit-clippy")
+    {
         return true;
     }
     is_apple_build_dir(&components)
@@ -543,6 +545,7 @@ mod tests {
     #[test]
     fn directory_filter_matches_formatter_skip_policy() {
         assert!(should_skip_dir(Path::new("target")));
+        assert!(should_skip_dir(Path::new("target-audit-clippy")));
         assert!(should_skip_dir(Path::new("target-flash-native")));
         assert!(should_skip_dir(Path::new(".build")));
         assert!(should_skip_dir(Path::new("docs-build")));

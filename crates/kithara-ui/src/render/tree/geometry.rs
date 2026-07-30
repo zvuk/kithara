@@ -168,7 +168,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        expand::Binding,
+        expand::{Binding, BindingKind},
         ids::{InternId, Interner, SourceUri},
         module::{AdaptivePolicy, PopoverAt},
     };
@@ -257,7 +257,8 @@ mod tests {
     }
 
     fn model(id: InternId) -> Binding {
-        Binding::Model {
+        Binding {
+            kind: BindingKind::Model,
             id,
             key: id,
             with: BTreeMap::new(),

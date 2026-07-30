@@ -334,7 +334,7 @@ fn check_impl(
         .collect();
     let target = self_ty_name(&im.self_ty).unwrap_or_else(|| "<anon>".to_string());
     let label = match (bucket, &im.trait_) {
-        ("impl_trait", Some((_, p, _))) => {
+        ("impl_trait", Some((p, _))) => {
             let trait_name = p
                 .segments
                 .last()

@@ -149,7 +149,8 @@ fn deny_reason_for_segment(
     let argv0 = argv0(tokens)?;
     if argv0 == "rustfmt" {
         return Some(
-            "error: do not run `rustfmt` directly; use `just xtask format --only rust`".to_owned(),
+            "error: do not run `rustfmt` directly; use `just tooling xtask format --only rust`"
+                .to_owned(),
         );
     }
     if matches!(argv0, "taplo" | "mdfmt") && !is_version_or_help(tokens) {
@@ -169,7 +170,7 @@ fn deny_reason_for_segment(
                 return Some("error: broad raw `cargo nextest run` is not an acceptance gate; use `just test`".to_owned());
             }
             "sort" if rest.iter().any(|arg| arg == "--check") => {
-                return Some("error: do not run `cargo sort --check`; use `just manifest dependency-order` or `just fmt-check`".to_owned());
+                return Some("error: do not run `cargo sort --check`; use `just deps manifest dependency-order` or `just fmt check`".to_owned());
             }
             _ => {}
         }

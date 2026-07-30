@@ -21,6 +21,11 @@ pub struct TrackParams {
     sample_rate: NonZeroU32,
     #[builder(default = FadeCurve::SquareRoot)]
     fade_curve: FadeCurve,
+    /// Media seconds consumed per output second. Seeds the track's media
+    /// clock so a track loaded while the player already runs off-unity
+    /// reports media time, not output time.
+    #[builder(default = 1.0)]
+    playback_rate: f32,
 }
 
 /// Per-track state in the processor arena.
@@ -57,13 +62,20 @@ pub struct PlayerTrack {
     /// duration) captured under the resource lock.
     pub(super) observed_duration: f64,
     pub(super) sample_rate: u32,
-    /// Cumulative frames this track has actually served into the mix output.
+    /// Media seconds consumed per output second, mirroring the speed the
+    /// time-stretch slot runs the source at. The mix output is on the output
+    /// clock; `duration`, the near-end triggers and every position consumer
+    /// are on the media clock, so served output frames only become a position
+    /// once scaled by this.
+    pub(super) playback_rate: f32,
+    /// Cumulative *media* frames this track has served into the mix output:
+    /// output frames scaled by [`Self::playback_rate`].
     ///
     /// Used as the source of truth for near-end trigger position so the
     /// trigger reflects what has been rendered to the audio output, not the
     /// decoder's pre-buffered position (which can be ~200 ms ahead of the
     /// mixer thanks to `PlayerResource`'s scratch buffer).
-    pub(super) served_frames: u64,
+    pub(super) served_media_frames: f64,
 }
 
 impl PlayerTrack {
@@ -80,6 +92,7 @@ impl PlayerTrack {
             prefetch_duration,
             sample_rate,
             fade_curve,
+            playback_rate,
         } = params;
         let observed_duration = resource.duration();
         let track = Self {
@@ -91,7 +104,8 @@ impl PlayerTrack {
             fade: TrackFade::new(fade_duration, fade_curve, sample_rate),
             prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
-            served_frames: 0,
+            playback_rate,
+            served_media_frames: 0.0,
             observed_duration,
             ended_at_eof: false,
         };
@@ -103,6 +117,12 @@ impl PlayerTrack {
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
         self.resource.decoded_frontier()
+    }
+
+    /// Cached span in seconds: how much of the source is on disk.
+    #[must_use]
+    pub fn cached_span(&self) -> f64 {
+        self.resource.cached_span()
     }
 
     /// Current visible (post-gapless-trim) duration in seconds.
@@ -132,16 +152,16 @@ impl PlayerTrack {
         self.ended_at_eof = false;
     }
 
-    /// Current position in seconds.
+    /// Current media position in seconds.
     ///
-    /// Tracks `served_frames / sample_rate` — i.e. what has actually been
-    /// mixed into the output — so the value matches the trigger evaluator
-    /// instead of the decoder's pre-buffered position.
+    /// Tracks `served_media_frames / sample_rate` — i.e. what has actually
+    /// been mixed into the output, on the media clock — so the value matches
+    /// the trigger evaluator and `duration` instead of the decoder's
+    /// pre-buffered position.
     #[must_use]
     pub fn position(&self) -> f64 {
         let sample_rate = self.sample_rate.max(1);
-        let served_f64: f64 = AsPrimitive::as_(self.served_frames);
-        served_f64 / f64::from(sample_rate)
+        self.served_media_frames / f64::from(sample_rate)
     }
 
     /// Reference to the owned resource.
@@ -150,14 +170,21 @@ impl PlayerTrack {
         &self.resource
     }
 
-    /// Seek the underlying resource and re-sync the served-frame counter
-    /// so trigger thresholds reflect the new playback origin.
+    /// Seek the underlying resource and re-sync the media clock so trigger
+    /// thresholds reflect the new playback origin.
     pub fn seek(&mut self, seconds: f64) {
         self.resource.seek(seconds);
         let frames = seek_frame_index(seconds, self.sample_rate, self.observed_duration);
-        self.served_frames = frames;
+        self.served_media_frames = AsPrimitive::as_(frames);
         self.triggers.reset();
         self.ended_at_eof = false;
+    }
+
+    /// Set the media seconds consumed per output second for this track,
+    /// pushing the same speed into the resource's stretch slot.
+    pub fn set_playback_rate(&mut self, rate: f32) {
+        self.playback_rate = rate;
+        self.resource.set_playback_rate(rate);
     }
 
     /// Update the prefetch lead time used for the preload trigger.

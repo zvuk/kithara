@@ -108,4 +108,11 @@ mod tests {
     fn self_cache_command_is_available_to_just_transport() {
         assert!(Cli::try_parse_from(["xtask", "self-cache", "probe"]).is_ok());
     }
+
+    #[test]
+    fn quality_lab_commands_are_nested_under_quality() {
+        assert!(Cli::try_parse_from(["xtask", "quality", "lab", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["xtask", "quality", "lab", "run", "scheduled"]).is_ok());
+        assert!(Cli::try_parse_from(["xtask", "quality-lab", "list"]).is_err());
+    }
 }

@@ -8,7 +8,8 @@ use anyhow::{Context as _, Result};
 use quote::ToTokens;
 use syn::{
     Attribute, Expr, Fields, FnArg, ImplItem, ImplItemFn, Item, ItemImpl, ItemStruct, Member,
-    PathArguments, ReturnType, Stmt, Type, UseTree, Visibility, parse_quote, spanned::Spanned,
+    PathArguments, ReceiverKind, ReturnType, Safety, Stmt, Type, UseTree, Visibility, parse_quote,
+    spanned::Spanned,
 };
 
 use super::{
@@ -734,7 +735,7 @@ fn detect(method: &ImplItemFn) -> Option<DetectedAccessor<'_>> {
     let signature = &method.sig;
     if signature.constness.is_some()
         || signature.asyncness.is_some()
-        || signature.unsafety.is_some()
+        || matches!(signature.safety, Safety::Unsafe(_))
         || signature.abi.is_some()
         || signature.variadic.is_some()
         || !signature.generics.params.is_empty()
@@ -751,12 +752,10 @@ fn detect(method: &ImplItemFn) -> Option<DetectedAccessor<'_>> {
     let FnArg::Receiver(receiver) = signature.inputs.first()? else {
         return None;
     };
-    if receiver.colon_token.is_some()
-        || !receiver
-            .reference
-            .as_ref()
-            .is_some_and(|(_, lifetime)| lifetime.is_none())
-    {
+    let ReceiverKind::Reference(_, lifetime, mutability) = &receiver.kind else {
+        return None;
+    };
+    if lifetime.is_some() {
         return None;
     }
     let ReturnType::Type(_, return_ty) = &signature.output else {
@@ -766,7 +765,7 @@ fn detect(method: &ImplItemFn) -> Option<DetectedAccessor<'_>> {
         return None;
     };
 
-    if receiver.mutability.is_some() {
+    if mutability.is_some() {
         let Expr::Reference(reference) = body else {
             return None;
         };
@@ -820,10 +819,7 @@ fn detect_with(method: &ImplItemFn) -> Option<DetectedAccessor<'_>> {
     let FnArg::Receiver(receiver) = signature.inputs.first()? else {
         return None;
     };
-    if receiver.colon_token.is_some()
-        || receiver.reference.is_some()
-        || receiver.mutability.is_none()
-    {
+    if !matches!(receiver.kind, ReceiverKind::Value) || receiver.mutability.is_none() {
         return None;
     }
     let FnArg::Typed(value) = signature.inputs.iter().nth(1)? else {

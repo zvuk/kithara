@@ -117,6 +117,12 @@ pub(super) struct VariantProfile {
 
 pub(super) struct VariantFlow {
     pub(super) prefetch_anchor: AtomicU64,
+    /// Byte at which [`HlsVariant::dispatch`]'s last deferral expires: the
+    /// cursor position that brings the front-of-queue segment inside the
+    /// look-ahead window. `u64::MAX` means nothing is deferred. The reader
+    /// reaching it is what re-opens the decision — see
+    /// [`HlsVariant::take_prefetch_resume`].
+    pub(super) prefetch_resume_at: AtomicU64,
     /// The variant's cancel epoch: the per-track parent (mirror of
     /// `coord.cancel` = `PlanCtx::master_cancel`) plus the rotating
     /// per-activation child. Survives variant re-activation — a cross-codec
@@ -198,6 +204,7 @@ impl VariantFlow {
         Self {
             cancel_epoch: CancelEpoch::new(master_cancel),
             prefetch_anchor: AtomicU64::new(0),
+            prefetch_resume_at: AtomicU64::new(u64::MAX),
             // Preallocate to the worst-case rebuild size (init + every media
             // segment + the seg-0 decoder probe) so the per-seek
             // `clear` + `extend` in `rebuild_queue` never reallocates on the

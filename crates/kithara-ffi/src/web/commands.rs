@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use kithara_queue::{TrackId, Transition};
+use kithara_queue::{RepeatMode, TrackId, Transition};
 
 /// Commands sent from the main-thread bridge to the engine Worker.
 ///
@@ -65,6 +65,7 @@ pub(crate) enum WorkerCmd {
     SetAbrMode {
         variant_index: Option<u32>,
     },
+    SetRepeat(RepeatMode),
     /// Apply per-network peak-bitrate ceilings to the worker's current ABR
     /// handle. Mirrors
     /// [`NativeInner::update_peak_bitrate`](crate::native::inner::NativeInner).

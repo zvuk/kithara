@@ -25,11 +25,16 @@ use kithara::{
 ///
 /// Produces a constant sample value (0.5), tracks seek position and reports
 /// [`ReadOutcome::Eof`] once the total-frame budget is consumed.
+///
+/// Honours [`PcmControl::set_playback_rate`]: every rendered output frame
+/// consumes `rate` source frames, so the source drains faster above 1.0 and
+/// slower below it, exactly as a stretching reader does.
 pub struct TestPcmReader {
     bus: EventBus,
     spec: PcmSpec,
     metadata: TrackMetadata,
     position_frames: u64,
+    rate_bits: AtomicU32,
     total_frames: u64,
     value: f32,
 }
@@ -38,6 +43,9 @@ pub struct TestPcmReader {
 pub const TEST_PCM_DEFAULT_VALUE: f32 = 0.5;
 
 impl TestPcmReader {
+    /// Lowest rate the mock will consume the source at.
+    const MIN_RATE: f32 = 0.01;
+
     /// Create a new test reader with the given spec and duration.
     /// Emits [`TEST_PCM_DEFAULT_VALUE`] for every sample.
     #[must_use]
@@ -59,6 +67,7 @@ impl TestPcmReader {
                 ..TrackMetadata::default()
             },
             position_frames: 0,
+            rate_bits: AtomicU32::new(1.0f32.to_bits()),
             bus: EventBus::default(),
             value,
         }
@@ -66,6 +75,26 @@ impl TestPcmReader {
 
     fn at_natural_end(&self) -> bool {
         self.position_frames >= self.total_frames
+    }
+
+    fn rate(&self) -> f64 {
+        f64::from(f32::from_bits(self.rate_bits.load(Ordering::Relaxed)))
+    }
+
+    /// Output frames still renderable before the source budget runs out.
+    fn output_frames_left(&self) -> u64 {
+        let source_left = self.total_frames - self.position_frames;
+        (source_left as f64 / self.rate()).ceil() as u64
+    }
+
+    /// Advance the source cursor by the frames consumed to render
+    /// `output_frames`, saturating at the total budget.
+    fn consume(&mut self, output_frames: u64) {
+        let consumed = (output_frames as f64 * self.rate()).round() as u64;
+        self.position_frames = self
+            .position_frames
+            .saturating_add(consumed)
+            .min(self.total_frames);
     }
 
     fn eof_outcome(&self) -> ReadOutcome {
@@ -116,13 +145,12 @@ impl PcmRead for TestPcmReader {
                 reason: PendingReason::Buffering,
             });
         }
-        let remaining_samples = (self.total_frames - self.position_frames) * channels;
-        let to_write = (buf.len() as u64).min(remaining_samples) as usize;
+        let renderable_samples = self.output_frames_left() * channels;
+        let to_write = (buf.len() as u64).min(renderable_samples) as usize;
         for sample in &mut buf[..to_write] {
             *sample = self.value;
         }
-        let frames_advanced = to_write as u64 / channels;
-        self.position_frames += frames_advanced;
+        self.consume(to_write as u64 / channels);
         let new_position = self.frames_to_duration(self.position_frames);
         let Some(count) = NonZeroUsize::new(to_write) else {
             return Ok(ReadOutcome::Pending {
@@ -158,14 +186,14 @@ impl PcmRead for TestPcmReader {
             });
         }
         let frames_per_channel = output[0].len();
-        let remaining = (self.total_frames - self.position_frames) as usize;
-        let frames_to_write = frames_per_channel.min(remaining);
+        let renderable = self.output_frames_left() as usize;
+        let frames_to_write = frames_per_channel.min(renderable);
         for ch in output.iter_mut().take(channels) {
             for sample in ch.iter_mut().take(frames_to_write) {
                 *sample = self.value;
             }
         }
-        self.position_frames += frames_to_write as u64;
+        self.consume(frames_to_write as u64);
         let new_position = self.frames_to_duration(self.position_frames);
         let Some(count) = NonZeroUsize::new(frames_to_write) else {
             return Ok(ReadOutcome::Pending {
@@ -185,6 +213,13 @@ impl PcmRead for TestPcmReader {
 }
 
 impl PcmControl for TestPcmReader {
+    /// Mirrors the player's `MIN_PLAYBACK_RATE` clamp so a zero or negative
+    /// rate cannot stall the source forever.
+    fn set_playback_rate(&self, rate: f32) {
+        self.rate_bits
+            .store(rate.max(Self::MIN_RATE).to_bits(), Ordering::Relaxed);
+    }
+
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let target = position;
         let frame = (position.as_secs_f64() * f64::from(self.spec.sample_rate.get())) as u64;

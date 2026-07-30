@@ -1,0 +1,9 @@
+[package]
+name = "flow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+conditional = { path = "../conditional", optional = true }
+support = { path = "../support" }

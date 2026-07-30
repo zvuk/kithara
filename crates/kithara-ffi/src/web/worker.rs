@@ -197,6 +197,7 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
         WorkerCmd::SetAbrMode { variant_index } => {
             apply_abr_mode(queue, variant_index);
         }
+        WorkerCmd::SetRepeat(mode) => queue.set_repeat(mode),
         WorkerCmd::PeakBitrate {
             wifi_bps,
             cellular_bps,

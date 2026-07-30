@@ -40,7 +40,7 @@ jobs:
         run: cargo install cargo-swift --locked
 
       - name: Build XCFramework
-        run: just release-apple
+        run: just platform apple release
 
       - name: Compute checksum and update Package.swift
         id: release

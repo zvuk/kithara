@@ -6,7 +6,9 @@ use std::num::{NonZeroU32, NonZeroUsize};
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
 ))]
-use kithara::decode::DecoderBackend;
+use kithara::{
+    audio::AudioDecoderConfig, decode::DecoderBackend, play::default_resource_decoder_config,
+};
 use kithara::{
     audio::{ChunkOutcome, PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome},
     bufpool::PcmPool,
@@ -907,14 +909,18 @@ async fn create_apple_fused_resource(
 
     let item_id = Arc::<str>::from(item_id);
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
+    let decoder_defaults = default_resource_decoder_config();
     let config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)
         .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
+            AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Apple)
+                .maybe_resampler(decoder_defaults.resampler().cloned())
                 .build(),
         )
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .build();
     let config = player.prepare_config(config);
     let mut resource = Resource::new(config)

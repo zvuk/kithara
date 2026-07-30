@@ -33,10 +33,6 @@ impl HoverState {
     }
 }
 
-/// Pointer travel that turns a press on an item into a drag; below it the
-/// press stays a plain click.
-const DRAG_THRESHOLD: f32 = 4.0;
-
 /// Drag source for one item of a list. It watches the pointer without ever
 /// capturing it, so the item keeps its own click behaviour and every other
 /// control still sees the same events.
@@ -63,6 +59,10 @@ impl ItemDragState {
 }
 
 impl ItemDrag {
+    /// Pointer travel that turns a press on an item into a drag; below it the
+    /// press stays a plain click.
+    const DRAG_THRESHOLD: f32 = 4.0;
+
     pub(crate) const fn new(path: String, index: usize) -> Self {
         Self { path, index }
     }
@@ -94,7 +94,7 @@ impl ItemDrag {
                     state.origin = Some(*position);
                     return None;
                 };
-                if position.distance(origin) < DRAG_THRESHOLD {
+                if position.distance(origin) < Self::DRAG_THRESHOLD {
                     return None;
                 }
                 state.active = true;
@@ -391,14 +391,14 @@ impl ScalarDrag {
     }
 }
 
-/// Trackpad pixel deltas per emitted wheel step. A discrete wheel detent
-/// (`ScrollDelta::Lines`) is always one step; trackpads stream many small
-/// `Pixels` events per gesture, so those accumulate to this threshold.
-const WHEEL_PIXELS_PER_STEP: f32 = 20.0;
-
 /// Scroll deltas arrive content-directed (macOS natural scrolling): an
 /// upward gesture is negative, so the value axis is the negated delta.
 fn wheel_steps(accum: &mut f32, delta: ScrollDelta) -> f32 {
+    /// Trackpad pixel deltas per emitted wheel step. A discrete wheel detent
+    /// (`ScrollDelta::Lines`) is always one step; trackpads stream many small
+    /// `Pixels` events per gesture, so those accumulate to this threshold.
+    const WHEEL_PIXELS_PER_STEP: f32 = 20.0;
+
     match delta {
         ScrollDelta::Lines { y, .. } => {
             if y == 0.0 {

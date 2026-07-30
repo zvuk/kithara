@@ -144,7 +144,7 @@ async fn track_initial_position_and_duration() {
 }
 
 #[kithara::test(tokio)]
-async fn track_seek_position_is_derived_from_served_frames() {
+async fn track_seek_position_is_derived_from_the_media_clock() {
     let mut track = make_track();
     let seconds = 9.791_337;
     track.seek(seconds);

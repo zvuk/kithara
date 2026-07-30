@@ -78,6 +78,13 @@ pub trait PcmRead {
     fn decoded_frontier(&self) -> Duration {
         Duration::from_secs(0)
     }
+
+    /// Cached span: the timestamp up to which the source's bytes are on disk
+    /// and need no further network. Unrelated to [`Self::position`] — bytes
+    /// land ahead of the decoder. Readers with no download side report `0`.
+    fn cached_span(&self) -> Duration {
+        Duration::from_secs(0)
+    }
 }
 
 /// PCM track and session introspection.

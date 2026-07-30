@@ -19,10 +19,10 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, AudioCodec, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
-    PlayheadWrite, PrerollHint, ReadOutcome, SeekControl, SeekObserve, SeekState, Source,
-    SourceError, SourcePhase, Stream, StreamError, StreamResult, StreamType, VariantControl,
-    WorkerWake,
+    Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead,
+    PlayheadState, PlayheadWrite, PrerollHint, ReadOutcome, SeekControl, SeekObserve, SeekState,
+    SegmentDescriptor, Source, SourceError, SourcePhase, SourceSeekAnchor, Stream, StreamError,
+    StreamResult, StreamType, VariantControl, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -39,7 +39,8 @@ use crate::{
         source::StreamAudioSource,
         stream::shared::SharedStream,
         track::{
-            self, CurrentFsm, RebuildingDecoder, Track, TrackFailure, TrackStep, WaitingReason,
+            self, CurrentFsm, RebuildingDecoder, RecreatingDecoder, Track, TrackFailure, TrackStep,
+            WaitingReason,
         },
     },
     renderer::AudioWorkerSource,
@@ -250,6 +251,7 @@ impl WorkerWake for CountingWake {
 struct TestControl {
     media_info: Mutex<Option<MediaInfo>>,
     variant_pending: AtomicBool,
+    read_gate_open: AtomicBool,
     variant_target: Mutex<Option<usize>>,
     format_range: Mutex<Option<Range<u64>>>,
 }
@@ -259,6 +261,7 @@ impl TestControl {
         Self {
             media_info: Mutex::new(Some(media_info)),
             variant_pending: AtomicBool::new(false),
+            read_gate_open: AtomicBool::new(true),
             variant_target: Mutex::new(None),
             format_range: Mutex::new(Some(0..32)),
         }
@@ -271,6 +274,7 @@ impl TestControl {
     fn raise_variant_fence(&self, target: usize, media_info: MediaInfo) {
         self.set_media_info(media_info);
         *self.variant_target.lock() = Some(target);
+        self.read_gate_open.store(false, Ordering::Release);
         self.variant_pending.store(true, Ordering::Release);
     }
 }
@@ -278,6 +282,7 @@ impl TestControl {
 impl VariantControl for TestControl {
     fn clear_variant_fence(&self) {
         self.variant_pending.store(false, Ordering::Release);
+        self.read_gate_open.store(true, Ordering::Release);
         *self.variant_target.lock() = None;
     }
 
@@ -292,12 +297,79 @@ impl VariantControl for TestControl {
         self.variant_pending.load(Ordering::Acquire)
     }
 
+    fn open_variant_read_gate(&self) {
+        self.read_gate_open.store(true, Ordering::Release);
+    }
+
+    fn variant_read_pending(&self) -> bool {
+        self.variant_pending.load(Ordering::Acquire) && !self.read_gate_open.load(Ordering::Acquire)
+    }
+
     fn variant_change_target(&self) -> Option<usize> {
         *self.variant_target.lock()
     }
 }
 
+/// Segmented layout of the shape HLS vends: an init header the demuxer has
+/// to be rooted at, followed by fixed-size media segments. A flat source
+/// vends no byte map at all, so `seek_time_anchor` resolves nothing on it.
+struct TestByteMap;
+
+impl TestByteMap {
+    const CONTAINER_ORIGIN: u64 = 0;
+    const INIT_BYTES: u64 = 627;
+    const SEGMENT_BYTES: u64 = 4096;
+    const SEGMENT_SECS: u64 = 4;
+
+    fn descriptor(index: u64) -> SegmentDescriptor {
+        let start = Self::INIT_BYTES.saturating_add(index.saturating_mul(Self::SEGMENT_BYTES));
+        SegmentDescriptor::new(
+            start..start.saturating_add(Self::SEGMENT_BYTES),
+            Duration::from_secs(index.saturating_mul(Self::SEGMENT_SECS)),
+            Duration::from_secs(Self::SEGMENT_SECS),
+            u32::try_from(index).unwrap_or(u32::MAX),
+            0,
+        )
+    }
+}
+
+impl ByteMap for TestByteMap {
+    fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
+        let segment = Self::descriptor(position.as_secs() / Self::SEGMENT_SECS);
+        Ok(Some(
+            SourceSeekAnchor::builder()
+                .segment_start(segment.decode_time)
+                .segment_end(segment.decode_time.saturating_add(segment.duration))
+                .segment_index(segment.segment_index)
+                .variant_index(segment.variant_index)
+                .byte_offset(segment.byte_range.start)
+                .build(),
+        ))
+    }
+
+    fn init_segment_range(&self) -> Range<u64> {
+        Self::CONTAINER_ORIGIN..Self::INIT_BYTES
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(Self::INIT_BYTES.saturating_add(Self::SEGMENT_BYTES))
+    }
+
+    fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
+        (byte_offset < Self::INIT_BYTES).then(|| Self::descriptor(0))
+    }
+
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        Some(Self::descriptor(t.as_secs() / Self::SEGMENT_SECS))
+    }
+
+    fn segment_count(&self) -> Option<u32> {
+        Some(1)
+    }
+}
+
 struct TestSource {
+    byte_map: Option<Arc<TestByteMap>>,
     control: Arc<TestControl>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
@@ -307,10 +379,18 @@ struct TestSource {
 impl TestSource {
     fn new(control: Arc<TestControl>) -> Self {
         Self {
+            byte_map: None,
             control,
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             seek: Arc::new(SeekState::new()),
+        }
+    }
+
+    fn segmented(control: Arc<TestControl>) -> Self {
+        Self {
+            byte_map: Some(Arc::new(TestByteMap)),
+            ..Self::new(control)
         }
     }
 }
@@ -322,6 +402,12 @@ impl Source for TestSource {
 
     fn advance(&self, n: u64) {
         self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        self.byte_map
+            .as_ref()
+            .map(|map| Arc::clone(map) as Arc<dyn ByteMap>)
     }
 
     fn len(&self) -> Option<u64> {
@@ -474,12 +560,35 @@ async fn test_source(variant: u32) -> RebuildFixture {
     }
 }
 
+/// `segmented` vends the byte map HLS supplies plus an init-bearing
+/// decoder factory: the rebuilt demuxer parses only when it is rooted at
+/// the container origin, exactly like the Apple fMP4 segment path. A flat
+/// source has neither, so no recreate origin other than `base_offset` is
+/// even reachable on it.
+struct RouteParams {
+    initial_host_rate: u32,
+    segmented: bool,
+}
+
 async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
+    route_source(RouteParams {
+        initial_host_rate,
+        segmented: false,
+    })
+    .await
+}
+
+async fn route_source(params: RouteParams) -> RouteFixture {
     let control = Arc::new(TestControl::new(media_info(0)));
     let drops = Arc::new(Mutex::new(Vec::new()));
-    let host_sample_rate = Arc::new(AtomicU32::new(initial_host_rate));
+    let host_sample_rate = Arc::new(AtomicU32::new(params.initial_host_rate));
+    let segmented = params.segmented;
     let stream = match Stream::<TestStream>::new(TestConfig {
-        source: TestSource::new(control),
+        source: if segmented {
+            TestSource::segmented(control)
+        } else {
+            TestSource::new(control)
+        },
     })
     .await
     {
@@ -489,7 +598,12 @@ async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
     let shared_stream = SharedStream::new(stream);
     let factory_drops = drops.clone();
     let factory_host_rate = host_sample_rate.clone();
-    let decoder_factory: DecoderFactory<TestStream> = Arc::new(move |_stream, _info, _offset| {
+    let decoder_factory: DecoderFactory<TestStream> = Arc::new(move |_stream, _info, offset| {
+        if segmented && offset != TestByteMap::CONTAINER_ORIGIN {
+            return Err(DecodeError::InvalidData {
+                detail: "init-bearing container demuxed from a media byte",
+            });
+        }
         let rate = factory_host_rate.load(Ordering::Acquire);
         Ok(Box::new(RouteSignalDecoder::new(
             99,
@@ -789,6 +903,64 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
     );
 }
 
+/// A route change swaps the resampler over the SAME container, so the
+/// rebuilt demuxer has to be rooted where the live one is — the container
+/// origin the running session was installed at. Deriving that origin from
+/// the seek anchor instead hands an init-bearing demuxer a media byte; the
+/// recreate then fails outright and takes the track with it.
+#[kithara::test(tokio)]
+async fn route_change_recreate_roots_the_demuxer_at_the_container_origin() {
+    let RouteFixture {
+        host_sample_rate,
+        mut source,
+    } = route_source(RouteParams {
+        initial_host_rate: Consts::SAMPLE_RATE,
+        segmented: true,
+    })
+    .await;
+
+    let mut route_recreated = false;
+    for _ in 0..4 {
+        let chunk = next_test_chunk(&mut source, &mut route_recreated);
+        source.playhead.advance(&ChunkPosition::from(&chunk.meta));
+    }
+    let resume_anchor = source
+        .shared_stream
+        .seek_time_anchor(source.playhead.position())
+        .ok()
+        .flatten()
+        .expect("segmented source resolves an anchor for the resume position");
+    assert_ne!(
+        resume_anchor.byte_offset,
+        source.decode.session().base_offset,
+        "fixture precondition: the resume anchor must be a media byte, not the container origin"
+    );
+
+    host_sample_rate.store(Consts::ROUTE_SAMPLE_RATE, Ordering::Release);
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    let CurrentFsm::RecreatingDecoder(handle) = &source.state else {
+        panic!("expected route-change recreate");
+    };
+    assert_eq!(handle.data().cause, RecreateCause::RouteChange);
+    assert_eq!(
+        handle.data().offset,
+        source.decode.session().base_offset,
+        "route change keeps the container, so the recreate must reuse its origin"
+    );
+
+    let mut saw_new_rate = false;
+    for _ in 0..4 {
+        let chunk = next_test_chunk(&mut source, &mut route_recreated);
+        saw_new_rate |= chunk.meta.spec.sample_rate.get() == Consts::ROUTE_SAMPLE_RATE;
+        source.playhead.advance(&ChunkPosition::from(&chunk.meta));
+    }
+    assert!(
+        saw_new_rate,
+        "the rebuilt decoder must deliver the new host rate"
+    );
+}
+
 #[kithara::test(tokio)]
 async fn equal_host_rate_does_not_start_route_recreate() {
     let RebuildFixture { mut source, .. } = test_source(0).await;
@@ -959,6 +1131,140 @@ async fn stale_rebuild_completion_retires_decoder_shell_side() {
 
     source.flush_deferred();
     assert_eq!(drops.lock().as_slice(), &[3]);
+}
+
+fn interrupting_rebuild_port(source: &StreamAudioSource<TestStream>) -> RebuildPort<TestStream> {
+    let factory: DecoderFactory<TestStream> =
+        Arc::new(|_stream, _info, _offset| Err(DecodeError::Interrupted));
+    RebuildPort::new(
+        factory,
+        RebuildRuntime {
+            handle: source.rebuild.runtime().clone(),
+            wake: Arc::new(TestWake),
+        },
+    )
+}
+
+/// Clearing the variant fence is the acknowledgement that "the decoder has
+/// been recreated against the new variant". A rebuild that comes back
+/// `Interrupted` recreated nothing, so the switch is still outstanding: the
+/// session keeps running the old variant. Acking it anyway destroys the only
+/// signal the decode loop and the rebuild-supersession check have, and the
+/// pending seek that carried the switch is left pointing at a snapshot no
+/// one can invalidate.
+#[kithara::test(tokio)]
+async fn interrupted_variant_rebuild_leaves_the_switch_outstanding() {
+    let RebuildFixture {
+        control,
+        mut source,
+        ..
+    } = test_source(0).await;
+    let target = Duration::from_secs(3);
+    let request = SeekRequest {
+        seek: SeekContext {
+            epoch: source.seek.begin(target),
+            target,
+        },
+        emit_request: false,
+    };
+    control.raise_variant_fence(1, media_info(1));
+    source.rebuild = interrupting_rebuild_port(&source);
+    source.state = Track::<RecreatingDecoder>::new(RecreateState {
+        media_info: media_info(1),
+        cause: RecreateCause::VariantSwitch,
+        next: RecreateNext::Seek(request),
+        offset: 0,
+    })
+    .erase();
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    assert!(
+        matches!(source.state, CurrentFsm::RebuildingDecoder(_)),
+        "fixture precondition: the recreate must reach the rebuild port"
+    );
+    source.rebuild.run_inline();
+    source.step_track();
+
+    assert_eq!(
+        source
+            .decode
+            .session()
+            .media_info
+            .as_ref()
+            .and_then(|info| info.variant_index),
+        Some(0),
+        "fixture precondition: an interrupted rebuild installs no decoder"
+    );
+    assert!(
+        control.has_variant_change_pending(),
+        "the variant switch was acknowledged while the session still runs the old variant"
+    );
+}
+
+/// The switch has to be consumed end to end: once the source can serve the
+/// new variant, the FSM must install a decoder for it and only then drop the
+/// fence. Asserting on the installed variant (not on how long it took) keeps
+/// this a statement about the state contract.
+#[kithara::test(tokio)]
+async fn variant_switch_pending_across_a_seek_is_eventually_consumed() {
+    let RebuildFixture {
+        control,
+        mut source,
+        ..
+    } = test_source(0).await;
+    let target = Duration::from_secs(3);
+    let request = SeekRequest {
+        seek: SeekContext {
+            epoch: source.seek.begin(target),
+            target,
+        },
+        emit_request: false,
+    };
+    control.raise_variant_fence(1, media_info(1));
+    source.rebuild = interrupting_rebuild_port(&source);
+    source.state = Track::<RecreatingDecoder>::new(RecreateState {
+        media_info: media_info(1),
+        cause: RecreateCause::VariantSwitch,
+        next: RecreateNext::Seek(request),
+        offset: 0,
+    })
+    .erase();
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    source.rebuild.run_inline();
+    source.step_track();
+
+    // The source can serve the new variant now. Restore the working factory
+    // and let the FSM settle.
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let factory: DecoderFactory<TestStream> =
+        Arc::new(move |_stream, _info, _offset| Ok(Box::new(TestDecoder::new(99, drops.clone()))));
+    source.rebuild = RebuildPort::new(
+        factory,
+        RebuildRuntime {
+            handle: source.rebuild.runtime().clone(),
+            wake: Arc::new(TestWake),
+        },
+    );
+    for _ in 0..16 {
+        source.rebuild.run_inline();
+        source.step_track();
+    }
+
+    assert_eq!(
+        source
+            .decode
+            .session()
+            .media_info
+            .as_ref()
+            .and_then(|info| info.variant_index),
+        Some(1),
+        "the pending variant switch was never consumed by a decoder recreate"
+    );
+    assert!(
+        !control.has_variant_change_pending(),
+        "the fence must drop once a decoder for the new variant is installed"
+    );
 }
 
 // A decoder factory that panics during construction must not strand the

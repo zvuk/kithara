@@ -13,10 +13,6 @@ use crate::{
     },
 };
 
-const WHEEL_STEP_INTERVAL_MS: u128 = 200;
-const DRAG_STEPS_PER_PIXEL: f32 = 0.25;
-const HOVER: HoverState = HoverState::new(mouse::Interaction::ResizingVertically);
-
 #[derive(bon::Builder)]
 pub(crate) struct WheelSurface<'path> {
     path: &'path str,
@@ -45,10 +41,13 @@ struct WheelState {
 }
 
 impl WheelState {
+    const STEP_INTERVAL_MS: u128 = 200;
+    const DRAG_STEPS_PER_PIXEL: f32 = 0.25;
+
     fn drag_steps(&mut self, y: f32) -> Option<f32> {
         let from = self.drag?;
         self.drag = Some(y);
-        Some((from - y) * DRAG_STEPS_PER_PIXEL)
+        Some((from - y) * Self::DRAG_STEPS_PER_PIXEL)
     }
 
     fn step(&mut self, delta: ScrollDelta) -> f32 {
@@ -58,7 +57,7 @@ impl WheelState {
                 let now = Instant::now();
                 if self.last_step.is_some_and(|previous| {
                     now.checked_duration_since(previous)
-                        .is_some_and(|elapsed| elapsed.as_millis() < WHEEL_STEP_INTERVAL_MS)
+                        .is_some_and(|elapsed| elapsed.as_millis() < Self::STEP_INTERVAL_MS)
                 }) {
                     return 0.0;
                 }
@@ -77,6 +76,8 @@ fn direction(y: f32) -> f32 {
 }
 
 impl WheelCanvas {
+    const HOVER: HoverState = HoverState::new(mouse::Interaction::ResizingVertically);
+
     fn publish(&self, action: ControlAction) -> Action<UiEvent> {
         Action::publish(UiEvent::Control {
             path: self.path.clone(),
@@ -106,7 +107,7 @@ impl canvas::Program<UiEvent> for WheelCanvas {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> mouse::Interaction {
-        HOVER.interaction(state.drag.is_some(), bounds, cursor)
+        Self::HOVER.interaction(state.drag.is_some(), bounds, cursor)
     }
 
     fn update(
@@ -308,12 +309,12 @@ mod tests {
         assert_eq!(published(&surface, &mut state, &press(), inside()), None);
         assert_eq!(
             published(&surface, &mut state, &moved(11.0), at(11.0)),
-            Some(stepped(8.0 * DRAG_STEPS_PER_PIXEL)),
+            Some(stepped(8.0 * WheelState::DRAG_STEPS_PER_PIXEL)),
             "dragging up must step the value up"
         );
         assert_eq!(
             published(&surface, &mut state, &moved(27.0), at(27.0)),
-            Some(stepped(-16.0 * DRAG_STEPS_PER_PIXEL)),
+            Some(stepped(-16.0 * WheelState::DRAG_STEPS_PER_PIXEL)),
             "the travel is measured from where the last step left off"
         );
 

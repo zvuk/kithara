@@ -49,7 +49,7 @@ pub(crate) const CACHE_ENV: &str = "KITHARA_FIXTURE_CACHE";
 ///
 /// On by default: [`from_env`](Self::from_env) resolves to `$KITHARA_FIXTURE_CACHE`
 /// when set, otherwise to a build-fingerprinted temp dir, so plain `cargo test`,
-/// `just test`, `just rtsan`, and IDE runs all reuse encode/mux output across
+/// `just test`, `just test rtsan`, and IDE runs all reuse encode/mux output across
 /// the per-test processes in a run. Only [`from_dir(None)`](Self::from_dir)
 /// makes every op a no-op (used for the disabled-path unit tests).
 #[derive(Clone)]

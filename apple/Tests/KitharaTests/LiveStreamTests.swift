@@ -2,7 +2,13 @@ import Foundation
 import Testing
 @testable import Kithara
 
-@Suite("Live Stream")
+@Suite(
+    "Live Stream",
+    .enabled(
+        if: ProcessInfo.processInfo.environment["KITHARA_PROD_LANE"] == "1",
+        "Set KITHARA_PROD_LANE=1 to run tests against production streams"
+    )
+)
 struct LiveStreamTests {
 
     @Test("zvuk MP3 loads and reports duration")

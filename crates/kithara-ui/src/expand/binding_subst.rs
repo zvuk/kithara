@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::{Binding, machine::Context};
+use super::{Binding, BindingKind, machine::Context};
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, SourceUri},
@@ -138,28 +138,19 @@ pub(crate) fn intern_binding(
     binding: &BindingRef,
     origin: &SourceUri,
 ) -> Result<Binding, UiDocError> {
-    match binding {
-        BindingRef::Command { id, with } => {
-            let BindingParts { id, key, with } =
-                intern_binding_parts(interner, &id.0, with, origin)?;
-            Ok(Binding::Command { id, key, with })
-        }
-        BindingRef::Parameter { id, with } => {
-            let BindingParts { id, key, with } =
-                intern_binding_parts(interner, &id.0, with, origin)?;
-            Ok(Binding::Parameter { id, key, with })
-        }
-        BindingRef::Telemetry { id, with } => {
-            let BindingParts { id, key, with } =
-                intern_binding_parts(interner, &id.0, with, origin)?;
-            Ok(Binding::Telemetry { id, key, with })
-        }
-        BindingRef::Model { id, with } => {
-            let BindingParts { id, key, with } =
-                intern_binding_parts(interner, &id.0, with, origin)?;
-            Ok(Binding::Model { id, key, with })
-        }
-    }
+    let (kind, id, with) = match binding {
+        BindingRef::Command { id, with } => (BindingKind::Command, id, with),
+        BindingRef::Parameter { id, with } => (BindingKind::Parameter, id, with),
+        BindingRef::Telemetry { id, with } => (BindingKind::Telemetry, id, with),
+        BindingRef::Model { id, with } => (BindingKind::Model, id, with),
+    };
+    let BindingParts { id, key, with } = intern_binding_parts(interner, &id.0, with, origin)?;
+    Ok(Binding {
+        kind,
+        id,
+        key,
+        with,
+    })
 }
 
 pub(super) fn intern_optional_binding(

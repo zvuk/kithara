@@ -57,7 +57,7 @@ jobs:
           restore-keys: perf-baseline-
 
       - name: Run performance tests
-        run: just perf-test
+        run: just perf suite
 
       - name: Prepare baseline for caching
         if: github.ref == 'refs/heads/main'
@@ -74,7 +74,7 @@ jobs:
         if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-matched-key != ''
         id: compare
         run: |
-          result=$(cargo xtask perf-compare perf-results.txt baseline-results.txt --threshold 10 2>&1) || true
+          result=$(just perf compare perf-results.txt baseline-results.txt --threshold 10 2>&1) || true
           echo "$result"
           {
             echo 'comparison<<EOF'

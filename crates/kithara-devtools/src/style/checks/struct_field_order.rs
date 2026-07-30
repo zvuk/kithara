@@ -413,7 +413,7 @@ fn type_sort_key(ty: &Type) -> String {
         Type::Never(_) => "!".to_string(),
         Type::TraitObject(_) => "dyn".to_string(),
         Type::ImplTrait(_) => "impl".to_string(),
-        Type::BareFn(_) => "fn".to_string(),
+        Type::FnPtr(_) => "fn".to_string(),
         Type::Macro(_) => "macro".to_string(),
         Type::Verbatim(_) => "?".to_string(),
         _ => "_".to_string(),

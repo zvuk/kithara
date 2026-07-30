@@ -1,6 +1,6 @@
 use std::env;
 
-use axum::{Router, routing::get};
+use axum::{Router, middleware, routing::get};
 use kithara::platform::{
     sync::Arc,
     time::{Duration, sleep},
@@ -15,7 +15,7 @@ use crate::{
     hls_url::HlsSpec,
     http_server::TestHttpServer,
     routes::{
-        assets, behavior, signal,
+        assets, behavior, control, signal,
         signal::{encode_signal_payload, encoded_signal_cache_key},
         stream,
     },
@@ -39,6 +39,10 @@ impl TestServerHelper {
             state: Arc::clone(&shared.state),
             base_url: shared.base_url.clone(),
         }
+    }
+
+    pub(crate) fn for_server(state: Arc<TestServerState>, base_url: Url) -> Self {
+        Self { state, base_url }
     }
 
     /// Build a URL for a static test asset.
@@ -234,6 +238,45 @@ impl TestServerHelper {
     }
 }
 
+/// A test server private to one test: its own port, its own [`TestServerState`].
+///
+/// Reachability is server-wide — the guard in front of every data route reads
+/// one flag — so a test that takes the network down must not share a server with
+/// anything else. On the process-global server ([`TestServerHelper::new`]) that
+/// outage answers every parallel sibling's request with `503`, and the siblings
+/// fail on preconditions that have nothing to do with what they assert.
+///
+/// Owning the switch here rather than on [`TestServerHelper`] is what keeps that
+/// from coming back: the shared helper has no way to take a server offline.
+///
+/// Dropping this shuts its server down.
+pub struct PrivateTestServer {
+    state: Arc<TestServerState>,
+    server: TestHttpServer,
+}
+
+impl PrivateTestServer {
+    /// Start a server private to this test on its own loopback port.
+    pub async fn start() -> Self {
+        let state = TestServerState::new();
+        let server = TestHttpServer::new(router(Arc::clone(&state))).await;
+        Self { state, server }
+    }
+
+    /// A helper bound to this private server instead of the shared one.
+    #[must_use]
+    pub fn helper(&self) -> TestServerHelper {
+        TestServerHelper::for_server(Arc::clone(&self.state), self.server.base_url().clone())
+    }
+
+    /// Lower or raise this server's reachability switch.
+    ///
+    /// In-process counterpart of `POST /control/network`.
+    pub fn set_network_online(&self, online: bool) {
+        self.state.set_network_online(online);
+    }
+}
+
 /// Release one delay gate after `delay_ms` of (virtual under flash) time.
 ///
 /// The `#[kithara::flash]` guard makes the body's `sleep` engine-backed inside an
@@ -385,6 +428,11 @@ pub(crate) fn router(state: Arc<TestServerState>) -> Router {
         .merge(signal::router())
         .merge(stream::router())
         .merge(crate::routes::token::router())
+        .merge(control::router())
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            control::network_guard,
+        ))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

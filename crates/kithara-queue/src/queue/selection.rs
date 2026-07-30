@@ -238,7 +238,7 @@ impl Queue {
         self.watch_apply(id, handle);
     }
 
-    fn promote_pending_load(&self, id: TrackId) {
+    pub(super) fn promote_pending_load(&self, id: TrackId) {
         if let Some(source) = self.tracks.source(id) {
             let handle = self.loader.promote_load(id, source);
             self.watch_apply(id, handle);

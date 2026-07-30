@@ -24,13 +24,13 @@ Supports `#[case]` / `#[case::name]` parameterization and fixture injection.
 
 ### Loom execution and debugging
 
-The macro emits a `loom_model_` test-name prefix. `just test --loom=on` enables
+The macro emits a `loom_model_` test-name prefix. `just test run --loom=on` enables
 `kithara/loom`, uses the optimized test profile, and selects only that
 prefix. This is required: enabling the Loom primitive backend while running an
 unmarked test would access modeled primitives outside `loom::model`. Ordinary
 `just test` never enables Loom and still runs the marked regression once, so
 the model annotation adds no permutation cost to the normal gate. Use
-`just test --loom=on --flash=on` to compose Flash over the Loom primitives.
+`just test run --loom=on --flash=on` to compose Flash over the Loom primitives.
 
 Do not annotate a full flaky async integration test. Loom cannot model sockets,
 Tokio scheduling, random input, decoder FFI, or wall time. Extract the smallest
@@ -42,9 +42,9 @@ The model hook calls `loom::model` directly. Assertion and Loom panics propagate
 without `catch_unwind`, and no per-permutation result is buffered. The debug
 workflow follows Loom's checkpoint contract:
 
-1. `just loom-checkpoint path/to/checkpoint.json TEST_FILTER` periodically saves progress while reproducing the failure.
-2. `just loom-isolate path/to/checkpoint.json TEST_FILTER` resumes with `LOOM_CHECKPOINT_INTERVAL=1`; after it fails, the file identifies the exact failing permutation.
-3. `just loom-debug path/to/checkpoint.json TEST_FILTER` replays that permutation with `LOOM_LOG=trace`, `LOOM_LOCATION=1`, and uncaptured output.
+1. `just test loom-checkpoint path/to/checkpoint.json TEST_FILTER` periodically saves progress while reproducing the failure.
+2. `just test loom-isolate path/to/checkpoint.json TEST_FILTER` resumes with `LOOM_CHECKPOINT_INTERVAL=1`; after it fails, the file identifies the exact failing permutation.
+3. `just test loom-debug path/to/checkpoint.json TEST_FILTER` replays that permutation with `LOOM_LOG=trace`, `LOOM_LOCATION=1`, and uncaptured output.
 
 The checkpoint JSON is an opaque execution path, not a report to inspect by
 hand. In the replay, switch markers show which modeled thread became runnable;

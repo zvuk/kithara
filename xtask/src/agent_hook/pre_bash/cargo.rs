@@ -56,7 +56,7 @@ fn cargo_global_option_has_value(arg: &str) -> bool {
 
 pub(super) fn is_full_test_harness(tokens: &[String]) -> bool {
     match argv0(tokens) {
-        Some("just") => tokens.get(1).is_some_and(|arg| arg.starts_with("test")),
+        Some("just") => tokens.get(1).is_some_and(|arg| arg == "test"),
         Some("cargo") => {
             let Some((subcommand, rest)) = cargo_subcommand(tokens) else {
                 return false;

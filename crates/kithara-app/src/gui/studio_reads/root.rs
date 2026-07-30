@@ -8,7 +8,7 @@ use super::{
 };
 use crate::gui::app::Kithara;
 
-pub(in crate::gui::studio_ui) struct StudioRoot<'a> {
+pub(in crate::gui) struct StudioRoot<'a> {
     library: LibraryNode<'a>,
     decks: Vec<DeckNode<'a>>,
     engine: EngineNode,
@@ -18,7 +18,7 @@ pub(in crate::gui::studio_ui) struct StudioRoot<'a> {
 }
 
 impl<'a> StudioRoot<'a> {
-    pub(in crate::gui::studio_ui) fn new(state: &'a Kithara) -> Self {
+    pub(in crate::gui) fn new(state: &'a Kithara) -> Self {
         let cache = &state.studio.cache;
         let library = LibraryNode::new(&state.catalog, &cache.deck_marks, state.selected_track);
         let focus = cache.focus_deck();

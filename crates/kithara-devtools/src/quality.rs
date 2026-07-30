@@ -8,12 +8,18 @@ use cargo_metadata::MetadataCommand;
 use clap::Subcommand;
 use regex::Regex;
 
-use crate::common::{project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files};
+use crate::{
+    Ctx,
+    common::{project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files},
+    quality_assessment, quality_lab,
+};
 
 const MOCK_COVERAGE_PATTERN: &str = r"(unimock::unimock\(|#\[\s*kithara::mock)";
 
-#[derive(Clone, Copy, Debug, Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum QualityCommand {
+    /// Build a decision-oriented repository quality assessment.
+    Assess(quality_assessment::AssessArgs),
     /// Generate a quality report.
     Report {
         #[arg(long)]
@@ -35,6 +41,11 @@ pub enum QualityCommand {
     TraitMockExceptions,
     /// Check unimock usage.
     UnimockCheck,
+    /// Run heavyweight external analyzers outside the fast lint loop.
+    Lab {
+        #[command(subcommand)]
+        command: quality_lab::LabCommand,
+    },
 }
 
 fn workspace_root() -> Result<PathBuf> {
@@ -96,8 +107,9 @@ fn count_rs_files_in(dir: &Path) -> Result<usize> {
     Ok(files.len())
 }
 
-pub(crate) fn run(cmd: &QualityCommand) -> Result<()> {
+pub(crate) fn run(cmd: &QualityCommand, ctx: &Ctx) -> Result<()> {
     match cmd {
+        QualityCommand::Assess(args) => quality_assessment::run(args, ctx),
         QualityCommand::Report {
             min_unimock_traits,
             min_rstest_cases,
@@ -115,6 +127,7 @@ pub(crate) fn run(cmd: &QualityCommand) -> Result<()> {
         QualityCommand::TraitMockAudit => run_trait_mock_audit(),
         QualityCommand::TraitMockExceptions => run_trait_mock_exceptions(),
         QualityCommand::UnimockCheck => run_unimock_check(),
+        QualityCommand::Lab { command } => quality_lab::run(command, ctx),
     }
 }
 
@@ -576,6 +589,14 @@ fn run_unimock_check() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assess_command_accepts_default_profile_and_depth() {
+        let command = QualityCommand::augment_subcommands(clap::Command::new("quality"));
+        let matches = command.try_get_matches_from(["quality", "assess"]);
+
+        assert!(matches.is_ok(), "quality assess should parse: {matches:?}");
+    }
 
     #[test]
     fn walk_rs_files_returns_sorted() {

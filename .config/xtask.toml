@@ -5,6 +5,31 @@
 [project]
 name = "kithara"
 
+[workspace-scan]
+# Cargo build output can also live below an individual crate (for example the
+# multi-target FFI builds). Generated bindings are not workspace source.
+exclude = ["target/**", "**/target/**"]
+
+[architecture.filters]
+exclude_crates = [
+  "kithara-devtools",
+  "kithara-fuzz",
+  "kithara-integration-tests",
+  "kithara-test-*",
+  "kithara-workspace-hack",
+  "xtask",
+]
+exclude_modules = ["*::tests"]
+
+[[architecture.runtime.scenarios]]
+name = "queue-playback"
+command = "test"
+package = "kithara-integration-tests"
+test = "suite_light"
+filter = "kithara_queue::architecture_flow::queue_playback_architecture"
+ignored = true
+timeout_secs = 120
+
 [audit_clippy]
 lints = [
   "redundant_clone",
@@ -184,6 +209,22 @@ prefix_args = [
 default_features = ["e2e", "kithara/resample-glide"]
 default_flash = false
 
+# Integration regression tests are red by design and stay outside the main gate.
+[test.lanes.integration-regressions]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-integration-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "suite_integration_regressions",
+]
+default_features = ["integration-regressions"]
+default_flash = true
+
 [test.lanes.selenium]
 program = "cargo"
 prefix_args = [
@@ -244,7 +285,7 @@ http_timeout_secs = 20
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 
 [ext.release]
-# Apple release flow (cargo xtask release prepare|publish).
+# Apple release flow (`just release artifacts|publish`).
 manifest = "Package.swift"
 title = "Kithara"
 github_repo = "zvuk/kithara"
@@ -255,11 +296,11 @@ asset = "KitharaFFIInternal.xcframework.zip"
 single_asset = "Kithara.xcframework.zip"
 http_timeout_secs = 60
 upload_timeout_secs = 600
-# Documentation channel: DocC archive (`just apple doc`) zipped + uploaded as a
+# Documentation channel: DocC archive (`just platform apple doc`) zipped + uploaded as a
 # release asset.
 docs_asset = "Kithara-docs.zip"
 docs_archive = "docs-build/Kithara.doccarchive"
-# WebAssembly channel: trunk dist (`cargo xtask wasm build`) zipped + deployed
+# WebAssembly channel: trunk dist (`just platform wasm build`) zipped + deployed
 # to GitHub Pages classic on the gh-pages branch.
 wasm_asset = "kithara-wasm-pages.zip"
 wasm_dist = "crates/kithara-ffi/dist"
@@ -283,7 +324,7 @@ exclude_packages = [
 ffi_crate = "kithara-ffi"
 # AAR artifacts the Gradle export is expected to produce.
 aars = ["kithara.aar", "rust-tls.aar"]
-# Demo app launched by `cargo xtask android run`.
+# Demo app launched by `just tooling xtask android run`.
 default_avd = "Pixel_6"
 demo_package = "com.kithara.example"
 demo_activity = "com.kithara.example.MainActivity"
@@ -299,8 +340,164 @@ js_artifact = "kithara-ffi.js"
 # Trait directory whose every `pub trait` must carry `#[unimock]`.
 unimock_traits_dir = "crates/kithara-play/src/api"
 
+[[quality.assessment.not_applicable_tools]]
+tool = "cargo-mutants"
+reason = "Workspace-wide mutation testing is prohibitively expensive and does not provide actionable signal."
+
+[[quality.assessment.deep_stages]]
+name = "extended-clippy"
+command = ["just", "lint", "audit-clippy"]
+tools = ["extended-clippy"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "quality-lab"
+command = ["just", "quality", "lab", "run", "manual"]
+tools = ["cha", "rustqual", "cargo-dupes", "pmat"]
+expected_artifacts = ["target/quality-lab/{revision}/manual-summary.json"]
+
+[[quality.assessment.deep_stages]]
+name = "coverage-risk"
+command = ["just", "quality", "coverage-risk"]
+tools = ["cargo-llvm-cov", "cargo-crap"]
+hard_invariant = true
+expected_artifacts = [
+  "coverage/lcov.info",
+  "target/quality-lab/{revision}/coverage-summary.json",
+]
+
+[[quality.assessment.deep_stages]]
+name = "public-api"
+command = ["cargo", "public-api", "-p", "kithara"]
+tools = ["cargo-public-api"]
+
+[[quality.assessment.deep_stages]]
+name = "binary-bloat"
+command = [
+  "cargo",
+  "bloat",
+  "-p",
+  "kithara-app",
+  "--release",
+  "--message-format",
+  "json",
+]
+tools = ["cargo-bloat"]
+
+[[quality.assessment.deep_stages]]
+name = "e2e"
+command = ["just", "test", "run", "--lane=e2e"]
+tools = ["e2e-tests"]
+hard_invariant = true
+complete_only = true
+
+[[quality.assessment.deep_stages]]
+name = "e2e-resamplers"
+command = ["just", "test", "e2e-resamplers"]
+tools = ["e2e-resamplers"]
+hard_invariant = true
+complete_only = true
+
+[[quality.assessment.deep_stages]]
+name = "selenium"
+command = ["just", "test", "run", "--lane=selenium"]
+tools = ["selenium-tests"]
+hard_invariant = true
+complete_only = true
+
+[[quality.assessment.deep_stages]]
+name = "feature-gate"
+command = ["just", "ci", "gate"]
+tools = ["feature-gate"]
+hard_invariant = true
+complete_only = true
+
+[[quality.assessment.deep_stages]]
+name = "loom"
+command = ["just", "test", "run", "--loom=on"]
+tools = ["loom"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "rtsan"
+command = ["just", "test", "rtsan"]
+tools = ["rtsan"]
+hard_invariant = true
+platforms = ["macos"]
+
+[[quality.assessment.deep_stages]]
+name = "perf-suite"
+command = ["just", "perf"]
+tools = ["perf-suite"]
+hard_invariant = true
+expected_artifacts = ["perf-results.txt"]
+
+[[quality.assessment.deep_stages]]
+name = "benchmarks"
+command = ["just", "perf", "bench", "build"]
+tools = ["benchmarks"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "memory"
+command = ["just", "perf", "memory"]
+tools = ["memory"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "wasm-check"
+command = ["just", "platform", "wasm", "check"]
+tools = ["wasm-check"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "wasm-tests"
+command = ["just", "platform", "wasm", "test"]
+tools = ["wasm-tests"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "wasm-size"
+command = ["just", "platform", "wasm", "size-check"]
+tools = ["wasm-build", "wasm-size", "wasm-slim"]
+hard_invariant = true
+expected_artifacts = ["target/wasm-slim-result.json"]
+
+[[quality.assessment.deep_stages]]
+name = "apple-xcframework"
+command = ["just", "platform", "apple", "xcframework", "--profile", "debug"]
+tools = ["apple-xcframework"]
+hard_invariant = true
+platforms = ["macos"]
+
+[[quality.assessment.deep_stages]]
+name = "apple-build"
+command = ["just", "platform", "apple", "single"]
+tools = ["apple-build"]
+hard_invariant = true
+platforms = ["macos"]
+
+[[quality.assessment.deep_stages]]
+name = "apple-docs"
+command = ["just", "tooling", "xtask", "apple", "docgen", "--check"]
+tools = ["apple-docs"]
+hard_invariant = true
+platforms = ["macos"]
+
+[[quality.assessment.deep_stages]]
+name = "android-build"
+command = ["just", "platform", "android", "build"]
+tools = ["android-build"]
+hard_invariant = true
+
+[[quality.assessment.deep_stages]]
+name = "android-aar"
+command = ["just", "platform", "android", "aar"]
+tools = ["android-aar"]
+hard_invariant = true
+
 [ext.apple]
-# Demo app launched by `cargo xtask apple run`.
+# Demo app launched by `just platform apple demo`.
 default_simulator = "iPhone 17 Pro Max"
 default_scheme = "KitharaDemo_iOS"
 demo_bundle_id = "com.kithara.demo"

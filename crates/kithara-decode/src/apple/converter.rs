@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_apple::audio_toolbox::{
     AUDIO_CONVERTER_PRIME_INFO, AudioConverter, AudioConverterPacketInput, AudioConverterPrimeInfo,
 };
@@ -6,6 +8,20 @@ use tracing::debug;
 use crate::GaplessInfo;
 
 pub(crate) type ConverterInputState = AudioConverterPacketInput;
+
+/// Rate the codec's embedded `AudioConverter` should emit at, given the
+/// conversion the caller asked for. See CONTEXT.md "Resampler integration".
+#[cfg(feature = "apple-codec-embedded-resampler")]
+pub(crate) fn embedded_target_output_rate(requested: Option<NonZeroU32>) -> Option<u32> {
+    requested.map(NonZeroU32::get)
+}
+
+/// Without the embedded converter the codec decodes at the source rate and
+/// conversion stays with the standalone resampler in `crate::resampled`.
+#[cfg(not(feature = "apple-codec-embedded-resampler"))]
+pub(crate) fn embedded_target_output_rate(_requested: Option<NonZeroU32>) -> Option<u32> {
+    None
+}
 
 /// Query `kAudioConverterPrimeInfo` from a live converter.
 ///

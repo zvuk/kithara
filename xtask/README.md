@@ -9,14 +9,14 @@ commands.
 Use the generic Just entry point:
 
 ```sh
-just xtask <subcommand> [args...]
+just tooling xtask <subcommand> [args...]
 ```
 
 All higher-level Just recipes that need xtask delegate to this entry point. It
 uses a worktree-local self-cache: a warm invocation runs an immutable cached
 binary directly, a stale invocation refreshes it once, and a missing cache uses
 Cargo for the cold bootstrap. Force a rebuild after an undeclared environment
-change with `just xtask-refresh`.
+change with `just tooling refresh`.
 
 The ignored `xtask/.xtask-cache` file locates the active generation owned by
 the concrete worktree. Cached commands do not use another worktree's binary or
@@ -30,15 +30,24 @@ throughout the build before atomically activating the new generation.
 ## Common Commands
 
 - `just lint` runs the architecture, style, and Rust-idiom checks.
-- `just ast-grep` runs the rules under `.config/ast-grep/`.
+- `just lint ast-grep` runs the rules under `.config/ast-grep/`.
 - `just fmt` formats Rust, Cargo manifests, non-Cargo TOML, and JSON/JSONC.
-- `just fmt-check` checks those formatters without rewriting files.
+- `just fmt check` checks those formatters without rewriting files.
 - `just test` runs the repository test harness.
-- `just xtask health` runs the broad local health report.
+- `just ci health` runs the broad local health report.
+- `just quality lab list` shows pinned heavyweight analyzers and time budgets.
+- `just quality lab run scheduled` runs the advisory scheduled profile.
+- `just quality coverage-risk [--baseline FILE]` produces Cobertura and LCOV from one
+  test run, then runs the cargo-crap regression profile.
 
-Use `just xtask --help` and `just xtask <subcommand> --help` for the complete
-CLI. Direct `cargo run -p xtask` is a scoped development probe, not the normal
-repository entry point.
+Use `just tooling xtask --help` and
+`just tooling xtask <subcommand> --help` for the complete CLI. Direct
+`cargo run -p xtask` is a scoped development probe, not the normal repository
+entry point.
+
+Quality Lab is deliberately absent from `lint-fast`, normal `audit`, and
+pre-commit. Its reports are stored under `target/quality-lab/<revision>/`; CI
+activation remains separate from the command implementation.
 
 ## Agent Hooks
 
@@ -47,7 +56,7 @@ kind, and edited paths from that payload. Typed routes and the destructive-Git
 override variable live under `[ext.agent_hook]` in `.config/xtask.toml`; the
 handlers own the guard and formatting policy.
 
-Tool adapters call the `just agent-hook` recipe. That recipe reuses the generic
+Tool adapters call the hidden `just _agent-hook` recipe. That recipe reuses the generic
 cache in optional mode, so hooks never invoke Cargo, refresh the binary, or
 wait for a build. There are no agent-hook
 install/uninstall/status/cache commands and no `pre-bash` or `post-edit` CLI

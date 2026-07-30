@@ -316,7 +316,7 @@ impl Drop for FlashScope {
 /// MACRO-INTERNAL: this is the private expansion target of the
 /// `#[kithara::flash(bool)]` guard macro (sync arm). Do NOT call it by hand —
 /// annotate the function with `#[kithara::flash(true|false)]` instead. Direct
-/// use is rejected by `cargo xtask lint`. It stays `pub` only because the macro
+/// use is rejected by `just lint`. It stays `pub` only because the macro
 /// expands `::kithara_platform::flash::enter_dynamic` into the annotated crate.
 #[doc(hidden)]
 pub fn enter_dynamic(on: bool) -> FlashScope {
@@ -432,7 +432,7 @@ impl<F: Future> Future for FlashDynamic<F> {
 /// MACRO-INTERNAL: this is the private expansion target of the
 /// `#[kithara::flash(bool)]` guard macro (async arm). Do NOT call it by hand —
 /// annotate the async function with `#[kithara::flash(true|false)]` instead.
-/// Direct use is rejected by `cargo xtask lint`. It stays `pub` only because the
+/// Direct use is rejected by `just lint`. It stays `pub` only because the
 /// macro expands `::kithara_platform::flash::dynamic` into the annotated crate.
 #[doc(hidden)]
 pub fn dynamic<F: Future>(on: bool, fut: F) -> FlashDynamic<F> {

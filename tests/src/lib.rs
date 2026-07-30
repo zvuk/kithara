@@ -17,6 +17,8 @@ pub mod alac_fixture;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple_warmup;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod architecture_trace;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod asset_fixture;
 pub mod assets_ext;
 pub mod audio_fixture;
@@ -99,7 +101,8 @@ pub use signal_url::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use test_server::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, InitGateHandle, SegmentGateHandle,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, InitGateHandle, PrivateTestServer,
+    SegmentGateHandle,
 };
 pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
 pub use wav::{create_test_wav, create_wav_exact_bytes};

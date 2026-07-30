@@ -1,0 +1,4 @@
+interface:
+  display_name: "Quality Assessment"
+  short_description: "Build evidence-backed repository health reports"
+  default_prompt: "Use $quality-assessment to build and interpret a scoped repository quality report."

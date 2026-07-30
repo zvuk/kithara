@@ -232,11 +232,20 @@ impl<T: StreamType> Stream<T> {
         }
     }
 
-    /// Clear the variant fence, allowing reads from the next variant.
-    /// No-op for non-adaptive sources.
+    /// Acknowledge the variant switch — a decoder for the new variant is
+    /// installed. No-op for non-adaptive sources.
     pub fn clear_variant_fence(&mut self) {
         if let Some(vc) = self.source.variant_control() {
             vc.clear_variant_fence();
+        }
+    }
+
+    /// Allow reads from the next variant so a decoder can be built against
+    /// it, leaving the switch itself unacknowledged. No-op for non-adaptive
+    /// sources.
+    pub fn open_variant_read_gate(&mut self) {
+        if let Some(vc) = self.source.variant_control() {
+            vc.open_variant_read_gate();
         }
     }
 
@@ -254,13 +263,22 @@ impl<T: StreamType> Stream<T> {
         )
     }
 
-    /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
-    /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
+    /// `true` while a committed cross-variant switch still has no decoder
+    /// built against it.
     #[must_use]
     pub fn has_variant_change_pending(&self) -> bool {
         self.source
             .variant_control()
             .is_some_and(|vc| vc.has_variant_change_pending())
+    }
+
+    /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
+    /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
+    #[must_use]
+    pub fn variant_read_pending(&self) -> bool {
+        self.source
+            .variant_control()
+            .is_some_and(|vc| vc.variant_read_pending())
     }
 
     pub fn is_empty(&self) -> Option<bool> {
@@ -398,7 +416,7 @@ impl<T: StreamType> Stream<T> {
 
             if variant_control
                 .as_ref()
-                .is_some_and(|vc| vc.has_variant_change_pending())
+                .is_some_and(|vc| vc.variant_read_pending())
             {
                 return Ok(StreamReadOutcome::Pending(PendingReason::VariantChange));
             }
@@ -677,7 +695,7 @@ impl<T: StreamType> Stream<T> {
             variant_fence: self
                 .source
                 .variant_control()
-                .is_some_and(|vc| vc.has_variant_change_pending()),
+                .is_some_and(|vc| vc.variant_read_pending()),
         }
     }
 }

@@ -60,6 +60,7 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
             pub(crate) fn format_change_segment_range(&self) -> kithara_stream::StreamResult<Range<u64>>;
             pub(crate) fn clear_variant_fence(&self);
+            pub(crate) fn open_variant_read_gate(&self);
             pub(crate) fn has_variant_change_pending(&self) -> bool;
             pub(crate) fn variant_change_target(&self) -> Option<usize>;
             pub(crate) fn seek_time_anchor(&self, position: kithara_platform::time::Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use kithara_platform::sync::Arc;
-use num_traits::cast::{AsPrimitive, ToPrimitive};
+use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
 use super::{
@@ -49,8 +49,14 @@ pub enum TrackReadOutcome {
 }
 
 impl PlayerTrack {
-    fn advance_served_frames(&mut self, frames: u64) {
-        self.served_frames = self.served_frames.saturating_add(frames);
+    /// Advance the media clock by `frames` of mixed output.
+    ///
+    /// The mix output runs on the output clock; one output frame carries
+    /// `playback_rate` media frames, which is what the stretch slot consumed
+    /// from the source to produce it.
+    fn advance_media_clock(&mut self, frames: usize) {
+        let output_frames: f64 = AsPrimitive::as_(frames);
+        self.served_media_frames += output_frames * f64::from(self.playback_rate);
     }
 
     fn check_notifications(
@@ -93,8 +99,7 @@ impl PlayerTrack {
             return outcome;
         };
 
-        let produced_frames = frames.to_u64().unwrap_or(0);
-        self.advance_served_frames(produced_frames);
+        self.advance_media_clock(frames);
         self.observed_duration = duration;
         self.update_observed_eof(frames_until_eof);
         let position = self.position();
@@ -156,7 +161,7 @@ impl PlayerTrack {
             range,
         } = ctx;
         let PartialRead { frames, duration } = partial;
-        self.advance_served_frames(frames.to_u64().unwrap_or(0));
+        self.advance_media_clock(frames);
         let position = self.position();
         self.observed_duration = if position > 0.0 { position } else { duration };
         let duration = self.observed_duration;

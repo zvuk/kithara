@@ -88,7 +88,8 @@ pub(crate) fn wrap_with_model(body: &TokenStream2, args: &TestArgs) -> TokenStre
 }
 
 /// Selenium tests no longer auto-inject `#[ignore]` — the suite runs only
-/// when the wasm-target test driver picks them up (`just test-selenium`),
+/// when the wasm-target test driver picks them up
+/// (`just test run --lane=selenium`),
 /// so plain `cargo test` already skips them by virtue of platform gating.
 pub(crate) fn make_selenium_attrs(_args: &TestArgs) -> TokenStream2 {
     quote! {}

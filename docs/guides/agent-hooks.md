@@ -10,7 +10,7 @@ Claude and Codex pass their hook JSON unchanged on stdin to one repo-owned
 entry point:
 
 ```text
-tool adapter -> just agent-hook
+tool adapter -> just _agent-hook
              -> _xtask-cached optional agent-hook
              -> cached xtask
 ```
@@ -20,7 +20,7 @@ repository root, inspect agent-specific project-directory variables, invoke
 Cargo, or select a hook subcommand. Just's parent-directory lookup selects the
 nearest repository `justfile`, and the payload identifies the event and tool.
 
-`agent-hook` uses the generic cached xtask transport in `optional` mode. A
+`_agent-hook` uses the generic cached xtask transport in `optional` mode. A
 missing or unusable transport prints a warning and skips the guard. Once the
 Rust hook starts, a policy denial, malformed payload, invalid configuration, or
 formatter failure is propagated to the calling agent instead of failing open.
@@ -28,8 +28,8 @@ formatter failure is propagated to the calling agent instead of failing open.
 There is no hook install command. Prime or refresh the shared xtask cache with:
 
 ```sh
-just xtask --help
-just xtask-refresh
+just tooling xtask --help
+just tooling refresh
 ```
 
 The first command bootstraps only when the cache is absent and refreshes only
@@ -37,7 +37,7 @@ when it is stale. The second forces a refresh.
 
 ## Payload Routing
 
-`agent-hook` has no `pre-bash` or `post-edit` CLI discriminator. It parses
+`_agent-hook` has no `pre-bash` or `post-edit` CLI discriminator. It parses
 `hook_event_name`, `tool_name`, and `tool_input` from stdin, maps them to typed
 event and tool kinds, and selects a configured handler. Handler routes and the
 destructive-Git override variable live in `.config/xtask.toml`:
@@ -71,7 +71,7 @@ mistakes:
 - broad raw test acceptance, such as unfiltered workspace `cargo test` or
   `cargo nextest run`; use `just test`;
 - direct formatter gates that bypass the repository harness; use `just fmt` or
-  `just fmt-check`;
+  `just fmt check`;
 - an outer timeout around the full test harness;
 - destructive Git commands such as `git reset --hard`, `git clean`, or
   `git checkout -- ...`.
@@ -88,8 +88,8 @@ The `format-edited-paths` handler formats only paths reported by the hook:
 - `.json` and `.jsonc` use `tidy-json`.
 
 `Cargo.toml` is deliberately skipped because its canonical dependency-order
-rewrite is workspace-wide. Run `just sort` explicitly. Unknown file types are
-ignored. Formatter commands and path containment are owned by
+rewrite is workspace-wide. Run `just fmt cargo` explicitly. Unknown file types
+are ignored. Formatter commands and path containment are owned by
 `kithara-devtools`; the hook does not duplicate formatter flags or scan the
 workspace.
 
@@ -99,10 +99,10 @@ Agent hooks use the same self-cache as every Just recipe that invokes xtask.
 The generic recipe graph is:
 
 ```text
-just xtask <args> -> _xtask-ready -> current: cached run
-                                  -> stale: cached single-flight refresh
-                                  -> missing: Cargo bootstrap
-                    _xtask-cached strict <args>
+just tooling xtask <args> -> _xtask-ready -> current: cached run
+                                          -> stale: cached single-flight refresh
+                                          -> missing: Cargo bootstrap
+                            _xtask-cached strict <args>
 ```
 
 The ignored `xtask/.xtask-cache` locator contains one absolute path to an
@@ -135,5 +135,5 @@ removed after older agent processes have exited.
 ## Tool Adapter Rule
 
 Tool-specific JSON files contain only event matchers and the small command that
-delegates to `agent-hook`. Keep policy, cache ownership, root discovery, and
+delegates to `_agent-hook`. Keep policy, cache ownership, root discovery, and
 formatter behavior out of adapters.

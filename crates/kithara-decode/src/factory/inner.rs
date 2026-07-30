@@ -567,11 +567,16 @@ where
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-fn decoder_embedded_target_output_rate<B>(_config: &DecoderConfig<B>) -> Option<u32>
+fn decoder_embedded_target_output_rate<B>(config: &DecoderConfig<B>) -> Option<u32>
 where
     B: ResamplerBackend,
 {
-    None
+    crate::apple::embedded_target_output_rate(
+        config
+            .resampler
+            .as_ref()
+            .map(|resampler| resampler.target_sample_rate),
+    )
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]

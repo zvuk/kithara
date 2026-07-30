@@ -1,5 +1,5 @@
 # On-disk fixture cache (L2). ON BY DEFAULT: when KITHARA_FIXTURE_CACHE is unset
-# (the default profile, `just test`, `cargo test`, `just rtsan`, IDE), the test
+# (the default profile, `just test`, `cargo test`, `just test rtsan`, IDE), the test
 # code falls back to a build-fingerprinted temp dir (see
 # tests/src/fixture_cache.rs::default_cache_dir), so encode/mux output is reused
 # across the per-test processes in a run. Without L2, nextest's process-per-test
@@ -57,7 +57,7 @@ leak-timeout = "2s"
 
 # Opt-in L2 fixture-cache profile: same settings as default, plus the
 # setup script that prepares the cache dir and exports KITHARA_FIXTURE_CACHE.
-# Use via `cargo nextest run --profile cache` / `just test-cached`.
+# Use via `cargo nextest run --profile cache` / `just test run --lane=cached`.
 [profile.cache]
 fail-fast = false
 test-threads = "num-cpus"
@@ -69,6 +69,6 @@ filter = 'package(kithara-integration-tests)'
 setup = ['fixture-cache']
 
 # Perf-measurement profile: behavior identical to default (profiles inherit
-# it); adds JUnit so `cargo xtask perf` gets exact per-test timings.
+# it); adds JUnit so `just perf suite` gets exact per-test timings.
 [profile.perf.junit]
 path = "junit.xml"

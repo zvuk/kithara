@@ -9,9 +9,9 @@ git clone https://github.com/<your-fork>/kithara.git
 cd kithara
 cargo install just --locked
 cargo build --workspace
-just test-all          # nextest + doctests
-just lint-fast         # fast policy checks
-just lint-full         # full lint / policy checks
+just test all          # nextest + doctests
+just lint fast         # fast policy checks
+just lint full         # full lint / policy checks
 ```
 
 Complete the environment setup below before relying on the `just` workflow. The
@@ -27,9 +27,10 @@ canonical local workflow for both humans and AI agents lives in
 
 ### Required tooling
 
-- `cargo-nextest` for `just test*`
-- `ast-grep` for `just lint-fast` and `just lint-full`
-- nightly `rustfmt` for `just fmt` and `just fmt-check`
+- `just` 1.43 or newer for domain modules and module defaults
+- `cargo-nextest` for `just test` and `just test run`
+- `ast-grep` for `just lint fast` and `just lint full`
+- nightly `rustfmt` for `just fmt` and `just fmt check`
 - `prek` for the configured pre-commit and pre-push hooks
 
 ```bash
@@ -72,7 +73,7 @@ Prerequisites: Android NDK installed with `ANDROID_NDK_HOME` exported,
 
 ```bash
 rustup target add aarch64-linux-android x86_64-linux-android
-just android aar
+just platform android aar
 ```
 
 This builds the Rust JNI libraries in release, generates Kotlin UniFFI
@@ -91,8 +92,8 @@ Prerequisites: Xcode + Command Line Tools, `cargo-swift`
 
 ```bash
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin
-just apple xcframework                 # release
-just apple xcframework --profile debug # faster local iteration
+just platform apple xcframework                 # release
+just platform apple xcframework --profile debug # faster local iteration
 ```
 
 Output: `apple/KitharaFFIInternal.xcframework`, with slices
@@ -114,8 +115,8 @@ xcodebuild -project /absolute/path/to/App.xcodeproj \
 ## Before Submitting a PR
 
 ```bash
-just lint-full
-just test-all
+just lint full
+just test all
 ```
 
 Run extra checks when the change affects multiple crates, public APIs, wasm,

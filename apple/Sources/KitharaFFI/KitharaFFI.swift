@@ -736,6 +736,11 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func removeAllItems()
 
     /**
+     * Current queue repeat mode.
+     */
+    func repeatMode()  -> FfiRepeatMode
+
+    /**
      * Replace the item at `index` with a freshly-configured one.
      *
      * # Errors
@@ -799,6 +804,16 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func setObserver(observer: PlayerObserver)
 
     func setPlayingRate(rate: Float)
+
+    /**
+     * Change the queue repeat mode.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `mode` has no queue-level
+     * meaning.
+     */
+    func setRepeatMode(mode: FfiRepeatMode) throws
 
     func setVolume(volume: Float)
 
@@ -1141,6 +1156,17 @@ open func removeAllItems()  {try! rustCall() {
 }
 
     /**
+     * Current queue repeat mode.
+     */
+open func repeatMode() -> FfiRepeatMode  {
+    return try!  FfiConverterTypeFfiRepeatMode_lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_repeat_mode(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+
+    /**
      * Replace the item at `index` with a freshly-configured one.
      *
      * # Errors
@@ -1265,6 +1291,22 @@ open func setPlayingRate(rate: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_playing_rate(
             self.uniffiCloneHandle(),
         FfiConverterFloat.lower(rate),$0
+    )
+}
+}
+
+    /**
+     * Change the queue repeat mode.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] if `mode` has no queue-level
+     * meaning.
+     */
+open func setRepeatMode(mode: FfiRepeatMode)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_repeat_mode(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiRepeatMode_lower(mode),$0
     )
 }
 }
@@ -8461,6 +8503,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_remove_all_items() != 21301) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_repeat_mode() != 59485) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_replace_item() != 29947) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8489,6 +8534,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 63075) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_repeat_mode() != 38270) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 21146) {

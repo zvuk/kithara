@@ -18,6 +18,8 @@ pub mod orphans;
 pub mod perf;
 pub mod perf_compare;
 pub mod quality;
+pub mod quality_assessment;
+pub mod quality_lab;
 pub mod scope;
 pub mod similarity;
 mod stages;
@@ -46,7 +48,7 @@ pub enum CoreCommand {
     AuditClippy(audit_clippy::AuditClippyArgs),
     /// Thin wrapper around `typos` that pins the workspace config.
     Typos(typos::TyposArgs),
-    /// Thin wrapper around `similarity-rs` with audit/advisory/strict profiles.
+    /// Analyze structural and behavioral similarity, then run similarity-rs.
     Similarity(similarity::SimilarityArgs),
     /// Cargo manifest hygiene checks.
     Manifest(manifest::ManifestArgs),
@@ -64,14 +66,14 @@ pub enum CoreCommand {
         #[command(subcommand)]
         command: quality::QualityCommand,
     },
-    /// Translate scope tokens to tool-specific flags (used by `just audit`).
+    /// Translate scope tokens to tool-specific flags (used by `just ci audit`).
     Scope(scope::ScopeArgs),
     /// Run workspace tests through `cargo nextest`.
     Test(test::TestArgs),
     /// Comprehensive workspace health check with markdown report.
     Health(health::HealthArgs),
     #[cfg(feature = "viz")]
-    /// Architecture visualization tools (hierarchy, arc-map).
+    /// Build architecture views from shared source and runtime evidence.
     Viz(viz::VizArgs),
 }
 
@@ -96,11 +98,11 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Lint(args) => lint::run(args),
         CoreCommand::PerfCompare(args) => perf_compare::run(args),
         CoreCommand::Perf(args) => perf::run(args, ctx),
-        CoreCommand::Quality { command } => quality::run(command),
+        CoreCommand::Quality { command } => quality::run(command, ctx),
         CoreCommand::Scope(args) => scope::run(args),
         CoreCommand::Test(args) => test::run(args),
         CoreCommand::Health(args) => health::run(args),
         #[cfg(feature = "viz")]
-        CoreCommand::Viz(args) => viz::run(args),
+        CoreCommand::Viz(args) => viz::run(args, ctx),
     }
 }

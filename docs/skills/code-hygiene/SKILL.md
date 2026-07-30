@@ -178,10 +178,10 @@ Flag new short, opaque names.
 
 ```
 cargo build --workspace
-just lint-fast          # fast policy checks (style, idioms, arch, ast-grep)
-just test-all           # nextest + doctests
+just lint fast          # fast policy checks (style, idioms, arch, ast-grep)
+just test all           # nextest + doctests
 ```
-Run `just lint-full` (the full set) before handing off. Removing `use`/code can
+Run `just lint full` (the full set) before handing off. Removing `use`/code can
 leave dangling imports or break a still-used dependency in `Cargo.toml` - the
 build/lints catch this.
 

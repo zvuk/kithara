@@ -303,7 +303,13 @@ state machine with `RecreateCause::RouteChange`, the same machine used by
 decode factory may reuse the codec decoder and install a fresh
 `ResampledDecoder` layer; that is a decode-factory outcome, not a separate
 lightweight path in `kithara-audio`. Equal-rate notifications recreate
-nothing.
+nothing. A route change keeps the container it is already decoding, so it
+resolves its recreate origin through the shared `anchor::recreate_offset`
+policy seeded with the running session's `base_offset` — never from the
+resume position's seek anchor. An anchor-derived origin roots an init-bearing
+demuxer on a media byte (the fMP4 `moof` right after `EXT-X-MAP`), the
+recreate fails hard, and the track dies a few frames in. Only a source with
+a byte map resolves an anchor at all, so a flat file source never reached it.
 
 ## Time-Stretch (speed and key-lock)
 

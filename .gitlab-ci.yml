@@ -117,10 +117,10 @@ build:
   before_script:
     - !reference [.touch-sources, before_script]
   script:
-    - just test --no-run
+    - just test run --no-run
     - RUSTUP_TOOLCHAIN=1.89 cargo check --workspace
-    - just wasm
-    - just wasm size-check || true
+    - just platform wasm
+    - just platform wasm size-check || true
   artifacts:
     paths:
       - target/wasm-slim-result.json
@@ -143,12 +143,12 @@ lint:
     - !reference [.touch-sources, before_script]
     - rustup toolchain install nightly --component rustfmt
   script:
-    - just lint-full
-    - just quality-report-ci
-    - just deny
-    - just machete
-    - just hack || true
-    - just semver || true
+    - just lint full
+    - just quality report-ci
+    - just deps deny
+    - just deps machete
+    - just deps hack || true
+    - just deps semver || true
   artifacts:
     paths:
       - target/quality-report.md
@@ -170,9 +170,9 @@ test:
     - !reference [.touch-sources, before_script]
     - rustup component add llvm-tools-preview
   script:
-    - just coverage
+    - just test coverage
     - just perf
-    - just bench ci
+    - just perf bench ci
   artifacts:
     reports:
       coverage_report:
@@ -201,7 +201,7 @@ release-apple:
     - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
     - test -f "$CARGO_HOME/bin/cargo-swift" || cargo install cargo-swift --locked
   script:
-    - just apple release
+    - just platform apple release
     - cp /tmp/KitharaFFIInternal.xcframework.zip .
     # macOS desktop binary
     - cargo build -p kithara-app --release --features tui
@@ -223,7 +223,7 @@ release-android:
   before_script:
     - !reference [.touch-sources, before_script]
   script:
-    - just android aar
+    - just platform android aar
   artifacts:
     paths:
       - android/lib/build/outputs/aar/lib-release.aar
@@ -237,7 +237,7 @@ release-wasm:
     - !reference [.touch-sources, before_script]
     - rustup toolchain install nightly --component rust-src
   script:
-    - cargo xtask wasm build --release
+    - just platform wasm build --release
   artifacts:
     paths:
       - crates/kithara-wasm/dist/
