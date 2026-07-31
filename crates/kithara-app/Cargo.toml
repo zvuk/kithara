@@ -10,8 +10,7 @@ name = "kithara"
 path = "src/main.rs"
 
 [features]
-default = ["tui", "gui", "analysis-waveform", "beat-nn", "stretch-signalsmith"]
-tui = ["dep:ratatui", "dep:crossterm"]
+default = ["gui", "analysis-waveform", "beat-nn", "stretch-signalsmith"]
 # HTTP backend forwarding to every kithara-net-reaching production dep
 # (kithara facade + kithara-queue). NOT in `default`: the backend is selected
 # per target (macOS desktop pulls `apple` + `client-wreq`; other desktops
@@ -29,7 +28,7 @@ beat-nn = ["kithara/beat-nn"]
 # Waveform analysis for the deck overview.
 analysis-waveform = ["kithara/analysis-waveform"]
 # Build kithara-app as a plain library — exposes `config`/`sources`/`drm`
-# modules without pulling in iced/ratatui. Used by integration tests
+# modules without pulling in iced. Used by integration tests
 # (`tests/tests/kithara_queue/real_playlist.rs`).
 lib-only = []
 # Production Apple decode shape: embedded AudioConverter SRC inside the Apple
@@ -65,13 +64,11 @@ bon = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }
-crossterm = { workspace = true, optional = true }
 derive_more = { workspace = true }
 iced = { workspace = true, optional = true }
 num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }
-ratatui = { workspace = true, optional = true }
 sha2 = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

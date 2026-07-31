@@ -78,8 +78,6 @@ schema_version = 1
 
 [file_size]
 "crates/kithara-app/src/state.rs" = 1
-"crates/kithara-app/src/tui/dashboard.rs" = 1
-"crates/kithara-app/src/tui/runner.rs" = 1
 "crates/kithara-assets/src/cache.rs" = 1
 "crates/kithara-assets/src/lease.rs" = 1
 "crates/kithara-assets/src/process.rs" = 1
@@ -271,7 +269,6 @@ schema_version = 1
 "crates/kithara-app/src/theme.rs::Palette" = 1
 "crates/kithara-app/src/theme.rs::Rgb" = 1
 "crates/kithara-app/src/theme.rs::TuiPalette" = 1
-"crates/kithara-app/src/tui/dashboard.rs::Dashboard" = 1
 "crates/kithara-assets/src/flush/core.rs::FlushPolicy" = 1
 "crates/kithara-assets/src/index/schema.rs::LruIndexFile" = 1
 "crates/kithara-assets/src/index/schema.rs::ResourceAvailabilityFile" = 1
@@ -338,7 +335,6 @@ schema_version = 1
 
 [single_impl_size]
 "crates/kithara-abr/src/state/core.rs::impl AbrState" = 1
-"crates/kithara-app/src/tui/dashboard.rs::impl Dashboard" = 1
 "crates/kithara-assets/src/cache.rs::impl CachedAssets" = 1
 "crates/kithara-assets/src/store.rs::impl AssetStoreBuilder" = 1
 "crates/kithara-assets/src/unified.rs::impl AssetStore" = 1

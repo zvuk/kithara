@@ -68,6 +68,19 @@ a press is worth and hold the scale to the bounds the wave draws within, the
 same bounds a wheel over the wave answers to. A deck no press has reached yet
 starts from `DEFAULT_ZOOM`, which is what the wave shows until then.
 
+Beside the zoom buttons the transport carries the stream-quality cell of the
+design, and it carries it only when there is a choice to make: the ladder is a
+property of the stream, so a deck playing a plain file answers
+`deck.stream.quality_hidden` and the cell leaves the row. The document is the
+`kithara-ui` one; the studio supplies the rungs.
+
+A rung is addressed by its slot in the ladder, and `auto` is the rung that hands
+the choice back to the ladder. `DeckMsg::SetQuality` is what a pick becomes: it
+sets the ABR mode on the deck's own handle and mirrors the choice in the deck
+state, the way the picker before it did. `StudioCache` owns the open flag per
+deck, because which menu is open is view state no deck knows about; the cell is
+the only thing that toggles it, and the popover's own path only ever closes it.
+
 The studio window opens without system decorations, so the top bar is the
 window chrome: its empty middle is a `WindowDrag` surface, and the cell on its
 right carries minimise, maximise and close. `Message::Window` executes those

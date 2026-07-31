@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Removed
+
+- App (`kithara-app`): the terminal frontend. The `kithara` binary is the desktop
+  studio alone — no `--mode` flag, no `tui` feature, no ratatui/crossterm.
+
+### Added
+
+- App (`kithara-app`): stream-quality cell in the deck transport — the ABR ladder
+  of the deck's stream, picked by hand or handed back to automatic.
+- UI (`kithara-ui`): `Popover.align` places the surface by its start or end edge;
+  the deck's quality menu opens flush with the right edge of its cell.
+
 ## [0.0.1-alpha1] - 2026-05-19
 
 First public alpha. Pre-release: public APIs may shift between alpha tags.

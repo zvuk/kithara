@@ -80,7 +80,7 @@ mod tests {
             },
         },
         mix::MixState,
-        state::UiState,
+        state::{AbrVariant, UiState},
     };
 
     const DERIVED: [&str; 5] = [
@@ -137,6 +137,20 @@ mod tests {
         ui.track_name = "Loaded".to_string();
         ui.eq_bands = vec![0.0; 3];
         ui.duration = 120.0;
+        // A deck on an HLS stream: without a ladder the quality cell is hidden
+        // and the rung reads below have nothing to answer for.
+        ui.abr_variants = vec![
+            AbrVariant {
+                index: 0,
+                label: "128k".to_string(),
+                detail: "128 kbps \u{b7} AAC".to_string(),
+            },
+            AbrVariant {
+                index: 1,
+                label: "320k".to_string(),
+                detail: "320 kbps \u{b7} AAC".to_string(),
+            },
+        ];
         let mut cache = DeckCache::default();
         cache.tempo = tempo.to_string();
         cache.remain = "-02:00".to_string();
@@ -146,16 +160,56 @@ mod tests {
     }
 
     #[kithara::test]
+    fn the_menu_marks_the_rung_in_force_and_hides_the_slots_the_ladder_lacks() {
+        let mut studio = Studio::new(["+0.0%", "+0.0%"]);
+        studio.decks[0].0.abr_mode_is_auto = false;
+        studio.decks[0].0.selected_variant = Some(1);
+        let root = studio.root();
+        let walk = Walk::new(&root);
+
+        assert_eq!(
+            walk.get("deck.stream.quality_hidden@deck=a"),
+            Some(ReadValue::Bool(false)),
+        );
+        assert_eq!(
+            walk.get("deck.stream.variant_active@deck=a,variant=1"),
+            Some(ReadValue::Bool(true)),
+        );
+        for absent in [
+            "deck.stream.variant_active@deck=a,variant=auto",
+            "deck.stream.variant_active@deck=a,variant=0",
+        ] {
+            assert_eq!(walk.get(absent), Some(ReadValue::Bool(false)), "{absent}");
+        }
+        assert_eq!(
+            walk.get("deck.stream.variant_sub@deck=a,variant=1"),
+            Some(ReadValue::Text("320 kbps \u{b7} AAC")),
+        );
+        assert_eq!(
+            walk.get("deck.stream.variant_hidden@deck=a,variant=2"),
+            Some(ReadValue::Bool(true)),
+            "the ladder has two rungs, so the third slot stays hidden",
+        );
+    }
+
+    #[kithara::test]
     fn the_studio_tree_answers_every_key_the_renderer_asks_for() {
         let studio = Studio::new(["+2.0%", "-1.0%"]);
         let root = studio.root();
         let walk = Walk::new(&root);
 
-        let documented = readable_endpoints().map(|(id, deck_scoped)| {
-            if deck_scoped {
-                format!("{id}@deck=a")
-            } else {
+        let documented = readable_endpoints().map(|(id, scopes)| {
+            let scope: Vec<String> = scopes
+                .iter()
+                .map(|scope| match *scope {
+                    "deck" => "deck=a".to_owned(),
+                    other => format!("{other}=0"),
+                })
+                .collect();
+            if scope.is_empty() {
                 id.to_string()
+            } else {
+                format!("{id}@{}", scope.join(","))
             }
         });
         let synthesized = DERIVED.into_iter().map(|id| format!("{id}@deck=b"));

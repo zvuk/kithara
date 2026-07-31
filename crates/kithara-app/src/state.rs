@@ -1,6 +1,6 @@
 use kithara::{
     abr::AbrHandle,
-    events::{AbrMode, AppEvent, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
+    events::{AbrMode, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
     play::StretchControls,
     prelude::EngineLoadSnapshot,
     stream::AudioCodec,
@@ -10,7 +10,7 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     tokio::task,
 };
-use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry};
+use kithara_queue::{Queue, QueueEvent, TrackEntry};
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 
 use crate::{config::AppConfig, waveform::TrackAnalysis};
@@ -28,22 +28,17 @@ pub struct UiState {
     pub engine_load: EngineLoadSnapshot,
     /// Source analysis of the current track; `None` until analysed.
     pub analysis: Option<TrackAnalysis>,
-    pub crossfade_progress: Option<f32>,
     pub current_track_index: Option<usize>,
     pub selected_variant: Option<usize>,
-    pub status_note: Option<String>,
-    pub repeat_mode: RepeatMode,
+    /// Rung the stream is on right now, whichever mode chose it.
+    pub current_variant: Option<usize>,
     pub track_name: String,
-    pub variant_label: String,
-    pub abr_variants: Vec<(usize, String)>,
+    pub abr_variants: Vec<AbrVariant>,
     pub eq_bands: Vec<f32>,
     pub tracks: Vec<TrackEntry>,
     pub abr_mode_is_auto: bool,
     pub is_seeking: bool,
     pub playing: bool,
-    pub shuffle_enabled: bool,
-    pub crossfade: f32,
-    pub selected_rate: f32,
     pub volume: f32,
     pub duration: f64,
     pub position: f64,
@@ -60,26 +55,20 @@ impl UiState {
             tracks,
             current_track_index,
             track_name,
-            variant_label: String::new(),
             abr_variants: Vec::new(),
             abr_mode_is_auto: true,
             selected_variant: None,
+            current_variant: None,
             playing: queue.is_playing(),
-            shuffle_enabled: queue.is_shuffle_enabled(),
-            repeat_mode: queue.repeat_mode(),
             position: queue.position_seconds().unwrap_or(0.0),
             duration: queue.duration_seconds().unwrap_or(0.0),
             volume: queue.volume(),
-            crossfade: queue.crossfade_duration(),
-            crossfade_progress: None,
             eq_bands: vec![0.0; queue.eq_band_count()],
             analysis: None,
             beat_marks: Arc::from(Vec::new()),
             downbeat_marks: Arc::from(Vec::new()),
-            status_note: None,
             is_seeking: false,
             seek_position: 0.0,
-            selected_rate: 1.0,
             engine_load: EngineLoadSnapshot::default(),
         }
     }
@@ -88,25 +77,19 @@ impl UiState {
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
         Self {
-            crossfade_progress: None,
             current_track_index: None,
             selected_variant: None,
-            status_note: None,
+            current_variant: None,
             track_name: String::new(),
-            variant_label: String::new(),
             abr_variants: Vec::new(),
             eq_bands: Vec::new(),
             tracks: Vec::new(),
             analysis: None,
             beat_marks: Arc::from(Vec::new()),
             downbeat_marks: Arc::from(Vec::new()),
-            repeat_mode: RepeatMode::default(),
             abr_mode_is_auto: true,
-            shuffle_enabled: false,
             is_seeking: false,
             playing: false,
-            crossfade: 0.0,
-            selected_rate: 1.0,
             volume: 1.0,
             duration: 0.0,
             position: 0.0,
@@ -234,8 +217,6 @@ impl StateController {
         let mode = abr.as_ref().and_then(AbrHandle::mode);
         let mut st = self.state.lock();
         st.playing = queue.is_playing();
-        st.shuffle_enabled = queue.is_shuffle_enabled();
-        st.repeat_mode = queue.repeat_mode();
         st.volume = queue.volume();
         st.position = position;
         st.duration = duration;
@@ -243,14 +224,10 @@ impl StateController {
         if let Some(idx) = queue.current_index() {
             st.current_track_index = Some(idx);
         }
-        st.variant_label = current_variant
+        st.current_variant = current_variant
             .as_ref()
-            .map(variant_display_label_from_info)
-            .unwrap_or_default();
-        st.abr_variants = variants
-            .iter()
-            .map(|v| (v.variant_index.get(), variant_short_label(v)))
-            .collect();
+            .map(|info| info.variant_index.get());
+        st.abr_variants = variants.iter().map(AbrVariant::from).collect();
         st.abr_mode_is_auto = match mode {
             Some(AbrMode::Manual(_)) => false,
             Some(AbrMode::Auto(_)) | None => true,
@@ -384,8 +361,8 @@ fn reapply_eq(queue: &Queue, eq_bands: &[f32]) {
     }
 }
 
-pub(crate) fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
-    match event {
+pub(crate) fn apply_event(event: &Event, queue: &Queue, state: &Mutex<UiState>) {
+    match *event {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
             let eq_bands = {
@@ -418,9 +395,6 @@ pub(crate) fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
             let mut st = state.lock();
             st.volume = volume;
         }
-        Event::App(AppEvent::Note(note)) => {
-            state.lock().status_note = Some(note);
-        }
         Event::Queue(
             QueueEvent::TrackAdded { .. }
             | QueueEvent::TrackRemoved { .. }
@@ -436,6 +410,26 @@ pub(crate) fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
             }
         }
         _ => {}
+    }
+}
+
+/// One rung of the ABR ladder as the UI names it: the short label a control
+/// shows and the fuller one it explains the rung with.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct AbrVariant {
+    pub index: usize,
+    pub label: String,
+    pub detail: String,
+}
+
+impl From<&VariantInfo> for AbrVariant {
+    fn from(info: &VariantInfo) -> Self {
+        Self {
+            index: info.variant_index.get(),
+            label: variant_short_label(info),
+            detail: variant_display_label_from_info(info),
+        }
     }
 }
 

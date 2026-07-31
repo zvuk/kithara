@@ -1,3 +1,4 @@
+use kithara::abr::AbrMode;
 use kithara_platform::sync::Arc;
 use kithara_queue::{TrackId, Transition};
 use tracing::{debug, error};
@@ -65,6 +66,9 @@ pub(crate) enum DeckMsg {
     EqBandChanged(usize, f32),
     DeleteTrack,
     SetTempo(f32),
+    /// Pin the stream to one rung of the ABR ladder, or hand the choice back
+    /// to the ladder with `None`.
+    SetQuality(Option<usize>),
 }
 
 /// Apply a deck message to its own deck. Nothing here reaches another deck.
@@ -87,7 +91,22 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
         DeckMsg::EqBandChanged(band, db) => eq_band_changed(deck, band, db),
         DeckMsg::DeleteTrack => delete_track(deck),
         DeckMsg::SetTempo(tempo) => set_tempo(deck, tempo),
+        DeckMsg::SetQuality(variant) => set_quality(deck, variant),
     }
+}
+
+fn set_quality(deck: &DeckUi, variant: Option<usize>) {
+    if let Some(handle) = deck.controller.queue().current_abr_handle() {
+        let mode = variant.map_or(AbrMode::Auto(None), AbrMode::manual);
+        if let Err(error) = handle.set_mode(mode) {
+            error!("abr mode failed: {error:?}");
+            return;
+        }
+    }
+    deck.controller.mutate(|st| {
+        st.abr_mode_is_auto = variant.is_none();
+        st.selected_variant = variant;
+    });
 }
 
 fn toggle_play_pause(deck: &DeckUi) {

@@ -14,19 +14,12 @@ Workspace application crate (`publish = false`) that wires demo binaries around 
 
 ## Binary
 
-Single binary `kithara` with mode auto-detection (`--mode auto|tui|gui`).
+Single binary `kithara` — the desktop DJ studio.
 
 ## Run
 
 ```bash
-# Auto mode (picks tui or gui based on the terminal)
-cargo run -p kithara-app -- --mode auto <TRACK_URL_1> <TRACK_URL_2>
-
-# Force TUI
-cargo run -p kithara-app -- --mode tui <TRACK_URL_1> <TRACK_URL_2>
-
-# Force GUI
-cargo run -p kithara-app -- --mode gui <TRACK_URL_1> <TRACK_URL_2>
+cargo run -p kithara-app -- <TRACK_URL_1> <TRACK_URL_2>
 ```
 
 If no tracks are provided, the app loads built-in defaults that include MP3, HLS,
@@ -34,7 +27,6 @@ and DRM-HLS examples.
 
 ## Features
 
-- `tui` — terminal dashboard player (ratatui + crossterm).
 - `gui` — desktop GUI player (iced).
 - `lib-only` — build as a plain library (used by integration tests).
 - `beat-nn` — NN beat/downbeat detection.
@@ -42,17 +34,14 @@ and DRM-HLS examples.
 - `client-reqwest` / `client-wreq` — HTTP backend forwarding.
 - `tls-rustls` / `tls-native` — TLS backend forwarding.
 
-Defaults: `tui` + `gui` + `beat-nn` + `stretch-signalsmith`.
+Defaults: `gui` + `beat-nn` + `stretch-signalsmith`.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    cli["kithara binary"] --> mode{"--mode"}
-    mode -->|tui| tui["kithara-app::tui"]
-    mode -->|gui| gui["kithara-app::gui"]
-    tui --> core["kithara::PlayerImpl"]
-    gui --> core
+    cli["kithara binary"] --> gui["kithara-app::gui"]
+    gui --> core["kithara::PlayerImpl"]
 ```
 
 ## Track Analysis Cache
@@ -65,6 +54,6 @@ and `ANALYSIS_BYTES_VERSION` invalidation contract.
 ## Integration
 
 - Depends on `kithara` with `file` + `hls` features.
-- TUI and GUI frontends are gated by the `tui` / `gui` Cargo features.
+- The GUI frontend is gated by the `gui` Cargo feature.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

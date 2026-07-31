@@ -1,10 +1,7 @@
-#[cfg(not(any(feature = "tui", feature = "gui")))]
-compile_error!("`kithara` binary requires at least one of `tui` or `gui` feature");
+#[cfg(not(feature = "gui"))]
+compile_error!("`kithara` binary requires the `gui` feature");
 
-use std::{
-    io::{self, IsTerminal},
-    sync::OnceLock,
-};
+use std::sync::OnceLock;
 
 use clap::Parser;
 use kithara::{
@@ -14,29 +11,20 @@ use kithara::{
     play::SessionHandle,
     stream::dl::{Downloader, DownloaderConfig},
 };
-#[cfg(not(feature = "tui"))]
-use kithara_app::gui;
-#[cfg(feature = "gui")]
-use kithara_app::gui::GuiFrontend;
-#[cfg(feature = "tui")]
-use kithara_app::tui::TuiFrontend;
 use kithara_app::{
     baked,
     config::AppConfig,
     deck::{Deck, DeckId, DeckSet},
     frontend::Frontend,
+    gui::GuiFrontend,
     tracing_init::init_tracing,
 };
 use kithara_platform::CancelToken;
 
 /// Kithara — audio player application.
 #[derive(Parser)]
-#[command(name = "kithara", about = "Audio player with TUI and GUI modes")]
+#[command(name = "kithara", about = "Audio player")]
 struct Args {
-    /// UI mode: auto, tui, or gui (default: auto-detect from terminal).
-    #[arg(long, short, default_value = "auto")]
-    mode: Mode,
-
     /// Audio files or URLs to play.
     tracks: Vec<String>,
 
@@ -46,17 +34,6 @@ struct Args {
     insecure: bool,
 }
 
-/// Application UI mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-enum Mode {
-    /// Auto-detect: TUI if terminal attached, GUI otherwise.
-    Auto,
-    /// Terminal UI (ratatui).
-    Tui,
-    /// Graphical UI (iced).
-    Gui,
-}
-
 type AppError = Box<dyn std::error::Error + Send + Sync>;
 type AppResult<T = ()> = Result<T, AppError>;
 
@@ -64,20 +41,6 @@ static APP_SESSION: OnceLock<SessionHandle> = OnceLock::new();
 
 fn app_session_handle() -> SessionHandle {
     APP_SESSION.get_or_init(SessionHandle::spawn_native).clone()
-}
-
-/// Resolve `Mode::Auto` into a concrete mode.
-fn resolve_mode(mode: Mode) -> Mode {
-    match mode {
-        Mode::Auto => {
-            if io::stdin().is_terminal() {
-                Mode::Tui
-            } else {
-                Mode::Gui
-            }
-        }
-        concrete => concrete,
-    }
 }
 
 /// Suppress noisy macOS system logs (`OpenGL` `dlsym`, `WindowTab`, etc.)
@@ -93,22 +56,11 @@ fn suppress_macos_system_logs() {
 #[cfg(not(target_os = "macos"))]
 fn suppress_macos_system_logs() {}
 
-fn init_tracing_for_mode(mode: Mode) -> AppResult<()> {
-    let log_directives: &[&str] = match mode {
-        Mode::Tui => &["off"],
-        _ => &["info"],
-    };
-    init_tracing(log_directives, mode == Mode::Tui)?;
-    Ok(())
-}
-
 fn main() -> AppResult {
     suppress_macos_system_logs();
 
     let args = Args::parse();
-    let mode = resolve_mode(args.mode);
-
-    init_tracing_for_mode(mode)?;
+    init_tracing(&["info"])?;
 
     // App master root held for the whole process: it goes into `AppConfig` and
     // every subsystem derives from `shutdown.child()`, so a frontend
@@ -143,35 +95,15 @@ fn main() -> AppResult {
         .build();
 
     let session = app_session_handle();
-    let deck_set = DeckSet::new(vec![
+    let mut deck_set = DeckSet::new(vec![
         Deck::build(DeckId(0), &config, &session),
         Deck::build(DeckId(1), &config, &session),
     ]);
-
-    match mode {
-        #[cfg(feature = "tui")]
-        Mode::Tui | Mode::Auto => {
-            let mut frontend = TuiFrontend::new(&config)?;
-            frontend.start(&deck_set)?;
-            frontend.run_loop(deck_set)?;
-            frontend.shutdown()?;
-        }
-        #[cfg(feature = "gui")]
-        Mode::Gui => {
-            // The DJ mix drives deck gains only in the GUI; the TUI plays its
-            // single deck at unity.
-            let mut deck_set = deck_set;
-            deck_set.commit(deck_set.mix().clone())?;
-            let mut frontend = GuiFrontend::new(&config)?;
-            frontend.start(&deck_set)?;
-            frontend.run_loop(deck_set)?;
-            frontend.shutdown()?;
-        }
-        #[cfg(not(feature = "gui"))]
-        Mode::Gui => {
-            return Err("GUI mode not available: compile with --features gui".into());
-        }
-    }
+    deck_set.commit(deck_set.mix().clone())?;
+    let mut frontend = GuiFrontend::new(&config)?;
+    frontend.start(&deck_set)?;
+    frontend.run_loop(deck_set)?;
+    frontend.shutdown()?;
 
     Ok(())
 }

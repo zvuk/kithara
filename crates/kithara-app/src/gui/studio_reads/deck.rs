@@ -13,7 +13,7 @@ use crate::{
         },
         view::playhead,
     },
-    state::UiState,
+    state::{AbrVariant, UiState},
 };
 
 #[derive(Clone, Copy)]
@@ -76,6 +76,10 @@ impl<'a> Node<'a> for DeckNode<'a> {
                 timestretch: self.view.timestretch,
             }),
             "eq" => Box::new(EqNode { ui: self.ui }),
+            "stream" => Box::new(StreamNode {
+                ui: self.ui,
+                cache: self.cache,
+            }),
             "view" => Box::new(ViewNode { cache: self.cache }),
             "focused" => Box::new(Value(ReadValue::Bool(self.focused))),
             _ => return None,
@@ -154,6 +158,52 @@ impl<'a> Node<'a> for TempoNode {
             "rate" => {
                 ReadValue::Scalar((f64::from(self.timestretch.tempo) + range) / (range * 2.0))
             }
+            _ => return None,
+        };
+        Some(Box::new(Value(value)))
+    }
+}
+
+/// The stream the deck plays: the rung it is on, the ladder it may pick from,
+/// and whether the menu that picks is open. A rung is addressed by its slot in
+/// the ladder, and `auto` is the rung that lets the ladder choose; the document
+/// names that one, so only ladder rungs answer for their text.
+#[derive(Clone, Copy)]
+struct StreamNode<'a> {
+    ui: &'a UiState,
+    cache: &'a DeckCache,
+}
+
+impl<'a> StreamNode<'a> {
+    const AUTO_SLOT: &'static str = "auto";
+
+    fn rung(self, slot: &str) -> Option<&'a AbrVariant> {
+        self.ui.abr_variants.get(slot.parse::<usize>().ok()?)
+    }
+
+    fn active(self, slot: &str) -> bool {
+        if slot == Self::AUTO_SLOT {
+            return self.ui.abr_mode_is_auto;
+        }
+        let picked = self.ui.selected_variant;
+        !self.ui.abr_mode_is_auto
+            && self
+                .rung(slot)
+                .is_some_and(|rung| picked == Some(rung.index))
+    }
+}
+
+impl<'a> Node<'a> for StreamNode<'a> {
+    fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
+        let stream = *self;
+        let value = match segment {
+            "quality" => ReadValue::Text(&stream.cache.quality),
+            "quality_menu" => ReadValue::Bool(stream.cache.quality_menu),
+            "quality_hidden" => ReadValue::Bool(stream.ui.abr_variants.is_empty()),
+            "variant_active" => ReadValue::Bool(stream.active(scope.get("variant")?)),
+            "variant_hidden" => ReadValue::Bool(stream.rung(scope.get("variant")?).is_none()),
+            "variant_label" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.label),
+            "variant_sub" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.detail),
             _ => return None,
         };
         Some(Box::new(Value(value)))

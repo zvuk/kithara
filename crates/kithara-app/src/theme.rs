@@ -1,10 +1,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
-/// Application color palette shared between TUI and GUI frontends.
-///
-/// Single source of truth — both frontends convert from this
-/// to their framework-specific color types via [`From`].
+/// Application color palette. Single source of truth: the frontend
+/// converts from this to its framework-specific color type via [`From`].
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub accent: Rgb,
@@ -130,42 +128,5 @@ pub(crate) mod gui {
 
     fn to_iced(rgb: Rgb) -> Color {
         Color::from_rgb8(rgb.0, rgb.1, rgb.2)
-    }
-}
-
-#[cfg(feature = "tui")]
-pub(crate) mod tui {
-    use ratatui::style::Color;
-
-    use super::{Palette, Rgb};
-
-    /// Resolved ratatui color palette.
-    #[derive(Debug, Clone, Copy)]
-    pub struct TuiPalette {
-        pub accent: Color,
-        pub bg: Color,
-        pub bg_panel: Color,
-        pub danger: Color,
-        pub muted: Color,
-        pub text: Color,
-        pub warning: Color,
-    }
-
-    impl From<Palette> for TuiPalette {
-        fn from(p: Palette) -> Self {
-            Self {
-                bg: to_ratatui(p.bg),
-                bg_panel: to_ratatui(p.bg_panel),
-                accent: to_ratatui(p.accent),
-                danger: to_ratatui(p.danger),
-                muted: to_ratatui(p.muted),
-                text: to_ratatui(p.text),
-                warning: to_ratatui(p.warning),
-            }
-        }
-    }
-
-    fn to_ratatui(rgb: Rgb) -> Color {
-        Color::Rgb(rgb.0, rgb.1, rgb.2)
     }
 }

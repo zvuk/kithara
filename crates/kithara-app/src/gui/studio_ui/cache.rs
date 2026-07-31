@@ -66,6 +66,10 @@ impl DeckLayout {
 pub(in crate::gui) struct DeckCache {
     pub(in crate::gui) wave: Vec<WaveBucket>,
     wave_src: Option<usize>,
+    pub(in crate::gui) quality: String,
+    /// Host-owned: the menu stays open until a press closes it, so the
+    /// per-frame refresh leaves this alone.
+    pub(in crate::gui) quality_menu: bool,
     pub(in crate::gui) tempo: String,
     pub(in crate::gui) bpm: String,
     pub(in crate::gui) remain: String,
@@ -161,6 +165,7 @@ impl DeckCache {
         self.bpm = format_bpm(analysis_bpm(&deck.ui), ts.speed());
         self.remain = format_remain(&deck.ui);
         self.subtitle = track_subtitle(&deck.ui);
+        self.quality = format_quality(&deck.ui);
         self.refresh_wave(deck.ui.analysis.as_ref());
     }
 
@@ -221,6 +226,25 @@ pub(in crate::gui) fn analysis_bpm(ui: &UiState) -> Option<f32> {
     bpm.is_finite().then(|| bpm.as_())
 }
 
+/// The cell names the rung the stream is on, prefixed with `AUTO` while the
+/// ladder is the one choosing it.
+fn format_quality(ui: &UiState) -> String {
+    let rung = ui
+        .current_variant
+        .or(ui.selected_variant)
+        .and_then(|index| {
+            ui.abr_variants
+                .iter()
+                .find(|variant| variant.index == index)
+        });
+    match (ui.abr_mode_is_auto, rung) {
+        (true, Some(rung)) => format!("AUTO\u{b7}{}", rung.label),
+        (true, None) => "AUTO".to_owned(),
+        (false, Some(rung)) => rung.label.clone(),
+        (false, None) => String::new(),
+    }
+}
+
 fn format_bpm(source: Option<f32>, speed: f32) -> String {
     const EM_DASH: char = '\u{2014}';
 
@@ -248,6 +272,43 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::state::AbrVariant;
+
+    fn ladder() -> Vec<AbrVariant> {
+        vec![
+            AbrVariant {
+                index: 0,
+                label: "128k".to_owned(),
+                detail: "128 kbps \u{b7} AAC".to_owned(),
+            },
+            AbrVariant {
+                index: 1,
+                label: "320k".to_owned(),
+                detail: "320 kbps \u{b7} AAC".to_owned(),
+            },
+        ]
+    }
+
+    #[kithara::test]
+    fn the_cell_marks_the_rung_the_ladder_chose_and_names_the_one_the_user_pinned() {
+        let mut ui = UiState::empty();
+        ui.abr_variants = ladder();
+        ui.current_variant = Some(1);
+
+        assert_eq!(format_quality(&ui), "AUTO\u{b7}320k");
+
+        ui.abr_mode_is_auto = false;
+        ui.selected_variant = Some(0);
+        ui.current_variant = Some(0);
+        assert_eq!(format_quality(&ui), "128k");
+    }
+
+    #[kithara::test]
+    fn a_stream_with_no_rung_yet_still_reports_its_mode() {
+        let ui = UiState::empty();
+
+        assert_eq!(format_quality(&ui), "AUTO");
+    }
 
     #[kithara::test]
     fn a_drop_ends_the_drag_and_keeps_the_hover() {

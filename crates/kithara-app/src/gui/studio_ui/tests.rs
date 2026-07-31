@@ -21,6 +21,15 @@ fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
                     walk(child, visit);
                 }
             }
+            ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+                walk(child, visit);
+            }
+            ExpandedNode::Popover {
+                anchor, content, ..
+            } => {
+                walk(anchor, visit);
+                walk(content, visit);
+            }
             _ => {}
         }
     }
@@ -144,10 +153,9 @@ fn deck_scoped_controls_are_routed_to_the_deck_they_read() {
         let ui = compile_studio(layout).unwrap();
         for (path, keys) in controls(&ui) {
             for key in keys {
-                let Some(letter) = key
-                    .split_once('@')
-                    .and_then(|(_, scope)| scope.strip_prefix("deck="))
-                else {
+                let Some(letter) = key.split_once('@').and_then(|(_, scope)| {
+                    scope.split(',').find_map(|pair| pair.strip_prefix("deck="))
+                }) else {
                     continue;
                 };
                 let routed = [
@@ -402,5 +410,48 @@ fn deck_letter_captions_name_their_deck() {
             }
         });
         assert!(seen > 0, "{layout:?}: no deck letter caption");
+    }
+}
+
+/// Every pressable in the compiled studio, as `(path, scoped write key)`.
+fn pressables(ui: &CompiledUi) -> Vec<(&str, &str)> {
+    let mut out = Vec::new();
+    each_node(ui, &mut |node| {
+        if let ExpandedNode::Pressable { path, press, .. } = node {
+            out.push((ui.resolve(*path), ui.resolve(press.key)));
+        }
+    });
+    out
+}
+
+#[kithara::test]
+fn each_deck_picks_its_own_stream_quality() {
+    for layout in LAYOUTS {
+        let ui = compile_studio(layout).unwrap();
+        let letters = ["a", "b"].into_iter().take(layout.decks());
+        for letter in letters {
+            let cell = format!("deck-{letter}/stream/cell");
+            let auto = format!("deck-{letter}/stream/auto/pick");
+            let rung = format!("deck-{letter}/stream/variant-0/pick");
+            let pressed = pressables(&ui);
+
+            assert!(
+                pressed.contains(&(
+                    cell.as_str(),
+                    format!("deck.stream.toggle_quality_menu@deck={letter}").as_str()
+                )),
+                "{layout:?}: the cell of deck {letter} must toggle its own menu",
+            );
+            for (path, variant) in [(&auto, "auto"), (&rung, "0")] {
+                assert!(
+                    pressed.contains(&(
+                        path.as_str(),
+                        format!("deck.stream.select_variant@deck={letter},variant={variant}")
+                            .as_str()
+                    )),
+                    "{layout:?}: `{path}` must pick rung `{variant}` on deck {letter}",
+                );
+            }
+        }
     }
 }

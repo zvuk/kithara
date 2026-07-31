@@ -11,17 +11,21 @@ struct Endpoint {
     category: EndpointCategory,
     id: &'static str,
     value: ValueKind,
-    deck_scoped: bool,
+    scopes: &'static [&'static str],
 }
 
 impl Endpoint {
+    /// Scope sets an endpoint is addressed under, named once each.
+    const DECK: &[&str] = &["deck"];
+    const GLOBAL: &[&str] = &[];
+    const VARIANT: &[&str] = &["deck", "variant"];
+
     fn desc(&self) -> EndpointDesc {
-        let desc = EndpointDesc::new(self.value);
-        if self.deck_scoped {
-            desc.with_scope("deck")
-        } else {
-            desc
-        }
+        self.scopes
+            .iter()
+            .fold(EndpointDesc::new(self.value), |desc, scope| {
+                desc.with_scope(scope)
+            })
     }
 }
 
@@ -33,172 +37,227 @@ static ENDPOINTS: &[Endpoint] = &[
         category: EndpointCategory::Telemetry,
         id: "deck.playback.waveform",
         value: ValueKind::Waveform,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
         id: "deck.playback.playing",
         value: ValueKind::Bool,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
         id: "deck.focused",
         value: ValueKind::Bool,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
         id: "deck.playback.position_secs",
         value: ValueKind::Scalar,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
         id: "deck.playback.tempo",
         value: ValueKind::Text,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
         id: "deck.playback.bpm",
         value: ValueKind::Text,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
         id: "deck.playback.remain",
         value: ValueKind::Text,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Command,
         id: "deck.transport.toggle_play",
         value: ValueKind::Trigger,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Command,
         id: "deck.transport.prev",
         value: ValueKind::Trigger,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Command,
         id: "deck.transport.next",
         value: ValueKind::Trigger,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Command,
         id: "deck.transport.seek_normalized",
         value: ValueKind::Scalar,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Parameter,
         id: "deck.tempo.rate",
         value: ValueKind::Scalar,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Parameter,
         id: "deck.eq.low",
         value: ValueKind::Scalar,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Parameter,
         id: "deck.eq.mid",
         value: ValueKind::Scalar,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Parameter,
         id: "deck.eq.high",
         value: ValueKind::Scalar,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Model,
         id: "deck.view.zoom",
         value: ValueKind::Scalar,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Command,
         id: "deck.view.zoom_in",
         value: ValueKind::Trigger,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Command,
         id: "deck.view.zoom_out",
         value: ValueKind::Trigger,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Command,
         id: "deck.queue.load",
         value: ValueKind::Trigger,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Model,
         id: "ui.drag.over",
         value: ValueKind::Bool,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Model,
         id: "ui.drag.track",
         value: ValueKind::Text,
-        deck_scoped: false,
+        scopes: Endpoint::GLOBAL,
     },
     Endpoint {
         category: EndpointCategory::Parameter,
         id: "mixer.trim",
         value: ValueKind::Scalar,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
         id: "mixer.volume",
         value: ValueKind::Stereo,
-        deck_scoped: true,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Parameter,
         id: "mix.crossfader",
         value: ValueKind::Scalar,
-        deck_scoped: false,
+        scopes: Endpoint::GLOBAL,
     },
     Endpoint {
         category: EndpointCategory::Model,
         id: "library.tracks",
         value: ValueKind::TrackList,
-        deck_scoped: false,
+        scopes: Endpoint::GLOBAL,
     },
     Endpoint {
         category: EndpointCategory::Parameter,
         id: "ui.layout.decks",
         value: ValueKind::Scalar,
-        deck_scoped: false,
+        scopes: Endpoint::GLOBAL,
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
         id: "engine.load",
         value: ValueKind::Scalar,
-        deck_scoped: false,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "deck.stream.quality",
+        value: ValueKind::Text,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "deck.stream.quality_menu",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.stream.quality_hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.stream.toggle_quality_menu",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "deck.stream.variant_active",
+        value: ValueKind::Bool,
+        scopes: Endpoint::VARIANT,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.stream.variant_hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::VARIANT,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.stream.variant_label",
+        value: ValueKind::Text,
+        scopes: Endpoint::VARIANT,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.stream.variant_sub",
+        value: ValueKind::Text,
+        scopes: Endpoint::VARIANT,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.stream.select_variant",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::VARIANT,
     },
 ];
 
 #[cfg(test)]
-pub(in crate::gui) fn readable_endpoints() -> impl Iterator<Item = (&'static str, bool)> {
+pub(in crate::gui) fn readable_endpoints()
+-> impl Iterator<Item = (&'static str, &'static [&'static str])> {
     ENDPOINTS
         .iter()
         .filter(|endpoint| endpoint.category != EndpointCategory::Command)
-        .map(|endpoint| (endpoint.id, endpoint.deck_scoped))
+        .map(|endpoint| (endpoint.id, endpoint.scopes))
 }
 
 struct Registration {

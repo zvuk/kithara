@@ -50,10 +50,8 @@ live in [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Demo Players
 
 ```bash
-# Native demo — auto-picks TUI or GUI for the terminal
-cargo run -p kithara-app -- --mode auto <TRACK_URL_1> <TRACK_URL_2>
-cargo run -p kithara-app -- --mode tui <TRACK_URL_1> <TRACK_URL_2>
-cargo run -p kithara-app -- --mode gui <TRACK_URL_1> <TRACK_URL_2>
+# Native demo — the desktop DJ studio
+cargo run -p kithara-app -- <TRACK_URL_1> <TRACK_URL_2>
 
 # WASM browser demo (via kithara-ffi)
 cd crates/kithara-ffi

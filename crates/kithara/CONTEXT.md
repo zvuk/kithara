@@ -93,7 +93,7 @@ below; backpressure and wakeups propagate the same way.
    a pause gate, handing decks to `kithara-play`.
 5. **Surfaces.** `kithara-ffi` exposes an `AudioPlayer` facade across the FFI /
    wasm boundary (worker-vs-main-thread ownership protocol); `kithara-app` is the
-   TUI/GUI app and adds the track-analysis cache. Both consume the `kithara`
+   desktop studio and adds the track-analysis cache. Both consume the `kithara`
    facade, not the internals.
 
 ### How HLS and file differ

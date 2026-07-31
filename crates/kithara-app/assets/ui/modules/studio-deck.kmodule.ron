@@ -71,6 +71,15 @@
                         frame: (top: false, right: false, bottom: false, left: true),
                         write: Command(id: "deck.view.zoom_in", with: { "deck": "$deck" }),
                     ),
+                    Optional(
+                        id: "stream-block",
+                        hidden: Telemetry(id: "deck.stream.quality_hidden", with: { "deck": "$deck" }),
+                        child: Include(
+                            id: "stream",
+                            source: "deck/quality.kmodule.ron",
+                            with: { "deck": "$deck" },
+                        ),
+                    ),
                     Row(
                         id: "tempo",
                         gap: 7.0,

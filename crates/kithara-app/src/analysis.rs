@@ -61,7 +61,7 @@ pub(crate) async fn listen(
                         event,
                         Event::Queue(QueueEvent::TrackAdded { .. } | QueueEvent::TrackRemoved { .. })
                     );
-                    apply_event(event, &queue, &state);
+                    apply_event(&event, &queue, &state);
                     if tracks_changed {
                         driver.on_tracks_changed(&queue, &state, &config);
                     }

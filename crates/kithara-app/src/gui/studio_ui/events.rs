@@ -59,6 +59,9 @@ fn deck_control(
     if zoom_control(&mut state.studio.cache, index, control, action).is_some() {
         return None;
     }
+    if let Some(rest) = control.strip_prefix("stream/") {
+        return stream_control(state, index, rest, action);
+    }
     let id = deck_id(state, index)?;
     let msg = match (control, action) {
         ("drop", ControlAction::Drag(DragPhase::Over(over))) => {
@@ -83,6 +86,47 @@ fn deck_control(
         _ => return None,
     };
     Some(Message::Deck(id, msg))
+}
+
+/// The quality cell owns the menu flag; picking a rung writes through to the
+/// deck. The popover publishes its dismissal on its own path, so that arm
+/// closes the menu and the cell stays the only toggle.
+fn stream_control(
+    state: &mut Kithara,
+    index: usize,
+    control: &str,
+    action: &ControlAction,
+) -> Option<Message> {
+    if !matches!(action, ControlAction::Activate) {
+        return None;
+    }
+    let open = match control {
+        "cell" => !state.studio.cache.deck_mut(index)?.quality_menu,
+        "pop" => false,
+        _ => {
+            let variant = pick(state, index, control)?;
+            state.studio.cache.deck_mut(index)?.quality_menu = false;
+            return Some(Message::Deck(
+                deck_id(state, index)?,
+                DeckMsg::SetQuality(variant),
+            ));
+        }
+    };
+    state.studio.cache.deck_mut(index)?.quality_menu = open;
+    None
+}
+
+/// A row addresses its rung by slot: `auto` hands the choice to the ladder,
+/// `variant-<slot>` pins it.
+fn pick(state: &Kithara, index: usize, control: &str) -> Option<Option<usize>> {
+    let (row, _) = control.split_once('/')?;
+    if row == "auto" {
+        return Some(None);
+    }
+    let slot: usize = row.strip_prefix("variant-")?.parse().ok()?;
+    let id = deck_id(state, index)?;
+    let variant = state.decks.get(id)?.ui.abr_variants.get(slot)?.index;
+    Some(Some(variant))
 }
 
 fn zoom_control(
