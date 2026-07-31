@@ -7,7 +7,7 @@ use super::{
     scope::deck_index,
 };
 use crate::{
-    deck::DeckId,
+    deck::{DeckId, EQ_BANDS},
     gui::{
         app::Kithara,
         deck::{DeckMsg, TEMPO_STEP},
@@ -131,9 +131,7 @@ fn strip_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
         ("volume", ControlAction::SetScalar(trim)) => {
             Message::Mix(MixMsg::Trim(id, trim.clamp(0.0, 1.0).as_()))
         }
-        ("low", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(0, *value)),
-        ("mid", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(1, *value)),
-        ("high", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(2, *value)),
+        (_, ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(eq_band(name)?, *value)),
         _ => return None,
     };
     Some(msg)
@@ -159,6 +157,10 @@ fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -
 
 fn deck_id(state: &Kithara, index: usize) -> Option<DeckId> {
     state.session.decks().get(index).map(|deck| deck.id)
+}
+
+fn eq_band(knob: &str) -> Option<usize> {
+    EQ_BANDS.iter().position(|name| *name == knob)
 }
 
 fn eq_msg(band: usize, normalized: f64) -> DeckMsg {

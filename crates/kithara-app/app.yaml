@@ -13,7 +13,6 @@
 
 playback:
   crossfade_seconds: 5.0
-  eq_band_count: 10
 
 network:
   should_accept_invalid_certs: true

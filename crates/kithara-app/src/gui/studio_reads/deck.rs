@@ -3,6 +3,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::value::Value;
 use crate::{
+    deck::EQ_BANDS,
     gui::{
         deck::{DeckView, TEMPO_RANGE, TimestretchState},
         studio_ui::{
@@ -166,12 +167,7 @@ struct EqNode<'a> {
 
 impl<'a> Node<'a> for EqNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let band = match segment {
-            "low" => 0,
-            "mid" => 1,
-            "high" => 2,
-            _ => return None,
-        };
+        let band = EQ_BANDS.iter().position(|knob| *knob == segment)?;
         let value = eq_value(self.ui.eq_bands.get(band))?;
         Some(Box::new(Value(value)))
     }

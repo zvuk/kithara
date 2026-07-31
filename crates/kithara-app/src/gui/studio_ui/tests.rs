@@ -6,6 +6,7 @@ use kithara_ui::{
 };
 
 use super::{cache::DeckLayout, compile::compile_studio};
+use crate::deck::EQ_BANDS;
 
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
@@ -217,7 +218,7 @@ fn every_channel_strip_carries_the_supported_control_set() {
     let ui = compile_studio(DeckLayout::Dual).unwrap();
     let paths = control_paths(&ui);
     for letter in ["a", "b"] {
-        for name in ["low", "mid", "high", "volume"] {
+        for name in EQ_BANDS.into_iter().chain(["volume"]) {
             let want = format!("mixer/{letter}/{name}");
             assert!(paths.contains(&want.as_str()), "missing control `{want}`");
         }

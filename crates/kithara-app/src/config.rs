@@ -58,9 +58,6 @@ pub struct AppConfig {
     /// Crossfade duration in seconds.
     #[builder(default = baked::BAKED_CROSSFADE_SECONDS)]
     pub crossfade_seconds: f32,
-    /// Number of EQ bands for the UI.
-    #[builder(default = baked::BAKED_EQ_BAND_COUNT)]
-    pub eq_band_count: usize,
     /// Source beat-analysis tunables.
     #[builder(default)]
     pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
@@ -87,7 +84,6 @@ impl fmt::Debug for AppConfig {
                 &self.should_accept_invalid_certs,
             )
             .field("crossfade_seconds", &self.crossfade_seconds)
-            .field("eq_band_count", &self.eq_band_count)
             .field("beat_analysis", &self.beat_analysis)
             .field("size_probe_method", &self.size_probe_method)
             .finish_non_exhaustive()

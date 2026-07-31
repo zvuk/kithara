@@ -7,6 +7,9 @@ use kithara_queue::{Queue, QueueConfig};
 
 use crate::{config::AppConfig, mix::MixState};
 
+/// The DJ isolator every deck runs, and the knobs the studio draws for it.
+pub const EQ_BANDS: [&str; 3] = ["low", "mid", "high"];
+
 /// App-local deck identity; never crosses into a shared playback crate.
 ///
 /// Stable for the deck's lifetime: decks come and go at runtime, so an id is
@@ -33,7 +36,7 @@ impl Deck {
             PlayerConfig::builder()
                 .cancel(config.shutdown.child())
                 .crossfade_duration(config.crossfade_seconds)
-                .eq_layout(generate_log_spaced_bands(config.eq_band_count))
+                .eq_layout(generate_log_spaced_bands(EQ_BANDS.len()))
                 .byte_pool(config.byte_pool.clone())
                 .pcm_pool(config.pcm_pool.clone())
                 .session(session.dispatcher())
