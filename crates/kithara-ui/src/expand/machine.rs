@@ -9,11 +9,12 @@ use super::{
         intern_binding, intern_optional_binding, intern_optional_text, intern_text, intern_texts,
         resolve_optional_param, resolve_param, substitute_binding, substitute_map,
     },
+    site::{ControlFields, ExtraBindingRefs, ExtraBindings},
 };
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
-    module::{AdaptivePolicy, BindingRef, ControlNode, PopoverAt, TrackColumn, WaveStyle},
+    module::{BindingRef, ControlNode, PopoverAlign, PopoverAt, TrackColumn, WaveStyle},
     param::Param,
     resolve::ModuleSet,
     size::SizeSpec,
@@ -28,7 +29,11 @@ pub(super) struct Context<'a> {
 }
 
 impl Context<'_> {
-    fn substitute(&self, binding: &BindingRef, path: &str) -> Result<BindingRef, UiDocError> {
+    pub(super) fn substitute(
+        &self,
+        binding: &BindingRef,
+        path: &str,
+    ) -> Result<BindingRef, UiDocError> {
         substitute_binding(&self.args, &self.origin, binding, path)
     }
 
@@ -230,111 +235,6 @@ fn begin_control(
 ) -> Result<String, UiDocError> {
     machine.budget.charge(&context.origin)?;
     Ok(child_path(&context.prefix, id))
-}
-
-#[derive(Clone, Copy)]
-struct ControlFields<'a> {
-    id: &'a NodeId,
-    size: Option<SizeSpec>,
-    read: Option<&'a BindingRef>,
-    write: Option<&'a BindingRef>,
-    adaptive: &'a AdaptivePolicy,
-}
-
-struct ExtraBindings {
-    columns_state: Option<BindingRef>,
-    query: Option<BindingRef>,
-    scope: Option<BindingRef>,
-    zoom: Option<BindingRef>,
-    active: Option<BindingRef>,
-}
-
-#[derive(Clone, Copy)]
-struct ExtraBindingRefs<'a> {
-    columns_state: Option<&'a BindingRef>,
-    query: Option<&'a BindingRef>,
-    scope: Option<&'a BindingRef>,
-    zoom: Option<&'a BindingRef>,
-    active: Option<&'a BindingRef>,
-}
-
-impl ExtraBindings {
-    fn substitute(
-        context: &Context<'_>,
-        control: &ControlNode,
-        path: &str,
-    ) -> Result<Self, UiDocError> {
-        let columns_state = match control {
-            ControlNode::TrackList { columns_state, .. } => columns_state
-                .as_ref()
-                .map(|binding| context.substitute(binding, path))
-                .transpose()?,
-            _ => None,
-        };
-        let query = match control {
-            ControlNode::Tree { query, .. } => query
-                .as_ref()
-                .map(|binding| context.substitute(binding, path))
-                .transpose()?,
-            _ => None,
-        };
-        let scope = match control {
-            ControlNode::ContextBar { scope, .. } => scope
-                .as_ref()
-                .map(|binding| context.substitute(binding, path))
-                .transpose()?,
-            _ => None,
-        };
-        let zoom = match control {
-            ControlNode::Wave { zoom, .. } => zoom
-                .as_ref()
-                .map(|binding| context.substitute(binding, path))
-                .transpose()?,
-            _ => None,
-        };
-        let active = match control {
-            ControlNode::Text { active, .. } | ControlNode::Glyph { active, .. } => active
-                .as_ref()
-                .map(|binding| context.substitute(binding, path))
-                .transpose()?,
-            _ => None,
-        };
-        Ok(Self {
-            columns_state,
-            query,
-            scope,
-            zoom,
-            active,
-        })
-    }
-
-    fn as_refs(&self) -> ExtraBindingRefs<'_> {
-        ExtraBindingRefs {
-            columns_state: self.columns_state.as_ref(),
-            query: self.query.as_ref(),
-            scope: self.scope.as_ref(),
-            zoom: self.zoom.as_ref(),
-            active: self.active.as_ref(),
-        }
-    }
-}
-
-impl<'a> ControlFields<'a> {
-    fn new(
-        id: &'a NodeId,
-        size: Option<SizeSpec>,
-        read: Option<&'a BindingRef>,
-        write: Option<&'a BindingRef>,
-        adaptive: &'a AdaptivePolicy,
-    ) -> Self {
-        Self {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-    }
 }
 
 fn finish_control(
@@ -613,54 +513,6 @@ fn track_list_spec(
     })
 }
 
-fn container_bindings(
-    context: &Context<'_>,
-    node: &ControlNode,
-    id: Option<&NodeId>,
-    write: Option<&BindingRef>,
-    active: Option<&BindingRef>,
-    machine: &mut Expander<'_, '_>,
-) -> Result<(Option<SurfaceSpec>, Option<Binding>), UiDocError> {
-    if write.is_none() && active.is_none() {
-        return Ok((None, None));
-    }
-    let path = id.map_or_else(
-        || context.prefix.clone(),
-        |id| child_path(&context.prefix, id),
-    );
-    let write = write
-        .map(|binding| context.substitute(binding, &path))
-        .transpose()?;
-    let active = active
-        .map(|binding| context.substitute(binding, &path))
-        .transpose()?;
-    (machine.visitor)(
-        ControlSite {
-            path: &path,
-            control: node,
-            read: None,
-            write: write.as_ref(),
-            columns_state: None,
-            query: None,
-            scope: None,
-            zoom: None,
-            active: active.as_ref(),
-        },
-        &context.origin,
-    )?;
-    let surface = write
-        .as_ref()
-        .map(|write| -> Result<SurfaceSpec, UiDocError> {
-            Ok(SurfaceSpec {
-                path: machine.interner.intern(&path, &context.origin)?,
-                write: intern_binding(machine.interner, write, &context.origin)?,
-            })
-        })
-        .transpose()?;
-    let active = intern_optional_binding(machine.interner, active.as_ref(), &context.origin)?;
-    Ok((surface, active))
-}
-
 fn expand_optional(
     context: &Context<'_>,
     node: &ControlNode,
@@ -701,11 +553,12 @@ fn expand_popover(
     context: &Context<'_>,
     node: &ControlNode,
     id: &NodeId,
-    declared: (&BindingRef, PopoverAt, &ControlNode, &ControlNode),
+    declared: (&BindingRef, PopoverAt, PopoverAlign),
+    subtrees: (&ControlNode, &ControlNode),
     depth: usize,
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
-    let (open, at, anchor, content) = declared;
+    let ((open, at, align), (anchor, content)) = (declared, subtrees);
     machine.budget.charge(&context.origin)?;
     let path = child_path(&context.prefix, id);
     if machine.in_popover {
@@ -738,6 +591,7 @@ fn expand_popover(
         path: machine.interner.intern(&path, &context.origin)?,
         open: intern_binding(machine.interner, &open, &context.origin)?,
         at,
+        align,
         anchor: Box::new(anchor),
         content: Box::new(content?),
     })
@@ -823,6 +677,63 @@ fn expand_include(
     expand_at(context.set, &target, args, path, depth + 1, machine)
 }
 
+fn container_bindings(
+    context: &Context<'_>,
+    node: &ControlNode,
+    declared: (Option<&NodeId>, Option<&BindingRef>, Option<&BindingRef>),
+    machine: &mut Expander<'_, '_>,
+) -> Result<(Option<SurfaceSpec>, Option<Binding>), UiDocError> {
+    let (id, write, active) = declared;
+    if write.is_none() && active.is_none() {
+        return Ok((None, None));
+    }
+    let path = id.map_or_else(
+        || context.prefix.clone(),
+        |id| child_path(&context.prefix, id),
+    );
+    let write = write
+        .map(|binding| context.substitute(binding, &path))
+        .transpose()?;
+    let active = active
+        .map(|binding| context.substitute(binding, &path))
+        .transpose()?;
+    (machine.visitor)(
+        ControlSite {
+            path: &path,
+            control: node,
+            read: None,
+            write: write.as_ref(),
+            columns_state: None,
+            query: None,
+            scope: None,
+            zoom: None,
+            active: active.as_ref(),
+        },
+        &context.origin,
+    )?;
+    let surface = write
+        .as_ref()
+        .map(|write| -> Result<SurfaceSpec, UiDocError> {
+            Ok(SurfaceSpec {
+                path: machine.interner.intern(&path, &context.origin)?,
+                write: intern_binding(machine.interner, write, &context.origin)?,
+            })
+        })
+        .transpose()?;
+    let active = intern_optional_binding(machine.interner, active.as_ref(), &context.origin)?;
+    Ok((surface, active))
+}
+
+/// A container's own id, interned when it declares one.
+fn intern_node_id(
+    id: Option<&NodeId>,
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+) -> Result<Option<InternId>, UiDocError> {
+    id.map(|id| machine.interner.intern(&id.0, &context.origin))
+        .transpose()
+}
+
 fn walk(
     context: &Context<'_>,
     node: &ControlNode,
@@ -848,19 +759,10 @@ fn walk(
             children,
         } => {
             machine.budget.charge(&context.origin)?;
-            let (surface, active) = container_bindings(
-                context,
-                node,
-                id.as_ref(),
-                write.as_ref(),
-                active.as_ref(),
-                machine,
-            )?;
+            let declared = (id.as_ref(), write.as_ref(), active.as_ref());
+            let (surface, active) = container_bindings(context, node, declared, machine)?;
             Ok(ExpandedNode::Row {
-                id: id
-                    .as_ref()
-                    .map(|id| machine.interner.intern(&id.0, &context.origin))
-                    .transpose()?,
+                id: intern_node_id(id.as_ref(), context, machine)?,
                 size: *size,
                 gap: *gap,
                 pad: *pad,
@@ -891,13 +793,10 @@ fn walk(
             children,
         } => {
             machine.budget.charge(&context.origin)?;
-            let (surface, _) =
-                container_bindings(context, node, id.as_ref(), write.as_ref(), None, machine)?;
+            let declared = (id.as_ref(), write.as_ref(), None);
+            let (surface, _) = container_bindings(context, node, declared, machine)?;
             Ok(ExpandedNode::Column {
-                id: id
-                    .as_ref()
-                    .map(|id| machine.interner.intern(&id.0, &context.origin))
-                    .transpose()?,
+                id: intern_node_id(id.as_ref(), context, machine)?,
                 size: *size,
                 gap: *gap,
                 pad: *pad,
@@ -920,11 +819,20 @@ fn walk(
             id,
             open,
             at,
+            align,
             anchor,
             content,
         } => {
-            let declared = (open, *at, anchor.as_ref(), content.as_ref());
-            expand_popover(context, node, id, declared, depth, machine)
+            let subtrees = (anchor.as_ref(), content.as_ref());
+            expand_popover(
+                context,
+                node,
+                id,
+                (open, *at, *align),
+                subtrees,
+                depth,
+                machine,
+            )
         }
         ControlNode::Pressable { id, press, child } => {
             expand_pressable(context, node, id, press, child, depth, machine)

@@ -165,7 +165,7 @@ mod tests {
         builtin,
         expand::{Binding, BindingKind},
         ids::{InternId, Interner, SourceUri},
-        module::{AdaptivePolicy, PopoverAt},
+        module::{AdaptivePolicy, PopoverAlign, PopoverAt},
     };
 
     #[kithara::test]
@@ -271,6 +271,7 @@ mod tests {
             path: interner.intern("menu", &origin).unwrap(),
             open: model(interner.intern("ui.menu.open", &origin).unwrap()),
             at: PopoverAt::Anchor,
+            align: PopoverAlign::Start,
             anchor: Box::new(control(&mut interner, &origin, "burger", anchor)),
             content: Box::new(control(&mut interner, &origin, "pop", content)),
         };

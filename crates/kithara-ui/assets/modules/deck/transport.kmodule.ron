@@ -86,16 +86,14 @@
                 frame: (top: false, right: false, bottom: false, left: true),
                 write: Command(id: "deck.view.zoom_in", with: { "deck": "$deck" }),
             ),
-            Row(
-                id: "stream",
-                gap: 7.0,
-                pad_x: 11.0,
-                frame: (top: false, right: false, bottom: false, left: true),
-                size: (w: Shrink, h: Fixed(30.0)),
-                children: [
-                    Text(id: "stream-label", style: MicroLabel, label: "HLS AUTO/320 BUF 18S"),
-                    Glyph(id: "stream-chevron", icon: ChevronDown),
-                ],
+            Optional(
+                id: "stream-block",
+                hidden: Telemetry(id: "deck.stream.quality_hidden", with: { "deck": "$deck" }),
+                child: Include(
+                    id: "stream",
+                    source: "quality.kmodule.ron",
+                    with: { "deck": "$deck" },
+                ),
             ),
             Row(
                 id: "tempo",

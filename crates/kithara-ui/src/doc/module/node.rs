@@ -2,11 +2,19 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::ron_io;
+use super::{
+    binding::{AdaptivePolicy, BindingRef},
+    style::{
+        ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
+        PopoverAt, ScalarFormat, TextAlign, TextStyle, Tone, TrackColumn, WaveStyle,
+        WindowControlsStyle,
+    },
+};
 use crate::{
+    doc::ron_io,
     envelope::{self, DocKind},
     error::UiDocError,
-    ids::{DocId, EndpointId, NodeId, SourceUri},
+    ids::{DocId, NodeId, SourceUri},
     layout::FrameSides,
     param::Param,
     size::SizeSpec,
@@ -146,6 +154,8 @@ pub enum ControlNode {
         open: BindingRef,
         #[serde(default)]
         at: PopoverAt,
+        #[serde(default)]
+        align: PopoverAlign,
         anchor: Box<Self>,
         content: Box<Self>,
     },
@@ -754,235 +764,6 @@ impl ControlNode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum IconName {
-    Activity,
-    ChevronDown,
-    ChevronRight,
-    ChevronUp,
-    Circle,
-    Disc,
-    Faders,
-    FastForward,
-    FolderPlus,
-    Gear,
-    Headphones,
-    Maximize,
-    Menu,
-    Monitor,
-    Play,
-    PlayReverse,
-    Playlist,
-    Plus,
-    Radio,
-    RefreshCw,
-    Rewind,
-    Save,
-    SlidersHorizontal,
-    SpeakerHigh,
-    Waveform,
-    X,
-    ZoomIn,
-    ZoomOut,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum TextAlign {
-    #[default]
-    Start,
-    Center,
-    End,
-}
-
-/// The geometry a popover surface opens from.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum PopoverAt {
-    #[default]
-    Anchor,
-    Pointer,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum GlyphStyle {
-    #[default]
-    Default,
-    Vis,
-    Menu,
-    MenuBurger,
-    MenuSmall,
-    MenuCell,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum DeckSummaryStyle {
-    #[default]
-    Default,
-    Micro,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum WindowControlsStyle {
-    #[default]
-    Standard,
-    Compact,
-    CloseWide,
-    CloseMicro,
-    CloseFramed,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum TextStyle {
-    #[default]
-    Body,
-    Brand,
-    BrandSmall,
-    DeckLetter,
-    TrackTitle,
-    Telemetry,
-    MicroLabel,
-    Section,
-    Mono,
-    Caption,
-    VisFooter,
-    VisMeta,
-    VisTitle,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum ButtonStyle {
-    #[default]
-    Default,
-    Transport,
-    TransportPrimary,
-    MicroPrimary,
-    VisNav,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum ScalarFormat {
-    #[default]
-    Default,
-    Percent,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum FaderStyle {
-    #[default]
-    Default,
-    Volume,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum ChipStyle {
-    #[default]
-    Deck,
-    Routing,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum WaveStyle {
-    #[default]
-    Default,
-    Hero,
-    Micro,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[non_exhaustive]
-pub enum TrackColumn {
-    Index,
-    Deck,
-    Title,
-    Artist,
-    Bpm,
-    Key,
-    Time,
-    Energy,
-    Transition,
-}
-
-impl TrackColumn {
-    #[must_use]
-    pub const fn endpoint_name(self) -> &'static str {
-        match self {
-            Self::Index => "index",
-            Self::Deck => "deck",
-            Self::Title => "title",
-            Self::Artist => "artist",
-            Self::Bpm => "bpm",
-            Self::Key => "key",
-            Self::Time => "time",
-            Self::Energy => "energy",
-            Self::Transition => "transition",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum Tone {
-    #[default]
-    Neutral,
-    Accent,
-    Success,
-    Danger,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub enum BindingRef {
-    Command {
-        id: EndpointId,
-        #[serde(default)]
-        with: BTreeMap<String, String>,
-    },
-    Parameter {
-        id: EndpointId,
-        #[serde(default)]
-        with: BTreeMap<String, String>,
-    },
-    Telemetry {
-        id: EndpointId,
-        #[serde(default)]
-        with: BTreeMap<String, String>,
-    },
-    Model {
-        id: EndpointId,
-        #[serde(default)]
-        with: BTreeMap<String, String>,
-    },
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-#[non_exhaustive]
-pub struct AdaptivePolicy {
-    pub priority: Priority,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum Priority {
-    Required,
-    High,
-    #[default]
-    Normal,
-    Low,
-}
-
 /// Parses a validated module document.
 ///
 /// # Errors
@@ -1008,7 +789,7 @@ pub fn parse_module(text: &str, origin: &SourceUri) -> Result<ModuleDoc, UiDocEr
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{super::binding::Priority, *};
     use crate::size::{Dim, SizeSpec};
 
     fn origin() -> SourceUri {

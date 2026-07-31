@@ -82,6 +82,56 @@ fn insert_deck_endpoints(registry: &mut MockRegistry) {
     }
 }
 
+fn insert_quality_endpoints(registry: &mut MockRegistry) {
+    for (id, kind) in [
+        ("deck.stream.quality_menu", ValueKind::Bool),
+        ("deck.stream.quality", ValueKind::Text),
+    ] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(kind).with_scope("deck"),
+        );
+    }
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "deck.stream.quality_hidden",
+        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "deck.stream.variant_active",
+        EndpointDesc::new(ValueKind::Bool)
+            .with_scope("deck")
+            .with_scope("variant"),
+    );
+    for (id, kind) in [
+        ("deck.stream.variant_hidden", ValueKind::Bool),
+        ("deck.stream.variant_label", ValueKind::Text),
+        ("deck.stream.variant_sub", ValueKind::Text),
+    ] {
+        registry.insert(
+            EndpointCategory::Telemetry,
+            id,
+            EndpointDesc::new(kind)
+                .with_scope("deck")
+                .with_scope("variant"),
+        );
+    }
+    registry.insert(
+        EndpointCategory::Command,
+        "deck.stream.toggle_quality_menu",
+        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "deck.stream.select_variant",
+        EndpointDesc::new(ValueKind::Trigger)
+            .with_scope("deck")
+            .with_scope("variant"),
+    );
+}
+
 pub(crate) fn registry() -> impl EndpointRegistry {
     let mut registry = MockRegistry::default();
     insert_deck_endpoints(&mut registry);
@@ -104,6 +154,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
     }
     insert_library_endpoints(&mut registry);
     insert_menu_endpoints(&mut registry);
+    insert_quality_endpoints(&mut registry);
     for id in [
         "gallery.label.knobs",
         "gallery.label.meters",

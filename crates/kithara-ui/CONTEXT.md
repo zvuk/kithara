@@ -464,9 +464,12 @@ document-local rule would let `Popover(content: Include(m))` through whenever `m
 Enforcing it once, where the include graph is flattened, is what makes "no submenus" a schema fact
 rather than a shape nobody happened to write.
 
-The document names which geometry the surface opens from; the widget owns how. `at: PopoverAt`
-chooses between the anchor rectangle and the pointer, and defaults to `Anchor`, so a document
-that declares nothing opens under its anchor. Everything else stays in `widgets/anchored.rs`:
+The document names which geometry the surface opens from and which of its edges lines up with
+that geometry; the widget owns how. `at: PopoverAt` chooses between the anchor rectangle and the
+pointer, and defaults to `Anchor`, so a document that declares nothing opens under its anchor.
+`align: PopoverAlign` picks the edge and defaults to `Start`: a menu wider than its trigger grows
+rightward from it, and `End` grows leftward instead, which is what a cell at the right end of a
+bar needs. The overhang follows the aligned edge, so the content column lands flush either way. Everything else stays in `widgets/anchored.rs`:
 `place` puts the surface below whichever geometry it opens from, overhangs it a pixel to the left
 so the content column starts flush, flips above when the room below runs out, and clamps both
 axes into the viewport; a surface taller than the viewport starts at the top and overflows
@@ -534,6 +537,30 @@ that reports a hint are one template each, taken as many times as the menu needs
 `Include`. Each instance's control paths are `app-menu/<include id>/<node id>`, so the template's
 own ids stay plain. The three rows carrying a literal shortcut and the settings row keep their own
 geometry and stay written out.
+
+## Stream Quality Ownership
+
+`assets/modules/deck/quality.kmodule.ron` is the deck's stream-quality cell and its menu, taken
+per deck through `parameters: ["deck"]`. It is markup over `Popover`, `Pressable` and the row
+template in `assets/modules/deck/quality/`, so the crate gains no control for it; the cell is a
+`Pop` surface like every other menu in the crate, which is the one place it departs from the
+design's own `HlsCell`, where the list draws its own panel and shadow.
+
+The transport bar is where it rides, before `TEMPO`, and it rides there as an `Optional` block:
+a quality ladder belongs to the stream, and a track served as one file has none, so the host
+answers `deck.stream.quality_hidden` and the cell leaves the row with its seam. The cell also
+reads `deck.stream.buffer` for the buffer depth the design shows beside the value.
+
+The ladder is host-owned and the document holds six slots for it. A slot beyond the ladder is an
+`Optional` block the host hides through `deck.stream.variant_hidden`, and the row inside it names
+`deck.stream.variant_label`, `deck.stream.variant_sub` and `deck.stream.variant_active` under the
+same `deck` and `variant` scopes. Automatic selection is the `variant=auto` row: it takes the same
+template, reads the same endpoints and writes the same `deck.stream.select_variant`, so the host
+owns what automatic means and the markup lists one kind of thing.
+
+The cell reads `deck.stream.quality` for what it shows and `deck.stream.quality_menu` for both its
+open state and its own two-state fill; `deck.stream.toggle_quality_menu` is the only toggle, and
+the popover's own path stays the set-false the widget publishes on dismissal.
 
 ## Window Chrome Ownership
 

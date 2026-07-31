@@ -120,5 +120,59 @@ pub(crate) fn player_registry() -> TestRegistry {
         "library.visible_tracks",
         EndpointDesc::new(ValueKind::TrackList),
     );
+    insert_stream_endpoints(&mut registry);
     registry
+}
+
+pub(crate) fn insert_stream_endpoints(registry: &mut TestRegistry) {
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "deck.stream.quality_hidden",
+        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "deck.stream.quality",
+        EndpointDesc::new(ValueKind::Text).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "deck.stream.quality_menu",
+        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "deck.stream.toggle_quality_menu",
+        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "deck.stream.variant_active",
+        EndpointDesc::new(ValueKind::Bool)
+            .with_scope("deck")
+            .with_scope("variant"),
+    );
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "deck.stream.variant_hidden",
+        EndpointDesc::new(ValueKind::Bool)
+            .with_scope("deck")
+            .with_scope("variant"),
+    );
+    for id in ["deck.stream.variant_label", "deck.stream.variant_sub"] {
+        registry.insert(
+            EndpointCategory::Telemetry,
+            id,
+            EndpointDesc::new(ValueKind::Text)
+                .with_scope("deck")
+                .with_scope("variant"),
+        );
+    }
+    registry.insert(
+        EndpointCategory::Command,
+        "deck.stream.select_variant",
+        EndpointDesc::new(ValueKind::Trigger)
+            .with_scope("deck")
+            .with_scope("variant"),
+    );
 }

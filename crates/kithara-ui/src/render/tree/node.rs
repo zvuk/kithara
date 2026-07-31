@@ -20,7 +20,11 @@ use crate::{
     module::ChromeStyle,
     render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent},
     size::{Dim, Hidden, visible},
-    widgets::{DropZone, ModuleChrome, Widget, anchored::Anchored, wheel::WheelSurface},
+    widgets::{
+        DropZone, ModuleChrome, Widget,
+        anchored::{Anchored, Placement},
+        wheel::WheelSurface,
+    },
 };
 
 pub(super) fn render_compiled<'a>(
@@ -251,6 +255,7 @@ fn render_node<'a>(
             path,
             open,
             at,
+            align,
             anchor,
             content,
         } => {
@@ -265,7 +270,10 @@ fn render_node<'a>(
                     render_node(anchor, ui, reads, skin),
                     content,
                     open,
-                    *at,
+                    Placement {
+                        at: *at,
+                        align: *align,
+                    },
                     control_event(ui.resolve(*path), ControlAction::Activate),
                     skin,
                 )

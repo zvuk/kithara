@@ -6,8 +6,8 @@ use crate::{
     layout::FrameSides,
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAt, ScalarFormat, TextAlign,
-        TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
+        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign, PopoverAt, ScalarFormat,
+        TextAlign, TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
     },
     size::{BlockNode, SizeSpec},
     skin::ColorRole,
@@ -56,6 +56,7 @@ pub enum ExpandedNode {
         path: InternId,
         open: Binding,
         at: PopoverAt,
+        align: PopoverAlign,
         anchor: Box<Self>,
         content: Box<Self>,
     },

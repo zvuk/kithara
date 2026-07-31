@@ -1,8 +1,8 @@
 use kithara_ui::render::ReadValue;
 
-struct MenuConsts;
+struct Consts;
 
-impl MenuConsts {
+impl Consts {
     const CLUB_MODULES: [bool; 11] = [
         true, true, true, false, true, true, false, false, true, true, true,
     ];
@@ -107,8 +107,8 @@ impl Default for MenuState {
             open: true,
             group: MenuGroup::Win,
             windows: vec![
-                MenuWindow::new(0, 0, MenuConsts::CLUB_MODULES),
-                MenuWindow::new(1, 2, MenuConsts::VISUAL_MODULES),
+                MenuWindow::new(0, 0, Consts::CLUB_MODULES),
+                MenuWindow::new(1, 2, Consts::VISUAL_MODULES),
             ],
             active: 0,
             wave_follow: true,
@@ -129,10 +129,10 @@ impl MenuState {
     fn rebuild(&mut self) {
         for (index, window) in self.windows.iter_mut().enumerate() {
             let number = index + 1;
-            window.title = format!("ОКНО {number} · {}", MenuConsts::LAYOUTS[window.layout]);
+            window.title = format!("ОКНО {number} · {}", Consts::LAYOUTS[window.layout]);
             window.caption = format!(
                 "{} · {} МОД.",
-                MenuConsts::DISPLAYS[window.display],
+                Consts::DISPLAYS[window.display],
                 window.modules_on()
             );
         }
@@ -149,7 +149,7 @@ impl MenuState {
     }
 
     const fn can_open(&self) -> bool {
-        self.windows.len() < MenuConsts::MAX_WINDOWS
+        self.windows.len() < Consts::MAX_WINDOWS
     }
 
     const fn closable(&self, index: usize) -> bool {
@@ -194,7 +194,7 @@ impl MenuState {
                 ReadValue::Bool(scoped_index(scope, "layout")? == self.windows[self.active].layout)
             }
             "ui.layouts.active" => {
-                ReadValue::Text(MenuConsts::LAYOUTS[self.windows[self.active].layout])
+                ReadValue::Text(Consts::LAYOUTS[self.windows[self.active].layout])
             }
             "ui.prefs.wave_follow" => ReadValue::Bool(self.wave_follow),
             "ui.prefs.autogain" => ReadValue::Bool(self.autogain),
@@ -273,7 +273,7 @@ impl MenuState {
         let Some(window) = self.windows.get_mut(index) else {
             return;
         };
-        window.display = (window.display + 1) % MenuConsts::DISPLAYS.len();
+        window.display = (window.display + 1) % Consts::DISPLAYS.len();
         self.rebuild();
     }
 
@@ -295,8 +295,8 @@ impl MenuState {
         let display = self.windows.len();
         self.windows.push(MenuWindow::new(
             display,
-            MenuConsts::NEW_WINDOW_LAYOUT,
-            MenuConsts::NEW_WINDOW_MODULES,
+            Consts::NEW_WINDOW_LAYOUT,
+            Consts::NEW_WINDOW_MODULES,
         ));
         self.rebuild();
     }
@@ -320,8 +320,7 @@ impl MenuState {
     }
 
     fn apply_layout(&mut self, number: &str) -> bool {
-        let Some(index) = row_index(number).filter(|index| *index < MenuConsts::LAYOUTS.len())
-        else {
+        let Some(index) = row_index(number).filter(|index| *index < Consts::LAYOUTS.len()) else {
             return false;
         };
         let active = self.active;
@@ -354,7 +353,7 @@ impl ContextState {
         }
         let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
         let row = scoped_index(scope, "row")?;
-        let track = MenuConsts::TRACKS.get(row)?;
+        let track = Consts::TRACKS.get(row)?;
         let value = match id {
             "gallery.menu.context" => ReadValue::Bool(self.open == Some(row)),
             "gallery.menu.selected" => ReadValue::Bool(self.selected == row),
@@ -401,7 +400,7 @@ impl ContextState {
 fn track_address(path: &str) -> Option<(usize, &str)> {
     let rest = path.strip_prefix("ctx/")?.strip_prefix("track-")?;
     let (number, node) = rest.split_once('/')?;
-    let row = row_index(number).filter(|row| *row < MenuConsts::TRACKS.len())?;
+    let row = row_index(number).filter(|row| *row < Consts::TRACKS.len())?;
     Some((row, node))
 }
 
@@ -418,5 +417,5 @@ fn module_index(scope: &str) -> Option<usize> {
 }
 
 fn module_index_of(key: &str) -> Option<usize> {
-    MenuConsts::MODULES.iter().position(|name| *name == key)
+    Consts::MODULES.iter().position(|name| *name == key)
 }

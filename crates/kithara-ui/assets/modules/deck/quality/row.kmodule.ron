@@ -1,0 +1,42 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "deck-quality-row",
+    parameters: ["deck", "variant"],
+    root: Pressable(
+        id: "pick",
+        press: Command(id: "deck.stream.select_variant", with: { "deck": "$deck", "variant": "$variant" }),
+        child: Row(
+            size: (w: Fill, h: Fixed(26.0)),
+            pad_x: 10.0,
+            gap: 8.0,
+            active: Model(id: "deck.stream.variant_active", with: { "deck": "$deck", "variant": "$variant" }),
+            active_background: BgSelect,
+            children: [
+                Row(
+                    id: "dot",
+                    size: (w: Fixed(6.0), h: Fixed(6.0)),
+                    gap: 0.0,
+                    background: Line,
+                    active: Model(id: "deck.stream.variant_active", with: { "deck": "$deck", "variant": "$variant" }),
+                    active_background: Accent,
+                    children: [],
+                ),
+                Text(
+                    id: "label",
+                    size: (w: Fill, h: Fixed(13.0)),
+                    style: Mono,
+                    active_color: Text,
+                    align: Start,
+                    read: Telemetry(id: "deck.stream.variant_label", with: { "deck": "$deck", "variant": "$variant" }),
+                    active: Model(id: "deck.stream.variant_active", with: { "deck": "$deck", "variant": "$variant" }),
+                ),
+                Text(
+                    id: "sub",
+                    style: MicroLabel,
+                    read: Telemetry(id: "deck.stream.variant_sub", with: { "deck": "$deck", "variant": "$variant" }),
+                ),
+            ],
+        ),
+    ),
+)

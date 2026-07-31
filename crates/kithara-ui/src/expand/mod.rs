@@ -1,6 +1,7 @@
 mod binding_subst;
 mod machine;
 mod node;
+mod site;
 
 pub use binding_subst::scoped_key;
 pub(crate) use binding_subst::{intern_binding, substitute_binding, substitute_map};

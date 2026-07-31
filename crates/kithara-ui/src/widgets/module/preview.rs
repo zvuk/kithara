@@ -194,6 +194,9 @@ mod tests {
         scoped_trigger: EndpointDesc,
         scoped_waveform: EndpointDesc,
         track_list: EndpointDesc,
+        variant_bool: EndpointDesc,
+        variant_text: EndpointDesc,
+        variant_trigger: EndpointDesc,
     }
 
     impl Default for Registry {
@@ -206,6 +209,15 @@ mod tests {
                 scoped_text: EndpointDesc::new(ValueKind::Text).with_scope("deck"),
                 scoped_trigger: EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
                 scoped_waveform: EndpointDesc::new(ValueKind::Waveform).with_scope("deck"),
+                variant_bool: EndpointDesc::new(ValueKind::Bool)
+                    .with_scope("deck")
+                    .with_scope("variant"),
+                variant_text: EndpointDesc::new(ValueKind::Text)
+                    .with_scope("deck")
+                    .with_scope("variant"),
+                variant_trigger: EndpointDesc::new(ValueKind::Trigger)
+                    .with_scope("deck")
+                    .with_scope("variant"),
                 track_list: EndpointDesc::new(ValueKind::TrackList),
             }
         }
@@ -235,14 +247,29 @@ mod tests {
                     "deck.playback.looping"
                     | "deck.playback.playing"
                     | "deck.playback.reverse"
-                    | "deck.playback.synced",
-                ) => Some(&self.bool_value),
+                    | "deck.playback.synced"
+                    | "deck.stream.quality_hidden",
+                )
+                | (EndpointCategory::Model, "deck.stream.quality_menu") => Some(&self.bool_value),
+                (EndpointCategory::Telemetry, "deck.stream.variant_hidden")
+                | (EndpointCategory::Model, "deck.stream.variant_active") => {
+                    Some(&self.variant_bool)
+                }
+                (
+                    EndpointCategory::Telemetry,
+                    "deck.stream.variant_label" | "deck.stream.variant_sub",
+                ) => Some(&self.variant_text),
+                (EndpointCategory::Command, "deck.stream.toggle_quality_menu") => {
+                    Some(&self.scoped_trigger)
+                }
+                (EndpointCategory::Command, "deck.stream.select_variant") => {
+                    Some(&self.variant_trigger)
+                }
                 (EndpointCategory::Telemetry, "deck.playback.waveform") => {
                     Some(&self.scoped_waveform)
                 }
-                (EndpointCategory::Telemetry, "deck.track.title" | "deck.playback.tempo") => {
-                    Some(&self.scoped_text)
-                }
+                (EndpointCategory::Telemetry, "deck.track.title" | "deck.playback.tempo")
+                | (EndpointCategory::Model, "deck.stream.quality") => Some(&self.scoped_text),
                 (EndpointCategory::Parameter, "player.output.volume")
                 | (EndpointCategory::Model, "deck.view.zoom") => Some(&self.scalar),
                 (EndpointCategory::Telemetry, "player.output.levels") => Some(&self.stereo),

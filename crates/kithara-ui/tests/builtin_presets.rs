@@ -153,19 +153,39 @@ fn player_deck_compiles_canonical_transport_row() {
         };
         assert!(frame.is_none(), "cell {index} keeps the skin's own seam");
     }
-    for (index, name) in [(10, "stream"), (11, "tempo")] {
-        let Some(ExpandedNode::Row {
-            id: Some(id),
-            frame: Some(frame),
-            ..
-        }) = children.get(index)
-        else {
-            panic!("expected a framed cell at {index}");
-        };
-        assert_eq!(ui.resolve(*id), name);
-        assert!(frame.left, "{name} must carry its left seam");
-        assert!(!frame.top && !frame.right && !frame.bottom);
-    }
+    let Some(ExpandedNode::Optional { block, child }) = children.get(10) else {
+        panic!("expected the stream block at 10");
+    };
+    assert_eq!(
+        ui.resolve(block.hidden.key),
+        "deck.stream.quality_hidden@deck=a"
+    );
+    let ExpandedNode::Popover { anchor, .. } = &**child else {
+        panic!("the stream block holds the quality menu");
+    };
+    let ExpandedNode::Pressable { child: cell, .. } = &**anchor else {
+        panic!("the menu opens from a pressable cell");
+    };
+    let ExpandedNode::Row {
+        frame: Some(frame), ..
+    } = &**cell
+    else {
+        panic!("expected a framed stream cell");
+    };
+    assert!(frame.left, "stream must carry its left seam");
+    assert!(!frame.top && !frame.right && !frame.bottom);
+
+    let Some(ExpandedNode::Row {
+        id: Some(id),
+        frame: Some(frame),
+        ..
+    }) = children.get(11)
+    else {
+        panic!("expected a framed cell at 11");
+    };
+    assert_eq!(ui.resolve(*id), "tempo");
+    assert!(frame.left, "tempo must carry its left seam");
+    assert!(!frame.top && !frame.right && !frame.bottom);
 }
 
 #[kithara::test]

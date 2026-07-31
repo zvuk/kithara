@@ -34,6 +34,18 @@ pub fn resolver() -> MemResolver {
             include_str!("../assets/modules/deck/transport.kmodule.ron"),
         ),
         (
+            "modules/deck/quality.kmodule.ron",
+            include_str!("../assets/modules/deck/quality.kmodule.ron"),
+        ),
+        (
+            "modules/deck/quality/auto.kmodule.ron",
+            include_str!("../assets/modules/deck/quality/auto.kmodule.ron"),
+        ),
+        (
+            "modules/deck/quality/row.kmodule.ron",
+            include_str!("../assets/modules/deck/quality/row.kmodule.ron"),
+        ),
+        (
             "modules/library.kmodule.ron",
             include_str!("../assets/modules/library.kmodule.ron"),
         ),

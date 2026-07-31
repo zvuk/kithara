@@ -1,0 +1,113 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "deck-quality",
+    chrome: Plain,
+    parameters: ["deck"],
+    root: Popover(
+        id: "pop",
+        open: Model(id: "deck.stream.quality_menu", with: { "deck": "$deck" }),
+        align: End,
+        anchor: Pressable(
+            id: "cell",
+            press: Command(id: "deck.stream.toggle_quality_menu", with: { "deck": "$deck" }),
+            child: Row(
+                size: (w: Shrink, h: Fill),
+                pad_x: 10.0,
+                gap: 6.0,
+                frame: (top: false, right: false, bottom: false, left: true),
+                frame_color: LineInner,
+                active: Model(id: "deck.stream.quality_menu", with: { "deck": "$deck" }),
+                active_background: BgSelect,
+                children: [
+                    Text(id: "label", style: MicroLabel, label: "HLS"),
+                    Text(
+                        id: "value",
+                        style: Mono,
+                        color: Text,
+                        read: Model(id: "deck.stream.quality", with: { "deck": "$deck" }),
+                    ),
+                    Glyph(id: "chevron", icon: ChevronDown, style: MenuCell, color: Muted),
+                ],
+            ),
+        ),
+        content: Column(
+            id: "surface",
+            size: (w: Fixed(158.0), h: Shrink),
+            gap: 0.0,
+            children: [
+                Row(
+                    id: "head",
+                    size: (w: Fill, h: Fixed(22.0)),
+                    pad_x: 10.0,
+                    gap: 0.0,
+                    frame: (top: false, right: false, bottom: true, left: false),
+                    frame_color: LinePop,
+                    children: [
+                        Text(
+                            id: "head-label",
+                            size: (w: Fill, h: Fill),
+                            style: MicroLabel,
+                            label: "КАЧЕСТВО HLS",
+                        ),
+                    ],
+                ),
+                Include(id: "auto", source: "quality/auto.kmodule.ron", with: { "deck": "$deck" }),
+                Optional(
+                    id: "variant-0-block",
+                    hidden: Telemetry(id: "deck.stream.variant_hidden", with: { "deck": "$deck", "variant": "0" }),
+                    child: Include(
+                        id: "variant-0",
+                        source: "quality/row.kmodule.ron",
+                        with: { "deck": "$deck", "variant": "0" },
+                    ),
+                ),
+                Optional(
+                    id: "variant-1-block",
+                    hidden: Telemetry(id: "deck.stream.variant_hidden", with: { "deck": "$deck", "variant": "1" }),
+                    child: Include(
+                        id: "variant-1",
+                        source: "quality/row.kmodule.ron",
+                        with: { "deck": "$deck", "variant": "1" },
+                    ),
+                ),
+                Optional(
+                    id: "variant-2-block",
+                    hidden: Telemetry(id: "deck.stream.variant_hidden", with: { "deck": "$deck", "variant": "2" }),
+                    child: Include(
+                        id: "variant-2",
+                        source: "quality/row.kmodule.ron",
+                        with: { "deck": "$deck", "variant": "2" },
+                    ),
+                ),
+                Optional(
+                    id: "variant-3-block",
+                    hidden: Telemetry(id: "deck.stream.variant_hidden", with: { "deck": "$deck", "variant": "3" }),
+                    child: Include(
+                        id: "variant-3",
+                        source: "quality/row.kmodule.ron",
+                        with: { "deck": "$deck", "variant": "3" },
+                    ),
+                ),
+                Optional(
+                    id: "variant-4-block",
+                    hidden: Telemetry(id: "deck.stream.variant_hidden", with: { "deck": "$deck", "variant": "4" }),
+                    child: Include(
+                        id: "variant-4",
+                        source: "quality/row.kmodule.ron",
+                        with: { "deck": "$deck", "variant": "4" },
+                    ),
+                ),
+                Optional(
+                    id: "variant-5-block",
+                    hidden: Telemetry(id: "deck.stream.variant_hidden", with: { "deck": "$deck", "variant": "5" }),
+                    child: Include(
+                        id: "variant-5",
+                        source: "quality/row.kmodule.ron",
+                        with: { "deck": "$deck", "variant": "5" },
+                    ),
+                ),
+            ],
+        ),
+    ),
+)
