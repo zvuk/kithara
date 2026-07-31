@@ -6,7 +6,7 @@
 //!
 //! Provides a phantom-typestate [`Resource<S, D>`] parameterized by a phase `S`
 //! and a [`Driver`] `D`:
-//! - [`ResourceWriter`] (`Resource<Active, D>`) — single-owner writeable handle.
+//! - [`ResourceWriter`] (`Resource<Active, D>`) - single-owner writable handle.
 //! - [`Resource<Committed, D>`] — sealed, read-final handle.
 //! - [`ResourceReader`] (`Resource<Reader, D>`) — cloneable read-only view.
 //!

@@ -27,7 +27,7 @@ pub trait ResourcePhase: sealed::Sealed {
     type Data<D: DriverIo>;
 }
 
-/// Writeable, in-flight phase: single-owner, not `Clone`.
+/// Writable, in-flight phase: single-owner, not `Clone`.
 pub struct Active;
 /// Sealed, fully-written phase: read-final, reactivatable.
 pub struct Committed;
@@ -95,13 +95,13 @@ pub struct Resource<S: ResourcePhase, D: DriverIo> {
     data: S::Data<D>,
 }
 
-/// The writeable, single-owner resource handle.
+/// The writable, single-owner resource handle.
 pub type ResourceWriter<D> = Resource<Active, D>;
 /// A cloneable read-only resource view.
 pub type ResourceReader<D> = Resource<Reader, D>;
 
 impl<D: Driver> Resource<Active, D> {
-    /// Open a writeable resource with no availability observer.
+    /// Open a writable resource with no availability observer.
     ///
     /// # Errors
     /// Returns error if `D::open(opts)` fails.
@@ -113,7 +113,7 @@ impl<D: Driver> Resource<Active, D> {
         })
     }
 
-    /// Open a writeable resource with an optional [`AvailabilityObserver`].
+    /// Open a writable resource with an optional [`AvailabilityObserver`].
     ///
     /// # Errors
     /// Returns error if `D::open(opts)` fails.

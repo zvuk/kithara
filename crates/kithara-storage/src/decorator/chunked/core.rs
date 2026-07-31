@@ -29,7 +29,7 @@ pub(super) fn make_tmp_path(canonical: &Path) -> Option<PathBuf> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenIntent {
     /// Initial open at the temp path: caller should produce a
-    /// writeable resource. The caller's `MmapOptions` should set
+    /// writable resource. The caller's `MmapOptions` should set
     /// `mode = OpenMode::ReadWrite`.
     Fresh,
     /// Reopen at the canonical path post-rename: caller should
