@@ -100,8 +100,6 @@ impl<'a> ControlFields<'a> {
     }
 }
 
-/// Substitutes an optional binding a control declares beside its read and
-/// write, leaving an absent one absent.
 fn substituted(
     declared: Option<&BindingRef>,
     context: &Context<'_>,

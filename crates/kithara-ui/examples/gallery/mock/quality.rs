@@ -83,16 +83,12 @@ impl QualityState {
         Consts::VARIANTS.get(index(variant)?)
     }
 
-    /// The cell rides the deck transport, so every host reaches it under its
-    /// own instance: the node is what follows the include this document takes.
     pub(super) fn activate(&mut self, path: &str) -> bool {
         let Some((_, id)) = path.split_once("/stream/") else {
             return false;
         };
         let (node, _) = id.split_once('/').unwrap_or((id, ""));
         match node {
-            // The widget publishes the dismissal on the popover's own path, so
-            // this handler sets false; the cell stays the only toggle.
             "pop" => self.open = false,
             "cell" => self.open = !self.open,
             "auto" => self.select(None),

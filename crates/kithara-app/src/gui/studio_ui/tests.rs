@@ -413,7 +413,6 @@ fn deck_letter_captions_name_their_deck() {
     }
 }
 
-/// Every pressable in the compiled studio, as `(path, scoped write key)`.
 fn pressables(ui: &CompiledUi) -> Vec<(&str, &str)> {
     let mut out = Vec::new();
     each_node(ui, &mut |node| {

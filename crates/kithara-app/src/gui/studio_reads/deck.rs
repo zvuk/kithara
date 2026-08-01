@@ -164,10 +164,6 @@ impl<'a> Node<'a> for TempoNode {
     }
 }
 
-/// The stream the deck plays: the rung it is on, the ladder it may pick from,
-/// and whether the menu that picks is open. A rung is addressed by its slot in
-/// the ladder, and `auto` is the rung that lets the ladder choose; the document
-/// names that one, so only ladder rungs answer for their text.
 #[derive(Clone, Copy)]
 struct StreamNode<'a> {
     ui: &'a UiState,
@@ -198,7 +194,7 @@ impl<'a> Node<'a> for StreamNode<'a> {
         let stream = *self;
         let value = match segment {
             "quality" => ReadValue::Text(&stream.cache.quality),
-            "quality_menu" => ReadValue::Bool(stream.cache.quality_menu),
+            "quality_menu" => ReadValue::Bool(stream.cache.view.quality_menu),
             "quality_hidden" => ReadValue::Bool(stream.ui.abr_variants.is_empty()),
             "variant_active" => ReadValue::Bool(stream.active(scope.get("variant")?)),
             "variant_hidden" => ReadValue::Bool(stream.rung(scope.get("variant")?).is_none()),
@@ -231,7 +227,7 @@ struct ViewNode<'a> {
 impl<'a> Node<'a> for ViewNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
-            "zoom" => ReadValue::Scalar(self.cache.zoom?),
+            "zoom" => ReadValue::Scalar(self.cache.view.zoom?),
             _ => return None,
         };
         Some(Box::new(Value(value)))

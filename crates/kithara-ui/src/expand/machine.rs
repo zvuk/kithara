@@ -724,7 +724,6 @@ fn container_bindings(
     Ok((surface, active))
 }
 
-/// A container's own id, interned when it declares one.
 fn intern_node_id(
     id: Option<&NodeId>,
     context: &Context<'_>,

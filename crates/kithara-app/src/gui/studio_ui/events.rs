@@ -73,7 +73,7 @@ fn deck_control(
             DeckMsg::SeekTo(position.clamp(0.0, 1.0) * duration)
         }
         ("wave/zoom", ControlAction::SetScalar(zoom)) => {
-            state.studio.cache.deck_mut(index)?.zoom = Some(zoom.clamp(0.0, 1.0));
+            state.studio.cache.deck_mut(index)?.view.zoom = Some(zoom.clamp(0.0, 1.0));
             return None;
         }
         ("tempo", ControlAction::StepScalar(steps)) => DeckMsg::SetTempo(
@@ -88,9 +88,6 @@ fn deck_control(
     Some(Message::Deck(id, msg))
 }
 
-/// The quality cell owns the menu flag; picking a rung writes through to the
-/// deck. The popover publishes its dismissal on its own path, so that arm
-/// closes the menu and the cell stays the only toggle.
 fn stream_control(
     state: &mut Kithara,
     index: usize,
@@ -101,32 +98,27 @@ fn stream_control(
         return None;
     }
     let open = match control {
-        "cell" => !state.studio.cache.deck_mut(index)?.quality_menu,
+        "cell" => !state.studio.cache.deck_mut(index)?.view.quality_menu,
         "pop" => false,
-        _ => {
-            let variant = pick(state, index, control)?;
-            state.studio.cache.deck_mut(index)?.quality_menu = false;
-            return Some(Message::Deck(
-                deck_id(state, index)?,
-                DeckMsg::SetQuality(variant),
-            ));
+        row => {
+            let msg = quality_msg(state, index, row)?;
+            state.studio.cache.deck_mut(index)?.view.quality_menu = false;
+            return Some(Message::Deck(deck_id(state, index)?, msg));
         }
     };
-    state.studio.cache.deck_mut(index)?.quality_menu = open;
+    state.studio.cache.deck_mut(index)?.view.quality_menu = open;
     None
 }
 
-/// A row addresses its rung by slot: `auto` hands the choice to the ladder,
-/// `variant-<slot>` pins it.
-fn pick(state: &Kithara, index: usize, control: &str) -> Option<Option<usize>> {
-    let (row, _) = control.split_once('/')?;
+fn quality_msg(state: &Kithara, index: usize, path: &str) -> Option<DeckMsg> {
+    let (row, _) = path.split_once('/')?;
     if row == "auto" {
-        return Some(None);
+        return Some(DeckMsg::SetQuality(None));
     }
     let slot: usize = row.strip_prefix("variant-")?.parse().ok()?;
     let id = deck_id(state, index)?;
-    let variant = state.decks.get(id)?.ui.abr_variants.get(slot)?.index;
-    Some(Some(variant))
+    let rung = state.decks.get(id)?.ui.abr_variants.get(slot)?.index;
+    Some(DeckMsg::SetQuality(Some(rung)))
 }
 
 fn zoom_control(
@@ -141,7 +133,7 @@ fn zoom_control(
         _ => return None,
     };
     let deck = cache.deck_mut(index)?;
-    deck.zoom = Some(step(deck.zoom.map_or(DEFAULT_ZOOM, AsPrimitive::as_)).into());
+    deck.view.zoom = Some(step(deck.view.zoom.map_or(DEFAULT_ZOOM, AsPrimitive::as_)).into());
     Some(())
 }
 
@@ -224,7 +216,7 @@ mod tests {
 
     fn press_zoom(cache: &mut StudioCache, control: &str) -> f64 {
         zoom_control(cache, 0, control, &ControlAction::Activate);
-        cache.deck_mut(0).and_then(|deck| deck.zoom).unwrap()
+        cache.deck_mut(0).and_then(|deck| deck.view.zoom).unwrap()
     }
 
     #[kithara::test]

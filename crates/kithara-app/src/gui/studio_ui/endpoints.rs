@@ -15,7 +15,6 @@ struct Endpoint {
 }
 
 impl Endpoint {
-    /// Scope sets an endpoint is addressed under, named once each.
     const DECK: &[&str] = &["deck"];
     const GLOBAL: &[&str] = &[];
     const VARIANT: &[&str] = &["deck", "variant"];

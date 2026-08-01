@@ -66,8 +66,6 @@ pub(crate) enum DeckMsg {
     EqBandChanged(usize, f32),
     DeleteTrack,
     SetTempo(f32),
-    /// Pin the stream to one rung of the ABR ladder, or hand the choice back
-    /// to the ladder with `None`.
     SetQuality(Option<usize>),
 }
 

@@ -132,14 +132,8 @@ mod tests {
         }
     }
 
-    fn deck(tempo: &str) -> (UiState, DeckCache) {
-        let mut ui = UiState::empty();
-        ui.track_name = "Loaded".to_string();
-        ui.eq_bands = vec![0.0; 3];
-        ui.duration = 120.0;
-        // A deck on an HLS stream: without a ladder the quality cell is hidden
-        // and the rung reads below have nothing to answer for.
-        ui.abr_variants = vec![
+    fn hls_ladder() -> Vec<AbrVariant> {
+        vec![
             AbrVariant {
                 index: 0,
                 label: "128k".to_string(),
@@ -150,12 +144,20 @@ mod tests {
                 label: "320k".to_string(),
                 detail: "320 kbps \u{b7} AAC".to_string(),
             },
-        ];
+        ]
+    }
+
+    fn deck(tempo: &str) -> (UiState, DeckCache) {
+        let mut ui = UiState::empty();
+        ui.track_name = "Loaded".to_string();
+        ui.eq_bands = vec![0.0; 3];
+        ui.duration = 120.0;
+        ui.abr_variants = hls_ladder();
         let mut cache = DeckCache::default();
         cache.tempo = tempo.to_string();
         cache.remain = "-02:00".to_string();
         cache.subtitle = "file".to_string();
-        cache.zoom = Some(1.0);
+        cache.view.zoom = Some(1.0);
         (ui, cache)
     }
 

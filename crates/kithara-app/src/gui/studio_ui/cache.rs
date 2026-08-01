@@ -62,8 +62,6 @@ impl DeckLayout {
     }
 }
 
-/// `refresh` re-derives the readings once a frame; the view flags below them
-/// belong to the user's presses.
 #[derive(Default)]
 pub(in crate::gui) struct DeckCache {
     pub(in crate::gui) wave: Vec<WaveBucket>,
@@ -73,7 +71,11 @@ pub(in crate::gui) struct DeckCache {
     pub(in crate::gui) bpm: String,
     pub(in crate::gui) remain: String,
     pub(in crate::gui) subtitle: String,
+    pub(in crate::gui) view: DeckViewState,
+}
 
+#[derive(Default)]
+pub(in crate::gui) struct DeckViewState {
     pub(in crate::gui) quality_menu: bool,
     pub(in crate::gui) zoom: Option<f64>,
 }
@@ -227,8 +229,6 @@ pub(in crate::gui) fn analysis_bpm(ui: &UiState) -> Option<f32> {
     bpm.is_finite().then(|| bpm.as_())
 }
 
-/// The cell names the rung the stream is on, prefixed with `AUTO` while the
-/// ladder is the one choosing it.
 fn format_quality(ui: &UiState) -> String {
     let rung = ui
         .current_variant
