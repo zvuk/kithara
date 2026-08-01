@@ -62,18 +62,19 @@ impl DeckLayout {
     }
 }
 
+/// `refresh` re-derives the readings once a frame; the view flags below them
+/// belong to the user's presses.
 #[derive(Default)]
 pub(in crate::gui) struct DeckCache {
     pub(in crate::gui) wave: Vec<WaveBucket>,
     wave_src: Option<usize>,
     pub(in crate::gui) quality: String,
-    /// Host-owned: the menu stays open until a press closes it, so the
-    /// per-frame refresh leaves this alone.
-    pub(in crate::gui) quality_menu: bool,
     pub(in crate::gui) tempo: String,
     pub(in crate::gui) bpm: String,
     pub(in crate::gui) remain: String,
     pub(in crate::gui) subtitle: String,
+
+    pub(in crate::gui) quality_menu: bool,
     pub(in crate::gui) zoom: Option<f64>,
 }
 
