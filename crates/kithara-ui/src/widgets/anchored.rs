@@ -17,7 +17,7 @@ use crate::{
     skin::PopSkin,
 };
 
-const OVERHANG: f32 = 1.0;
+const FRAME_OVERHANG: f32 = 1.0;
 
 /// Where the surface sits: the geometry it opens from and the edge of that
 /// geometry its own edge lines up with.
@@ -133,11 +133,9 @@ fn place(
     } else {
         from.y - surface.height
     };
-    // The frame draws outward of the content column, so the overhang carries
-    // the aligned edge of the column onto the aligned edge of the anchor.
     let x = match align {
-        PopoverAlign::Start => from.x - OVERHANG,
-        PopoverAlign::End => from.x + from.width + OVERHANG - surface.width,
+        PopoverAlign::Start => from.x - FRAME_OVERHANG,
+        PopoverAlign::End => from.x + from.width + FRAME_OVERHANG - surface.width,
     };
     let position = Point::new(
         inside(x, surface.width, viewport.width),
