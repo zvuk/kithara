@@ -2,11 +2,12 @@ use firewheel::{
     FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
     dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume_pan::VolumePanNode,
 };
+use kithara_audio::EqBandConfig;
 use tracing::{debug, warn};
 
 use super::{
     protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
-    state::{PlayerState, SessionState, SlotNodes, ensure_ctx},
+    state::{PlayerState, SessionState, SlotNodes, ensure_ctx, prepare_eq_layout},
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
@@ -393,6 +394,94 @@ pub(super) mod controls {
         memo.update_memo(&mut queue);
         Ok(())
     }
+    pub(in crate::session) fn set_player_eq_layout<B: AudioBackend>(
+        state: &mut SessionState<B>,
+        player_id: PlayerId,
+        eq_layout: Vec<EqBandConfig>,
+    ) -> Result<(), SessionError> {
+        let idx = player_index(state, player_id)?;
+        let (eq_layout, gains) = prepare_eq_layout(eq_layout);
+        if !state.players[idx].started {
+            let player = &mut state.players[idx];
+            player.eq_layout = eq_layout;
+            player.shared_eq.replace(gains);
+            return Ok(());
+        }
+
+        let (old_eq_id, master_volume_id, slot_volume_ids) = {
+            let player = &state.players[idx];
+            let old_eq_id = player
+                .master_eq_node_id
+                .ok_or_else(|| graph_state("player master eq node is not initialised"))?;
+            let master_volume_id = player
+                .master_vol_pan_node_id
+                .ok_or_else(|| graph_state("player master vol node is not initialised"))?;
+            let slot_volume_ids = player
+                .slots
+                .iter()
+                .map(|slot| slot.vol_pan_node_id)
+                .collect::<Vec<_>>();
+            (old_eq_id, master_volume_id, slot_volume_ids)
+        };
+        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
+        let master_eq = MasterEqNode::new(&eq_layout);
+        let master_eq_memo = Memo::new(master_eq.clone());
+        let master_eq_id = fw_ctx.add_node(master_eq, None);
+
+        let connect_result = slot_volume_ids
+            .into_iter()
+            .try_for_each(|slot_id| {
+                connect_stereo(
+                    fw_ctx,
+                    slot_id,
+                    master_eq_id,
+                    "connect slot_vol_pan->replacement master_eq",
+                )
+            })
+            .and_then(|()| {
+                connect_stereo(
+                    fw_ctx,
+                    master_eq_id,
+                    master_volume_id,
+                    "connect replacement master_eq->master_vol",
+                )
+            });
+        if let Err(err) = connect_result {
+            if let Err(remove_err) = fw_ctx.remove_node(master_eq_id) {
+                warn!(
+                    player_id,
+                    ?remove_err,
+                    "failed to remove rejected replacement EQ node"
+                );
+            }
+            return Err(err);
+        }
+        if let Err(err) = fw_ctx.remove_node(old_eq_id) {
+            if let Err(remove_err) = fw_ctx.remove_node(master_eq_id) {
+                warn!(
+                    player_id,
+                    ?remove_err,
+                    "failed to remove replacement EQ node after swap rejection"
+                );
+            }
+            return Err(SessionError::Graph(format!(
+                "remove previous master_eq failed: {err}"
+            )));
+        }
+        if let Err(err) = fw_ctx.update() {
+            warn!(
+                player_id,
+                "graph update after EQ layout swap failed: {err:?}"
+            );
+        }
+
+        let player = &mut state.players[idx];
+        player.eq_layout = eq_layout;
+        player.shared_eq.replace(gains);
+        player.master_eq_node_id = Some(master_eq_id);
+        player.master_eq_memo = Some(master_eq_memo);
+        Ok(())
+    }
     pub(in crate::session) fn set_session_ducking<B: AudioBackend>(
         state: &mut SessionState<B>,
         mode: SessionDuckingMode,
@@ -598,6 +687,59 @@ mod tests {
             Reply::Err(err) => panic!("player {player_id} failed to unregister: {err}"),
             _ => panic!("player unregister returned unexpected reply"),
         }
+    }
+
+    #[kithara::test]
+    fn a_running_player_replaces_its_eq_layout_without_releasing_slots() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = SessionState::<TestBackend>::new(start_test_stream);
+        let player_id = register(&mut state);
+        start(&mut state, player_id);
+        let slot = match run_cmd(&mut state, Cmd::AllocateSlot { player_id }) {
+            Reply::SlotAllocated(allocated) => allocated.slot,
+            Reply::Err(err) => panic!("slot allocation failed: {err}"),
+            _ => panic!("slot allocation returned unexpected reply"),
+        };
+        let previous_eq = state.players[0].master_eq_node_id;
+        let previous_volume = state.players[0].master_vol_pan_node_id;
+        let mut layout = generate_log_spaced_bands(4);
+        for (band, gain) in layout.iter_mut().zip([-6.0, -3.0, 1.5, 4.0]) {
+            band.set_gain_db(gain);
+        }
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetPlayerEqLayout {
+                    player_id,
+                    eq_layout: layout,
+                },
+            ),
+            Reply::Ok
+        ));
+
+        let player = &state.players[0];
+        assert_eq!(player.eq_layout.len(), 4);
+        assert_eq!(player.shared_eq.snapshot(), vec![-6.0, -3.0, 1.5, 4.0]);
+        assert_eq!(player.slots.len(), 1);
+        assert_eq!(player.slots[0].slot_id, slot);
+        assert_ne!(player.master_eq_node_id, previous_eq);
+        assert_eq!(player.master_vol_pan_node_id, previous_volume);
+        assert_eq!(
+            player.master_eq_memo.as_ref().map(|memo| memo.bands.len()),
+            Some(4)
+        );
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetPlayerEqGain {
+                    player_id,
+                    band: 3,
+                    gain_db: 5.0,
+                },
+            ),
+            Reply::Ok
+        ));
     }
 
     #[kithara::test]

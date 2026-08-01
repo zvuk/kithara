@@ -3,7 +3,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::value::Value;
 use crate::{
-    deck::EQ_BANDS,
+    deck::EqMode,
     gui::{
         deck::{DeckView, TEMPO_RANGE, TimestretchState},
         studio_ui::{
@@ -42,6 +42,7 @@ pub(super) struct DeckNode<'a> {
     ui: &'a UiState,
     view: DeckView,
     cache: &'a DeckCache,
+    eq_mode: EqMode,
     focused: bool,
 }
 
@@ -50,12 +51,14 @@ impl<'a> DeckNode<'a> {
         ui: &'a UiState,
         view: DeckView,
         cache: &'a DeckCache,
+        eq_mode: EqMode,
         focused: bool,
     ) -> Self {
         Self {
             ui,
             view,
             cache,
+            eq_mode,
             focused,
         }
     }
@@ -75,7 +78,11 @@ impl<'a> Node<'a> for DeckNode<'a> {
             "tempo" => Box::new(TempoNode {
                 timestretch: self.view.timestretch,
             }),
-            "eq" => Box::new(EqNode { ui: self.ui }),
+            "eq" => Box::new(EqNode {
+                ui: self.ui,
+                cache: self.cache,
+                mode: self.eq_mode,
+            }),
             "stream" => Box::new(StreamNode {
                 ui: self.ui,
                 cache: self.cache,
@@ -209,12 +216,18 @@ impl<'a> Node<'a> for StreamNode<'a> {
 #[derive(Clone, Copy)]
 struct EqNode<'a> {
     ui: &'a UiState,
+    cache: &'a DeckCache,
+    mode: EqMode,
 }
 
 impl<'a> Node<'a> for EqNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let band = EQ_BANDS.iter().position(|knob| *knob == segment)?;
-        let value = eq_value(self.ui.eq_bands.get(band))?;
+        let value = match segment {
+            "menu_open" => ReadValue::Bool(self.cache.view.eq_menu_open),
+            "three_band" => ReadValue::Bool(self.mode == EqMode::ThreeBand),
+            "four_band" => ReadValue::Bool(self.mode == EqMode::FourBand),
+            band => eq_value(self.ui.eq_bands.get(self.mode.band(band)?))?,
+        };
         Some(Box::new(Value(value)))
     }
 }

@@ -16,7 +16,7 @@ Detailed contracts and invariants for the kithara-queue crate; the README is the
 - Delegated to `PlayerImpl`: `play`, `pause`, `is_playing`,
   `crossfade_duration` / `set_crossfade_duration`, `default_rate` /
   `set_default_rate`, `volume` / `set_volume`, `is_muted` / `set_muted`,
-  `eq_band_count`, `eq_gain`, `set_eq_gain`, `reset_eq`,
+  `eq_band_count`, `eq_gain`, `set_eq_gain`, `set_eq_layout`, `reset_eq`,
   `position_seconds`, `duration_seconds`
 - Lifecycle: `tick()` — call from the host loop to drive
   `PlayerImpl::tick` and drain engine events into `QueueEvent`s.

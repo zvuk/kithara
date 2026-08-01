@@ -1,6 +1,6 @@
 use kithara_ui::render::{UiEvent, WindowCommand};
 
-use crate::deck::DeckId;
+use crate::deck::{DeckId, EqMode};
 
 /// All GUI events flow through this enum.
 ///
@@ -13,6 +13,8 @@ pub(crate) enum Message {
     Ui(UiEvent),
     /// Event addressed to one deck.
     Deck(DeckId, super::deck::DeckMsg),
+    /// Replace the EQ topology of every deck.
+    SetEqMode(EqMode),
     /// Session-mix edit (crossfader, trim).
     Mix(super::mix::MixMsg),
     /// Delete the current track of the focused deck (keyboard shortcut;

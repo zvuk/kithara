@@ -1,0 +1,36 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "studio-strip-eq-3-band",
+    parameters: ["deck"],
+    root: Column(
+        id: "eq-3-knobs",
+        gap: 4.0,
+        align: Center,
+        pad: 8.0,
+        size: (w: Fill, h: Shrink),
+        children: [
+            Knob(
+                id: "high-3",
+                size: (w: Fixed(34.0), h: Fixed(45.0)),
+                label: Some("HIGH"),
+                read: Parameter(id: "deck.eq.high", with: { "deck": "$deck" }),
+                write: Parameter(id: "deck.eq.high", with: { "deck": "$deck" }),
+            ),
+            Knob(
+                id: "mid-3",
+                size: (w: Fixed(34.0), h: Fixed(45.0)),
+                label: Some("MID"),
+                read: Parameter(id: "deck.eq.mid", with: { "deck": "$deck" }),
+                write: Parameter(id: "deck.eq.mid", with: { "deck": "$deck" }),
+            ),
+            Knob(
+                id: "low-3",
+                size: (w: Fixed(34.0), h: Fixed(45.0)),
+                label: Some("LOW"),
+                read: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
+                write: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
+            ),
+        ],
+    ),
+)

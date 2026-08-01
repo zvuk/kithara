@@ -13,7 +13,7 @@ use super::{
 use crate::{
     catalog::Catalog,
     config::AppConfig,
-    deck::{DeckId, DeckSet},
+    deck::{DeckId, DeckSet, EqMode},
     state::StateController,
     theme::gui,
 };
@@ -33,6 +33,8 @@ pub(crate) struct Kithara {
     pub(crate) config: AppConfig,
     /// The compiled studio UI and its host-owned view state.
     pub(crate) studio: StudioUi,
+    /// One EQ topology shared by every deck in the studio.
+    pub(crate) eq_mode: EqMode,
 
     pub(crate) palette: gui::GuiPalette,
     /// Highlighted catalog row, shared by every deck's load buttons.
@@ -92,6 +94,7 @@ impl Kithara {
             catalog,
             config,
             studio,
+            eq_mode: EqMode::default(),
             palette,
             selected_track: None,
             window_id,

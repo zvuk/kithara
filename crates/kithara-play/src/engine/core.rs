@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_audio::AudioWorkerHandle;
+use kithara_audio::{AudioWorkerHandle, EqBandConfig};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -31,6 +31,7 @@ pub struct EngineImpl {
     #[field(get)]
     worker: AudioWorkerHandle,
     config: EngineConfig,
+    eq_layout: Mutex<Vec<EqBandConfig>>,
     bus: EventBus,
     player_id: Mutex<Option<PlayerId>>,
     slots: Mutex<SlotTable>,
@@ -49,10 +50,12 @@ impl EngineImpl {
             .map_or_else(default_session_handle, SessionHandle::new);
         let max_slots = config.max_slots;
         let resolved_pool = config.pcm_pool.clone();
+        let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
         let worker_cancel = CancelScope::new(config.cancel.clone()).token();
 
         Self {
             config,
+            eq_layout,
             bus,
             session,
             master_volume: AtomicF32::new(1.0),
@@ -85,7 +88,7 @@ impl EngineImpl {
     }
 
     pub(crate) fn eq_band_count(&self) -> usize {
-        self.config.eq_layout.len()
+        self.eq_layout.lock().len()
     }
 
     fn emit(&self, event: EngineEvent) {
@@ -100,7 +103,7 @@ impl EngineImpl {
 
         let id = self
             .session
-            .register_player(self.config.eq_layout.clone(), self.pcm_pool.clone())?;
+            .register_player(self.eq_layout.lock().clone(), self.pcm_pool.clone())?;
         *player_id = Some(id);
         drop(player_id);
         Ok(id)
@@ -133,6 +136,19 @@ impl EngineImpl {
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
         let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
         self.session.set_player_eq_gain(player_id, band, gain_db)
+    }
+
+    pub(crate) fn set_master_eq_layout(
+        &self,
+        eq_layout: Vec<EqBandConfig>,
+    ) -> Result<(), PlayError> {
+        let player_id = *self.player_id.lock();
+        if let Some(player_id) = player_id {
+            self.session
+                .set_player_eq_layout(player_id, eq_layout.clone())?;
+        }
+        *self.eq_layout.lock() = eq_layout;
+        Ok(())
     }
 
     pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {

@@ -78,6 +78,7 @@ pub(in crate::gui) struct DeckCache {
 pub(in crate::gui) struct DeckViewState {
     pub(in crate::gui) quality_menu: bool,
     pub(in crate::gui) zoom: Option<f64>,
+    pub(in crate::gui) eq_menu_open: bool,
 }
 
 #[derive(Default)]
@@ -104,6 +105,17 @@ impl StudioCache {
 
     pub(in crate::gui) fn deck_mut(&mut self, index: usize) -> Option<&mut DeckCache> {
         self.decks.get_mut(index)
+    }
+
+    pub(in crate::gui) fn set_eq_menu_open(&mut self, index: usize, open: bool) -> Option<()> {
+        self.deck_mut(index)?.view.eq_menu_open = open;
+        Some(())
+    }
+
+    pub(in crate::gui) fn close_eq_menus(&mut self) {
+        for deck in &mut self.decks {
+            deck.view.eq_menu_open = false;
+        }
     }
 
     pub(in crate::gui) const fn layout(&self) -> DeckLayout {

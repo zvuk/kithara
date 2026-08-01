@@ -7,49 +7,87 @@
         gap: 0.0,
         size: (w: Fill, h: Fill),
         children: [
-            Column(
-                id: "eq",
-                gap: 6.0,
-                pad: 8.0,
-                frame: (top: false, right: false, bottom: true, left: false),
-                size: (w: Fill, h: Shrink),
-                children: [
-                    Row(
-                        id: "row-1",
-                        gap: 24.0,
-                        size: (w: Shrink, h: Shrink),
+            Popover(
+                id: "eq-menu",
+                open: Model(id: "deck.eq.menu_open", with: { "deck": "$deck" }),
+                at: Pointer,
+                anchor: Pressable(
+                    id: "eq-menu-anchor",
+                    press: Command(id: "deck.eq.menu", with: { "deck": "$deck" }),
+                    child: Column(
+                        id: "eq",
+                        gap: 0.0,
+                        frame: (top: false, right: false, bottom: true, left: false),
+                        size: (w: Fill, h: Shrink),
                         children: [
-                            Knob(
-                                id: "high",
-                                label: Some("HIGH"),
-                                read: Parameter(id: "deck.eq.high", with: { "deck": "$deck" }),
-                                write: Parameter(id: "deck.eq.high", with: { "deck": "$deck" }),
+                            Optional(
+                                id: "eq-3-band",
+                                hidden: Model(id: "deck.eq.four_band", with: { "deck": "$deck" }),
+                                child: Include(
+                                    id: "three-band",
+                                    source: "studio-strip/eq-3-band.kmodule.ron",
+                                    with: { "deck": "$deck" },
+                                ),
                             ),
-                            Knob(
-                                id: "mid",
-                                label: Some("MID"),
-                                read: Parameter(id: "deck.eq.mid", with: { "deck": "$deck" }),
-                                write: Parameter(id: "deck.eq.mid", with: { "deck": "$deck" }),
+                            Optional(
+                                id: "eq-4-band",
+                                hidden: Model(id: "deck.eq.three_band", with: { "deck": "$deck" }),
+                                child: Include(
+                                    id: "four-band",
+                                    source: "studio-strip/eq-4-band.kmodule.ron",
+                                    with: { "deck": "$deck" },
+                                ),
                             ),
                         ],
                     ),
-                    Row(
-                        id: "row-2",
-                        gap: 24.0,
-                        size: (w: Shrink, h: Shrink),
-                        children: [
-                            Knob(
-                                id: "low",
-                                label: Some("LOW"),
-                                read: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
-                                write: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
+                ),
+                content: Column(
+                    id: "eq-pop",
+                    gap: 0.0,
+                    size: (w: Fixed(158.0), h: Shrink),
+                    children: [
+                        Row(
+                            id: "eq-pop-head",
+                            size: (w: Fill, h: Fixed(22.0)),
+                            pad_x: 10.0,
+                            frame: (top: false, right: false, bottom: true, left: false),
+                            frame_color: LinePop,
+                            children: [
+                                Text(id: "eq-pop-title", style: MicroLabel, label: "ЭКВАЛАЙЗЕР"),
+                            ],
+                        ),
+                        Pressable(
+                            id: "eq-3",
+                            press: Command(id: "deck.eq.menu", with: { "deck": "$deck" }),
+                            child: Include(
+                                id: "eq-3-row",
+                                source: "studio-select-row.kmodule.ron",
+                                with: {
+                                    "deck": "$deck",
+                                    "label": "3 ПОЛОСЫ",
+                                    "state": "deck.eq.three_band",
+                                },
                             ),
-                        ],
-                    ),
-                ],
+                        ),
+                        Pressable(
+                            id: "eq-4",
+                            press: Command(id: "deck.eq.menu", with: { "deck": "$deck" }),
+                            child: Include(
+                                id: "eq-4-row",
+                                source: "studio-select-row.kmodule.ron",
+                                with: {
+                                    "deck": "$deck",
+                                    "label": "4 ПОЛОСЫ",
+                                    "state": "deck.eq.four_band",
+                                },
+                            ),
+                        ),
+                    ],
+                ),
             ),
             Column(
                 id: "volume-section",
+                align: Center,
                 pad: 8.0,
                 size: (w: Fill, h: Fill),
                 children: [

@@ -454,6 +454,21 @@ mod tests {
     }
 
     #[kithara::test]
+    fn eq_band_count_tracks_a_replacement_layout_before_start() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .eq_layout(generate_log_spaced_bands(3))
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .build(),
+        );
+        assert_eq!(player.eq_band_count(), 3);
+
+        player.set_eq_layout(generate_log_spaced_bands(4)).unwrap();
+        assert_eq!(player.eq_band_count(), 4);
+    }
+
+    #[kithara::test]
     fn player_config_builder() {
         let config = PlayerConfig::builder()
             .max_slots(8)

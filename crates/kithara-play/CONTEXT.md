@@ -57,6 +57,21 @@ returning to unity passthrough resets buffered stretch state.
 `Queue` delegates `set_rate` to the player; key-lock and backend are set by the
 consumer directly on the shared `StretchControls` handle.
 
+## Live Equalizer Layout
+
+`PlayerImpl::set_eq_layout` replaces one player's master EQ while the player is
+running. The session graph is the actuator: it builds the replacement node on
+the control thread, reconnects every existing slot through it to the unchanged
+master-volume node, removes the old EQ, and submits one graph update. The audio
+thread never allocates, locks, or reconstructs filters for a layout change.
+
+`EngineImpl` owns the current `EqBandConfig` vector before registration and uses
+it for `eq_band_count`; after registration the session's `PlayerState` owns the
+live graph projection. `SharedEq` is the control-plane gain mirror shared by
+the session and slot handles. Layout replacement updates its vector in place so
+existing slot handles observe the new band count; it is never read by an audio
+processor. Gains embedded in the replacement layout become the new live gains.
+
 ## Events
 
 `tokio::sync::broadcast`, via `player.subscribe()` / `engine.subscribe()`.

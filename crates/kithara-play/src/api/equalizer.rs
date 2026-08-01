@@ -8,8 +8,8 @@ mod kithara {
 
 /// Master N-band equalizer.
 ///
-/// Provides read/write access to per-band gains by index. The number of bands
-/// is fixed at player construction time via [`PlayerConfig::eq_layout`].
+/// Provides read/write access to the current per-band gains by index. A concrete
+/// player may replace its layout through `PlayerImpl::set_eq_layout`.
 #[kithara::mock(api = EqualizerMock)]
 pub trait Equalizer: MaybeSend + MaybeSync + 'static {
     /// Number of EQ bands.

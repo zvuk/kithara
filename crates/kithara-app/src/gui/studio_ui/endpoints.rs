@@ -123,6 +123,42 @@ static ENDPOINTS: &[Endpoint] = &[
         scopes: Endpoint::DECK,
     },
     Endpoint {
+        category: EndpointCategory::Parameter,
+        id: "deck.eq.low_mid",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Parameter,
+        id: "deck.eq.high_mid",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "deck.eq.menu_open",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "deck.eq.three_band",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "deck.eq.four_band",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.eq.menu",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
         category: EndpointCategory::Model,
         id: "deck.view.zoom",
         value: ValueKind::Scalar,

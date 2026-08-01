@@ -77,6 +77,10 @@ mod wire {
             gain_db: f32,
             player_id: PlayerId,
         },
+        SetPlayerEqLayout {
+            eq_layout: Vec<EqBandConfig>,
+            player_id: PlayerId,
+        },
         SetSessionDucking {
             mode: SessionDuckingMode,
         },
@@ -232,6 +236,18 @@ mod handle {
             }
             self.exec_ok(Cmd::SetPlayerMasterVolumes { levels })
                 .map(|_| ())
+        }
+
+        pub fn set_player_eq_layout(
+            &self,
+            player_id: PlayerId,
+            eq_layout: Vec<EqBandConfig>,
+        ) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::SetPlayerEqLayout {
+                eq_layout,
+                player_id,
+            })
+            .map(|_| ())
         }
 
         pub fn set_player_slot_volume(

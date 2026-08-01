@@ -25,7 +25,7 @@ mod consts {
     pub(super) const STUDIO_WIDTH: f32 = 1280.0;
     pub(super) const STUDIO_HEIGHT: f32 = 760.0;
     pub(super) const STUDIO_MIN_WIDTH: f32 = 1080.0;
-    pub(super) const STUDIO_MIN_HEIGHT: f32 = 640.0;
+    pub(super) const STUDIO_MIN_HEIGHT: f32 = 760.0;
 }
 use consts::*;
 

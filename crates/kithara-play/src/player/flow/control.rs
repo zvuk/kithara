@@ -1,3 +1,4 @@
+use kithara_audio::EqBandConfig;
 use kithara_events::RouteDescription;
 
 use super::super::core::PlayerImpl;
@@ -80,6 +81,15 @@ impl PlayerImpl {
             .ok_or(PlayError::SlotNotFound(slot_id))?;
         let clamped = eq.set_gain(band, gain_db)?;
         self.core.engine.set_master_eq_gain(band, clamped)
+    }
+
+    /// Replaces the master EQ layout and gains without releasing the running slot.
+    ///
+    /// # Errors
+    /// Returns a session graph error when a running player's EQ node cannot be
+    /// replaced.
+    pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError> {
+        self.core.engine.set_master_eq_layout(layout)
     }
 
     /// Set muted state.

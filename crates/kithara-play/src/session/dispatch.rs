@@ -59,6 +59,13 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
+        Cmd::SetPlayerEqLayout {
+            eq_layout,
+            player_id,
+        } => match controls::set_player_eq_layout(state, player_id, eq_layout) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
         Cmd::SetSessionDucking { mode } => {
             controls::set_session_ducking(state, mode);
             Reply::Ok

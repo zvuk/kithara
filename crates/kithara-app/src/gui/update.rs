@@ -1,4 +1,5 @@
 use iced::{Task, window, window::Direction};
+use kithara::audio::EqBandConfig;
 use kithara_ui::render::{WindowCommand, WindowEdge};
 use tracing::{error, warn};
 
@@ -8,7 +9,19 @@ use super::{
     message::Message,
     mix, studio_ui,
 };
-use crate::{catalog, deck::DeckId};
+use crate::{
+    catalog,
+    deck::{DeckId, EqMode},
+    state::StateController,
+};
+
+struct EqModeChange<'a> {
+    id: DeckId,
+    controller: &'a StateController,
+    previous: Vec<EqBandConfig>,
+    next: Vec<EqBandConfig>,
+    gains: Vec<f32>,
+}
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
@@ -20,6 +33,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
         Message::Deck(id, msg) => {
             handle_deck(state, id, &msg);
+            Task::none()
+        }
+        Message::SetEqMode(mode) => {
+            set_eq_mode(state, mode);
             Task::none()
         }
         Message::Mix(msg) => {
@@ -111,6 +128,79 @@ fn delete_focused_track(state: &mut Kithara) {
 fn handle_deck(state: &mut Kithara, id: DeckId, msg: &DeckMsg) {
     if let Some(target) = state.decks.get_mut(id) {
         deck::handle(target, msg);
+    }
+}
+
+fn set_eq_mode(state: &mut Kithara, mode: EqMode) {
+    let current_mode = state.eq_mode;
+    if current_mode == mode {
+        return;
+    }
+
+    let mut changes = Vec::new();
+    for deck in state.decks.iter() {
+        let current = deck.controller.snapshot();
+        let Some(gains) = current_mode.remap(mode, &current.eq_bands) else {
+            error!(
+                deck = deck.id.0,
+                current = ?current_mode,
+                requested = ?mode,
+                bands = current.eq_bands.len(),
+                "EQ mode state does not match its band layout"
+            );
+            return;
+        };
+        let Some(previous) = current_mode.layout(&current.eq_bands) else {
+            error!(deck = deck.id.0, current = ?current_mode, "invalid current EQ layout");
+            return;
+        };
+        let Some(next) = mode.layout(&gains) else {
+            error!(deck = deck.id.0, requested = ?mode, "invalid requested EQ layout");
+            return;
+        };
+        changes.push(EqModeChange {
+            id: deck.id,
+            controller: deck.controller.as_ref(),
+            previous,
+            next,
+            gains,
+        });
+    }
+
+    for (applied, change) in changes.iter().enumerate() {
+        if let Err(err) = change.controller.queue().set_eq_layout(change.next.clone()) {
+            error!(
+                deck = change.id.0,
+                requested = ?mode,
+                error = ?err,
+                "set shared EQ layout failed"
+            );
+            rollback_eq_mode(&changes[..applied]);
+            return;
+        }
+    }
+
+    for change in changes {
+        change
+            .controller
+            .mutate(|deck_state| deck_state.eq_bands = change.gains);
+    }
+    state.eq_mode = mode;
+}
+
+fn rollback_eq_mode(changes: &[EqModeChange<'_>]) {
+    for change in changes.iter().rev() {
+        if let Err(err) = change
+            .controller
+            .queue()
+            .set_eq_layout(change.previous.clone())
+        {
+            error!(
+                deck = change.id.0,
+                error = ?err,
+                "rollback shared EQ layout failed"
+            );
+        }
     }
 }
 

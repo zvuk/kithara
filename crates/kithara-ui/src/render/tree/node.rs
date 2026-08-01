@@ -17,7 +17,7 @@ use crate::{
     compile::{CompiledNode, CompiledUi},
     expand::{ExpandedNode, SurfaceSpec},
     layout::Axis,
-    module::ChromeStyle,
+    module::{ChromeStyle, TextAlign},
     render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent},
     size::{Dim, Hidden, visible},
     widgets::{
@@ -215,6 +215,7 @@ fn render_node<'a>(
         ExpandedNode::Column {
             children,
             gap,
+            align,
             pad,
             pad_x,
             pad_y,
@@ -232,7 +233,7 @@ fn render_node<'a>(
                                 .map(|child| render_node(child, ui, reads, skin)),
                         )
                         .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                        .align_x(Alignment::Start)
+                        .align_x(column_alignment(*align))
                         .width(size.0),
                     )
                     .padding(padding(*pad, *pad_x, *pad_y, skin))
@@ -311,6 +312,14 @@ fn control_event(path: &str, action: ControlAction) -> UiEvent {
     UiEvent::Control {
         path: path.to_owned(),
         action,
+    }
+}
+
+const fn column_alignment(align: TextAlign) -> Alignment {
+    match align {
+        TextAlign::Start => Alignment::Start,
+        TextAlign::Center => Alignment::Center,
+        TextAlign::End => Alignment::End,
     }
 }
 

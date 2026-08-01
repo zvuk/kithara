@@ -28,7 +28,7 @@ impl<'a> StudioRoot<'a> {
             .zip(cache.decks())
             .enumerate()
             .map(|(at, (deck, deck_cache))| {
-                DeckNode::new(&deck.ui, deck.view, deck_cache, at == focus)
+                DeckNode::new(&deck.ui, deck.view, deck_cache, state.eq_mode, at == focus)
             })
             .collect();
         let engine = EngineNode::new(&decks);
@@ -72,6 +72,7 @@ mod tests {
     use super::*;
     use crate::{
         catalog::Catalog,
+        deck::EqMode,
         gui::{
             deck::DeckView,
             studio_ui::{
@@ -96,6 +97,7 @@ mod tests {
         marks: CatalogRowMarks,
         collapsed: CollapsedModules,
         mix: MixState,
+        eq_mode: EqMode,
         decks: Vec<(UiState, DeckCache)>,
     }
 
@@ -106,6 +108,7 @@ mod tests {
                 marks: CatalogRowMarks::default(),
                 collapsed: CollapsedModules::default(),
                 mix: MixState::new(tempos.len()),
+                eq_mode: EqMode::default(),
                 decks: tempos.into_iter().map(deck).collect(),
             }
         }
@@ -116,7 +119,9 @@ mod tests {
                 .decks
                 .iter()
                 .enumerate()
-                .map(|(at, (ui, cache))| DeckNode::new(ui, DeckView::default(), cache, at == 0))
+                .map(|(at, (ui, cache))| {
+                    DeckNode::new(ui, DeckView::default(), cache, self.eq_mode, at == 0)
+                })
                 .collect();
             let engine = EngineNode::new(&decks);
             let drag = DragNode::new(library.title(0), Some(1), decks.len());
@@ -216,6 +221,10 @@ mod tests {
         });
         let synthesized = DERIVED.into_iter().map(|id| format!("{id}@deck=b"));
         for key in documented.chain(synthesized) {
+            if key.starts_with("deck.eq.low_mid@") || key.starts_with("deck.eq.high_mid@") {
+                assert_eq!(walk.get(&key), None, "three-band decks have no `{key}`");
+                continue;
+            }
             assert!(walk.get(&key).is_some(), "no owner answers `{key}`");
         }
 
@@ -232,5 +241,28 @@ mod tests {
             None,
             "the session has two decks",
         );
+    }
+
+    #[kithara::test]
+    fn every_deck_reads_the_shared_eq_mode() {
+        let mut studio = Studio::new(["+2.0%", "-1.0%"]);
+        studio.eq_mode = EqMode::FourBand;
+        for (ui, _) in &mut studio.decks {
+            ui.eq_bands = vec![0.0; 4];
+        }
+        let root = studio.root();
+        let walk = Walk::new(&root);
+
+        for deck in ["a", "b"] {
+            assert_eq!(
+                walk.get(&format!("deck.eq.three_band@deck={deck}")),
+                Some(ReadValue::Bool(false))
+            );
+            assert_eq!(
+                walk.get(&format!("deck.eq.four_band@deck={deck}")),
+                Some(ReadValue::Bool(true))
+            );
+            assert!(walk.get(&format!("deck.eq.low_mid@deck={deck}")).is_some());
+        }
     }
 }

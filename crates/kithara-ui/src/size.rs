@@ -456,6 +456,7 @@ mod tests {
             id: None,
             size: None,
             gap,
+            align: TextAlign::Start,
             pad: None,
             pad_x: None,
             pad_y: None,

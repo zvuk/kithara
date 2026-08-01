@@ -116,6 +116,8 @@ pub enum ControlNode {
         #[serde(default)]
         gap: Option<f32>,
         #[serde(default)]
+        align: TextAlign,
+        #[serde(default)]
         pad: Option<f32>,
         /// Per-axis override of `pad`.
         #[serde(default)]

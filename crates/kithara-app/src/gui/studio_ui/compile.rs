@@ -51,8 +51,20 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../../assets/ui/modules/studio-mixer-single.kmodule.ron"),
     ),
     (
+        "modules/studio-select-row.kmodule.ron",
+        include_str!("../../../assets/ui/modules/studio-select-row.kmodule.ron"),
+    ),
+    (
         "modules/studio-strip.kmodule.ron",
         include_str!("../../../assets/ui/modules/studio-strip.kmodule.ron"),
+    ),
+    (
+        "modules/studio-strip/eq-3-band.kmodule.ron",
+        include_str!("../../../assets/ui/modules/studio-strip/eq-3-band.kmodule.ron"),
+    ),
+    (
+        "modules/studio-strip/eq-4-band.kmodule.ron",
+        include_str!("../../../assets/ui/modules/studio-strip/eq-4-band.kmodule.ron"),
     ),
     (
         "modules/studio-library.kmodule.ron",

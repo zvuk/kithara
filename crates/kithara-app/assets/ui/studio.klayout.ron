@@ -19,7 +19,7 @@
                 size: (w: Fill, h: Fixed(82.0)),
                 frame: (top: false, right: false, bottom: true, left: false),
             )),
-            (weight: 1.1, node: Split(
+            (weight: 2.1, node: Split(
                 axis: Horizontal,
                 children: [
                     (weight: 1.0, node: Module(

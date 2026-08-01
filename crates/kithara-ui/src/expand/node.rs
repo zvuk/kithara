@@ -37,6 +37,7 @@ pub enum ExpandedNode {
         id: Option<InternId>,
         size: Option<SizeSpec>,
         gap: Option<f32>,
+        align: TextAlign,
         pad: Option<f32>,
         pad_x: Option<f32>,
         pad_y: Option<f32>,

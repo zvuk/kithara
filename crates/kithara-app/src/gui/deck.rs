@@ -130,7 +130,7 @@ fn seek(deck: &DeckUi, target: f64) {
 }
 
 fn eq_band_changed(deck: &DeckUi, band: usize, db: f32) {
-    if band >= deck.ui.eq_bands.len() {
+    if band >= deck.controller.snapshot().eq_bands.len() {
         return;
     }
     // `eq_bands` is the user's desired EQ and the source of truth: record it
