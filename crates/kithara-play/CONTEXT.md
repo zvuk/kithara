@@ -68,9 +68,11 @@ thread never allocates, locks, or reconstructs filters for a layout change.
 `EngineImpl` owns the current `EqBandConfig` vector before registration and uses
 it for `eq_band_count`; after registration the session's `PlayerState` owns the
 live graph projection. `SharedEq` is the control-plane gain mirror shared by
-the session and slot handles. Layout replacement updates its vector in place so
-existing slot handles observe the new band count; it is never read by an audio
-processor. Gains embedded in the replacement layout become the new live gains.
+the session and slot handles; no audio processor reads it, and the DSP takes its
+gains from the session's node event queue instead. Reading and writing one gain
+are lock-free atomics. Layout replacement swaps the whole band array behind the
+`ArcSwap` every handle clone points at, so existing slot handles observe the new
+band count. Gains embedded in the replacement layout become the new live gains.
 
 ## Events
 

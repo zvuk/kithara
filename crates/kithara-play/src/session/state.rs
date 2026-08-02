@@ -47,7 +47,7 @@ impl PlayerState {
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
         let band_count = eq_layout.len();
         let shared_eq = SharedEq::new(band_count);
-        shared_eq.replace(gains);
+        shared_eq.replace(&gains);
         Self {
             eq_layout,
             pcm_pool,

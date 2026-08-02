@@ -404,7 +404,7 @@ pub(super) mod controls {
         if !state.players[idx].started {
             let player = &mut state.players[idx];
             player.eq_layout = eq_layout;
-            player.shared_eq.replace(gains);
+            player.shared_eq.replace(&gains);
             return Ok(());
         }
 
@@ -470,7 +470,7 @@ pub(super) mod controls {
 
         let player = &mut state.players[idx];
         player.eq_layout = eq_layout;
-        player.shared_eq.replace(gains);
+        player.shared_eq.replace(&gains);
         player.master_eq_node_id = Some(master_eq_id);
         player.master_eq_memo = Some(master_eq_memo);
         Ok(())
