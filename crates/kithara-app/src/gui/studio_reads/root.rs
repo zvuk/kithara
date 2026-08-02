@@ -166,6 +166,15 @@ mod tests {
         (ui, cache)
     }
 
+    fn studio_in(mode: EqMode) -> Studio {
+        let mut studio = Studio::new(["+2.0%", "-1.0%"]);
+        studio.eq_mode = mode;
+        for (ui, _) in &mut studio.decks {
+            ui.eq_bands = vec![0.0; mode.bands().len()];
+        }
+        studio
+    }
+
     #[kithara::test]
     fn the_menu_marks_the_rung_in_force_and_hides_the_slots_the_ladder_lacks() {
         let mut studio = Studio::new(["+0.0%", "+0.0%"]);
@@ -201,10 +210,6 @@ mod tests {
 
     #[kithara::test]
     fn the_studio_tree_answers_every_key_the_renderer_asks_for() {
-        let studio = Studio::new(["+2.0%", "-1.0%"]);
-        let root = studio.root();
-        let walk = Walk::new(&root);
-
         let documented = readable_endpoints().map(|(id, scopes)| {
             let scope: Vec<String> = scopes
                 .iter()
@@ -220,14 +225,20 @@ mod tests {
             }
         });
         let synthesized = DERIVED.into_iter().map(|id| format!("{id}@deck=b"));
-        for key in documented.chain(synthesized) {
-            if key.starts_with("deck.eq.low_mid@") || key.starts_with("deck.eq.high_mid@") {
-                assert_eq!(walk.get(&key), None, "three-band decks have no `{key}`");
-                continue;
-            }
-            assert!(walk.get(&key).is_some(), "no owner answers `{key}`");
+        // A mode-scoped endpoint is answered only by the mode that draws it,
+        // so ownership is a claim about the modes together.
+        let mut unowned: Vec<String> = documented.chain(synthesized).collect();
+        for mode in [EqMode::ThreeBand, EqMode::FourBand] {
+            let studio = studio_in(mode);
+            let root = studio.root();
+            let walk = Walk::new(&root);
+            unowned.retain(|key| walk.get(key).is_none());
         }
+        assert!(unowned.is_empty(), "no owner answers {unowned:?}");
 
+        let studio = Studio::new(["+2.0%", "-1.0%"]);
+        let root = studio.root();
+        let walk = Walk::new(&root);
         assert_eq!(
             walk.get("deck.playback.tempo@deck=a"),
             Some(ReadValue::Text("+2.0%")),
@@ -245,11 +256,7 @@ mod tests {
 
     #[kithara::test]
     fn every_deck_reads_the_shared_eq_mode() {
-        let mut studio = Studio::new(["+2.0%", "-1.0%"]);
-        studio.eq_mode = EqMode::FourBand;
-        for (ui, _) in &mut studio.decks {
-            ui.eq_bands = vec![0.0; 4];
-        }
+        let studio = studio_in(EqMode::FourBand);
         let root = studio.root();
         let walk = Walk::new(&root);
 
@@ -263,6 +270,20 @@ mod tests {
                 Some(ReadValue::Bool(true))
             );
             assert!(walk.get(&format!("deck.eq.low_mid@deck={deck}")).is_some());
+        }
+    }
+
+    #[kithara::test]
+    fn a_three_band_studio_answers_no_four_band_key() {
+        let studio = studio_in(EqMode::ThreeBand);
+        let root = studio.root();
+        let walk = Walk::new(&root);
+
+        for deck in ["a", "b"] {
+            for band in ["low_mid", "high_mid"] {
+                let key = format!("deck.eq.{band}@deck={deck}");
+                assert_eq!(walk.get(&key), None, "three-band decks have no `{key}`");
+            }
         }
     }
 }

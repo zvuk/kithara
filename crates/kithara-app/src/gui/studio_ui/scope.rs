@@ -1,3 +1,5 @@
+use crate::deck::EqMode;
+
 /// Channel letter -> session deck position. The studio addresses decks by
 /// their channel letter, in control paths and in binding scopes alike, and the
 /// letter is the deck's position in the session.
@@ -13,11 +15,25 @@ pub(super) fn deck_letter(index: usize) -> Option<char> {
     byte.is_ascii_lowercase().then(|| char::from(byte))
 }
 
+/// Knob id -> band index in the mode that draws it. The banks share a strip,
+/// so each knob carries its band count and only the drawn bank answers.
+pub(in crate::gui) fn eq_band(mode: EqMode, control: &str) -> Option<usize> {
+    let band = match (mode, control) {
+        (EqMode::ThreeBand, "low-3") | (EqMode::FourBand, "low-4") => "low",
+        (EqMode::ThreeBand, "mid-3") => "mid",
+        (EqMode::ThreeBand, "high-3") | (EqMode::FourBand, "high-4") => "high",
+        (EqMode::FourBand, "low-mid-4") => "low_mid",
+        (EqMode::FourBand, "high-mid-4") => "high_mid",
+        _ => return None,
+    };
+    mode.band(band)
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{deck_index, deck_letter};
+    use super::{EqMode, deck_index, deck_letter, eq_band};
 
     #[kithara::test]
     fn letters_are_session_positions() {
@@ -36,5 +52,13 @@ mod tests {
         }
         assert_eq!(deck_letter(26), None);
         assert_eq!(deck_letter(usize::MAX), None);
+    }
+
+    #[kithara::test]
+    fn eq_controls_only_address_bands_in_the_visible_mode() {
+        assert_eq!(eq_band(EqMode::ThreeBand, "mid-3"), Some(1));
+        assert_eq!(eq_band(EqMode::ThreeBand, "high-mid-4"), None);
+        assert_eq!(eq_band(EqMode::FourBand, "high-mid-4"), Some(2));
+        assert_eq!(eq_band(EqMode::FourBand, "mid-3"), None);
     }
 }

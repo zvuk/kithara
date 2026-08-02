@@ -33,24 +33,8 @@ impl EqMode {
     }
 
     #[must_use]
-    pub(crate) fn control_band(self, control: &str) -> Option<usize> {
-        let band = match (self, control) {
-            (Self::ThreeBand, "low-3") | (Self::FourBand, "low-4") => "low",
-            (Self::ThreeBand, "mid-3") => "mid",
-            (Self::ThreeBand, "high-3") | (Self::FourBand, "high-4") => "high",
-            (Self::FourBand, "low-mid-4") => "low_mid",
-            (Self::FourBand, "high-mid-4") => "high_mid",
-            _ => return None,
-        };
-        self.band(band)
-    }
-
-    #[must_use]
     pub(crate) fn remap(self, next: Self, gains: &[f32]) -> Option<Vec<f32>> {
         match (self, next, gains) {
-            (current, next, gains) if current == next && gains.len() == current.bands().len() => {
-                Some(gains.to_vec())
-            }
             (Self::ThreeBand, Self::FourBand, [low, mid, high]) => {
                 Some(vec![*low, *mid, *mid, *high])
             }
@@ -62,15 +46,12 @@ impl EqMode {
     }
 
     #[must_use]
-    pub(crate) fn layout(self, gains: &[f32]) -> Option<Vec<EqBandConfig>> {
-        if gains.len() != self.bands().len() {
-            return None;
-        }
+    pub(crate) fn layout(self, gains: &[f32]) -> Vec<EqBandConfig> {
         let mut layout = generate_log_spaced_bands(self.bands().len());
         for (band, gain) in layout.iter_mut().zip(gains) {
             band.set_gain_db(*gain);
         }
-        Some(layout)
+        layout
     }
 }
 
@@ -317,14 +298,6 @@ mod tests {
             .remap(EqMode::ThreeBand, &[-6.0, -2.0, 4.0, 5.0])
             .unwrap();
         assert_eq!(three, [-6.0, 1.0, 5.0]);
-    }
-
-    #[test]
-    fn eq_controls_only_address_bands_in_the_visible_mode() {
-        assert_eq!(EqMode::ThreeBand.control_band("mid-3"), Some(1));
-        assert_eq!(EqMode::ThreeBand.control_band("high-mid-4"), None);
-        assert_eq!(EqMode::FourBand.control_band("high-mid-4"), Some(2));
-        assert_eq!(EqMode::FourBand.control_band("mid-3"), None);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use num_traits::cast::AsPrimitive;
 use super::{
     cache::{DeckLayout, StudioCache},
     endpoints::{EQ_MAX_DB, EQ_MIN_DB},
-    scope::deck_index,
+    scope::{deck_index, eq_band},
 };
 use crate::{
     deck::{DeckId, EqMode},
@@ -166,33 +166,30 @@ fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
     match (name, action) {
         ("eq-menu-anchor", ControlAction::SecondaryActivate) => {
             state.studio.cache.set_eq_menu_open(index, true)?;
-            return None;
+            None
         }
         ("eq-menu", ControlAction::Activate) => {
             state.studio.cache.set_eq_menu_open(index, false)?;
-            return None;
+            None
         }
         ("eq-3", ControlAction::Activate) => {
             state.studio.cache.close_eq_menus();
-            return Some(Message::SetEqMode(EqMode::ThreeBand));
+            Some(Message::SetEqMode(EqMode::ThreeBand))
         }
         ("eq-4", ControlAction::Activate) => {
             state.studio.cache.close_eq_menus();
-            return Some(Message::SetEqMode(EqMode::FourBand));
+            Some(Message::SetEqMode(EqMode::FourBand))
         }
-        _ => {}
+        ("volume", ControlAction::SetScalar(trim)) => Some(Message::Mix(MixMsg::Trim(
+            deck_id(state, index)?,
+            trim.clamp(0.0, 1.0).as_(),
+        ))),
+        (_, ControlAction::SetScalar(value)) => Some(Message::Deck(
+            deck_id(state, index)?,
+            eq_msg(eq_band(state.eq_mode, name)?, *value),
+        )),
+        _ => None,
     }
-    let id = deck_id(state, index)?;
-    let msg = match (name, action) {
-        ("volume", ControlAction::SetScalar(trim)) => {
-            Message::Mix(MixMsg::Trim(id, trim.clamp(0.0, 1.0).as_()))
-        }
-        (_, ControlAction::SetScalar(value)) => {
-            Message::Deck(id, eq_msg(state.eq_mode.control_band(name)?, *value))
-        }
-        _ => return None,
-    };
-    Some(msg)
 }
 
 /// The library hands a row to whichever deck the pointer released it over.

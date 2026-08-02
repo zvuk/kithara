@@ -7,7 +7,7 @@ use kithara_ui::{
     ids::{DocId, EndpointId, NodeId, SourceUri},
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, FaderStyle, ModuleDoc, ScalarFormat,
-        TrackColumn, WaveStyle, parse_module,
+        TextAlign, TrackColumn, WaveStyle, parse_module,
     },
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
@@ -411,6 +411,7 @@ fn column(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         id: id.map(NodeId),
         size: None,
         gap: None,
+        align: TextAlign::Start,
         pad: None,
         pad_x: None,
         pad_y: None,

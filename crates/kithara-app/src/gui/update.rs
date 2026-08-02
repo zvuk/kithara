@@ -139,30 +139,24 @@ fn set_eq_mode(state: &mut Kithara, mode: EqMode) {
 
     let mut changes = Vec::new();
     for deck in state.decks.iter() {
-        let current = deck.controller.snapshot();
-        let Some(gains) = current_mode.remap(mode, &current.eq_bands) else {
+        let current = deck
+            .controller
+            .mutate(|deck_state| deck_state.eq_bands.clone());
+        let Some(gains) = current_mode.remap(mode, &current) else {
             error!(
                 deck = deck.id.0,
                 current = ?current_mode,
                 requested = ?mode,
-                bands = current.eq_bands.len(),
+                bands = current.len(),
                 "EQ mode state does not match its band layout"
             );
-            return;
-        };
-        let Some(previous) = current_mode.layout(&current.eq_bands) else {
-            error!(deck = deck.id.0, current = ?current_mode, "invalid current EQ layout");
-            return;
-        };
-        let Some(next) = mode.layout(&gains) else {
-            error!(deck = deck.id.0, requested = ?mode, "invalid requested EQ layout");
             return;
         };
         changes.push(EqModeChange {
             id: deck.id,
             controller: deck.controller.as_ref(),
-            previous,
-            next,
+            previous: current_mode.layout(&current),
+            next: mode.layout(&gains),
             gains,
         });
     }

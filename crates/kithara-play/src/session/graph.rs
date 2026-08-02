@@ -428,7 +428,7 @@ pub(super) mod controls {
         let master_eq_memo = Memo::new(master_eq.clone());
         let master_eq_id = fw_ctx.add_node(master_eq, None);
 
-        let connect_result = slot_volume_ids
+        let swap = slot_volume_ids
             .into_iter()
             .try_for_each(|slot_id| {
                 connect_stereo(
@@ -445,8 +445,13 @@ pub(super) mod controls {
                     master_volume_id,
                     "connect replacement master_eq->master_vol",
                 )
+            })
+            .and_then(|()| {
+                fw_ctx.remove_node(old_eq_id).map_err(|err| {
+                    SessionError::Graph(format!("remove previous master_eq failed: {err}"))
+                })
             });
-        if let Err(err) = connect_result {
+        if let Err(err) = swap {
             if let Err(remove_err) = fw_ctx.remove_node(master_eq_id) {
                 warn!(
                     player_id,
@@ -455,18 +460,6 @@ pub(super) mod controls {
                 );
             }
             return Err(err);
-        }
-        if let Err(err) = fw_ctx.remove_node(old_eq_id) {
-            if let Err(remove_err) = fw_ctx.remove_node(master_eq_id) {
-                warn!(
-                    player_id,
-                    ?remove_err,
-                    "failed to remove replacement EQ node after swap rejection"
-                );
-            }
-            return Err(SessionError::Graph(format!(
-                "remove previous master_eq failed: {err}"
-            )));
         }
         if let Err(err) = fw_ctx.update() {
             warn!(
