@@ -3,9 +3,28 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
 };
 
-/// EQ knob travel in dB: knob `0.0` is `EQ_MIN_DB`, knob `1.0` is `EQ_MAX_DB`.
+/// EQ knob travel in dB: knob `0.0` is `EQ_MIN_DB`, knob `0.5` is unity, knob
+/// `1.0` is `EQ_MAX_DB`. Each half of the travel spans its own side of unity,
+/// so the cut half resolves coarser per degree than the boost half.
 pub(in crate::gui) const EQ_MIN_DB: f32 = -24.0;
 pub(in crate::gui) const EQ_MAX_DB: f32 = 6.0;
+
+/// Band gain the knob at `knob` asks for. Canonical owner of the EQ travel;
+/// [`knob_from_db`] is its inverse.
+pub(in crate::gui) fn db_from_knob(knob: f32) -> f32 {
+    let offset = knob.clamp(0.0, 1.0) - 0.5;
+    2.0 * offset * half_span(offset)
+}
+
+/// Knob position that reads back the band gain `db`.
+pub(in crate::gui) fn knob_from_db(db: f32) -> f32 {
+    let db = db.clamp(EQ_MIN_DB, EQ_MAX_DB);
+    0.5 + db / (2.0 * half_span(db))
+}
+
+fn half_span(side: f32) -> f32 {
+    if side < 0.0 { -EQ_MIN_DB } else { EQ_MAX_DB }
+}
 
 struct Endpoint {
     scopes: &'static [&'static str],
@@ -324,5 +343,34 @@ impl EndpointRegistry for StudioRegistry {
             .iter()
             .find(|entry| entry.endpoint.category == category && entry.endpoint.id == id.0)
             .map(|entry| &entry.desc)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    const STEPS: usize = 256;
+
+    #[kithara::test]
+    fn unity_gain_sits_at_the_middle_of_the_knob_travel() {
+        assert_eq!(knob_from_db(0.0), 0.5);
+        assert_eq!(db_from_knob(0.5), 0.0);
+        assert_eq!(db_from_knob(0.0), EQ_MIN_DB);
+        assert_eq!(db_from_knob(1.0), EQ_MAX_DB);
+    }
+
+    #[kithara::test]
+    fn reading_back_a_written_gain_lands_on_the_same_knob_position() {
+        for step in 0..=STEPS {
+            let knob = step as f32 / STEPS as f32;
+            let round_trip = knob_from_db(db_from_knob(knob));
+            assert!(
+                (round_trip - knob).abs() < 1e-6,
+                "knob {knob} came back as {round_trip}"
+            );
+        }
     }
 }

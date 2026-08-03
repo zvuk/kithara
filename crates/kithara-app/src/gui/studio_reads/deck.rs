@@ -8,7 +8,7 @@ use crate::{
         deck::{DeckView, TEMPO_RANGE, TimestretchState},
         studio_ui::{
             cache::{DeckCache, analysis_bpm},
-            endpoints::{EQ_MAX_DB, EQ_MIN_DB},
+            endpoints::knob_from_db,
             scope::deck_index,
         },
         view::playhead,
@@ -277,7 +277,5 @@ fn title(ui: &UiState) -> Option<&str> {
 }
 
 fn eq_value(db: Option<&f32>) -> Option<ReadValue<'static>> {
-    let db = *db?;
-    let normalized = (db - EQ_MIN_DB) / (EQ_MAX_DB - EQ_MIN_DB);
-    Some(ReadValue::Scalar(f64::from(normalized.clamp(0.0, 1.0))))
+    Some(ReadValue::Scalar(f64::from(knob_from_db(*db?))))
 }

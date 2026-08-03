@@ -3,7 +3,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     cache::{DeckLayout, StudioCache},
-    endpoints::{EQ_MAX_DB, EQ_MIN_DB},
+    endpoints::db_from_knob,
     scope::{deck_index, eq_band},
 };
 use crate::{
@@ -214,9 +214,8 @@ fn deck_id(state: &Kithara, index: usize) -> Option<DeckId> {
     state.session.decks().get(index).map(|deck| deck.id)
 }
 
-fn eq_msg(band: usize, normalized: f64) -> DeckMsg {
-    let normalized: f32 = normalized.clamp(0.0, 1.0).as_();
-    DeckMsg::EqBandChanged(band, normalized.mul_add(EQ_MAX_DB - EQ_MIN_DB, EQ_MIN_DB))
+fn eq_msg(band: usize, knob: f64) -> DeckMsg {
+    DeckMsg::EqBandChanged(band, db_from_knob(knob.as_()))
 }
 
 #[cfg(test)]
