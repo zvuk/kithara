@@ -4,19 +4,15 @@ use kithara_ui::{
 };
 
 /// EQ knob travel in dB: knob `0.0` is `EQ_MIN_DB`, knob `0.5` is unity, knob
-/// `1.0` is `EQ_MAX_DB`. Each half of the travel spans its own side of unity,
-/// so the cut half resolves coarser per degree than the boost half.
+/// `1.0` is `EQ_MAX_DB`.
 pub(in crate::gui) const EQ_MIN_DB: f32 = -24.0;
 pub(in crate::gui) const EQ_MAX_DB: f32 = 6.0;
 
-/// Band gain the knob at `knob` asks for. Canonical owner of the EQ travel;
-/// [`knob_from_db`] is its inverse.
 pub(in crate::gui) fn db_from_knob(knob: f32) -> f32 {
     let offset = knob.clamp(0.0, 1.0) - 0.5;
     2.0 * offset * half_span(offset)
 }
 
-/// Knob position that reads back the band gain `db`.
 pub(in crate::gui) fn knob_from_db(db: f32) -> f32 {
     let db = db.clamp(EQ_MIN_DB, EQ_MAX_DB);
     0.5 + db / (2.0 * half_span(db))
