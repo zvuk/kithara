@@ -4,6 +4,7 @@
 use std::{
     io::Cursor,
     num::{NonZeroU32, NonZeroUsize},
+    sync::{Arc, Mutex},
 };
 
 use kithara_bufpool::{BytePool, PcmPool};
@@ -26,7 +27,14 @@ const WAV_DATA_OFFSET: u32 = 36;
 const WAV_FMT_CHUNK_SIZE: u32 = 16;
 const WAV_HEADER_SIZE: usize = 44;
 const WAV_PCM_FORMAT: u16 = 1;
+const WAV_FLOAT_FORMAT: u16 = 3;
 const MARKERS: [[f32; FRAMES]; 2] = [[1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0]];
+/// One frame per hazard a 32-bit float file can legally carry, interleaved
+/// against an ordinary sample so the frame count still matches [`FRAMES`].
+const POISON: [[f32; FRAMES]; 2] = [
+    [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e-40],
+    [0.25, -0.25, 0.5, -0.5],
+];
 
 #[derive(Clone)]
 struct AdapterProbeBackend;
@@ -93,6 +101,89 @@ impl Resampler for AdapterProbeResampler {
         _input: &[&[f32]],
         output: &mut [&mut [f32]],
     ) -> Result<ResamplerProcess, kithara_resampler::ResamplerError> {
+        for (channel, dst) in output.iter_mut().enumerate() {
+            dst[..FRAMES].copy_from_slice(&MARKERS[channel]);
+        }
+        Ok(ResamplerProcess::new(FRAMES, FRAMES))
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Records every sample the adapter hands the backend.
+type Captured = Arc<Mutex<Vec<f32>>>;
+
+#[derive(Clone)]
+struct CaptureProbeBackend(Captured);
+
+impl ResamplerBackend for CaptureProbeBackend {
+    type Resampler = CaptureProbeResampler;
+
+    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
+        Ok(CaptureProbeResampler {
+            captured: Arc::clone(&self.0),
+            channels: settings.channels,
+            mode: settings.mode,
+        })
+    }
+
+    fn capabilities(&self) -> ResamplerCapabilities {
+        ResamplerCapabilities::FIXED_RATIO | ResamplerCapabilities::STANDALONE
+    }
+
+    fn name(&self) -> &'static str {
+        "capture-probe"
+    }
+}
+
+struct CaptureProbeResampler {
+    captured: Captured,
+    channels: NonZeroUsize,
+    mode: ResamplerMode,
+}
+
+impl Resampler for CaptureProbeResampler {
+    fn capabilities(&self) -> ResamplerCapabilities {
+        ResamplerCapabilities::FIXED_RATIO | ResamplerCapabilities::STANDALONE
+    }
+
+    fn channels(&self) -> NonZeroUsize {
+        self.channels
+    }
+
+    fn input_frames_max(&self) -> usize {
+        FRAMES
+    }
+
+    fn input_frames_next(&self) -> usize {
+        FRAMES
+    }
+
+    fn mode(&self) -> ResamplerMode {
+        self.mode
+    }
+
+    fn output_frames_for_input(&self, input_frames: usize) -> usize {
+        input_frames
+    }
+
+    fn output_frames_max(&self) -> usize {
+        FRAMES
+    }
+
+    fn output_frames_next(&self) -> usize {
+        FRAMES
+    }
+
+    fn process_into_buffer(
+        &mut self,
+        input: &[&[f32]],
+        output: &mut [&mut [f32]],
+    ) -> Result<ResamplerProcess, kithara_resampler::ResamplerError> {
+        let mut captured = self.captured.lock().expect("capture probe lock");
+        for channel in input {
+            captured.extend_from_slice(channel);
+        }
         for (channel, dst) in output.iter_mut().enumerate() {
             dst[..FRAMES].copy_from_slice(&MARKERS[channel]);
         }
@@ -222,6 +313,50 @@ fn standalone_decoder_adapter_flushes_backend_delay_at_eof() {
     ));
 }
 
+/// A sinc resampler spreads whatever it is fed across its whole FIR window, so
+/// one poisoned frame comes back out as hundreds — and a `NaN` that reaches a
+/// stateful backend can outlive the window entirely. The adapter is the last
+/// place that owns the samples by value, so it is where the input contract is
+/// met: everything the backend sees is finite and normal.
+#[test]
+fn resampler_never_sees_a_sample_the_file_poisoned() {
+    let captured: Captured = Arc::default();
+    let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
+    let mut decoder = decoder_over(
+        poisoned_float_wav(),
+        target_rate,
+        CaptureProbeBackend(Arc::clone(&captured)),
+    );
+    let _: PcmChunk = decoder
+        .next_chunk()
+        .expect("next chunk")
+        .try_into()
+        .expect("adapter output chunk");
+
+    let seen = captured.lock().expect("capture probe lock");
+    assert_eq!(
+        seen.len(),
+        FRAMES * usize::from(CHANNELS),
+        "the probe never saw a full block"
+    );
+    let leaked: Vec<f32> = seen
+        .iter()
+        .copied()
+        .filter(|sample| {
+            !sample.is_finite() || (*sample != 0.0 && sample.abs() < f32::MIN_POSITIVE)
+        })
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "the file's poison reached the resampler: {leaked:?}"
+    );
+    assert_eq!(
+        seen[FRAMES..],
+        POISON[1],
+        "the untouched channel lost its samples"
+    );
+}
+
 #[test]
 fn decoder_factory_uses_configured_pcm_pool() {
     let pcm_pool = PcmPool::new(4, 4_096);
@@ -254,6 +389,17 @@ fn decoder_with_resampler<B>(
 where
     B: ResamplerBackend,
 {
+    decoder_over(test_wav(), target_rate, backend)
+}
+
+fn decoder_over<B>(
+    wav: Vec<u8>,
+    target_rate: NonZeroU32,
+    backend: B,
+) -> Box<dyn kithara_decode::Decoder>
+where
+    B: ResamplerBackend,
+{
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
@@ -268,7 +414,7 @@ where
                 .build(),
         )
         .build();
-    DecoderFactory::create_from_media_info(Cursor::new(test_wav()), &media_info, config)
+    DecoderFactory::create_from_media_info(Cursor::new(wav), &media_info, config)
         .expect("decoder builds")
 }
 
@@ -280,6 +426,32 @@ fn test_wav() -> Vec<u8> {
     let data_size = FRAMES
         .saturating_mul(usize::from(CHANNELS))
         .saturating_mul(usize::from(WAV_BYTES_PER_SAMPLE));
+    let mut wav = wav_header(WAV_PCM_FORMAT, WAV_BITS_PER_SAMPLE, data_size);
+    wav.resize(WAV_HEADER_SIZE + data_size, 0);
+    wav
+}
+
+/// A 32-bit float WAV carrying [`POISON`]. Nothing here is malformed: an IEEE
+/// float file may hold any bit pattern, so this is what a hostile or corrupt
+/// track looks like on the wire.
+fn poisoned_float_wav() -> Vec<u8> {
+    const BYTES_PER_SAMPLE: u16 = 4;
+    const BITS_PER_SAMPLE: u16 = BYTES_PER_SAMPLE * 8;
+
+    let data_size = FRAMES
+        .saturating_mul(usize::from(CHANNELS))
+        .saturating_mul(usize::from(BYTES_PER_SAMPLE));
+    let mut wav = wav_header(WAV_FLOAT_FORMAT, BITS_PER_SAMPLE, data_size);
+    for frame in 0..FRAMES {
+        for channel in POISON {
+            wav.extend_from_slice(&channel[frame].to_le_bytes());
+        }
+    }
+    wav
+}
+
+fn wav_header(format: u16, bits_per_sample: u16, data_size: usize) -> Vec<u8> {
+    let bytes_per_sample = bits_per_sample / 8;
     let data_size_u32 = u32::try_from(data_size).expect("test WAV data size fits u32");
     let mut wav = Vec::with_capacity(WAV_HEADER_SIZE + data_size);
     wav.extend_from_slice(b"RIFF");
@@ -287,16 +459,15 @@ fn test_wav() -> Vec<u8> {
     wav.extend_from_slice(b"WAVE");
     wav.extend_from_slice(b"fmt ");
     wav.extend_from_slice(&WAV_FMT_CHUNK_SIZE.to_le_bytes());
-    wav.extend_from_slice(&WAV_PCM_FORMAT.to_le_bytes());
+    wav.extend_from_slice(&format.to_le_bytes());
     wav.extend_from_slice(&CHANNELS.to_le_bytes());
     wav.extend_from_slice(&SOURCE_RATE.to_le_bytes());
     wav.extend_from_slice(
-        &(SOURCE_RATE * u32::from(CHANNELS) * u32::from(WAV_BYTES_PER_SAMPLE)).to_le_bytes(),
+        &(SOURCE_RATE * u32::from(CHANNELS) * u32::from(bytes_per_sample)).to_le_bytes(),
     );
-    wav.extend_from_slice(&(CHANNELS * WAV_BYTES_PER_SAMPLE).to_le_bytes());
-    wav.extend_from_slice(&WAV_BITS_PER_SAMPLE.to_le_bytes());
+    wav.extend_from_slice(&(CHANNELS * bytes_per_sample).to_le_bytes());
+    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&data_size_u32.to_le_bytes());
-    wav.resize(WAV_HEADER_SIZE + data_size, 0);
     wav
 }

@@ -1,10 +1,7 @@
+use kithara_decode::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
-use super::{
-    EqBandConfig,
-    filter::CrossoverFilters,
-    gain::{GainBank, clamp_sample},
-};
+use super::{EqBandConfig, filter::CrossoverFilters, gain::GainBank};
 
 /// Single-channel isolator crossover EQ.
 pub struct IsolatorEq {
@@ -52,6 +49,8 @@ impl IsolatorEq {
 
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
+        // Guarding the input covers the bypass and silence paths too.
+        let input = sanitize_sample(input);
         self.gains.tick();
         if self.gains.silence_active() {
             self.filters.record(input);
@@ -69,8 +68,8 @@ impl IsolatorEq {
         }
         match self.gains.len() {
             0 => input,
-            1 => clamp_sample(input * self.gains.linear(0)),
-            _ => clamp_sample(self.filters.process(input, |band| self.gains.linear(band))),
+            1 => sanitize_sample(input * self.gains.linear(0)),
+            _ => sanitize_sample(self.filters.process(input, |band| self.gains.linear(band))),
         }
     }
 
@@ -84,5 +83,37 @@ impl IsolatorEq {
         let sample_rate = sample_rate.as_();
         self.gains.update_sample_rate(sample_rate);
         self.filters.update_sample_rate(sample_rate);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    /// A decaying IIR tail passes through the denormal range on its way to
+    /// zero, and denormal arithmetic costs one to two orders of magnitude more
+    /// than normal arithmetic. On an audio callback that turns a silent tail
+    /// into an xrun, so the EQ must land its tail on exact zero and never hand
+    /// a denormal to the stages after it.
+    #[kithara::test]
+    fn a_decaying_tail_never_leaks_denormals() {
+        const SAMPLE_RATE: u32 = 48_000;
+        const TAIL_SECONDS: u32 = 4;
+
+        let bands = super::super::band::generate_log_spaced_bands(3);
+        let mut eq = IsolatorEq::new(&bands, SAMPLE_RATE);
+        for band in 0..bands.len() {
+            eq.set_gain(band, 6.0);
+        }
+
+        let _ = eq.process_sample(1.0);
+        let denormals = (0..SAMPLE_RATE * TAIL_SECONDS)
+            .map(|_| eq.process_sample(0.0))
+            .filter(|out| *out != 0.0 && out.abs() < f32::MIN_POSITIVE)
+            .count();
+
+        assert_eq!(denormals, 0, "impulse tail leaked {denormals} denormals");
     }
 }

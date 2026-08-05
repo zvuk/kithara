@@ -1,5 +1,6 @@
 use core::num::{NonZeroU32, NonZeroUsize};
 
+use kithara_decode::sanitize_sample;
 use num_traits::ToPrimitive;
 
 /// Configuration rejected by [`PeakLimiter::new`].
@@ -14,7 +15,8 @@ pub enum LimiterError {
 }
 
 /// Stereo-linked, zero-lookahead peak limiter: immediate attack, exponential
-/// release toward unity, exact unity bypass below the ceiling.
+/// release toward unity, and a unity bypass below the ceiling that is exact for
+/// normal finite samples.
 #[derive(Debug, Clone)]
 pub struct PeakLimiter {
     ceiling: f32,
@@ -54,15 +56,19 @@ impl PeakLimiter {
     }
 
     /// Apply the limiter in place to a planar block, linking channels by frame
-    /// peak. Allocates nothing, locks nothing, performs no I/O.
+    /// peak. Each sample is guarded before the peak is taken, so the envelope
+    /// only ever sees a finite peak. Allocates nothing, locks nothing, performs
+    /// no I/O.
     pub fn process_planar(&mut self, channels: &mut [&mut [f32]]) {
         debug_assert_eq!(channels.len(), self.channels);
 
         let frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
         for frame in 0..frames {
             let mut peak = 0.0_f32;
-            for channel in channels.iter() {
-                peak = peak.max(channel[frame].abs());
+            for channel in channels.iter_mut() {
+                let sample = sanitize_sample(channel[frame]);
+                channel[frame] = sample;
+                peak = peak.max(sample.abs());
             }
             let gain = self.step(peak);
             for channel in channels.iter_mut() {
@@ -256,6 +262,25 @@ mod tests {
             assert_eq!(s, 0.0);
             assert!(s.is_finite());
         }
+    }
+
+    /// An infinite peak would drive `ceiling / peak` to zero and duck the bus
+    /// for a whole release, so one bad sample costs 50 ms of level.
+    #[test]
+    fn non_finite_frame_stays_silent_without_ducking_the_next_block() {
+        let mut lim = limiter(48_000, 50.0);
+        let mut spike_l = [f32::INFINITY];
+        let mut spike_r = [f32::NEG_INFINITY];
+        run(&mut lim, &mut spike_l, &mut spike_r);
+        assert_eq!(spike_l[0], 0.0);
+        assert_eq!(spike_r[0], 0.0);
+
+        let signal = 0.5_f32;
+        let mut left = [signal; 64];
+        let mut right = [signal; 64];
+        run(&mut lim, &mut left, &mut right);
+        assert_eq!(left, [signal; 64], "the block after lost level");
+        assert_eq!(right, [signal; 64], "the block after lost level");
     }
 
     #[test]

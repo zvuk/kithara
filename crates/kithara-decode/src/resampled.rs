@@ -12,7 +12,7 @@ use crate::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, GaplessInfo,
     GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec, TrackMetadata, duration_for_frames,
-    frames_for_duration,
+    frames_for_duration, sanitize_sample,
 };
 
 pub(crate) fn wrap<B>(
@@ -128,7 +128,7 @@ where
             let base = frame.saturating_mul(channels);
             for channel in 0..channels {
                 let dst = base_len + frame;
-                self.input[channel][dst] = chunk.samples[base + channel];
+                self.input[channel][dst] = sanitize_sample(chunk.samples[base + channel]);
             }
         }
         Ok(())

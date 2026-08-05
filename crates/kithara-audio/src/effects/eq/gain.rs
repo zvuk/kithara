@@ -148,11 +148,6 @@ impl GainBank {
 }
 
 #[inline]
-pub(crate) fn clamp_sample(sample: f32) -> f32 {
-    if sample.is_finite() { sample } else { 0.0 }
-}
-
-#[inline]
 fn db_to_linear(db: f32) -> f32 {
     if db <= MIN_GAIN_DB {
         0.0

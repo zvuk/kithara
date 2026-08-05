@@ -247,6 +247,17 @@ byte-copy wrappers) stays in `kithara-apple`; the standalone PCM-to-PCM Apple
 backend stays in `kithara-resampler`. `kithara-decode` owns codec planning,
 gapless policy, and the codec-embedded Apple decode path.
 
+`sanitize_sample` is the workspace's one sample guard — `NaN`, infinities and
+denormals all become silence — and `ResampledDecoder::append_chunk` applies it
+as it deinterleaves, so a backend only ever sees finite normal input. A 32-bit
+float file may legally hold any bit pattern, and a sinc backend spreads one
+poisoned frame across its whole FIR window (a stateful one can hold it
+indefinitely), so the guard belongs here: the adapter is the last owner of the
+samples by value, and `Resampler::process_into_buffer` takes its input by
+shared reference. `kithara-audio` reuses the same function at the two stages
+that also take untrusted input — `IsolatorEq` and `PeakLimiter`. Pinned by
+`resampler_never_sees_a_sample_the_file_poisoned`.
+
 ## Apple AAC input format (ESDS rationale)
 
 The Apple `AudioConverter` accepts AAC via a magic cookie laid out as an ISO/IEC
