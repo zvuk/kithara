@@ -38,7 +38,7 @@ pub struct Queue {
     /// the engine directly. Read/written lock-free as a typed
     /// [`CachedPosition`] — [`CachedPosition::Unknown`] before the first
     /// stable sample.
-    pub(super) cached_position: Arc<AtomicCachedPosition>,
+    pub(super) cached_position: AtomicCachedPosition,
     /// Tracks the id of the track whose crossfade-advance has already
     /// been armed during `tick()`. Prevents triggering the next-track
     /// select repeatedly as the remaining playtime keeps ticking below
@@ -47,7 +47,7 @@ pub struct Queue {
     ///
     /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
     /// loop and the engine event handler.
-    pub(super) crossfade_armed_for: Arc<AtomicTrackId>,
+    pub(super) crossfade_armed_for: AtomicTrackId,
     /// Whether this queue auto-starts playback once the first registered
     /// track finishes loading. Configured via
     /// [`QueueConfig::should_autoplay`]. `false` means the user must
@@ -64,7 +64,7 @@ pub struct Queue {
     /// consumed when the matching id finishes loading.
     /// [`CrossfadeArm::Disarmed`] = no pending target.
     #[cfg(any(test, feature = "probe"))]
-    pub(super) autoplay_target: Arc<AtomicTrackId>,
+    pub(super) autoplay_target: AtomicTrackId,
     pub(super) loader: Arc<Loader>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
@@ -175,10 +175,10 @@ impl Queue {
             #[cfg(any(test, feature = "probe"))]
             test_resources: Arc::new(Mutex::new(HashMap::new())),
             player_rx: Mutex::new(player_rx),
-            crossfade_armed_for: Arc::new(AtomicTrackId::disarmed()),
+            crossfade_armed_for: AtomicTrackId::disarmed(),
             #[cfg(any(test, feature = "probe"))]
-            autoplay_target: Arc::new(AtomicTrackId::disarmed()),
-            cached_position: Arc::new(AtomicCachedPosition::unknown()),
+            autoplay_target: AtomicTrackId::disarmed(),
+            cached_position: AtomicCachedPosition::unknown(),
         }
     }
 
