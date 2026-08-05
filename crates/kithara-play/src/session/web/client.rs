@@ -34,10 +34,12 @@ impl SessionClient {
             SessionHost::Remote { tx } => {
                 let (reply_tx, reply_rx) = mpsc::channel();
                 tx.send(CmdMsg { cmd, reply_tx })
-                    .map_err(|_| PlayError::Internal("session host gone".into()))?;
-                reply_rx
-                    .recv()
-                    .map_err(|_| PlayError::Internal("session host gone (reply)".into()))
+                    .map_err(|_| PlayError::SessionGone {
+                        reason: "session host stopped accepting commands",
+                    })?;
+                reply_rx.recv().map_err(|_| PlayError::SessionGone {
+                    reason: "session host dropped the reply channel",
+                })
             }
         }
     }

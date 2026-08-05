@@ -25,10 +25,12 @@ impl SessionClient {
         self.cmd_tx
             .lock()
             .send(CmdMsg { cmd, reply_tx })
-            .map_err(|_| PlayError::Internal("session thread gone".into()))?;
-        let reply = reply_rx
-            .recv()
-            .map_err(|_| PlayError::Internal("session thread gone (reply)".into()))?;
+            .map_err(|_| PlayError::SessionGone {
+                reason: "session thread stopped accepting commands",
+            })?;
+        let reply = reply_rx.recv().map_err(|_| PlayError::SessionGone {
+            reason: "session thread dropped the reply channel",
+        })?;
         Ok(reply)
     }
 }

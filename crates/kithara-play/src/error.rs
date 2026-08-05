@@ -89,6 +89,9 @@ pub enum PlayError {
     #[error("end of resource")]
     Eof,
 
+    #[error("audio session is gone: {reason}")]
+    SessionGone { reason: &'static str },
+
     #[error(transparent)]
     Session(#[from] SessionError),
 
