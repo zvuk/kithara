@@ -8,7 +8,7 @@ use kithara_platform::time::Duration;
     test,
     all(feature = "apple", any(target_os = "macos", target_os = "ios"))
 ))]
-use crate::pcm_time::duration_for_frames;
+use crate::pcm::duration_for_frames;
 
 struct Consts;
 impl Consts {

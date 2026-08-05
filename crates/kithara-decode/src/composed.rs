@@ -13,7 +13,7 @@ use crate::{
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     duration_for_frames,
     error::DecodeResult,
-    pcm_time::frames_for_duration,
+    pcm::frames_for_duration,
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };

@@ -13,7 +13,7 @@ use crate::{
     codec::CodecPriming,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
     error::{DecodeError, DecodeResult},
-    pcm_time::{duration_for_frames, frames_for_duration},
+    pcm::{duration_for_frames, frames_for_duration},
     traits::BoxedSource,
 };
 
