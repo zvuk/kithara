@@ -276,3 +276,7 @@ harness = false
 [[bench]]
 name = "abr_estimator"
 harness = false
+
+[[bench]]
+name = "rt_block_budget"
+harness = false

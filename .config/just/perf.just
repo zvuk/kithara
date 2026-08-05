@@ -18,29 +18,30 @@ compare *ARGS:
 bench MODE="build":
     #!/usr/bin/env bash
     set -uo pipefail
+    benches=(abr_estimator bufpool refactor_hotpaths rt_block_budget)
     case "{{ MODE }}" in
       build)
-        cargo bench -p kithara-integration-tests --bench abr_estimator --no-run
-        cargo bench -p kithara-integration-tests --bench bufpool --no-run
-        cargo bench -p kithara-integration-tests --bench refactor_hotpaths --no-run
+        for b in "${benches[@]}"; do
+          cargo bench -p kithara-integration-tests --bench "$b" --no-run
+        done
         ;;
       run)
         sample_size="${BENCH_SAMPLE_SIZE:-20}"
-        for b in abr_estimator bufpool refactor_hotpaths; do
+        for b in "${benches[@]}"; do
           cargo bench -p kithara-integration-tests --bench "$b" -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt
         done
         ;;
       ci)
-        cargo bench -p kithara-integration-tests --bench abr_estimator --no-run
-        cargo bench -p kithara-integration-tests --bench bufpool --no-run
-        cargo bench -p kithara-integration-tests --bench refactor_hotpaths --no-run
+        for b in "${benches[@]}"; do
+          cargo bench -p kithara-integration-tests --bench "$b" --no-run
+        done
         if [[ "${RUN_BENCHMARKS:-0}" != "1" ]]; then
           echo "==> benchmark execution skipped (set RUN_BENCHMARKS=1 to execute)" | tee bench-results.txt
           exit 0
         fi
         sample_size="${BENCH_SAMPLE_SIZE:-20}"
         candidate_name="${BENCH_CANDIDATE_NAME:-ci}"
-        for b in abr_estimator bufpool refactor_hotpaths; do
+        for b in "${benches[@]}"; do
           cargo bench -p kithara-integration-tests --bench "$b" \
             -- --sample-size "$sample_size" --save-baseline "$candidate_name" 2>&1 | tee -a bench-results.txt
         done
