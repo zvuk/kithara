@@ -2,6 +2,7 @@ use std::{num::NonZeroU32, ops::Range};
 
 use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_decode::Frames;
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 
 #[rustfmt::skip]
@@ -62,11 +63,12 @@ impl PlayerResource {
     /// Frames each per-channel scratch buffer holds for a given source rate.
     ///
     /// The buffers are planar — one per channel — so the size is a frame count
-    /// and channel count does not enter it. `write_len` / `write_pos` and the
-    /// `read` range are frames against this same scale. Sole source of the
-    /// scratch size, so the frame/sample distinction lives in exactly one place.
-    fn scratch_frames(sample_rate: u32) -> usize {
-        sample_rate as usize / Self::BUFFER_DURATION_DIVISOR
+    /// and channel count does not enter it. The return type says so: an
+    /// interleaved length is [`Samples`], which does not fit here, and reaching
+    /// one takes an explicit `Frames::samples(channels)`. `write_len` /
+    /// `write_pos` and the `read` range are frames against this same scale.
+    fn scratch_frames(sample_rate: u32) -> Frames {
+        Frames::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
     }
 
     /// Create a new `PlayerResource` wrapping the given resource.
@@ -75,7 +77,7 @@ impl PlayerResource {
     /// holding [`Self::scratch_frames`] frames (200 ms of audio).
     #[must_use]
     pub fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
-        let buffer_frames = Self::scratch_frames(resource.spec().sample_rate.get());
+        let buffer_frames = Self::scratch_frames(resource.spec().sample_rate.get()).get();
 
         let channel_buffers = std::array::from_fn(|_| {
             pool.get_with(|b: &mut Vec<f32>| {
@@ -279,6 +281,8 @@ impl PlayerResource {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -291,6 +295,18 @@ mod tests {
     #[case(48_000, 9_600)]
     #[case(96_000, 19_200)]
     fn scratch_holds_200ms_of_frames(#[case] sample_rate: u32, #[case] expected: usize) {
-        assert_eq!(PlayerResource::scratch_frames(sample_rate), expected);
+        assert_eq!(
+            PlayerResource::scratch_frames(sample_rate),
+            Frames::new(expected)
+        );
+    }
+
+    /// The stereo interleaved length is what the buffer must NOT be sized to.
+    #[kithara::test]
+    fn an_interleaved_length_is_not_a_frame_count() {
+        const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("2 is non-zero");
+
+        let frames = PlayerResource::scratch_frames(48_000);
+        assert_eq!(frames.samples(STEREO).get(), frames.get() * 2);
     }
 }

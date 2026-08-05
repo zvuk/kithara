@@ -49,7 +49,10 @@ pub use gapless::{
     GaplessInfo, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer,
     SilenceTrimParams, probe_mp4_gapless,
 };
-pub use pcm::{ChunkSink, DropChunks, duration_for_frames, frames_for_duration, sanitize_sample};
+pub use pcm::{
+    ChunkSink, DropChunks, Frames, Samples, duration_for_frames, frames_for_duration,
+    sanitize_sample,
+};
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };

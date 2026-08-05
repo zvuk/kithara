@@ -251,6 +251,17 @@ byte-copy wrappers) stays in `kithara-apple`; the standalone PCM-to-PCM Apple
 backend stays in `kithara-resampler`. `kithara-decode` owns codec planning,
 gapless policy, and the codec-embedded Apple decode path.
 
+`Frames` and `Samples` (`pcm/units.rs`) keep the two PCM lengths apart. Planar
+buffers are sized in frames, interleaved ones in samples, and the two differ by
+the channel count — both are `usize`, and a buffer sized in the wrong one is
+silent, off by exactly that factor. Conversion is explicit and needs the channel
+count (`Frames::samples`, `Samples::frames`), so the multiply cannot be implied.
+Applied where the two units meet — `ResampledDecoder::interleave` and
+`PlayerResource::scratch_frames` — rather than to every frame count in the
+workspace: inside a body where only one unit exists the type adds `get()` and no
+guarantee. `PcmMeta.frames` stays a plain `u32`; it is a public field with no
+interleaved counterpart beside it.
+
 `sanitize_sample` is the workspace's one sample guard — `NaN`, infinities and
 denormals all become silence — and `ResampledDecoder::append_chunk` applies it
 as it deinterleaves, so a backend only ever sees finite normal input. A 32-bit
