@@ -16,23 +16,22 @@ use crate::{HlsError, decrypt_processor::as_process_ctx, segment::SegmentContent
 /// directly. There is deliberately no `store()` accessor: the handle exposes
 /// only what a segment needs (narrow-handle invariant).
 ///
-/// Construction is cheap — it clones the shared (Arc-backed) [`AssetScope`]
-/// plus the segment's [`ResourceKey`] and [`Url`] — so each segment/entry can
-/// own one. At this stage it is a thin façade: every method routes to the same
-/// `scope` / `scope.store().open_resource` op the call site ran before. The
-/// held-resource lease optimization is deferred.
-#[derive(fieldwork::Fieldwork)]
+/// Borrows its three parts, so vending one allocates nothing — the produce
+/// core builds a handle on every readiness probe, and a `Url` owns its string.
+/// At this stage it is a thin façade: every method routes to the same `scope` /
+/// `scope.store().open_resource` op the call site ran before. The held-resource
+/// lease optimization is deferred.
+#[derive(Clone, Copy, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct ResourceHandle {
-    scope: AssetScope,
+pub(crate) struct ResourceHandle<'a> {
+    scope: &'a AssetScope,
+    key: &'a ResourceKey,
     #[field(get, vis = "pub(crate)")]
-    key: ResourceKey,
-    #[field(get, vis = "pub(crate)")]
-    url: Url,
+    url: &'a Url,
 }
 
-impl ResourceHandle {
-    pub(crate) fn new(scope: AssetScope, key: ResourceKey, url: Url) -> Self {
+impl<'a> ResourceHandle<'a> {
+    pub(crate) fn new(scope: &'a AssetScope, key: &'a ResourceKey, url: &'a Url) -> Self {
         Self { scope, key, url }
     }
 
@@ -41,9 +40,9 @@ impl ResourceHandle {
     /// the AES-128 [`DecryptContext`] forward as the processing context.
     pub(crate) fn acquire(&self, content: &SegmentContent) -> AssetsResult<ResourceAcquisition> {
         match content {
-            SegmentContent::Plain => self.scope.store().acquire_resource(&self.key, None),
+            SegmentContent::Plain => self.scope.store().acquire_resource(self.key, None),
             SegmentContent::Encrypted(c) => self.scope.store().acquire_resource_with_ctx(
-                &self.key,
+                self.key,
                 None,
                 Some(as_process_ctx(c.clone())),
             ),
@@ -53,7 +52,7 @@ impl ResourceHandle {
     /// Committed on-disk length when the resource is `Committed` with a known
     /// `final_len` — the skip-fetch guard's size source.
     pub(crate) fn committed_len(&self) -> Option<u64> {
-        match self.scope.store().resource_state(&self.key) {
+        match self.scope.store().resource_state(self.key) {
             Ok(AssetResourceState::Committed { final_len }) => final_len,
             _ => None,
         }
@@ -62,14 +61,14 @@ impl ResourceHandle {
     /// Whether every byte in `range` is already present on disk for this
     /// resource (or `range` is empty).
     pub(crate) fn contains(&self, range: Range<u64>) -> bool {
-        self.scope.store().contains_range(&self.key, range)
+        self.scope.store().contains_range(self.key, range)
     }
 
     /// Open the resource and copy `range` into `dst`. `Ok(None)` means the
     /// resource is not on disk yet (`NotFound`) — the caller treats that as a
     /// pending read.
     pub(crate) fn read_at(&self, range: Range<u64>, dst: &mut [u8]) -> StreamResult<Option<usize>> {
-        let resource = match self.scope.store().open_resource(&self.key, None) {
+        let resource = match self.scope.store().open_resource(self.key, None) {
             Ok(res) => res,
             Err(AssetsError::Io(e)) if e.kind() == ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(StreamError::Source(HlsError::from(e).into())),

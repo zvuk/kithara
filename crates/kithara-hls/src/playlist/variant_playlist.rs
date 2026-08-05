@@ -7,24 +7,25 @@ use super::{
     parse::{MediaPlaylist, VariantId, VariantStream},
     playlist_cache::PlaylistCache,
 };
-use crate::{HlsResult, handle::ResourceHandle};
+use crate::HlsResult;
 
 /// Loadable media playlist for one master variant: a narrow `PlaylistCache`
-/// handle plus a per-resource [`ResourceHandle`] for that variant's media
-/// `.m3u8`, tagged with its [`VariantId`]. [`load`](Self::load) delegates to
+/// handle plus that variant's media `.m3u8` cache identity, tagged with its
+/// [`VariantId`]. [`load`](Self::load) delegates to
 /// [`PlaylistCache::media_playlist`], preserving the per-variant `OnceCell`
 /// dedup and disk-cache semantics.
 pub(crate) struct VariantPlaylist {
     cache: PlaylistCache,
-    resource: ResourceHandle,
+    key: ResourceKey,
+    url: Url,
     variant_id: VariantId,
 }
 
 impl VariantPlaylist {
     /// Build a loadable for `variant`, resolving its media URL against
     /// `master_url` through the cache's base-override-aware
-    /// [`PlaylistCache::resolve_url`] and minting the per-resource handle from
-    /// `scope`. Preserves `VariantId(variant.id.0)` exactly.
+    /// [`PlaylistCache::resolve_url`] and minting its cache key from `scope`.
+    /// Preserves `VariantId(variant.id.0)` exactly.
     ///
     /// # Errors
     /// Returns an error when the variant URL fails to resolve.
@@ -43,10 +44,10 @@ impl VariantPlaylist {
         } else {
             scope.key(&AssetResource::Url(media_url.clone()))?
         };
-        let resource = ResourceHandle::new(scope.clone(), key, media_url);
         Ok(Self {
-            resource,
+            key,
             cache: cache.clone(),
+            url: media_url,
             variant_id: VariantId(variant.id.0),
         })
     }
@@ -58,7 +59,7 @@ impl VariantPlaylist {
     /// Returns an error when fetching or parsing fails.
     pub(crate) async fn load(&self) -> HlsResult<MediaPlaylist> {
         self.cache
-            .media_playlist(self.resource.key(), self.resource.url(), self.variant_id)
+            .media_playlist(&self.key, &self.url, self.variant_id)
             .await
     }
 }

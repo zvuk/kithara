@@ -171,7 +171,7 @@ impl HlsVariant {
             /// or `None` for a variant with no `#EXT-X-MAP` init.
             #[expr(Some($?.resource(&self.segments.scope)))]
             #[call(as_ref)]
-            fn init_handle(&self) -> Option<ResourceHandle>;
+            fn init_handle(&self) -> Option<ResourceHandle<'_>>;
             #[expr($.map_or(0, Segment::len))]
             #[call(as_ref)]
             pub(super) fn init_route_size(&self) -> u64;
