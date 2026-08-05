@@ -1,5 +1,5 @@
 use arc_swap::ArcSwap;
-use kithara_decode::PcmChunk;
+use kithara_decode::{ChunkSink, PcmChunk};
 use kithara_events::{AudioEvent, DecoderChangeCause, DeferredBus, Event, TrackFailureKind};
 use kithara_platform::sync::Arc;
 use kithara_stream::{
@@ -23,10 +23,7 @@ use crate::{
             transition::{IncomingPrime, OutgoingFrontier},
         },
         parts::SourceParts,
-        rebuild::{
-            DecoderBuildComplete, DecoderBuildPurpose, port::RebuildPort,
-            retire::RetiredGenerations,
-        },
+        rebuild::{DecoderBuildComplete, DecoderBuildPurpose, port::RebuildPort, retire::Retired},
         seek::SeekEngine,
         track::{self, CurrentFsm, Decoding, Track, TrackStep, WaitContext},
     },
@@ -91,7 +88,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `execute_recreation`.
     /// Decode generations displaced on the produce core. They are dropped
     /// from `flush_deferred`, outside the forbid-blocking region.
-    pub(crate) retired: RetiredGenerations,
+    pub(crate) retired: Retired,
     pub(crate) seek_engine: SeekEngine,
     pub(crate) shared_stream: SharedStream<T>,
 }
@@ -100,6 +97,11 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
 impl<T: StreamType> StreamAudioSource<T> {
     /// Bounded off-RT retire queue for decode state displaced on the produce core.
     const GENERATION_RETIRE_CAPACITY: usize = 4;
+
+    /// Chunks one seek can flush out of staging plus the gapless leading and
+    /// tail buffers. Drained every scheduler pass, so the queue only has to
+    /// hold one flush.
+    const CHUNK_RETIRE_CAPACITY: usize = 64;
 
     pub(crate) fn new(shared_stream: SharedStream<T>, parts: SourceParts<T>) -> Self {
         let SourceParts {
@@ -133,7 +135,10 @@ impl<T: StreamType> StreamAudioSource<T> {
             variant_control,
             state: Track::<Decoding>::new(()).erase(),
             emit: None,
-            retired: RetiredGenerations::new(Self::GENERATION_RETIRE_CAPACITY),
+            retired: Retired::new(
+                Self::GENERATION_RETIRE_CAPACITY,
+                Self::CHUNK_RETIRE_CAPACITY,
+            ),
         }
     }
 
@@ -493,7 +498,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 }
 
-fn retire_completion(retired: &RetiredGenerations, complete: DecoderBuildComplete) {
+fn retire_completion(retired: &Retired, complete: DecoderBuildComplete) {
     if let Ok(generation) = complete.result {
         retired.retire_generation(generation);
     }
@@ -532,6 +537,10 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         // lands here in the shell. Same `Arc<DeferredWake>` the reader drivers
         // and the FSM arm, so one flush covers both. `None` for file streams.
         self.readiness.flush_peer_wake();
+    }
+
+    fn retire_chunk(&self, chunk: PcmChunk) {
+        ChunkSink::retire(&self.retired, chunk);
     }
 
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {

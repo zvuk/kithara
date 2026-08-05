@@ -2,7 +2,7 @@ use num_traits::AsPrimitive;
 use smallvec::SmallVec;
 
 use crate::{
-    GaplessInfo, GaplessTailCompensation, PcmChunk, duration_for_frames,
+    ChunkSink, GaplessInfo, GaplessTailCompensation, PcmChunk, duration_for_frames,
     gapless::heuristic::SilenceTrimParams,
 };
 
@@ -248,7 +248,11 @@ impl GaplessTrimmer {
     /// fade-in are abandoned: after a seek we land mid-track and
     /// trying to "trim leading silence" or apply a fade-in there
     /// would corrupt audible content.
-    pub fn notify_seek(&mut self) {
+    ///
+    /// The buffered chunks go to `retire` rather than being dropped here —
+    /// this runs on the produce core, and a pooled buffer whose shard is full
+    /// deallocates on drop.
+    pub fn notify_seek(&mut self, retire: &dyn ChunkSink) {
         match &mut self.mode {
             GaplessMode::Disabled => {}
             GaplessMode::Fixed {
@@ -259,7 +263,7 @@ impl GaplessTrimmer {
                 *fade_in = None;
             }
             GaplessMode::Heuristic(state) => {
-                state.leading_buffer.clear();
+                retire_buffer(&mut state.leading_buffer, retire);
                 state.leading_buffered_frames = 0;
                 state.leading_enabled = false;
                 state.fade_in = None;
@@ -267,7 +271,8 @@ impl GaplessTrimmer {
         }
         self.tail_compensation = None;
         self.input_frames_seen = 0;
-        clear_tail_buffer(&mut self.tail_buffer, &mut self.tail_buffered_frames);
+        retire_buffer(&mut self.tail_buffer, retire);
+        self.tail_buffered_frames = 0;
     }
 
     #[must_use]
@@ -735,9 +740,11 @@ fn drain_tail(tail_buffer: &mut TailBuffer, tail_buffered_frames: &mut u64) -> G
     ready
 }
 
-fn clear_tail_buffer(tail_buffer: &mut TailBuffer, tail_buffered_frames: &mut u64) {
-    tail_buffer.clear();
-    *tail_buffered_frames = 0;
+/// Empty a buffer into `retire` instead of dropping its chunks in place.
+fn retire_buffer(buffer: &mut TailBuffer, retire: &dyn ChunkSink) {
+    for chunk in buffer.drain(..) {
+        retire.retire(chunk);
+    }
 }
 
 fn frame_is_silent(samples: &[f32], threshold_amp: f32) -> bool {

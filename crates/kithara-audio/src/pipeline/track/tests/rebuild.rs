@@ -40,6 +40,7 @@ use crate::{
             DecoderBuildComplete, DecoderBuildPurpose, RebuildState, RecreateCause, RecreateNext,
             RecreateState,
             port::{RebuildPort, RebuildRuntime},
+            retire::Retired,
             state::BuildId,
         },
         seek::{SeekContext, SeekRequest},
@@ -1422,4 +1423,35 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
         }
         _ => panic!("expected RecreateFailed terminal state after factory panic"),
     }
+}
+
+/// The seek flush runs on the produce core, where returning a pooled buffer to
+/// a full shard deallocates. Every chunk it drops has to reach the retire queue
+/// the worker shell drains instead of being freed where it stands.
+#[kithara::test]
+fn a_seek_hands_its_buffered_chunks_to_the_retire_queue() {
+    const STAGED: usize = 3;
+
+    let mut generation = DecoderGeneration::new(
+        Box::new(RouteSignalDecoder::new(1, 48_000, Arc::default())),
+        None,
+        0,
+        0,
+        None,
+        GaplessMode::Disabled,
+    );
+    for _ in 0..STAGED {
+        let DecoderChunkOutcome::Chunk(chunk) = generation.next_chunk().expect("fixture chunk")
+        else {
+            panic!("the route-signal fixture produces chunks");
+        };
+        generation.stage(chunk);
+    }
+    assert!(generation.has_output(), "fixture staged nothing to flush");
+
+    let retired = Retired::new(1, 8);
+    generation.notify_seek(&retired);
+
+    assert_eq!(retired.chunk_len(), STAGED);
+    assert!(!generation.has_output());
 }

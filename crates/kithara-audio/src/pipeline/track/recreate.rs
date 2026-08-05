@@ -217,7 +217,7 @@ fn transition_to_seek_request<T: StreamType>(
 ) -> TrackStep<PcmChunk> {
     src.update_state(Track::<SeekRequested>::new(request).erase());
     src.decode.reset();
-    src.decode.notify_seek();
+    src.decode.notify_seek(&src.retired);
     TrackStep::StateChanged
 }
 

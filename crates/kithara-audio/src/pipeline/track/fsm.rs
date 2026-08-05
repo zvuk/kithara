@@ -99,7 +99,7 @@ pub(super) fn apply_seek_transition<T: StreamType>(
             src.seek_engine.commit_decode_epoch(epoch, "seek_applied");
             src.readiness
                 .finalize_seek_pending(src.seek.as_ref(), epoch);
-            src.decode.notify_seek();
+            src.decode.notify_seek(&src.retired);
             src.update_state(Track::<AwaitingResume>::new(resume).erase());
         }
         SeekTransition::AtEof { epoch } => {
@@ -180,7 +180,7 @@ pub(crate) fn dispatch<T: StreamType>(src: &mut StreamAudioSource<T>) -> TrackSt
             .erase(),
         );
         src.decode.reset();
-        src.decode.notify_seek();
+        src.decode.notify_seek(&src.retired);
         return TrackStep::StateChanged;
     }
     if !matches!(

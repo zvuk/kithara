@@ -150,8 +150,12 @@ codec open (`track_with_output_domain_gapless`, round-half-up) so
 `Some(GaplessInfo)` means the backend decoded the untrimmed PCM region and the
 `kithara-audio` pipeline must apply `GaplessTrimmer` before effects; `None` means
 no engine trim (no metadata, or a backend path that already trimmed internally).
-`GaplessTrimmer::notify_seek()` drops seek-sensitive state (leading trim, pending
-fade-in, buffered tail, tail compensation); trailing trim still applies at EOF.
+`GaplessTrimmer::notify_seek(retire)` drops seek-sensitive state (leading trim,
+pending fade-in, buffered tail, tail compensation); trailing trim still applies
+at EOF. It takes a `ChunkSink` rather than dropping the buffered chunks itself:
+a `PcmChunk` holds a pooled buffer, returning one to a full pool shard
+deallocates, and the caller is the produce core. `DropChunks` is the sink for
+callers that are free to deallocate.
 
 `Decoder::gapless_profile(codec) -> GaplessProfile` bundles spec, gapless, tail
 compensation, and `default_priming_frames` for trimmer construction, referencing

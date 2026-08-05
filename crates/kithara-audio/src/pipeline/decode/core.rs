@@ -6,8 +6,8 @@ use std::{
 };
 
 use kithara_decode::{
-    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessMode,
-    PcmChunk,
+    ChunkSink, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome,
+    GaplessMode, PcmChunk,
 };
 use kithara_events::{DeferredBus, Event};
 use kithara_platform::sync::Arc;
@@ -239,7 +239,7 @@ impl ActiveDecode {
 
     delegate::delegate! {
         to self.active {
-            pub(crate) fn notify_seek(&mut self);
+            pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkSink);
             pub(crate) fn push(&mut self, chunk: PcmChunk);
             #[call(finish)]
             pub(crate) fn set_tail_compensation(&mut self);

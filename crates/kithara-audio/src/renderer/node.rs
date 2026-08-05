@@ -187,7 +187,9 @@ impl DecoderNode {
             return;
         }
 
-        let _ = self.outlet.take_pending();
+        if let Some(Fetch::Data { data, .. }) = self.outlet.take_pending() {
+            self.source.retire_chunk(data);
+        }
         self.preload_gate.rearm();
         self.runtime = DecoderRuntime {
             seek_epoch: current,

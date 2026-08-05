@@ -4,8 +4,8 @@ use std::{
 };
 
 use kithara_decode::{
-    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, GaplessMode,
-    GaplessProfile, PcmChunk,
+    BlenderProfile, ChunkSink, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
+    GaplessMode, GaplessProfile, PcmChunk,
 };
 use kithara_stream::MediaInfo;
 use tracing::warn;
@@ -106,9 +106,11 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn notify_seek(&mut self) {
-        self.gapless.notify_seek();
-        self.staged.clear();
+    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkSink) {
+        self.gapless.notify_seek(retire);
+        for chunk in self.staged.drain(..) {
+            retire.retire(chunk);
+        }
     }
 
     pub(crate) fn pending_head_skip_mut(&mut self) -> Option<&mut ResumeState> {

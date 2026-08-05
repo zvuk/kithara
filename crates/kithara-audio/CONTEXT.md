@@ -33,7 +33,7 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
 - **Off-RT deferral.** Signals the forbid-blocking core must not make are armed
   on-core and flushed by the shell from `AudioWorkerSource::flush_deferred`: FSM
   lifecycle events (`DeferredBus<Event>`), the reader→peer wake
-  (`ReadinessGate::flush_peer_wake`), retired state (`RetiredGenerations::drain`).
+  (`ReadinessGate::flush_peer_wake`), retired state (`Retired::drain`).
   `StreamAudioSource::drop` flushes once more — `retain` removes a terminal slot
   without another pass.
 
@@ -92,8 +92,13 @@ mutator of track state through `update_state`. Sub-owners never take
 - `RebuildPort<T>` — the two-phase rebuild boundary: `prepare` produces a pending
   job, `submit` (from `flush_deferred`) spawns it off-RT. The job constructs a
   complete `DecoderGeneration`; installation only moves it.
-- `RetiredGenerations` — retirement and off-RT drain; generation destruction
-  never happens in the RT region. Queue holds 4 entries; on overflow it
+- `Retired` — retirement and off-RT drain for everything the produce core
+  displaces but must not free: whole generations a rebuild replaced (4 entries),
+  and the chunks a seek flushed out of staging and the gapless buffers (64,
+  sized for one flush since the shell drains every pass). A `PcmChunk` holds a
+  pooled buffer, and returning one to a full shard deallocates, so
+  `DecoderGeneration::notify_seek` routes them through `ChunkSink`
+  (`kithara-decode`) instead of dropping them. On overflow the queue
   `mem::forget`s rather than freeing on-core, and warns on drain.
 - Format and anchor decisions are pure functions in `decode::format` and
   `seek::anchor`.
@@ -277,7 +282,7 @@ and terminal phases abort the transition.
   output, tells the source (`VariantControl::promote_variant`), swaps the
   generation, and joins the blender. `VariantPromotion::Deferred` stops the pass,
   `Stale` discards the local incoming, and every displaced or aborted generation
-  goes to `RetiredGenerations` — never dropped on the produce core.
+  goes to `Retired` — never dropped on the produce core.
 
 **`PcmBlender`** is always on and owns the audible seam. `join_active` starts a
 `Pending` join when the two generations share a `PcmSpec` and ≥3 frames of

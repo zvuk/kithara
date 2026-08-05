@@ -6,7 +6,7 @@ use kithara_test_utils::kithara;
 
 use super::{Consts, GaplessTrimmer};
 use crate::{
-    GaplessInfo, GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec,
+    DropChunks, GaplessInfo, GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec,
     gapless::heuristic::SilenceTrimParams,
 };
 
@@ -223,7 +223,7 @@ fn notify_seek_resets_leading_only() {
     });
 
     assert!(trimmer.push(chunk(spec, 0, 64)).is_empty());
-    trimmer.notify_seek();
+    trimmer.notify_seek(&DropChunks);
 
     assert!(trimmer.push(chunk(spec, 64, 128)).is_empty());
 
@@ -510,7 +510,7 @@ fn silence_trim_seek_disables_leading_only() {
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
     assert!(trimmer.push(silent_chunk(spec, 0, 128)).is_empty());
-    trimmer.notify_seek();
+    trimmer.notify_seek(&DropChunks);
 
     assert!(
         trimmer

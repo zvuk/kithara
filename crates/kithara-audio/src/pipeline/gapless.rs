@@ -1,5 +1,6 @@
 use kithara_decode::{
-    GaplessMode, GaplessOutput, GaplessProfile, GaplessTrimmer, PcmChunk, duration_for_frames,
+    ChunkSink, GaplessMode, GaplessOutput, GaplessProfile, GaplessTrimmer, PcmChunk,
+    duration_for_frames,
 };
 use kithara_platform::time::Duration;
 
@@ -68,9 +69,15 @@ impl GaplessStage {
     }
 
     /// Drop pending output and reset seek-sensitive trimming state.
-    pub(crate) fn notify_seek(&mut self) {
-        self.trimmer.notify_seek();
-        self.pending = None;
+    /// Abandon the pending batch and the trimmer's seek-sensitive state.
+    /// Runs on the produce core, so the chunks go to `retire`.
+    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkSink) {
+        if let Some(pending) = self.pending.take() {
+            for chunk in pending {
+                retire.retire(chunk);
+            }
+        }
+        self.trimmer.notify_seek(retire);
     }
 
     /// Feed one decoded chunk into the trimmer.
