@@ -1,20 +1,29 @@
-use firewheel::node::ProcBuffers;
+use std::num::NonZeroU32;
+
+use firewheel::{
+    dsp::{
+        fade::FadeCurve,
+        filter::smoothing_filter::DEFAULT_SETTLE_EPSILON,
+        mix::{Mix, MixDSP},
+    },
+    node::ProcBuffers,
+    param::smoother::SmootherConfig,
+};
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_platform::sync::Arc;
+use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
 use smallvec::SmallVec;
-use thunderdome::Index;
 
 use super::{
-    processor::PlayerNodeProcessor,
-    track::{PlayerTrack, TrackReadOutcome},
+    processor::{PlayerNodeProcessor, StreamShape},
+    track::{RtSink, TrackReadOutcome},
 };
 use crate::{
-    bridge::{PlayerNotification, TrackState},
-    rt::ArenaRegistry,
+    bridge::{PlayerNotification, RtMetrics, TrackState},
+    rt::{TrackSlot, TrackSlots},
 };
 
-type ActiveTrackEntry = (usize, Index, bool);
+type ActiveTrackEntry = (usize, TrackSlot, bool);
 
 #[derive(Clone, Copy)]
 struct Handover {
@@ -22,31 +31,60 @@ struct Handover {
 }
 
 pub(crate) struct RenderTargets<'a> {
-    pub(crate) tracks: &'a mut ArenaRegistry<Arc<str>, PlayerTrack>,
+    pub(crate) tracks: &'a mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
     pub(crate) notification_tx: &'a mut HeapProd<PlayerNotification>,
+    pub(crate) metrics: &'a RtMetrics,
 }
 
 pub(crate) struct RenderPass {
     scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
+    /// Frames every scratch buffer is known to hold. Sized off the audio thread
+    /// (`new` / `resize`), so `render_audio` clamps to it instead of growing.
+    capacity: usize,
+    /// Transport gate: mixes the track bus into the node output, open while
+    /// playback runs and closed while it is paused. Pause and resume land
+    /// between two frames, so the gate carries the step as a ramp.
+    gate: MixDSP,
+    /// Cleared by the first rendered block. A ramp needs a previous frame to
+    /// step from, so the gate adopts the transport state on that block rather
+    /// than fading into it.
+    priming: bool,
 }
 
 impl RenderPass {
+    /// Curve of the transport gate. Only its end points are used — the gate is
+    /// either open or closed — and the smoother shapes the ramp between them.
+    const GATE_CURVE: FadeCurve = FadeCurve::Linear;
+
+    /// Seconds the transport gate takes to open or close: long enough that the
+    /// step becomes a fade, short enough that the tracks it keeps reading
+    /// hardly move the media clock past a pause.
+    const GATE_SMOOTH_SECONDS: f32 = 0.005;
+
     /// Minimum stereo channel count for output processing.
     const MIN_STEREO: usize = 2;
 
-    /// Number of scratch buffers for stereo processing.
-    const SCRATCH_BUF_COUNT: usize = 4;
+    /// Number of scratch buffers for stereo processing: a read pair, a per-track
+    /// mix pair, and the bus every track sums into.
+    const SCRATCH_BUF_COUNT: usize = 6;
 
-    pub(crate) fn new(pool: &PcmPool, max_frames: usize) -> Self {
-        let scratch_bufs = std::array::from_fn(|_| {
-            let mut buf = pool.get();
-            buf.ensure_len(max_frames)
-                .expect("scratch buffer exceeds PCM pool budget");
-            buf.clear();
-            buf
-        });
-
-        Self { scratch_bufs }
+    pub(crate) fn new(pool: &PcmPool, shape: StreamShape) -> Self {
+        let mut pass = Self {
+            scratch_bufs: std::array::from_fn(|_| pool.get()),
+            capacity: 0,
+            priming: true,
+            gate: MixDSP::new(
+                Mix::FULLY_WET,
+                Self::GATE_CURVE,
+                SmootherConfig {
+                    smooth_seconds: Self::GATE_SMOOTH_SECONDS,
+                    settle_epsilon: DEFAULT_SETTLE_EPSILON,
+                },
+                shape.sample_rate,
+            ),
+        };
+        pass.resize(shape.max_block_frames.get().as_());
+        pass
     }
 
     /// Render audio for all active tracks into the output buffers.
@@ -64,41 +102,61 @@ impl RenderPass {
             return (false, None);
         }
 
+        // The host declared `max_block_frames` in `new_stream`, which is where
+        // the scratch was sized. Clamping keeps a larger-than-declared block
+        // from growing a pooled buffer on the audio thread.
+        let frames = frames.min(self.capacity);
+
         for ch_buffer in buffers.outputs.iter_mut() {
             ch_buffer[..frames].fill(0.0);
         }
 
-        for buf in &mut self.scratch_bufs {
-            buf.ensure_len(frames)
-                .expect("scratch buffer exceeds PCM pool budget");
+        self.gate.set_mix(
+            if is_playing {
+                Mix::FULLY_DRY
+            } else {
+                Mix::FULLY_WET
+            },
+            Self::GATE_CURVE,
+        );
+        if self.priming {
+            self.priming = false;
+            self.gate.reset_to_target();
+        }
+        // A closed gate outputs silence whatever the tracks hold, so the pause
+        // only stops the readers once its ramp has run out.
+        if !is_playing && self.gate.has_settled() {
+            return (false, None);
         }
 
-        let (left, right) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
-        let (read_buf0, read_buf1) = left.split_at_mut(1);
-        let (mix_buf0, mix_buf1) = right.split_at_mut(1);
+        let (read, rest) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
+        let (mix, bus) = rest.split_at_mut(Self::MIN_STEREO);
+        let (read_buf0, read_buf1) = read.split_at_mut(1);
+        let (mix_buf0, mix_buf1) = mix.split_at_mut(1);
+        let (bus_buf0, bus_buf1) = bus.split_at_mut(1);
         let mut read_bufs = [&mut read_buf0[0][..frames], &mut read_buf1[0][..frames]];
         let mut mix_bufs = [&mut mix_buf0[0][..frames], &mut mix_buf1[0][..frames]];
+        let mut bus_bufs = [&mut bus_buf0[0][..frames], &mut bus_buf1[0][..frames]];
+        for ch_buffer in &mut bus_bufs {
+            ch_buffer.fill(0.0);
+        }
         let tracks = targets.tracks;
-        let notification_tx = targets.notification_tx;
-        let arena_tracks: SmallVec<[(Index, TrackState); PlayerNodeProcessor::MAX_TRACKS]> =
-            if is_playing {
-                tracks
-                    .iter()
-                    .map(|(idx, track)| (idx, track.state()))
-                    .collect()
-            } else {
-                SmallVec::new()
-            };
+        let mut sink = RtSink::new(targets.notification_tx, targets.metrics);
+        let loaded_tracks: SmallVec<[(TrackSlot, TrackState); PlayerNodeProcessor::MAX_TRACKS]> =
+            tracks
+                .iter()
+                .map(|(idx, track)| (idx, track.state()))
+                .collect();
         let active_tracks: SmallVec<[ActiveTrackEntry; PlayerNodeProcessor::MAX_TRACKS]> =
-            arena_tracks
+            loaded_tracks
                 .iter()
                 .enumerate()
                 .filter(|(_, (_, state))| state.is_playing())
-                .map(|(arena_idx, (idx, state))| (arena_idx, *idx, state.is_leading()))
+                .map(|(loaded_idx, (idx, state))| (loaded_idx, *idx, state.is_leading()))
                 .collect();
-        let mut active_arena_slots = [false; PlayerNodeProcessor::MAX_TRACKS];
-        for (arena_idx, _, _) in &active_tracks {
-            active_arena_slots[*arena_idx] = true;
+        let mut active_slots = [false; PlayerNodeProcessor::MAX_TRACKS];
+        for (loaded_idx, _, _) in &active_tracks {
+            active_slots[*loaded_idx] = true;
         }
         let mut skip_tracks = [false; PlayerNodeProcessor::MAX_TRACKS];
 
@@ -114,9 +172,10 @@ impl RenderPass {
             }
 
             let mut read_outcome = {
-                let Some(outcome) = tracks.get_by_index_mut(*track_handle).map(|track| {
-                    track.read(&mut read_bufs, &mut mix_bufs, 0..frames, notification_tx)
-                }) else {
+                let Some(outcome) = tracks
+                    .at_mut(*track_handle)
+                    .map(|track| track.read(&mut read_bufs, &mut mix_bufs, 0..frames, &mut sink))
+                else {
                     continue;
                 };
                 playback_started = true;
@@ -144,13 +203,8 @@ impl RenderPass {
                         break;
                     }
 
-                    let Some(outcome) = tracks.get_by_index_mut(*next_handle).map(|track| {
-                        track.read(
-                            &mut read_bufs,
-                            &mut mix_bufs,
-                            offset..frames,
-                            notification_tx,
-                        )
+                    let Some(outcome) = tracks.at_mut(*next_handle).map(|track| {
+                        track.read(&mut read_bufs, &mut mix_bufs, offset..frames, &mut sink)
                     }) else {
                         continue;
                     };
@@ -169,47 +223,59 @@ impl RenderPass {
                 {
                     let offset = handoff.offset;
                     for (next_arena_idx, (next_handle, next_state)) in
-                        arena_tracks.iter().enumerate()
+                        loaded_tracks.iter().enumerate()
                     {
-                        if *next_state != TrackState::Preloading
-                            || active_arena_slots[next_arena_idx]
-                        {
+                        if *next_state != TrackState::Preloading || active_slots[next_arena_idx] {
                             continue;
                         }
 
-                        let Some(next_track) = tracks.get_by_index_mut(*next_handle) else {
+                        let Some(next_track) = tracks.at_mut(*next_handle) else {
                             continue;
                         };
                         next_track.play();
-                        next_track.read(
-                            &mut read_bufs,
-                            &mut mix_bufs,
-                            offset..frames,
-                            notification_tx,
-                        );
+                        next_track.read(&mut read_bufs, &mut mix_bufs, offset..frames, &mut sink);
                         break;
                     }
                 }
             }
 
-            for (out_ch, mix_ch) in buffers.outputs.iter_mut().zip(mix_bufs.iter()) {
-                out_ch
+            for (bus_ch, mix_ch) in bus_bufs.iter_mut().zip(mix_bufs.iter()) {
+                bus_ch
                     .iter_mut()
-                    .take(frames)
                     .zip(mix_ch.iter())
-                    .for_each(|(out_sample, &mix_sample)| *out_sample += mix_sample);
+                    .for_each(|(bus_sample, &mix_sample)| *bus_sample += mix_sample);
             }
         }
+
+        let (out_left, out_right) = buffers.outputs.split_at_mut(1);
+        self.gate.mix_dry_into_wet_stereo(
+            bus_bufs[0],
+            bus_bufs[1],
+            &mut out_left[0][..frames],
+            &mut out_right[0][..frames],
+            frames,
+        );
 
         (playback_started, leading_outcome_pos_dur)
     }
 
+    /// Follow the host's rate so the transport gate keeps its ramp length.
+    pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.gate.update_sample_rate(sample_rate);
+    }
+
+    /// Size the scratch for the host's declared block. Firewheel calls
+    /// `new_stream` on the main thread, so growing a pooled buffer here is
+    /// allowed; a pool that cannot afford the block leaves the previous
+    /// capacity in place and `render_audio` clamps to it.
     pub(crate) fn resize(&mut self, max_frames: usize) {
+        let mut capacity = usize::MAX;
         for buf in &mut self.scratch_bufs {
-            buf.ensure_len(max_frames)
-                .expect("scratch buffer exceeds PCM pool budget");
-            buf.clear();
+            let _ = buf.ensure_len(max_frames);
+            buf.fill(0.0);
+            capacity = capacity.min(buf.len());
         }
+        self.capacity = capacity;
     }
 }
 

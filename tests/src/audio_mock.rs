@@ -15,7 +15,9 @@ use std::{
 };
 
 use kithara::{
-    audio::{PcmControl, PcmRead, PcmSession, PendingReason, ReadOutcome, SeekOutcome},
+    audio::{
+        PcmControl, PcmRead, PcmSession, PendingReason, ReadOutcome, SeekDeclare, SeekOutcome,
+    },
     decode::{DecodeError, PcmSpec, TrackMetadata},
     events::EventBus,
     platform::time::Duration,
@@ -565,5 +567,219 @@ impl PcmControl for LiveFrontierReader {
             target: position,
             landed_at: position,
         })
+    }
+}
+
+/// How a [`FaultyPcmReader`] misbehaves, so RT paths that must not log or
+/// block can be driven into their failure branches from a test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fault {
+    /// Every read returns a decoder error.
+    DecodeError,
+    /// Every read reports no frames without reaching EOF — the underrun path.
+    Stall,
+    /// Reads succeed; seeks are refused.
+    RefuseSeek,
+}
+
+/// A reader parked in one failure mode for the life of the test.
+pub struct FaultyPcmReader {
+    bus: EventBus,
+    fault: Fault,
+    metadata: TrackMetadata,
+    spec: PcmSpec,
+}
+
+impl FaultyPcmReader {
+    #[must_use]
+    pub fn new(spec: PcmSpec, fault: Fault) -> Self {
+        Self {
+            bus: EventBus::default(),
+            fault,
+            metadata: TrackMetadata::default(),
+            spec,
+        }
+    }
+
+    fn outcome(&self) -> Result<ReadOutcome, DecodeError> {
+        match self.fault {
+            Fault::DecodeError => Err(DecodeError::Io {
+                source: std::io::Error::other("mock decode failure"),
+            }),
+            Fault::Stall | Fault::RefuseSeek => Ok(ReadOutcome::Pending {
+                position: Duration::ZERO,
+                reason: PendingReason::Buffering,
+            }),
+        }
+    }
+}
+
+impl PcmSession for FaultyPcmReader {
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(60))
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
+    }
+}
+
+impl PcmRead for FaultyPcmReader {
+    fn position(&self) -> Duration {
+        Duration::ZERO
+    }
+
+    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        self.outcome()
+    }
+
+    fn read_planar<'a>(
+        &mut self,
+        _output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        self.outcome()
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+}
+
+impl PcmControl for FaultyPcmReader {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        if self.fault == Fault::RefuseSeek {
+            return Err(DecodeError::Io {
+                source: std::io::Error::other("mock seek refusal"),
+            });
+        }
+        Ok(SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        })
+    }
+}
+
+/// Counts which half of a seek each caller used, so a test can pin that the
+/// audio thread never runs the blocking one.
+#[derive(Clone, Default)]
+pub struct SeekSplitCounts {
+    pub blocking_seeks: Arc<AtomicU64>,
+    pub declares: Arc<AtomicU64>,
+    pub syncs: Arc<AtomicU64>,
+}
+
+impl SeekSplitCounts {
+    #[must_use]
+    pub fn blocking_seeks(&self) -> u64 {
+        self.blocking_seeks.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn declares(&self) -> u64 {
+        self.declares.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn syncs(&self) -> u64 {
+        self.syncs.load(Ordering::Relaxed)
+    }
+}
+
+struct SeekSpy(SeekSplitCounts);
+
+impl SeekDeclare for SeekSpy {
+    fn declare(&self, position: Duration) -> SeekOutcome {
+        self.0.declares.fetch_add(1, Ordering::Relaxed);
+        SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        }
+    }
+}
+
+/// A reader that splits its seek the way a worker-backed one does.
+pub struct SeekSplitReader {
+    bus: EventBus,
+    counts: SeekSplitCounts,
+    metadata: TrackMetadata,
+    spec: PcmSpec,
+}
+
+impl SeekSplitReader {
+    #[must_use]
+    pub fn new(spec: PcmSpec) -> (Self, SeekSplitCounts) {
+        let counts = SeekSplitCounts::default();
+        (
+            Self {
+                bus: EventBus::default(),
+                counts: counts.clone(),
+                metadata: TrackMetadata::default(),
+                spec,
+            },
+            counts,
+        )
+    }
+}
+
+impl PcmSession for SeekSplitReader {
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(60))
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
+    }
+}
+
+impl PcmRead for SeekSplitReader {
+    fn position(&self) -> Duration {
+        Duration::ZERO
+    }
+
+    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        Ok(ReadOutcome::Pending {
+            position: Duration::ZERO,
+            reason: PendingReason::Buffering,
+        })
+    }
+
+    fn read_planar<'a>(
+        &mut self,
+        _output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        Ok(ReadOutcome::Pending {
+            position: Duration::ZERO,
+            reason: PendingReason::Buffering,
+        })
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+}
+
+impl PcmControl for SeekSplitReader {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        self.counts.blocking_seeks.fetch_add(1, Ordering::Relaxed);
+        Ok(SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        })
+    }
+
+    fn seek_handle(&self) -> Option<Arc<dyn SeekDeclare>> {
+        Some(Arc::new(SeekSpy(self.counts.clone())))
+    }
+
+    fn sync_seek(&mut self) {
+        self.counts.syncs.fetch_add(1, Ordering::Relaxed);
     }
 }

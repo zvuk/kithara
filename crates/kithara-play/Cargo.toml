@@ -119,7 +119,6 @@ ringbuf = { workspace = true }
 sha2 = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
-thunderdome = { workspace = true }
 tracing = { workspace = true }
 triple_buffer = { workspace = true }
 

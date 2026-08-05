@@ -4,8 +4,11 @@ mod cursor;
 pub(crate) mod event;
 mod park;
 mod ring;
+mod seek;
 
 pub use core::Audio;
+
+pub use seek::SeekHandle;
 
 pub(crate) use crate::{
     AudioConfig, AudioDecoderConfig, AudioEffect, AudioWorkerHandle, ChunkOutcome, DecodeError,

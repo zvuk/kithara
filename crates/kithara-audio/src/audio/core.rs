@@ -6,11 +6,10 @@ use std::{
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmSpec, TrackMetadata};
-use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage, SegmentLocation};
+use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
-use kithara_stream::{DeferredWake, PlayheadWrite, SeekControl, SeekObserve};
+use kithara_stream::{DeferredWake, PlayheadWrite, SeekControl, SeekObserve, SeekPrepare};
 use portable_atomic::AtomicF32;
-use tracing::trace;
 
 use super::{
     AtomicServiceClass, AudioWorkerHandle, ChunkOutcome, DecodeError, PcmControl, PcmRead,
@@ -19,7 +18,9 @@ use super::{
     cursor::ChunkCursor,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
+    seek::{SeekHandle, SeekHandleParts},
 };
+use crate::traits::SeekDeclare;
 
 /// Pull-based PCM facade backed by a shared renderer worker.
 pub struct Audio<S> {
@@ -50,6 +51,7 @@ pub(super) struct Session {
     pub(super) seek_obs: Arc<dyn SeekObserve>,
     pub(super) abr_handle: Option<kithara_abr::AbrHandle>,
     pub(super) peer_wake: Option<Arc<DeferredWake>>,
+    pub(super) seek_prepare: Option<Arc<dyn SeekPrepare>>,
     pub(super) metadata: TrackMetadata,
 }
 
@@ -151,6 +153,7 @@ impl<S> Audio<S> {
     ///
     /// Returns [`DecodeError`] if the producer channel closes during preload.
     pub fn preload(&mut self) -> Result<(), DecodeError> {
+        self.sync_seek();
         if !self.is_preloaded() {
             self.ring.preloaded = true;
         }
@@ -169,6 +172,7 @@ impl<S> Audio<S> {
     ///
     /// Returns [`DecodeError`] when the producer reports a failure or closes early.
     pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        self.sync_seek();
         let recv = recv_ctx(&self.session, &self.lease);
         let read = self.cursor.read(
             &mut self.ring,
@@ -188,43 +192,42 @@ impl<S> Audio<S> {
     ///
     /// Propagates seek-layer decode errors.
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let epoch = self.session.seek.begin(position);
-        self.session.seek.mark_pending(epoch);
-        self.events.publish(AudioEvent::SeekLifecycle {
-            seek_epoch: epoch,
-            stage: SeekLifecycleStage::SeekRequest,
-            location: SegmentLocation::default(),
-        });
-        if let Some(wake) = &self.session.peer_wake {
-            wake.notify_now();
-        }
-        self.session.preload_gate.rearm();
-        self.events.reset_underrun();
-        self.ring.begin_seek_epoch(epoch, &mut self.cursor);
-        wake_worker(self.lease.worker.as_ref());
+        let outcome = self.seek_handle().declare(position);
+        self.sync_seek();
+        Ok(outcome)
+    }
 
-        trace!(?position, epoch, "seek initiated via seek state");
-        match self.session.playhead.duration() {
-            Some(duration) if position >= duration => {
-                debug_assert!(position >= duration);
-                Ok(SeekOutcome::PastEof {
-                    duration,
-                    target: position,
-                })
-            }
-            _ => {
-                debug_assert!(
-                    self.session
-                        .playhead
-                        .duration()
-                        .is_none_or(|duration| position <= duration)
-                );
-                Ok(SeekOutcome::Landed {
-                    target: position,
-                    landed_at: position,
-                })
-            }
+    /// Control-plane handle that declares a seek without touching the reader.
+    ///
+    /// The blocking half of a seek — event publish, peer nudge, worker wake —
+    /// lives here so a caller on an audio callback can hand it off to the
+    /// control thread and keep only [`sync_seek`](Self::sync_seek).
+    #[must_use]
+    pub fn seek_handle(&self) -> Arc<dyn SeekDeclare> {
+        Arc::new(SeekHandle::new(SeekHandleParts {
+            bus: self.events.bus().clone(),
+            peer_wake: self.session.peer_wake.clone(),
+            seek_prepare: self.session.seek_prepare.clone(),
+            playhead: Arc::clone(&self.session.playhead),
+            preload_gate: Arc::clone(&self.session.preload_gate),
+            seek: Arc::clone(&self.session.seek),
+            worker: self.lease.worker.clone(),
+        }))
+    }
+
+    /// Adopt a seek epoch declared elsewhere, dropping everything buffered
+    /// before it.
+    ///
+    /// Lock-free and allocation-free: recycled chunks go to the trash outlet
+    /// and the cursor is cleared in place, so this is the only half of a seek
+    /// an audio callback may run. A no-op when no new epoch was declared.
+    pub fn sync_seek(&mut self) {
+        let declared = self.session.seek_obs.epoch();
+        if declared == self.ring.validator.epoch {
+            return;
         }
+        self.events.reset_underrun();
+        self.ring.begin_seek_epoch(declared, &mut self.cursor);
     }
 
     #[must_use]
@@ -244,6 +247,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
     }
 
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        self.sync_seek();
         self.ring.preloaded = true;
         let chunk = if let Some(chunk) = self.ring.current_chunk.take() {
             Some(chunk)
@@ -285,6 +289,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
         &mut self,
         output: &'a mut [&'a mut [f32]],
     ) -> Result<ReadOutcome, DecodeError> {
+        self.sync_seek();
         let read = self.cursor.read_planar(
             &mut self.ring,
             &mut self.events,
@@ -331,6 +336,14 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
 
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Self::seek(self, position)
+    }
+
+    fn seek_handle(&self) -> Option<Arc<dyn SeekDeclare>> {
+        Some(Self::seek_handle(self))
+    }
+
+    fn sync_seek(&mut self) {
+        Self::sync_seek(self);
     }
 
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
@@ -450,6 +463,7 @@ mod tests {
                         metadata: TrackMetadata::default(),
                         abr_handle: None,
                         peer_wake: None,
+                        seek_prepare: None,
                     },
                     controls: Controls {
                         host_sample_rate: Arc::new(AtomicU32::new(0)),

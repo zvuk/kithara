@@ -20,6 +20,7 @@ use kithara::{
     platform::{sync::Arc, time::Duration},
     play::{
         Resource,
+        bridge::RtMetrics,
         rt::track::{PlayerResource, ReadOutcome as BlockReadOutcome},
     },
 };
@@ -220,7 +221,7 @@ async fn read_returns_constant_samples_full() {
     let mut left = vec![0.0f32; 128];
     let mut right = vec![0.0f32; 128];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..128);
+    let result = pr.read(&mut output, 0..128, &RtMetrics::default());
     assert!(matches!(result, BlockReadOutcome::Full { frames: 128 }));
     for &s in &left[..128] {
         assert!((s - 0.5).abs() < f32::EPSILON);
@@ -230,8 +231,11 @@ async fn read_returns_constant_samples_full() {
     }
 }
 
+/// The audio-thread half of a seek drops what the wrapper buffered ahead of the
+/// old position, so the next block is served from the source rather than from
+/// samples the listener already skipped past.
 #[kithara::test(tokio)]
-async fn seek_clears_buffered_samples() {
+async fn reset_for_seek_drops_buffered_samples() {
     let reader = PositionReader::new(1.0);
     let resource = Resource::from_reader(reader, None);
     let mut pr = PlayerResource::new(resource, Arc::from("position.mp3"), &PcmPool::default());
@@ -240,19 +244,20 @@ async fn seek_clears_buffered_samples() {
     let mut right = vec![0.0f32; 128];
     {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        let _ = pr.read(&mut output, 0..128);
+        let _ = pr.read(&mut output, 0..128, &RtMetrics::default());
     }
     assert!(left[0] < 1024.0, "pre-seek sample should be near frame 0");
+    let buffered_before = left[127];
 
-    pr.seek(0.5);
+    pr.reset_for_seek();
 
     let mut left2 = vec![0.0f32; 128];
     let mut right2 = vec![0.0f32; 128];
     let mut output2: Vec<&mut [f32]> = vec![&mut left2, &mut right2];
-    let _ = pr.read(&mut output2, 0..128);
+    let _ = pr.read(&mut output2, 0..128, &RtMetrics::default());
     assert!(
-        left2[0] > 20_000.0,
-        "post-seek sample must reflect new position, got {}",
+        left2[0] > buffered_before,
+        "the reset must discard the scratch and pull fresh frames, got {}",
         left2[0]
     );
 }
@@ -266,7 +271,7 @@ async fn zero_read_without_eof_is_not_error() {
     let mut left = vec![0.0f32; 128];
     let mut right = vec![0.0f32; 128];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..128);
+    let result = pr.read(&mut output, 0..128, &RtMetrics::default());
     assert!(matches!(result, BlockReadOutcome::Full { frames: 0 }));
 }
 
@@ -284,7 +289,7 @@ async fn read_zeroes_output_when_no_data_available() {
     let mut right = vec![0.999f32; 128];
     {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        let result = pr.read(&mut output, 0..128);
+        let result = pr.read(&mut output, 0..128, &RtMetrics::default());
         assert!(
             matches!(result, BlockReadOutcome::Full { frames: 0 }),
             "zero-read without EOF must not error"
@@ -309,7 +314,7 @@ async fn full_read_prefetches_buffered_eof() {
     let mut left = vec![0.0f32; 512];
     let mut right = vec![0.0f32; 512];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..512);
+    let result = pr.read(&mut output, 0..512, &RtMetrics::default());
 
     assert!(matches!(result, BlockReadOutcome::Full { frames: 512 }));
     let remaining = pr
@@ -328,7 +333,7 @@ async fn read_returns_partial_when_eof_inside_buffer() {
     let mut left = vec![0.0f32; 4096];
     let mut right = vec![0.0f32; 4096];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..4096);
+    let result = pr.read(&mut output, 0..4096, &RtMetrics::default());
 
     let frames = match result {
         BlockReadOutcome::Partial { frames, .. } => frames,
@@ -338,7 +343,7 @@ async fn read_returns_partial_when_eof_inside_buffer() {
     assert!(frames < 4096);
 
     let mut output2: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result2 = pr.read(&mut output2, 0..4096);
+    let result2 = pr.read(&mut output2, 0..4096, &RtMetrics::default());
     assert!(matches!(result2, BlockReadOutcome::Eof));
 }
 
@@ -424,7 +429,7 @@ async fn read_returns_failed_not_eof_on_decoder_error() {
     let mut left = vec![0.0f32; 4096];
     let mut right = vec![0.0f32; 4096];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..4096);
+    let result = pr.read(&mut output, 0..4096, &RtMetrics::default());
 
     match result {
         BlockReadOutcome::Failed => {}
@@ -455,7 +460,7 @@ async fn read_returns_eof_when_already_drained() {
 
     loop {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        match pr.read(&mut output, 0..4096) {
+        match pr.read(&mut output, 0..4096, &RtMetrics::default()) {
             BlockReadOutcome::Full { .. } | BlockReadOutcome::Partial { .. } => {}
             BlockReadOutcome::Eof => break,
             BlockReadOutcome::Failed => panic!("unexpected Failed in EOF test"),
@@ -463,6 +468,6 @@ async fn read_returns_eof_when_already_drained() {
     }
 
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..4096);
+    let result = pr.read(&mut output, 0..4096, &RtMetrics::default());
     assert!(matches!(result, BlockReadOutcome::Eof));
 }

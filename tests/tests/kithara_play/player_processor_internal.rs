@@ -36,10 +36,15 @@ enum TrackCommandScenario {
     LoadThenUnload,
 }
 
+/// Firewheel never hands `process` more frames than the `max_block_frames` it
+/// declared in `new_stream`, so tests that render a block must declare at least
+/// that block — the scratch is sized here and never grown on the audio thread.
+const MAX_BLOCK_FRAMES: u32 = 1024;
+
 fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {
     StreamShape {
         sample_rate,
-        max_block_frames: NonZeroU32::new(512).expect("BUG: non-zero"),
+        max_block_frames: NonZeroU32::new(MAX_BLOCK_FRAMES).expect("BUG: non-zero"),
     }
 }
 
@@ -330,13 +335,24 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
 
     processor.drain_commands();
 
-    let recorded_seeks = {
-        let seek_log = seek_log
+    // Only the current epoch re-bases the track: the two superseded commands
+    // are dropped, so the media clock lands on the last target rather than
+    // replaying every one of them.
+    let position = processor
+        .track(&src)
+        .expect("BUG: track must stay loaded")
+        .position();
+    assert!(
+        (position - 30.0).abs() < 0.001,
+        "stale seek epochs must not move the media clock, got {position}"
+    );
+    assert!(
+        seek_log
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        seek_log.clone()
-    };
-    assert_eq!(recorded_seeks, [30000]);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty(),
+        "the audio thread must not reach the reader's blocking seek"
+    );
     assert_eq!(playback.seek_epoch.load(AtomicOrdering::SeqCst), third);
 }
 
@@ -492,15 +508,14 @@ async fn render_audio_handover_fills_tail_from_next_playing_track() {
         .expect("BUG: long track must be loaded")
         .play();
 
-    let inputs: [&[f32]; 0] = [];
     let mut out_l = vec![99.0f32; frames];
     let mut out_r = vec![99.0f32; frames];
+    let inputs: [&[f32]; 0] = [];
     let mut outputs = [&mut out_l[..], &mut out_r[..]];
     let mut buffers = ProcBuffers {
         inputs: &inputs,
         outputs: &mut outputs,
     };
-
     let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
 
     assert!(rendered);
@@ -544,15 +559,14 @@ async fn render_audio_handover_promotes_preloading_track_without_silence() {
         .expect("BUG: short track must be loaded")
         .play();
 
-    let inputs: [&[f32]; 0] = [];
     let mut out_l = vec![99.0f32; frames];
     let mut out_r = vec![99.0f32; frames];
+    let inputs: [&[f32]; 0] = [];
     let mut outputs = [&mut out_l[..], &mut out_r[..]];
     let mut buffers = ProcBuffers {
         inputs: &inputs,
         outputs: &mut outputs,
     };
-
     let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
 
     assert!(rendered);
@@ -619,15 +633,14 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
         .expect("BUG: fading track must remain loaded")
         .fade_out();
 
-    let inputs: [&[f32]; 0] = [];
     let mut out_l = vec![99.0f32; frames];
     let mut out_r = vec![99.0f32; frames];
+    let inputs: [&[f32]; 0] = [];
     let mut outputs = [&mut out_l[..], &mut out_r[..]];
     let mut buffers = ProcBuffers {
         inputs: &inputs,
         outputs: &mut outputs,
     };
-
     let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
 
     assert!(rendered);

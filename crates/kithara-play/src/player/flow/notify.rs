@@ -124,6 +124,9 @@ impl Notifier<'_> {
             while let Some(notification) = self.core.engine.pop_slot_notification(slot_id) {
                 saw_slot = true;
                 tracing::debug!(?notification, "process_notifications: handle");
+                if let PlayerNotification::Unloaded { src } = &notification {
+                    self.core.engine.unbind_slot_seek(slot_id, src);
+                }
                 self.dispatch_notification(notification);
             }
             if !self.core.engine.drain_slot_trash(slot_id) && !saw_slot {

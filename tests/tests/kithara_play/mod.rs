@@ -23,6 +23,8 @@ mod resource_internal;
 mod resource_regressions;
 #[cfg(not(target_arch = "wasm32"))]
 mod ring_admission;
+mod rt_click;
+mod rt_metrics;
 mod seamless_queue_advance;
 #[cfg(not(target_arch = "wasm32"))]
 mod session_transport;

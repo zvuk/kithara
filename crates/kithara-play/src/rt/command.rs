@@ -5,6 +5,7 @@ use ringbuf::traits::{Consumer, Producer};
 use smallvec::SmallVec;
 
 use super::{
+    TrackSlot,
     processor::PlayerNodeProcessor,
     track::{PlayerResource, PlayerTrack},
 };
@@ -61,13 +62,10 @@ impl PlayerNodeProcessor {
     }
 
     fn clear_all_tracks(&mut self) {
-        let keys: SmallVec<[Arc<str>; Self::MAX_TRACKS]> = self
-            .tracks
-            .iter_keys()
-            .map(|(key, _)| Arc::clone(key))
-            .collect();
-        for key in keys {
-            self.unload_track(&key);
+        let loaded: SmallVec<[TrackSlot; Self::MAX_TRACKS]> =
+            self.tracks.iter().map(|(slot, _)| slot).collect();
+        for slot in loaded {
+            self.unload_slot(slot);
         }
         self.tracks_transitions.clear();
         self.playback.playing.store(false, Ordering::SeqCst);
@@ -123,12 +121,10 @@ impl PlayerNodeProcessor {
             new_track = Some(nt.clone());
             self.tracks_transitions.clear();
 
-            let maybe_old = self.tracks.iter_keys().find_map(|(key, idx)| {
-                self.tracks
-                    .get_by_index(*idx)
-                    .filter(|t| t.state().is_leading())
-                    .map(|_| key.clone())
-            });
+            let maybe_old = self
+                .tracks
+                .iter()
+                .find_map(|(_, track)| track.state().is_leading().then(|| Arc::clone(track.src())));
 
             if let Some(ref ot) = maybe_old
                 && ot != nt
@@ -175,18 +171,11 @@ impl PlayerNodeProcessor {
 
     fn load_track(&mut self, resource: Box<PlayerResource>, item_id: Option<Arc<str>>) {
         let src = Arc::clone(resource.src());
-        if let Some(track) = self.tracks.remove(&src) {
-            self.discard_track(track);
-            self.notif_tx
-                .try_push(PlayerNotification::Unloaded { src: src.clone() })
-                .ok();
-        }
-
+        self.unload_track(&src);
         self.evict_tracks_if_needed();
 
         resource.set_host_sample_rate(self.sample_rate);
 
-        let loaded_src = src.clone();
         let track = PlayerTrack::builder()
             .sample_rate(self.sample_rate)
             .maybe_item_id(item_id)
@@ -195,10 +184,17 @@ impl PlayerNodeProcessor {
             .fade_curve(self.crossfade.fade_curve())
             .playback_rate(self.playback_rate)
             .build(resource);
-        self.tracks.insert(src, track);
+
+        // `evict_tracks_if_needed` left a free slot, so `insert` normally takes
+        // it. A newcomer handed back means the set was somehow still full — it
+        // goes to the trash ring rather than being freed here.
+        if let Some(rejected) = self.tracks.insert(track) {
+            self.discard_track(rejected);
+            return;
+        }
 
         self.notif_tx
-            .try_push(PlayerNotification::Loaded { src: loaded_src })
+            .try_push(PlayerNotification::Loaded { src })
             .ok();
     }
 }

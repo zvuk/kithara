@@ -6,6 +6,7 @@ use kithara_events::EventBus;
 use kithara_platform::{
     CancelScope, CancelToken,
     sync::{Arc, Mutex},
+    time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
 };
 use portable_atomic::AtomicF32;
@@ -143,14 +144,44 @@ impl EngineImpl {
     pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
         let mut slots = self.slots.lock();
         let result = match slots.get_mut(slot) {
-            Some(handle) => handle
-                .cmd_tx
-                .try_push(cmd)
-                .map_err(|_| PlayError::SlotChannelFull { slot }),
+            Some(handle) => {
+                // A resource crossing to the audio thread leaves its seek
+                // handle behind: declaring a seek takes locks, so it stays on
+                // this side. Released on the matching `Unloaded`.
+                if let PlayerCmd::LoadTrack { resource, .. } = &cmd
+                    && let Some(seek) = resource.seek_handle()
+                {
+                    handle.bind_seek(Arc::clone(resource.src()), seek);
+                }
+                handle
+                    .cmd_tx
+                    .try_push(cmd)
+                    .map_err(|_| PlayError::SlotChannelFull { slot })
+            }
             None => Err(PlayError::SlotNotFound(slot)),
         };
         drop(slots);
         result
+    }
+
+    /// Declare a seek for every track a slot holds, on the calling (control)
+    /// thread. The processor then only re-bases its own buffers.
+    pub(crate) fn declare_slot_seek(&self, slot: SlotId, position: Duration) {
+        let slots = self.slots.lock();
+        if let Some(handle) = slots.get(slot) {
+            handle.declare_seek(position);
+        }
+        drop(slots);
+    }
+
+    /// Release the control half of a track's seek path once the processor
+    /// reports it unloaded.
+    pub(crate) fn unbind_slot_seek(&self, slot: SlotId, src: &str) {
+        let mut slots = self.slots.lock();
+        if let Some(handle) = slots.get_mut(slot) {
+            handle.unbind_seek(src);
+        }
+        drop(slots);
     }
 
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {

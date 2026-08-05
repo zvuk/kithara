@@ -219,8 +219,16 @@ impl Resource {
                 &mut self,
                 output: &'a mut [&'a mut [f32]],
             ) -> Result<ReadOutcome, DecodeError>;
-            /// Seek to position.
+            /// Seek to position. Declares and applies in one call, so it takes
+            /// locks — off the audio thread only. Audio-thread callers declare
+            /// through [`seek_handle`](Self::seek_handle) instead.
             pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+            /// Control-plane handle that declares a seek without touching the
+            /// reader. `None` for readers with no worker-backed seek.
+            #[must_use]
+            pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekDeclare>>;
+            /// Adopt a seek epoch declared through `seek_handle`. Lock-free.
+            pub fn sync_seek(&mut self);
             /// Set the target sample rate of the audio host.
             pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
             /// Set the playback rate for the active stretch controls.

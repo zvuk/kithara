@@ -127,6 +127,20 @@ pub trait PcmSession {
     }
 }
 
+/// The control-plane half of a seek: everything that must happen off the audio
+/// thread for a reader to start moving toward a new position.
+///
+/// Declaring typically publishes an event and wakes a decode worker, both of
+/// which take locks. Splitting it out lets an audio callback keep only the
+/// lock-free half ([`PcmControl::sync_seek`]) while the control thread declares
+/// through a handle it holds.
+pub trait SeekDeclare: Send + Sync {
+    /// Declare a seek to `position` and report where it will land.
+    ///
+    /// Blocking by design — never call this from an audio callback.
+    fn declare(&self, position: Duration) -> SeekOutcome;
+}
+
 /// PCM control operations and runtime knobs.
 #[kithara::mock(api = PcmControlMock)]
 pub trait PcmControl {
@@ -160,6 +174,25 @@ pub trait PcmControl {
     /// Returns `Err(DecodeError)` when seek cannot complete: stream I/O
     /// failure, decoder recreate failure, or terminal producer error.
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+
+    /// Control-plane handle that declares a seek without touching the reader.
+    ///
+    /// [`seek`](Self::seek) does the declaring and the buffer reset in one
+    /// call, and the declaring half takes locks — so a caller on an audio
+    /// callback declares through this handle from the control thread instead,
+    /// and lets [`sync_seek`](Self::sync_seek) pick the target up.
+    ///
+    /// `None` means the reader cannot be seeked from an audio callback at all:
+    /// such a caller must reach it off-thread through [`seek`](Self::seek).
+    fn seek_handle(&self) -> Option<Arc<dyn SeekDeclare>> {
+        None
+    }
+
+    /// Adopt a seek epoch declared through [`seek_handle`](Self::seek_handle).
+    ///
+    /// Must be lock-free: this is the only half of a seek an audio callback
+    /// may run. A no-op when no new epoch was declared.
+    fn sync_seek(&mut self) {}
 
     /// Set the target sample rate of the audio host.
     ///

@@ -5,13 +5,13 @@ use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
 use super::{
-    PlayerTrack, ReadOutcome,
+    PlayerTrack, ReadOutcome, RtSink,
     triggers::{TrackTriggers, TriggerInput},
 };
-use crate::bridge::{PlayerNotification, TrackPlaybackStopReason, TrackState};
+use crate::bridge::{PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState};
 
 struct TrackReadContext<'a> {
-    notification_tx: &'a mut HeapProd<PlayerNotification>,
+    sink: RtSink<'a>,
     range: Range<usize>,
 }
 
@@ -105,12 +105,13 @@ impl PlayerTrack {
         let position = self.position();
         let duration = self.observed_duration;
 
-        let range_len = ctx.range.len();
+        let TrackReadContext { sink, range } = ctx;
+        let range_len = range.len();
         self.fade
-            .mix_range(scratch_bufs, mix_bufs, ctx.range, range_len);
+            .mix_range(scratch_bufs, mix_bufs, range, range_len);
         Self::check_notifications(
             &mut self.triggers,
-            ctx.notification_tx,
+            sink.notifications,
             TriggerInput {
                 duration,
                 frames_until_eof,
@@ -121,7 +122,7 @@ impl PlayerTrack {
                 sample_rate: self.sample_rate,
             },
         );
-        self.update_after_mix(ctx.notification_tx);
+        self.update_after_mix(sink.notifications);
 
         TrackReadOutcome::Full {
             position,
@@ -156,10 +157,8 @@ impl PlayerTrack {
         ctx: TrackReadContext<'_>,
         partial: PartialRead,
     ) -> TrackReadOutcome {
-        let TrackReadContext {
-            notification_tx,
-            range,
-        } = ctx;
+        let TrackReadContext { sink, range } = ctx;
+        let notification_tx = sink.notifications;
         let PartialRead { frames, duration } = partial;
         self.advance_media_clock(frames);
         let position = self.position();
@@ -224,19 +223,19 @@ impl PlayerTrack {
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
         range: Range<usize>,
-        notification_tx: &mut HeapProd<PlayerNotification>,
+        sink: &mut RtSink<'_>,
     ) -> TrackReadOutcome {
         if self.state == TrackState::Finished {
             return TrackReadOutcome::Eof;
         }
 
-        let read_outcome = self.read_resource(scratch_bufs, range.clone());
+        let read_outcome = self.read_resource(scratch_bufs, range.clone(), sink.metrics);
         match read_outcome {
             TrackReadOutcome::Full { .. } => self.handle_full_read(
                 scratch_bufs,
                 mix_bufs,
                 TrackReadContext {
-                    notification_tx,
+                    sink: sink.reborrow(),
                     range,
                 },
                 read_outcome,
@@ -245,17 +244,17 @@ impl PlayerTrack {
                 scratch_bufs,
                 mix_bufs,
                 TrackReadContext {
-                    notification_tx,
+                    sink: sink.reborrow(),
                     range,
                 },
                 PartialRead { duration, frames },
             ),
             TrackReadOutcome::Eof => {
-                self.handle_natural_end(notification_tx);
+                self.handle_natural_end(sink.notifications);
                 TrackReadOutcome::Eof
             }
             TrackReadOutcome::Failed => {
-                self.handle_failed_end(notification_tx);
+                self.handle_failed_end(sink.notifications);
                 TrackReadOutcome::Failed
             }
         }
@@ -265,6 +264,7 @@ impl PlayerTrack {
         &mut self,
         scratch_bufs: &mut [&mut [f32]],
         range: Range<usize>,
+        metrics: &RtMetrics,
     ) -> TrackReadOutcome {
         let resource = &mut self.resource;
         let (scratch_left, scratch_right) = scratch_bufs.split_at_mut(1);
@@ -273,7 +273,7 @@ impl PlayerTrack {
             &mut scratch_right[0][range.clone()],
         ];
 
-        match resource.read(&mut scratch_window, 0..range.len()) {
+        match resource.read(&mut scratch_window, 0..range.len(), metrics) {
             ReadOutcome::Full { frames } => TrackReadOutcome::Full {
                 frames,
                 duration: resource.duration(),

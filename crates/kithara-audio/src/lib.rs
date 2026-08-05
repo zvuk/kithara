@@ -25,7 +25,7 @@ mod runtime;
 mod traits;
 mod waveform;
 
-pub use audio::Audio;
+pub use audio::{Audio, SeekHandle};
 pub use blob::frame::BlobError;
 pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
@@ -47,6 +47,6 @@ pub use renderer::{
 };
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead, PcmReader,
-    PcmSession, PendingReason, ReadOutcome, SeekOutcome,
+    PcmSession, PendingReason, ReadOutcome, SeekDeclare, SeekOutcome,
 };
 pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, bucket::Waveform};

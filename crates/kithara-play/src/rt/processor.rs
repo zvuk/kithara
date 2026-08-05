@@ -12,15 +12,14 @@ use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapCons, HeapProd, traits::Producer};
-use thunderdome::Index;
-use tracing::warn;
+use smallvec::SmallVec;
 
 use super::track::PlayerTrack;
 use crate::{
     bridge::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
     },
-    rt::{ArenaRegistry, RenderPass, RenderTargets},
+    rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -57,14 +56,14 @@ impl CrossfadeSettings {
 
 /// The realtime audio processor for the player node.
 ///
-/// Manages tracks in a thunderdome arena, handles transitions,
-/// and renders mixed stereo audio into the Firewheel output buffers.
+/// Owns the loaded tracks, handles transitions, and renders mixed stereo
+/// audio into the Firewheel output buffers.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct PlayerNodeProcessor {
     #[field(get, deref = false)]
     pub(super) playback: Arc<PlaybackShared>,
-    pub(super) tracks: ArenaRegistry<Arc<str>, PlayerTrack>,
+    pub(super) tracks: TrackSlots<{ Self::MAX_TRACKS }>,
     pub(super) crossfade: CrossfadeSettings,
     pub(super) cmd_rx: HeapCons<PlayerCmd>,
     pub(super) notif_tx: HeapProd<PlayerNotification>,
@@ -90,7 +89,7 @@ impl PlayerNodeProcessor {
     pub(super) const FADE_IN_SEEK_THRESHOLD: f64 = 0.5;
 
     /// Maximum number of concurrent tracks per player node.
-    pub(super) const MAX_TRACKS: usize = 4;
+    pub const MAX_TRACKS: usize = 4;
 
     /// Create a new processor with the given command receiver and shared state.
     #[must_use]
@@ -101,123 +100,104 @@ impl PlayerNodeProcessor {
             trash_tx: inputs.trash_tx,
             playback: inputs.playback,
             sample_rate: shape.sample_rate,
-            render: RenderPass::new(pool, shape.max_block_frames.get().as_()),
+            render: RenderPass::new(pool, shape),
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
             playback_rate: 1.0,
-            tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
+            tracks: TrackSlots::default(),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
         }
     }
 
     /// Clean up finished tracks.
     ///
-    /// Uses a stack-allocated array instead of `Vec` since `Self::MAX_TRACKS` is 4,
-    /// avoiding heap allocation on every `process()` call.
+    /// Collects into a stack array sized to the slot set, so no allocation
+    /// happens on the `process()` path.
     ///
-    /// When the cleanup empties the arena (last track played out to natural
+    /// When the cleanup empties the slot set (last track played out to natural
     /// EOF), drop `state.playing` so `Player::is_playing()` reflects the
     /// stopped state without a separate `SetPaused` round-trip from the
-    /// queue layer — the queue's `QueueEnded` path can leave the arena
+    /// queue layer — the queue's `QueueEnded` path can leave the slots
     /// running so the tail samples drain instead of cutting them off.
     pub fn cleanup_finished_tracks(&mut self) {
-        let mut finished: [Option<(Arc<str>, Index)>; Self::MAX_TRACKS] =
-            [const { None }; Self::MAX_TRACKS];
-        let mut count = 0;
-
-        for (key, idx) in self.tracks.iter_keys() {
-            if let Some(track) = self.tracks.get_by_index(*idx)
-                && track.state() == TrackState::Finished
-                && count < Self::MAX_TRACKS
-            {
-                finished[count] = Some((Arc::clone(key), *idx));
-                count += 1;
-            }
-        }
+        let finished: SmallVec<[(TrackSlot, bool); Self::MAX_TRACKS]> = self
+            .tracks
+            .iter()
+            .filter(|(_, track)| track.state() == TrackState::Finished)
+            .map(|(slot, track)| (slot, track.ended_at_eof()))
+            .collect();
 
         // Superpowered-style end-of-queue resume: if removing the finished
-        // tracks would empty the arena (the queue has played out) and one of
+        // tracks would empty the slot set (the queue has played out) and one of
         // them reached *natural* EOF, keep that single track resident (warm)
         // so a later in-range seek can revive it (`apply_seek`). It is
         // reclaimed by `evict_tracks_if_needed` (Finished evicts first) when
         // the next track loads. Tracks that finished via `stop()` or a
         // faded-out crossfade (not `ended_at_eof`) are discarded as usual.
-        let retain: Option<Index> = if count == self.tracks.len() {
-            finished[..count].iter().flatten().find_map(|(_, idx)| {
-                self.tracks
-                    .get_by_index(*idx)
-                    .filter(|t| t.ended_at_eof())
-                    .map(|_| *idx)
-            })
+        let retain: Option<TrackSlot> = if finished.len() == self.tracks.len() {
+            finished
+                .iter()
+                .find_map(|(slot, ended_at_eof)| ended_at_eof.then_some(*slot))
         } else {
             None
         };
 
-        for entry in finished[..count].iter().flatten() {
-            let (key, idx) = entry;
-            if Some(*idx) == retain {
-                continue;
-            }
-            if let Some(track) = self.tracks.remove_by_index(*idx) {
+        for (slot, _) in finished.iter().filter(|(slot, _)| Some(*slot) != retain) {
+            if let Some(track) = self.tracks.remove_at(*slot) {
+                let src = Arc::clone(track.src());
                 self.discard_track(track);
                 self.notif_tx
-                    .try_push(PlayerNotification::Unloaded {
-                        src: Arc::clone(key),
-                    })
+                    .try_push(PlayerNotification::Unloaded { src })
                     .ok();
             }
         }
 
-        // Playback has stopped once nothing audible remains: either the arena
-        // is empty (all finished discarded) or only the retained, played-out
-        // track is left. The retained track is inert in `render_audio` (gated
-        // by `is_playing`), so `is_playing()` correctly stays false until a
+        // Playback has stopped once nothing audible remains: either the slot
+        // set is empty (all finished discarded) or only the retained,
+        // played-out track is left. The retained track is inert in
+        // `render_audio` (gated by `is_playing`), so `is_playing()` correctly
+        // stays false until a seek revives it.
         if self.tracks.len() == 0 || retain.is_some() {
             self.playback.playing.store(false, Ordering::SeqCst);
         }
     }
 
-    /// Update fade duration for all tracks.
+    /// Hand a retired track to the control thread for freeing.
+    ///
+    /// A full ring is the one path that frees a `PlayerTrack` — decoder,
+    /// buffers and cancel guard — on the audio thread, so it is counted rather
+    /// than discarded silently.
     pub(super) fn discard_track(&mut self, track: PlayerTrack) {
-        let _ = self.trash_tx.try_push(track);
+        if self.trash_tx.try_push(track).is_err() {
+            self.playback.metrics().record_trash_overflow();
+        }
     }
 
     /// Evict tracks to make room when at capacity.
     ///
     /// Tracks are evicted in priority order: `Finished` first, then `FadingOut`,
-    /// `Preloading`, `Paused`, `FadingIn`, and `Playing` last. If all tracks are in the
-    /// same state (e.g. all Playing), eviction order is non-deterministic
-    /// because `HashMap` iteration order is undefined.
+    /// `Preloading`, `FadingIn`, and `Playing` last. Ties break by slot order,
+    /// so eviction is deterministic even when every track is in the same state.
     pub(super) fn evict_tracks_if_needed(&mut self) {
-        while self.tracks.len() >= Self::MAX_TRACKS {
-            let eviction_candidate = self
+        while self.tracks.is_full() {
+            let Some((slot, state)) = self
                 .tracks
-                .iter_keys()
-                .min_by_key(|(_, idx)| {
-                    self.tracks
-                        .get_by_index(**idx)
-                        .map_or(0, |t| super::render::eviction_priority(t.state()))
-                })
-                .map(|(key, idx)| {
-                    let state = self.tracks.get_by_index(*idx).map(PlayerTrack::state);
-                    (Arc::clone(key), state)
-                });
-
-            if let Some((key, state)) = eviction_candidate {
-                if state == Some(TrackState::Playing) {
-                    warn!(
-                        src = &*key,
-                        "evicting a Playing track to make room for a new track"
-                    );
-                }
-                if let Some(track) = self.tracks.remove(&key) {
-                    self.discard_track(track);
-                    self.notif_tx
-                        .try_push(PlayerNotification::Unloaded { src: key })
-                        .ok();
-                }
-            } else {
+                .iter()
+                .min_by_key(|(_, track)| super::render::eviction_priority(track.state()))
+                .map(|(slot, track)| (slot, track.state()))
+            else {
                 break;
+            };
+
+            if state == TrackState::Playing {
+                self.playback.metrics().record_evicted_playing();
+            }
+            if let Some(track) = self.tracks.remove_at(slot) {
+                let src = Arc::clone(track.src());
+                self.discard_track(track);
+                self.notif_tx
+                    .try_push(PlayerNotification::Unloaded { src })
+                    .ok();
             }
         }
     }
@@ -232,6 +212,7 @@ impl PlayerNodeProcessor {
             RenderTargets {
                 tracks: &mut self.tracks,
                 notification_tx: &mut self.notif_tx,
+                metrics: self.playback.metrics(),
             },
             buffers,
             frames,
@@ -245,16 +226,27 @@ impl PlayerNodeProcessor {
             .for_each(|(_, track)| track.resource().set_host_sample_rate(sample_rate));
     }
 
-    /// Unload a track from the arena.
-    pub(super) fn unload_track(&mut self, src: &Arc<str>) {
+    /// Unload a track by source identifier.
+    pub(super) fn unload_track(&mut self, src: &str) {
         if let Some(track) = self.tracks.remove(src) {
-            self.discard_track(track);
-            self.notif_tx
-                .try_push(PlayerNotification::Unloaded {
-                    src: Arc::clone(src),
-                })
-                .ok();
+            self.retire(track);
         }
+    }
+
+    /// Unload the track held in one slot.
+    pub(super) fn unload_slot(&mut self, slot: TrackSlot) {
+        if let Some(track) = self.tracks.remove_at(slot) {
+            self.retire(track);
+        }
+    }
+
+    /// Send a removed track to the control thread and announce it.
+    fn retire(&mut self, track: PlayerTrack) {
+        let src = Arc::clone(track.src());
+        self.discard_track(track);
+        self.notif_tx
+            .try_push(PlayerNotification::Unloaded { src })
+            .ok();
     }
 
     fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
@@ -265,6 +257,7 @@ impl PlayerNodeProcessor {
             .store(sample_rate.get(), Ordering::Relaxed);
         if rate_changed {
             self.set_tracks_host_sample_rate(sample_rate);
+            self.render.update_sample_rate(sample_rate);
         }
     }
 
