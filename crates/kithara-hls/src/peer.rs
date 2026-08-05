@@ -601,17 +601,16 @@ impl HlsTrackState {
     /// probe). Called every poll cycle; the equality short-circuit
     /// keeps it free in the steady state.
     ///
-    /// Collapses cross-variant byte-continuity layering on the new
-    /// seek epoch — a random seek into pre-switch territory would
-    /// otherwise pull bytes from a `history` variant whose data does
-    /// not match the variant ABR currently considers active.
+    /// The byte space the epoch resolves against was already collapsed by
+    /// [`HlsCoord::prepare_for_seek`], which the control thread runs before
+    /// minting the epoch. What is left here is the peer's own state: which
+    /// segment it fetches next.
     fn apply_seek_change(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
         let cur_seek = self.seek_obs.epoch();
         if cur_seek == self.last_seek_epoch {
             return;
         }
         self.last_seek_epoch = cur_seek;
-        coord.prepare_for_seek();
         self.seek_epoch_reset(coord, ctx);
     }
 

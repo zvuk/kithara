@@ -39,9 +39,9 @@ re-validates all three, and any mismatch discards the incoming session. Promotio
 half-switching; it is deferred while the reader is untaken or the ABR claim is `Locked`.
 
 `HlsSession::is_ready` is a pure question under the transition lock and must not wake the peer:
-`wake_peer` takes the peer state lock, which the peer holds across `prepare_for_seek` →
-`cancel_incoming_for_seek` (takes the transition lock). Wake via `wake_peer_for_readiness` after
-dropping the lock.
+`wake_peer` takes the peer state lock, and `cancel_incoming_for_seek` takes the transition lock,
+so a wake from here closes a lock cycle. Wake via `wake_peer_for_readiness` after dropping the
+lock.
 
 **No read fence:** no generation counter, read gate, or decoder acknowledgement. A switch becomes
 visible on promotion, and its only published fact is the active variant's `MediaInfo`. Reads are
@@ -121,6 +121,20 @@ then skips the O(N) layout reset, while ABR invalidation and the reader wake sta
 in-flight body fetches; `HlsVariant::reset_to_full_range` (from `prepare_reader`) also clears the
 seek alias, the exact-seek/exact-byte demands, and the segment-aware tail.
 
+## Seek Ownership
+
+`prepare_for_seek` is the crate's `SeekPrepare` impl, and the control thread runs it once per seek
+*before* the epoch is minted (`SeekHandle::declare`). It is the only site that rebuilds the byte
+space for a seek. That ordering is what makes the read side cheap: the reader resolves its anchor on
+the produce core, and both halves of the preparation take a lock — `cancel_incoming_for_seek` the
+transition lock, `Layout::reset` the write lock plus a copy of the offset table — so neither may
+run there. Because the rebuild precedes the epoch, every later observer on any thread already sees a
+layout that matches the seek, and `ByteMap::anchor_at_time` stays a pure query. Pinned by the
+`rtsan-hls` lane.
+
+Everything downstream reacts to the epoch rather than re-preparing: `HlsPeer::apply_seek_change`
+repositions only the peer's own next-segment state.
+
 ## EOF, Exact Sizes, Seek Aliases
 
 Byte EOF is minted only when `total_bytes() > 0`, the offset is at or past it, and `eof_ready()`
@@ -173,12 +187,10 @@ the peer wakes. The gate is a lock-free `kithara_platform::sync::ThreadGate` (at
 `unpark`), not a condvar, because RT-reachable readiness edges signal it on the produce core, which
 must not take a condvar mutex. Single-waiter — the one off-RT `wait_range(_, None)` reader. `fire()`
 signals the gate **and** re-ticks the audio worker; it is fired from every off-RT site where new
-bytes or a resolvable range appear, including each segment byte write and each terminal settle
+bytes or a resolvable range appear, including each segment byte write, each terminal settle
 (`FetchSlot::settle` commit/fail/cancel — for DRM the decrypt gate opens only at commit, so settle
-is the load-bearing wake). `fire_ready_only()` signals only the gate and is used by the coord's
-RT-reachable transitions (`prepare_for_seek`), which must not unpark a worker from the produce core.
-Cancel is the one transition with no producer-side signal: the wait registers a
-`CancelToken::on_cancel` waker for its own lifetime.
+is the load-bearing wake), and `prepare_for_seek`. Cancel is the one transition with no
+producer-side signal: the wait registers a `CancelToken::on_cancel` waker for its own lifetime.
 
 The reader snapshots the gate counter **before** probing and parks only if it is unchanged — a
 seqlock guard closing the lost-wakeup window, since the probe predicate and the gate sit under
@@ -187,8 +199,7 @@ wait returns `WaitBudgetExceeded` so the off-RT reader can re-assert a possibly 
 re-enter. A genuine wedge trips `#[kithara::hang_watchdog]` (`WAIT_HANG_TIMEOUT` = 180 s, which must
 exceed the kithara-net per-fetch total timeout so a stalled upstream fails as a terminal `Err`
 first). The worker wake (`Source::set_worker_wake`, installed by the audio worker) is `None` until
-the worker exists; the audio scheduler's 10 ms `Waiting` park is the backstop for that window and
-for `fire_ready_only` edges.
+the worker exists; the audio scheduler's 10 ms `Waiting` park is the backstop for that window.
 
 ## Encryption (AES-128-CBC)
 

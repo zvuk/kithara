@@ -38,8 +38,8 @@ pub use reader::{
 };
 pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};
 pub use source::{
-    ByteMap, NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase,
-    SourceSeekAnchor, VariantControl,
+    ByteMap, NotReadyCause, PendingReason, ReadOutcome, SeekPrepare, SegmentDescriptor, Source,
+    SourcePhase, SourceSeekAnchor, VariantControl,
 };
 pub use stream::{
     Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType,

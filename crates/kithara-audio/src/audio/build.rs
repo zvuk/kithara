@@ -228,6 +228,7 @@ where
 
         let abr_handle = shared_stream.abr_handle();
         let peer_wake = shared_stream.peer_wake();
+        let seek_prepare = shared_stream.seek_prepare();
         let emit = AudioEvents::deferred(&bus);
         let registered = register_stream_audio_source(StreamSourceRegistration {
             decoder,
@@ -284,6 +285,7 @@ where
                 metadata,
                 abr_handle,
                 peer_wake,
+                seek_prepare,
                 preload_gate: registered.preload_gate,
             },
             controls: Controls {

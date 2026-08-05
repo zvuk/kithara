@@ -9,7 +9,7 @@ use kithara_platform::{CancelScope, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadWrite,
-    ReadOutcome, SeekControl, SeekObserve, Source, SourcePhase, StreamResult,
+    ReadOutcome, SeekControl, SeekObserve, SeekPrepare, Source, SourcePhase, StreamResult,
 };
 
 use super::coord::HlsCoord;
@@ -119,6 +119,10 @@ impl Source for HlsSource {
 
     fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
         self.peer_wake.clone()
+    }
+
+    fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn SeekPrepare>)
     }
 
     fn take_reader_event_sink(&mut self) -> Option<BoxedEventSink> {

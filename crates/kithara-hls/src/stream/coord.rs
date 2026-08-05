@@ -14,9 +14,9 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadState, PlayheadWrite,
-    ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState, SegmentDescriptor,
-    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantControl,
-    VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
+    ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekPrepare, SeekState,
+    SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
+    VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
 };
 use kithara_test_utils::kithara;
 
@@ -234,6 +234,12 @@ impl HlsCoord {
     /// Seek entry point. Collapses cross-variant byte-continuity layering,
     /// cancels the incoming exact session, and wakes a parked reader.
     ///
+    /// Runs on the control thread, before the seek epoch is minted — both the
+    /// cancel and the collapse take a lock, and the collapse copies the offset
+    /// table, so no reader may reach them. By the time an epoch is visible the
+    /// layout already matches it, and the produce core resolves its anchor
+    /// against geometry it only reads.
+    ///
     /// The expensive layout collapse ([`Self::reset_for_seek`]) runs only
     /// when the active variant's offset table is not already the canonical
     /// full-range geometry with every served size exact — a fully-resolved
@@ -252,7 +258,7 @@ impl HlsCoord {
         }
         // A seek repositioned the active variant: wake a reader parked on the
         // pre-seek range so it re-probes against the new position / flush gate.
-        self.signal.fire_ready_only();
+        self.signal.fire();
     }
 
     /// Single wake-free readiness probe (the wake-free `HlsVariant::wait_range`
@@ -552,14 +558,16 @@ impl VariantControl for HlsCoord {
 }
 
 /// `ByteMap` delegates to the authoritative active session's variant.
+///
+/// Every method here is a query. The layout a seek resolves against is
+/// rebuilt by [`SeekPrepare::prepare`] before the epoch exists, so resolving
+/// one on the produce core neither locks nor allocates.
 impl ByteMap for HlsCoord {
-    fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
-        self.prepare_for_seek();
-        self.seek_time_anchor(position)
-    }
-
     delegate! {
         to self {
+            #[call(seek_time_anchor)]
+            fn anchor_at_time(&self, position: Duration)
+            -> StreamResult<Option<SourceSeekAnchor>>;
             #[expr($.init_byte_range())]
             #[call(active)]
             fn init_segment_range(&self) -> Range<u64>;
@@ -585,6 +593,15 @@ impl ByteMap for HlsCoord {
 
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         self.active().descriptor_at_time(t)
+    }
+}
+
+impl SeekPrepare for HlsCoord {
+    delegate! {
+        to self {
+            #[call(prepare_for_seek)]
+            fn prepare(&self);
+        }
     }
 }
 

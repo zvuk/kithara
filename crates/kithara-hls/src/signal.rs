@@ -27,13 +27,11 @@ fn wake_worker(cell: &WorkerWakeCell) {
 /// audio-worker wake. Replaces the two manually-paired handles (`ready` +
 /// `worker_wake`) threaded through `PlanCtx`, `HlsCoord`, and `FetchSlot`.
 ///
-/// - [`fire`](Self::fire) wakes both: the off-RT reader parked in
-///   `wait_range(_, None)` (via the gate) **and** the RT decoder's audio worker
-///   (via the late-bound wake). Used at the two downloader write/settle sites
-///   and the dispatch/commit transitions that publish new readable bytes.
-/// - [`fire_ready_only`](Self::fire_ready_only) wakes just the gate. Used at the
-///   coord's RT-reachable fence/seek/cancel transitions, which deliberately do
-///   not re-tick the worker (the 10 ms scheduler poll covers them).
+/// [`fire`](Self::fire) wakes both: the off-RT reader parked in
+/// `wait_range(_, None)` (via the gate) **and** the RT decoder's audio worker
+/// (via the late-bound wake). Used at the two downloader write/settle sites,
+/// the dispatch/commit transitions that publish new readable bytes, and the
+/// coord's seek preparation.
 ///
 /// `Clone` shares both underlying `Arc`s — every clone signals the same gate and
 /// the same worker cell.
@@ -53,16 +51,14 @@ pub(crate) struct SizeSignal {
     /// "Event-driven read wait".
     ///
     /// Lock-free [`ThreadGate`] (atomic bump + `unpark`) rather than a condvar:
-    /// the RT-reachable readiness edges (`fire_ready_only` from the coord's
-    /// fence-clear / seek transitions) `signal` it on the produce core, which
-    /// must not take a condvar mutex / `notify_all` futex. Single-waiter — the
-    /// one off-RT `wait_range(_, None)` reader registers for the `unpark`
-    /// fast-path; the counter bump alone closes the lost-wakeup window.
+    /// readiness edges reach it from the produce core, which must not take a
+    /// condvar mutex / `notify_all` futex. Single-waiter — the one off-RT
+    /// `wait_range(_, None)` reader registers for the `unpark` fast-path; the
+    /// counter bump alone closes the lost-wakeup window.
     ready: Arc<ThreadGate>,
-    /// Late-bound audio-worker wake. Fired alongside `ready` on the two
-    /// downloader write/settle sites (NOT the coord's RT-reachable fence/seek
-    /// signals), so the RT decoder's worker re-ticks on data arrival rather than
-    /// on its 10 ms scheduler poll.
+    /// Late-bound audio-worker wake, fired alongside `ready` so the RT
+    /// decoder's worker re-ticks on data arrival rather than on its 10 ms
+    /// scheduler poll.
     worker_wake: WorkerWakeCell,
 }
 
@@ -137,12 +133,6 @@ impl SizeSignal {
             /// Pre-park snapshot of the gate generation (seqlock guard for the off-RT
             /// `wait_range` loop). Pass-through to [`WaitGate::current`].
             pub(crate) fn current(&self) -> u64;
-            /// Signal only the gate. Used at the coord's RT-reachable transitions
-            /// (fence clear, seek reset, cancel waker) that flip a blocked reader's
-            /// predicate without producing new bytes — the audio worker re-discovers the
-            /// state on its next scheduler poll, so it is deliberately not re-ticked.
-            #[call(signal)]
-            pub(crate) fn fire_ready_only(&self);
             /// Park on the gate until its generation advances past `since` or `timeout`
             /// elapses. Returns `true` on a signal, `false` on timeout. Pass-through to
             /// [`WaitGate::wait_timeout`].

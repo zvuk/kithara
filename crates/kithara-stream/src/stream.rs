@@ -247,6 +247,9 @@ impl<T: StreamType> Stream<T> {
             pub fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink>;
             /// Optional byte-map handle for segment-aware decoders.
             pub fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>>;
+            /// Optional control-plane hook that rebuilds the byte space for a
+            /// seek before its epoch is minted.
+            pub fn seek_prepare(&self) -> Option<Arc<dyn crate::SeekPrepare>>;
             /// Absolute byte-position set — used by [`Stream::seek`] callers
             /// and audio FSM landings. Forwards to the source's atomic cursor.
             pub fn set_position(&self, pos: u64);
