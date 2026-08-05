@@ -11,6 +11,7 @@ pub(crate) fn rtsan(process: &Process) -> Result<()> {
     preflight(process)?;
     for command in [
         ["test", "rtsan"].as_slice(),
+        ["test", "rtsan-async"].as_slice(),
         ["test", "rtsan-file"].as_slice(),
         ["test", "rtsan-hls"].as_slice(),
     ] {
