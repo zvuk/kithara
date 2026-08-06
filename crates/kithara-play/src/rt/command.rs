@@ -185,9 +185,6 @@ impl PlayerNodeProcessor {
             .playback_rate(self.playback_rate)
             .build(resource);
 
-        // `evict_tracks_if_needed` left a free slot, so `insert` normally takes
-        // it. A newcomer handed back means the set was somehow still full — it
-        // goes to the trash ring rather than being freed here.
         if let Some(rejected) = self.tracks.insert(track) {
             self.discard_track(rejected);
             return;
