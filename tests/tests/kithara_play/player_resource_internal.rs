@@ -231,9 +231,6 @@ async fn read_returns_constant_samples_full() {
     }
 }
 
-/// The audio-thread half of a seek drops what the wrapper buffered ahead of the
-/// old position, so the next block is served from the source rather than from
-/// samples the listener already skipped past.
 #[kithara::test(tokio)]
 async fn reset_for_seek_drops_buffered_samples() {
     let reader = PositionReader::new(1.0);

@@ -264,8 +264,6 @@ mod tests {
         }
     }
 
-    /// An infinite peak would drive `ceiling / peak` to zero and duck the bus
-    /// for a whole release, so one bad sample costs 50 ms of level.
     #[test]
     fn non_finite_frame_stays_silent_without_ducking_the_next_block() {
         let mut lim = limiter(48_000, 50.0);

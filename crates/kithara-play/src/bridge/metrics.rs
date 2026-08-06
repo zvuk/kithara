@@ -15,14 +15,9 @@ pub struct RtMetrics {
 #[non_exhaustive]
 #[fieldwork(get, copy)]
 pub struct RtMetricsSnapshot {
-    /// Blocks where the source reported a non-recoverable decode error.
     pub(crate) decode_errors: u64,
-    /// Tracks evicted while still audible, because every slot was taken.
     pub(crate) evicted_playing: u64,
-    /// Tracks freed on the audio thread because the trash ring was full.
     pub(crate) trash_overflows: u64,
-    /// Blocks zero-filled because the source had no frames ready and had not
-    /// reached EOF.
     pub(crate) underruns: u64,
 }
 

@@ -39,26 +39,18 @@ pub(crate) struct RenderTargets<'a> {
 
 pub(crate) struct RenderPass {
     scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
-    /// Frames every scratch buffer holds. Sized off the audio thread, so
-    /// `render_audio` clamps to it instead of growing.
     capacity: usize,
-    /// Mixes the track bus into the node output; open while playback runs.
     gate: MixDSP,
-    /// Cleared by the first rendered block, which adopts the transport state
-    /// rather than fading into it.
     priming: bool,
 }
 
 impl RenderPass {
     const GATE_CURVE: FadeCurve = FadeCurve::Linear;
 
-    /// Long enough that the step becomes a fade, short enough that a pause
-    /// hardly moves the media clock.
     const GATE_SMOOTH_SECONDS: f32 = 0.005;
 
     const MIN_STEREO: usize = 2;
 
-    /// A read pair, a per-track mix pair, and the bus every track sums into.
     const SCRATCH_BUF_COUNT: usize = 6;
 
     pub(crate) fn new(pool: &PcmPool, shape: StreamShape) -> Self {
@@ -251,14 +243,10 @@ impl RenderPass {
         (playback_started, leading_outcome_pos_dur)
     }
 
-    /// Follow the host's rate so the transport gate keeps its ramp length.
     pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.gate.update_sample_rate(sample_rate);
     }
 
-    /// Size the scratch for the host's declared block, on the main thread.
-    /// A pool that cannot afford it leaves the capacity short, and
-    /// `render_audio` clamps to that.
     pub(crate) fn resize(&mut self, max_frames: usize) {
         let mut capacity = usize::MAX;
         for buf in &mut self.scratch_bufs {

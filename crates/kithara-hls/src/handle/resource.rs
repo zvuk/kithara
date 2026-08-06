@@ -9,18 +9,6 @@ use url::Url;
 
 use crate::{HlsError, decrypt_processor::as_process_ctx, segment::SegmentContent};
 
-/// Narrow per-segment view over the variant's on-disk resource. A segment (or
-/// its init prefix) talks to disk only through this surface — `read_at` /
-/// `contains` / `committed_len` for reads, `acquire` for the write path —
-/// instead of reaching into [`AssetScope`] / its [`store`](AssetScope::store)
-/// directly. There is deliberately no `store()` accessor: the handle exposes
-/// only what a segment needs (narrow-handle invariant).
-///
-/// Borrows its three parts, so vending one allocates nothing — the produce
-/// core builds a handle on every readiness probe, and a `Url` owns its string.
-/// At this stage it is a thin façade: every method routes to the same `scope` /
-/// `scope.store().open_resource` op the call site ran before. The held-resource
-/// lease optimization is deferred.
 #[derive(Clone, Copy, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct ResourceHandle<'a> {

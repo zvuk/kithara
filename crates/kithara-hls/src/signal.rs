@@ -23,18 +23,6 @@ fn wake_worker(cell: &WorkerWakeCell) {
     }
 }
 
-/// Unified reader-wake handle pairing the readiness gate with the late-bound
-/// audio-worker wake. Replaces the two manually-paired handles (`ready` +
-/// `worker_wake`) threaded through `PlanCtx`, `HlsCoord`, and `FetchSlot`.
-///
-/// [`fire`](Self::fire) wakes both: the off-RT reader parked in
-/// `wait_range(_, None)` (via the gate) **and** the RT decoder's audio worker
-/// (via the late-bound wake). Used at the two downloader write/settle sites,
-/// the dispatch/commit transitions that publish new readable bytes, and the
-/// coord's seek preparation.
-///
-/// `Clone` shares both underlying `Arc`s — every clone signals the same gate and
-/// the same worker cell.
 #[derive(Clone)]
 pub(crate) struct SizeSignal {
     /// Direct off-RT peer-poll wake. Unlike `peer_wake`, this invokes the
@@ -44,21 +32,7 @@ pub(crate) struct SizeSignal {
     /// Deferred peer wake used by RT callers, which arm it for the scheduler
     /// shell to flush without invoking a task waker on the produce core.
     peer_wake: Arc<OnceLock<Arc<DeferredWake>>>,
-    /// Shared readiness gate. Every transition that can flip a blocked reader's
-    /// `wait_range` predicate (segment write/commit/fail, fence raise/clear,
-    /// seek reset, cancel) signals it; the off-RT `wait_range(_, None)` parks on
-    /// it instead of polling a wall-clock timer. See `CONTEXT.md`
-    /// "Event-driven read wait".
-    ///
-    /// Lock-free [`ThreadGate`] (atomic bump + `unpark`) rather than a condvar:
-    /// readiness edges reach it from the produce core, which must not take a
-    /// condvar mutex / `notify_all` futex. Single-waiter — the one off-RT
-    /// `wait_range(_, None)` reader registers for the `unpark` fast-path; the
-    /// counter bump alone closes the lost-wakeup window.
     ready: Arc<ThreadGate>,
-    /// Late-bound audio-worker wake, fired alongside `ready` so the RT
-    /// decoder's worker re-ticks on data arrival rather than on its 10 ms
-    /// scheduler poll.
     worker_wake: WorkerWakeCell,
 }
 

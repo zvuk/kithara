@@ -26,16 +26,11 @@ impl Consts {
     const CHANNELS: u16 = 2;
     const MEASURED_BLOCKS: usize = 20_000;
     const SAMPLE_RATE: u32 = 48_000;
-    /// One track, a crossfade pair, and a full arena (`MAX_TRACKS`).
     const TRACK_COUNTS: [usize; 3] = [1, 2, 4];
-    /// Longer than `MEASURED_BLOCKS + WARMUP_BLOCKS` of audio, so no track
-    /// reaches EOF while it is being measured.
     const TRACK_SECONDS: f64 = 600.0;
     const WARMUP_BLOCKS: usize = 2_000;
 }
 
-/// One measured lane: sorted per-block durations plus the evidence that the
-/// blocks carried a real mix.
 struct Measurement {
     durations: Vec<Duration>,
     peak: f32,
@@ -62,8 +57,6 @@ fn spec() -> PcmSpec {
     )
 }
 
-/// Build the processor the way the production stream does: `slot_channels`
-/// for the ring pair, `StreamShape` for the rate and block the host declared.
 fn processor() -> (PlayerNodeProcessor, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let shape = StreamShape {
@@ -82,8 +75,6 @@ fn send(control: &mut SlotControl, cmd: PlayerCmd) {
     }
 }
 
-/// Ship `count` ready sources across and start them, so every measured block
-/// mixes `count` tracks.
 fn load_tracks(processor: &mut PlayerNodeProcessor, control: &mut SlotControl, count: usize) {
     let pool = PcmPool::default();
     let sources: Vec<Arc<str>> = (0..count)
@@ -114,8 +105,6 @@ fn load_tracks(processor: &mut PlayerNodeProcessor, control: &mut SlotControl, c
     }
 }
 
-/// Time the three calls `process()` makes around the block. The block counter
-/// it bumps and the playing flag it reads stay outside the timer.
 fn render_block(
     processor: &mut PlayerNodeProcessor,
     control: &SlotControl,

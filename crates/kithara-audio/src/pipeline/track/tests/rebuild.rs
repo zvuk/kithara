@@ -1425,9 +1425,6 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
     }
 }
 
-/// The seek flush runs on the produce core, where returning a pooled buffer to
-/// a full shard deallocates. Every chunk it drops has to reach the retire queue
-/// the worker shell drains instead of being freed where it stands.
 #[kithara::test]
 fn a_seek_hands_its_buffered_chunks_to_the_retire_queue() {
     const STAGED: usize = 3;

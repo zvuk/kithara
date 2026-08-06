@@ -98,9 +98,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// Bounded off-RT retire queue for decode state displaced on the produce core.
     const GENERATION_RETIRE_CAPACITY: usize = 4;
 
-    /// Chunks one seek can flush out of staging plus the gapless leading and
-    /// tail buffers. Drained every scheduler pass, so the queue only has to
-    /// hold one flush.
     const CHUNK_RETIRE_CAPACITY: usize = 64;
 
     pub(crate) fn new(shared_stream: SharedStream<T>, parts: SourceParts<T>) -> Self {

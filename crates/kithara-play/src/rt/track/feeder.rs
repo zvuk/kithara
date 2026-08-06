@@ -60,8 +60,6 @@ impl PlayerResource {
     /// Number of stereo output channels.
     const STEREO_CHANNELS: usize = 2;
 
-    /// Frames each planar scratch buffer holds for a given source rate.
-    /// `write_len` / `write_pos` and the `read` range share this scale.
     fn scratch_frames(sample_rate: u32) -> Frames {
         Frames::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
     }
@@ -279,9 +277,6 @@ mod tests {
 
     use super::*;
 
-    /// The scratch is planar — one buffer per channel — so its size is a frame
-    /// count. Sizing it in interleaved samples doubles it on stereo and
-    /// contradicts the 200 ms the type documents.
     #[kithara::test]
     #[case(44_100, 8_820)]
     #[case(48_000, 9_600)]
@@ -293,7 +288,6 @@ mod tests {
         );
     }
 
-    /// The stereo interleaved length is what the buffer must NOT be sized to.
     #[kithara::test]
     fn an_interleaved_length_is_not_a_frame_count() {
         const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("2 is non-zero");

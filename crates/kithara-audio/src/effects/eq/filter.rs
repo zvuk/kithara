@@ -14,11 +14,6 @@ impl Consts {
     };
 }
 
-/// One biquad section that lands its tail on exact zero.
-///
-/// An IIR fed silence decays into the denormal range, which costs real callback
-/// time. The section flushes its state once **both** input and output fall
-/// below normal, so a live signal through a deep cut keeps its history.
 struct Section(DirectForm1<f32>);
 
 impl Section {

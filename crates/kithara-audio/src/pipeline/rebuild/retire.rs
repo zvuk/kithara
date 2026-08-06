@@ -9,10 +9,6 @@ use tracing::warn;
 
 use crate::pipeline::decode::DecoderGeneration;
 
-/// Decode state the produce core displaced and must not free: whole
-/// generations replaced by a rebuild, and the chunks a seek flushed out of the
-/// staging and gapless buffers. Both are pushed lock-free on the core and
-/// dropped by [`drain`](Self::drain) in the worker shell.
 pub(crate) struct Retired {
     chunks: ArrayQueue<PcmChunk>,
     generations: ArrayQueue<DecoderGeneration>,

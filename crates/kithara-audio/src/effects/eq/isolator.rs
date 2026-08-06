@@ -92,11 +92,6 @@ mod tests {
 
     use super::*;
 
-    /// A decaying IIR tail passes through the denormal range on its way to
-    /// zero, and denormal arithmetic costs one to two orders of magnitude more
-    /// than normal arithmetic. On an audio callback that turns a silent tail
-    /// into an xrun, so the EQ must land its tail on exact zero and never hand
-    /// a denormal to the stages after it.
     #[kithara::test]
     fn a_decaying_tail_never_leaks_denormals() {
         const SAMPLE_RATE: u32 = 48_000;

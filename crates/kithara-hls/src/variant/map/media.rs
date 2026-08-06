@@ -74,9 +74,6 @@ impl HlsVariant {
             .is_some_and(|s| s.state().is_failed())
     }
 
-    /// Narrow disk handle for media segment `seg_idx`, or `None` when the
-    /// index is out of range. Borrows the shared scope plus the segment's key
-    /// and url, so it allocates nothing.
     pub(super) fn segment_handle(&self, seg_idx: u32) -> Option<ResourceHandle<'_>> {
         Some(
             self.segments

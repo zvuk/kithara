@@ -56,13 +56,6 @@ pub(crate) struct PlanCtx {
     /// and trigger eviction/rebuild thrash.
     pub(crate) look_ahead_segments: Option<usize>,
     pub(crate) size_probe_method: SizeProbeMethod,
-    /// Unified reader-wake handle (owned by [`HlsCoord`]). Every `FetchCmd` this
-    /// plan emits fires it on each segment byte write and on settle
-    /// (commit/fail) — [`SizeSignal::fire`] wakes both the off-RT reader parked
-    /// in `wait_range(_, None)` (the moment its range fills, no wall-clock poll)
-    /// and the RT decoder's audio worker (re-ticked on data arrival rather than
-    /// on its 10 ms scheduler poll). The late-bound worker wake inside is filled
-    /// once by `HlsSource::set_worker_wake`.
     pub(crate) signal: SizeSignal,
     /// Snapshot of `SeekObserve::epoch()` at plan-time. Tagged on
     /// every emitted `FetchCmd`'s probe so integration tests can

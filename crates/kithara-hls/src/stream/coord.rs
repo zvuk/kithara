@@ -42,13 +42,6 @@ pub(crate) struct HlsCoordEnv {
     pub(crate) scope: AssetScope,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
-    /// Unified reader-wake handle: the shared readiness gate paired with the
-    /// late-bound audio-worker wake. Every transition that can flip a blocked
-    /// reader's `wait_range` predicate (segment write/commit/fail, seek reset,
-    /// cancel) signals the gate; the off-RT `wait_range(_, None)` parks on it
-    /// instead of polling a wall-clock timer. The two downloader write/settle
-    /// sites and the coord's seek preparation re-tick the audio worker via
-    /// [`SizeSignal::fire`]. See `CONTEXT.md` "Event-driven read wait".
     pub(crate) signal: SizeSignal,
 }
 
@@ -73,10 +66,6 @@ pub(crate) struct HlsCoord {
     /// Narrow seek-observe handle — derived from `seek` at construction.
     /// Used by internal methods that only need epoch/target/pending reads.
     seek_obs: Arc<dyn SeekObserve>,
-    /// Unified reader-wake handle for the off-RT blocking `wait_range(_, None)`.
-    /// Shared with every variant's fetch closures (write/commit/fail
-    /// [`SizeSignal::fire`] it) and fired by the coord on a seek reset.
-    /// See [`HlsCoordEnv::signal`].
     signal: SizeSignal,
 }
 
@@ -229,23 +218,6 @@ impl HlsCoord {
         Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
     }
 
-    /// Seek entry point. Collapses cross-variant byte-continuity layering,
-    /// cancels the incoming exact session, and wakes a parked reader.
-    ///
-    /// Runs on the control thread before the seek epoch is minted: the cancel
-    /// and the collapse both take a lock, so no reader may reach them.
-    ///
-    /// The expensive layout collapse ([`Self::reset_for_seek`]) runs only
-    /// when the active variant's offset table is not already the canonical
-    /// full-range geometry with every served size exact — a fully-resolved
-    /// single-variant track repeats the identical table, so the O(N) rebuild
-    /// is skipped. The ABR invalidation and the reader wake stay
-    /// unconditional, so the seek's cancel/wake semantics are unchanged for
-    /// every track (cross-variant, partial-download, or fully cached).
-    ///
-    /// A pending decision survives the seek: its incoming session is rebuilt in
-    /// the new seek epoch, and publication remains impossible until that
-    /// replacement is ready.
     pub(crate) fn prepare_for_seek(&self) {
         self.cancel_incoming_for_seek();
         if !self.active().layout_seek_invariant() {
@@ -552,11 +524,6 @@ impl VariantControl for HlsCoord {
     }
 }
 
-/// `ByteMap` delegates to the authoritative active session's variant.
-///
-/// Every method here is a query: [`SeekPrepare::prepare`] rebuilds the layout
-/// before the epoch exists, so resolving one on the produce core neither locks
-/// nor allocates.
 impl ByteMap for HlsCoord {
     delegate! {
         to self {

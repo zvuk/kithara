@@ -29,15 +29,11 @@ pub struct SlotControl {
     seek: SeekBindings,
 }
 
-/// Control-side seek handles for the tracks this slot shipped to the audio
-/// thread. Bound when the resource goes out, dropped on its
-/// `PlayerNotification::Unloaded`.
 #[derive(Default)]
 struct SeekBindings(SmallVec<[SeekBinding; SLOT_TRACKS]>);
 
 type SeekBinding = (Arc<str>, Arc<dyn SeekBegin>);
 
-/// Tracks one slot can hold at once.
 const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
 
 impl SlotControl {

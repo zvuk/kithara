@@ -1,12 +1,8 @@
 use super::track::PlayerTrack;
 
-/// Position of a track in [`TrackSlots`], stable while that track lives:
-/// removing one never shifts another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TrackSlot(usize);
 
-/// The processor's fixed set of loaded tracks, scanned linearly by `src`.
-/// Iteration is slot order, so eviction and cleanup are deterministic.
 pub(crate) struct TrackSlots<const CAPACITY: usize> {
     slots: [Option<PlayerTrack>; CAPACITY],
 }
@@ -25,8 +21,6 @@ impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
             #[expr($?.as_mut())]
             #[call(get_mut)]
             pub(crate) fn at_mut(&mut self, #[newtype] slot: TrackSlot) -> Option<&mut PlayerTrack>;
-            /// Whether every slot is taken. `insert` on a full set drops the newcomer,
-            /// so callers evict first.
             #[expr($.all(Option::is_some))]
             #[call(iter)]
             pub(crate) fn is_full(&self) -> bool;
@@ -64,9 +58,6 @@ impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
         self.slots.iter().flatten().count()
     }
 
-    /// Place a track, replacing any already loaded under the same `src`.
-    /// Returns the replaced track, or the newcomer when the set is full — a
-    /// `PlayerTrack` must not be freed on the audio thread.
     pub(crate) fn insert(&mut self, track: PlayerTrack) -> Option<PlayerTrack> {
         if let Some(slot) = self.slot_of(track.src()) {
             return self.slots[slot.0].replace(track);

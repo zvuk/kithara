@@ -20,39 +20,25 @@ use kithara_integration_tests::signal_pcm::{
     signal::{SignalFn, SineWave, Sweep},
 };
 
-/// Both rates fit `u16`, so every widening below is a lossless `From`.
 const HOST_RATE: u16 = 48_000;
 const INTERMEDIATE_RATE: u16 = 44_100;
 
 const LIMITER_CEILING: f32 = 0.98;
 const LIMITER_RELEASE_MS: f32 = 50.0;
 
-/// The three shapes `IsolatorEq` takes: the 0 dB bypass, the crossover chain,
-/// and the killed-band silence path.
 const EQ_GAIN_PATHS: [(&str, f32); 3] = [
     ("flat", 0.0),
     ("boosted", MAX_GAIN_DB),
     ("killed", MIN_GAIN_DB),
 ];
 
-/// 0.2 s at the host rate. The gain smoother's progress is only observable
-/// from outside by processing frames, so tests converge it by running silence.
 const SETTLE_FRAMES: usize = 9_600;
 
 const RESAMPLE_CHUNK: usize = 1_024;
-/// Frames of real signal in the resample detour.
 const ROUND_TRIP_FRAMES: usize = 12_288;
-/// Zero pad that pushes the group-delayed tail out of both stages.
 const ROUND_TRIP_PAD: usize = 2_048;
-/// Both stages start on zeroed history, so the frames at either edge of the
-/// signal are a filter ramp rather than a copy of the input.
 const ROUND_TRIP_EDGE: usize = 512;
-/// Each stage reports a whole-frame delay and the first one is rescaled into
-/// host frames, so the composite prediction carries up to one frame of
-/// rounding — that is the whole envelope a correct pair of stages may land in.
 const LAG_TOLERANCE: usize = 1;
-/// Alignment searches wider than the envelope so a stage that misreports its
-/// latency is measured rather than clamped away.
 const LAG_SEARCH: usize = 8;
 const SWEEP_BLOCK: usize = 1_024;
 
@@ -75,9 +61,6 @@ fn pcm_chunk(pool: &PcmPool, spec: PcmSpec, samples: Vec<f32>) -> PcmChunk {
     PcmChunk::new(meta, pool.attach(samples))
 }
 
-/// Renders a repo signal generator to `f32`. The generator is 16-bit, so the
-/// rendered wave carries about -90 dBFS of quantisation noise — three orders
-/// of magnitude under every tolerance below.
 fn render(signal: &dyn SignalFn, sample_rate: u16, frames: usize) -> Vec<f32> {
     (0..frames)
         .map(|frame| f32::from(signal.sample(frame, u32::from(sample_rate))) / 32_768.0)
@@ -128,8 +111,6 @@ fn limit_stereo(limiter: &mut PeakLimiter, interleaved: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-/// The master bus the way `kithara-play` wires it: the EQ node feeds the
-/// limiter node, both built on these two production types.
 fn master_chain(
     eq: &mut EqEffect,
     limiter: &mut PeakLimiter,
@@ -150,9 +131,6 @@ fn non_finite_report(label: &str, samples: &[f32]) -> Vec<String> {
         .collect()
 }
 
-/// Digital silence must stay digital silence. A non-zero floor on a paused or
-/// gap-filled bus is audible hiss, and it defeats the silence fast paths that
-/// keep the audio callback cheap.
 #[kithara::test]
 #[case::flat(0.0)]
 #[case::boosted(MAX_GAIN_DB)]
@@ -196,10 +174,6 @@ fn master_chain_maps_silence_to_exact_silence() {
     }
 }
 
-/// A flat EQ is a wire. The tolerance is zero because the contract is a
-/// bit-exact bypass rather than an approximation: at 0 dB the crossover chain
-/// never runs, so anything other than the input byte-for-byte means every
-/// listener who never touched the EQ is hearing a filter.
 #[kithara::test]
 #[case::mono_three_band(1, 3)]
 #[case::stereo_five_band(2, 5)]
@@ -218,8 +192,6 @@ fn eq_at_zero_db_is_bit_exact_identity(#[case] channels: u16, #[case] band_count
     );
 }
 
-/// The identity has to come back after the user rides a band and returns it to
-/// centre — a knob round trip must leave no residue in the signal.
 #[kithara::test]
 fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip() {
     let pool = pcm_pool();
@@ -241,9 +213,6 @@ fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip() {
     );
 }
 
-/// Below the ceiling the limiter is required to be a wire, not a near-wire:
-/// residual gain movement on quiet material is audible as pumping, so the
-/// contract is bit-exact and the tolerance is zero.
 #[kithara::test]
 #[case::default_ceiling(LIMITER_CEILING)]
 #[case::unity_ceiling(1.0)]
@@ -265,8 +234,6 @@ fn limiter_below_ceiling_is_bit_exact_identity(#[case] ceiling: f32) {
     );
 }
 
-/// A no-op master bus must be a no-op end to end. Composing the stages is
-/// where a unity-check regression shows up that neither stage exposes alone.
 #[kithara::test]
 fn master_chain_at_unity_is_bit_exact_identity() {
     let pool = pcm_pool();
@@ -284,9 +251,6 @@ fn master_chain_at_unity_is_bit_exact_identity() {
     );
 }
 
-/// No input may put a non-finite sample on the bus, and the stage behind it
-/// must recover: a `NaN` latched into an IIR silences that channel for the
-/// rest of the track, and a `NaN` handed to the device is a click at best.
 #[kithara::test]
 #[case::tiny(1e-30)]
 #[case::subnormal(f32::MIN_POSITIVE / 2.0)]
@@ -367,8 +331,6 @@ fn build_stage(pool: &PcmPool, source_rate: u16, target_rate: u16) -> impl Resam
     create_resampler(&config).expect("rubato stage must build")
 }
 
-/// Drives one fixed-ratio stage over `input`; a trailing remainder shorter
-/// than the backend's fixed input block stays unconsumed.
 fn run_stage(stage: &mut dyn Resampler, input: &[f32]) -> Vec<f32> {
     let mut out = Vec::new();
     let mut cursor = 0;
@@ -389,10 +351,6 @@ fn run_stage(stage: &mut dyn Resampler, input: &[f32]) -> Vec<f32> {
     out
 }
 
-/// Runs the 48k -> 44.1k -> 48k detour and returns the host-rate output next
-/// to the delay the two stages report for it. The down-sampler reports its
-/// delay in intermediate frames, so the up-sampler's ratio rescales it before
-/// the two add up.
 fn round_trip(pool: &PcmPool, input: &[f32]) -> (Vec<f32>, usize) {
     let mut down = build_stage(pool, HOST_RATE, INTERMEDIATE_RATE);
     let mut up = build_stage(pool, INTERMEDIATE_RATE, HOST_RATE);
@@ -426,20 +384,10 @@ fn rms(block: &[f32]) -> f32 {
     (power / f32::from(u16::try_from(block.len()).expect("block length fits u16"))).sqrt()
 }
 
-/// Worst case, aligning on whole frames leaves half a frame of delay, which
-/// moves a tone of `freq_hz` by `pi * freq_hz / rate` radians and, for a
-/// unit-peak sine, the same figure in amplitude. The 0.005 (-46 dBFS) term
-/// covers the interpolator's passband ripple and the generator's 16-bit floor,
-/// and is what the observed deviation actually sits inside.
 fn shape_tolerance(freq_hz: f32) -> f32 {
     core::f32::consts::PI * freq_hz / f32::from(HOST_RATE) + 0.005
 }
 
-/// A 48k -> 44.1k -> 48k detour is what every 44.1 kHz track survives on a
-/// 48 kHz output device. Its shape has to come back: the wave is compared
-/// sample by sample once the stages' own group delay is taken out, so a
-/// resampler that smears or shifts it fails here instead of sounding dull in
-/// the field.
 #[kithara::test]
 #[case::low(200.0)]
 #[case::mid(1_000.0)]
@@ -477,13 +425,6 @@ fn resample_round_trip_preserves_wave_shape(#[case] freq_hz: f32) {
     );
 }
 
-/// The same detour must not cost any band its level. A 100 Hz -> 15 kHz log
-/// sweep stays inside the intermediate stage's passband (0.95 x 22.05 kHz), so
-/// every block has to come back with the energy it went in with. Block RMS is
-/// the right lens here: it ignores the sub-frame delay that blocks a
-/// sample-wise comparison at 15 kHz. The 3 % budget is 0.26 dB — an order of
-/// magnitude below an audible level change, so a lost band or a tilted
-/// passband cannot slip through it.
 #[kithara::test]
 fn resample_round_trip_keeps_sweep_band_energy() {
     const TOLERANCE: f32 = 0.03;
@@ -514,15 +455,6 @@ fn resample_round_trip_keeps_sweep_band_energy() {
     }
 }
 
-/// Given finite input a resampler stage owes finite output, and the extremes
-/// a track can legally reach — a subnormal and a huge sample — both survive
-/// the detour intact.
-///
-/// Non-finite input is out of scope on purpose: a sinc stage spreads whatever
-/// it is fed across its whole FIR window, so the only useful place to stop a
-/// `NaN` is before it arrives. That contract belongs to the decode adapter
-/// that owns the samples by value, and is pinned by
-/// `resampler_never_sees_a_sample_the_file_poisoned` in `kithara-decode`.
 #[kithara::test]
 #[case::tiny(1e-30)]
 #[case::huge(1e30)]

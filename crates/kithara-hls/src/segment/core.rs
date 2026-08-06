@@ -83,9 +83,6 @@ impl Segment {
         self.resource(scope).read_at(range, dst)
     }
 
-    /// Narrow disk handle for this slot, borrowing the variant's shared scope
-    /// plus the slot's key and url — the same handle `segment_handle` /
-    /// `init_handle` vend.
     pub(crate) fn resource<'a>(&'a self, scope: &'a AssetScope) -> ResourceHandle<'a> {
         ResourceHandle::new(scope, self.resource_id(), self.url())
     }

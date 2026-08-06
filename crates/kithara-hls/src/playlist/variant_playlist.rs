@@ -9,11 +9,6 @@ use super::{
 };
 use crate::HlsResult;
 
-/// Loadable media playlist for one master variant: a narrow `PlaylistCache`
-/// handle plus that variant's media `.m3u8` cache identity, tagged with its
-/// [`VariantId`]. [`load`](Self::load) delegates to
-/// [`PlaylistCache::media_playlist`], preserving the per-variant `OnceCell`
-/// dedup and disk-cache semantics.
 pub(crate) struct VariantPlaylist {
     cache: PlaylistCache,
     key: ResourceKey,
@@ -22,13 +17,6 @@ pub(crate) struct VariantPlaylist {
 }
 
 impl VariantPlaylist {
-    /// Build a loadable for `variant`, resolving its media URL against
-    /// `master_url` through the cache's base-override-aware
-    /// [`PlaylistCache::resolve_url`] and minting its cache key from `scope`.
-    /// Preserves `VariantId(variant.id.0)` exactly.
-    ///
-    /// # Errors
-    /// Returns an error when the variant URL fails to resolve.
     pub(crate) fn for_variant(
         cache: &PlaylistCache,
         scope: &AssetScope,

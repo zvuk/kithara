@@ -36,9 +36,6 @@ enum TrackCommandScenario {
     LoadThenUnload,
 }
 
-/// Firewheel never hands `process` more frames than the `max_block_frames` it
-/// declared in `new_stream`, so tests that render a block must declare at least
-/// that block — the scratch is sized here and never grown on the audio thread.
 const MAX_BLOCK_FRAMES: u32 = 1024;
 
 fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {

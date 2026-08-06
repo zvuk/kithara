@@ -740,7 +740,6 @@ fn drain_tail(tail_buffer: &mut TailBuffer, tail_buffered_frames: &mut u64) -> G
     ready
 }
 
-/// Empty a buffer into `retire` instead of dropping its chunks in place.
 fn retire_buffer(buffer: &mut TailBuffer, retire: &dyn ChunkSink) {
     for chunk in buffer.drain(..) {
         retire.retire(chunk);

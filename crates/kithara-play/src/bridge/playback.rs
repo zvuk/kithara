@@ -49,7 +49,6 @@ pub struct PlaybackShared {
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,
-    /// Counters the audio thread keeps in place of logging.
     metrics: RtMetrics,
 }
 

@@ -234,9 +234,6 @@ where
         self.finish_output()
     }
 
-    /// Pack the planar output into one interleaved buffer. The two sides are
-    /// sized in different units, so the conversion is named rather than a bare
-    /// multiply.
     fn interleave(&self, frames: Frames) -> DecodeResult<PcmBuf> {
         let channels = self.channel_count();
         let mut samples = self.pool.get();
@@ -250,8 +247,6 @@ where
         Ok(samples)
     }
 
-    /// Channel count as the non-zero the unit conversions require. `PcmSpec`
-    /// guarantees it, and a zero would make a frame count meaningless.
     fn channel_count(&self) -> NonZeroUsize {
         NonZeroUsize::new(self.channels()).unwrap_or(NonZeroUsize::MIN)
     }

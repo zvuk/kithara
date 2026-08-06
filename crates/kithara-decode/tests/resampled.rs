@@ -29,8 +29,6 @@ const WAV_HEADER_SIZE: usize = 44;
 const WAV_PCM_FORMAT: u16 = 1;
 const WAV_FLOAT_FORMAT: u16 = 3;
 const MARKERS: [[f32; FRAMES]; 2] = [[1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0]];
-/// One frame per hazard a 32-bit float file can legally carry, interleaved
-/// against an ordinary sample so the frame count still matches [`FRAMES`].
 const POISON: [[f32; FRAMES]; 2] = [
     [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e-40],
     [0.25, -0.25, 0.5, -0.5],
@@ -110,7 +108,6 @@ impl Resampler for AdapterProbeResampler {
     fn reset(&mut self) {}
 }
 
-/// Records every sample the adapter hands the backend.
 type Captured = Arc<Mutex<Vec<f32>>>;
 
 #[derive(Clone)]
@@ -426,8 +423,6 @@ fn test_wav() -> Vec<u8> {
     wav
 }
 
-/// A 32-bit float WAV carrying [`POISON`]. Nothing is malformed - an IEEE float
-/// file may legally hold any bit pattern.
 fn poisoned_float_wav() -> Vec<u8> {
     const BYTES_PER_SAMPLE: u16 = 4;
     const BITS_PER_SAMPLE: u16 = BYTES_PER_SAMPLE * 8;

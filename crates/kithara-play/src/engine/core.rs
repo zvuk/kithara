@@ -164,8 +164,6 @@ impl EngineImpl {
         result
     }
 
-    /// Begin a seek for every track a slot holds, on the calling (control)
-    /// thread. The processor then only re-bases its own buffers.
     pub(crate) fn begin_slot_seek(&self, slot: SlotId, position: Duration) {
         let slots = self.slots.lock();
         if let Some(handle) = slots.get(slot) {
@@ -174,8 +172,6 @@ impl EngineImpl {
         drop(slots);
     }
 
-    /// Release the control half of a track's seek path once the processor
-    /// reports it unloaded.
     pub(crate) fn unbind_slot_seek(&self, slot: SlotId, src: &str) {
         let mut slots = self.slots.lock();
         if let Some(handle) = slots.get_mut(slot) {

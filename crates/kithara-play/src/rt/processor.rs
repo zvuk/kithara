@@ -150,20 +150,12 @@ impl PlayerNodeProcessor {
         }
     }
 
-    /// Hand a retired track to the control thread for freeing. A full ring is
-    /// the one path that frees a `PlayerTrack` on the audio thread, so it is
-    /// counted rather than discarded silently.
     pub(super) fn discard_track(&mut self, track: PlayerTrack) {
         if self.trash_tx.try_push(track).is_err() {
             self.playback.metrics().record_trash_overflow();
         }
     }
 
-    /// Evict tracks to make room when at capacity.
-    ///
-    /// Tracks are evicted in priority order: `Finished` first, then `FadingOut`,
-    /// `Preloading`, `FadingIn`, and `Playing` last. Ties break by slot order,
-    /// so eviction is deterministic even when every track is in the same state.
     pub(super) fn evict_tracks_if_needed(&mut self) {
         while self.tracks.is_full() {
             let Some((slot, state)) = self
@@ -212,21 +204,18 @@ impl PlayerNodeProcessor {
             .for_each(|(_, track)| track.resource().set_host_sample_rate(sample_rate));
     }
 
-    /// Unload a track by source identifier.
     pub(super) fn unload_track(&mut self, src: &str) {
         if let Some(track) = self.tracks.remove(src) {
             self.retire(track);
         }
     }
 
-    /// Unload the track held in one slot.
     pub(super) fn unload_slot(&mut self, slot: TrackSlot) {
         if let Some(track) = self.tracks.remove_at(slot) {
             self.retire(track);
         }
     }
 
-    /// Send a removed track to the control thread and announce it.
     fn retire(&mut self, track: PlayerTrack) {
         let src = Arc::clone(track.src());
         self.discard_track(track);

@@ -79,8 +79,6 @@ fn load(control: &mut SlotControl, resource: Box<PlayerResource>) {
         .ok();
 }
 
-/// Load one track, start it, and render blocks through the same path
-/// `process()` takes. Returns the processor and the last rendered left channel.
 fn render_loaded_blocks(
     src: &str,
     resource: Box<PlayerResource>,
@@ -128,10 +126,6 @@ fn decode_error_is_counted_not_logged() {
     );
 }
 
-/// The scratch is sized once off the audio thread and reused block after block
-/// without being re-zeroed, so a source with nothing ready must write silence
-/// over its whole window. Otherwise the underrun replays the previous block —
-/// audibly, as a stutter.
 #[kithara::test]
 fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
     let (processor, rendered) =
@@ -155,10 +149,6 @@ fn a_healthy_track_reports_no_trouble() {
     assert_eq!(metrics(&processor), RtMetricsSnapshot::default());
 }
 
-/// The blocking half of a seek — the event publish and the worker wake — must
-/// happen on the control thread. What the processor runs is only the lock-free
-/// re-base, so a seek reaching a track through `PlayerCmd::Seek` must never
-/// call the reader's blocking `seek`.
 #[kithara::test]
 fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
     let (reader, counts) = SeekSplitReader::new(spec());
@@ -195,8 +185,6 @@ fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
     );
 }
 
-/// The control side declares through the handle the slot kept when the
-/// resource crossed over, and forgets it once the track is unloaded.
 #[kithara::test]
 fn the_slot_begins_seeks_for_the_tracks_it_shipped() {
     let (reader, counts) = SeekSplitReader::new(spec());
@@ -240,11 +228,6 @@ fn evicting_an_audible_track_is_counted() {
     );
 }
 
-/// Firewheel bounds a block by the `max_block_frames` declared in
-/// `new_stream`; a host that ignores that must not make the audio thread grow a
-/// pooled buffer. The render is clamped to the scratch, and `process()` reports
-/// `OutputsModified` for the whole block the host asked for — so every frame of
-/// it must be written, the tail as silence.
 #[kithara::test]
 fn a_block_larger_than_declared_is_clamped_not_grown() {
     let (mut processor, mut control) = processor();

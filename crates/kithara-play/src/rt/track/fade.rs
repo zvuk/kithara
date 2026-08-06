@@ -71,8 +71,6 @@ impl TrackFade {
         );
     }
 
-    /// Take the track to full level. A settled mix snaps, so a start with no
-    /// crossfade stays sample-exact; a fade in flight keeps its ramp.
     pub(super) fn play(&mut self) {
         let settled = self.mix.has_settled();
         self.mix.set_mix(Mix::FULLY_DRY, self.curve);
@@ -93,8 +91,6 @@ impl TrackFade {
         self.mix.reset_to_target();
     }
 
-    /// Re-arm the mix for a new fade length. The new smoother starts at the
-    /// state's end point, costing a fade in flight its ramp.
     pub(super) fn update_duration(
         &mut self,
         duration: f32,

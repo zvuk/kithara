@@ -44,11 +44,6 @@ impl SeekHandle {
 }
 
 impl SeekBegin for SeekHandle {
-    /// Mints the epoch the reader picks up on its next block.
-    ///
-    /// The byte space is rebuilt first, so every observer of the new epoch —
-    /// the produce core included — resolves against a layout that already
-    /// matches the seek and never has to rebuild one itself.
     fn begin(&self, position: Duration) -> SeekOutcome {
         if let Some(prepare) = &self.seek_prepare {
             prepare.prepare();

@@ -27,17 +27,6 @@ use crate::{
 /// cache coordination, fetching, validation, and processor execution.
 #[derive(Clone)]
 pub struct KeyStore {
-    /// In-memory hot-path cache of validated final keys.
-    ///
-    /// `get_cached_key` reads from here under a synchronous segment
-    /// fetch after prefetch, so that hot path stays zero-I/O. The final key is
-    /// persisted to the [`AssetStore`](kithara_assets::AssetStore) by
-    /// [`Self::get_raw_key`] under
-    /// the same layout-derived URL resource key as plain HLS-AES keys
-    /// — re-opening the same track in a later session resolves through
-    /// disk cache without re-hitting the key endpoint. The cached
-    /// **plaintext** is deterministic per track/quality and safe to
-    /// persist; request-specific wire material never touches disk.
     keys: Arc<DashMap<Url, Bytes>>,
     scope: AssetScope,
     /// Byte buffer pool for reading cached key bodies.

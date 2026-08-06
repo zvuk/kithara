@@ -68,9 +68,6 @@ impl GaplessStage {
         next
     }
 
-    /// Drop pending output and reset seek-sensitive trimming state.
-    /// Abandon the pending batch and the trimmer's seek-sensitive state.
-    /// Runs on the produce core, so the chunks go to `retire`.
     pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkSink) {
         if let Some(pending) = self.pending.take() {
             for chunk in pending {
