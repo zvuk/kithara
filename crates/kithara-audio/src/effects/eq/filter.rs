@@ -14,13 +14,6 @@ impl Consts {
     };
 }
 
-/// Whether `sample` is a denormal — non-zero but below the smallest normal
-/// float, where arithmetic costs one to two orders of magnitude more.
-#[inline]
-fn is_subnormal(sample: f32) -> bool {
-    sample != 0.0 && sample.abs() < f32::MIN_POSITIVE
-}
-
 /// One biquad section that lands its tail on exact zero.
 ///
 /// An IIR fed silence decays geometrically and would otherwise spend minutes
@@ -39,7 +32,7 @@ impl Section {
     #[inline]
     fn run(&mut self, input: f32) -> f32 {
         let out = self.0.run(input);
-        if is_subnormal(out) && input.abs() < f32::MIN_POSITIVE {
+        if out.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
             self.0.reset_state();
             return 0.0;
         }

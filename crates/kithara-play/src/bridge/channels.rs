@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 use super::PlaybackShared;
 use crate::{
     bridge::{PlayerCmd, PlayerNotification, SharedEq},
-    rt::track::PlayerTrack,
+    rt::{PlayerNodeProcessor, track::PlayerTrack},
 };
 
 /// RT-owned channel halves and playback atomics for one player node.
@@ -41,8 +41,8 @@ struct SeekBindings(SmallVec<[SeekBinding; SLOT_TRACKS]>);
 
 type SeekBinding = (Arc<str>, Arc<dyn SeekDeclare>);
 
-/// Tracks one slot can hold at once, mirroring `PlayerNodeProcessor::MAX_TRACKS`.
-const SLOT_TRACKS: usize = 4;
+/// Tracks one slot can hold at once.
+const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
 
 impl SlotControl {
     /// Record the control half of a track's seek path.

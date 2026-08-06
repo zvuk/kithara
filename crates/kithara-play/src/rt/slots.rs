@@ -1,5 +1,3 @@
-use kithara_platform::sync::Arc;
-
 use super::track::PlayerTrack;
 
 /// Position of a track in [`TrackSlots`].
@@ -30,8 +28,7 @@ impl<const CAPACITY: usize> Default for TrackSlots<CAPACITY> {
 
 impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
     pub(crate) fn at_mut(&mut self, slot: TrackSlot) -> Option<&mut PlayerTrack> {
-        self.iter_mut()
-            .find_map(|(at, track)| (at == slot).then_some(track))
+        self.slots.get_mut(slot.0)?.as_mut()
     }
 
     pub(crate) fn get(&self, src: &str) -> Option<&PlayerTrack> {
@@ -47,7 +44,7 @@ impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
     /// Whether every slot is taken. `insert` on a full set drops the newcomer,
     /// so callers evict first.
     pub(crate) fn is_full(&self) -> bool {
-        self.len() == CAPACITY
+        self.slots.iter().all(Option::is_some)
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (TrackSlot, &PlayerTrack)> {
@@ -74,8 +71,7 @@ impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
     /// — never silently drops it, since a `PlayerTrack` must not be freed on
     /// the audio thread.
     pub(crate) fn insert(&mut self, track: PlayerTrack) -> Option<PlayerTrack> {
-        let src = Arc::clone(track.src());
-        if let Some(slot) = self.slot_of(&src) {
+        if let Some(slot) = self.slot_of(track.src()) {
             return self.slots[slot.0].replace(track);
         }
         match self.slots.iter_mut().find(|slot| slot.is_none()) {
