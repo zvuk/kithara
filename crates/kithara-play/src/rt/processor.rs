@@ -154,9 +154,9 @@ impl PlayerNodeProcessor {
 
         // Playback has stopped once nothing audible remains: either the slot
         // set is empty (all finished discarded) or only the retained,
-        // played-out track is left. The retained track is inert in
-        // `render_audio` (gated by `is_playing`), so `is_playing()` correctly
-        // stays false until a seek revives it.
+        // played-out track is left. The retained track is `Finished`, so
+        // `render_audio` skips it and `is_playing()` stays false until a seek
+        // revives it.
         if self.tracks.len() == 0 || retain.is_some() {
             self.playback.playing.store(false, Ordering::SeqCst);
         }

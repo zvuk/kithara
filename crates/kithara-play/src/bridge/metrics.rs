@@ -20,7 +20,7 @@ pub struct RtMetrics {
 pub struct RtMetricsSnapshot {
     /// Blocks where the source reported a non-recoverable decode error.
     pub(crate) decode_errors: u64,
-    /// Tracks evicted while still audible, because the arena was at capacity.
+    /// Tracks evicted while still audible, because every slot was taken.
     pub(crate) evicted_playing: u64,
     /// Tracks freed on the audio thread because the trash ring was full.
     pub(crate) trash_overflows: u64,

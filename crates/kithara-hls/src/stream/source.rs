@@ -22,7 +22,7 @@ use crate::{peer::HlsPeer, reader::HlsReaderEventSink};
 /// state is forwarded to `HlsCoord` via `delegate!` — coord is the
 /// single owner of the active-variant atomic, the cross-variant
 /// history, and the asset store. `HlsSource` keeps only what coord
-/// legitimately should not know about: the [`EventBus`] (for
+/// legitimately should not know about: the [`EventBus`](kithara_events::EventBus) (for
 /// [`HlsReaderEventSink`]) and the [`HlsPeer`] handle (for teardown on
 /// drop and for the ABR handle the audio FSM consumes).
 pub struct HlsSource {

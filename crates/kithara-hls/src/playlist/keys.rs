@@ -31,7 +31,8 @@ pub struct KeyStore {
     ///
     /// `get_cached_key` reads from here under a synchronous segment
     /// fetch after prefetch, so that hot path stays zero-I/O. The final key is
-    /// persisted to the [`AssetStore`] by [`Self::get_raw_key`] under
+    /// persisted to the [`AssetStore`](kithara_assets::AssetStore) by
+    /// [`Self::get_raw_key`] under
     /// the same layout-derived URL resource key as plain HLS-AES keys
     /// — re-opening the same track in a later session resolves through
     /// disk cache without re-hitting the key endpoint. The cached
@@ -189,7 +190,8 @@ impl KeyStore {
     ///
     /// Keys normally come from the in-memory map populated by a prior
     /// [`Self::get_raw_key`] call on this session. The persistent
-    /// [`AssetStore`] remains a fallback for callers that have not prefetched.
+    /// [`AssetStore`](kithara_assets::AssetStore) remains a fallback for
+    /// callers that have not prefetched.
     ///
     /// # Errors
     /// Returns an error when the key hasn't been fetched yet.

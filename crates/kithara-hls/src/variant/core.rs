@@ -62,9 +62,7 @@ pub(crate) struct PlanCtx {
     /// in `wait_range(_, None)` (the moment its range fills, no wall-clock poll)
     /// and the RT decoder's audio worker (re-ticked on data arrival rather than
     /// on its 10 ms scheduler poll). The late-bound worker wake inside is filled
-    /// once by `HlsSource::set_worker_wake`; only the two downloader-thread sites
-    /// fire it — the coord's RT-reachable fence/seek signals use
-    /// [`SizeSignal::fire_ready_only`].
+    /// once by `HlsSource::set_worker_wake`.
     pub(crate) signal: SizeSignal,
     /// Snapshot of `SeekObserve::epoch()` at plan-time. Tagged on
     /// every emitted `FetchCmd`'s probe so integration tests can

@@ -47,10 +47,8 @@ pub(crate) struct HlsCoordEnv {
     /// reader's `wait_range` predicate (segment write/commit/fail, seek reset,
     /// cancel) signals the gate; the off-RT `wait_range(_, None)` parks on it
     /// instead of polling a wall-clock timer. The two downloader write/settle
-    /// sites additionally re-tick the audio worker via [`SizeSignal::fire`];
-    /// the coord's RT-reachable seek signal uses
-    /// [`SizeSignal::fire_ready_only`]. See `CONTEXT.md`
-    /// "Event-driven read wait".
+    /// sites and the coord's seek preparation re-tick the audio worker via
+    /// [`SizeSignal::fire`]. See `CONTEXT.md` "Event-driven read wait".
     pub(crate) signal: SizeSignal,
 }
 
@@ -77,8 +75,8 @@ pub(crate) struct HlsCoord {
     seek_obs: Arc<dyn SeekObserve>,
     /// Unified reader-wake handle for the off-RT blocking `wait_range(_, None)`.
     /// Shared with every variant's fetch closures (write/commit/fail
-    /// [`SizeSignal::fire`] it) and signalled by the coord on a seek reset
-    /// ([`SizeSignal::fire_ready_only`]). See [`HlsCoordEnv::signal`].
+    /// [`SizeSignal::fire`] it) and fired by the coord on a seek reset.
+    /// See [`HlsCoordEnv::signal`].
     signal: SizeSignal,
 }
 
