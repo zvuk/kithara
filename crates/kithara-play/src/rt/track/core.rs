@@ -107,10 +107,10 @@ impl PlayerTrack {
             #[must_use]
             #[expr(observed_duration(self.observed_duration, $))]
             pub fn duration(&self) -> f64;
-            /// Control-plane handle used to declare this track's seeks off
+            /// Control-plane handle used to begin this track's seeks off
             /// the audio thread.
             #[must_use]
-            pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekDeclare>>;
+            pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
             /// Source identifier.
             #[must_use]
             pub fn src(&self) -> &Arc<str>;
@@ -156,10 +156,10 @@ impl PlayerTrack {
         &self.resource
     }
 
-    /// Re-base the track on a seek the control thread already declared.
+    /// Re-base the track on a seek the control thread already begun.
     ///
     /// Lock-free, so it is safe from the audio callback: it drops what the
-    /// feeder buffered and moves the media clock, while the declaring half of
+    /// feeder buffered and moves the media clock, while the begin half of
     /// the seek — the epoch, the event, the wakes — happened on the control
     /// thread through [`PlayerResource::seek_handle`].
     pub fn seek(&mut self, seconds: f64) {

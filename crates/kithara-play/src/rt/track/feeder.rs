@@ -244,10 +244,10 @@ impl PlayerResource {
         }
     }
 
-    /// Drop everything buffered ahead of a seek the control thread declared.
+    /// Drop everything buffered ahead of a seek the control thread began.
     ///
     /// Lock-free: clears this wrapper's scratch and lets the reader pick up the
-    /// declared epoch itself (`sync_seek`), which recycles its chunks into the
+    /// begun epoch itself (`sync_seek`), which recycles its chunks into the
     /// trash outlet rather than freeing them here.
     pub fn reset_for_seek(&mut self) {
         self.resource.get_mut().sync_seek();
@@ -257,9 +257,9 @@ impl PlayerResource {
         self.failed = false;
     }
 
-    /// Control-plane handle used to declare a seek off the audio thread.
+    /// Control-plane handle used to begin a seek off the audio thread.
     #[must_use]
-    pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekDeclare>> {
+    pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>> {
         self.resource.get().seek_handle()
     }
 

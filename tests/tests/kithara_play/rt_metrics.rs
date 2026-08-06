@@ -179,11 +179,15 @@ fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
         0,
         "the audio thread must not reach the blocking seek"
     );
-    assert_eq!(counts.syncs(), 1, "it adopts the declared target instead");
     assert_eq!(
-        counts.declares(),
+        counts.syncs(),
+        1,
+        "it adopts the target that begin published"
+    );
+    assert_eq!(
+        counts.begins(),
         0,
-        "declaring belongs to the control thread, not to this call"
+        "beginning belongs to the control thread, not to this call"
     );
     assert!(
         (processor.track(&src).expect("track loaded").position() - 30.0).abs() < 0.001,
@@ -194,21 +198,21 @@ fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
 /// The control side declares through the handle the slot kept when the
 /// resource crossed over, and forgets it once the track is unloaded.
 #[kithara::test]
-fn the_slot_declares_seeks_for_the_tracks_it_shipped() {
+fn the_slot_begins_seeks_for_the_tracks_it_shipped() {
     let (reader, counts) = SeekSplitReader::new(spec());
     let resource = boxed(Resource::from_reader(reader, None), "split.mp3");
     let handle = resource.seek_handle().expect("reader splits its seek");
     let (_, mut control) = processor();
 
     control.bind_seek(Arc::from("split.mp3"), handle);
-    control.declare_seek(Duration::from_secs(30));
-    assert_eq!(counts.declares(), 1);
+    control.begin_seek(Duration::from_secs(30));
+    assert_eq!(counts.begins(), 1);
     assert_eq!(counts.blocking_seeks(), 0);
 
     control.unbind_seek("split.mp3");
-    control.declare_seek(Duration::from_secs(45));
+    control.begin_seek(Duration::from_secs(45));
     assert_eq!(
-        counts.declares(),
+        counts.begins(),
         1,
         "an unloaded track must not be seeked any more"
     );

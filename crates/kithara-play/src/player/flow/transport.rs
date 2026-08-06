@@ -145,11 +145,11 @@ impl PlayerImpl {
         let target_secs = seconds.max(0.0);
         let target = Duration::from_secs_f64(target_secs);
 
-        // Declare here, on the control thread: minting the source epoch
+        // Begin here, on the control thread: minting the source epoch
         // publishes an event and wakes the decode worker, both of which take
         // locks. The processor's `PlayerCmd::Seek` then only re-bases the
         // track's own buffers and media clock, lock-free.
-        self.core.engine.declare_slot_seek(slot_id, target);
+        self.core.engine.begin_slot_seek(slot_id, target);
         let outcome = match self.duration_seconds() {
             Some(dur) if target_secs >= dur => SeekOutcome::PastEof {
                 target,

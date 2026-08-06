@@ -4,14 +4,14 @@ use kithara_stream::{DeferredWake, PlayheadWrite, SeekControl, SeekPrepare};
 use tracing::trace;
 
 use super::{AudioWorkerHandle, PreloadGate, SeekOutcome};
-use crate::traits::SeekDeclare;
+use crate::traits::SeekBegin;
 
 /// The control-plane half of a seek.
 ///
-/// Declaring a seek rebuilds the source's byte space, publishes a lifecycle
+/// Beginning a seek rebuilds the source's byte space, publishes a lifecycle
 /// event, nudges the segment peer and wakes the decode worker. Each of those
 /// takes a lock, so none of them may run on an audio device callback. Holding
-/// them behind a `Send + Sync` handle lets the control thread declare the seek
+/// them behind a `Send + Sync` handle lets the control thread begin the seek
 /// while the audio thread only picks up the new epoch and drops what it had
 /// buffered — see [`Audio::sync_seek`](super::Audio::sync_seek).
 pub struct SeekHandle {
@@ -47,13 +47,13 @@ impl SeekHandle {
     }
 }
 
-impl SeekDeclare for SeekHandle {
+impl SeekBegin for SeekHandle {
     /// Mints the epoch the reader picks up on its next block.
     ///
     /// The byte space is rebuilt first, so every observer of the new epoch —
     /// the produce core included — resolves against a layout that already
     /// matches the seek and never has to rebuild one itself.
-    fn declare(&self, position: Duration) -> SeekOutcome {
+    fn begin(&self, position: Duration) -> SeekOutcome {
         if let Some(prepare) = &self.seek_prepare {
             prepare.prepare();
         }
@@ -72,7 +72,7 @@ impl SeekDeclare for SeekHandle {
             worker.wake();
         }
 
-        trace!(?position, epoch, "seek declared");
+        trace!(?position, epoch, "seek begun");
         match self.playhead.duration() {
             Some(duration) if position >= duration => SeekOutcome::PastEof {
                 duration,

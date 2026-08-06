@@ -15,9 +15,7 @@ use std::{
 };
 
 use kithara::{
-    audio::{
-        PcmControl, PcmRead, PcmSession, PendingReason, ReadOutcome, SeekDeclare, SeekOutcome,
-    },
+    audio::{PcmControl, PcmRead, PcmSession, PendingReason, ReadOutcome, SeekBegin, SeekOutcome},
     decode::{DecodeError, PcmSpec, TrackMetadata},
     events::EventBus,
     platform::time::Duration,
@@ -668,7 +666,7 @@ impl PcmControl for FaultyPcmReader {
 #[derive(Clone, Default)]
 pub struct SeekSplitCounts {
     pub blocking_seeks: Arc<AtomicU64>,
-    pub declares: Arc<AtomicU64>,
+    pub begins: Arc<AtomicU64>,
     pub syncs: Arc<AtomicU64>,
 }
 
@@ -679,8 +677,8 @@ impl SeekSplitCounts {
     }
 
     #[must_use]
-    pub fn declares(&self) -> u64 {
-        self.declares.load(Ordering::Relaxed)
+    pub fn begins(&self) -> u64 {
+        self.begins.load(Ordering::Relaxed)
     }
 
     #[must_use]
@@ -691,9 +689,9 @@ impl SeekSplitCounts {
 
 struct SeekSpy(SeekSplitCounts);
 
-impl SeekDeclare for SeekSpy {
-    fn declare(&self, position: Duration) -> SeekOutcome {
-        self.0.declares.fetch_add(1, Ordering::Relaxed);
+impl SeekBegin for SeekSpy {
+    fn begin(&self, position: Duration) -> SeekOutcome {
+        self.0.begins.fetch_add(1, Ordering::Relaxed);
         SeekOutcome::Landed {
             target: position,
             landed_at: position,
@@ -775,7 +773,7 @@ impl PcmControl for SeekSplitReader {
         })
     }
 
-    fn seek_handle(&self) -> Option<Arc<dyn SeekDeclare>> {
+    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
         Some(Arc::new(SeekSpy(self.counts.clone())))
     }
 

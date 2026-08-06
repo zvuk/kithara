@@ -126,10 +126,10 @@ impl OfflinePlayer {
     /// Panics if the command channel is full.
     pub fn seek(&mut self, seconds: f64, seek_epoch: u64) {
         self.playback.seek_epoch.store(seek_epoch, Ordering::SeqCst);
-        // Declare first, off the render loop — the blocking half of a seek —
+        // Begin first, off the render loop — the blocking half of a seek —
         // then hand the processor the lock-free re-base.
         self.control
-            .declare_seek(kithara::platform::time::Duration::from_secs_f64(seconds));
+            .begin_seek(kithara::platform::time::Duration::from_secs_f64(seconds));
         self.control
             .cmd_tx
             .try_push(PlayerCmd::Seek {

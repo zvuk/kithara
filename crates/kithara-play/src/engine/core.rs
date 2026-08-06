@@ -146,7 +146,7 @@ impl EngineImpl {
         let result = match slots.get_mut(slot) {
             Some(handle) => {
                 // A resource crossing to the audio thread leaves its seek
-                // handle behind: declaring a seek takes locks, so it stays on
+                // handle behind: beginning a seek takes locks, so it stays on
                 // this side. Released on the matching `Unloaded`.
                 if let PlayerCmd::LoadTrack { resource, .. } = &cmd
                     && let Some(seek) = resource.seek_handle()
@@ -164,12 +164,12 @@ impl EngineImpl {
         result
     }
 
-    /// Declare a seek for every track a slot holds, on the calling (control)
+    /// Begin a seek for every track a slot holds, on the calling (control)
     /// thread. The processor then only re-bases its own buffers.
-    pub(crate) fn declare_slot_seek(&self, slot: SlotId, position: Duration) {
+    pub(crate) fn begin_slot_seek(&self, slot: SlotId, position: Duration) {
         let slots = self.slots.lock();
         if let Some(handle) = slots.get(slot) {
-            handle.declare_seek(position);
+            handle.begin_seek(position);
         }
         drop(slots);
     }

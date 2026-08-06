@@ -1,4 +1,4 @@
-use kithara_audio::SeekDeclare;
+use kithara_audio::SeekBegin;
 use kithara_platform::{sync::Arc, time::Duration};
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
 use smallvec::SmallVec;
@@ -32,29 +32,29 @@ pub struct SlotControl {
 /// Control-side seek handles for the tracks this slot shipped to the audio
 /// thread.
 ///
-/// The other half of what `PlayerCmd::LoadTrack` sent across: declaring a seek
+/// The other half of what `PlayerCmd::LoadTrack` sent across: beginning a seek
 /// publishes an event and wakes the worker, so it must happen here rather than
 /// in the processor. Bound when the resource goes out, dropped on its
 /// `PlayerNotification::Unloaded` — the same signal that retires the track.
 #[derive(Default)]
 struct SeekBindings(SmallVec<[SeekBinding; SLOT_TRACKS]>);
 
-type SeekBinding = (Arc<str>, Arc<dyn SeekDeclare>);
+type SeekBinding = (Arc<str>, Arc<dyn SeekBegin>);
 
 /// Tracks one slot can hold at once.
 const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
 
 impl SlotControl {
     /// Record the control half of a track's seek path.
-    pub fn bind_seek(&mut self, src: Arc<str>, handle: Arc<dyn SeekDeclare>) {
+    pub fn bind_seek(&mut self, src: Arc<str>, handle: Arc<dyn SeekBegin>) {
         self.unbind_seek(&src);
         self.seek.0.push((src, handle));
     }
 
-    /// Declare a seek on every track this slot holds, off the audio thread.
-    pub fn declare_seek(&self, position: Duration) {
+    /// Begin a seek on every track this slot holds, off the audio thread.
+    pub fn begin_seek(&self, position: Duration) {
         for (_, handle) in &self.seek.0 {
-            handle.declare(position);
+            handle.begin(position);
         }
     }
 
