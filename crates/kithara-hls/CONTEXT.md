@@ -123,17 +123,14 @@ seek alias, the exact-seek/exact-byte demands, and the segment-aware tail.
 
 ## Seek Ownership
 
-`prepare_for_seek` is the crate's `SeekPrepare` impl, and the control thread runs it once per seek
-*before* the epoch is minted (`SeekHandle::declare`). It is the only site that rebuilds the byte
-space for a seek. That ordering is what makes the read side cheap: the reader resolves its anchor on
-the produce core, and both halves of the preparation take a lock — `cancel_incoming_for_seek` the
-transition lock, `Layout::reset` the write lock plus a copy of the offset table — so neither may
-run there. Because the rebuild precedes the epoch, every later observer on any thread already sees a
-layout that matches the seek, and `ByteMap::anchor_at_time` stays a pure query. Pinned by the
+`prepare_for_seek` is the crate's `SeekPrepare` impl and the only site that rebuilds the byte space
+for a seek. The control thread runs it once per seek *before* the epoch is minted
+(`SeekHandle::begin`). Both halves take a lock — `cancel_incoming_for_seek` the transition lock,
+`Layout::reset` the write lock plus a copy of the offset table — so neither may run on the produce
+core, where the reader resolves its anchor. Because the rebuild precedes the epoch, every observer
+of that epoch already sees a matching layout and `ByteMap::anchor_at_time` stays a pure query;
+`HlsPeer::apply_seek_change` then repositions only the peer's own next-segment state. Pinned by the
 `rtsan-hls` lane.
-
-Everything downstream reacts to the epoch rather than re-preparing: `HlsPeer::apply_seek_change`
-repositions only the peer's own next-segment state.
 
 ## EOF, Exact Sizes, Seek Aliases
 

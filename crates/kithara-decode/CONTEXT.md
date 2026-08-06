@@ -152,10 +152,9 @@ codec open (`track_with_output_domain_gapless`, round-half-up) so
 no engine trim (no metadata, or a backend path that already trimmed internally).
 `GaplessTrimmer::notify_seek(retire)` drops seek-sensitive state (leading trim,
 pending fade-in, buffered tail, tail compensation); trailing trim still applies
-at EOF. It takes a `ChunkSink` rather than dropping the buffered chunks itself:
-a `PcmChunk` holds a pooled buffer, returning one to a full pool shard
-deallocates, and the caller is the produce core. `DropChunks` is the sink for
-callers that are free to deallocate.
+at EOF. Its buffered chunks go to a `ChunkSink` rather than being dropped —
+returning a pooled `PcmChunk` to a full shard deallocates, and the caller is the
+produce core. `DropChunks` is the sink for callers free to deallocate.
 
 `Decoder::gapless_profile(codec) -> GaplessProfile` bundles spec, gapless, tail
 compensation, and `default_priming_frames` for trimmer construction, referencing
@@ -251,26 +250,21 @@ byte-copy wrappers) stays in `kithara-apple`; the standalone PCM-to-PCM Apple
 backend stays in `kithara-resampler`. `kithara-decode` owns codec planning,
 gapless policy, and the codec-embedded Apple decode path.
 
-`Frames` and `Samples` (`pcm/units.rs`) keep the two PCM lengths apart. Planar
-buffers are sized in frames, interleaved ones in samples, and the two differ by
-the channel count — both are `usize`, and a buffer sized in the wrong one is
-silent, off by exactly that factor. Conversion is explicit and needs the channel
-count (`Frames::samples`, `Samples::frames`), so the multiply cannot be implied.
-Applied where the two units meet — `ResampledDecoder::interleave` and
-`PlayerResource::scratch_frames` — rather than to every frame count in the
-workspace: inside a body where only one unit exists the type adds `get()` and no
-guarantee. `PcmMeta.frames` stays a plain `u32`; it is a public field with no
-interleaved counterpart beside it.
+`Frames` and `Samples` (`pcm/units.rs`) keep the two PCM lengths apart: planar
+buffers are sized in frames, interleaved ones in samples, both are `usize`, and a
+buffer sized in the wrong one is silently off by the channel count. Conversion
+takes that count explicitly (`Frames::samples`, `Samples::frames`). Applied where
+the two units meet — `ResampledDecoder::interleave`, `PlayerResource::scratch_frames`
+— and not inside bodies holding one unit, where the type adds `get()` and no
+guarantee. `PcmMeta.frames` stays a plain `u32`.
 
-`sanitize_sample` is the workspace's one sample guard — `NaN`, infinities and
-denormals all become silence — and `ResampledDecoder::append_chunk` applies it
-as it deinterleaves, so a backend only ever sees finite normal input. A 32-bit
-float file may legally hold any bit pattern, and a sinc backend spreads one
-poisoned frame across its whole FIR window (a stateful one can hold it
-indefinitely), so the guard belongs here: the adapter is the last owner of the
-samples by value, and `Resampler::process_into_buffer` takes its input by
-shared reference. `kithara-audio` reuses the same function at the two stages
-that also take untrusted input — `IsolatorEq` and `PeakLimiter`. Pinned by
+`sanitize_sample` is the workspace's one sample guard: `NaN`, infinities and
+denormals become silence. `ResampledDecoder::append_chunk` applies it while
+deinterleaving, so a backend only sees finite normal input — a 32-bit float file
+may hold any bit pattern, and a sinc stage spreads one poisoned frame across its
+whole FIR window. The adapter is the placement because it owns the samples by
+value while `Resampler::process_into_buffer` takes them by shared reference.
+`kithara-audio` reuses the function at `IsolatorEq` and `PeakLimiter`. Pinned by
 `resampler_never_sees_a_sample_the_file_poisoned`.
 
 ## Apple AAC input format (ESDS rationale)

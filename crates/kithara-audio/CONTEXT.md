@@ -92,14 +92,12 @@ mutator of track state through `update_state`. Sub-owners never take
 - `RebuildPort<T>` — the two-phase rebuild boundary: `prepare` produces a pending
   job, `submit` (from `flush_deferred`) spawns it off-RT. The job constructs a
   complete `DecoderGeneration`; installation only moves it.
-- `Retired` — retirement and off-RT drain for everything the produce core
-  displaces but must not free: whole generations a rebuild replaced (4 entries),
-  and the chunks a seek flushed out of staging and the gapless buffers (64,
-  sized for one flush since the shell drains every pass). A `PcmChunk` holds a
-  pooled buffer, and returning one to a full shard deallocates, so
-  `DecoderGeneration::notify_seek` routes them through `ChunkSink`
-  (`kithara-decode`) instead of dropping them. On overflow the queue
-  `mem::forget`s rather than freeing on-core, and warns on drain.
+- `Retired` — off-RT drain for everything the produce core displaces but must not
+  free: generations a rebuild replaced (4 entries) and the chunks a seek flushed
+  out of staging and the gapless buffers (64). A `PcmChunk` holds a pooled buffer
+  and returning one to a full shard deallocates, so `notify_seek` routes them
+  through `ChunkSink` (`kithara-decode`). On overflow the queue `mem::forget`s
+  rather than freeing on-core, and warns on drain.
 - Format and anchor decisions are pure functions in `decode::format` and
   `seek::anchor`.
 
@@ -221,21 +219,19 @@ seek, so it lags across the requested-but-not-applied window. Decoded chunks
 EOF reached after a newer seek bumped the seek-state epoch would otherwise pass
 the consumer's `EpochValidator` as the new seek's terminal.
 
-Consumer side splits in two, because the declaring half takes locks and some
-consumers sit on an audio device callback. **Declare** — `SeekDeclare::declare`,
+Consumer side splits in two, because the begin half takes locks and some
+consumers sit on an audio device callback. **Begin** — `SeekBegin::begin`,
 implemented by `SeekHandle` (`Audio::seek_handle`) — bumps the epoch, marks
 pending, publishes `SeekLifecycle`, notifies the peer, rearms the preload gate
-and wakes the worker. **Adopt** — `Audio::sync_seek` — compares the declared
-epoch against the ring's and, when they differ, resets the underrun edge and runs
-`RingConsumer::begin_seek_epoch`, which drains stale fetches inside the RT
-no-free boundary (stale chunks to the trash ring; the first fetch at the new
-epoch is staged, not dropped). Adopting is lock-free, so a callback may run it;
-every read entry point (`read`, `read_planar`, `next_chunk`, `preload`) does so
-first, which is what makes a declaration reach the reader without the declarer
-touching it.
+and wakes the worker. **Adopt** — `Audio::sync_seek` — runs
+`RingConsumer::begin_seek_epoch` when that epoch differs from the ring's, draining
+stale fetches inside the RT no-free boundary (stale chunks to the trash ring; the
+first fetch at the new epoch is staged, not dropped). Adopting is lock-free, and
+every read entry point (`read`, `read_planar`, `next_chunk`, `preload`) does it
+first, so a new epoch reaches the reader without its caller touching the reader.
 
-`Audio::seek` remains the one-call form — declare then adopt — for consumers that
-are not on an audio thread. A `SourceSeekAnchor` byte offset
+`Audio::seek` remains the one-call form for consumers off the audio thread.
+A `SourceSeekAnchor` byte offset
 is valid only in the variant byte space that resolved it, so `ApplyingSeek` (and
 a wait carrying it) re-resolves the seek when the active ABR variant no longer
 matches `anchor.variant_index`.
@@ -329,28 +325,21 @@ playhead). A duration-changing `AudioEffect` is the sole timeline authority: it
 restamps only `spec` + `frames` and carries the consumed input's song-time meta
 forward, so there is no translation layer and no parallel frame counter.
 
-**Denormals.** `IsolatorEq`'s crossover is IIR, so a tail fed silence decays
-geometrically and would otherwise spend minutes in the denormal range - inaudible
-samples that still cost a real-time callback one to two orders of magnitude more
-arithmetic than normal ones. Each biquad section flushes its state and returns
-exact zero once both its input and output fall below `f32::MIN_POSITIVE`; the
-input half of the guard keeps a live signal through a deep cut from losing its
-history. `sanitize_sample` closes the same door at the EQ's boundary, alongside
-the `NaN` / infinity guard, so no denormal reaches the stages downstream.
+**Sample guard.** `sanitize_sample` (`kithara-decode`) runs on the *input* of
+every stage that takes untrusted samples: `IsolatorEq::process_sample` before it
+branches, `PeakLimiter::process_planar` before it takes the frame peak. Input is
+the only placement covering every path — the EQ's silence and bypass branches
+return their sample untouched, its filter branch would latch a `NaN` into the IIR
+for the rest of the track, and one infinite peak drives the limiter's
+`ceiling / peak` to zero, fading the master bus back in over the release. The
+limiter guards each sample rather than the peak, since `f32::max` returns its
+non-`NaN` operand. Bit-exact bypass holds for finite samples.
 
-**Non-finite samples.** `sanitize_sample` (`kithara-decode`, which owns the PCM
-sample domain and applies it first at the decode boundary) is shared by every
-stage in the chain and runs on their *input*: `IsolatorEq::process_sample`
-applies it before branching on silence / bypass / filter, and
-`PeakLimiter::process_planar` before it takes the frame peak. The input
-side is the only placement that covers every path: the EQ's silence and bypass
-branches hand their sample straight back, and its filter branch would latch a
-`NaN` into the IIR for the rest of the track. In the limiter an infinite peak
-drives `ceiling / peak` to zero, which collapses the envelope and fades the whole
-master bus back in over the release — one bad sample for 50 ms of level. The
-limiter guards each sample in place rather than the peak alone, because
-`f32::max` returns its non-`NaN` operand and a `NaN` never reaches the peak.
-Bit-exact bypass is a contract for normal finite samples and is unaffected.
+`IsolatorEq`'s crossover is IIR, so its tail decays into the denormal range and
+would cost the callback one to two orders of magnitude more arithmetic. Each
+biquad section flushes state and returns exact zero once **both** its input and
+output fall below `f32::MIN_POSITIVE`; the input half keeps a live signal through
+a deep cut from losing its history.
 
 **EOF drain.** At true EOF `EofDrain` drains the chain incrementally, one emitted
 chunk per FSM step: each stage is flushed to exhaustion only after the upstream

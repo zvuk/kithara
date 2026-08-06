@@ -171,85 +171,56 @@ to the bounded trash ring from `bridge::slot_channels` instead of being freed on
 the main thread drains it in `PlayerImpl::process_notifications`. A full command ring surfaces as
 `PlayError::SlotChannelFull`, never as a block.
 
-`render_audio` clamps its block to the scratch it holds rather than growing a pooled buffer, so a
-host that exceeds the `max_block_frames` it declared loses the tail of that block instead of
-allocating in the callback.
+`render_audio` clamps its block to the scratch it holds, so a host exceeding the `max_block_frames`
+it declared loses that block's tail rather than allocating in the callback.
 
-Pause and resume are ramps, not switches. `RenderPass` owns a transport gate - a `MixDSP` on a 5 ms
-smoother - that mixes the summed track bus into the node output: open while `PlaybackShared::playing`
-is set, closed while it is clear. A pause keeps the tracks rendering until the gate settles at
-silence, so the flag flips at once for `Player::is_playing()` while the waveform reaches zero over
-the ramp (~35 ms), and the media clock advances by that much. The first block a processor renders
-adopts the transport state instead of fading into it - a ramp needs a previous frame to step from -
-and a settled open gate copies the bus through unchanged.
+Pause and resume are ramps. `RenderPass` owns a transport gate - a `MixDSP` on a 5 ms smoother -
+open while `PlaybackShared::playing` is set. The flag flips at once for `Player::is_playing()` while
+the output reaches zero over ~35 ms, and the media clock advances by that much. A processor's first
+block adopts the transport state rather than fading into it.
 
-`TrackFade::play` snaps only when its mix has settled: a start with no crossfade stays sample-exact,
-while a fade still in flight keeps its ramp instead of jumping to full level - the path a seek during
-a fade-in takes. `TrackFade::update_duration` re-arms the smoother at the state's end point, so an
-unchanged duration - `PlayerImpl::play` re-sends the crossfade duration on every call - only follows
-the sample rate.
+`TrackFade::play` snaps only when its mix has settled, so a fade still in flight keeps its ramp -
+the path a seek during a fade-in takes.
 
-One block is the whole budget: 128 frames at 48 kHz gives the device callback **2.667 ms**, shared
-by the three processors and whatever the host adds. `tests/benches/rt_block_budget.rs`
-(`cargo bench -p kithara-integration-tests --bench rt_block_budget`) times the body of
-`process()` - `drain_commands`, `cleanup_finished_tracks`, `render_audio` - over a 1-, 2-, and
-4-track arena and reports `PlayerNodeProcessor`'s share of it as p50 / p99 / max, because a mean
-averages away the one block that overruns. Sources are ready-in-memory mocks, so the figure is the
-callback's own mix cost: decode belongs to the worker, and the master EQ and limiter are separate
-nodes. The bench asserts a non-silent block and an unmoved underrun counter, so a number can only
-come from a real mix.
+One block is the whole budget: 128 frames at 48 kHz gives the callback 2.667 ms across all three
+processors. `tests/benches/rt_block_budget.rs` reports `PlayerNodeProcessor`'s share as p50 / p99 /
+max over 1-, 2-, and 4-track arenas.
 
-The audio thread never logs. Conditions the control thread needs to know about leave through one of
-two lock-free channels: discrete facts through `PlayerNotification`, rates and faults through
-`PlaybackShared::metrics()` (`bridge::RtMetrics`) - decode errors, underruns, audible tracks evicted
-at capacity, and trash-ring overflows. `RtSink` carries both into the per-track read path.
+The audio thread never logs. Discrete facts leave through `PlayerNotification`, rates and faults
+through `PlaybackShared::metrics()` (`bridge::RtMetrics`); `RtSink` carries both into the per-track
+read path.
 
-**Memory ordering.** `PlaybackShared` splits by what a reader has to conclude from the value.
-`playing` and `seek_epoch` decide whether the audio thread acts, so they carry `SeqCst`: both are
-touched once per command or once per block, never per sample, so one barrier there is free next to
-the mix, and a single total order removes the question of which pairs would have needed
-acquire/release. The seek epoch is minted by the `fetch_add` in
-`PlaybackShared::next_seek_epoch` - that RMW is the publication, and nothing may store its result
-back, or two concurrent seeks would reinstate the older epoch. Everything else is `Relaxed`: the
-`RtMetrics` counters are monotonic and read as deltas, and `PlaybackSnapshot`'s scalars are
-independent progress readouts whose fields deliberately do not agree across a block boundary (see
-its docstring).
+**Memory ordering.** `playing` and `seek_epoch` decide whether the audio thread acts and carry
+`SeqCst`; touched once per command or block, never per sample. The `fetch_add` in
+`next_seek_epoch` **is** the publication - storing its result back would let two concurrent seeks
+reinstate the older epoch. Everything else is `Relaxed`: `RtMetrics` counters are monotonic deltas,
+and `PlaybackSnapshot`'s scalars are independent readouts that need not agree across a block.
 
 ## Seek Ownership
 
-A seek is split in two, because declaring one publishes an event and wakes the decode worker - both
+A seek is split in two, because beginning one publishes an event and wakes the decode worker - both
 lock-taking, both forbidden on the device callback.
 
-**Control thread declares.** `PlayerImpl::seek_seconds` calls `EngineImpl::declare_slot_seek`, which
-walks the slot's `SeekBindings` and calls `kithara_audio::SeekDeclare::declare` on each. A track's
-handle is bound in `send_slot_cmd` at the moment its resource crosses to the audio thread, and
-released when the processor reports it `Unloaded` - the two halves of one object, like
-`SlotControl` / `NodeInputs`, not a mirror of the arena.
+**Control thread begins.** `EngineImpl::begin_slot_seek` walks the slot's `SeekBindings` and calls
+`kithara_audio::SeekBegin::begin` on each. A handle is bound in `send_slot_cmd` when its resource
+crosses to the audio thread and released on `Unloaded`.
 
-**Audio thread re-bases.** `PlayerCmd::Seek` carries only data. `PlayerTrack::seek` drops the
-feeder's scratch and moves the media clock, and `PlayerResource::reset_for_seek` calls the reader's
-lock-free `sync_seek`, which adopts the declared epoch and recycles stale chunks into the trash
-outlet. Nothing on this path can block or fail, so there is no seek-failure signal to report.
+**Audio thread re-bases.** `PlayerCmd::Seek` carries only data; `PlayerResource::reset_for_seek`
+calls the reader's lock-free `sync_seek`, which adopts that epoch and recycles stale chunks into the
+trash outlet. Nothing here can block or fail, so there is no seek-failure signal. The command still
+carries `seek_epoch`, so one minted before a newer seek is dropped rather than applied.
 
-`PlayerCmd::Seek` still carries `seek_epoch`: a command minted before a newer one is dropped rather
-than re-basing the clock to a superseded target.
+`PcmControl::seek` remains the one-call form for consumers off the audio thread. A reader whose
+`seek_handle` is `None` cannot be seeked from the callback at all.
 
-`PcmControl::seek` keeps declaring and applying in one call for consumers that are not on an audio
-thread (analysis, offline render). A reader whose `seek_handle` is `None` cannot be seeked from the
-callback at all - those callers must reach it off-thread.
+`PlayerResource::scratch_frames` is a per-channel **frame** count, and `write_len` / `write_pos` /
+the `read` range share that scale. Sized once per resource off the audio thread and never re-zeroed,
+so every mixing path must fill its whole window - an underrun zero-fills rather than returning short.
 
-`PlayerResource`'s scratch is planar: `PlayerResource::scratch_frames` is a per-channel **frame**
-count, and `write_len` / `write_pos` / the `read` range are on that same scale. Channel count does
-not enter it. It is sized once per resource, off the audio thread, and never re-zeroed per block —
-so every path that mixes must write its whole window, which is why an underrun zero-fills rather
-than returning short.
-
-Loaded tracks live in `rt::TrackSlots`, a fixed `[Option<PlayerTrack>; MAX_TRACKS]`. A track carries
-its own `src`, so lookup is a linear scan over at most four entries rather than a side table keyed
-by the same string, and a `TrackSlot` stays valid while its track lives - removing one never shifts
-another. Iteration is slot order, so cleanup and eviction are deterministic even when every track
-shares a state. `TrackSlots::insert` hands a rejected newcomer back instead of dropping it, since a
-`PlayerTrack` must not be freed on the audio thread.
+Loaded tracks live in `rt::TrackSlots`, a fixed `[Option<PlayerTrack>; MAX_TRACKS]` scanned linearly
+by `src`. A `TrackSlot` stays valid while its track lives, and iteration is slot order, so cleanup
+and eviction are deterministic. `insert` hands a rejected newcomer back, since a `PlayerTrack` must
+not be freed on the audio thread.
 
 When the arena's last track ends at *natural* EOF the processor keeps it resident but inert, so a
 later in-range seek can revive it; tracks finished via stop or a faded-out crossfade are discarded.
@@ -261,18 +232,14 @@ Cross-thread wakes reached on the core are *armed* lock-free (`kithara_stream::D
 and delivered by the shell (`flush`), never on the forbid path.
 
 Verification is gated by `--cfg rtsan`, so stable/production builds are byte-identical. Lanes:
-`just test rtsan` (mock decoder - the offline-harness smoke plus `kithara_play::rt_metrics`, which
-drives `process()` through a decode error, an underrun, an eviction, and the on-core seek re-base),
-`just test rtsan-file` / `rtsan-hls` (real decoder, `suite_stress` phase continuity), and
-`just test rtsan-async` (`--features no-block`). The decoder lanes check the product's forbid
-regions alone, and their harness allocates freely: a whole test body counts as a nonblocking region
-only in the `no-block` lane, where `.config/rtsan/async-suppressions.txt` narrows the check to
-genuine waits. GitLab `deep:nightly` runs all four through `just ci run deep`
-(`xtask/src/ci/run.rs`) on macOS, where a violation fails the job;
-`.github/workflows/rtsan.yml.disabled` mirrors the decoder lanes onto Actions and stays inert while
-it carries that suffix. The toolchain comes from `KITHARA_NIGHTLY_TOOLCHAIN`, pinned for CI in
-`.config/ci-pins.toml` and falling back to `nightly`. `permit()` and the RT attribute macros live
-in `kithara-test-utils` / `kithara-test-macros`; there is no separate rtsan crate.
+`just test rtsan` (mock decoder, plus `kithara_play::rt_metrics` driving `process()` through a
+decode error, an underrun, an eviction, and the on-core seek re-base), `rtsan-file` / `rtsan-hls`
+(real decoder, `suite_stress`), and `rtsan-async` (`--features no-block`). A whole test body counts
+as a nonblocking region only in the `no-block` lane, where `.config/rtsan/async-suppressions.txt`
+narrows the check to genuine waits; the decoder lanes check the product's forbid regions alone and
+their harness allocates freely. `deep:nightly` runs all four through `just ci run deep`, where a
+violation fails the job. `permit()` and the RT attribute macros live in `kithara-test-utils` /
+`kithara-test-macros`; there is no separate rtsan crate.
 
 ## Session Hosting
 
