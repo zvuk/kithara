@@ -313,11 +313,6 @@ fn standalone_decoder_adapter_flushes_backend_delay_at_eof() {
     ));
 }
 
-/// A sinc resampler spreads whatever it is fed across its whole FIR window, so
-/// one poisoned frame comes back out as hundreds — and a `NaN` that reaches a
-/// stateful backend can outlive the window entirely. The adapter is the last
-/// place that owns the samples by value, so it is where the input contract is
-/// met: everything the backend sees is finite and normal.
 #[test]
 fn resampler_never_sees_a_sample_the_file_poisoned() {
     let captured: Captured = Arc::default();
@@ -431,9 +426,8 @@ fn test_wav() -> Vec<u8> {
     wav
 }
 
-/// A 32-bit float WAV carrying [`POISON`]. Nothing here is malformed: an IEEE
-/// float file may hold any bit pattern, so this is what a hostile or corrupt
-/// track looks like on the wire.
+/// A 32-bit float WAV carrying [`POISON`]. Nothing is malformed - an IEEE float
+/// file may legally hold any bit pattern.
 fn poisoned_float_wav() -> Vec<u8> {
     const BYTES_PER_SAMPLE: u16 = 4;
     const BITS_PER_SAMPLE: u16 = BYTES_PER_SAMPLE * 8;

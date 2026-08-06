@@ -1,10 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Counts the audio thread keeps instead of logging.
-///
-/// Every write is a relaxed `fetch_add` from `process()`; every read is a
-/// relaxed load from any other thread. Counters are monotonic for the life of
-/// the slot, so a reader samples them twice and looks at the delta.
+/// Counts the audio thread keeps instead of logging. Monotonic for the life of
+/// the slot, so a reader samples twice and looks at the delta.
 #[derive(Debug, Default)]
 pub struct RtMetrics {
     decode_errors: AtomicU64,

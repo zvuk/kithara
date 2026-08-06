@@ -235,10 +235,7 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     }
 
     /// Control-plane hook run once per seek, before the epoch is minted.
-    ///
-    /// Layouts whose byte space depends on where the reader is (HLS, whose
-    /// variants layer onto one address space) rebuild it here. Sources with a
-    /// fixed byte space keep the default `None`.
+    /// Sources with a fixed byte space keep the default `None`.
     fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
         None
     }
@@ -420,14 +417,11 @@ pub trait VariantControl: Send + Sync + 'static {
     ) -> StreamResult<VariantReaderTake>;
 }
 
-/// Rebuilds a source's byte space for a seek that is about to be declared.
+/// Rebuilds a source's byte space for a seek about to begin.
 ///
-/// [`ByteMap::anchor_at_time`] resolves a time against the layout the reader
-/// already sees, and the reader resolves it on the produce core — so the
-/// rebuild cannot live there: it takes the layout's write lock and copies the
-/// offset table. Running it from the control thread before the epoch exists
-/// leaves every later observer, on any thread, reading a layout that already
-/// matches the seek.
+/// The rebuild takes the layout's write lock, so it cannot run on the produce
+/// core where the reader resolves its anchor. Running it before the epoch
+/// exists leaves every later observer reading a layout that matches the seek.
 pub trait SeekPrepare: Send + Sync + 'static {
     /// Collapse the byte space onto the geometry a seek resolves against.
     /// Idempotent: a repeated call for the same layout is a no-op.

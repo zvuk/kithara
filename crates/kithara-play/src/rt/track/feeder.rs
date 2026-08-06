@@ -60,13 +60,8 @@ impl PlayerResource {
     /// Number of stereo output channels.
     const STEREO_CHANNELS: usize = 2;
 
-    /// Frames each per-channel scratch buffer holds for a given source rate.
-    ///
-    /// The buffers are planar — one per channel — so the size is a frame count
-    /// and channel count does not enter it. The return type says so: an
-    /// interleaved length is [`Samples`], which does not fit here, and reaching
-    /// one takes an explicit `Frames::samples(channels)`. `write_len` /
-    /// `write_pos` and the `read` range are frames against this same scale.
+    /// Frames each planar scratch buffer holds for a given source rate.
+    /// `write_len` / `write_pos` and the `read` range share this scale.
     fn scratch_frames(sample_rate: u32) -> Frames {
         Frames::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
     }
@@ -245,10 +240,7 @@ impl PlayerResource {
     }
 
     /// Drop everything buffered ahead of a seek the control thread began.
-    ///
-    /// Lock-free: clears this wrapper's scratch and lets the reader pick up the
-    /// begun epoch itself (`sync_seek`), which recycles its chunks into the
-    /// trash outlet rather than freeing them here.
+    /// Lock-free: the reader picks up the epoch itself via `sync_seek`.
     pub fn reset_for_seek(&mut self) {
         self.resource.get_mut().sync_seek();
         self.write_len = 0;

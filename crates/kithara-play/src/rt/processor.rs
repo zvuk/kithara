@@ -109,16 +109,7 @@ impl PlayerNodeProcessor {
         }
     }
 
-    /// Clean up finished tracks.
-    ///
-    /// Collects into a stack array sized to the slot set, so no allocation
-    /// happens on the `process()` path.
-    ///
-    /// When the cleanup empties the slot set (last track played out to natural
-    /// EOF), drop `state.playing` so `Player::is_playing()` reflects the
-    /// stopped state without a separate `SetPaused` round-trip from the
-    /// queue layer — the queue's `QueueEnded` path can leave the slots
-    /// running so the tail samples drain instead of cutting them off.
+    /// Clean up finished tracks, dropping `playing` once none is audible.
     pub fn cleanup_finished_tracks(&mut self) {
         let finished: SmallVec<[(TrackSlot, bool); Self::MAX_TRACKS]> = self
             .tracks
@@ -152,21 +143,16 @@ impl PlayerNodeProcessor {
             }
         }
 
-        // Playback has stopped once nothing audible remains: either the slot
-        // set is empty (all finished discarded) or only the retained,
-        // played-out track is left. The retained track is `Finished`, so
-        // `render_audio` skips it and `is_playing()` stays false until a seek
-        // revives it.
+        // The retained track is `Finished`, so `render_audio` skips it and
+        // `is_playing()` stays false until a seek revives it.
         if self.tracks.len() == 0 || retain.is_some() {
             self.playback.playing.store(false, Ordering::SeqCst);
         }
     }
 
-    /// Hand a retired track to the control thread for freeing.
-    ///
-    /// A full ring is the one path that frees a `PlayerTrack` — decoder,
-    /// buffers and cancel guard — on the audio thread, so it is counted rather
-    /// than discarded silently.
+    /// Hand a retired track to the control thread for freeing. A full ring is
+    /// the one path that frees a `PlayerTrack` on the audio thread, so it is
+    /// counted rather than discarded silently.
     pub(super) fn discard_track(&mut self, track: PlayerTrack) {
         if self.trash_tx.try_push(track).is_err() {
             self.playback.metrics().record_trash_overflow();

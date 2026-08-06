@@ -2,10 +2,9 @@ use crate::PcmChunk;
 
 /// Where a chunk goes when the caller must not free it.
 ///
-/// A [`PcmChunk`] holds a pooled buffer, and returning one to a full pool
-/// shard deallocates. Paths that run on the produce core therefore hand the
-/// chunks they displace to a sink the worker shell drains, instead of dropping
-/// them where they stand.
+/// A [`PcmChunk`] holds a pooled buffer and returning one to a full shard
+/// deallocates, so the produce core hands displaced chunks to a sink the
+/// worker shell drains.
 pub trait ChunkSink {
     fn retire(&self, chunk: PcmChunk);
 }

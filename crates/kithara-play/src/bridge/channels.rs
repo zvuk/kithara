@@ -30,12 +30,8 @@ pub struct SlotControl {
 }
 
 /// Control-side seek handles for the tracks this slot shipped to the audio
-/// thread.
-///
-/// The other half of what `PlayerCmd::LoadTrack` sent across: beginning a seek
-/// publishes an event and wakes the worker, so it must happen here rather than
-/// in the processor. Bound when the resource goes out, dropped on its
-/// `PlayerNotification::Unloaded` — the same signal that retires the track.
+/// thread. Bound when the resource goes out, dropped on its
+/// `PlayerNotification::Unloaded`.
 #[derive(Default)]
 struct SeekBindings(SmallVec<[SeekBinding; SLOT_TRACKS]>);
 

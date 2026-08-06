@@ -232,11 +232,8 @@ impl HlsCoord {
     /// Seek entry point. Collapses cross-variant byte-continuity layering,
     /// cancels the incoming exact session, and wakes a parked reader.
     ///
-    /// Runs on the control thread, before the seek epoch is minted — both the
-    /// cancel and the collapse take a lock, and the collapse copies the offset
-    /// table, so no reader may reach them. By the time an epoch is visible the
-    /// layout already matches it, and the produce core resolves its anchor
-    /// against geometry it only reads.
+    /// Runs on the control thread before the seek epoch is minted: the cancel
+    /// and the collapse both take a lock, so no reader may reach them.
     ///
     /// The expensive layout collapse ([`Self::reset_for_seek`]) runs only
     /// when the active variant's offset table is not already the canonical
@@ -557,9 +554,9 @@ impl VariantControl for HlsCoord {
 
 /// `ByteMap` delegates to the authoritative active session's variant.
 ///
-/// Every method here is a query. The layout a seek resolves against is
-/// rebuilt by [`SeekPrepare::prepare`] before the epoch exists, so resolving
-/// one on the produce core neither locks nor allocates.
+/// Every method here is a query: [`SeekPrepare::prepare`] rebuilds the layout
+/// before the epoch exists, so resolving one on the produce core neither locks
+/// nor allocates.
 impl ByteMap for HlsCoord {
     delegate! {
         to self {

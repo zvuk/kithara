@@ -2,10 +2,8 @@ use std::num::NonZeroUsize;
 
 /// A count of PCM frames — one sample per channel.
 ///
-/// Planar buffers are sized in frames, interleaved ones in [`Samples`], and the
-/// two differ by the channel count. Keeping them apart is worth a type because
-/// they are both `usize` and a buffer sized in the wrong one is silent: it
-/// under- or over-reads by exactly the channel count.
+/// Both this and [`Samples`] are `usize`, and a buffer sized in the wrong one is
+/// silently off by the channel count.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Frames(usize);
 

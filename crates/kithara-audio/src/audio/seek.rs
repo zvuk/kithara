@@ -6,14 +6,10 @@ use tracing::trace;
 use super::{AudioWorkerHandle, PreloadGate, SeekOutcome};
 use crate::traits::SeekBegin;
 
-/// The control-plane half of a seek.
-///
-/// Beginning a seek rebuilds the source's byte space, publishes a lifecycle
-/// event, nudges the segment peer and wakes the decode worker. Each of those
-/// takes a lock, so none of them may run on an audio device callback. Holding
-/// them behind a `Send + Sync` handle lets the control thread begin the seek
-/// while the audio thread only picks up the new epoch and drops what it had
-/// buffered — see [`Audio::sync_seek`](super::Audio::sync_seek).
+/// The control-plane half of a seek: rebuilds the source's byte space,
+/// publishes a lifecycle event, nudges the peer and wakes the worker. Each
+/// takes a lock, so the audio thread only runs
+/// [`Audio::sync_seek`](super::Audio::sync_seek).
 pub struct SeekHandle {
     bus: EventBus,
     peer_wake: Option<Arc<DeferredWake>>,

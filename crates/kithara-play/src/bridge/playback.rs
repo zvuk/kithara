@@ -6,10 +6,8 @@ use super::RtMetrics;
 
 /// One read of each live playback scalar.
 ///
-/// The fields are independent relaxed loads, so they can straddle two audio
-/// blocks: `position` may be one block ahead of `duration`. That is fine for a
-/// progress readout and wrong for anything that needs the two to agree exactly
-/// — such a consumer must derive both from a single field it does control.
+/// The fields are independent relaxed loads and can straddle two audio blocks,
+/// so a consumer needing two of them to agree must derive both from one field.
 #[derive(Clone, Copy, Debug, Default, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
 #[fieldwork(get)]
@@ -57,7 +55,7 @@ pub struct PlaybackShared {
 
 impl PlaybackShared {
     /// Lock-free counters the audio thread bumps instead of emitting `tracing`
-    /// events: read them from any thread, log or surface them there.
+    /// events.
     #[must_use]
     pub fn metrics(&self) -> &RtMetrics {
         &self.metrics

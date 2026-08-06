@@ -1,19 +1,12 @@
 use super::track::PlayerTrack;
 
-/// Position of a track in [`TrackSlots`].
-///
-/// Stable while the track lives: removing one track never shifts another, so a
-/// slot collected at the top of a render pass still addresses the same track
-/// further down it.
+/// Position of a track in [`TrackSlots`], stable while that track lives:
+/// removing one never shifts another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TrackSlot(usize);
 
-/// The processor's fixed set of loaded tracks.
-///
-/// A track carries its own `src`, so lookup is a linear scan over at most
-/// `CAPACITY` entries rather than a side table keyed by the same string.
-/// Iteration order is slot order, which makes eviction and cleanup
-/// deterministic.
+/// The processor's fixed set of loaded tracks, scanned linearly by `src`.
+/// Iteration is slot order, so eviction and cleanup are deterministic.
 pub(crate) struct TrackSlots<const CAPACITY: usize> {
     slots: [Option<PlayerTrack>; CAPACITY],
 }
@@ -71,11 +64,9 @@ impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
         self.slots.iter().flatten().count()
     }
 
-    /// Place a track, replacing any track already loaded under the same `src`.
-    ///
-    /// Returns the replaced track, or the newcomer itself when the set is full
-    /// — never silently drops it, since a `PlayerTrack` must not be freed on
-    /// the audio thread.
+    /// Place a track, replacing any already loaded under the same `src`.
+    /// Returns the replaced track, or the newcomer when the set is full — a
+    /// `PlayerTrack` must not be freed on the audio thread.
     pub(crate) fn insert(&mut self, track: PlayerTrack) -> Option<PlayerTrack> {
         if let Some(slot) = self.slot_of(track.src()) {
             return self.slots[slot.0].replace(track);

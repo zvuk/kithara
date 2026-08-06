@@ -39,34 +39,26 @@ pub(crate) struct RenderTargets<'a> {
 
 pub(crate) struct RenderPass {
     scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
-    /// Frames every scratch buffer is known to hold. Sized off the audio thread
-    /// (`new` / `resize`), so `render_audio` clamps to it instead of growing.
+    /// Frames every scratch buffer holds. Sized off the audio thread, so
+    /// `render_audio` clamps to it instead of growing.
     capacity: usize,
-    /// Transport gate: mixes the track bus into the node output, open while
-    /// playback runs and closed while it is paused. Pause and resume land
-    /// between two frames, so the gate carries the step as a ramp.
+    /// Mixes the track bus into the node output; open while playback runs.
     gate: MixDSP,
-    /// Cleared by the first rendered block. A ramp needs a previous frame to
-    /// step from, so the gate adopts the transport state on that block rather
-    /// than fading into it.
+    /// Cleared by the first rendered block, which adopts the transport state
+    /// rather than fading into it.
     priming: bool,
 }
 
 impl RenderPass {
-    /// Curve of the transport gate. Only its end points are used — the gate is
-    /// either open or closed — and the smoother shapes the ramp between them.
     const GATE_CURVE: FadeCurve = FadeCurve::Linear;
 
-    /// Seconds the transport gate takes to open or close: long enough that the
-    /// step becomes a fade, short enough that the tracks it keeps reading
-    /// hardly move the media clock past a pause.
+    /// Long enough that the step becomes a fade, short enough that a pause
+    /// hardly moves the media clock.
     const GATE_SMOOTH_SECONDS: f32 = 0.005;
 
-    /// Minimum stereo channel count for output processing.
     const MIN_STEREO: usize = 2;
 
-    /// Number of scratch buffers for stereo processing: a read pair, a per-track
-    /// mix pair, and the bus every track sums into.
+    /// A read pair, a per-track mix pair, and the bus every track sums into.
     const SCRATCH_BUF_COUNT: usize = 6;
 
     pub(crate) fn new(pool: &PcmPool, shape: StreamShape) -> Self {
@@ -107,11 +99,8 @@ impl RenderPass {
             ch_buffer[..frames].fill(0.0);
         }
 
-        // The host declared `max_block_frames` in `new_stream`, where the
-        // scratch was sized. Clamping keeps a larger-than-declared block from
-        // growing a pooled buffer on the audio thread; the fill above already
-        // covers every frame the host asked for, so the part past the clamp is
-        // silence.
+        // Growing a pooled buffer here would allocate on the audio thread. The
+        // fill above already covered the frames past the clamp with silence.
         let frames = frames.min(self.capacity);
 
         self.gate.set_mix(
@@ -126,8 +115,8 @@ impl RenderPass {
             self.priming = false;
             self.gate.reset_to_target();
         }
-        // A closed gate outputs silence whatever the tracks hold, so the pause
-        // only stops the readers once its ramp has run out.
+        // A closed gate outputs silence whatever the tracks hold, so readers
+        // stop only once its ramp has run out.
         if !is_playing && self.gate.has_settled() {
             return (false, None);
         }
@@ -267,10 +256,9 @@ impl RenderPass {
         self.gate.update_sample_rate(sample_rate);
     }
 
-    /// Size the scratch for the host's declared block. Firewheel calls
-    /// `new_stream` on the main thread, so growing a pooled buffer here is
-    /// allowed; a pool that cannot afford the block leaves the capacity short
-    /// and `render_audio` clamps to it.
+    /// Size the scratch for the host's declared block, on the main thread.
+    /// A pool that cannot afford it leaves the capacity short, and
+    /// `render_audio` clamps to that.
     pub(crate) fn resize(&mut self, max_frames: usize) {
         let mut capacity = usize::MAX;
         for buf in &mut self.scratch_bufs {
