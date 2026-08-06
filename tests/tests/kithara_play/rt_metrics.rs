@@ -5,10 +5,6 @@
 //! altogether — fails here.
 
 #![cfg(not(target_arch = "wasm32"))]
-#![allow(
-    clippy::cast_possible_truncation,
-    reason = "block sizes in this file are small literals"
-)]
 
 use std::num::NonZeroU32;
 
@@ -29,7 +25,11 @@ use kithara_integration_tests::audio_mock::{
 use ringbuf::traits::Producer;
 
 const SAMPLE_RATE: u32 = 48_000;
-const BLOCK_FRAMES: usize = 128;
+const BLOCK_FRAMES: u32 = 128;
+
+fn block_len() -> usize {
+    usize::try_from(BLOCK_FRAMES).expect("block frames fit usize")
+}
 
 fn spec() -> PcmSpec {
     PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
@@ -39,7 +39,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let shape = StreamShape {
         sample_rate: NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"),
-        max_block_frames: NonZeroU32::new(BLOCK_FRAMES as u32).expect("non-zero block"),
+        max_block_frames: NonZeroU32::new(BLOCK_FRAMES).expect("non-zero block"),
     };
     (
         PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
@@ -95,16 +95,16 @@ fn render_loaded_blocks(
         track.play();
     }
 
-    let mut out_l = vec![0.0f32; BLOCK_FRAMES];
+    let mut out_l = vec![0.0f32; block_len()];
     for _ in 0..blocks {
-        let mut out_r = vec![0.0f32; BLOCK_FRAMES];
+        let mut out_r = vec![0.0f32; block_len()];
         let inputs: [&[f32]; 0] = [];
         let mut outputs = [&mut out_l[..], &mut out_r[..]];
         let mut buffers = ProcBuffers {
             inputs: &inputs,
             outputs: &mut outputs,
         };
-        let _ = processor.render_audio(&mut buffers, BLOCK_FRAMES, true);
+        let _ = processor.render_audio(&mut buffers, block_len(), true);
     }
 
     (processor, out_l)
@@ -238,8 +238,9 @@ fn evicting_an_audible_track_is_counted() {
 
 /// Firewheel bounds a block by the `max_block_frames` declared in
 /// `new_stream`; a host that ignores that must not make the audio thread grow a
-/// pooled buffer. The render is clamped instead, and the tail the host asked
-/// for is left untouched rather than half-written.
+/// pooled buffer. The render is clamped to the scratch, and `process()` reports
+/// `OutputsModified` for the whole block the host asked for — so every frame of
+/// it must be written, the tail as silence.
 #[kithara::test]
 fn a_block_larger_than_declared_is_clamped_not_grown() {
     let (mut processor, mut control) = processor();
@@ -249,7 +250,7 @@ fn a_block_larger_than_declared_is_clamped_not_grown() {
         track.play();
     }
 
-    let oversized = BLOCK_FRAMES * 2;
+    let oversized = block_len() * 2;
     let mut out_l = vec![f32::NAN; oversized];
     let mut out_r = vec![f32::NAN; oversized];
 
@@ -266,11 +267,12 @@ fn a_block_larger_than_declared_is_clamped_not_grown() {
 
     assert!(rendered, "the declared part of the block still renders");
     assert!(
-        out_l[..BLOCK_FRAMES].iter().all(|s| s.is_finite()),
+        out_l[..block_len()].iter().all(|s| s.is_finite()),
         "frames up to max_block_frames are written"
     );
     assert!(
-        out_l[BLOCK_FRAMES..].iter().all(|s| s.is_nan()),
-        "frames beyond the declared block are left alone, not silently grown into"
+        out_l[block_len()..].iter().all(|s| *s == 0.0),
+        "frames beyond the declared block are silence, since the host is told the \
+         whole block is valid"
     );
 }

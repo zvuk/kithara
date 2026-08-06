@@ -13,6 +13,7 @@ use kithara_bufpool::{PcmBuf, PcmPool};
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
 use smallvec::SmallVec;
+use tracing::warn;
 
 use super::{
     processor::{PlayerNodeProcessor, StreamShape},
@@ -102,14 +103,16 @@ impl RenderPass {
             return (false, None);
         }
 
-        // The host declared `max_block_frames` in `new_stream`, which is where
-        // the scratch was sized. Clamping keeps a larger-than-declared block
-        // from growing a pooled buffer on the audio thread.
-        let frames = frames.min(self.capacity);
-
         for ch_buffer in buffers.outputs.iter_mut() {
             ch_buffer[..frames].fill(0.0);
         }
+
+        // The host declared `max_block_frames` in `new_stream`, where the
+        // scratch was sized. Clamping keeps a larger-than-declared block from
+        // growing a pooled buffer on the audio thread; the fill above already
+        // covers every frame the host asked for, so the part past the clamp is
+        // silence.
+        let frames = frames.min(self.capacity);
 
         self.gate.set_mix(
             if is_playing {
@@ -266,12 +269,18 @@ impl RenderPass {
 
     /// Size the scratch for the host's declared block. Firewheel calls
     /// `new_stream` on the main thread, so growing a pooled buffer here is
-    /// allowed; a pool that cannot afford the block leaves the previous
-    /// capacity in place and `render_audio` clamps to it.
+    /// allowed; a pool that cannot afford the block leaves the capacity short
+    /// and `render_audio` clamps to it.
     pub(crate) fn resize(&mut self, max_frames: usize) {
         let mut capacity = usize::MAX;
         for buf in &mut self.scratch_bufs {
-            let _ = buf.ensure_len(max_frames);
+            if buf.ensure_len(max_frames).is_err() {
+                warn!(
+                    max_frames,
+                    held = buf.len(),
+                    "PCM pool budget cannot afford the render scratch; blocks are clamped"
+                );
+            }
             buf.fill(0.0);
             capacity = capacity.min(buf.len());
         }
