@@ -200,6 +200,12 @@ pub(super) struct Layout {
     /// cannot lose an update (the old `RwLock` serialized writes; `ArcSwap`
     /// alone does not). Never taken on the produce-core read path.
     write_lock: Mutex<()>,
+    /// Frames displaced by a swap, alive until a later mutation sees them
+    /// quiesced (`strong_count == 1`). Keeps reclamation on the writer
+    /// thread: a produce-core guard racing the swap can resolve to the
+    /// displaced frame, and this floor makes its drop a pure decrement.
+    /// Touched only under `write_lock`.
+    retired: Mutex<Vec<Arc<Frame>>>,
 }
 
 impl Layout {
@@ -220,6 +226,7 @@ impl Layout {
             total: AtomicU64::new(snapshot.total),
             sizes_complete: AtomicBool::new(snapshot.sizes_complete),
             publication_seq: AtomicU64::new(0),
+            retired: Mutex::new(Vec::new()),
         }
     }
 
@@ -255,6 +262,7 @@ impl Layout {
         let mut frame = (**self.frame.load()).clone();
         frame.recompute(init_size, segments);
         let snapshot = frame.snapshot(segments, init_size);
+        self.retire_current();
         self.frame.store(Arc::new(frame));
         self.republish(snapshot);
         self.finish_publication();
@@ -308,9 +316,18 @@ impl Layout {
         let mut frame = (**self.frame.load()).clone();
         f(&mut frame);
         let snapshot = frame.snapshot(segments, init_size);
+        self.retire_current();
         self.frame.store(Arc::new(frame));
         self.republish(snapshot);
         self.finish_publication();
+    }
+
+    /// Under `write_lock`: reclaim quiesced retirees, then move the live
+    /// frame into the retire list ahead of the swap.
+    fn retire_current(&self) {
+        let mut retired = self.retired.lock();
+        retired.retain(|frame| Arc::strong_count(frame) > 1);
+        retired.push(self.frame.load_full());
     }
 
     pub(super) fn natural_offset(&self, idx: usize) -> Option<u64> {
@@ -386,5 +403,56 @@ impl Layout {
             #[field]
             pub(super) fn served_from(&self) -> u32;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::sync::Weak;
+
+    use super::*;
+
+    /// A produce-core reader racing a frame swap can end up holding the last
+    /// reference to the displaced frame, and dropping it would `free` inside
+    /// the forbid region. The writer therefore keeps every displaced frame
+    /// alive until a later mutation proves it quiesced.
+    #[kithara::test]
+    fn displaced_frame_is_freed_by_the_writer() {
+        let layout = Layout::new(0, &[]);
+        let displaced: Weak<Frame> = Arc::downgrade(&layout.frame.load_full());
+
+        layout.apply_commit(&[], || 0);
+        assert!(
+            displaced.upgrade().is_some(),
+            "the displaced frame must stay alive: a racing reader guard may still \
+             resolve to it, and its drop must never be the one that frees"
+        );
+
+        layout.apply_commit(&[], || 0);
+        assert!(
+            displaced.upgrade().is_none(),
+            "the next mutation reclaims quiesced frames on the writer thread"
+        );
+    }
+
+    #[kithara::test]
+    fn outstanding_reader_blocks_reclamation() {
+        let layout = Layout::new(0, &[]);
+        let reader: Arc<Frame> = layout.frame.load_full();
+        let displaced = Arc::downgrade(&reader);
+
+        layout.apply_commit(&[], || 0);
+        layout.apply_commit(&[], || 0);
+        assert!(
+            displaced.upgrade().is_some(),
+            "a frame with an outstanding reader reference must survive reclamation"
+        );
+
+        drop(reader);
+        layout.apply_commit(&[], || 0);
+        assert!(
+            displaced.upgrade().is_none(),
+            "once the reader is gone the writer reclaims the frame"
+        );
     }
 }
