@@ -143,6 +143,7 @@ kithara = { workspace = true, features = [
 ] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
 
+kithara-broadcast = { workspace = true }
 # Only `architecture_trace` reaches for it, and that module is already native
 # only: the crate's LSP client builds file URLs, which `url` offers everywhere
 # but wasm.

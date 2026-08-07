@@ -20,6 +20,11 @@ mod kithara_audio;
 mod kithara_bufpool;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod kithara_broadcast {
+    mod packaging_tests;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 mod kithara_encode {
     mod aac_tests;
     mod bytes_tests;
