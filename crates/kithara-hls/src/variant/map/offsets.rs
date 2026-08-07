@@ -199,13 +199,13 @@ pub(super) struct Layout {
     /// Serializes off-RT writers so a concurrent load-clone-mutate-store pair
     /// cannot lose an update (the old `RwLock` serialized writes; `ArcSwap`
     /// alone does not). Never taken on the produce-core read path.
-    write_lock: Mutex<()>,
-    /// Frames displaced by a swap, alive until a later mutation sees them
-    /// quiesced (`strong_count == 1`). Keeps reclamation on the writer
-    /// thread: a produce-core guard racing the swap can resolve to the
-    /// displaced frame, and this floor makes its drop a pure decrement.
-    /// Touched only under `write_lock`.
-    retired: Mutex<Vec<Arc<Frame>>>,
+    ///
+    /// Its payload is the retire list: frames displaced by a swap, alive
+    /// until a later mutation sees them quiesced (`strong_count == 1`).
+    /// Keeps reclamation on the writer thread — a produce-core guard racing
+    /// the swap can resolve to the displaced frame, and this floor makes its
+    /// drop a pure decrement.
+    write_lock: Mutex<Vec<Arc<Frame>>>,
 }
 
 impl Layout {
@@ -222,11 +222,10 @@ impl Layout {
         let snapshot = frame.snapshot(segments, init_size);
         Self {
             frame: ArcSwap::from(Arc::new(frame)),
-            write_lock: Mutex::new(()),
+            write_lock: Mutex::new(Vec::new()),
             total: AtomicU64::new(snapshot.total),
             sizes_complete: AtomicBool::new(snapshot.sizes_complete),
             publication_seq: AtomicU64::new(0),
-            retired: Mutex::new(Vec::new()),
         }
     }
 
@@ -255,14 +254,14 @@ impl Layout {
         store: impl FnOnce() -> u64,
         before_publish: impl FnOnce(),
     ) {
-        let _w = self.write_lock.lock();
+        let mut retired = self.write_lock.lock();
         self.begin_publication();
         let init_size = store();
         before_publish();
         let mut frame = (**self.frame.load()).clone();
         frame.recompute(init_size, segments);
         let snapshot = frame.snapshot(segments, init_size);
-        self.retire_current();
+        Self::retire_current(&mut retired, &self.frame);
         self.frame.store(Arc::new(frame));
         self.republish(snapshot);
         self.finish_publication();
@@ -311,23 +310,23 @@ impl Layout {
     /// and republishes the atomics. Concurrent writers cannot lose an update
     /// because each runs the whole cycle under `write_lock`.
     fn mutate_frame(&self, segments: &[Segment], init_size: u64, f: impl FnOnce(&mut Frame)) {
-        let _w = self.write_lock.lock();
+        let mut retired = self.write_lock.lock();
         self.begin_publication();
         let mut frame = (**self.frame.load()).clone();
         f(&mut frame);
         let snapshot = frame.snapshot(segments, init_size);
-        self.retire_current();
+        Self::retire_current(&mut retired, &self.frame);
         self.frame.store(Arc::new(frame));
         self.republish(snapshot);
         self.finish_publication();
     }
 
-    /// Under `write_lock`: reclaim quiesced retirees, then move the live
-    /// frame into the retire list ahead of the swap.
-    fn retire_current(&self) {
-        let mut retired = self.retired.lock();
+    /// Reclaim quiesced retirees, then move the live frame into the retire
+    /// list ahead of the swap. Takes the write-lock payload, so a caller
+    /// holds the lock by construction.
+    fn retire_current(retired: &mut Vec<Arc<Frame>>, frame: &ArcSwap<Frame>) {
         retired.retain(|frame| Arc::strong_count(frame) > 1);
-        retired.push(self.frame.load_full());
+        retired.push(frame.load_full());
     }
 
     pub(super) fn natural_offset(&self, idx: usize) -> Option<u64> {
@@ -433,6 +432,17 @@ mod tests {
             displaced.upgrade().is_none(),
             "the next mutation reclaims quiesced frames on the writer thread"
         );
+    }
+
+    /// `mutate_frame` (reset / activation mutators) routes through the same
+    /// retire step as `apply_commit`.
+    #[kithara::test]
+    fn mutate_frame_retires_the_displaced_frame() {
+        let layout = Layout::new(0, &[]);
+        let displaced: Weak<Frame> = Arc::downgrade(&layout.frame.load_full());
+
+        layout.mutate_frame(&[], 0, |_| {});
+        assert!(displaced.upgrade().is_some());
     }
 
     #[kithara::test]

@@ -164,9 +164,8 @@ impl AssetStore {
     /// Return `true` when every byte in `range` is already present for
     /// the resource, or when the range is empty.
     ///
-    /// Answers from the availability aggregate alone, which keeps the
-    /// probe free of store locks and filesystem calls — it runs inside
-    /// `rtsan_forbid_blocking` regions. Hydration at store build and the
+    /// Answers from the availability aggregate alone — no handle-cache
+    /// mutex, no filesystem call. Hydration at store build and the
     /// write/commit observers keep the aggregate complete; a resource the
     /// aggregate does not know is absent and gets refetched.
     #[must_use]

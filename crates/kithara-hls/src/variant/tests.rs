@@ -883,7 +883,7 @@ fn segment_aware_rebuild_at_time_prefetches_seek_preroll_segment() {
 }
 
 #[kithara::test]
-fn segment_aware_seek_time_anchor_fetches_preroll_segment() {
+fn segment_aware_seek_time_anchor_leaves_the_fetch_plan_to_the_peer() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: None,
@@ -893,6 +893,9 @@ fn segment_aware_seek_time_anchor_fetches_preroll_segment() {
         container: Some(ContainerFormat::Fmp4),
     }
     .into_variant(0, &ctx);
+
+    v.rebuild(&ctx, 0);
+    let plan_before = queue_seg_indices(&v);
 
     let anchor = v
         .prepare_seek_time_anchor(Duration::from_secs(4))
@@ -904,8 +907,9 @@ fn segment_aware_seek_time_anchor_fetches_preroll_segment() {
         anchor.byte_offset, 200,
         "decoder anchor remains the target segment boundary"
     );
-    assert!(
-        queue_seg_indices(&v).is_empty(),
+    assert_eq!(
+        queue_seg_indices(&v),
+        plan_before,
         "anchor resolution runs on the produce core and leaves the fetch \
          plan to the download peer (seek_epoch_reset -> rebuild_at_time)"
     );

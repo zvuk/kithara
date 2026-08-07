@@ -172,7 +172,7 @@ fn write_aggregate(
                         // The crash-recovery snapshot is a COMMITTED-only
                         // contract: an uncommitted partial write (whose `.tmp`
                         // was never renamed) must be invisible after a rebuild,
-                        // exactly as the slow path reports it Missing. Persisting
+                        // matching the aggregate probes' verdict. Persisting
                         // its in-flight ranges would let a flush that races the
                         // writer's cleanup resurrect a partial segment on the
                         // next open — corrupting availability and a real crash
