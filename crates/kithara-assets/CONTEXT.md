@@ -151,8 +151,12 @@ aggregate `AvailabilityIndex` keyed by the `asset_root` and relative path alread
 - **Updated** by a `ScopedAvailabilityObserver` attached to every resource opened through the base
   stores: `write_at` fires `on_write(range)`, a successful `commit(Some(len))` fires
   `on_commit(len)`, and opening a pre-existing committed file seeds `0..final_len`.
-- **Queried** aggregate-first, with a single cold-miss fallback to `resource_state` so pre-existing
-  committed files are discoverable before the observer fires.
+- **Queried** aggregate-only. The three probes answer from the aggregate alone — no store lock, no
+  filesystem call — which is what makes them legal inside `rtsan_forbid_blocking` regions (the
+  produce core probes readiness through `contains_range`). Hydration at store build plus the
+  observers keep the aggregate complete; a resource the aggregate does not know is absent and gets
+  refetched, the same verdict the acquire path reaches through `is_confirmed`. `resource_state` is
+  the control-side inspection API: it consults the handle cache and the filesystem and may block.
 - **Persisted** in two tiers (below), and it is the **authority on what survives a restart**. A
   segment's file becomes visible at `rename`, but the barrier that puts its blocks on the medium is
   paid later, by the manifest flush, which forces every queued file down *before* naming it. So a

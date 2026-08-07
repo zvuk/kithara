@@ -131,8 +131,15 @@ fn garbage_lru_bin_is_treated_as_empty() {
     assert!(scope.store().contains_range(&key, 0..12));
 }
 
+/// The availability manifest is the sole authority on which bytes are
+/// present: the segment file becomes visible at `rename`, while its
+/// durability barrier is paid later by the manifest flush, so a file that
+/// the manifest does not vouch for may carry the right name and length
+/// over unwritten blocks. A corrupt manifest therefore costs a refetch,
+/// never a wrong read — and the probes answer from the aggregate alone,
+/// which keeps them free of locks and filesystem calls on the produce core.
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn garbage_availability_bin_is_treated_as_empty() {
+fn garbage_availability_bin_costs_a_refetch() {
     let dir = tempdir().unwrap();
     seed_clean_state_then(dir.path(), |root, _, _| {
         fs::write(availability_bin(root), b"corrupted-bytes-here").unwrap();
@@ -148,10 +155,17 @@ fn garbage_availability_bin_is_treated_as_empty() {
     let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
     assert_eq!(
         scope.store().final_len(&key),
-        Some(12),
-        "slow-path must recover committed segments when availability.bin is unreadable"
+        None,
+        "an unvouched file is a torn write; the probes must not resurrect it"
     );
-    assert!(scope.store().contains_range(&key, 0..12));
+    assert!(!scope.store().contains_range(&key, 0..12));
+    assert!(scope.store().available_ranges(&key).is_empty());
+
+    let acq = store.acquire_resource(&key, None).unwrap();
+    assert!(
+        matches!(acq, AcquisitionResult::Pending(_)),
+        "the acquire path reaches the same verdict and refetches"
+    );
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -443,7 +457,7 @@ fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn doubly_corrupted_indexes_do_not_panic_and_slow_path_serves_data() {
+fn doubly_corrupted_indexes_do_not_panic_and_the_store_refetches() {
     let dir = tempdir().unwrap();
     seed_clean_state_then(dir.path(), |root, _, _| {
         fs::write(pins_bin(root), b"").unwrap();
@@ -461,10 +475,12 @@ fn doubly_corrupted_indexes_do_not_panic_and_slow_path_serves_data() {
 
     assert_eq!(
         scope.store().final_len(&key),
-        Some(12),
-        "every index corrupt → slow-path still works"
+        None,
+        "every index corrupt → the unvouched segment is refetched, never trusted"
     );
-    assert!(scope.store().contains_range(&key, 0..12));
+    assert!(!scope.store().contains_range(&key, 0..12));
+    let acq = store.acquire_resource(&key, None).unwrap();
+    assert!(matches!(acq, AcquisitionResult::Pending(_)));
 
     store
         .checkpoint()

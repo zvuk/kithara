@@ -133,29 +133,10 @@ impl AssetStore {
     }
 
     /// Return a snapshot of byte ranges known to be available for the
-    /// given resource.
-    ///
-    /// Fast path: aggregate lookup. Slow path: if the aggregate is
-    /// empty for this key and `resource_state` reports
-    /// `Committed { final_len: Some(len) }`, return `0..len` without
-    /// seeding the aggregate (the observer does the actual seeding on
-    /// open).
+    /// given resource, answered from the availability aggregate.
     #[must_use]
     pub fn available_ranges(&self, key: &ResourceKey) -> RangeSet<u64> {
-        let ranges = self.availability().available_ranges(key);
-        if !ranges.is_empty() {
-            return ranges;
-        }
-        if let Ok(AssetResourceState::Committed {
-            final_len: Some(len),
-        }) = self.resource_state(key)
-            && len > 0
-        {
-            let mut set = RangeSet::default();
-            set.insert(0..len);
-            return set;
-        }
-        ranges
+        self.availability().available_ranges(key)
     }
 
     /// Persist the in-memory byte-availability aggregate snapshot to
@@ -183,24 +164,14 @@ impl AssetStore {
     /// Return `true` when every byte in `range` is already present for
     /// the resource, or when the range is empty.
     ///
-    /// Fast path checks the aggregate; slow path falls back to
-    /// `resource_state` so pre-existing committed files on disk are
-    /// discoverable even before the observer wires in.
+    /// Answers from the availability aggregate alone, which keeps the
+    /// probe free of store locks and filesystem calls — it runs inside
+    /// `rtsan_forbid_blocking` regions. Hydration at store build and the
+    /// write/commit observers keep the aggregate complete; a resource the
+    /// aggregate does not know is absent and gets refetched.
     #[must_use]
     pub fn contains_range(&self, key: &ResourceKey, range: Range<u64>) -> bool {
-        if range.start >= range.end {
-            return true;
-        }
-        if self.availability().contains_range(key, range.clone()) {
-            return true;
-        }
-        if let Ok(AssetResourceState::Committed {
-            final_len: Some(len),
-        }) = self.resource_state(key)
-        {
-            return range.end <= len;
-        }
-        false
+        self.availability().contains_range(key, range)
     }
 
     /// Delete the entire asset directory.
@@ -223,19 +194,11 @@ impl AssetStore {
         }
     }
 
-    /// Return the committed final length of the resource, if known.
+    /// Return the committed final length of the resource, if known to
+    /// the availability aggregate.
     #[must_use]
     pub fn final_len(&self, key: &ResourceKey) -> Option<u64> {
-        if let Some(len) = self.availability().final_len(key) {
-            return Some(len);
-        }
-        if let Ok(AssetResourceState::Committed {
-            final_len: Some(len),
-        }) = self.resource_state(key)
-        {
-            return Some(len);
-        }
-        None
+        self.availability().final_len(key)
     }
 
     /// Return whether both handles refer to the same store instance.
