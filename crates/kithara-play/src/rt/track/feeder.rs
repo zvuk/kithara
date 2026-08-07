@@ -67,7 +67,7 @@ impl PlayerResource {
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
     /// Allocates two per-channel scratch buffers from the given PCM pool, each holding
-    /// [`Self::scratch_frames`] frames (200 ms of audio).
+    /// [`Self::scratch_frames`] frames.
     #[must_use]
     pub fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
         let buffer_frames = Self::scratch_frames(resource.spec().sample_rate.get()).get();

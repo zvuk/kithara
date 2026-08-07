@@ -174,15 +174,16 @@ the main thread drains it in `PlayerImpl::process_notifications`. A full command
 `render_audio` clamps its block to the scratch it holds, so a host exceeding the `max_block_frames`
 it declared loses that block's tail rather than allocating in the callback.
 
-Pause and resume are ramps. `RenderPass` owns a transport gate - a `MixDSP` on a 5 ms smoother -
-open while `PlaybackShared::playing` is set. The flag flips at once for `Player::is_playing()` while
-the output reaches zero over ~35 ms, and the media clock advances by that much. A processor's first
-block adopts the transport state rather than fading into it.
+Pause and resume are ramps. `RenderPass` owns a transport gate - a smoothed `MixDSP` - open while
+`PlaybackShared::playing` is set. The flag flips at once for `Player::is_playing()` while the output
+ramps to zero, and the media clock advances by the length of that ramp. A processor's first block
+adopts the transport state rather than fading into it.
 
 `TrackFade::play` snaps only when its mix has settled, so a fade still in flight keeps its ramp.
 
-One block is the whole budget: 128 frames at 48 kHz gives the callback 2.667 ms across all three
-processors. `tests/benches/rt_block_budget.rs` measures the share `PlayerNodeProcessor` takes.
+One block is the whole budget, shared by all three processors.
+`tests/benches/rt_block_budget.rs` derives it from the host's block and rate, and measures the share
+`PlayerNodeProcessor` takes.
 
 The audio thread never logs. Discrete facts leave through `PlayerNotification`, rates and faults
 through `PlaybackShared::metrics()` (`bridge::RtMetrics`); `RtSink` carries both into the per-track
