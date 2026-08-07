@@ -910,14 +910,9 @@ fn segment_aware_seek_time_anchor_leaves_the_fetch_plan_to_the_peer() {
     assert_eq!(
         queue_seg_indices(&v),
         plan_before,
-        "anchor resolution runs on the produce core and leaves the fetch \
-         plan to the download peer (seek_epoch_reset -> rebuild_at_time)"
+        "the fetch plan is the peer's; anchor resolution must not touch it"
     );
-    assert_eq!(
-        v.prefetch_anchor(),
-        100,
-        "the lock-free prefetch anchor still aims at the preroll segment"
-    );
+    assert_eq!(v.prefetch_anchor(), 100);
 }
 
 #[kithara::test]

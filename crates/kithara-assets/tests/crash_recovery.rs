@@ -131,13 +131,6 @@ fn garbage_lru_bin_is_treated_as_empty() {
     assert!(scope.store().contains_range(&key, 0..12));
 }
 
-/// The availability manifest is the sole authority on which bytes are
-/// present: the segment file becomes visible at `rename`, while its
-/// durability barrier is paid later by the manifest flush, so a file that
-/// the manifest does not vouch for may carry the right name and length
-/// over unwritten blocks. A corrupt manifest therefore costs a refetch,
-/// never a wrong read — and the probes answer from the aggregate alone,
-/// which keeps them free of locks and filesystem calls on the produce core.
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn garbage_availability_bin_costs_a_refetch() {
     let dir = tempdir().unwrap();
@@ -476,7 +469,7 @@ fn doubly_corrupted_indexes_do_not_panic_and_the_store_refetches() {
     assert_eq!(
         scope.store().final_len(&key),
         None,
-        "every index corrupt → the unvouched segment is refetched, never trusted"
+        "every index corrupt -> the unvouched segment is refetched"
     );
     assert!(!scope.store().contains_range(&key, 0..12));
     let acq = store.acquire_resource(&key, None).unwrap();

@@ -196,15 +196,10 @@ pub(super) struct Layout {
     /// old frame.
     publication_seq: AtomicU64,
     total: AtomicU64,
-    /// Serializes off-RT writers so a concurrent load-clone-mutate-store pair
-    /// cannot lose an update (the old `RwLock` serialized writes; `ArcSwap`
-    /// alone does not). Never taken on the produce-core read path.
-    ///
-    /// Its payload is the retire list: frames displaced by a swap, alive
-    /// until a later mutation sees them quiesced (`strong_count == 1`).
-    /// Keeps reclamation on the writer thread — a produce-core guard racing
-    /// the swap can resolve to the displaced frame, and this floor makes its
-    /// drop a pure decrement.
+    /// Serializes off-RT writers; never taken on the produce-core read
+    /// path. Payload: frames displaced by a swap, held until quiesced
+    /// (`strong_count == 1`) so reclamation stays on the writer and a
+    /// reader guard drop is a pure decrement.
     write_lock: Mutex<Vec<Arc<Frame>>>,
 }
 
@@ -321,9 +316,7 @@ impl Layout {
         self.finish_publication();
     }
 
-    /// Reclaim quiesced retirees, then move the live frame into the retire
-    /// list ahead of the swap. Takes the write-lock payload, so a caller
-    /// holds the lock by construction.
+    /// Reclaim quiesced retirees, then park the live frame ahead of the swap.
     fn retire_current(retired: &mut Vec<Arc<Frame>>, frame: &ArcSwap<Frame>) {
         retired.retain(|frame| Arc::strong_count(frame) > 1);
         retired.push(frame.load_full());
@@ -411,10 +404,6 @@ mod tests {
 
     use super::*;
 
-    /// A produce-core reader racing a frame swap can end up holding the last
-    /// reference to the displaced frame, and dropping it would `free` inside
-    /// the forbid region. The writer therefore keeps every displaced frame
-    /// alive until a later mutation proves it quiesced.
     #[kithara::test]
     fn displaced_frame_is_freed_by_the_writer() {
         let layout = Layout::new(0, &[]);
@@ -423,19 +412,16 @@ mod tests {
         layout.apply_commit(&[], || 0);
         assert!(
             displaced.upgrade().is_some(),
-            "the displaced frame must stay alive: a racing reader guard may still \
-             resolve to it, and its drop must never be the one that frees"
+            "a racing reader guard may still resolve to the displaced frame"
         );
 
         layout.apply_commit(&[], || 0);
         assert!(
             displaced.upgrade().is_none(),
-            "the next mutation reclaims quiesced frames on the writer thread"
+            "the next mutation reclaims quiesced frames"
         );
     }
 
-    /// `mutate_frame` (reset / activation mutators) routes through the same
-    /// retire step as `apply_commit`.
     #[kithara::test]
     fn mutate_frame_retires_the_displaced_frame() {
         let layout = Layout::new(0, &[]);
@@ -455,14 +441,11 @@ mod tests {
         layout.apply_commit(&[], || 0);
         assert!(
             displaced.upgrade().is_some(),
-            "a frame with an outstanding reader reference must survive reclamation"
+            "an outstanding reader blocks reclamation"
         );
 
         drop(reader);
         layout.apply_commit(&[], || 0);
-        assert!(
-            displaced.upgrade().is_none(),
-            "once the reader is gone the writer reclaims the frame"
-        );
+        assert!(displaced.upgrade().is_none());
     }
 }

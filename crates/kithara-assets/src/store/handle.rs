@@ -132,8 +132,7 @@ impl AssetStore {
         }
     }
 
-    /// Return a snapshot of byte ranges known to be available for the
-    /// given resource, answered from the availability aggregate.
+    /// Byte ranges known to the availability aggregate for this resource.
     #[must_use]
     pub fn available_ranges(&self, key: &ResourceKey) -> RangeSet<u64> {
         self.availability().available_ranges(key)
@@ -162,12 +161,8 @@ impl AssetStore {
     }
 
     /// Return `true` when every byte in `range` is already present for
-    /// the resource, or when the range is empty.
-    ///
-    /// Answers from the availability aggregate alone — no handle-cache
-    /// mutex, no filesystem call. Hydration at store build and the
-    /// write/commit observers keep the aggregate complete; a resource the
-    /// aggregate does not know is absent and gets refetched.
+    /// the resource, or when the range is empty. Aggregate-only: no
+    /// locks, no filesystem.
     #[must_use]
     pub fn contains_range(&self, key: &ResourceKey, range: Range<u64>) -> bool {
         self.availability().contains_range(key, range)
@@ -193,8 +188,7 @@ impl AssetStore {
         }
     }
 
-    /// Return the committed final length of the resource, if known to
-    /// the availability aggregate.
+    /// Committed final length per the availability aggregate, if known.
     #[must_use]
     pub fn final_len(&self, key: &ResourceKey) -> Option<u64> {
         self.availability().final_len(key)
