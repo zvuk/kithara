@@ -27,7 +27,7 @@ mod ffmpeg;
 pub use error::{EncodeError, EncodeResult};
 pub use factory::EncoderFactory;
 #[cfg(not(target_arch = "wasm32"))]
-pub use ffmpeg::flac::normalize_flac_codec_config;
+pub use ffmpeg::{flac::normalize_flac_codec_config, stream::StreamEncoder};
 pub use traits::InnerEncoder;
 pub use types::{
     BytesEncodeRequest, BytesEncodeTarget, EncodedAccessUnit, EncodedBytes, EncodedTrack,

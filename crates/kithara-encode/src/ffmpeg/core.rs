@@ -69,6 +69,7 @@ pub(crate) fn build_direct_filter(
     encoder: &AudioEncoder,
     sample_rate: u32,
     channels: u16,
+    input_format: av_format::Sample,
 ) -> Result<FilterGraph, FfmpegError> {
     let mut graph = FilterGraph::new();
     let input_channel_layout = ChannelLayout::default(i32::from(channels));
@@ -76,7 +77,7 @@ pub(crate) fn build_direct_filter(
         "time_base=1/{}:sample_rate={}:sample_fmt={}:channel_layout=0x{:x}",
         sample_rate,
         sample_rate,
-        av_format::Sample::I16(av_format::sample::Type::Packed).name(),
+        input_format.name(),
         input_channel_layout.bits()
     );
 

@@ -10,7 +10,7 @@
 
 # kithara-encode
 
-Synchronous audio encoding library with a thin facade, FFmpeg-backed implementations, and an in-tree fdk-aac HE-AAC v1/v2 packaged encoder. `EncoderFactory` creates packaged access units for fMP4/HLS helpers and complete encoded bytes for test fixture routes.
+Synchronous audio encoding library with a thin facade, FFmpeg-backed implementations, and an in-tree fdk-aac HE-AAC v1/v2 packaged encoder. `StreamEncoder` encodes a live AAC-LC stream from interleaved f32; `EncoderFactory` creates packaged access units for fMP4/HLS helpers and complete encoded bytes.
 
 ## Usage
 
@@ -27,12 +27,13 @@ let encoded = encoder.encode_bytes(BytesEncodeRequest {
 
 ## Key types
 
+- `StreamEncoder` — streaming AAC-LC encoder; interleaved f32 in, access units out.
 - `EncoderFactory` — entry point; creates byte-oriented and packaged encoders.
 - `InnerEncoder` — encoder trait returned by the factory.
 - `BytesEncodeRequest` / `BytesEncodeTarget` — byte-encoding inputs.
 - `PackagedEncodeRequest` — packaged access-unit encoding input.
 - `EncodedBytes` / `EncodedTrack` — encoded outputs (complete bytes and packaged access units).
 
-Consumes canonical media types from `kithara-stream` and is primarily used by `kithara-test-utils` to generate encoded fixtures and packaged tracks.
+Consumes canonical media types from `kithara-stream`. The streaming path feeds live broadcast; the packaged and byte paths generate encoded fixtures and packaged tracks for the integration harness.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

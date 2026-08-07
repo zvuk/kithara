@@ -2,11 +2,21 @@
 
 Contracts and invariants for the kithara-encode crate; the README is the overview.
 
-Test-only infrastructure (`publish = false`), consumed by `kithara-integration-tests` to generate encoded fixtures and packaged tracks. It consumes canonical `AudioCodec`, `ContainerFormat`, and `MediaInfo` from `kithara-stream`.
+The crate owns two roles: streaming AAC-LC encoding for the live broadcast path, and offline encoding that `kithara-integration-tests` uses to generate encoded fixtures and packaged tracks. It consumes canonical `AudioCodec`, `ContainerFormat`, and `MediaInfo` from `kithara-stream`.
+
+## Streaming encoding
+
+`StreamEncoder` is the canonical AAC-LC encode path. `new(sample_rate, channels, bit_rate, timescale)` opens one encoder for one continuous stream; `push` takes **interleaved f32** and returns the access units that audio completed; `finish` flushes the encoder and returns the rest. The instance lives for the whole stream — a per-segment encoder would restart the priming frame and click at every boundary.
+
+- `push` takes full frames: a slice whose length is not a multiple of the channel count is rejected. Samples are expected in `[-1.0, 1.0]`; the encoder passes larger magnitudes through to `FFmpeg`, where the outcome depends on the linked encoder's sample format.
+- The filter graph holds up to `FRAME_SAMPLES - 1` samples between calls and hands the encoder whole frames, so chunk size does not reach the encoder: the same audio pushed in any chunking yields byte-identical access units with identical timestamps. `finish` is what releases the tail.
+- A `push` that returns a backend error leaves the encoder mid-frame — drop it and open a new one rather than pushing again.
+- Timestamps are rescaled from `1/sample_rate` to `1/timescale` and normalized against the first packet, so a stream starts at 0 and its first `FRAME_SAMPLES` decode to encoder priming. Access-unit boundaries are what gets rescaled, so durations tile the pts timeline exactly even when the ratio is fractional. Each access unit carries `FRAME_SAMPLES` (1024) samples per channel; the flush emits the zero-padded tail frame plus one priming frame.
+- The encoder takes the source's own channel layout: a channel count AAC-LC has no layout for fails in `new` rather than being silently downmixed or upmixed.
 
 ## PCM input contract
 
-`PcmSource::read_pcm_at` must yield **interleaved packed i16** bytes; every backend derives its frame stride as `channels * size_of::<i16>()`. A source that hands back any other layout produces silent garbage, not an error.
+`PcmSource::read_pcm_at` must yield **interleaved packed i16** bytes; every backend derives its frame stride as `channels * size_of::<i16>()`. A source that hands back any other layout produces silent garbage, not an error. The AAC-LC offline path reads those bytes, scales them by `1/32768` into f32, and pushes them through `StreamEncoder`; the FLAC and bytes paths hand the i16 bytes to `FFmpeg` directly, and the HE-AAC path reads them into the in-tree fdk encoder.
 
 ## Packaged encoding
 
@@ -14,7 +24,7 @@ Test-only infrastructure (`publish = false`), consumed by `kithara-integration-t
 
 Routing inside the single `InnerEncoder` implementation:
 
-- `AacLc` — FFmpeg AAC, natural frame 1024 samples.
+- `AacLc` — `StreamEncoder` fed the whole source, natural frame 1024 samples.
 - `AacHe` / `AacHeV2` — in-tree fdk-aac `AacHeEncoder` (AOT SBR / PS), natural frame 2048 samples, **stereo input only**.
 - `Flac` — FFmpeg FLAC, natural frame 4608 samples.
 - Any other codec — `EncodeError::UnsupportedCodec`.
@@ -36,4 +46,4 @@ Routing inside the single `InnerEncoder` implementation:
 
 ## Platform
 
-FFmpeg is initialized once per process behind a `OnceLock`. On `wasm32` the ffmpeg and fdk modules are not compiled at all and every factory entry point returns `EncodeError::InvalidInput("encoding is not supported on wasm32")`.
+FFmpeg is initialized once per process behind a `OnceLock`. On `wasm32` the ffmpeg and fdk modules are not compiled at all, `StreamEncoder` is absent, and every factory entry point returns `EncodeError::InvalidInput("encoding is not supported on wasm32")`.

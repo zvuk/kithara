@@ -13,8 +13,8 @@ use ffmpeg_next as ffmpeg;
 use super::{
     build_direct_filter, ensure_ffmpeg_initialized, find_encoder,
     pcm::{
-        drain_filtered_frames, flush_filter, pump_pcm_frames, send_eof_to_encoder,
-        send_frame_to_filter,
+        PCM_INPUT_FORMAT, drain_filtered_frames, flush_filter, pump_pcm_frames,
+        send_eof_to_encoder, send_frame_to_filter,
     },
 };
 use crate::{
@@ -210,7 +210,7 @@ impl DirectEncoder {
         let encoder = encoder.open_as_with(output_codec, options)?;
         output.set_parameters(&encoder);
 
-        let filter = build_direct_filter(&encoder, sample_rate, channels)?;
+        let filter = build_direct_filter(&encoder, sample_rate, channels, PCM_INPUT_FORMAT)?;
 
         Ok(Self { encoder, filter })
     }

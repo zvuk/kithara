@@ -130,7 +130,7 @@ pub struct EncodedBytes {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodedAccessUnit {
     pub bytes: Vec<u8>,
     pub is_sync: bool,

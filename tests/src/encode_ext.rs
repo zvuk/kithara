@@ -1,4 +1,6 @@
-use kithara_encode::BytesEncodeTarget;
+use kithara_encode::{BytesEncodeTarget, EncodedTrack};
+
+use crate::{fixture_protocol::GaplessEncoding, fmp4::mux_audio_track};
 
 /// Expected `Content-Type` per encode target — the oracle integration tests
 /// assert the encoder's `EncodedBytes::content_type` field against. Production
@@ -17,4 +19,15 @@ impl BytesEncodeTargetExt for BytesEncodeTarget {
             Self::M4a => "audio/mp4",
         }
     }
+}
+
+/// Mux a packaged track into one fMP4 byte stream — init segment followed by
+/// every media segment — the form an in-memory decoder reads.
+pub fn mux_fmp4_bytes(track: &EncodedTrack, gapless: GaplessEncoding) -> Vec<u8> {
+    let packaged = mux_audio_track(track, gapless).expect("mux packaged track into fMP4");
+    let mut bytes = packaged.init_segment.as_ref().clone();
+    for segment in &packaged.media_segments {
+        bytes.extend_from_slice(segment);
+    }
+    bytes
 }

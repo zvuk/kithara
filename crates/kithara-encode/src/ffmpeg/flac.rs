@@ -5,6 +5,8 @@ use ffmpeg::{
         flag::Flags as CodecFlags,
     },
     encoder::find as find_encoder,
+    error::EAGAIN,
+    rescale::Rescale,
 };
 use ffmpeg_next as ffmpeg;
 use kithara_stream::{AudioCodec, ContainerFormat};
@@ -14,8 +16,8 @@ use super::{
     bytes::encode_bytes_audio,
     ensure_ffmpeg_initialized,
     pcm::{
-        drain_filtered_frames, flush_filter, pump_pcm_frames, send_eof_to_encoder,
-        send_frame_to_filter,
+        PCM_INPUT_FORMAT, drain_filtered_frames, flush_filter, pump_pcm_frames,
+        send_eof_to_encoder, send_frame_to_filter,
     },
 };
 use crate::{
@@ -56,7 +58,7 @@ impl FlacFFmpegEncoder {
         flush_filter(&mut encoder.filter)?;
         encoder.receive_and_collect_filtered_frames()?;
         send_eof_to_encoder(&mut encoder.encoder)?;
-        encoder.receive_and_collect_packets();
+        encoder.receive_and_collect_packets()?;
 
         let mut media_info = request.media_info.clone();
         media_info.codec = Some(AudioCodec::Flac);
@@ -135,7 +137,7 @@ impl PacketCollectingEncoder {
         let mut options = Dictionary::new();
         options.set("compression_level", "5");
         let encoder = encoder.open_as_with(output_codec, options)?;
-        let filter = build_direct_filter(&encoder, sample_rate, channels)?;
+        let filter = build_direct_filter(&encoder, sample_rate, channels, PCM_INPUT_FORMAT)?;
 
         Ok(Self {
             filter,
@@ -162,12 +164,11 @@ impl PacketCollectingEncoder {
                 },
                 timestamp_origin,
                 units,
-            );
-            Ok(())
+            )
         })
     }
 
-    fn receive_and_collect_packets(&mut self) {
+    fn receive_and_collect_packets(&mut self) -> Result<(), FfmpegError> {
         collect_encoded_packets(
             &mut self.encoder,
             RebaseRates {
@@ -176,7 +177,7 @@ impl PacketCollectingEncoder {
             },
             &mut self.timestamp_origin,
             &mut self.units,
-        );
+        )
     }
 }
 
@@ -279,34 +280,35 @@ fn collect_encoded_packets(
     rates: RebaseRates,
     timestamp_origin: &mut Option<i64>,
     units: &mut Vec<EncodedAccessUnit>,
-) {
-    let RebaseRates {
-        encoder: encoder_time_base,
-        target: target_time_base,
-    } = rates;
+) -> Result<(), FfmpegError> {
     let mut encoded = Packet::empty();
-    while encoder.receive_packet(&mut encoded).is_ok() {
+    loop {
+        match encoder.receive_packet(&mut encoded) {
+            Ok(()) => {}
+            Err(FfmpegError::Eof | FfmpegError::Other { errno: EAGAIN }) => return Ok(()),
+            Err(error) => return Err(error),
+        }
         if encoded.size() == 0 {
             continue;
         }
-        let mut packet = Packet::copy(encoded.data().unwrap_or(&[]));
-        packet.set_pts(encoded.pts());
-        packet.set_dts(encoded.dts());
-        packet.set_duration(encoded.duration());
-        packet.rescale_ts(encoder_time_base, target_time_base);
-        let raw_pts = packet.pts().unwrap_or_default();
-        let raw_dts = packet.dts().unwrap_or_default();
+
+        let raw_pts = encoded.pts().unwrap_or_default();
+        let raw_dts = encoded.dts().unwrap_or_default();
         let origin = *timestamp_origin.get_or_insert(raw_pts.min(raw_dts));
+        let start = raw_pts.saturating_sub(origin).max(0);
+        let end = start.saturating_add(encoded.duration().max(0));
+
+        let pts = rescale_timestamp(start, rates);
         units.push(EncodedAccessUnit {
-            bytes: packet.data().unwrap_or(&[]).to_vec(),
-            pts: normalize_timestamp(raw_pts, origin),
-            dts: normalize_timestamp(raw_dts, origin),
+            bytes: encoded.data().unwrap_or(&[]).to_vec(),
+            pts,
+            dts: rescale_timestamp(raw_dts.saturating_sub(origin).max(0), rates),
             duration: {
-                let d = packet.duration().max(0);
-                u32::try_from(d).unwrap_or_else(|_| {
+                let duration = rescale_timestamp(end, rates).saturating_sub(pts);
+                u32::try_from(duration).unwrap_or_else(|_| {
                     tracing::error!(
-                        packet_duration = d,
-                        "BUG: FLAC packet duration exceeds u32::MAX in target_time_base"
+                        packet_duration = duration,
+                        "BUG: FLAC packet duration exceeds u32::MAX in the target time base"
                     );
                     0
                 })
@@ -316,11 +318,13 @@ fn collect_encoded_packets(
     }
 }
 
-fn normalize_timestamp(value: i64, origin: i64) -> u64 {
-    let normalized = i128::from(value) - i128::from(origin);
-    let clamped = normalized.max(0);
-    u64::try_from(clamped).unwrap_or_else(|_| {
-        tracing::error!(normalized = ?clamped, "BUG: normalized timestamp exceeds u64::MAX");
+/// Rescale an encoder-domain timestamp into the target time base. Access-unit
+/// boundaries are rescaled, so a duration is always the gap between two
+/// rescaled positions and the timeline stays consistent for any ratio.
+fn rescale_timestamp(value: i64, rates: RebaseRates) -> u64 {
+    let rescaled = value.rescale(rates.encoder, rates.target).max(0);
+    u64::try_from(rescaled).unwrap_or_else(|_| {
+        tracing::error!(rescaled, "BUG: rescaled timestamp exceeds u64::MAX");
         0
     })
 }

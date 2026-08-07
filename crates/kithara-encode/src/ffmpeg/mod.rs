@@ -5,6 +5,9 @@ pub(crate) mod bytes;
 mod core;
 pub(crate) mod flac;
 pub(crate) mod pcm;
+pub(crate) mod stream;
+#[cfg(test)]
+pub(crate) mod test_pcm;
 
 pub(crate) use ffmpeg::codec::encoder::find as find_encoder;
 use ffmpeg_next as ffmpeg;
