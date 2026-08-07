@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_decode::{
-    BlenderProfile, ChunkSink, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
+    BlenderProfile, ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     GaplessMode, GaplessProfile, PcmChunk,
 };
 use kithara_stream::MediaInfo;
@@ -106,7 +106,7 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkSink) {
+    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
         self.gapless.notify_seek(retire);
         for chunk in self.staged.drain(..) {
             retire.retire(chunk);

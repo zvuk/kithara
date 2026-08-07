@@ -2,7 +2,7 @@ use num_traits::AsPrimitive;
 use smallvec::SmallVec;
 
 use crate::{
-    ChunkSink, GaplessInfo, GaplessTailCompensation, PcmChunk, duration_for_frames,
+    ChunkRetire, GaplessInfo, GaplessTailCompensation, PcmChunk, duration_for_frames,
     gapless::heuristic::SilenceTrimParams,
 };
 
@@ -250,7 +250,7 @@ impl GaplessTrimmer {
     ///
     /// The buffered chunks go to `retire` rather than being dropped here — this runs on the produce
     /// core, and a pooled buffer whose shard is full deallocates on drop.
-    pub fn notify_seek(&mut self, retire: &dyn ChunkSink) {
+    pub fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
         match &mut self.mode {
             GaplessMode::Disabled => {}
             GaplessMode::Fixed {
@@ -738,7 +738,7 @@ fn drain_tail(tail_buffer: &mut TailBuffer, tail_buffered_frames: &mut u64) -> G
     ready
 }
 
-fn retire_buffer(buffer: &mut TailBuffer, retire: &dyn ChunkSink) {
+fn retire_buffer(buffer: &mut TailBuffer, retire: &dyn ChunkRetire) {
     for chunk in buffer.drain(..) {
         retire.retire(chunk);
     }

@@ -1,5 +1,5 @@
 use arc_swap::ArcSwap;
-use kithara_decode::{ChunkSink, PcmChunk};
+use kithara_decode::{ChunkRetire, PcmChunk};
 use kithara_events::{AudioEvent, DecoderChangeCause, DeferredBus, Event, TrackFailureKind};
 use kithara_platform::sync::Arc;
 use kithara_stream::{
@@ -537,7 +537,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     }
 
     fn retire_chunk(&self, chunk: PcmChunk) {
-        ChunkSink::retire(&self.retired, chunk);
+        ChunkRetire::retire(&self.retired, chunk);
     }
 
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {

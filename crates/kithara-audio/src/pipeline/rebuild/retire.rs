@@ -4,7 +4,7 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
-use kithara_decode::{ChunkSink, PcmChunk};
+use kithara_decode::{ChunkRetire, PcmChunk};
 use tracing::warn;
 
 use crate::pipeline::decode::DecoderGeneration;
@@ -50,7 +50,7 @@ impl Retired {
     }
 }
 
-impl ChunkSink for Retired {
+impl ChunkRetire for Retired {
     fn retire(&self, chunk: PcmChunk) {
         if let Err(chunk) = self.chunks.push(chunk) {
             self.overflowed.store(true, Ordering::Release);

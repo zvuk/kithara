@@ -50,7 +50,7 @@ pub use gapless::{
     SilenceTrimParams, probe_mp4_gapless,
 };
 pub use pcm::{
-    ChunkSink, DropChunks, Frames, Samples, duration_for_frames, frames_for_duration,
+    ChunkRetire, DropChunks, Frames, Samples, duration_for_frames, frames_for_duration,
     sanitize_sample,
 };
 pub use traits::{

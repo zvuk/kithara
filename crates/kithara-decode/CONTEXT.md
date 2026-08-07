@@ -152,7 +152,7 @@ codec open (`track_with_output_domain_gapless`, round-half-up) so
 no engine trim (no metadata, or a backend path that already trimmed internally).
 `GaplessTrimmer::notify_seek(retire)` drops seek-sensitive state (leading trim,
 pending fade-in, buffered tail, tail compensation); trailing trim still applies
-at EOF. Its buffered chunks go to a `ChunkSink` rather than being dropped —
+at EOF. Its buffered chunks go to a `ChunkRetire` rather than being dropped —
 returning a pooled `PcmChunk` to a full shard deallocates, and the caller is the
 produce core. `DropChunks` is the sink for callers free to deallocate.
 

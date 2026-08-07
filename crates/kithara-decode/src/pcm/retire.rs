@@ -4,13 +4,13 @@ use crate::PcmChunk;
 ///
 /// A [`PcmChunk`] holds a pooled buffer and returning one to a full shard deallocates, so the
 /// produce core hands displaced chunks to a sink the worker shell drains.
-pub trait ChunkSink {
+pub trait ChunkRetire {
     fn retire(&self, chunk: PcmChunk);
 }
 
 /// Sink for callers that are free to deallocate. Drops each chunk in place.
 pub struct DropChunks;
 
-impl ChunkSink for DropChunks {
+impl ChunkRetire for DropChunks {
     fn retire(&self, _chunk: PcmChunk) {}
 }

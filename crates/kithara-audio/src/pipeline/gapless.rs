@@ -1,5 +1,5 @@
 use kithara_decode::{
-    ChunkSink, GaplessMode, GaplessOutput, GaplessProfile, GaplessTrimmer, PcmChunk,
+    ChunkRetire, GaplessMode, GaplessOutput, GaplessProfile, GaplessTrimmer, PcmChunk,
     duration_for_frames,
 };
 use kithara_platform::time::Duration;
@@ -68,7 +68,7 @@ impl GaplessStage {
         next
     }
 
-    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkSink) {
+    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
         if let Some(pending) = self.pending.take() {
             for chunk in pending {
                 retire.retire(chunk);
