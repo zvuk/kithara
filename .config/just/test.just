@@ -151,7 +151,7 @@ rtsan-async FILTER="no_block":
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
         cargo "+$toolchain" test -p kithara-integration-tests --test suite_light \
-        --features kithara/no-block,kithara-test-utils/no-block --target "$target" -- --nocapture {{ FILTER }}
+        --features no-block --target "$target" -- --nocapture {{ FILTER }}
 
 # `rt_metrics` drives `process()` directly: decode error, underrun, eviction,
 # and the on-core seek re-base.
