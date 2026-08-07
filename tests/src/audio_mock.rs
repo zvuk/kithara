@@ -568,8 +568,8 @@ impl PcmControl for LiveFrontierReader {
     }
 }
 
-/// How a [`FaultyPcmReader`] misbehaves, so RT paths that must not log or
-/// block can be driven into their failure branches from a test.
+/// How a [`FaultyPcmReader`] misbehaves, so RT paths that must not log or block can be driven into
+/// their failure branches from a test.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
     /// Every read returns a decoder error.
@@ -661,8 +661,8 @@ impl PcmControl for FaultyPcmReader {
     }
 }
 
-/// Counts which half of a seek each caller used, so a test can pin that the
-/// audio thread never runs the blocking one.
+/// Counts which half of a seek each caller used, so a test can pin that the audio thread never runs
+/// the blocking one.
 #[derive(Clone, Default)]
 pub struct SeekSplitCounts {
     pub blocking_seeks: Arc<AtomicU64>,

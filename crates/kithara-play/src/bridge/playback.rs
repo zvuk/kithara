@@ -6,8 +6,8 @@ use super::RtMetrics;
 
 /// One read of each live playback scalar.
 ///
-/// The fields are independent relaxed loads and can straddle two audio blocks,
-/// so a consumer needing two of them to agree must derive both from one field.
+/// The fields are independent relaxed loads and can straddle two audio blocks, so a consumer
+/// needing two of them to agree must derive both from one field.
 #[derive(Clone, Copy, Debug, Default, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
 #[fieldwork(get)]
@@ -53,8 +53,7 @@ pub struct PlaybackShared {
 }
 
 impl PlaybackShared {
-    /// Lock-free counters the audio thread bumps instead of emitting `tracing`
-    /// events.
+    /// Lock-free counters the audio thread bumps instead of emitting `tracing` events.
     #[must_use]
     pub fn metrics(&self) -> &RtMetrics {
         &self.metrics
@@ -66,8 +65,8 @@ impl PlaybackShared {
             .wrapping_add(1)
     }
 
-    /// Read every live playback scalar once. See [`PlaybackSnapshot`] for what
-    /// the fields do and do not guarantee about each other.
+    /// Read every live playback scalar once. See [`PlaybackSnapshot`] for what the fields do and do
+    /// not guarantee about each other.
     #[must_use]
     pub fn snapshot(&self) -> PlaybackSnapshot {
         let position = self.position.load(Ordering::Relaxed);

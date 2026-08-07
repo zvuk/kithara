@@ -91,10 +91,9 @@ pub fn watch<F: Future>(
     kithara_platform::no_block::watch_budget(name, budget_ms, rtsan_gate::RtsanChecked { fut })
 }
 
-// A whole test body counts as a real-time context only in the `no-block` lane,
-// which pairs that claim with `.config/rtsan/async-suppressions.txt`. The
-// decoder lanes run unsuppressed and check the product's own forbid regions, so
-// their harness setup allocates freely.
+// A whole test body counts as a real-time context only in the `no-block` lane, which pairs that
+// claim with `.config/rtsan/async-suppressions.txt`. The decoder lanes run unsuppressed and check
+// the product's own forbid regions, so their harness setup allocates freely.
 #[doc(hidden)]
 #[track_caller]
 #[cfg(not(all(rtsan, feature = "no-block")))]

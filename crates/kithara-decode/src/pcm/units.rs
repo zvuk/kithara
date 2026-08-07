@@ -2,8 +2,8 @@ use std::num::NonZeroUsize;
 
 /// A count of PCM frames — one sample per channel.
 ///
-/// Both this and [`Samples`] are `usize`, and a buffer sized in the wrong one is
-/// silently off by the channel count.
+/// Both this and [`Samples`] are `usize`, and a buffer sized in the wrong one is silently off by
+/// the channel count.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Frames(usize);
 
@@ -40,8 +40,8 @@ impl Samples {
         self.0
     }
 
-    /// How many whole frames this many interleaved samples cover. A trailing
-    /// partial frame is not a frame.
+    /// How many whole frames this many interleaved samples cover. A trailing partial frame is not a
+    /// frame.
     #[must_use]
     pub const fn frames(self, channels: NonZeroUsize) -> Frames {
         Frames(self.0 / channels.get())

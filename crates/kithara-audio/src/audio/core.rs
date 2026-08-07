@@ -199,9 +199,9 @@ impl<S> Audio<S> {
 
     /// Control-plane handle that begins a seek without touching the reader.
     ///
-    /// The blocking half of a seek — event publish, peer nudge, worker wake —
-    /// lives here so a caller on an audio callback can hand it off to the
-    /// control thread and keep only [`sync_seek`](Self::sync_seek).
+    /// The blocking half of a seek — event publish, peer nudge, worker wake — lives here so a
+    /// caller on an audio callback can hand it off to the control thread and keep only
+    /// [`sync_seek`](Self::sync_seek).
     #[must_use]
     pub fn seek_handle(&self) -> Arc<dyn SeekBegin> {
         Arc::new(SeekHandle::new(SeekHandleParts {
@@ -215,12 +215,11 @@ impl<S> Audio<S> {
         }))
     }
 
-    /// Adopt a seek epoch begun elsewhere, dropping everything buffered
-    /// before it.
+    /// Adopt a seek epoch begun elsewhere, dropping everything buffered before it.
     ///
-    /// Lock-free and allocation-free: recycled chunks go to the trash outlet
-    /// and the cursor is cleared in place, so this is the only half of a seek
-    /// an audio callback may run. A no-op when no new epoch was begun.
+    /// Lock-free and allocation-free: recycled chunks go to the trash outlet and the cursor is
+    /// cleared in place, so this is the only half of a seek an audio callback may run. A no-op when
+    /// no new epoch was begun.
     pub fn sync_seek(&mut self) {
         let begun = self.session.seek_obs.epoch();
         if begun == self.ring.validator.epoch {

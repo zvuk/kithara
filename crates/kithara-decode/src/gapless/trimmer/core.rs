@@ -244,14 +244,12 @@ impl GaplessTrimmer {
         }
     }
 
-    /// Drop seek-sensitive state. Both heuristic search and pending
-    /// fade-in are abandoned: after a seek we land mid-track and
-    /// trying to "trim leading silence" or apply a fade-in there
-    /// would corrupt audible content.
+    /// Drop seek-sensitive state. Both heuristic search and pending fade-in are abandoned: after a
+    /// seek we land mid-track and trying to "trim leading silence" or apply a fade-in there would
+    /// corrupt audible content.
     ///
-    /// The buffered chunks go to `retire` rather than being dropped here —
-    /// this runs on the produce core, and a pooled buffer whose shard is full
-    /// deallocates on drop.
+    /// The buffered chunks go to `retire` rather than being dropped here — this runs on the produce
+    /// core, and a pooled buffer whose shard is full deallocates on drop.
     pub fn notify_seek(&mut self, retire: &dyn ChunkSink) {
         match &mut self.mode {
             GaplessMode::Disabled => {}

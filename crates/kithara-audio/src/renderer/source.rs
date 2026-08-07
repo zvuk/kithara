@@ -35,10 +35,9 @@ pub trait AudioWorkerSource: Send + 'static {
     /// shell calls this once per pass, off the checked path. Default no-op.
     fn flush_deferred(&mut self) {}
 
-    /// Hand back a chunk the node discarded on the produce core. A pooled
-    /// buffer returned to a full shard deallocates, so the chunk goes to the
-    /// source's retire queue and the shell drops it in `flush_deferred`.
-    /// Default no-op for sources that pool nothing.
+    /// Hand back a chunk the node discarded on the produce core. A pooled buffer returned to a full
+    /// shard deallocates, so the chunk goes to the source's retire queue and the shell drops it in
+    /// `flush_deferred`. Default no-op for sources that pool nothing.
     fn retire_chunk(&self, chunk: Self::Chunk) {
         let _ = chunk;
     }

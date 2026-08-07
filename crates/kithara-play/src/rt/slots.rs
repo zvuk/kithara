@@ -58,8 +58,8 @@ impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
         self.slots.iter().flatten().count()
     }
 
-    /// Place a track in a free slot, handing it back when every slot is taken —
-    /// a `PlayerTrack` must not be freed on the audio thread.
+    /// Place a track in a free slot, handing it back when every slot is taken — a `PlayerTrack`
+    /// must not be freed on the audio thread.
     pub(crate) fn insert(&mut self, track: PlayerTrack) -> Option<PlayerTrack> {
         match self.slots.iter_mut().find(|slot| slot.is_none()) {
             Some(slot) => {

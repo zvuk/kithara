@@ -1,7 +1,6 @@
-//! A click is a step in the waveform, so every test here renders PCM through
-//! the same calls `process()` makes and measures the largest jump between
-//! neighbouring frames. The mock source is constant DC: whatever step the
-//! render adds is the transport or the fade, never the material.
+//! A click is a step in the waveform, so every test here renders PCM through the same calls
+//! `process()` makes and measures the largest jump between neighbouring frames. The mock source is
+//! constant DC: whatever step the render adds is the transport or the fade, never the material.
 
 #![cfg(not(target_arch = "wasm32"))]
 

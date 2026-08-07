@@ -14,9 +14,8 @@ pub enum LimiterError {
     Release { release_ms: f32 },
 }
 
-/// Stereo-linked, zero-lookahead peak limiter: immediate attack, exponential
-/// release toward unity, and a unity bypass below the ceiling that is exact for
-/// normal finite samples.
+/// Stereo-linked, zero-lookahead peak limiter: immediate attack, exponential release toward unity,
+/// and a unity bypass below the ceiling that is exact for normal finite samples.
 #[derive(Debug, Clone)]
 pub struct PeakLimiter {
     ceiling: f32,
@@ -55,10 +54,9 @@ impl PeakLimiter {
         })
     }
 
-    /// Apply the limiter in place to a planar block, linking channels by frame
-    /// peak. Each sample is guarded before the peak is taken, so the envelope
-    /// only ever sees a finite peak. Allocates nothing, locks nothing, performs
-    /// no I/O.
+    /// Apply the limiter in place to a planar block, linking channels by frame peak. Each sample is
+    /// guarded before the peak is taken, so the envelope only ever sees a finite peak. Allocates
+    /// nothing, locks nothing, performs no I/O.
     pub fn process_planar(&mut self, channels: &mut [&mut [f32]]) {
         debug_assert_eq!(channels.len(), self.channels);
 

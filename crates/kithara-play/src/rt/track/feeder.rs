@@ -66,8 +66,8 @@ impl PlayerResource {
 
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
-    /// Allocates two per-channel scratch buffers from the given PCM pool, each
-    /// holding [`Self::scratch_frames`] frames (200 ms of audio).
+    /// Allocates two per-channel scratch buffers from the given PCM pool, each holding
+    /// [`Self::scratch_frames`] frames (200 ms of audio).
     #[must_use]
     pub fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
         let buffer_frames = Self::scratch_frames(resource.spec().sample_rate.get()).get();
@@ -237,8 +237,8 @@ impl PlayerResource {
         }
     }
 
-    /// Drop everything buffered ahead of a seek the control thread began.
-    /// Lock-free: the reader picks up the epoch itself via `sync_seek`.
+    /// Drop everything buffered ahead of a seek the control thread began. Lock-free: the reader
+    /// picks up the epoch itself via `sync_seek`.
     pub fn reset_for_seek(&mut self) {
         self.resource.get_mut().sync_seek();
         self.write_len = 0;

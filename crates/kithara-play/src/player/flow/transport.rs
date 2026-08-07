@@ -138,17 +138,16 @@ impl PlayerImpl {
             return Err(PlayError::SlotNotFound(slot_id));
         };
 
-        // The `fetch_add` inside is the publication: storing the returned value
-        // back would let two concurrent seeks reinstate the older epoch.
+        // The `fetch_add` inside is the publication: storing the returned value back would let two
+        // concurrent seeks reinstate the older epoch.
         let seek_epoch = playback.next_seek_epoch();
 
         let target_secs = seconds.max(0.0);
         let target = Duration::from_secs_f64(target_secs);
 
-        // Begin here, on the control thread: minting the source epoch
-        // publishes an event and wakes the decode worker, both of which take
-        // locks. The processor's `PlayerCmd::Seek` then only re-bases the
-        // track's own buffers and media clock, lock-free.
+        // Begin here, on the control thread: minting the source epoch publishes an event and wakes
+        // the decode worker, both of which take locks. The processor's `PlayerCmd::Seek` then only
+        // re-bases the track's own buffers and media clock, lock-free.
         self.core.engine.begin_slot_seek(slot_id, target);
         let outcome = match self.duration_seconds() {
             Some(dur) if target_secs >= dur => SeekOutcome::PastEof {

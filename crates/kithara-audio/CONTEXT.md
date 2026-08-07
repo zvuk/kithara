@@ -93,11 +93,9 @@ mutator of track state through `update_state`. Sub-owners never take
   job, `submit` (from `flush_deferred`) spawns it off-RT. The job constructs a
   complete `DecoderGeneration`; installation only moves it.
 - `Retired` — off-RT drain for everything the produce core displaces but must not
-  free: generations a rebuild replaced (4 entries) and the chunks a seek flushed
-  out of staging and the gapless buffers (64). A `PcmChunk` holds a pooled buffer
-  and returning one to a full shard deallocates, so `notify_seek` routes them
-  through `ChunkSink` (`kithara-decode`). On overflow the queue `mem::forget`s
-  rather than freeing on-core, and warns on drain.
+  free: generations a rebuild replaced, and the chunks a seek flushed out of
+  staging and the gapless buffers. On overflow the queue `mem::forget`s rather
+  than freeing on-core, and warns on drain.
 - Format and anchor decisions are pure functions in `decode::format` and
   `seek::anchor`.
 
@@ -325,18 +323,14 @@ playhead). A duration-changing `AudioEffect` is the sole timeline authority: it
 restamps only `spec` + `frames` and carries the consumed input's song-time meta
 forward, so there is no translation layer and no parallel frame counter.
 
-**Sample guard.** `sanitize_sample` (`kithara-decode`) runs on the *input* of
-every stage that takes untrusted samples: `IsolatorEq::process_sample` before it
-branches, `PeakLimiter::process_planar` before it takes the frame peak. Input is
-the only placement covering every path — the EQ's silence and bypass branches
-return their sample untouched, its filter branch would latch a `NaN` into the IIR
-for the rest of the track, and one infinite peak drives the limiter's
-`ceiling / peak` to zero, fading the master bus back in over the release. The
-limiter guards each sample rather than the peak, since `f32::max` returns its
-non-`NaN` operand. Bit-exact bypass holds for finite samples.
+**Sample guard.** `sanitize_sample` (`kithara-decode`, which owns it) runs on the
+*input* of every stage taking untrusted samples: `IsolatorEq::process_sample`
+before it branches, `PeakLimiter::process_planar` before it takes the frame peak.
+Input is the only placement covering every branch. The limiter guards each sample
+rather than the peak, since `f32::max` returns its non-`NaN` operand. Bit-exact
+bypass holds for finite samples.
 
-`IsolatorEq`'s crossover is IIR, so its tail decays into the denormal range and
-would cost the callback one to two orders of magnitude more arithmetic. Each
+`IsolatorEq`'s crossover is IIR, so its tail decays into the denormal range. Each
 biquad section flushes state and returns exact zero once **both** its input and
 output fall below `f32::MIN_POSITIVE`; the input half keeps a live signal through
 a deep cut from losing its history.

@@ -177,12 +177,12 @@ impl KeyStore {
 
     /// Synchronous key lookup — no network I/O.
     ///
-    /// Keys normally come from the in-memory map populated by a prior
-    /// [`Self::get_raw_key`] call on this session. The persistent
-    /// [`AssetStore`](kithara_assets::AssetStore) remains a fallback for
-    /// callers that have not prefetched.
+    /// Keys normally come from the in-memory map populated by a prior [`Self::get_raw_key`] call on
+    /// this session. The persistent [`AssetStore`](kithara_assets::AssetStore) remains a fallback
+    /// for callers that have not prefetched.
     ///
     /// # Errors
+    ///
     /// Returns an error when the key hasn't been fetched yet.
     pub fn get_cached_key(&self, url: &Url) -> HlsResult<Bytes> {
         if let Some(cached) = self.keys.get(url).map(|entry| entry.value().clone()) {

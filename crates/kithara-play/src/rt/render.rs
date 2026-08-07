@@ -91,8 +91,8 @@ impl RenderPass {
             ch_buffer[..frames].fill(0.0);
         }
 
-        // Growing a pooled buffer here would allocate on the audio thread. The
-        // fill above already covered the frames past the clamp with silence.
+        // Growing a pooled buffer here would allocate on the audio thread. The fill above already
+        // covered the frames past the clamp with silence.
         let frames = frames.min(self.capacity);
 
         self.gate.set_mix(
@@ -107,8 +107,8 @@ impl RenderPass {
             self.priming = false;
             self.gate.reset_to_target();
         }
-        // A closed gate outputs silence whatever the tracks hold, so readers
-        // stop only once its ramp has run out.
+        // A closed gate outputs silence whatever the tracks hold, so readers stop only once its
+        // ramp has run out.
         if !is_playing && self.gate.has_settled() {
             return (false, None);
         }

@@ -72,10 +72,9 @@ impl OfflinePlayer {
             Arc::clone(&src),
             &kithara::bufpool::PcmPool::default(),
         );
-        // Keep the control half of the track's seek path, exactly as
-        // `EngineImpl::send_slot_cmd` does when a resource crosses to the audio
-        // thread. Without it a later `seek` would move the media clock while
-        // the source stayed put.
+        // Keep the control half of the track's seek path, exactly as `EngineImpl::send_slot_cmd`
+        // does when a resource crosses to the audio thread. Without it a later `seek` would move
+        // the media clock while the source stayed put.
         if let Some(handle) = pr.seek_handle() {
             self.control.bind_seek(Arc::clone(&src), handle);
         }

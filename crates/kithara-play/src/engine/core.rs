@@ -145,9 +145,9 @@ impl EngineImpl {
         let mut slots = self.slots.lock();
         let result = match slots.get_mut(slot) {
             Some(handle) => {
-                // A resource crossing to the audio thread leaves its seek
-                // handle behind: beginning a seek takes locks, so it stays on
-                // this side. Released on the matching `Unloaded`.
+                // A resource crossing to the audio thread leaves its seek handle behind: beginning
+                // a seek takes locks, so it stays on this side. Released on the matching
+                // `Unloaded`.
                 if let PlayerCmd::LoadTrack { resource, .. } = &cmd
                     && let Some(seek) = resource.seek_handle()
                 {

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Counts the audio thread keeps instead of logging. Monotonic for the life of
-/// the slot, so a reader samples twice and looks at the delta.
+/// Counts the audio thread keeps instead of logging. Monotonic for the life of the slot, so a
+/// reader samples twice and looks at the delta.
 #[derive(Debug, Default)]
 pub struct RtMetrics {
     decode_errors: AtomicU64,

@@ -56,8 +56,8 @@ impl CrossfadeSettings {
 
 /// The realtime audio processor for the player node.
 ///
-/// Owns the loaded tracks, handles transitions, and renders mixed stereo
-/// audio into the Firewheel output buffers.
+/// Owns the loaded tracks, handles transitions, and renders mixed stereo audio into the Firewheel
+/// output buffers.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct PlayerNodeProcessor {
@@ -118,13 +118,12 @@ impl PlayerNodeProcessor {
             .map(|(slot, track)| (slot, track.ended_at_eof()))
             .collect();
 
-        // Superpowered-style end-of-queue resume: if removing the finished
-        // tracks would empty the slot set (the queue has played out) and one of
-        // them reached *natural* EOF, keep that single track resident (warm)
-        // so a later in-range seek can revive it (`apply_seek`). It is
-        // reclaimed by `evict_tracks_if_needed` (Finished evicts first) when
-        // the next track loads. Tracks that finished via `stop()` or a
-        // faded-out crossfade (not `ended_at_eof`) are discarded as usual.
+        // Superpowered-style end-of-queue resume: if removing the finished tracks would empty the
+        // slot set (the queue has played out) and one of them reached *natural* EOF, keep that
+        // single track resident (warm) so a later in-range seek can revive it (`apply_seek`). It is
+        // reclaimed by `evict_tracks_if_needed` (Finished evicts first) when the next track loads.
+        // Tracks that finished via `stop()` or a faded-out crossfade (not `ended_at_eof`) are
+        // discarded as usual.
         let retain: Option<TrackSlot> = if finished.len() == self.tracks.len() {
             finished
                 .iter()
@@ -143,8 +142,8 @@ impl PlayerNodeProcessor {
             }
         }
 
-        // The retained track is `Finished`, so `render_audio` skips it and
-        // `is_playing()` stays false until a seek revives it.
+        // The retained track is `Finished`, so `render_audio` skips it and `is_playing()` stays
+        // false until a seek revives it.
         if self.tracks.len() == 0 || retain.is_some() {
             self.playback.playing.store(false, Ordering::SeqCst);
         }

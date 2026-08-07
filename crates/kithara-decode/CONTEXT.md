@@ -254,17 +254,15 @@ gapless policy, and the codec-embedded Apple decode path.
 buffers are sized in frames, interleaved ones in samples, both are `usize`, and a
 buffer sized in the wrong one is silently off by the channel count. Conversion
 takes that count explicitly (`Frames::samples`, `Samples::frames`). Applied where
-the two units meet — `ResampledDecoder::interleave`, `PlayerResource::scratch_frames`
-— and not inside bodies holding one unit, where the type adds `get()` and no
-guarantee. `PcmMeta.frames` stays a plain `u32`.
+the two units meet — `ResampledDecoder::interleave`, `PlayerResource::scratch_frames`.
+`PcmMeta.frames` stays a plain `u32`.
 
 `sanitize_sample` is the workspace's one sample guard: `NaN`, infinities and
 denormals become silence. `ResampledDecoder::append_chunk` applies it while
-deinterleaving, so a backend only sees finite normal input — a 32-bit float file
-may hold any bit pattern, and a sinc stage spreads one poisoned frame across its
-whole FIR window. The adapter is the placement because it owns the samples by
-value while `Resampler::process_into_buffer` takes them by shared reference.
-`kithara-audio` reuses the function at `IsolatorEq` and `PeakLimiter`. Pinned by
+deinterleaving, so a backend only ever sees finite normal input — the adapter is
+the last owner of the samples by value, while `Resampler::process_into_buffer`
+takes them by shared reference. `kithara-audio` reuses the function at its own
+untrusted-input stages. Pinned by
 `resampler_never_sees_a_sample_the_file_poisoned`.
 
 ## Apple AAC input format (ESDS rationale)

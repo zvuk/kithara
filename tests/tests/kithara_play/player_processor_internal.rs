@@ -332,9 +332,8 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
 
     processor.drain_commands();
 
-    // Only the current epoch re-bases the track: the two superseded commands
-    // are dropped, so the media clock lands on the last target rather than
-    // replaying every one of them.
+    // Only the current epoch re-bases the track: the two superseded commands are dropped, so the
+    // media clock lands on the last target rather than replaying every one of them.
     let position = processor
         .track(&src)
         .expect("BUG: track must stay loaded")

@@ -405,8 +405,8 @@ fn resample_round_trip_preserves_wave_shape(#[case] freq_hz: f32) {
         output.len()
     );
 
-    // A stage that misreports its latency by more than the rounding envelope
-    // desyncs the deck clock from what the listener hears.
+    // A stage that misreports its latency by more than the rounding envelope desyncs the deck clock
+    // from what the listener hears.
     let aligned = best_lag(&input, &output, predicted, window.clone());
     assert!(
         aligned.abs_diff(predicted) <= LAG_TOLERANCE,

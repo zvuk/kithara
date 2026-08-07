@@ -1,8 +1,7 @@
 //! The audio thread reports trouble through lock-free counters, not `tracing`.
 //!
-//! Each test drives one failure branch of `process()` and asserts the matching
-//! counter moved, so a change that reintroduces a log — or drops the signal
-//! altogether — fails here.
+//! Each test drives one failure branch of `process()` and asserts the matching counter moved, so a
+//! change that reintroduces a log — or drops the signal altogether — fails here.
 
 #![cfg(not(target_arch = "wasm32"))]
 

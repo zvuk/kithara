@@ -179,12 +179,10 @@ open while `PlaybackShared::playing` is set. The flag flips at once for `Player:
 the output reaches zero over ~35 ms, and the media clock advances by that much. A processor's first
 block adopts the transport state rather than fading into it.
 
-`TrackFade::play` snaps only when its mix has settled, so a fade still in flight keeps its ramp -
-the path a seek during a fade-in takes.
+`TrackFade::play` snaps only when its mix has settled, so a fade still in flight keeps its ramp.
 
 One block is the whole budget: 128 frames at 48 kHz gives the callback 2.667 ms across all three
-processors. `tests/benches/rt_block_budget.rs` reports `PlayerNodeProcessor`'s share as p50 / p99 /
-max over 1-, 2-, and 4-track arenas.
+processors. `tests/benches/rt_block_budget.rs` measures the share `PlayerNodeProcessor` takes.
 
 The audio thread never logs. Discrete facts leave through `PlayerNotification`, rates and faults
 through `PlaybackShared::metrics()` (`bridge::RtMetrics`); `RtSink` carries both into the per-track
@@ -217,10 +215,10 @@ carries `seek_epoch`, so one minted before a newer seek is dropped rather than a
 the `read` range share that scale. Sized once per resource off the audio thread and never re-zeroed,
 so every mixing path must fill its whole window - an underrun zero-fills rather than returning short.
 
-Loaded tracks live in `rt::TrackSlots`, a fixed `[Option<PlayerTrack>; MAX_TRACKS]` scanned linearly
-by `src`. A `TrackSlot` stays valid while its track lives, and iteration is slot order, so cleanup
-and eviction are deterministic. `insert` hands a rejected newcomer back, since a `PlayerTrack` must
-not be freed on the audio thread.
+Loaded tracks live in `rt::TrackSlots`, a fixed `[Option<PlayerTrack>; MAX_TRACKS]`. A `TrackSlot`
+stays valid while its track lives, and iteration is slot order, so cleanup and eviction are
+deterministic. `insert` hands a rejected newcomer back, since a `PlayerTrack` must not be freed on
+the audio thread.
 
 When the arena's last track ends at *natural* EOF the processor keeps it resident but inert, so a
 later in-range seek can revive it; tracks finished via stop or a faded-out crossfade are discarded.
@@ -232,9 +230,8 @@ Cross-thread wakes reached on the core are *armed* lock-free (`kithara_stream::D
 and delivered by the shell (`flush`), never on the forbid path.
 
 Verification is gated by `--cfg rtsan`, so stable/production builds are byte-identical. Lanes:
-`just test rtsan` (mock decoder, plus `kithara_play::rt_metrics` driving `process()` through a
-decode error, an underrun, an eviction, and the on-core seek re-base), `rtsan-file` / `rtsan-hls`
-(real decoder, `suite_stress`), and `rtsan-async` (`--features no-block`). A whole test body counts
+`just test rtsan` (mock decoder), `rtsan-file` / `rtsan-hls` (real decoder, `suite_stress`), and
+`rtsan-async` (`--features no-block`). A whole test body counts
 as a nonblocking region only in the `no-block` lane, where `.config/rtsan/async-suppressions.txt`
 narrows the check to genuine waits; the decoder lanes check the product's forbid regions alone and
 their harness allocates freely. `deep:nightly` runs all four through `just ci run deep`, where a

@@ -219,12 +219,12 @@ impl Resource {
                 &mut self,
                 output: &'a mut [&'a mut [f32]],
             ) -> Result<ReadOutcome, DecodeError>;
-            /// Seek to position. Begins and applies in one call, so it takes
-            /// locks — off the audio thread only. Audio-thread callers begin
-            /// through [`seek_handle`](Self::seek_handle) instead.
+            /// Seek to position. Begins and applies in one call, so it takes locks — off the audio
+            /// thread only. Audio-thread callers begin through [`seek_handle`](Self::seek_handle)
+            /// instead.
             pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
-            /// Control-plane handle that begins a seek without touching the
-            /// reader. `None` for readers with no worker-backed seek.
+            /// Control-plane handle that begins a seek without touching the reader. `None` for
+            /// readers with no worker-backed seek.
             #[must_use]
             pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
             /// Adopt a seek epoch begun through `seek_handle`. Lock-free.

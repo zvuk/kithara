@@ -234,8 +234,8 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
         None
     }
 
-    /// Control-plane hook run once per seek, before the epoch is minted.
-    /// Sources with a fixed byte space keep the default `None`.
+    /// Control-plane hook run once per seek, before the epoch is minted. Sources with a fixed byte
+    /// space keep the default `None`.
     fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
         None
     }
@@ -419,12 +419,12 @@ pub trait VariantControl: Send + Sync + 'static {
 
 /// Rebuilds a source's byte space for a seek about to begin.
 ///
-/// The rebuild takes the layout's write lock, so it cannot run on the produce
-/// core where the reader resolves its anchor. Running it before the epoch
-/// exists leaves every later observer reading a layout that matches the seek.
+/// The rebuild takes the layout's write lock, so it cannot run on the produce core where the reader
+/// resolves its anchor. Running it before the epoch exists leaves every later observer reading a
+/// layout that matches the seek.
 pub trait SeekPrepare: Send + Sync + 'static {
-    /// Collapse the byte space onto the geometry a seek resolves against.
-    /// Idempotent: a repeated call for the same layout is a no-op.
+    /// Collapse the byte space onto the geometry a seek resolves against. Idempotent: a repeated
+    /// call for the same layout is a no-op.
     fn prepare(&self);
 }
 

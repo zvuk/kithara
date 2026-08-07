@@ -2,8 +2,8 @@ use ringbuf::HeapProd;
 
 use crate::bridge::{PlayerNotification, RtMetrics};
 
-/// The two lock-free channels a track reports through: discrete events the
-/// control thread reacts to, and counters it samples.
+/// The two lock-free channels a track reports through: discrete events the control thread reacts
+/// to, and counters it samples.
 pub struct RtSink<'a> {
     pub(super) notifications: &'a mut HeapProd<PlayerNotification>,
     pub(super) metrics: &'a RtMetrics,
