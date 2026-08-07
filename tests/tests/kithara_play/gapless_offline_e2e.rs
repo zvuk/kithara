@@ -31,6 +31,7 @@ use kithara_integration_tests::{
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
+    goertzel::goertzel_magnitude,
     temp_dir,
 };
 
@@ -679,12 +680,12 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
         let mag_body_before = goertzel_magnitude(
             &left[item1_end - probe_lookback..item1_end - probe_lookback + win],
             SINE_HZ,
-            GAPLESS_SAMPLE_RATE as usize,
+            GAPLESS_SAMPLE_RATE,
         );
         let mag_body_after = goertzel_magnitude(
             &left[item1_end + probe_lookback..item1_end + probe_lookback + win],
             SINE_HZ,
-            GAPLESS_SAMPLE_RATE as usize,
+            GAPLESS_SAMPLE_RATE,
         );
         let ratio = (mag_body_after / mag_body_before.max(f64::MIN_POSITIVE))
             .max(mag_body_before / mag_body_after.max(f64::MIN_POSITIVE));
@@ -766,28 +767,6 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
          tail_peak={tail_peak:.4}, body_peak={body_peak:.4}, ratio={:.2}",
         tail_peak / body_peak.max(f32::MIN_POSITIVE),
     );
-}
-
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "test-only spectral probe: sample_rate fits f64 precision well below 2^52"
-)]
-fn goertzel_magnitude(samples: &[f32], freq_hz: f64, sample_rate: usize) -> f64 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    let omega = 2.0 * std::f64::consts::PI * freq_hz / sample_rate as f64;
-    let coeff = 2.0 * omega.cos();
-    let mut q1 = 0.0f64;
-    let mut q2 = 0.0f64;
-    for sample in samples {
-        let q0 = coeff * q1 - q2 + f64::from(*sample);
-        q2 = q1;
-        q1 = q0;
-    }
-    let real = q1 - q2 * omega.cos();
-    let imag = q2 * omega.sin();
-    (real * real + imag * imag).sqrt()
 }
 
 async fn create_resource(

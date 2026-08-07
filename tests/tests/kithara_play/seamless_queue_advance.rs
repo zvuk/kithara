@@ -10,6 +10,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
+    goertzel::goertzel_magnitude,
     temp_dir,
 };
 
@@ -177,7 +178,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
         overlap_start,
         overlap_end,
         440.0,
-        sample_rate,
+        GAPLESS_SAMPLE_RATE,
         spectral_window,
     );
     let overlap_880 = max_windowed_goertzel_magnitude(
@@ -185,7 +186,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
         overlap_start,
         overlap_end,
         880.0,
-        sample_rate,
+        GAPLESS_SAMPLE_RATE,
         spectral_window,
     );
     let solo_440 = max_windowed_goertzel_magnitude(
@@ -193,7 +194,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
         leading_solo_start,
         leading_solo_end,
         440.0,
-        sample_rate,
+        GAPLESS_SAMPLE_RATE,
         spectral_window,
     );
     let solo_880 = max_windowed_goertzel_magnitude(
@@ -201,7 +202,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
         trailing_solo_start,
         trailing_solo_end,
         880.0,
-        sample_rate,
+        GAPLESS_SAMPLE_RATE,
         spectral_window,
     );
 
@@ -390,33 +391,12 @@ fn max_silence_run(samples: &[f32], start: usize, end: usize) -> usize {
     max_run
 }
 
-fn goertzel_magnitude(samples: &[f32], freq_hz: f64, sample_rate: usize) -> f64 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-
-    let omega = 2.0 * std::f64::consts::PI * freq_hz / sample_rate as f64;
-    let coeff = 2.0 * omega.cos();
-    let mut q1 = 0.0f64;
-    let mut q2 = 0.0f64;
-
-    for sample in samples {
-        let q0 = coeff * q1 - q2 + f64::from(*sample);
-        q2 = q1;
-        q1 = q0;
-    }
-
-    let real = q1 - q2 * omega.cos();
-    let imag = q2 * omega.sin();
-    (real * real + imag * imag).sqrt()
-}
-
 fn max_windowed_goertzel_magnitude(
     samples: &[f32],
     start: usize,
     end: usize,
     freq_hz: f64,
-    sample_rate: usize,
+    sample_rate: u32,
     window_frames: usize,
 ) -> f64 {
     let end = end.min(samples.len());

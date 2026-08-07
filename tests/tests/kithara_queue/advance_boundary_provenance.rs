@@ -17,6 +17,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::PcmPattern,
+    goertzel::goertzel_magnitude,
     pcm_provenance::{
         FrameClass, Replay, SAWTOOTH_PERIOD_FRAMES, ascending_phase_replays, classify_windows,
         phase_units,
@@ -1835,16 +1836,8 @@ fn classify_tone_windows(left: &[f32], window: usize, sample_rate: u32) -> Vec<T
 }
 
 fn classify_tone_window(samples: &[f32], sample_rate: u32) -> ToneClass {
-    let mag_a = goertzel_magnitude(
-        samples,
-        TONE_A_FREQ_HZ,
-        usize::try_from(sample_rate).expect("sample rate fits usize"),
-    );
-    let mag_b = goertzel_magnitude(
-        samples,
-        TONE_B_FREQ_HZ,
-        usize::try_from(sample_rate).expect("sample rate fits usize"),
-    );
+    let mag_a = goertzel_magnitude(samples, TONE_A_FREQ_HZ, sample_rate);
+    let mag_b = goertzel_magnitude(samples, TONE_B_FREQ_HZ, sample_rate);
     let max_mag = mag_a.max(mag_b);
     if max_mag < TONE_MAG_FLOOR {
         ToneClass::Silence
@@ -1855,24 +1848,6 @@ fn classify_tone_window(samples: &[f32], sample_rate: u32) -> ToneClass {
     } else {
         ToneClass::Unknown
     }
-}
-
-fn goertzel_magnitude(samples: &[f32], freq_hz: f64, sample_rate: usize) -> f64 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    let omega = 2.0 * std::f64::consts::PI * freq_hz / sample_rate as f64;
-    let coeff = 2.0 * omega.cos();
-    let mut q1 = 0.0f64;
-    let mut q2 = 0.0f64;
-    for sample in samples {
-        let q0 = coeff * q1 - q2 + f64::from(*sample);
-        q2 = q1;
-        q1 = q0;
-    }
-    let real = q1 - q2 * omega.cos();
-    let imag = q2 * omega.sin();
-    (real * real + imag * imag).sqrt()
 }
 
 fn require_first_non_silence(
