@@ -2,7 +2,7 @@ use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 use tracing::{debug, trace, warn};
 
 use super::{
-    graph::{controls, lifecycle, player_index, slots},
+    graph::{controls, lifecycle, player_index, slots, tap},
     protocol::{Cmd, PlayerId, Reply, SessionError},
     state::{SessionState, register_player},
     transport,
@@ -68,6 +68,14 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
+        Cmd::EnableMixTap { writer } => match tap::enable(state, writer) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
+        Cmd::DisableMixTap => {
+            tap::disable(state);
+            Reply::Ok
+        }
         Cmd::SetSessionDucking { mode } => {
             controls::set_session_ducking(state, mode);
             Reply::Ok
@@ -246,18 +254,23 @@ pub(super) fn trace_stream_info<B: AudioBackend>(state: &SessionState<B>, contex
 mod tests {
     use std::{
         num::NonZeroU32,
-        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     };
 
     use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
+    use ringbuf::{HeapRb, traits::Split};
 
     use super::*;
-    use crate::session::{
-        protocol::{Cmd, PlayerLevel, Reply, SessionError},
-        state::SessionState,
+    use crate::{
+        bridge::MixTapWriter,
+        session::{
+            protocol::{Cmd, PlayerLevel, Reply, SessionError},
+            state::SessionState,
+        },
     };
 
     #[derive(Default)]
@@ -712,6 +725,57 @@ mod tests {
             Reply::Err(SessionError::PlayerNotFound(_))
         ));
         assert_eq!(master_volume_of(&state, known), 1.0);
+    }
+
+    fn mix_tap_writer(drops: &Arc<AtomicU64>) -> MixTapWriter {
+        const TAP_CAPACITY: usize = 1_024;
+
+        let (pcm, _cons) = HeapRb::<f32>::new(TAP_CAPACITY).split();
+        MixTapWriter::new(pcm, Arc::clone(drops))
+    }
+
+    #[kithara::test]
+    fn mix_tap_rejects_a_second_consumer_and_is_cleared_by_idle_teardown() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let id = register_player(&mut state);
+        start_player_cmd(&mut state, id);
+
+        let drops = Arc::new(AtomicU64::new(0));
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::EnableMixTap {
+                    writer: mix_tap_writer(&drops),
+                },
+            ),
+            Reply::Ok
+        ));
+        assert!(state.mix_tap.is_some(), "the tap reached the session graph");
+
+        assert!(
+            matches!(
+                run_cmd(
+                    &mut state,
+                    Cmd::EnableMixTap {
+                        writer: mix_tap_writer(&drops),
+                    },
+                ),
+                Reply::Err(SessionError::MixTapActive)
+            ),
+            "a second consumer must be rejected instead of silently replacing the first"
+        );
+
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::StopPlayer { player_id: id }),
+            Reply::Ok
+        ));
+        assert!(state.session_limiter_node_id.is_none());
+        assert!(
+            state.mix_tap.is_none(),
+            "idle teardown must clear the mix tap with the context it lived in"
+        );
     }
 
     #[kithara::test]

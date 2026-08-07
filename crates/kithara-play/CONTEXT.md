@@ -162,9 +162,10 @@ are forbidden and enforced by `just lint arch`; kithara-play is not on that allo
 
 ## Real-Time Audio Thread
 
-Three Firewheel processors run on the audio thread and carry
+Four Firewheel processors run on the audio thread and carry
 `#[kithara::rtsan_forbid_blocking]`: `PlayerNodeProcessor::process` (`rt/processor.rs`),
-`MasterEqProcessor::process` (`rt/eq.rs`), `LimiterProcessor::process` (`rt/limiter.rs`). They stay
+`MasterEqProcessor::process` (`rt/eq.rs`), `LimiterProcessor::process` (`rt/limiter.rs`), and
+`TapProcessor::process` (`rt/tap.rs`, present while a mix tap is enabled). They stay
 allocation-, free-, and lock-free: render scratch is sized in `new_stream`
 (`RenderPass::resize`), which Firewheel calls on the main thread, and finished or evicted tracks go
 to the bounded trash ring from `bridge::slot_channels` instead of being freed on the audio thread -
@@ -181,7 +182,7 @@ adopts the transport state rather than fading into it.
 
 `TrackFade::play` snaps only when its mix has settled, so a fade still in flight keeps its ramp.
 
-One block is the whole budget, shared by all three processors.
+One block is the whole budget, shared by every processor in the graph.
 `tests/benches/rt_block_budget.rs` derives it from the host's block and rate, and measures the share
 `PlayerNodeProcessor` takes.
 
@@ -291,6 +292,35 @@ change, idle teardown) rebuilds it with a fresh envelope. Player start/stop only
 disconnects player master nodes and never creates a per-player limiter. The session constants
 (ceiling `0.98`, release `50 ms`, stereo) are const-asserted valid, so limiter construction cannot
 fail in practice and the processor holds the DSP directly.
+
+## Session Mix Tap
+
+`Cmd::EnableMixTap` hangs `rt/tap.rs`'s `TapNode` off the session limiter beside `graph_out`:
+stereo in, zero outputs, `ProcessStatus::ClearAllOutputs`. Firewheel's compiler sorts every node
+topologically and keeps a sink with no outgoing edges in the schedule, so the extra
+`limiter -> tap` edge is an addition to the terminal chain and the device path is byte-identical
+with or without it - the tap sees exactly the samples `graph_out` receives.
+
+The processor owns the `MixTapWriter` (`bridge/channels.rs`): a `ringbuf::HeapProd<f32>` carrying
+the mix as interleaved stereo (LRLR) and an `Arc<AtomicU64>` drop counter. The ring's capacity is
+the caller's to choose, and the node keeps it as handed over. Pushes are frame-aligned, because a
+half frame lost to a full ring would swap L and R for the rest of the feed; an even capacity
+therefore accounts for every sample. **The counter is in samples** - frames x 2 - monotonic and
+`Relaxed`: the consumer reads deltas, and a non-zero delta means that many interleaved samples are
+missing from the PCM it received.
+
+`SessionState.mix_tap` is the one owner of both states a tap has: `Requested` while it waits for a
+session output to hang off - enabling before the first `start_player` is allowed, and
+`create_session_output` installs it - and `Installed` once it carries a `NodeID`. A second
+`EnableMixTap` while either state holds fails with `SessionError::MixTapActive`, so the live
+consumer keeps its feed.
+
+`DisableMixTap` and idle teardown release the producer, which the consumer observes as
+`Observer::write_is_held() == false` and reads as end of feed. Removed nodes ride the returned
+schedule back to the control thread, so the writer and its scratch buffer are freed there rather
+than on the audio thread. A stream restart keeps the tap running: Firewheel constructs a processor
+once per node, so `stop_stream` / `start_stream` reuse the one holding the writer. Arming a tap
+against a fresh context is the consumer's call; the session carries none across contexts.
 
 ## Route Changes
 

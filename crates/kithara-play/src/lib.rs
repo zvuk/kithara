@@ -28,10 +28,10 @@ pub use api::{
     WaitingReason, crossfader_gain,
 };
 pub use bridge::{
-    AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
-    PlayerLevel, PlayerNotification, Reply, SessionDispatcher, SessionError, SessionHandle,
-    SessionState, SharedEq, SlotControl, StartStreamFn, TrackPlaybackStopReason, TrackState,
-    TrackTransition, run_cmd,
+    AllocatedSlot, Cmd, CmdMsg, MixTapWriter, NodeInputs, PlaybackShared, PlaybackSnapshot,
+    PlayerId, PlayerLevel, PlayerNotification, Reply, SessionDispatcher, SessionError,
+    SessionHandle, SessionState, SharedEq, SlotControl, StartStreamFn, TrackPlaybackStopReason,
+    TrackState, TrackTransition, run_cmd,
 };
 pub use engine::{EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;

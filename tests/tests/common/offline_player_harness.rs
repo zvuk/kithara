@@ -56,6 +56,10 @@ impl OfflinePlayerHarness {
         &self.player
     }
 
+    pub(crate) fn session(&self) -> &Arc<OfflineSession> {
+        &self.session
+    }
+
     /// Synchronously render `frames` of audio.
     pub(crate) fn render(&self, frames: usize) -> Vec<f32> {
         self.session.render(frames)

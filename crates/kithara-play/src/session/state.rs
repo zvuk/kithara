@@ -11,13 +11,13 @@ use tracing::{debug, warn};
 
 use super::{
     dispatch::{restart_stream, trace_stream_info},
-    graph::ducking_gain,
+    graph::{ducking_gain, tap},
     protocol::{PlayerId, SessionError, StartStreamFn},
     transport::{SessionTransportState, TransportControl, install},
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
-    bridge::SharedEq,
+    bridge::{MixTapWriter, SharedEq},
     rt::{LimiterNode, MasterEqNode},
 };
 
@@ -82,9 +82,30 @@ pub(super) fn prepare_eq_layout(mut eq_layout: Vec<EqBandConfig>) -> (Vec<EqBand
     (eq_layout, gains)
 }
 
+/// The session mix tap, before and after it reaches the graph. One field, so
+/// "a tap is requested" and "a tap is running" cannot disagree.
+pub(super) enum MixTap {
+    Requested(MixTapWriter),
+    Installed(NodeID),
+}
+
+impl MixTap {
+    /// Take the writer while it still waits for a graph to hang off.
+    pub(super) fn take_requested(slot: &mut Option<Self>) -> Option<MixTapWriter> {
+        match slot.take() {
+            Some(Self::Requested(writer)) => Some(writer),
+            other => {
+                *slot = other;
+                None
+            }
+        }
+    }
+}
+
 pub struct SessionState<B: AudioBackend> {
     pub(super) ctx: Option<FirewheelCtx<B>>,
     pub(super) transport_control: Option<TransportControl>,
+    pub(super) mix_tap: Option<MixTap>,
     pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) session_output_memo: Option<Memo<VolumePanNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
@@ -109,6 +130,7 @@ impl<B: AudioBackend> SessionState<B> {
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
             transport_control: None,
+            mix_tap: None,
             next_player_id: 1,
             players: Vec::new(),
             sample_rate_hint: Self::DEFAULT_SAMPLE_RATE,
@@ -228,6 +250,7 @@ fn create_session_output<B: AudioBackend>(state: &mut SessionState<B>) -> Result
     state.session_output_node_id = Some(session_id);
     state.session_output_memo = Some(session_memo);
     state.session_limiter_node_id = Some(limiter_id);
+    tap::install_requested(state, limiter_id)?;
     debug!(
         ?session_id,
         ?limiter_id,

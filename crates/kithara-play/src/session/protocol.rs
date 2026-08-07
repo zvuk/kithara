@@ -7,7 +7,7 @@ mod wire {
 
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
-        bridge::SlotControl,
+        bridge::{MixTapWriter, SlotControl},
     };
 
     pub type PlayerId = u64;
@@ -38,6 +38,8 @@ mod wire {
         StreamStart(String),
         #[error("graph edit failed: {0}")]
         Graph(String),
+        #[error("session mix tap already has a consumer")]
+        MixTapActive,
         #[error("session transport has not been processed")]
         TransportNotProcessed,
         #[error("session transport commit was rejected at the render boundary")]
@@ -94,6 +96,10 @@ mod wire {
             eq_layout: Vec<EqBandConfig>,
             player_id: PlayerId,
         },
+        EnableMixTap {
+            writer: MixTapWriter,
+        },
+        DisableMixTap,
         SetSessionDucking {
             mode: SessionDuckingMode,
         },

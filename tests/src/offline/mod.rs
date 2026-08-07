@@ -13,4 +13,4 @@ pub use backend::{OfflineBackend, OfflineConfig, OfflineError};
 pub use player::{
     NotificationKind, OfflinePlayer, resource_from_reader, resource_from_reader_with_src,
 };
-pub use session::OfflineSession;
+pub use session::{MixTapProbe, OfflineSession};
