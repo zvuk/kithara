@@ -1,8 +1,7 @@
 use std::{io::ErrorKind, ops::Range};
 
 use kithara_assets::{
-    AssetResourceState, AssetScope, AssetsError, AssetsResult, ReadSide, ResourceAcquisition,
-    ResourceKey,
+    AssetScope, AssetsError, AssetsResult, ReadSide, ResourceAcquisition, ResourceKey,
 };
 use kithara_stream::{StreamError, StreamResult};
 use url::Url;
@@ -37,13 +36,12 @@ impl<'a> ResourceHandle<'a> {
         }
     }
 
-    /// Committed on-disk length when the resource is `Committed` with a known
-    /// `final_len` — the skip-fetch guard's size source.
+    /// Committed length per the availability manifest — the skip-fetch
+    /// guard's size source. The manifest is the sole byte authority: a file
+    /// it does not vouch for reads as absent here, the guard dispatches the
+    /// fetch, and the acquire path deletes the torn leftover and refetches.
     pub(crate) fn committed_len(&self) -> Option<u64> {
-        match self.scope.store().resource_state(self.key) {
-            Ok(AssetResourceState::Committed { final_len }) => final_len,
-            _ => None,
-        }
+        self.scope.store().final_len(self.key)
     }
 
     /// Whether every byte in `range` is already present on disk for this
@@ -68,5 +66,74 @@ impl<'a> ResourceHandle<'a> {
             .read_at(range.start, dst)
             .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
         Ok(Some(n))
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests {
+    use std::fs;
+
+    use kithara_assets::{
+        AcquisitionResult, AssetResource, AssetSource, AssetStore, StorageBackend, WriteSide,
+    };
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    fn segment_fixture(dir: &std::path::Path) -> (AssetScope, ResourceKey, Url) {
+        let store = AssetStore::builder()
+            .backend(StorageBackend::Disk { root: dir.into() })
+            .build();
+        let url = Url::parse("https://example.com/media/seg0.m4s").expect("segment url");
+        let scope = store
+            .scope::<crate::Hls>(&AssetSource::Remote {
+                url: Url::parse("https://example.com/master.m3u8").expect("master url"),
+                discriminator: None,
+            })
+            .expect("scope");
+        let key = scope.key(&AssetResource::Url(url.clone())).expect("key");
+        (scope, key, url)
+    }
+
+    /// The skip-fetch guard and the readiness gate must consult the same
+    /// byte authority — the availability manifest. A segment file the
+    /// manifest does not vouch for is a torn write: the guard reports no
+    /// committed length, the fetch is dispatched, and the acquire path
+    /// replaces the leftover. A metadata-based answer here marks the slot
+    /// `Loaded` while the readiness gate keeps answering "absent", and
+    /// playback wedges on a warm cache with no manifest.
+    #[kithara::test]
+    fn committed_len_answers_from_the_availability_manifest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (scope, key, url) = segment_fixture(dir.path());
+
+        let path = dir
+            .path()
+            .join(scope.asset_root())
+            .join(key.rel_path().expect("relative key"));
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        fs::write(&path, b"unvouched-bytes").expect("write");
+
+        let handle = ResourceHandle::new(&scope, &key, &url);
+        assert_eq!(
+            handle.committed_len(),
+            None,
+            "a file the manifest does not vouch for must be refetched, never sized"
+        );
+
+        let AcquisitionResult::Pending(writer) =
+            scope.store().acquire_resource(&key, None).expect("acquire")
+        else {
+            panic!("unvouched file must reacquire as Pending");
+        };
+        writer.write_at(0, b"committed-bytes").expect("write_at");
+        drop(writer.commit(Some(15)).expect("commit"));
+
+        assert_eq!(
+            handle.committed_len(),
+            Some(15),
+            "a commit through the store vouches the bytes and sizes the guard"
+        );
     }
 }
