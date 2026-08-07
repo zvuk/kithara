@@ -1,0 +1,36 @@
+[package]
+name = "kithara-broadcast"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Live HLS packaging: ADTS framing, segment rotation, and playlist window"
+publish = false
+
+[features]
+default = ["client-reqwest", "tls-rustls"]
+# HTTP backend forwarding. This crate speaks no HTTP, but it takes its access
+# units from kithara-encode, which reaches kithara-net through kithara-stream,
+# and kithara-net refuses to build without a backend.
+client-apple = ["kithara-encode/client-apple"]
+client-reqwest = ["kithara-encode/client-reqwest"]
+client-wreq = ["kithara-encode/client-wreq"]
+tls-native = ["kithara-encode/tls-native"]
+tls-rustls = ["kithara-encode/tls-rustls"]
+
+[dependencies]
+kithara-encode = { workspace = true }
+kithara-platform = { workspace = true }
+
+bytes = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+hls_m3u8 = { workspace = true }
+
+[lints]
+workspace = true

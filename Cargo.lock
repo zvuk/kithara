@@ -4386,6 +4386,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-broadcast"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bytes",
+ "hls_m3u8",
+ "kithara-encode",
+ "kithara-platform",
+ "kithara-workspace-hack",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "kithara-bufpool"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -4668,6 +4680,7 @@ dependencies = [
  "js-sys",
  "kithara",
  "kithara-app",
+ "kithara-broadcast",
  "kithara-devtools",
  "kithara-encode",
  "kithara-test-utils",
