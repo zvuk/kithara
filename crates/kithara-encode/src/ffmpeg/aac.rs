@@ -62,12 +62,16 @@ mod tests {
         ffmpeg::{stream::StreamEncoder, test_pcm::TestPcm},
     };
 
-    const SAMPLE_RATE: u32 = 48_000;
-    const CHANNELS: u16 = 2;
-    const FRAMES: usize = 4_096;
-    const BIT_RATE: u64 = 128_000;
-    const ENCODER_DELAY: u32 = 2_112;
-    const TRAILING_DELAY: u32 = 1_920;
+    struct Consts;
+
+    impl Consts {
+        const BIT_RATE: u64 = 128_000;
+        const CHANNELS: u16 = 2;
+        const ENCODER_DELAY: u32 = 2_112;
+        const FRAMES: usize = 4_096;
+        const SAMPLE_RATE: u32 = 48_000;
+        const TRAILING_DELAY: u32 = 1_920;
+    }
 
     fn encode_offline(pcm: &TestPcm) -> EncodedTrack {
         AacFFmpegEncoder::encode(&PackagedEncodeRequest {
@@ -75,10 +79,10 @@ mod tests {
             media_info: MediaInfo::builder()
                 .container(ContainerFormat::Fmp4)
                 .build(),
-            encoder_delay: ENCODER_DELAY,
-            timescale: SAMPLE_RATE,
-            trailing_delay: TRAILING_DELAY,
-            bit_rate: BIT_RATE,
+            encoder_delay: Consts::ENCODER_DELAY,
+            timescale: Consts::SAMPLE_RATE,
+            trailing_delay: Consts::TRAILING_DELAY,
+            bit_rate: Consts::BIT_RATE,
             packets_per_segment: 2,
         })
         .expect("offline AAC-LC encode")
@@ -86,11 +90,16 @@ mod tests {
 
     #[test]
     fn the_offline_wrapper_keeps_every_streamed_access_unit() {
-        let pcm = TestPcm::sawtooth(FRAMES, SAMPLE_RATE, CHANNELS);
+        let pcm = TestPcm::sawtooth(Consts::FRAMES, Consts::SAMPLE_RATE, Consts::CHANNELS);
         let offline = encode_offline(&pcm);
 
-        let mut encoder = StreamEncoder::new(SAMPLE_RATE, CHANNELS, BIT_RATE, SAMPLE_RATE)
-            .expect("stream encoder");
+        let mut encoder = StreamEncoder::new(
+            Consts::SAMPLE_RATE,
+            Consts::CHANNELS,
+            Consts::BIT_RATE,
+            Consts::SAMPLE_RATE,
+        )
+        .expect("stream encoder");
         let mut streamed = encoder.push(&pcm.samples_f32()).expect("push");
         streamed.extend(encoder.finish().expect("finish"));
 
@@ -99,14 +108,18 @@ mod tests {
 
     #[test]
     fn offline_track_holds_the_golden_shape() {
-        let track = encode_offline(&TestPcm::sawtooth(FRAMES, SAMPLE_RATE, CHANNELS));
+        let track = encode_offline(&TestPcm::sawtooth(
+            Consts::FRAMES,
+            Consts::SAMPLE_RATE,
+            Consts::CHANNELS,
+        ));
         let units = &track.access_units;
 
         assert_eq!(track.media_info.codec, Some(AudioCodec::AacLc));
-        assert_eq!(track.media_info.sample_rate, Some(SAMPLE_RATE));
-        assert_eq!(track.media_info.channels, Some(CHANNELS));
-        assert_eq!(track.encoder_delay, ENCODER_DELAY);
-        assert_eq!(track.trailing_delay, TRAILING_DELAY);
+        assert_eq!(track.media_info.sample_rate, Some(Consts::SAMPLE_RATE));
+        assert_eq!(track.media_info.channels, Some(Consts::CHANNELS));
+        assert_eq!(track.encoder_delay, Consts::ENCODER_DELAY);
+        assert_eq!(track.trailing_delay, Consts::TRAILING_DELAY);
         assert!(track.codec_config.is_empty());
 
         assert_eq!(units.len(), 5);

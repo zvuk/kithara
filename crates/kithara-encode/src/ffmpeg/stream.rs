@@ -248,20 +248,29 @@ mod tests {
     use super::StreamEncoder;
     use crate::{EncodeError, EncodedAccessUnit, ffmpeg::test_pcm::TestPcm};
 
-    const SAMPLE_RATE: u32 = 48_000;
-    const CHANNELS: u16 = 2;
-    const FRAMES: usize = 4_096;
-    const BIT_RATE: u64 = 128_000;
+    struct Consts;
+
+    impl Consts {
+        const BIT_RATE: u64 = 128_000;
+        const CHANNELS: u16 = 2;
+        const FRAMES: usize = 4_096;
+        const SAMPLE_RATE: u32 = 48_000;
+    }
 
     fn encode_in_chunks(
         samples: &[f32],
         chunk_frames: usize,
         timescale: u32,
     ) -> Vec<EncodedAccessUnit> {
-        let mut encoder =
-            StreamEncoder::new(SAMPLE_RATE, CHANNELS, BIT_RATE, timescale).expect("stream encoder");
+        let mut encoder = StreamEncoder::new(
+            Consts::SAMPLE_RATE,
+            Consts::CHANNELS,
+            Consts::BIT_RATE,
+            timescale,
+        )
+        .expect("stream encoder");
         let mut units = Vec::new();
-        for chunk in samples.chunks(chunk_frames * usize::from(CHANNELS)) {
+        for chunk in samples.chunks(chunk_frames * usize::from(Consts::CHANNELS)) {
             units.extend(encoder.push(chunk).expect("push"));
         }
         units.extend(encoder.finish().expect("finish"));
@@ -270,11 +279,12 @@ mod tests {
 
     #[test]
     fn chunking_does_not_change_the_encoded_stream() {
-        let samples = TestPcm::sawtooth(FRAMES, SAMPLE_RATE, CHANNELS).samples_f32();
+        let samples =
+            TestPcm::sawtooth(Consts::FRAMES, Consts::SAMPLE_RATE, Consts::CHANNELS).samples_f32();
 
-        let whole = encode_in_chunks(&samples, FRAMES, SAMPLE_RATE);
-        let framed = encode_in_chunks(&samples, StreamEncoder::FRAME_SAMPLES, SAMPLE_RATE);
-        let ragged = encode_in_chunks(&samples, 333, SAMPLE_RATE);
+        let whole = encode_in_chunks(&samples, Consts::FRAMES, Consts::SAMPLE_RATE);
+        let framed = encode_in_chunks(&samples, StreamEncoder::FRAME_SAMPLES, Consts::SAMPLE_RATE);
+        let ragged = encode_in_chunks(&samples, 333, Consts::SAMPLE_RATE);
 
         assert!(!whole.is_empty(), "encoder produced no access units");
         assert_eq!(whole, framed);
@@ -285,11 +295,13 @@ mod tests {
     fn timestamps_start_at_zero_and_advance_by_one_frame() {
         let frame_samples =
             u64::try_from(StreamEncoder::FRAME_SAMPLES).expect("frame size fits u64");
-        let pushed_frames = u64::try_from(FRAMES).expect("frame count fits u64");
-        let samples = TestPcm::sawtooth(FRAMES, SAMPLE_RATE, CHANNELS).samples_f32();
+        let pushed_frames = u64::try_from(Consts::FRAMES).expect("frame count fits u64");
+        let samples =
+            TestPcm::sawtooth(Consts::FRAMES, Consts::SAMPLE_RATE, Consts::CHANNELS).samples_f32();
 
-        for timescale in [SAMPLE_RATE, 90_000] {
-            let rescale = |frames: u64| frames * u64::from(timescale) / u64::from(SAMPLE_RATE);
+        for timescale in [Consts::SAMPLE_RATE, 90_000] {
+            let rescale =
+                |frames: u64| frames * u64::from(timescale) / u64::from(Consts::SAMPLE_RATE);
             let units = encode_in_chunks(&samples, StreamEncoder::FRAME_SAMPLES, timescale);
 
             let mut expected_pts = 0;
@@ -319,9 +331,11 @@ mod tests {
         const SOURCE_RATE: u32 = 44_100;
         const TIMESCALE: u32 = 90_000;
 
-        let samples = TestPcm::sawtooth(FRAMES, SOURCE_RATE, CHANNELS).samples_f32();
+        let samples =
+            TestPcm::sawtooth(Consts::FRAMES, SOURCE_RATE, Consts::CHANNELS).samples_f32();
         let mut encoder =
-            StreamEncoder::new(SOURCE_RATE, CHANNELS, BIT_RATE, TIMESCALE).expect("stream encoder");
+            StreamEncoder::new(SOURCE_RATE, Consts::CHANNELS, Consts::BIT_RATE, TIMESCALE)
+                .expect("stream encoder");
         let mut units = encoder.push(&samples).expect("push");
         units.extend(encoder.finish().expect("finish"));
 
@@ -334,7 +348,8 @@ mod tests {
             expected_pts += u64::from(unit.duration);
         }
 
-        let frames = u64::try_from(FRAMES + StreamEncoder::FRAME_SAMPLES).expect("fits u64");
+        let frames =
+            u64::try_from(Consts::FRAMES + StreamEncoder::FRAME_SAMPLES).expect("fits u64");
         let ticks = frames * u64::from(TIMESCALE);
         assert_eq!(
             expected_pts,
@@ -346,15 +361,26 @@ mod tests {
     #[test]
     fn new_rejects_a_channel_count_the_encoder_cannot_carry() {
         assert!(
-            StreamEncoder::new(SAMPLE_RATE, 9, BIT_RATE, SAMPLE_RATE).is_err(),
+            StreamEncoder::new(
+                Consts::SAMPLE_RATE,
+                9,
+                Consts::BIT_RATE,
+                Consts::SAMPLE_RATE
+            )
+            .is_err(),
             "AAC-LC carries no 9-channel layout"
         );
     }
 
     #[test]
     fn push_rejects_a_partial_frame() {
-        let mut encoder = StreamEncoder::new(SAMPLE_RATE, CHANNELS, BIT_RATE, SAMPLE_RATE)
-            .expect("stream encoder");
+        let mut encoder = StreamEncoder::new(
+            Consts::SAMPLE_RATE,
+            Consts::CHANNELS,
+            Consts::BIT_RATE,
+            Consts::SAMPLE_RATE,
+        )
+        .expect("stream encoder");
 
         let error = encoder.push(&[0.0, 0.0, 0.0]).expect_err("partial frame");
 
