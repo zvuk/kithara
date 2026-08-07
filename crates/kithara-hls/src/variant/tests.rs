@@ -904,12 +904,16 @@ fn segment_aware_seek_time_anchor_fetches_preroll_segment() {
         anchor.byte_offset, 200,
         "decoder anchor remains the target segment boundary"
     );
-    assert_eq!(
-        queue_seg_indices(&v),
-        vec![1, 2, 3, 4],
-        "fetch queue includes the segment a codec warmup backoff may read"
+    assert!(
+        queue_seg_indices(&v).is_empty(),
+        "anchor resolution runs on the produce core and leaves the fetch \
+         plan to the download peer (seek_epoch_reset -> rebuild_at_time)"
     );
-    assert_eq!(v.prefetch_anchor(), 100);
+    assert_eq!(
+        v.prefetch_anchor(),
+        100,
+        "the lock-free prefetch anchor still aims at the preroll segment"
+    );
 }
 
 #[kithara::test]

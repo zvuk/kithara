@@ -26,6 +26,11 @@ impl HlsVariant {
             .store(Self::NO_SEEK_TAIL, Ordering::Release);
     }
 
+    /// Resolve a time-target seek to its byte anchor on the produce core:
+    /// lock-free layout reads plus atomic anchor stores. The fetch plan is
+    /// owned by the download peer, which re-aims the queue when it observes
+    /// the epoch bump (`seek_epoch_reset`); stale entries of the previous
+    /// epoch are dropped by the dispatcher's epoch tag.
     pub(crate) fn prepare_seek_time_anchor(
         &self,
         position: Duration,
@@ -68,9 +73,6 @@ impl HlsVariant {
         self.set_prefetch_anchor(prefetch_anchor);
         self.set_seek_alias(byte_offset, seg_idx_u32);
         self.set_segment_aware_seek_tail(fetch_start);
-        if !self.queue_matches_plan(fetch_start) {
-            self.rebuild_queue(fetch_start, None);
-        }
         self.set_exact_seek_demand(byte_offset, seg_idx_u32);
         Ok(Some(anchor))
     }
