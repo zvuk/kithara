@@ -91,8 +91,8 @@ impl LiveWindow {
     }
 
     fn render(&self) -> String {
-        let listed = self.segments.len().saturating_sub(self.window);
-        let listed = self.segments.range(listed..);
+        let evicted = self.segments.len().saturating_sub(self.window);
+        let listed = self.segments.range(evicted..);
         let target = listed
             .clone()
             .map(|segment| u64::from(segment.duration_ts))
@@ -263,6 +263,17 @@ mod tests {
                 .contains("#EXT-X-TARGETDURATION:7\n"),
             "{}",
             window.snapshot().playlist
+        );
+    }
+
+    #[test]
+    fn an_empty_window_renders_a_playlist_with_no_segments() {
+        assert_eq!(
+            window().snapshot().playlist.as_ref(),
+            "#EXTM3U\n\
+             #EXT-X-VERSION:3\n\
+             #EXT-X-TARGETDURATION:0\n\
+             #EXT-X-MEDIA-SEQUENCE:0\n"
         );
     }
 

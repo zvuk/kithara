@@ -7,7 +7,7 @@ use kithara_platform::time::Duration;
 use crate::{BroadcastError, BroadcastResult, adts::AdtsPacker};
 
 /// One closed media segment: ADTS frames plus the playlist facts about them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Segment {
     pub seq: u64,
@@ -71,12 +71,12 @@ impl Segmenter {
     /// cannot carry, and [`BroadcastError::DurationOutOfRange`] when the open
     /// segment outgrows the playlist time base.
     pub fn push(&mut self, unit: &EncodedAccessUnit) -> BroadcastResult<Option<Segment>> {
-        self.duration_ts = self.duration_ts.checked_add(unit.duration).ok_or(
+        self.packer.pack_into(&unit.bytes, &mut self.frames)?;
+        self.duration_ts = self.duration_ts.checked_add(unit.duration).ok_or_else(|| {
             BroadcastError::DurationOutOfRange {
                 duration_ts: u64::from(self.duration_ts) + u64::from(unit.duration),
-            },
-        )?;
-        self.packer.pack_into(&unit.bytes, &mut self.frames)?;
+            }
+        })?;
 
         if u64::from(self.duration_ts) >= self.target_ts {
             return Ok(self.close());
@@ -239,6 +239,32 @@ mod tests {
             "an unemitted segment consumes no sequence number"
         );
         assert!(next.discontinuity);
+    }
+
+    #[test]
+    fn a_rejected_access_unit_leaves_the_media_clock_alone() {
+        let mut segmenter = segmenter();
+        let oversized = EncodedAccessUnit {
+            bytes: vec![0; AdtsPacker::MAX_PAYLOAD + 1],
+            ..unit()
+        };
+
+        push_units(&mut segmenter, 5);
+        segmenter
+            .push(&oversized)
+            .expect_err("oversized access unit");
+        push_units(&mut segmenter, 5);
+        let segment = segmenter.flush().expect("the open segment closes");
+
+        assert_eq!(
+            segment.duration_ts,
+            Consts::UNIT_DURATION * 10,
+            "the rejected unit contributes no duration"
+        );
+        assert_eq!(
+            segment.bytes.len(),
+            10 * (AdtsPacker::HEADER_LEN + Consts::PAYLOAD)
+        );
     }
 
     #[test]

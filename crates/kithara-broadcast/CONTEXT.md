@@ -8,7 +8,9 @@ The crate is a pure packaging core: it turns `kithara-encode` access units into 
 
 Every access unit gets a 7-byte ADTS header (no CRC): MPEG-4, layer 0, `protection_absent`, AAC-LC profile, `buffer_fullness = 0x7FF` (VBR), one raw data block. Each frame is a sync point, so segments are byte-concatenatable and a client joining at any segment decodes it standalone.
 
-The header's `sampling_frequency_index` and `channel_configuration` fields are fixed at construction, so audio ADTS cannot describe is rejected there: a sample rate outside the 13-entry table (96000 … 7350 Hz) and a channel count outside 1..=7 both error. `frame_length` is 13 bits, capping one access unit at 8184 payload bytes.
+The header's `sampling_frequency_index` and `channel_configuration` fields are fixed at construction, so audio ADTS cannot describe is rejected there: a sample rate outside the 13-entry table (96000 … 7350 Hz) errors, and so does a channel count outside 1..=6 — `channel_configuration` counts channels only up to 6, and its remaining value stands for 7.1, which is a layout rather than a count.
+
+`kithara-decode` builds the same header shape for its fdk-aac transport (`symphonia/aac_fdk.rs`). The two stay separate: neither crate depends on the other, and a shared owner for seven bytes would couple the decode path to the broadcast path.
 
 ## Segment rotation
 
@@ -26,11 +28,13 @@ Its caller is the serving layer, which reports the gap — so the `dead_exports`
 
 `LiveWindow` is the only mutator of window state. It keeps `window + grace` segments and lists the last `window` of them, so a segment evicted from the playlist stays fetchable for `grace` further segments and then leaves the retention. Cleanup follows the window; clients hold no state here.
 
-`snapshot` returns a value: the playlist text, the retained segments, and whether the stream ended. Both payloads sit behind an `Arc`, so a snapshot is cheap to clone and hand to concurrent readers.
+`snapshot` returns a value: the playlist text, the retained segments, and whether the stream ended. Both payloads sit behind an `Arc`, so a snapshot is cheap to clone and hand to concurrent readers. `finished` is the authority on end-of-stream; `EXT-X-ENDLIST` is how the playlist renders it, and a reader answers the question from the flag.
 
 The rendered playlist is version 3: `EXT-X-TARGETDURATION` is the longest listed `EXTINF` rounded up to whole seconds, `EXT-X-MEDIA-SEQUENCE` is the first listed segment's sequence number, each segment carries `EXTINF` with three decimals and the URI `seg/<seq>.aac`, and a discontinuous segment is preceded by `EXT-X-DISCONTINUITY`. `finish` appends `EXT-X-ENDLIST`, which turns the tail into a valid VOD playlist; the owner stops pushing at that point.
 
 An empty window renders `EXT-X-TARGETDURATION:0` and `EXT-X-MEDIA-SEQUENCE:0`. What an origin serves before the first segment exists is the serving layer's contract, not this crate's.
+
+The playlist carries no `EXT-X-DISCONTINUITY-SEQUENCE`, so a client reloading after the window has slid past a discontinuity cannot place it. The tag belongs with the serving layer that decides how a client resynchronises.
 
 `Segmenter` and `LiveWindow` are given the timescale separately and must be given the same one — the encoder's — for `EXTINF` to describe the segments the segmenter cut.
 

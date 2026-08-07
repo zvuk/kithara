@@ -138,9 +138,12 @@ fn a_late_joiner_decodes_one_segment_on_its_own() {
         .expect("a full segment before the tail");
     let decoded = decode_left_channel(joined.bytes.to_vec());
 
+    let declared = usize::try_from(joined.duration_ts).expect("duration fits usize");
+    let priming_slack = 2 * StreamEncoder::FRAME_SAMPLES;
     assert!(
-        decoded.len() > SEGMENT_PRIMING_SKIP_FRAMES,
-        "segment {} decoded to {} frames",
+        decoded.len().abs_diff(declared) <= priming_slack,
+        "segment {} declares {declared} frames of audio and decoded to {}, past the \
+         {priming_slack} frames a standalone segment loses to decoder priming",
         joined.seq,
         decoded.len()
     );

@@ -1,4 +1,3 @@
-use kithara_encode::EncodeError;
 use thiserror::Error;
 
 /// Errors raised while packaging a live stream.
@@ -19,9 +18,6 @@ pub enum BroadcastError {
 
     #[error("{field} must be > 0")]
     InvalidConfig { field: &'static str },
-
-    #[error("encode error: {0}")]
-    Encode(#[from] EncodeError),
 }
 
 /// Result type for live packaging operations.

@@ -16,7 +16,7 @@ impl AdtsPacker {
     /// Largest access unit the 13-bit `frame_length` field can carry.
     pub(crate) const MAX_PAYLOAD: usize = (1 << 13) - 1 - Self::HEADER_LEN;
 
-    const CHANNEL_CONFIGS: RangeInclusive<u16> = 1..=7;
+    const CHANNEL_CONFIGS: RangeInclusive<u8> = 1..=6;
     const FULLNESS_HIGH_BITS: u8 = 0x1F;
     const FULLNESS_LOW_BITS: u8 = 0x3F;
     const HEADER_LEN_U16: u16 = 7;
@@ -40,10 +40,9 @@ impl AdtsPacker {
             .position(|rate| *rate == sample_rate)
             .and_then(|index| u8::try_from(index).ok())
             .ok_or(BroadcastError::UnsupportedSampleRate { sample_rate })?;
-        let channel_config = Self::CHANNEL_CONFIGS
-            .contains(&channels)
-            .then(|| u8::try_from(channels).ok())
-            .flatten()
+        let channel_config = u8::try_from(channels)
+            .ok()
+            .filter(|config| Self::CHANNEL_CONFIGS.contains(config))
             .ok_or(BroadcastError::UnsupportedChannels { channels })?;
 
         Ok(Self {
@@ -151,12 +150,14 @@ mod tests {
 
     #[test]
     fn a_channel_count_outside_the_table_is_rejected() {
-        let error = AdtsPacker::new(48_000, 8).expect_err("unsupported channels");
+        for channels in [0, 7, 8] {
+            let error = AdtsPacker::new(48_000, channels).expect_err("unsupported channels");
 
-        assert!(
-            matches!(error, BroadcastError::UnsupportedChannels { channels: 8 }),
-            "{error}"
-        );
+            assert!(
+                matches!(error, BroadcastError::UnsupportedChannels { channels: got } if got == channels),
+                "{error}"
+            );
+        }
     }
 
     #[test]
