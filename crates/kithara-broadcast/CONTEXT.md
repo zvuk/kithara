@@ -26,7 +26,7 @@ RFC 8216 §3.4 requires every packed-audio segment to open with an ID3v2 tag who
 
 `TimestampTag::mpeg_timestamp` is the only place the media timescale and the 90 kHz MPEG-2 domain meet: it rounds to the nearest 90 kHz tick and wraps at 33 bits. Everything else in the crate counts in the configured sample rate.
 
-The stream clock counts encoded audio only. `mark_drop` closes a segment and marks the next one discontinuous; it does not synthesise a gap in the timestamps, because `EXT-X-DISCONTINUITY` is what tells a client the timeline broke. The encoder runs across the gap, so the access unit it was still filling spans the cut — one AAC frame of the discontinuous segment carries audio from both sides.
+The stream clock counts encoded audio only. `mark_drop` closes a segment and marks the next one discontinuous; it does not synthesise a gap in the timestamps, because `EXT-X-DISCONTINUITY` is what tells a client the timeline broke. The encoder runs across the gap and holds its own delay of audio when the cut lands, so the discontinuous segment opens with the last of what came ahead of the gap. A gap the last poll of a broadcast reports leaves the whole of that delay there, since `finish` drains it into the discontinuous tail segment.
 
 symphonia's ADTS reader resyncs to the next sync word on every frame, so the prefix costs the in-tree decode path nothing.
 
@@ -58,7 +58,9 @@ The worker is the sole mutator of the segmenter and the window. It publishes eac
 
 Nothing in the pipeline reads a wall clock: rotation is media-driven and the playlist changes only when a segment closes. The worker's poll backoff paces an empty feed and is not part of the contract.
 
-`stop` ends the broadcast: the worker swallows what the feed still holds, drains the encoder, flushes the tail segment, and publishes the playlist with `EXT-X-ENDLIST`. The origin keeps serving that VOD tail. The first caller takes the join slot and returns once the tail is published; a caller that finds the slot empty returns straight away, because the broadcast is already ending or ended. A feed that reports its producer gone — the app disabling the tap, a device rate change, session teardown — takes the same graceful path and leaves the stream off air.
+`stop` ends the broadcast: the worker closes the feed, swallows the audio that close drew the line under, drains the encoder, flushes the tail segment, and publishes the playlist with `EXT-X-ENDLIST`. The origin keeps serving that VOD tail. The first caller takes the join slot and returns once the tail is published; a caller that finds the slot empty returns straight away, because the broadcast is already ending or ended. A feed that reports its producer gone — the app disabling the tap, a device rate change, session teardown — takes the same graceful path and leaves the stream off air.
+
+The close is what bounds the drain and the feed's end is what terminates it: the worker keeps polling until the feed reports that end, so audio the producer handed over before the stop reaches the playlist however many polls the feed takes to hand it over. The line the close draws is what the producer had already handed over, so `stop` returns against a producer that is still running — the audio it writes past that line belongs to no broadcast.
 
 Cancelling the token is the other axis: it stops the origin and the worker without a tail, including a drain already under way. `CancelScope::new(parent)` derives the broadcast's subtree, so the app cancels the broadcast by cancelling what it owns. Dropping the handle is passive — it cancels nothing, so an owner that starts a broadcast without a parent must keep the handle's token to release the two threads.
 
@@ -70,13 +72,17 @@ Cancelling the token is the other axis: it stops the origin and the worker witho
 
 ## Intake
 
-`LivePcmFeed` is the crate's PCM seam: one `poll` appends interleaved f32 and reports the gap that preceded it plus end-of-stream, so the worker cannot see the producer leave while samples are still pending. `FeedChunk` is deliberately not `#[non_exhaustive]` — implementors outside the crate construct it. A non-zero `dropped` closes the open segment and marks the next one discontinuous; there is no backpressure on the audio path and no silence injection.
+`LivePcmFeed` is the crate's PCM seam: one `poll` appends interleaved f32 and reports the gap that came behind that audio plus end-of-stream, so the worker cannot see the producer leave while samples are still pending. `close` is the other half of the seam: it draws the line under the feed at what the producer has already handed over, and the feed goes on serving polls until that audio is gone and then reports its end. `FeedChunk` is deliberately not `#[non_exhaustive]` — implementors outside the crate construct it. There is no backpressure on the audio path and no silence injection.
+
+The worker frames a poll's audio first and applies its `dropped` after, so the closed segment carries the audio the gap came behind and `EXT-X-DISCONTINUITY` opens the segment the audio past the gap goes into. A ring loses samples only while it is full, so everything one poll drains was written ahead of the loss the same poll reports — which is what puts the break behind that audio rather than in front of it.
 
 `RingFeed` implements that seam over a `ringbuf` consumer and an `Arc<AtomicU64>` of samples the producer lost. Those two types are the whole vocabulary between the broadcast and whoever fills the ring, so a real-time producer reaches the packager without either side depending on the other's crate.
 
 The counter is monotonic, so a poll reports the difference since the previous one and never re-reports a debt. It carries no position, so the gap it reports is located to the whole poll that saw it; a segment therefore breaks at a poll boundary near the lost audio.
 
 The producer is read as held before the ring is drained, so one already gone by then can push nothing more and an empty drain is the end of the feed. End of feed is therefore reported only on an empty drain — the remainder a released producer left behind goes out first.
+
+`close` reads what the ring holds at that moment. Only the broadcast side takes samples out, so that count is audio already in hand: the polls that follow hand over exactly it, and the one that exhausts it reports the end.
 
 ## Time base
 

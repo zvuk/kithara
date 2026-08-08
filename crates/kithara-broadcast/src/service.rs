@@ -203,14 +203,6 @@ impl<F: LivePcmFeed> Worker<F> {
         self.samples.clear();
         let chunk = self.feed.poll(&mut self.samples);
 
-        if chunk.dropped > 0 {
-            self.counters
-                .dropped
-                .fetch_add(chunk.dropped, Ordering::Relaxed);
-            if let Some(segment) = self.segmenter.mark_drop() {
-                self.publish(segment);
-            }
-        }
         if let Some(encoder) = self.encoder.as_mut()
             && !self.samples.is_empty()
         {
@@ -221,20 +213,31 @@ impl<F: LivePcmFeed> Worker<F> {
                 }
             }
         }
+        if chunk.dropped > 0 {
+            self.counters
+                .dropped
+                .fetch_add(chunk.dropped, Ordering::Relaxed);
+            if let Some(segment) = self.segmenter.mark_drop() {
+                self.publish(segment);
+            }
+        }
         Ok(chunk.has_ended)
     }
 
     /// Swallow what the feed still holds, drain the encoder, and publish the
     /// VOD tail.
     fn end(mut self) {
+        self.feed.close();
+
         loop {
             if self.token.is_cancelled() {
                 return;
             }
             match self.pump() {
-                Ok(ended) => {
-                    if ended || self.samples.is_empty() {
-                        break;
+                Ok(true) => break,
+                Ok(false) => {
+                    if self.samples.is_empty() {
+                        thread::paced_backoff(Self::POLL);
                     }
                 }
                 Err(error) => {
@@ -279,12 +282,22 @@ impl<F: LivePcmFeed> Worker<F> {
 mod tests {
     use std::collections::VecDeque;
 
-    use kithara_platform::{sync::Arc, thread, time::Duration};
+    use arc_swap::ArcSwap;
+    use kithara_encode::StreamEncoder;
+    use kithara_platform::{
+        CancelScope,
+        sync::{Arc, atomic::AtomicBool},
+        thread,
+        time::Duration,
+    };
 
-    use super::{Broadcast, BroadcastHandle};
+    use super::{Broadcast, BroadcastHandle, Counters, Worker};
     use crate::{
         config::BroadcastConfig,
         feed::{FeedChunk, LivePcmFeed},
+        segment::Segmenter,
+        server::{self, Origin},
+        window::LiveWindow,
     };
 
     struct Consts;
@@ -328,6 +341,106 @@ mod tests {
                 },
             }
         }
+
+        fn close(&mut self) {
+            self.ends = true;
+        }
+    }
+
+    /// Feed with audio ready every other poll, the way a producer filling a
+    /// ring in bursts leaves it.
+    struct BurstFeed {
+        chunks: VecDeque<Vec<f32>>,
+        ready: bool,
+        closed: bool,
+    }
+
+    impl BurstFeed {
+        fn new(chunks: impl IntoIterator<Item = Vec<f32>>) -> Self {
+            Self {
+                chunks: chunks.into_iter().collect(),
+                ready: false,
+                closed: false,
+            }
+        }
+    }
+
+    impl LivePcmFeed for BurstFeed {
+        fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk {
+            self.ready = !self.ready;
+            if self.ready
+                && let Some(chunk) = self.chunks.pop_front()
+            {
+                out.extend_from_slice(&chunk);
+            }
+            FeedChunk {
+                dropped: 0,
+                has_ended: self.closed && self.chunks.is_empty(),
+            }
+        }
+
+        fn close(&mut self) {
+            self.closed = true;
+        }
+    }
+
+    /// Drive one worker to its end on this thread and read back what the origin
+    /// would serve. `stop` is the flag the handle sets.
+    fn run_worker<F: LivePcmFeed>(feed: F, config: &BroadcastConfig, stop: bool) -> Arc<str> {
+        let window = LiveWindow::new(config).expect("window");
+        let origin = Arc::new(Origin {
+            snapshot: ArcSwap::from_pointee(window.snapshot()),
+            master: Arc::from(server::master_playlist(config.bit_rate)),
+        });
+        let scope = CancelScope::new(None);
+        let worker = Worker {
+            feed,
+            encoder: Some(
+                StreamEncoder::new(
+                    config.sample_rate,
+                    config.channels,
+                    config.bit_rate,
+                    config.sample_rate,
+                )
+                .expect("encoder"),
+            ),
+            segmenter: Segmenter::new(config).expect("segmenter"),
+            window,
+            origin: Arc::clone(&origin),
+            counters: Arc::new(Counters::default()),
+            token: scope.token(),
+            stop: Arc::new(AtomicBool::new(stop)),
+            samples: Vec::new(),
+        };
+
+        worker.run();
+        Arc::clone(&origin.snapshot.load().playlist)
+    }
+
+    /// Each listed segment as the media seconds it announces and whether the
+    /// playlist breaks the timeline in front of it.
+    fn listed_segments(playlist: &str) -> Vec<(bool, f64)> {
+        let mut listed = Vec::new();
+        let mut broke = false;
+        for line in playlist.lines() {
+            if line == "#EXT-X-DISCONTINUITY" {
+                broke = true;
+            } else if let Some(value) = line.strip_prefix("#EXTINF:")
+                && let Ok(seconds) = value.trim_end_matches(',').parse::<f64>()
+            {
+                listed.push((broke, seconds));
+                broke = false;
+            }
+        }
+        listed
+    }
+
+    /// Media seconds the playlist announces across the segments it lists.
+    fn listed_seconds(playlist: &str) -> f64 {
+        listed_segments(playlist)
+            .iter()
+            .map(|(_, seconds)| seconds)
+            .sum()
     }
 
     /// Alternating full-scale steps: enough for the encoder to produce access
@@ -401,6 +514,65 @@ mod tests {
             "a producer that left takes the stream off air"
         );
         handle.token().cancel();
+    }
+
+    #[test]
+    fn the_break_falls_behind_the_audio_the_gap_came_after() {
+        /// Half a second of audio per chunk, far past what the encoder holds
+        /// between a push and the access units it hands back.
+        const CHUNK: usize = 24_000;
+        const CHUNK_SECONDS: f64 = 0.5;
+        /// Halfway between the two chunks that came ahead of the gap and the
+        /// one that followed it: a break in place has the first two in front of
+        /// it and the third behind, whatever the encoder's framing shifts.
+        const MIDPOINT: f64 = 1.5 * CHUNK_SECONDS;
+
+        let feed = VecFeed::new(
+            [
+                (0, pcm(CHUNK)),
+                (u64::from(Consts::SAMPLE_RATE), pcm(CHUNK)),
+                (0, pcm(CHUNK)),
+            ],
+            true,
+        );
+
+        let playlist = run_worker(feed, &BroadcastConfig::builder().build(), false);
+        let listed = listed_segments(&playlist);
+
+        assert_eq!(listed.len(), 2, "{playlist}");
+        assert!(!listed[0].0, "the stream opens on one timeline: {playlist}");
+        assert!(listed[1].0, "the gap breaks the timeline: {playlist}");
+        assert!(
+            listed[0].1 > MIDPOINT,
+            "audio the producer handed over ahead of the gap belongs ahead of \
+             the break: {playlist}"
+        );
+        assert!(
+            listed[1].1 < MIDPOINT,
+            "audio the producer handed over past the gap belongs past the \
+             break: {playlist}"
+        );
+    }
+
+    #[test]
+    fn stopping_puts_everything_the_feed_holds_on_air() {
+        /// Chunks the feed still holds when the stop lands: more than the one
+        /// poll a drain that judged the feed by an empty poll would take.
+        const HELD: usize = 8;
+        /// Media seconds those chunks carry at [`Consts::SAMPLE_RATE`].
+        const HELD_SECONDS: f64 = 0.8;
+        /// Media seconds the encoder's framing shifts the tail by.
+        const SLACK: f64 = 0.05;
+
+        let feed = BurstFeed::new((0..HELD).map(|_| pcm(Consts::CHUNK_FRAMES)));
+
+        let playlist = run_worker(feed, &config(), true);
+
+        assert!(
+            listed_seconds(&playlist) >= HELD_SECONDS - SLACK,
+            "a stop airs the audio the feed holds, not the audio one poll \
+             happened to catch: {HELD_SECONDS} s went in, {playlist}"
+        );
     }
 
     #[test]

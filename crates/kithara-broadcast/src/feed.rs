@@ -11,9 +11,9 @@ use ringbuf::{
 /// it appended, and whether the producer is gone.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FeedChunk {
-    /// Samples the producer dropped since the previous poll. A feed that knows
-    /// where its gap fell reports it before the samples that follow it; one
-    /// counting alone locates it no closer than the poll.
+    /// Samples the producer lost behind the audio this poll appended, so the
+    /// gap sits between that audio and whatever the next poll brings. A
+    /// counter alone locates it no closer than the poll that saw it.
     pub dropped: u64,
     /// The producer will send nothing further.
     pub has_ended: bool,
@@ -26,8 +26,13 @@ pub struct FeedChunk {
 /// are still pending.
 pub trait LivePcmFeed: Send {
     /// Append whatever interleaved audio is ready onto `out` and report the
-    /// gap that came with it. Returns without waiting when nothing is ready.
+    /// gap that came behind it. Returns without waiting when nothing is ready.
     fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk;
+
+    /// Draw the line under the feed: what the producer has already handed over
+    /// still goes out poll by poll, and the feed reports its end once that is
+    /// gone.
+    fn close(&mut self);
 }
 
 /// Intake over the SPSC ring a real-time producer writes the mix into, paired
@@ -39,6 +44,8 @@ pub struct RingFeed {
     pcm: HeapCons<f32>,
     drops: Arc<AtomicU64>,
     counted: u64,
+    /// Samples left of what the ring held when the feed was closed.
+    last: Option<usize>,
 }
 
 impl RingFeed {
@@ -49,6 +56,7 @@ impl RingFeed {
             pcm,
             drops,
             counted: 0,
+            last: None,
         }
     }
 }
@@ -63,13 +71,24 @@ impl LivePcmFeed for RingFeed {
         self.counted = total;
 
         let held = self.pcm.write_is_held();
+        let take = self.last.unwrap_or_else(|| self.pcm.occupied_len());
         let pending = out.len();
-        out.extend(self.pcm.pop_iter());
+        out.resize(pending + take, 0.0);
+        let taken = self.pcm.pop_slice(&mut out[pending..]);
+        out.truncate(pending + taken);
 
-        FeedChunk {
-            dropped,
-            has_ended: !held && out.len() == pending,
-        }
+        let has_ended = self.last.as_mut().map_or(!held && taken == 0, |last| {
+            *last -= taken;
+            *last == 0
+        });
+        FeedChunk { dropped, has_ended }
+    }
+
+    /// The ring holds every sample the producer handed over, and only this side
+    /// takes them out, so what it holds now is the whole of the feed's last
+    /// audio.
+    fn close(&mut self) {
+        self.last = Some(self.pcm.occupied_len());
     }
 }
 
@@ -132,6 +151,25 @@ mod tests {
             "the feed ends once the released producer's remainder is drained"
         );
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_closed_feed_hands_over_what_the_ring_held_and_ends_there() {
+        let (mut producer, _drops, mut feed) = ring();
+        let mut out = Vec::new();
+
+        producer.push_iter([0.25, -0.25].into_iter());
+        feed.close();
+        producer.push_iter([1.0].into_iter());
+
+        let chunk = feed.poll(&mut out);
+
+        assert_eq!(out, [0.25, -0.25], "the ring's audio still goes out");
+        assert!(
+            chunk.has_ended,
+            "a closed feed ends on the audio it held, whatever the producer \
+             wrote after"
+        );
     }
 
     #[test]

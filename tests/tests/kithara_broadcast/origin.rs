@@ -102,6 +102,7 @@ impl Origin {
             released: Arc::clone(&released),
             dropped: Arc::clone(&dropped),
             produced: 0,
+            closed: false,
         };
         let handle = Broadcast::start(&config, feed, Some(scope.token())).expect("go on air");
         let base = Url::parse(handle.url()).expect("the handle reports a URL");
@@ -167,11 +168,12 @@ impl Drop for Origin {
 }
 
 /// Sine the test releases in steps: a poll hands over what has been released
-/// and nothing more, and the feed never ends on its own.
+/// and nothing more, and only a close ends the feed.
 struct PacedSine {
     released: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
     produced: u64,
+    closed: bool,
 }
 
 impl LivePcmFeed for PacedSine {
@@ -195,7 +197,11 @@ impl LivePcmFeed for PacedSine {
 
         FeedChunk {
             dropped,
-            has_ended: false,
+            has_ended: self.closed && pending == frames,
         }
+    }
+
+    fn close(&mut self) {
+        self.closed = true;
     }
 }
