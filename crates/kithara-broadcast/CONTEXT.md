@@ -4,6 +4,12 @@ Contracts and invariants for the kithara-broadcast crate; the README is the over
 
 The crate is a pure packaging core: it turns `kithara-encode` access units into HLS media segments and playlist text. It performs no I/O, spawns no threads, and holds no clock — the caller drives it.
 
+## Configuration
+
+`BroadcastConfig` is the single knob surface. `Segmenter` and `LiveWindow` both take it, so the sample rate is the media timescale everywhere and no caller can pair a segmenter with a window that disagrees about time.
+
+`validate` rejects zero audio, a zero window, a segment target shorter than one media tick, and — per RFC 8216 §6.2.2 — a window that spans fewer than three target durations. A short window is a typed `PlaylistTooShort`, never a silent adjustment.
+
 ## ADTS framing
 
 Every access unit gets a 7-byte ADTS header (no CRC): MPEG-4, layer 0, `protection_absent`, AAC-LC profile, `buffer_fullness = 0x7FF` (VBR), one raw data block. Each frame is a sync point, so segments are byte-concatenatable and a client joining at any segment decodes it standalone.
@@ -11,6 +17,16 @@ Every access unit gets a 7-byte ADTS header (no CRC): MPEG-4, layer 0, `protecti
 The header's `sampling_frequency_index` and `channel_configuration` fields are fixed at construction, so audio ADTS cannot describe is rejected there: a sample rate outside the 13-entry table (96000 … 7350 Hz) errors, and so does a channel count outside 1..=6 — `channel_configuration` counts channels only up to 6, and its remaining value stands for 7.1, which is a layout rather than a count.
 
 `kithara-decode` builds the same header shape for its fdk-aac transport (`symphonia/aac_fdk.rs`). The two stay separate: neither crate depends on the other, and a shared owner for seven bytes would couple the decode path to the broadcast path.
+
+## Packed-audio timestamp
+
+RFC 8216 §3.4 requires every packed-audio segment to open with an ID3v2 tag whose single PRIV frame is owned by `com.apple.streaming.transportStreamTimestamp` and whose 8-octet big-endian body is the first sample's MPEG-2 timestamp. `TimestampTag` renders that fixed-size tag and `Segmenter` prepends it when it closes a segment, from the stream time the segment started at.
+
+`TimestampTag::mpeg_timestamp` is the only place the media timescale and the 90 kHz MPEG-2 domain meet: it rounds to the nearest 90 kHz tick and wraps at 33 bits. Everything else in the crate counts in the configured sample rate.
+
+The stream clock counts encoded audio only. `mark_drop` closes a segment and marks the next one discontinuous; it does not synthesise a gap in the timestamps, because `EXT-X-DISCONTINUITY` is what tells a client the timeline broke.
+
+symphonia's ADTS reader resyncs to the next sync word on every frame, so the prefix costs the in-tree decode path nothing.
 
 ## Segment rotation
 
@@ -22,7 +38,7 @@ Sequence numbers count emitted segments from zero. An empty buffer emits nothing
 
 `mark_drop` is the intake-gap signal: it closes the open segment and marks the next one `EXT-X-DISCONTINUITY`. On an empty buffer it emits nothing and still marks; repeating it is idempotent. `flush` closes the open segment as-is and is how the stream's tail is emitted.
 
-Its caller is the serving layer, which reports the gap — so the `dead_exports` ratchet reports `mark_drop` as an export with test-only references, and that report stands unsuppressed. `Segment` is `#[non_exhaustive]` and only `Segmenter` constructs one, so `mark_drop` is the sole path to a discontinuous segment: dropping it would make `Segment::discontinuity` and the playlist's `EXT-X-DISCONTINUITY` branch unreachable.
+`Segment` is `#[non_exhaustive]` and only `Segmenter` constructs one, so `mark_drop` is the sole path to a discontinuous segment.
 
 ## Playlist window
 
@@ -30,14 +46,8 @@ Its caller is the serving layer, which reports the gap — so the `dead_exports`
 
 `snapshot` returns a value: the playlist text, the retained segments, and whether the stream ended. Both payloads sit behind an `Arc`, so a snapshot is cheap to clone and hand to concurrent readers. `finished` is the authority on end-of-stream; `EXT-X-ENDLIST` is how the playlist renders it, and a reader answers the question from the flag.
 
-The rendered playlist is version 3: `EXT-X-TARGETDURATION` is the longest listed `EXTINF` rounded up to whole seconds, `EXT-X-MEDIA-SEQUENCE` is the first listed segment's sequence number, each segment carries `EXTINF` with three decimals and the URI `seg/<seq>.aac`, and a discontinuous segment is preceded by `EXT-X-DISCONTINUITY`. `finish` appends `EXT-X-ENDLIST`, which turns the tail into a valid VOD playlist; the owner stops pushing at that point.
-
-An empty window renders `EXT-X-TARGETDURATION:0` and `EXT-X-MEDIA-SEQUENCE:0`. What an origin serves before the first segment exists is the serving layer's contract, not this crate's.
-
-The playlist carries no `EXT-X-DISCONTINUITY-SEQUENCE`, so a client reloading after the window has slid past a discontinuity cannot place it. The tag belongs with the serving layer that decides how a client resynchronises.
-
-`Segmenter` and `LiveWindow` are given the timescale separately and must be given the same one — the encoder's — for `EXTINF` to describe the segments the segmenter cut.
+The rendered playlist is version 3. `EXT-X-TARGETDURATION` is the configured segment target rounded up to whole seconds, raised only if a listed segment is longer — a client is told one value for the life of the stream, and a window of drop-truncated segments cannot lower it. `EXT-X-MEDIA-SEQUENCE` is the first listed segment's sequence number and `EXT-X-DISCONTINUITY-SEQUENCE` follows it on every playlist, counting the discontinuous segments that have left the listed window; a client reloading after the window slid past a discontinuity can place it. Each segment carries `EXTINF` with three decimals and the URI `seg/<seq>.aac`, and a discontinuous segment is preceded by `EXT-X-DISCONTINUITY`. `finish` appends `EXT-X-ENDLIST`, which turns the tail into a valid VOD playlist; the owner stops pushing at that point.
 
 ## Time base
 
-`Segment::duration_ts` is a `u32` in timescale units, so a segment tops out around 24 hours at 48 kHz; the segmenter errors rather than wrapping when an open segment outgrows it. Nothing here reads a wall clock: rotation is media-driven and a playlist changes only when a segment closes.
+`Segment::duration_ts` is a `u32` in timescale units, so a segment tops out around 24 hours at 48 kHz; the segmenter errors rather than wrapping when an open segment outgrows it.

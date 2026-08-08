@@ -10,16 +10,16 @@
 
 # kithara-broadcast
 
-Live HLS packaging core. It frames AAC-LC access units as ADTS, rotates segments on the media clock, and keeps a sliding playlist window whose snapshot carries the rendered media playlist and the segments a client can still fetch. Segments live in memory as `bytes::Bytes`.
+Live HLS packaging core. It frames AAC-LC access units as ADTS behind the RFC 8216 §3.4 timestamp tag, rotates segments on the media clock, and keeps a sliding playlist window whose snapshot carries the rendered media playlist and the segments a client can still fetch. Segments live in memory as `bytes::Bytes`.
 
 ## Usage
 
 ```rust
-use std::time::Duration;
-use kithara_broadcast::{LiveWindow, Segmenter};
+use kithara_broadcast::{BroadcastConfig, LiveWindow, Segmenter};
 
-let mut segmenter = Segmenter::new(48_000, 2, 48_000, Segmenter::TARGET)?;
-let mut window = LiveWindow::new(LiveWindow::WINDOW, LiveWindow::GRACE, 48_000)?;
+let config = BroadcastConfig::builder().build();
+let mut segmenter = Segmenter::new(&config)?;
+let mut window = LiveWindow::new(&config)?;
 
 for unit in encoder.push(&samples)? {
     if let Some(segment) = segmenter.push(&unit)? {
@@ -32,6 +32,7 @@ let snapshot = window.snapshot();
 
 ## Key types
 
+- `BroadcastConfig` — the audio and the segments the packager cuts.
 - `Segmenter` — ADTS framing plus segment rotation on the media clock.
 - `Segment` — one closed segment: sequence number, bytes, duration, discontinuity flag.
 - `LiveWindow` — sole owner of the playlist window, its retention, and the playlist text.

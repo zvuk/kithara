@@ -1,10 +1,9 @@
-use std::mem;
-
 use bytes::Bytes;
 use kithara_encode::EncodedAccessUnit;
-use kithara_platform::time::Duration;
 
-use crate::{BroadcastError, BroadcastResult, adts::AdtsPacker};
+use crate::{
+    BroadcastError, BroadcastResult, adts::AdtsPacker, config::BroadcastConfig, id3::TimestampTag,
+};
 
 /// One closed media segment: ADTS frames plus the playlist facts about them.
 #[derive(Debug, Clone)]
@@ -20,43 +19,36 @@ pub struct Segment {
 #[derive(Debug)]
 pub struct Segmenter {
     packer: AdtsPacker,
+    timescale: u32,
     target_ts: u64,
     next_seq: u64,
+    stream_ts: u64,
     frames: Vec<u8>,
+    units: usize,
     duration_ts: u32,
     discontinuity: bool,
 }
 
 impl Segmenter {
-    /// Segment duration the live window is built around.
-    pub const TARGET: Duration = Duration::from_secs(4);
-
-    /// Open a segmenter for `sample_rate`/`channels` audio whose access units
-    /// carry durations in `timescale` units.
+    /// Open a segmenter for the audio `config` describes.
     ///
     /// # Errors
     ///
-    /// Returns [`BroadcastError::InvalidConfig`] when `timescale` or `target`
-    /// resolve to a zero-length target, and the [`AdtsPacker`] errors for audio
-    /// ADTS cannot describe.
-    pub fn new(
-        sample_rate: u32,
-        channels: u16,
-        timescale: u32,
-        target: Duration,
-    ) -> BroadcastResult<Self> {
-        let target_ts = u64::try_from(target.as_millis())
-            .ok()
-            .and_then(|millis| millis.checked_mul(u64::from(timescale)))
-            .map(|ticks| ticks / 1_000)
-            .filter(|ticks| *ticks > 0)
-            .ok_or(BroadcastError::InvalidConfig { field: "target" })?;
+    /// Returns [`BroadcastError::InvalidConfig`] or
+    /// [`BroadcastError::PlaylistTooShort`] for a configuration the packager
+    /// cannot serve, and the [`AdtsPacker`] error for audio ADTS cannot
+    /// describe.
+    pub fn new(config: &BroadcastConfig) -> BroadcastResult<Self> {
+        config.validate()?;
 
         Ok(Self {
-            packer: AdtsPacker::new(sample_rate, channels)?,
-            target_ts,
+            packer: AdtsPacker::new(config.sample_rate, config.channels)?,
+            timescale: config.sample_rate,
+            target_ts: config.target_ticks()?,
             next_seq: 0,
+            stream_ts: 0,
             frames: Vec::new(),
+            units: 0,
             duration_ts: 0,
             discontinuity: false,
         })
@@ -72,6 +64,7 @@ impl Segmenter {
     /// segment outgrows the playlist time base.
     pub fn push(&mut self, unit: &EncodedAccessUnit) -> BroadcastResult<Option<Segment>> {
         self.packer.pack_into(&unit.bytes, &mut self.frames)?;
+        self.units += 1;
         self.duration_ts = self.duration_ts.checked_add(unit.duration).ok_or_else(|| {
             BroadcastError::DurationOutOfRange {
                 duration_ts: u64::from(self.duration_ts) + u64::from(unit.duration),
@@ -97,17 +90,24 @@ impl Segmenter {
     }
 
     fn close(&mut self) -> Option<Segment> {
-        if self.frames.is_empty() {
+        if self.units == 0 {
             return None;
         }
 
+        let mut bytes = Vec::with_capacity(TimestampTag::LEN + self.frames.len());
+        bytes.extend_from_slice(&TimestampTag::render(self.stream_ts, self.timescale));
+        bytes.extend_from_slice(&self.frames);
+
         let segment = Segment {
             seq: self.next_seq,
-            bytes: Bytes::from(mem::take(&mut self.frames)),
+            bytes: Bytes::from(bytes),
             duration_ts: self.duration_ts,
             discontinuity: self.discontinuity,
         };
         self.next_seq += 1;
+        self.stream_ts += u64::from(self.duration_ts);
+        self.frames.clear();
+        self.units = 0;
         self.duration_ts = 0;
         self.discontinuity = false;
         Some(segment)
@@ -120,12 +120,11 @@ mod tests {
     use kithara_platform::time::Duration;
 
     use super::{Segment, Segmenter};
-    use crate::adts::AdtsPacker;
+    use crate::{adts::AdtsPacker, config::BroadcastConfig, id3::TimestampTag};
 
     struct Consts;
 
     impl Consts {
-        const CHANNELS: u16 = 2;
         const PAYLOAD: usize = 200;
         const SAMPLE_RATE: u32 = 48_000;
         const UNIT_DURATION: u32 = 1_024;
@@ -133,13 +132,18 @@ mod tests {
     }
 
     fn segmenter() -> Segmenter {
-        Segmenter::new(
-            Consts::SAMPLE_RATE,
-            Consts::CHANNELS,
-            Consts::SAMPLE_RATE,
-            Segmenter::TARGET,
-        )
-        .expect("segmenter")
+        Segmenter::new(&BroadcastConfig::builder().build()).expect("segmenter")
+    }
+
+    fn frame_bytes(units: usize) -> usize {
+        TimestampTag::LEN + units * (AdtsPacker::HEADER_LEN + Consts::PAYLOAD)
+    }
+
+    fn start_ts(segment: &Segment) -> u64 {
+        let timestamp: [u8; 8] = segment.bytes[TimestampTag::LEN - 8..TimestampTag::LEN]
+            .try_into()
+            .expect("the tag ends in eight timestamp bytes");
+        u64::from_be_bytes(timestamp)
     }
 
     fn unit() -> EncodedAccessUnit {
@@ -183,11 +187,45 @@ mod tests {
         for (index, segment) in segments.iter().enumerate() {
             assert_eq!(segment.seq, u64::try_from(index).expect("index fits"));
             assert!(!segment.discontinuity);
+            assert_eq!(segment.bytes.len(), frame_bytes(Consts::UNITS_PER_TARGET));
+        }
+    }
+
+    #[test]
+    fn a_segment_opens_with_the_timestamp_of_its_first_sample() {
+        let mut segmenter = segmenter();
+
+        let segments = push_units(&mut segmenter, 3 * Consts::UNITS_PER_TARGET);
+
+        for pair in segments.windows(2) {
+            assert!(pair[0].bytes.starts_with(b"ID3"));
             assert_eq!(
-                segment.bytes.len(),
-                Consts::UNITS_PER_TARGET * (AdtsPacker::HEADER_LEN + Consts::PAYLOAD)
+                start_ts(&pair[1]),
+                start_ts(&pair[0])
+                    + TimestampTag::mpeg_timestamp(
+                        u64::from(pair[0].duration_ts),
+                        Consts::SAMPLE_RATE
+                    ),
+                "the next segment starts where the previous one ended"
             );
         }
+        assert_eq!(start_ts(&segments[0]), 0);
+    }
+
+    #[test]
+    fn a_drop_leaves_the_media_clock_running() {
+        let mut segmenter = segmenter();
+
+        push_units(&mut segmenter, 10);
+        let closed = segmenter.mark_drop().expect("the open segment closes");
+        push_units(&mut segmenter, 10);
+        let next = segmenter.flush().expect("the next segment closes");
+
+        assert_eq!(
+            start_ts(&next),
+            TimestampTag::mpeg_timestamp(u64::from(closed.duration_ts), Consts::SAMPLE_RATE),
+            "a gap in the intake does not move the encoded time base"
+        );
     }
 
     #[test]
@@ -261,10 +299,7 @@ mod tests {
             Consts::UNIT_DURATION * 10,
             "the rejected unit contributes no duration"
         );
-        assert_eq!(
-            segment.bytes.len(),
-            10 * (AdtsPacker::HEADER_LEN + Consts::PAYLOAD)
-        );
+        assert_eq!(segment.bytes.len(), frame_bytes(10));
     }
 
     #[test]
@@ -276,10 +311,9 @@ mod tests {
     fn a_target_shorter_than_one_tick_is_rejected() {
         assert!(
             Segmenter::new(
-                Consts::SAMPLE_RATE,
-                Consts::CHANNELS,
-                Consts::SAMPLE_RATE,
-                Duration::ZERO
+                &BroadcastConfig::builder()
+                    .segment_target(Duration::ZERO)
+                    .build()
             )
             .is_err()
         );

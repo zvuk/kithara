@@ -18,6 +18,15 @@ pub enum BroadcastError {
 
     #[error("{field} must be > 0")]
     InvalidConfig { field: &'static str },
+
+    #[error(
+        "a {window}-segment playlist spans {span_ts} ticks, short of the {minimum_ts} ticks three target durations need"
+    )]
+    PlaylistTooShort {
+        window: usize,
+        span_ts: u64,
+        minimum_ts: u64,
+    },
 }
 
 /// Result type for live packaging operations.

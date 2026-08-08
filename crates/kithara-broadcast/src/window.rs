@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use bytes::Bytes;
 use kithara_platform::sync::Arc;
 
-use crate::{BroadcastError, BroadcastResult, segment::Segment};
+use crate::{BroadcastResult, config::BroadcastConfig, segment::Segment};
 
 /// Value view of the live stream: rendered playlist plus the segments a client
 /// can still fetch. Cloning shares both.
@@ -12,7 +12,7 @@ use crate::{BroadcastError, BroadcastResult, segment::Segment};
 pub struct PlaylistSnapshot {
     pub playlist: Arc<str>,
     pub segments: Arc<[Segment]>,
-    pub finished: bool,
+    pub is_finished: bool,
 }
 
 impl PlaylistSnapshot {
@@ -33,36 +33,30 @@ pub struct LiveWindow {
     window: usize,
     retention: usize,
     timescale: u32,
+    target_seconds: u64,
+    discontinuity_sequence: u64,
     segments: VecDeque<Segment>,
     finished: bool,
 }
 
 impl LiveWindow {
-    /// Segments a client sees in the playlist.
-    pub const WINDOW: usize = 6;
-
-    /// Segments kept fetchable past the playlist window.
-    pub const GRACE: usize = 3;
-
-    /// Open a window of `window` playlist segments with `grace` extra retained
-    /// segments, over access units timed in `timescale` units.
+    /// Open the window `config` describes.
     ///
     /// # Errors
     ///
-    /// Returns [`BroadcastError::InvalidConfig`] for a zero window or timescale.
-    pub fn new(window: usize, grace: usize, timescale: u32) -> BroadcastResult<Self> {
-        if window == 0 {
-            return Err(BroadcastError::InvalidConfig { field: "window" });
-        }
-        if timescale == 0 {
-            return Err(BroadcastError::InvalidConfig { field: "timescale" });
-        }
+    /// Returns [`BroadcastError::InvalidConfig`] or
+    /// [`BroadcastError::PlaylistTooShort`] for a configuration the packager
+    /// cannot serve.
+    pub fn new(config: &BroadcastConfig) -> BroadcastResult<Self> {
+        config.validate()?;
 
         Ok(Self {
-            window,
-            retention: window + grace,
-            timescale,
-            segments: VecDeque::with_capacity(window + grace),
+            window: config.window,
+            retention: config.window + config.grace,
+            timescale: config.sample_rate,
+            target_seconds: config.target_seconds()?,
+            discontinuity_sequence: 0,
+            segments: VecDeque::with_capacity(config.window + config.grace),
             finished: false,
         })
     }
@@ -70,6 +64,13 @@ impl LiveWindow {
     /// Append a closed segment, evicting whatever falls past the retention.
     pub fn push(&mut self, segment: Segment) {
         self.segments.push_back(segment);
+
+        if self.segments.len() > self.window {
+            let unlisted = self.segments.len() - self.window - 1;
+            if self.segments[unlisted].discontinuity {
+                self.discontinuity_sequence += 1;
+            }
+        }
         while self.segments.len() > self.retention {
             self.segments.pop_front();
         }
@@ -86,26 +87,29 @@ impl LiveWindow {
         PlaylistSnapshot {
             playlist: Arc::from(self.render()),
             segments: self.segments.iter().cloned().collect(),
-            finished: self.finished,
+            is_finished: self.finished,
         }
     }
 
     fn render(&self) -> String {
         let evicted = self.segments.len().saturating_sub(self.window);
         let listed = self.segments.range(evicted..);
-        let target = listed
+        let longest = listed
             .clone()
             .map(|segment| u64::from(segment.duration_ts))
             .max()
             .unwrap_or_default()
             .div_ceil(u64::from(self.timescale));
+        let target = longest.max(self.target_seconds);
         let media_sequence = listed.clone().next().map_or(0, |segment| segment.seq);
+        let discontinuity_sequence = self.discontinuity_sequence;
 
         let mut playlist = format!(
             "#EXTM3U\n\
              #EXT-X-VERSION:3\n\
              #EXT-X-TARGETDURATION:{target}\n\
-             #EXT-X-MEDIA-SEQUENCE:{media_sequence}\n"
+             #EXT-X-MEDIA-SEQUENCE:{media_sequence}\n\
+             #EXT-X-DISCONTINUITY-SEQUENCE:{discontinuity_sequence}\n"
         );
         for segment in listed {
             if segment.discontinuity {
@@ -124,9 +128,10 @@ impl LiveWindow {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use kithara_platform::time::Duration;
 
     use super::LiveWindow;
-    use crate::segment::Segment;
+    use crate::{config::BroadcastConfig, segment::Segment};
 
     struct Consts;
 
@@ -136,7 +141,7 @@ mod tests {
     }
 
     fn window() -> LiveWindow {
-        LiveWindow::new(LiveWindow::WINDOW, LiveWindow::GRACE, Consts::TIMESCALE).expect("window")
+        LiveWindow::new(&BroadcastConfig::builder().build()).expect("window")
     }
 
     fn segment(seq: u64, discontinuity: bool) -> Segment {
@@ -149,9 +154,17 @@ mod tests {
     }
 
     fn fill(window: &mut LiveWindow, count: u64) {
-        for seq in 0..count {
+        fill_from(window, 0, count);
+    }
+
+    fn fill_from(window: &mut LiveWindow, first: u64, count: u64) {
+        for seq in first..first + count {
             window.push(segment(seq, false));
         }
+    }
+
+    fn listed() -> u64 {
+        u64::try_from(BroadcastConfig::WINDOW).expect("the window fits a sequence number")
     }
 
     #[test]
@@ -166,6 +179,7 @@ mod tests {
              #EXT-X-VERSION:3\n\
              #EXT-X-TARGETDURATION:5\n\
              #EXT-X-MEDIA-SEQUENCE:4\n\
+             #EXT-X-DISCONTINUITY-SEQUENCE:0\n\
              #EXTINF:4.011,\n\
              seg/4.aac\n\
              #EXTINF:4.011,\n\
@@ -212,11 +226,42 @@ mod tests {
              #EXT-X-VERSION:3\n\
              #EXT-X-TARGETDURATION:5\n\
              #EXT-X-MEDIA-SEQUENCE:0\n\
+             #EXT-X-DISCONTINUITY-SEQUENCE:0\n\
              #EXTINF:4.011,\n\
              seg/0.aac\n\
              #EXT-X-DISCONTINUITY\n\
              #EXTINF:4.011,\n\
              seg/1.aac\n"
+        );
+    }
+
+    #[test]
+    fn the_discontinuity_sequence_counts_the_tags_that_left_the_playlist() {
+        let mut window = window();
+
+        window.push(segment(0, true));
+        fill_from(&mut window, 1, listed() - 1);
+        assert!(
+            window
+                .snapshot()
+                .playlist
+                .contains("#EXT-X-DISCONTINUITY-SEQUENCE:0\n"),
+            "a listed discontinuity is still the client's to see"
+        );
+
+        window.push(segment(listed(), false));
+        let snapshot = window.snapshot();
+
+        assert!(
+            snapshot
+                .playlist
+                .contains("#EXT-X-DISCONTINUITY-SEQUENCE:1\n"),
+            "{}",
+            snapshot.playlist
+        );
+        assert!(
+            !snapshot.playlist.contains("#EXT-X-DISCONTINUITY\n"),
+            "the discontinuous segment left the playlist"
         );
     }
 
@@ -230,12 +275,12 @@ mod tests {
         let finished = window.snapshot();
 
         assert!(!live.playlist.contains("#EXT-X-ENDLIST"));
-        assert!(!live.finished);
+        assert!(!live.is_finished);
         assert_eq!(
             finished.playlist.as_ref(),
             format!("{}#EXT-X-ENDLIST\n", live.playlist)
         );
-        assert!(finished.finished);
+        assert!(finished.is_finished);
         assert_eq!(
             window.snapshot().playlist,
             finished.playlist,
@@ -267,13 +312,33 @@ mod tests {
     }
 
     #[test]
+    fn a_window_of_short_segments_keeps_the_configured_target_duration() {
+        let mut window = window();
+
+        window.push(Segment {
+            duration_ts: Consts::TIMESCALE / 2,
+            ..segment(0, true)
+        });
+
+        assert!(
+            window
+                .snapshot()
+                .playlist
+                .contains("#EXT-X-TARGETDURATION:4\n"),
+            "a drop-truncated segment must not lower what the client was told: {}",
+            window.snapshot().playlist
+        );
+    }
+
+    #[test]
     fn an_empty_window_renders_a_playlist_with_no_segments() {
         assert_eq!(
             window().snapshot().playlist.as_ref(),
             "#EXTM3U\n\
              #EXT-X-VERSION:3\n\
-             #EXT-X-TARGETDURATION:0\n\
-             #EXT-X-MEDIA-SEQUENCE:0\n"
+             #EXT-X-TARGETDURATION:4\n\
+             #EXT-X-MEDIA-SEQUENCE:0\n\
+             #EXT-X-DISCONTINUITY-SEQUENCE:0\n"
         );
     }
 
@@ -287,7 +352,8 @@ mod tests {
         let parsed = hls_m3u8::MediaPlaylist::try_from(live.playlist.as_ref())
             .expect("the live playlist parses");
         assert_eq!(parsed.media_sequence, 5);
-        assert_eq!(parsed.segments.iter().count(), LiveWindow::WINDOW);
+        assert_eq!(parsed.discontinuity_sequence, 0);
+        assert_eq!(parsed.segments.iter().count(), BroadcastConfig::WINDOW);
         assert!(!parsed.has_end_list);
 
         window.finish();
@@ -298,8 +364,17 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_window_or_timescale_is_rejected() {
-        assert!(LiveWindow::new(0, LiveWindow::GRACE, Consts::TIMESCALE).is_err());
-        assert!(LiveWindow::new(LiveWindow::WINDOW, LiveWindow::GRACE, 0).is_err());
+    fn a_window_the_playlist_rules_reject_is_refused() {
+        assert!(LiveWindow::new(&BroadcastConfig::builder().window(0).build()).is_err());
+        assert!(LiveWindow::new(&BroadcastConfig::builder().sample_rate(0).build()).is_err());
+        assert!(
+            LiveWindow::new(
+                &BroadcastConfig::builder()
+                    .segment_target(Duration::from_millis(500))
+                    .window(5)
+                    .build()
+            )
+            .is_err()
+        );
     }
 }

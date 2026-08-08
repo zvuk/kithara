@@ -6,7 +6,7 @@ use kithara::{
     platform::time::Duration,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_broadcast::{LiveWindow, PlaylistSnapshot, Segmenter};
+use kithara_broadcast::{BroadcastConfig, LiveWindow, PlaylistSnapshot, Segmenter};
 use kithara_encode::StreamEncoder;
 use kithara_integration_tests::{
     goertzel::goertzel_magnitude,
@@ -38,12 +38,16 @@ fn sine(frames: usize) -> Vec<f32> {
 
 /// Run interleaved f32 through the whole packaging chain and stop the stream.
 fn broadcast(samples: &[f32]) -> PlaylistSnapshot {
+    let config = BroadcastConfig::builder()
+        .sample_rate(SAMPLE_RATE)
+        .channels(CHANNELS)
+        .bit_rate(BIT_RATE)
+        .segment_target(TARGET)
+        .build();
     let mut encoder = StreamEncoder::new(SAMPLE_RATE, CHANNELS, BIT_RATE, SAMPLE_RATE)
         .expect("open the streaming AAC-LC encoder");
-    let mut segmenter =
-        Segmenter::new(SAMPLE_RATE, CHANNELS, SAMPLE_RATE, TARGET).expect("open the segmenter");
-    let mut window = LiveWindow::new(LiveWindow::WINDOW, LiveWindow::GRACE, SAMPLE_RATE)
-        .expect("open the window");
+    let mut segmenter = Segmenter::new(&config).expect("open the segmenter");
+    let mut window = LiveWindow::new(&config).expect("open the window");
 
     let mut units = Vec::new();
     for chunk in samples.chunks(PUSH_FRAMES * usize::from(CHANNELS)) {
@@ -107,7 +111,7 @@ fn the_packaged_segments_decode_back_to_the_source_tone() {
         "expected several segments, packaged {}",
         snapshot.segments.len()
     );
-    assert!(snapshot.finished);
+    assert!(snapshot.is_finished);
     assert!(snapshot.playlist.contains("#EXT-X-ENDLIST"));
 
     let mut stream = Vec::new();

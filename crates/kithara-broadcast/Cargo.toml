@@ -23,6 +23,7 @@ tls-rustls = ["kithara-encode/tls-rustls"]
 kithara-encode = { workspace = true }
 kithara-platform = { workspace = true }
 
+bon = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 
