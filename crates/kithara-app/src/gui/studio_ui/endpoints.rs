@@ -316,7 +316,7 @@ struct Registration {
 }
 
 /// Registry over the static endpoint table; built once at studio compile time.
-pub(super) struct StudioRegistry {
+pub(crate) struct StudioRegistry {
     endpoints: Vec<Registration>,
 }
 

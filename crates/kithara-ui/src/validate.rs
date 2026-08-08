@@ -352,8 +352,14 @@ pub(crate) fn check_controls(
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
     check_context_scope(site, origin)?;
-    if let ControlNode::TrackList { columns, .. } = site.control {
-        check_track_list(columns, site.columns_state, site.path, origin, endpoints)?;
+    if matches!(site.control, ControlNode::TrackList { .. }) {
+        check_track_list(
+            site.columns,
+            site.columns_state,
+            site.path,
+            origin,
+            endpoints,
+        )?;
     }
     if let Some(query) = site.query {
         check_binding(
@@ -906,6 +912,7 @@ mod tests {
                 active,
                 control: &document.root,
                 read: None,
+                columns: &[],
                 columns_state: None,
                 query: None,
             },
@@ -973,6 +980,7 @@ mod tests {
                 control: &document.root,
                 read: None,
                 write: None,
+                columns: &[],
                 columns_state: None,
                 query: query.as_ref(),
                 scope: None,
@@ -1141,6 +1149,7 @@ mod tests {
                 control: &document.root,
                 read: read.as_ref(),
                 write: write.as_ref(),
+                columns: &[],
                 columns_state: None,
                 query: None,
                 scope: None,

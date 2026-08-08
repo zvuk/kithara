@@ -13,11 +13,9 @@ use iced::{
 
 use crate::{
     module::{PopoverAlign, PopoverAt},
-    render::Skin,
+    render::{IcedSkin, Skin},
     skin::PopSkin,
 };
-
-const FRAME_OVERHANG: f32 = 1.0;
 
 /// Where the surface sits: the geometry it opens from and the edge of that
 /// geometry its own edge lines up with.
@@ -126,26 +124,14 @@ fn place(
     viewport: Size,
     align: PopoverAlign,
 ) -> Rectangle {
-    let from = pointer.map_or(anchor, |point| Rectangle::new(point, Size::ZERO));
-    let below = from.y + from.height;
-    let y = if surface.height <= viewport.height - below {
-        below
-    } else {
-        from.y - surface.height
-    };
-    let x = match align {
-        PopoverAlign::Start => from.x - FRAME_OVERHANG,
-        PopoverAlign::End => from.x + from.width + FRAME_OVERHANG - surface.width,
-    };
-    let position = Point::new(
-        inside(x, surface.width, viewport.width),
-        inside(y, surface.height, viewport.height),
+    let position = crate::render::place_popover(
+        anchor.into(),
+        pointer.map(Into::into),
+        crate::solve::Size::new(surface.width, surface.height),
+        crate::solve::Size::new(viewport.width, viewport.height),
+        align,
     );
-    Rectangle::new(position, surface)
-}
-
-fn inside(start: f32, length: f32, extent: f32) -> f32 {
-    start.clamp(0.0, (extent - length).max(0.0))
+    Rectangle::new(Point::new(position.x, position.y), surface)
 }
 
 fn claims(content: mouse::Interaction, surface: Rectangle, cursor: Cursor) -> mouse::Interaction {
@@ -464,16 +450,24 @@ where
 #[cfg(test)]
 mod tests {
     use iced::{
+        Pixels,
+        advanced::{
+            clipboard,
+            layout::{Layout, Limits},
+            widget::Tree,
+        },
         keyboard::{Location, Modifiers, key::Physical},
         mouse::{Button, ScrollDelta},
-        widget::Space,
+        widget::{Space, mouse_area},
     };
+    use iced_renderer::fallback::Renderer as FallbackRenderer;
+    use iced_tiny_skia::Renderer as TinySkiaRenderer;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
         builtin,
-        render::{ControlAction, UiEvent},
+        render::{ControlAction, UiEvent, control_event, fonts::SANS},
     };
 
     struct Consts;
@@ -891,12 +885,100 @@ mod tests {
                 at: PopoverAt::Anchor,
                 align: PopoverAlign::Start,
             },
-            UiEvent::Control {
-                path: "menu".to_owned(),
-                action: ControlAction::Activate,
-            },
+            control_event("menu", ControlAction::Activate),
             builtin::skin(),
         )
+    }
+
+    fn dispatch_open_popover_press(point: Point) -> (Rectangle, Vec<UiEvent>, bool) {
+        let anchor: Element<'static, UiEvent> = Space::new()
+            .width(Length::Fixed(36.0))
+            .height(Length::Fixed(36.0))
+            .into();
+        let content = mouse_area(
+            Space::new()
+                .width(Length::Fixed(298.0))
+                .height(Length::Fixed(400.0)),
+        )
+        .on_press(UiEvent::OpenSettings)
+        .into();
+        let mut element: Element<'static, UiEvent> = Anchored::new(
+            anchor,
+            content,
+            true,
+            Placement {
+                at: PopoverAt::Anchor,
+                align: PopoverAlign::Start,
+            },
+            control_event("menu", ControlAction::Activate),
+            builtin::skin(),
+        )
+        .into();
+        let renderer = FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)));
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, Consts::VIEWPORT),
+        );
+        let viewport = Rectangle::with_size(Consts::VIEWPORT);
+        let mut overlay = element
+            .as_widget_mut()
+            .overlay(
+                &mut tree,
+                Layout::new(&node),
+                &renderer,
+                &viewport,
+                Vector::new(36.0, 0.0),
+            )
+            .unwrap_or_else(|| panic!("an open Anchored widget must expose its popover overlay"));
+        let overlay_node = overlay.as_overlay_mut().layout(&renderer, Consts::VIEWPORT);
+        let surface = Layout::new(&overlay_node).children().next().map_or_else(
+            || panic!("the Anchored overlay group must contain its popover surface"),
+            |layout| layout.bounds(),
+        );
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        overlay.as_overlay_mut().update(
+            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&overlay_node),
+            Cursor::Available(point),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+        );
+        let captured = shell.is_event_captured();
+        drop(shell);
+        (surface, messages, captured)
+    }
+
+    #[kithara::test]
+    fn the_real_overlay_places_and_owns_an_outside_dismiss_press() {
+        let outside = Point::new(600.0, 500.0);
+        let (surface, messages, captured) = dispatch_open_popover_press(outside);
+
+        assert_eq!(surface, Consts::POPOVER);
+        assert!(!surface.contains(outside));
+        assert_eq!(
+            messages,
+            [UiEvent::Control {
+                path: "menu".to_owned(),
+                action: ControlAction::Activate,
+            }]
+        );
+        assert!(captured, "the outside press must not reach the base tree");
+    }
+
+    #[kithara::test]
+    fn content_captures_an_inside_press_before_the_popover_can_dismiss() {
+        let inside = Point::new(100.0, 100.0);
+        let (surface, messages, captured) = dispatch_open_popover_press(inside);
+
+        assert_eq!(surface, Consts::POPOVER);
+        assert!(surface.contains(inside));
+        assert_eq!(messages, [UiEvent::OpenSettings]);
+        assert!(captured, "the popover content owns the inside press");
     }
 
     #[kithara::test]

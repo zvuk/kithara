@@ -51,6 +51,10 @@ A drop focuses the deck it landed on: `deck.focused` marks it in the overview ro
   which sets the ABR mode on the deck's own `current_abr_handle` and mirrors it in the deck state.
 - The mixer channel keeps the EQ; `EQ_MIN_DB` / `EQ_MAX_DB` are the knob's dB travel.
 
+The deck module is retained-hosted, but the tempo surface stays on iced: the engine observes each decoded event first,
+and an unanswered wheel event reaches the same child unchanged. The Hero Wave and five transport buttons have engine
+descriptors; the tempo row deliberately does not.
+
 `Kithara` owns one EQ mode for the whole studio; every deck keeps only its own
 desired gains in `UiState`. Right-clicking either knob bank opens its host-owned
 pointer popover in `StudioCache`; the popover itself owns no product state.

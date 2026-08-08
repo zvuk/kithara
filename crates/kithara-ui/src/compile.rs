@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use crate::{
     error::UiDocError,
     expand::{
-        Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedNode, Expander, intern_binding,
-        substitute_binding, substitute_map,
+        Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedInclude, ExpandedNode, Expander,
+        intern_binding, substitute_binding, substitute_map,
     },
     ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, FrameSides, LayoutNode, parse_layout},
@@ -30,9 +30,18 @@ pub struct CompiledUi {
     /// The layout asked to be framed by its own resize edges.
     pub resize_edges: bool,
     arena: StrArena,
+    includes: Vec<IncludedModule>,
 }
 
 impl CompiledUi {
+    #[cfg(feature = "render")]
+    pub(crate) fn includes_module(&self, owner: InternId, address: &[usize], module: &str) -> bool {
+        self.includes
+            .iter()
+            .filter(|include| include.owner == owner && include.address.as_ref() == address)
+            .any(|include| self.resolve(include.module) == module)
+    }
+
     delegate::delegate! {
         to self.arena {
             /// Resolves a string interned by this compiled UI.
@@ -40,6 +49,13 @@ impl CompiledUi {
             pub fn resolve(&self, id: InternId) -> &str;
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct IncludedModule {
+    address: Box<[usize]>,
+    module: InternId,
+    owner: InternId,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -116,6 +132,7 @@ pub fn compile(
     validate::check_layout_dragged(&document, &loaded.uri, endpoints)?;
     let mut budget = Budget::new(config.limits.max_nodes);
     let mut interner = Interner::new(config.max_arena_bytes);
+    let mut includes = Vec::new();
     let root = Compiler {
         resolver,
         endpoints,
@@ -123,6 +140,7 @@ pub fn compile(
         config,
         budget: &mut budget,
         interner: &mut interner,
+        includes: &mut includes,
     }
     .build(&document.root, &loaded.uri)?;
     let size = compiled_node_size(&root);
@@ -136,6 +154,7 @@ pub fn compile(
         root,
         size,
         dragged,
+        includes,
         arena,
         resize_edges: document.resize_edges,
     })
@@ -146,6 +165,7 @@ struct Compiler<'a> {
     interner: &'a mut Interner,
     skin: &'a SkinDoc,
     config: &'a UiConfig,
+    includes: &'a mut Vec<IncludedModule>,
     endpoints: &'a dyn EndpointRegistry,
     resolver: &'a dyn SourceResolver,
 }
@@ -215,7 +235,7 @@ impl Compiler<'_> {
                     })?;
                 validate::check_module_footer(document, &module_uri, self.endpoints)?;
                 validate::check_module_drop(document, &module_uri, self.endpoints)?;
-                let expanded = Expander::new(
+                let mut expanded = Expander::new(
                     self.config.limits.max_depth,
                     self.budget,
                     self.interner,
@@ -228,6 +248,11 @@ impl Compiler<'_> {
                 });
                 let blocks = declared.is_none() && has_blocks(&expanded.root);
                 let instance = self.interner.intern(&instance.0, layout_uri)?;
+                self.includes.extend(
+                    std::mem::take(&mut expanded.includes)
+                        .into_iter()
+                        .map(|include| included_module(instance, include)),
+                );
                 Ok(CompiledNode::Module {
                     instance,
                     size,
@@ -246,6 +271,14 @@ impl Compiler<'_> {
                 })
             }
         }
+    }
+}
+
+fn included_module(owner: InternId, include: ExpandedInclude) -> IncludedModule {
+    IncludedModule {
+        owner,
+        address: include.address,
+        module: include.module,
     }
 }
 

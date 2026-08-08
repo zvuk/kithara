@@ -27,6 +27,31 @@ fn track_list_resolver(module: &str) -> MemResolver {
     resolver
 }
 
+/// Same shape, but the layout hands the module a column list, so the module
+/// body reads `columns: "$columns"`.
+fn parameterised_track_list_resolver(columns: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "track-list.klayout.ron",
+        &format!(
+            r#"(schema: "kithara.layout", version: 1, id: "track-list",
+            root: Module(instance: "track-list", source: "track-list.kmodule.ron",
+                with: {{ "columns": "{columns}" }}))"#
+        ),
+    );
+    resolver.insert(
+        "track-list.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "track-list",
+            parameters: ["columns"],
+            root: TrackList(
+                id: "tracks",
+                columns: "$columns",
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+    resolver
+}
+
 #[kithara::test]
 fn compiles_micro_layout_end_to_end() {
     let ui = compile(
@@ -287,6 +312,37 @@ fn track_list_requires_title_column_at_compile_time() {
     let error = compile(
         "track-list.klayout.ron",
         &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        UiDocError::MissingTrackTitleColumn { path, .. } if path == "track-list/tracks"
+    ));
+}
+
+#[kithara::test]
+fn a_column_list_may_arrive_as_an_include_parameter() {
+    compile(
+        "track-list.klayout.ron",
+        &parameterised_track_list_resolver("[Title, Artist]"),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .expect("a substituted column list must compile like a literal one");
+}
+
+/// The title-column rule reads the *resolved* list, so routing columns through a
+/// parameter cannot be used to slip past it.
+#[kithara::test]
+fn a_parameterised_column_list_still_needs_the_title_column() {
+    let error = compile(
+        "track-list.klayout.ron",
+        &parameterised_track_list_resolver("[Index, Artist]"),
         &common::player_registry(),
         builtin::skin_doc(),
         &UiConfig::default(),

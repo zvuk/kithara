@@ -32,3 +32,29 @@ jobs:
 
       - name: Run the render tests
         run: just test run -p kithara-ui --features kithara-ui/gpu -E 'test(/vis::/)'
+
+  # The two hosts draw the same documents. The unit tests say each control
+  # produces a picture; this says the two pictures are the same picture, page by
+  # page, against a checked-in price per page. It needs a device because the
+  # masonry set goes through Vello.
+  parity:
+    name: Both hosts photograph the same pages
+    if: vars.KITHARA_GPU_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_GPU_RUNNER_LABELS) }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Photograph both sets and compare them against the budget
+        run: just test ui
+
+      # The numbers name the page that disagrees; only the masks say where on
+      # it. Kept on failure too, because that is when they are read.
+      - name: Upload both sets and the difference masks
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: host-parity
+          path: target/parity

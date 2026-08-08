@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    compile::{CompiledNode, compiled_node_size},
     expand::{BlockSpec, ControlSpec, ExpandedNode},
-    module::{ButtonStyle, ChromeStyle, GlyphStyle, TextStyle},
-    skin::{SkinDoc, WindowControlSkin},
+    module::ChromeStyle,
+    mount,
+    skin::SkinDoc,
 };
 
 /// One-axis size rule. `Fill` takes available space, `Shrink` takes exactly what
@@ -131,109 +133,20 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
     SizeSpec::new(Dim::from(width), Dim::from(height))
 }
 
-/// An icon renders as a text glyph, whose line box is taller than the icon
-/// size; the row it sits in owns the height so the glyph centres against its
-/// siblings.
-fn icon_cell(side: f32) -> SizeSpec {
-    SizeSpec::new(Dim::Fixed(side), Dim::Fill)
-}
-
 /// Returns the intrinsic size for a typed control specification.
 #[must_use]
 pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
-    match spec {
-        ControlSpec::DeckSummary { .. } => skin.deck.summary_size,
-        ControlSpec::Brand => skin.global_bar.brand_size,
-        ControlSpec::Spacer => skin.global_bar.spacer_size,
-        ControlSpec::Divider => SizeSpec::new(Dim::Fixed(skin.divider.width), Dim::Fill),
-        ControlSpec::PresetSelector => skin.global_bar.preset_size,
-        ControlSpec::SettingsButton => skin.global_bar.settings_size,
-        ControlSpec::WindowDrag | ControlSpec::TitleBar { .. } => SizeSpec::FILL,
-        ControlSpec::WindowControls { style } => match skin.window.controls(*style) {
-            WindowControlSkin::Buttons {
-                minus_icon_size,
-                maximize_icon_size,
-                close_icon_size,
-                gap,
-                padding,
-            } => SizeSpec::new(
-                Dim::Fixed(
-                    minus_icon_size
-                        + maximize_icon_size
-                        + close_icon_size
-                        + gap * 2.0
-                        + padding * 2.0,
-                ),
-                Dim::Fill,
-            ),
-            WindowControlSkin::Close { cell_size, .. } => {
-                SizeSpec::new(Dim::Fixed(cell_size), Dim::Fill)
-            }
-        },
-        ControlSpec::Text { style, .. } => match style {
-            TextStyle::VisFooter => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.footer_height)),
-            TextStyle::VisMeta | TextStyle::VisTitle => {
-                SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.header_height))
-            }
-            TextStyle::BrandSmall | TextStyle::Mono | TextStyle::Caption => {
-                SizeSpec::new(Dim::Shrink, Dim::Fill)
-            }
-            TextStyle::Body
-            | TextStyle::Brand
-            | TextStyle::DeckLetter
-            | TextStyle::TrackTitle
-            | TextStyle::Telemetry
-            | TextStyle::MicroLabel
-            | TextStyle::Section => skin.text.size,
-        },
-        ControlSpec::Glyph { style, .. } => match style {
-            GlyphStyle::Menu => icon_cell(skin.menu.icon_size),
-            GlyphStyle::MenuBurger => icon_cell(skin.menu.burger_icon_size),
-            GlyphStyle::MenuSmall => icon_cell(skin.menu.small_icon_size),
-            GlyphStyle::MenuCell => icon_cell(skin.menu.cell_icon_size),
-            GlyphStyle::Default | GlyphStyle::Vis => SizeSpec::new(
-                Dim::Fixed(skin.nav.header_icon_size),
-                Dim::Fixed(skin.nav.header_height),
-            ),
-        },
-        ControlSpec::NavItem { .. } => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.nav.item_height)),
-        ControlSpec::TabLarge { .. } => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tab_large.height)),
-        ControlSpec::Button { style, .. } => match style {
-            ButtonStyle::VisNav => SizeSpec::new(
-                Dim::Fixed(skin.vis.nav_cell_size),
-                Dim::Fixed(skin.vis.nav_cell_size),
-            ),
-            ButtonStyle::MicroPrimary => SizeSpec::new(
-                Dim::Fixed(skin.button.micro_size),
-                Dim::Fixed(skin.button.micro_size),
-            ),
-            _ => skin.button.size,
-        },
-        ControlSpec::Bpm { .. } => skin.deck.bpm_size,
-        ControlSpec::Time => skin.deck.time_size,
-        ControlSpec::Scalar { .. } => skin.telemetry.size,
-        ControlSpec::Crossfader { .. } => skin.crossfader.size,
-        ControlSpec::Fader { .. } => skin.fader.size,
-        ControlSpec::Wave { .. } => skin.wave.size,
-        ControlSpec::Vis => skin.vis.size,
-        ControlSpec::TrackList { .. } => skin.track_list.size,
-        ControlSpec::Tree { .. } => skin.tree.size,
-        ControlSpec::ContextBar { .. } => {
-            SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tree.context_height))
-        }
-        ControlSpec::Toggle => skin.toggle.size,
-        ControlSpec::Checkbox => skin.checkbox.size,
-        ControlSpec::Segmented { .. } => skin.segmented.size,
-        ControlSpec::Select { .. } => skin.select.size,
-        ControlSpec::StatusDot { .. } => skin.status_dot.size,
-        ControlSpec::Swatch { .. } => skin.swatch.size,
-        ControlSpec::Cell { .. } => skin.cell.size,
-        ControlSpec::Readout { .. } => skin.readout.size,
-        ControlSpec::Chip { .. } => skin.chip.size,
-        ControlSpec::Knob { .. } => skin.knob.size,
-        ControlSpec::VuStereo => skin.vu_stereo.size,
-        ControlSpec::Meter => skin.meter.size,
-        ControlSpec::VuVertical { .. } => skin.vu_vertical.size,
+    mount::controls!(spec, Intrinsic { skin })
+}
+
+/// Asks whichever control the document named how big its skin makes it.
+struct Intrinsic<'a> {
+    skin: &'a SkinDoc,
+}
+
+impl Intrinsic<'_> {
+    fn apply<C: mount::Control>(self, control: &C) -> SizeSpec {
+        control.size(self.skin)
     }
 }
 
@@ -268,6 +181,67 @@ pub(crate) fn visible<'a, N: BlockNode>(
     children
         .iter()
         .filter(move |child| !is_hidden(*child, hidden))
+}
+
+pub(crate) fn visible_compiled_children<'a>(
+    children: &'a [(f32, CompiledNode)],
+    hidden: Hidden<'a>,
+) -> impl Iterator<Item = (f32, &'a CompiledNode)> {
+    children
+        .iter()
+        .filter(move |(_, child)| !is_hidden(child, hidden))
+        .map(|(weight, child)| (*weight, child))
+}
+
+pub(crate) fn compiled_node_size_with_hidden(
+    node: &CompiledNode,
+    skin: &SkinDoc,
+    hidden: Hidden<'_>,
+) -> SizeSpec {
+    match node {
+        CompiledNode::Optional { child, .. } => compiled_node_size_with_hidden(child, skin, hidden),
+        node if !node.blocks() => compiled_node_size(node),
+        CompiledNode::Split { axis, children, .. } => {
+            let sizes = visible_compiled_children(children, hidden)
+                .map(|(_, child)| compiled_node_size_with_hidden(child, skin, hidden));
+            match axis {
+                crate::layout::Axis::Horizontal => combine_horizontal(sizes),
+                crate::layout::Axis::Vertical => combine_vertical(sizes),
+            }
+        }
+        CompiledNode::Module { chrome, root, .. } => {
+            crate::compile::module_size(root, *chrome, skin, hidden)
+        }
+    }
+}
+
+pub(crate) fn effective_size(node: &ExpandedNode, skin: &SkinDoc) -> Option<SizeSpec> {
+    let declared = match node {
+        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+            return effective_size(child, skin);
+        }
+        ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin),
+        ExpandedNode::Row { size, .. }
+        | ExpandedNode::Column { size, .. }
+        | ExpandedNode::Slot { size, .. }
+        | ExpandedNode::Control { size, .. } => *size,
+    };
+    declared.or_else(|| match node {
+        ExpandedNode::Control { spec, .. } => mount::controls!(spec, Composed { skin }),
+        _ => None,
+    })
+}
+
+/// Asks whichever control the document named for the size a parent composes
+/// with, which some controls leave to the row that holds them.
+struct Composed<'a> {
+    skin: &'a SkinDoc,
+}
+
+impl Composed<'_> {
+    fn apply<C: mount::Control>(self, control: &C) -> Option<SizeSpec> {
+        control.composes_size().then(|| control.size(self.skin))
+    }
 }
 
 /// Computes a node's intrinsic size from its override, children, or control specification.
@@ -306,9 +280,9 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
                         .iter()
                         .map(|child| compute_size(child, skin, hidden)),
                 ),
-                gap_total(*gap, laid_out.len(), skin.layout.size_gap),
+                gap_total(*gap, laid_out.len(), skin.layout.grid_gap),
                 0.0,
-                Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
+                Pad::new(*pad, *pad_x, *pad_y, skin.layout.grid_pad),
             )
         }
         ExpandedNode::Column {
@@ -327,8 +301,8 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
                         .map(|child| compute_size(child, skin, hidden)),
                 ),
                 0.0,
-                gap_total(*gap, laid_out.len(), skin.layout.size_gap),
-                Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
+                gap_total(*gap, laid_out.len(), skin.layout.grid_gap),
+                Pad::new(*pad, *pad_x, *pad_y, skin.layout.grid_pad),
             )
         }
         ExpandedNode::Slot { children, .. } => {
@@ -411,7 +385,9 @@ mod tests {
         builtin,
         expand::{Binding, BindingKind},
         ids::{Interner, SourceUri},
-        module::{AdaptivePolicy, GlyphStyle, IconName, PopoverAlign, PopoverAt, TextAlign},
+        module::{
+            AdaptivePolicy, GlyphStyle, IconName, PopoverAlign, PopoverAt, TextAlign, TextStyle,
+        },
     };
 
     fn control(interner: &mut Interner, id: &str, size: SizeSpec) -> ExpandedNode {
@@ -714,8 +690,8 @@ mod tests {
             None,
         );
         let mut skin = builtin::skin_doc().clone();
-        skin.layout.size_gap = 3.0;
-        skin.layout.size_pad = 2.0;
+        skin.layout.grid_gap = 3.0;
+        skin.layout.grid_pad = 2.0;
 
         let size = compute_size(&node, &skin, VISIBLE);
 

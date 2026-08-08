@@ -4,7 +4,7 @@ use kithara_ui::{
     compile::{CompiledUi, compile},
     error::UiDocError,
     render::{Walk, tree},
-    source::UiConfig,
+    source::{MemResolver, UiConfig},
 };
 
 use super::{
@@ -66,10 +66,6 @@ const DOCS: &[(&str, &str)] = &[
         "modules/studio-strip/eq-4-band.kmodule.ron",
         include_str!("../../../assets/ui/modules/studio-strip/eq-4-band.kmodule.ron"),
     ),
-    (
-        "modules/studio-library.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-library.kmodule.ron"),
-    ),
 ];
 
 /// The compiled studio UI plus the host-owned view state it reads back. Both
@@ -97,17 +93,28 @@ impl StudioUi {
     }
 }
 
-pub(super) fn compile_studio(layout: DeckLayout) -> Result<CompiledUi, UiDocError> {
+/// Where the studio's own documents are read from: the built-in library with
+/// this application's layouts and modules laid over it.
+pub(crate) fn resolver() -> MemResolver {
     let mut resolver = builtin::resolver();
     for (path, text) in DOCS {
         resolver.insert(path, text);
     }
-    let entry = match layout {
+    resolver
+}
+
+/// The layout entry for a deck arrangement, which is what a host compiles.
+pub(crate) const fn entry(layout: DeckLayout) -> &'static str {
+    match layout {
         DeckLayout::Single => "studio-single.klayout.ron",
         DeckLayout::Dual => "studio.klayout.ron",
-    };
+    }
+}
+
+pub(super) fn compile_studio(layout: DeckLayout) -> Result<CompiledUi, UiDocError> {
+    let resolver = resolver();
     compile(
-        entry,
+        entry(layout),
         &resolver,
         &StudioRegistry::default(),
         builtin::skin_doc(),

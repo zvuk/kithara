@@ -132,7 +132,7 @@ fn builtin_skin_pins_the_design_canon() {
 
     assert_eq!(document.palette.bg, "#12121f");
     assert_eq!(document.layout.grid_gap, 1.0);
-    assert_eq!(document.layout.size_gap, 0.0);
+    assert_eq!(document.layout.grid_pad, 0.0);
     assert_eq!(document.chrome.frame.border, ColorRole::Line);
     assert_eq!(document.palette.line_inner, "#2a2a4c");
     assert_eq!(document.palette.bg_footer, "#1b1b32");

@@ -16,8 +16,13 @@ pub(crate) enum EqMode {
 }
 
 impl EqMode {
-    const FOUR_BANDS: [&'static str; 4] = ["low", "low_mid", "high_mid", "high"];
-    const THREE_BANDS: [&'static str; 3] = ["low", "mid", "high"];
+    const FOUR_BANDS: [&str; 4] = ["low", "low_mid", "high_mid", "high"];
+    const THREE_BANDS: [&str; 3] = ["low", "mid", "high"];
+
+    #[must_use]
+    pub(crate) fn band(self, name: &str) -> Option<usize> {
+        self.bands().iter().position(|band| *band == name)
+    }
 
     #[must_use]
     pub(crate) const fn bands(self) -> &'static [&'static str] {
@@ -28,8 +33,12 @@ impl EqMode {
     }
 
     #[must_use]
-    pub(crate) fn band(self, name: &str) -> Option<usize> {
-        self.bands().iter().position(|band| *band == name)
+    pub(crate) fn layout(self, gains: &[f32]) -> Vec<EqBandConfig> {
+        let mut layout = generate_log_spaced_bands(self.bands().len());
+        for (band, gain) in layout.iter_mut().zip(gains) {
+            band.set_gain_db(*gain);
+        }
+        layout
     }
 
     #[must_use]
@@ -43,15 +52,6 @@ impl EqMode {
             }
             _ => None,
         }
-    }
-
-    #[must_use]
-    pub(crate) fn layout(self, gains: &[f32]) -> Vec<EqBandConfig> {
-        let mut layout = generate_log_spaced_bands(self.bands().len());
-        for (band, gain) in layout.iter_mut().zip(gains) {
-            band.set_gain_db(*gain);
-        }
-        layout
     }
 }
 
@@ -111,12 +111,8 @@ impl Deck {
 /// The deck list is dynamic. `mix.strips` is kept parallel to `decks` — same
 /// length, same order — by this type alone; every lookup goes through
 /// [`DeckSet::position`], never through a raw [`DeckId`] value.
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
 pub struct DeckSet {
-    #[field(get)]
     mix: MixState,
-    #[field(get)]
     decks: Vec<Deck>,
     next_id: usize,
 }
@@ -169,6 +165,16 @@ impl DeckSet {
     #[must_use]
     pub fn deck(&self, id: DeckId) -> Option<&Deck> {
         self.decks.iter().find(|deck| deck.id == id)
+    }
+
+    #[must_use]
+    pub fn decks(&self) -> &[Deck] {
+        &self.decks
+    }
+
+    #[must_use]
+    pub fn mix(&self) -> &MixState {
+        &self.mix
     }
 
     /// Id for the next deck; never reuses one that has been handed out.

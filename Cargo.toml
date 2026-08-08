@@ -279,6 +279,9 @@ firewheel = { version = "0.10.0", default-features = false, features = ["schedul
 firewheel-web-audio = { version = "0.4.0", default-features = false }
 fs4 = "1.1.0"
 futures = "0.3.32"
+
+# proc macros
+futures-lite = "2"
 glob = "0.3"
 gloo-timers = { version = "0.4", features = ["futures"] }
 
@@ -289,15 +292,24 @@ hotpath = "0.19.1"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
 
 # UI frameworks
-iced = { version = "0.14", features = ["tokio", "svg", "canvas"] }
+iced = { version = "0.14", features = ["tokio", "svg", "canvas", "advanced"] }
+iced_renderer = "0.14.0"
+iced_runtime = "0.14.0"
+iced_tiny_skia = "0.14.0"
+iced_wgpu = "0.14.0"
 
 # FFI
 jni = "0.22"
 js-sys = "0.3"
+# Curve geometry and the SVG path grammar (kithara-ui reads authored icons
+# through it). Pinned to the version peniko already resolves so the graph keeps
+# one kurbo.
+kurbo = "0.12"
 libfuzzer-sys = "0.4"
 loom = { version = "0.7.2", features = ["checkpoint"] }
 lru = "0.18"
 lucide-icons = { version = "1.25", default-features = false }
+masonry = "0.4"
 memory-stats = "1.2"
 mmap-io = { version = "1.0", default-features = false }
 moka = { version = "0.12", features = ["sync"] }
@@ -308,12 +320,12 @@ obfstr = "0.4.5"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false }
 parking_lot = "0.12"
+parley = { version = "0.6", default-features = false, features = ["std", "system"] }
 pin-project-lite = "0.2"
 plist = "1"
+png = "0.17"
 pollster = "0.4"
 portable-atomic = { version = "1.13.1", default-features = false, features = ["fallback", "float"] }
-
-# proc macros
 proc-macro2 = "1"
 proptest = "1"
 quote = "1"
@@ -345,6 +357,7 @@ sha2 = "0.11"
 signal-hook = "0.3"
 # Time-stretch backends: C++ FFI, native-only, behind `stretch-*` features.
 signalsmith-stretch = "0.1.3"
+skrifa = "0.37"
 slice_ring_buf = "0.3"
 smallvec = "1"
 stats_alloc = "0.1"
@@ -370,17 +383,27 @@ tracing-log = "0.2"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry"] }
 tracing-wasm = "0.2"
 triple_buffer = "8.1.1"
+unicode-segmentation = "1.13.3"
 uniffi = { version = "0.31.2", default-features = false }
 unimock = { version = "0.6", features = ["std"] }
 url = { version = "2.5.8", features = ["serde"] }
 usdt = { version = "0.6", default-features = false, features = ["asm"] }
 uuid = { version = "1", features = ["v5"] }
+# Held at 0.6 for the masonry host: masonry 0.4 hands a widget a `Scene` from its own
+# vello 0.6, and 0.6/0.9 `Scene` are unrelated types. This pin keeps the painter buildable
+# against the host dependency.
+# The feature is off because the painter encodes a scene and rasterises nothing; enabling it
+# would add a second wgpu major beside the 27 that iced already brings.
+vello = { version = "0.6", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 wasm-bindgen-test = "0.3"
 wasm_safe_thread = "0.1.1"
 web-sys = { version = "0.3", features = ["AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioSampleFormat", "Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageEvent", "Window"] }
 web-time = "1.1"
+# Dev-only: the gallery example drives the Masonry host in a real window. iced
+# already builds this exact version, so it costs no extra compilation.
+winit = "0.30"
 wreq = "=6.0.0-rc.29"
 wreq-util = "=3.0.0-rc.14"
 

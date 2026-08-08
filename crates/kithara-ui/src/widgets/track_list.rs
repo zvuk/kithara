@@ -1,57 +1,38 @@
-use iced::{
-    Alignment, Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Size,
-    Theme,
-    alignment::{Horizontal, Vertical},
-    mouse::{self, Cursor},
-    widget::{
-        Canvas, Column, Row, Space, Stack, button,
-        button::{Status as ButtonStatus, Style as ButtonStyle},
-        canvas::{self, Action, Frame, Geometry},
-        column, container,
-        container::Style as ContainerStyle,
-        responsive, row, scrollable,
-        scrollable::{
-            Direction as ScrollDirection, Rail, Scrollbar, Scroller, Style as ScrollableStyle,
-        },
-    },
-};
+use iced::{Element, Length, widget::Space};
 use num_traits::ToPrimitive;
 
-use super::{
-    Widget,
-    behavior::{
-        HorizontalPixelDrag, HorizontalPixelDragState, HoverState, ItemDrag, ItemDragState,
-    },
-};
+use super::Widget;
 use crate::{
+    draw::{Pt, Rect},
     module::TrackColumn,
-    render::{
-        ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, fonts, shaped_text,
-        theme::RenderPalette,
-    },
+    render::{InputOwner, ReadValue, Reads, Skin, TrackRow, UiEvent, track_list},
     skin::TrackListSkin,
 };
 
-const fn em_dash() -> &'static str {
-    "\u{2014}"
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ColumnLayout {
+    pub(crate) column: TrackColumn,
+    pub(crate) width: f32,
 }
 
-#[derive(Clone, Copy)]
-struct ColumnLayout {
-    column: TrackColumn,
-    width: f32,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ColumnDividerLayout {
+    pub(crate) column: TrackColumn,
+    pub(crate) hit: Rect,
+    pub(crate) paint: Rect,
+    pub(crate) value: f32,
 }
 
-struct TrackListRowData {
-    artist: Option<String>,
-    bpm: Option<String>,
-    deck: Option<String>,
-    energy: Option<u8>,
-    key: Option<String>,
-    time: Option<String>,
-    transition: Option<String>,
-    title: String,
-    selected: bool,
+pub(crate) struct TrackListRowData {
+    pub(crate) artist: Option<String>,
+    pub(crate) bpm: Option<String>,
+    pub(crate) deck: Option<String>,
+    pub(crate) energy: Option<u8>,
+    pub(crate) key: Option<String>,
+    pub(crate) time: Option<String>,
+    pub(crate) transition: Option<String>,
+    pub(crate) title: String,
+    pub(crate) selected: bool,
 }
 
 impl From<&TrackRow<'_>> for TrackListRowData {
@@ -70,36 +51,6 @@ impl From<&TrackRow<'_>> for TrackListRowData {
     }
 }
 
-struct TrackListStyle {
-    bpm_badge_frame: Border,
-    deck_chip_frame: Border,
-    row_frame: Border,
-    bpm_badge_background: Color,
-    divider_color: Color,
-    energy_bar_background: Color,
-    scrollbar_background: Color,
-    scroller_color: Color,
-    palette: RenderPalette,
-    metrics: TrackListSkin,
-}
-
-impl TrackListStyle {
-    fn new(skin: &Skin) -> Self {
-        Self {
-            bpm_badge_background: skin.color(skin.track_list.bpm_badge_background),
-            bpm_badge_frame: skin.border(skin.track_list.bpm_badge_frame),
-            deck_chip_frame: skin.border(skin.track_list.deck_chip_frame),
-            divider_color: skin.color(skin.track_list.divider_color),
-            energy_bar_background: skin.color(skin.track_list.energy_bar_background),
-            metrics: skin.track_list.clone(),
-            palette: skin.palette,
-            row_frame: skin.border(skin.track_list.row_frame),
-            scrollbar_background: skin.color(skin.track_list.scrollbar_background),
-            scroller_color: skin.color(skin.track_list.scroller_color),
-        }
-    }
-}
-
 #[derive(bon::Builder)]
 pub(crate) struct TrackList<'path, 'columns, 'state, 'value, 'data, 'reads, 'skin> {
     skin: &'skin Skin,
@@ -109,9 +60,10 @@ pub(crate) struct TrackList<'path, 'columns, 'state, 'value, 'data, 'reads, 'ski
     path: &'path str,
     columns_state: Option<&'state str>,
     value: Option<&'value ReadValue<'data>>,
+    owner: InputOwner,
 }
 
-impl<'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_, '_, '_> {
+impl<'a, 'skin: 'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_, '_, 'skin> {
     fn view(self) -> Element<'a, UiEvent> {
         let Some(ReadValue::TrackList(tracks)) = self.value else {
             return Space::new().into();
@@ -121,575 +73,16 @@ impl<'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_, '_, '_> {
             .map(|prefix| (prefix, self.columns_scope));
         let columns = column_layouts(self.columns, self.reads, state, self.skin);
         let path = self.path.to_owned();
-        let style = TrackListStyle::new(self.skin);
-        let tracks: Vec<_> = tracks.iter().map(TrackListRowData::from).collect();
-        responsive(move |size| track_list_table(&path, &tracks, &columns, &style, size.width))
-            .into()
+        let owner = self.owner;
+        let rows: Vec<_> = tracks.iter().map(TrackListRowData::from).collect();
+        track_list(&path, rows, columns, self.skin, owner)
     }
 }
 
-fn track_list_table(
-    path: &str,
-    tracks: &[TrackListRowData],
-    columns: &[ColumnLayout],
-    style: &TrackListStyle,
-    available_width: f32,
-) -> Element<'static, UiEvent> {
-    let minimum_width = minimum_table_width(columns);
-    let overflowing = minimum_width > available_width;
-    let flexible_title = !overflowing;
-    let header = Row::with_children(columns.iter().copied().enumerate().map(|(index, column)| {
-        header_cell(
-            path,
-            column,
-            flexible_title,
-            column_resizable(columns, index),
-            style,
-        )
-    }))
-    .align_y(Alignment::Center)
-    .height(Length::Fixed(style.metrics.header_height))
-    .width(Length::Fill);
-    let header_background = style.palette.bg_panel;
-    let header = container(header)
-        .height(Length::Fixed(style.metrics.header_height))
-        .width(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(header_background)));
-    let rows = tracks.iter().enumerate().map(|(index, track)| {
-        TrackListRow::builder()
-            .style(style)
-            .path(path)
-            .index(index)
-            .track(track)
-            .columns(columns)
-            .flexible_title(flexible_title)
-            .build()
-            .view()
-    });
-    let line_soft = style.palette.line_soft;
-    let rows = container(
-        Column::with_children(rows)
-            .spacing(style.metrics.grid_gap)
-            .width(Length::Fill),
-    )
-    .style(move |_| ContainerStyle::default().background(Background::Color(line_soft)));
-    let table = scrollable(rows)
-        .direction(ScrollDirection::Vertical(scrollbar(style)))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(scrollable_style(style));
-    let footer = footer(tracks.len(), style);
-    let content_width = if overflowing {
-        Length::Fixed(minimum_width)
-    } else {
-        Length::Fill
-    };
-    let line_soft = style.palette.line_soft;
-    let content = container(
-        column![header, table, footer]
-            .spacing(style.metrics.grid_gap)
-            .width(Length::Fill)
-            .height(Length::Fill),
-    )
-    .width(content_width)
-    .height(Length::Fill)
-    .style(move |_| ContainerStyle::default().background(Background::Color(line_soft)));
-
-    if overflowing {
-        scrollable(content)
-            .direction(ScrollDirection::Horizontal(scrollbar(style)))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(scrollable_style(style))
-            .into()
-    } else {
-        content.into()
-    }
-}
-
-fn scrollbar(style: &TrackListStyle) -> Scrollbar {
-    Scrollbar::new()
-        .width(style.metrics.scrollbar_width)
-        .margin(style.metrics.scrollbar_margin)
-        .scroller_width(style.metrics.scrollbar_width)
-}
-
-fn scrollable_style(
-    style: &TrackListStyle,
-) -> impl Fn(&Theme, scrollable::Status) -> ScrollableStyle + 'static {
-    let background = style.scrollbar_background;
-    let scroller = style.scroller_color;
-    move |theme, status| {
-        let rail = Rail {
-            background: Some(Background::Color(background)),
-            border: Border::default(),
-            scroller: Scroller {
-                background: Background::Color(scroller),
-                border: Border::default(),
-            },
-        };
-        ScrollableStyle {
-            horizontal_rail: rail,
-            vertical_rail: rail,
-            ..scrollable::default(theme, status)
-        }
-    }
-}
-
-fn column_resizable(columns: &[ColumnLayout], index: usize) -> bool {
+pub(crate) fn column_resizable(columns: &[ColumnLayout], index: usize) -> bool {
     columns
         .get(index)
         .is_some_and(|column| column.column != TrackColumn::Title && index + 1 < columns.len())
-}
-
-#[derive(bon::Builder)]
-struct TrackListRow<'path, 'columns, 'data, 'style> {
-    track: &'data TrackListRowData,
-    style: &'style TrackListStyle,
-    columns: &'columns [ColumnLayout],
-    path: &'path str,
-    flexible_title: bool,
-    index: usize,
-}
-
-impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        let cells = self
-            .columns
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(column_index, column)| {
-                let cell = row_cell(
-                    column,
-                    self.flexible_title,
-                    self.index,
-                    self.track,
-                    self.style,
-                );
-                if column_resizable(self.columns, column_index) {
-                    cell_with_divider(cell, column_length(column, self.flexible_title), self.style)
-                } else {
-                    cell
-                }
-            });
-        let height = Length::Fixed(self.style.metrics.row_height);
-        let row = button(
-            Row::with_children(cells)
-                .align_y(Alignment::Center)
-                .width(Length::Fill)
-                .height(Length::Fill),
-        )
-        .padding(0)
-        .width(Length::Fill)
-        .height(height)
-        .style(track_button_style(self.style, self.track.selected))
-        .on_press(UiEvent::Control {
-            path: self.path.to_owned(),
-            action: ControlAction::SelectIndex(self.index),
-        });
-        let drag = Canvas::new(RowDrag {
-            drag: ItemDrag::new(self.path.to_owned(), self.index),
-        })
-        .width(Length::Fill)
-        .height(height);
-        Stack::with_children([row.into(), drag.into()])
-            .width(Length::Fill)
-            .height(height)
-            .into()
-    }
-}
-
-/// Transparent overlay that turns a press and a pull on the row into a drag of
-/// its track. It paints nothing and captures nothing, so the row keeps its own
-/// click and its hover.
-struct RowDrag {
-    drag: ItemDrag,
-}
-
-impl canvas::Program<UiEvent> for RowDrag {
-    type State = ItemDragState;
-
-    fn draw(
-        &self,
-        _state: &ItemDragState,
-        _renderer: &Renderer,
-        _theme: &Theme,
-        _bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> Vec<Geometry> {
-        Vec::new()
-    }
-
-    fn mouse_interaction(
-        &self,
-        state: &ItemDragState,
-        _bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> mouse::Interaction {
-        state.interaction()
-    }
-
-    delegate::delegate! {
-        to self.drag {
-            fn update(
-                &self,
-                state: &mut ItemDragState,
-                event: &Event,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Option<Action<UiEvent>>;
-        }
-    }
-}
-
-fn header_cell(
-    path: &str,
-    column: ColumnLayout,
-    flexible_title: bool,
-    resizable: bool,
-    style: &TrackListStyle,
-) -> Element<'static, UiEvent> {
-    let label = column_label(column.column, &style.metrics).to_owned();
-    let horizontal = if column.column == TrackColumn::Index {
-        Horizontal::Right
-    } else {
-        Horizontal::Left
-    };
-    let width = column_length(column, flexible_title);
-    let cell: Element<'static, UiEvent> = container(
-        shaped_text(label)
-            .font(fonts::mono(style.metrics.header_text.weight))
-            .size(style.metrics.header_text.size)
-            .color(style.palette.muted),
-    )
-    .padding([0.0, style.metrics.cell_padding_x])
-    .width(width)
-    .height(Length::Fill)
-    .align_x(horizontal)
-    .align_y(Vertical::Center)
-    .into();
-    if !resizable {
-        return cell;
-    }
-    let divider = Canvas::new(ColumnDivider {
-        color: style.divider_color,
-        divider_width: style.metrics.divider_width,
-        drag: HorizontalPixelDrag::builder()
-            .path(format!("{path}/width/{}", column.column.endpoint_name()))
-            .value(column.width)
-            .minimum(style.metrics.min_column_width)
-            .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
-            .build(),
-    })
-    .width(Length::Fixed(style.metrics.divider_hit_width))
-    .height(Length::Fill);
-    let divider = container(divider)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Horizontal::Right);
-    Stack::with_children([cell, divider.into()])
-        .width(width)
-        .height(Length::Fill)
-        .into()
-}
-
-fn row_cell(
-    column: ColumnLayout,
-    flexible_title: bool,
-    index: usize,
-    track: &TrackListRowData,
-    style: &TrackListStyle,
-) -> Element<'static, UiEvent> {
-    let width = column_length(column, flexible_title);
-    match column.column {
-        TrackColumn::Index => text_cell(
-            format!("{:02}", index + 1),
-            width,
-            style.metrics.index_text,
-            fonts::mono,
-            style.palette.muted,
-            Horizontal::Right,
-            style,
-        ),
-        TrackColumn::Deck => deck_cell(track, width, style),
-        TrackColumn::Title => text_cell(
-            value_or_dash(&track.title),
-            width,
-            style.metrics.title_text,
-            fonts::display,
-            style.palette.text,
-            Horizontal::Left,
-            style,
-        ),
-        TrackColumn::Artist => text_cell(
-            optional_or_dash(track.artist.as_deref()),
-            width,
-            style.metrics.artist_text,
-            fonts::sans,
-            style.palette.text_dim,
-            Horizontal::Left,
-            style,
-        ),
-        TrackColumn::Bpm => bpm_cell(track.bpm.as_deref(), width, style),
-        TrackColumn::Key => text_cell(
-            optional_or_dash(track.key.as_deref()),
-            width,
-            style.metrics.key_text,
-            fonts::mono,
-            style.palette.accent,
-            Horizontal::Left,
-            style,
-        ),
-        TrackColumn::Time => text_cell(
-            optional_or_dash(track.time.as_deref()),
-            width,
-            style.metrics.time_text,
-            fonts::mono,
-            style.palette.text_dim,
-            Horizontal::Right,
-            style,
-        ),
-        TrackColumn::Energy => energy_cell(track.energy, width, style),
-        TrackColumn::Transition => text_cell(
-            track
-                .transition
-                .as_deref()
-                .map_or_else(|| em_dash().to_owned(), str::to_uppercase),
-            width,
-            style.metrics.transition_text,
-            fonts::mono,
-            style.palette.muted,
-            Horizontal::Left,
-            style,
-        ),
-    }
-}
-
-fn text_cell(
-    value: String,
-    width: Length,
-    font: crate::skin::FontSkin,
-    family: fn(crate::skin::FontWeight) -> iced::Font,
-    color: Color,
-    horizontal: Horizontal,
-    style: &TrackListStyle,
-) -> Element<'static, UiEvent> {
-    container(
-        shaped_text(value)
-            .font(family(font.weight))
-            .size(font.size)
-            .color(color),
-    )
-    .padding([0.0, style.metrics.cell_padding_x])
-    .width(width)
-    .height(Length::Fill)
-    .align_x(horizontal)
-    .align_y(Vertical::Center)
-    .into()
-}
-
-/// The decks the row is loaded on, as their letters. A row on no deck shows
-/// nothing: the column marks assignment, it does not offer it.
-fn deck_cell(
-    track: &TrackListRowData,
-    width: Length,
-    style: &TrackListStyle,
-) -> Element<'static, UiEvent> {
-    let Some(marks) = track.deck.clone() else {
-        return container(Space::new())
-            .width(width)
-            .height(Length::Fill)
-            .into();
-    };
-    let chip = container(
-        shaped_text(marks)
-            .font(fonts::mono(style.metrics.deck_text.weight))
-            .size(style.metrics.deck_text.size)
-            .color(style.palette.bg_deep),
-    )
-    .width(Length::Fixed(style.metrics.deck_chip_width))
-    .height(Length::Fixed(style.metrics.deck_chip_height))
-    .align_x(Horizontal::Center)
-    .align_y(Vertical::Center)
-    .style({
-        let border = style.deck_chip_frame;
-        let background = Background::Color(style.palette.accent);
-        move |_| {
-            ContainerStyle::default()
-                .background(background)
-                .border(border)
-        }
-    });
-    container(chip)
-        .width(width)
-        .height(Length::Fill)
-        .align_x(Horizontal::Center)
-        .align_y(Vertical::Center)
-        .into()
-}
-
-fn bpm_cell(
-    value: Option<&str>,
-    width: Length,
-    style: &TrackListStyle,
-) -> Element<'static, UiEvent> {
-    let badge = container(
-        shaped_text(optional_or_dash(value))
-            .font(fonts::mono(style.metrics.bpm_text.weight))
-            .size(style.metrics.bpm_text.size)
-            .color(style.palette.text),
-    )
-    .padding([0.0, style.metrics.bpm_badge_padding_x])
-    .height(Length::Fixed(style.metrics.bpm_badge_height))
-    .align_y(Vertical::Center)
-    .style({
-        let border = style.bpm_badge_frame;
-        let background = style.bpm_badge_background;
-        move |_| {
-            ContainerStyle::default()
-                .background(Background::Color(background))
-                .border(border)
-        }
-    });
-    container(badge)
-        .padding([0.0, style.metrics.cell_padding_x])
-        .width(width)
-        .height(Length::Fill)
-        .align_y(Vertical::Center)
-        .into()
-}
-
-fn energy_cell(
-    value: Option<u8>,
-    width: Length,
-    style: &TrackListStyle,
-) -> Element<'static, UiEvent> {
-    let value = value.map(|value| value.min(100));
-    let ratio = value.map_or(0.0, |value| f32::from(value) / 100.0);
-    let filled = style.metrics.energy_bar_width * ratio;
-    let empty = style.metrics.energy_bar_width - filled;
-    let accent = style.palette.accent;
-    let fill = container(Space::new())
-        .width(Length::Fixed(filled))
-        .height(Length::Fixed(style.metrics.energy_bar_height))
-        .style(move |_| ContainerStyle::default().background(Background::Color(accent)));
-    let remainder = container(Space::new())
-        .width(Length::Fixed(empty))
-        .height(Length::Fixed(style.metrics.energy_bar_height))
-        .style({
-            let background = style.energy_bar_background;
-            move |_| ContainerStyle::default().background(Background::Color(background))
-        });
-    let bar = row![fill, remainder]
-        .width(Length::Fixed(style.metrics.energy_bar_width))
-        .height(Length::Fixed(style.metrics.energy_bar_height));
-    let label = value.map_or_else(|| em_dash().to_owned(), |value| value.to_string());
-    container(
-        row![
-            bar,
-            shaped_text(label)
-                .font(fonts::mono(style.metrics.energy_text.weight))
-                .size(style.metrics.energy_text.size)
-                .color(style.palette.accent),
-        ]
-        .spacing(style.metrics.energy_bar_gap)
-        .align_y(Alignment::Center),
-    )
-    .padding([0.0, style.metrics.cell_padding_x])
-    .width(width)
-    .height(Length::Fill)
-    .align_y(Vertical::Center)
-    .into()
-}
-
-struct ColumnDivider {
-    color: Color,
-    drag: HorizontalPixelDrag,
-    divider_width: f32,
-}
-
-impl canvas::Program<UiEvent> for ColumnDivider {
-    type State = HorizontalPixelDragState;
-
-    fn draw(
-        &self,
-        _state: &HorizontalPixelDragState,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let x = (bounds.width - self.divider_width) / 2.0;
-        frame.fill_rectangle(
-            Point::new(x, 0.0),
-            Size::new(self.divider_width, bounds.height),
-            self.color,
-        );
-        vec![frame.into_geometry()]
-    }
-
-    delegate::delegate! {
-        to self.drag {
-            fn update(
-                &self,
-                state: &mut HorizontalPixelDragState,
-                event: &Event,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Option<Action<UiEvent>>;
-            fn mouse_interaction(
-                &self,
-                state: &HorizontalPixelDragState,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> mouse::Interaction;
-        }
-    }
-}
-
-fn cell_with_divider(
-    cell: Element<'static, UiEvent>,
-    width: Length,
-    style: &TrackListStyle,
-) -> Element<'static, UiEvent> {
-    let color = style.divider_color;
-    let line = container(Space::new())
-        .width(Length::Fixed(style.metrics.divider_width))
-        .height(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(color)));
-    let inset = ((style.metrics.divider_hit_width - style.metrics.divider_width) / 2.0).max(0.0);
-    let divider = container(line)
-        .padding([0.0, inset])
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Horizontal::Right);
-    Stack::with_children([cell, divider.into()])
-        .width(width)
-        .height(Length::Fill)
-        .into()
-}
-
-fn footer(count: usize, style: &TrackListStyle) -> Element<'static, UiEvent> {
-    let left = format!("{count} {}", style.metrics.labels.footer_tracks);
-    let font = style.metrics.footer_text;
-    let content = row![
-        shaped_text(left)
-            .font(fonts::mono(font.weight))
-            .size(font.size)
-            .color(style.palette.muted),
-        Space::new().width(Length::Fill),
-    ]
-    .align_y(Alignment::Center);
-    let background = style.palette.bg_footer;
-    container(content)
-        .padding([0.0, style.metrics.footer_padding_x])
-        .width(Length::Fill)
-        .height(Length::Fixed(style.metrics.footer_height))
-        .align_y(Vertical::Center)
-        .style(move |_| ContainerStyle::default().background(Background::Color(background)))
-        .into()
 }
 
 fn column_visible(reads: &dyn Reads, state: Option<(&str, &str)>, column: TrackColumn) -> bool {
@@ -700,7 +93,7 @@ fn column_visible(reads: &dyn Reads, state: Option<(&str, &str)>, column: TrackC
     !matches!(reads.get(&endpoint), Some(ReadValue::Bool(false)))
 }
 
-fn column_layouts(
+pub(crate) fn column_layouts(
     columns: &[TrackColumn],
     reads: &dyn Reads,
     state: Option<(&str, &str)>,
@@ -756,11 +149,11 @@ fn effective_column_width(
     width.max(minimum)
 }
 
-fn minimum_table_width(columns: &[ColumnLayout]) -> f32 {
+pub(crate) fn minimum_table_width(columns: &[ColumnLayout]) -> f32 {
     columns.iter().map(|column| column.width).sum()
 }
 
-fn column_label(column: TrackColumn, metrics: &TrackListSkin) -> &str {
+pub(crate) fn column_label(column: TrackColumn, metrics: &TrackListSkin) -> &str {
     let labels = &metrics.labels;
     match column {
         TrackColumn::Index => &labels.index,
@@ -783,38 +176,191 @@ fn column_length(column: ColumnLayout, flexible_title: bool) -> Length {
     }
 }
 
-fn value_or_dash(value: &str) -> String {
-    if value.is_empty() {
-        em_dash().to_owned()
-    } else {
-        value.to_owned()
+pub(crate) fn track_list_overflows(columns: &[ColumnLayout], available_width: f32) -> bool {
+    minimum_table_width(columns) > available_width
+}
+
+pub(crate) fn track_list_content_width(columns: &[ColumnLayout], available_width: f32) -> f32 {
+    minimum_table_width(columns).max(available_width)
+}
+
+pub(crate) fn track_list_content_height(row_count: usize, skin: &Skin) -> f32 {
+    let rows = row_count.to_f32().unwrap_or(f32::MAX);
+    let gaps = row_count.saturating_sub(1).to_f32().unwrap_or(f32::MAX);
+    skin.track_list
+        .row_height
+        .mul_add(rows, skin.track_list.grid_gap * gaps)
+}
+
+pub(crate) fn track_list_row_pitch(skin: &Skin) -> f32 {
+    skin.track_list.row_height + skin.track_list.grid_gap
+}
+
+pub(crate) fn track_list_body(bounds: Rect, skin: &Skin) -> Rect {
+    let gap = skin.track_list.grid_gap;
+    Rect {
+        h: (bounds.h - skin.track_list.header_height - skin.track_list.footer_height - gap * 2.0)
+            .max(0.0),
+        w: bounds.w,
+        x: bounds.x,
+        y: bounds.y + skin.track_list.header_height + gap,
     }
 }
 
-fn optional_or_dash(value: Option<&str>) -> String {
-    value.map_or_else(|| em_dash().to_owned(), value_or_dash)
+pub(crate) fn track_list_vertical_scrollbar_rect(
+    bounds: Rect,
+    columns: &[ColumnLayout],
+    row_count: usize,
+    horizontal_offset: f32,
+    skin: &Skin,
+) -> Option<Rect> {
+    let body = track_list_body(bounds, skin);
+    (track_list_content_height(row_count, skin) > body.h).then_some(())?;
+    let rail = Rect {
+        h: body.h,
+        w: skin.track_list.scrollbar_width,
+        x: bounds.x - horizontal_offset + track_list_content_width(columns, bounds.w)
+            - skin.track_list.scrollbar_margin
+            - skin.track_list.scrollbar_width,
+        y: body.y,
+    };
+    intersect(rail, body)
 }
 
-fn track_button_style(
-    style: &TrackListStyle,
-    selected: bool,
-) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle + 'static {
-    let palette = style.palette;
-    let border = style.row_frame;
-    move |_theme, status| {
-        let background = match status {
-            ButtonStatus::Pressed => palette.accent_soft,
-            _ if selected => palette.bg_select,
-            ButtonStatus::Hovered => palette.bg_panel_2,
-            ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_inset,
+pub(crate) fn track_list_row_rect(
+    bounds: Rect,
+    columns: &[ColumnLayout],
+    index: usize,
+    horizontal_offset: f32,
+    vertical_offset: f32,
+    skin: &Skin,
+) -> Rect {
+    let body = track_list_body(bounds, skin);
+    let y = index.to_f32().map_or(f32::MAX, |index| {
+        index.mul_add(track_list_row_pitch(skin), body.y) - vertical_offset
+    });
+    Rect {
+        h: skin.track_list.row_height,
+        w: track_list_content_width(columns, bounds.w),
+        x: bounds.x - horizontal_offset,
+        y,
+    }
+}
+
+pub(crate) fn track_list_visible_row_rect(
+    bounds: Rect,
+    columns: &[ColumnLayout],
+    row_count: usize,
+    index: usize,
+    horizontal_offset: f32,
+    vertical_offset: f32,
+    skin: &Skin,
+) -> Option<Rect> {
+    let row = track_list_row_rect(
+        bounds,
+        columns,
+        index,
+        horizontal_offset,
+        vertical_offset,
+        skin,
+    );
+    let mut visible = intersect(row, track_list_body(bounds, skin))?;
+    if let Some(scrollbar) =
+        track_list_vertical_scrollbar_rect(bounds, columns, row_count, horizontal_offset, skin)
+    {
+        visible.w = (scrollbar.x - visible.x).max(0.0);
+    }
+    (visible.w > 0.0).then_some(visible)
+}
+
+pub(crate) fn track_list_row_at(
+    point: Option<Pt>,
+    bounds: Rect,
+    columns: &[ColumnLayout],
+    row_count: usize,
+    horizontal_offset: f32,
+    vertical_offset: f32,
+    skin: &Skin,
+) -> Option<usize> {
+    let point = point?;
+    let body = track_list_body(bounds, skin);
+    let pitch = track_list_row_pitch(skin);
+    if !body.contains(point) || pitch <= 0.0 {
+        return None;
+    }
+    let y = point.y - body.y + vertical_offset;
+    let index = (y / pitch).floor().to_usize()?;
+    if index >= row_count {
+        return None;
+    }
+    let row = track_list_visible_row_rect(
+        bounds,
+        columns,
+        row_count,
+        index,
+        horizontal_offset,
+        vertical_offset,
+        skin,
+    )?;
+    row.contains(point).then_some(index)
+}
+
+fn intersect(left: Rect, right: Rect) -> Option<Rect> {
+    let x = left.x.max(right.x);
+    let y = left.y.max(right.y);
+    let right_edge = (left.x + left.w).min(right.x + right.w);
+    let bottom = (left.y + left.h).min(right.y + right.h);
+    (right_edge > x && bottom > y).then_some(Rect {
+        h: bottom - y,
+        w: right_edge - x,
+        x,
+        y,
+    })
+}
+
+pub(crate) fn track_list_dividers(
+    bounds: Rect,
+    columns: &[ColumnLayout],
+    horizontal_offset: f32,
+    skin: &Skin,
+) -> Vec<ColumnDividerLayout> {
+    let overflowing = track_list_overflows(columns, bounds.w);
+    let flexible_title = !overflowing;
+    let extra = (bounds.w - minimum_table_width(columns)).max(0.0);
+    let mut edge = bounds.x - horizontal_offset;
+    let mut dividers = Vec::new();
+    for (index, column) in columns.iter().copied().enumerate() {
+        let width = match column_length(column, flexible_title) {
+            Length::Fill => column.width + extra,
+            Length::Fixed(width) => width,
+            Length::FillPortion(_) | Length::Shrink => column.width,
         };
-        ButtonStyle {
-            background: Some(Background::Color(background)),
-            text_color: palette.text,
-            border,
-            ..ButtonStyle::default()
+        edge += width;
+        if !column_resizable(columns, index) {
+            continue;
         }
+        dividers.push(ColumnDividerLayout {
+            column: column.column,
+            hit: Rect {
+                h: skin.track_list.header_height,
+                w: skin.track_list.divider_hit_width,
+                x: edge - skin.track_list.divider_hit_width / 2.0,
+                y: bounds.y,
+            },
+            paint: Rect {
+                h: skin.track_list.header_height,
+                w: skin.track_list.divider_width,
+                x: edge - skin.track_list.divider_width / 2.0,
+                y: bounds.y,
+            },
+            value: column.width,
+        });
     }
+    dividers
+}
+
+pub(crate) fn track_list_visible_divider_hit(bounds: Rect, hit: Rect) -> Option<Rect> {
+    intersect(hit, bounds)
 }
 
 #[cfg(test)]
@@ -879,6 +425,201 @@ mod tests {
         assert_eq!(
             minimum_table_width(&columns),
             skin.track_list.title_min_width + 240.0
+        );
+    }
+
+    #[kithara::test]
+    fn divider_hit_rect_is_wider_than_the_centered_paint_rect() {
+        let skin = crate::builtin::skin();
+        let columns = column_layouts(
+            &[TrackColumn::Index, TrackColumn::Title, TrackColumn::Artist],
+            &ColumnReads(None),
+            None,
+            skin,
+        );
+        let divider = track_list_dividers(
+            Rect {
+                h: 160.0,
+                w: 800.0,
+                x: 0.0,
+                y: 0.0,
+            },
+            &columns,
+            0.0,
+            skin,
+        )[0];
+
+        assert_eq!(divider.hit.w, skin.track_list.divider_hit_width);
+        assert_eq!(divider.paint.w, skin.track_list.divider_width);
+        assert_eq!(divider.hit.w, 7.0);
+        assert_eq!(divider.paint.w, 1.0);
+        assert!(divider.hit.w > divider.paint.w);
+        assert_eq!(
+            divider.hit.x + divider.hit.w / 2.0,
+            divider.paint.x + divider.paint.w / 2.0
+        );
+    }
+
+    #[kithara::test]
+    fn overflow_changes_at_the_exact_minimum_width_boundary() {
+        let skin = crate::builtin::skin();
+        let columns = column_layouts(
+            &[TrackColumn::Index, TrackColumn::Title, TrackColumn::Artist],
+            &ColumnReads(None),
+            None,
+            skin,
+        );
+        let minimum = minimum_table_width(&columns);
+
+        assert!(track_list_overflows(&columns, minimum - 1.0));
+        assert!(!track_list_overflows(&columns, minimum));
+        assert!(!track_list_overflows(&columns, minimum + 1.0));
+    }
+
+    #[kithara::test]
+    fn row_geometry_keeps_grid_gaps_outside_row_hits() {
+        let skin = crate::builtin::skin();
+        let columns = column_layouts(&[TrackColumn::Title], &ColumnReads(None), None, skin);
+        let bounds = Rect {
+            h: 160.0,
+            w: 400.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let first = track_list_row_rect(bounds, &columns, 0, 0.0, 0.0, skin);
+        let second = track_list_row_rect(bounds, &columns, 1, 0.0, 0.0, skin);
+
+        assert_eq!(second.y - first.y, track_list_row_pitch(skin));
+        assert_eq!(second.y - (first.y + first.h), skin.track_list.grid_gap);
+    }
+
+    #[kithara::test]
+    fn visible_row_hits_are_clipped_to_the_body() {
+        let skin = crate::builtin::skin();
+        let columns = column_layouts(&[TrackColumn::Title], &ColumnReads(None), None, skin);
+        let bounds = Rect {
+            h: 160.0,
+            w: 400.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let clipped = track_list_visible_row_rect(
+            bounds,
+            &columns,
+            3,
+            0,
+            0.0,
+            skin.track_list.row_height / 2.0,
+            skin,
+        )
+        .unwrap_or_else(|| panic!("the partially visible first row must retain a hit rect"));
+
+        assert_eq!(clipped.y, track_list_body(bounds, skin).y);
+        assert_eq!(clipped.h, skin.track_list.row_height / 2.0);
+    }
+
+    #[kithara::test]
+    fn divider_hit_bands_are_clipped_at_both_viewport_edges() {
+        let bounds = Rect {
+            h: 100.0,
+            w: 100.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let hit = |x, w| Rect {
+            h: 22.0,
+            w,
+            x,
+            y: 0.0,
+        };
+
+        assert_eq!(track_list_visible_divider_hit(bounds, hit(-8.0, 4.0)), None);
+        assert_eq!(
+            track_list_visible_divider_hit(bounds, hit(-2.0, 7.0)),
+            Some(hit(0.0, 5.0))
+        );
+        assert_eq!(
+            track_list_visible_divider_hit(bounds, hit(98.0, 7.0)),
+            Some(hit(98.0, 2.0))
+        );
+        assert_eq!(
+            track_list_visible_divider_hit(bounds, hit(101.0, 7.0)),
+            None
+        );
+    }
+
+    #[kithara::test]
+    fn row_hits_yield_to_the_visible_scrollbar_lane_at_each_horizontal_edge() {
+        let skin = crate::builtin::skin();
+        let columns = column_layouts(
+            &[
+                TrackColumn::Title,
+                TrackColumn::Artist,
+                TrackColumn::Transition,
+            ],
+            &ColumnReads(None),
+            None,
+            skin,
+        );
+        let bounds = Rect {
+            h: 160.0,
+            w: 400.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let row_count = 10;
+        let maximum = minimum_table_width(&columns) - bounds.w;
+        let row = |offset| {
+            track_list_visible_row_rect(bounds, &columns, row_count, 0, offset, 0.0, skin)
+                .unwrap_or_else(|| panic!("the first row must be visible"))
+        };
+
+        assert_eq!(
+            track_list_vertical_scrollbar_rect(bounds, &columns, row_count, 0.0, skin),
+            None
+        );
+        assert_eq!(row(0.0).w, bounds.w);
+
+        let partial = maximum - skin.track_list.scrollbar_margin;
+        let partial_scrollbar =
+            track_list_vertical_scrollbar_rect(bounds, &columns, row_count, partial, skin)
+                .unwrap_or_else(|| {
+                    panic!("the rail must enter the viewport before maximum scroll")
+                });
+        assert_eq!(row(partial).x + row(partial).w, partial_scrollbar.x);
+
+        let scrollbar =
+            track_list_vertical_scrollbar_rect(bounds, &columns, row_count, maximum, skin)
+                .unwrap_or_else(|| panic!("the rail must be visible at maximum horizontal scroll"));
+        let visible = row(maximum);
+        assert_eq!(visible.x + visible.w, scrollbar.x);
+        let y = visible.y + visible.h / 2.0;
+        assert_eq!(
+            track_list_row_at(
+                Some(Pt {
+                    x: scrollbar.x - 0.5,
+                    y,
+                }),
+                bounds,
+                &columns,
+                row_count,
+                maximum,
+                0.0,
+                skin,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            track_list_row_at(
+                Some(Pt { x: scrollbar.x, y }),
+                bounds,
+                &columns,
+                row_count,
+                maximum,
+                0.0,
+                skin,
+            ),
+            None
         );
     }
 }

@@ -241,6 +241,10 @@ impl MockReads {
         self.active_tab = tab;
     }
 
+    pub(crate) const fn select_module(&mut self, module: ModuleDemo) {
+        self.active_module = module;
+    }
+
     fn select_tree_row(&mut self, index: usize) {
         let Some(base_index) = self.tree_visible_indices.get(index).copied() else {
             return;

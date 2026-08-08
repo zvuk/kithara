@@ -85,6 +85,9 @@ routine work:
   `docs/skills/quality-assessment/SKILL.md`; do not rediscover these routes.
 - Platform entrypoints are `just platform apple ...`,
   `just platform android ...`, and `just platform wasm ...`.
+- Both UI hosts drawing the same pages, compared against a per-page budget:
+  `just test ui`. The same pages through a real window, which is the only
+  capture that needs a display: `just test ui-window`.
 - Direct cached xtask access is exceptional and uses
   `just tooling xtask <subcommand>`. Agent hooks use the hidden
   `just _agent-hook` transport configured in adapter JSON.

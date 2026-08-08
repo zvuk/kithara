@@ -16,3 +16,7 @@ compiler producing a normalized UI tree for renderers.
   `CompiledUi`. The optional `render` feature converts the skin to iced-facing colors and adds
   shared fonts, icons, events, and read-model contracts. Built-in presets and the complete
   default skin live in `assets/`.
+- `render::document` is the toolkit-neutral document fold. The iced render tree implements it for
+  the existing app, while the optional `masonry-host` feature mounts the same compiled document and
+  neutral solver into retained Masonry widgets with a public custom-content seam, typed actions,
+  portable pointer capture, and native popover/window layers.

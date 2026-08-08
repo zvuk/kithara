@@ -62,12 +62,8 @@ pub struct TickSkin {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct LayoutSkin {
-    pub fill_weight_min: f32,
-    pub fill_weight_scale: f32,
     pub grid_gap: f32,
     pub grid_pad: f32,
-    pub size_gap: f32,
-    pub size_pad: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

@@ -3,6 +3,8 @@ mod deck;
 mod frontend;
 mod message;
 mod mix;
+#[cfg(feature = "masonry")]
+pub(crate) mod retained;
 mod studio_reads;
 mod studio_ui;
 mod subscription;
@@ -10,4 +12,4 @@ mod theme;
 mod update;
 mod view;
 
-pub use frontend::{FrontendError, GuiFrontend};
+pub use frontend::{FrontendError, GuiFrontend, Host};

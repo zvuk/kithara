@@ -1,8 +1,15 @@
+mod capture;
+mod compare;
+#[cfg(feature = "masonry-host")]
+mod host;
+#[cfg(feature = "masonry-host")]
+mod masonry_shots;
 mod mock;
 mod mock_data;
 mod mock_mixer;
 mod mock_stress;
 mod mock_transport;
+mod offscreen;
 mod sections;
 
 use iced::{Element, Size, Subscription, Task, Theme, time as iced_time, window, window::Settings};
@@ -15,6 +22,7 @@ use kithara_ui::{
 };
 
 use self::{
+    capture::{Capture, Shot},
     mock::MockReads,
     sections::{ModuleDemo, Tab},
 };
@@ -335,6 +343,12 @@ enum Message {
     Close(window::Id),
     Tick,
     Ui(UiEvent),
+    /// Move to the next page to photograph, or finish and exit.
+    CaptureNext,
+    /// The page is on screen; ask the window for its pixels.
+    CaptureShoot(Shot),
+    /// Write one page to disk.
+    CaptureSave(Shot, window::Screenshot),
 }
 
 struct Gallery {
@@ -343,9 +357,34 @@ struct Gallery {
     reads: MockReads,
     layouts: [CompiledUi; Tab::ALL.len()],
     module_layouts: [CompiledUi; ModuleDemo::ALL.len()],
+    capture: Option<Capture>,
 }
 
 impl Gallery {
+    /// The gallery with no window of iced's: the offscreen capture rasterises
+    /// the same documents itself, and never opens one.
+    fn mounted() -> Self {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+        Self {
+            layouts: Tab::ALL.map(|tab| compiled(tab.entry(), &resolver, &endpoints)),
+            module_layouts: ModuleDemo::ALL
+                .map(|module| compiled(module.entry(), &resolver, &endpoints)),
+            window_id: window::Id::unique(),
+            skin: builtin::skin(),
+            reads: MockReads::default(),
+            capture: None,
+        }
+    }
+
+    /// Turns to the page a shot names.
+    fn select(&mut self, shot: Shot) {
+        self.reads.select_tab(shot.tab);
+        if let Some(module) = shot.module {
+            self.reads.select_module(module);
+        }
+    }
+
     fn new() -> (Self, Task<Message>) {
         let resolver = resolver();
         let endpoints = mock::registry();
@@ -387,6 +426,12 @@ impl Gallery {
             ..Settings::default()
         };
         let (window_id, open) = window::open(settings);
+        let capture = Capture::requested();
+        let start = if capture.is_some() {
+            Task::done(Message::CaptureNext)
+        } else {
+            Task::none()
+        };
         (
             Self {
                 layouts,
@@ -394,8 +439,9 @@ impl Gallery {
                 window_id,
                 skin: builtin::skin(),
                 reads: MockReads::default(),
+                capture,
             },
-            open.discard(),
+            open.discard().chain(start),
         )
     }
 
@@ -410,9 +456,47 @@ impl Gallery {
     fn select_tab(&mut self, tab: Tab) {
         self.reads.select_tab(tab);
     }
+
+    /// Selects the next page and lets one frame render before the shot.
+    fn capture_next(&mut self) -> Task<Message> {
+        let Some(capture) = self.capture.as_mut() else {
+            return Task::none();
+        };
+        let Some(shot) = capture.next() else {
+            capture.report();
+            return iced::exit();
+        };
+        self.select(shot);
+        Task::done(Message::CaptureShoot(shot))
+    }
+
+    fn capture_save(&mut self, shot: Shot, image: &window::Screenshot) -> Task<Message> {
+        let Some(capture) = self.capture.as_mut() else {
+            return Task::none();
+        };
+        match capture.save(shot, image) {
+            Ok(path) => println!("captured {} ({} left)", path.display(), capture.remaining()),
+            Err(error) => eprintln!("capture failed: {error}"),
+        }
+        Task::done(Message::CaptureNext)
+    }
 }
 
 fn main() -> iced::Result {
+    match compare::run() {
+        compare::Verdict::Passed => return Ok(()),
+        // A gate says so with its exit code; iced's error type has no shape for
+        // "the two hosts disagree", and inventing one would say less.
+        compare::Verdict::Failed => std::process::exit(1),
+        compare::Verdict::NotAsked => {}
+    }
+    if offscreen::run() {
+        return Ok(());
+    }
+    #[cfg(feature = "masonry-host")]
+    if masonry_shots::run() || host::run() {
+        return Ok(());
+    }
     let daemon = iced::daemon(Gallery::new, update, view)
         .title(|_state: &Gallery, _window| "Kithara UI Gallery".to_owned())
         .theme(|state: &Gallery, _window| theme(state.skin))
@@ -456,6 +540,11 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             _ => Task::none(),
         },
         Message::Ui(_) => Task::none(),
+        Message::CaptureNext => state.capture_next(),
+        Message::CaptureShoot(shot) => {
+            window::screenshot(state.window_id).map(move |image| Message::CaptureSave(shot, image))
+        }
+        Message::CaptureSave(shot, image) => state.capture_save(shot, &image),
     }
 }
 
@@ -481,6 +570,27 @@ fn subscription(state: &Gallery) -> Subscription<Message> {
     }
 }
 
+/// The window every capture is taken at, so the three sets line up without
+/// anyone stating the geometry twice.
+fn window_size() -> Size {
+    Size::new(Consts::WIDTH, Consts::HEIGHT)
+}
+
+fn compiled(
+    entry: &str,
+    resolver: &MemResolver,
+    endpoints: &dyn kithara_ui::registry::EndpointRegistry,
+) -> CompiledUi {
+    compile(
+        entry,
+        resolver,
+        endpoints,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_or_else(|error| panic!("embedded gallery document {entry} must compile: {error}"))
+}
+
 fn resolver() -> MemResolver {
     let mut resolver = builtin::resolver();
     for (path, text) in ASSETS {
@@ -494,12 +604,12 @@ fn theme(skin: &Skin) -> Theme {
     Theme::custom(
         "Kithara".to_owned(),
         iced::theme::Palette {
-            background: palette.bg,
-            text: palette.text,
-            primary: palette.accent,
-            success: palette.success,
-            danger: palette.danger,
-            warning: palette.warning,
+            background: palette.bg.into(),
+            text: palette.text.into(),
+            primary: palette.accent.into(),
+            success: palette.success.into(),
+            danger: palette.danger.into(),
+            warning: palette.warning.into(),
         },
     )
 }
@@ -510,7 +620,7 @@ mod tests {
     use kithara_ui::{
         compile::CompiledNode,
         expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
-        module::ChromeStyle,
+        module::{ButtonStyle, ChromeStyle, IconName, WaveStyle},
         render::{ControlAction, Reads},
     };
 
@@ -579,6 +689,305 @@ mod tests {
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| panic!("{} must compile: {error}", tab.entry()));
+        }
+    }
+
+    #[kithara::test]
+    fn the_hosted_meters_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Atoms,
+            "meters",
+            |path| path.contains("/meters/"),
+            &[
+                ("atoms/meters/stereo", "stereo-meter"),
+                ("atoms/meters/vertical-120", "vertical-vu"),
+                ("atoms/meters/vertical-64", "vertical-vu"),
+            ],
+        );
+    }
+
+    #[kithara::test]
+    fn the_hosted_knobs_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Atoms,
+            "knobs",
+            |path| path.contains("/knobs/"),
+            &[
+                ("atoms/knobs/size-26", "knob"),
+                ("atoms/knobs/size-28", "knob"),
+                ("atoms/knobs/size-34", "knob"),
+                ("atoms/knobs/size-38", "knob"),
+            ],
+        );
+    }
+
+    #[kithara::test]
+    fn the_hosted_toggles_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Atoms,
+            "toggles",
+            |path| path.contains("/toggles/"),
+            &[
+                ("atoms/toggles/checkbox-off", "activation"),
+                ("atoms/toggles/checkbox-on", "activation"),
+                ("atoms/toggles/toggle-off", "activation"),
+                ("atoms/toggles/toggle-on", "activation"),
+            ],
+        );
+    }
+
+    #[kithara::test]
+    fn the_hosted_chips_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Atoms,
+            "chips",
+            |path| path.contains("/chips/"),
+            &[
+                ("atoms/chips/active", "activation"),
+                ("atoms/chips/inactive", "activation"),
+            ],
+        );
+    }
+
+    #[kithara::test]
+    fn the_hosted_buttons_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Buttons,
+            "buttons",
+            |path| path.starts_with("buttons/"),
+            &[
+                ("buttons/cue", "activation"),
+                ("buttons/default", "activation"),
+                ("buttons/micro", "activation"),
+                ("buttons/play", "activation"),
+                ("buttons/primary", "activation"),
+                ("buttons/sync", "activation"),
+            ],
+        );
+    }
+
+    #[kithara::test]
+    fn the_hosted_faders_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Faders,
+            "faders",
+            |path| path.starts_with("faders/"),
+            &[
+                ("faders/default", "fader"),
+                ("faders/vertical", "vertical-vu"),
+                ("faders/volume", "fader"),
+            ],
+        );
+    }
+
+    #[kithara::test]
+    fn the_hosted_tree_keeps_its_exact_descriptor_inventory() {
+        assert_hosted_page_claims(
+            Tab::Tree,
+            "tree",
+            |path| path.starts_with("tree/"),
+            &[
+                ("tree/browser", "scroll"),
+                ("tree/browser/search", "text-input"),
+            ],
+        );
+    }
+
+    #[kithara::test]
+    fn the_hosted_library_keeps_its_exact_descriptor_inventory() {
+        assert_hosted_page_claims(
+            Tab::Library2,
+            "library",
+            |path| path.starts_with("library2/"),
+            &[
+                ("library2/browser", "scroll"),
+                ("library2/browser/search", "text-input"),
+                ("library2/context", "picker"),
+                ("library2/table", "track-list"),
+            ],
+        );
+    }
+
+    #[kithara::test]
+    fn the_hosted_track_list_keeps_its_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Tracklist,
+            "track-list",
+            |path| path.starts_with("tracklist/"),
+            &[
+                ("tracklist/column-artist", "activation"),
+                ("tracklist/column-bpm", "activation"),
+                ("tracklist/column-deck", "activation"),
+                ("tracklist/column-energy", "activation"),
+                ("tracklist/column-index", "activation"),
+                ("tracklist/column-key", "activation"),
+                ("tracklist/column-preset", "segmented"),
+                ("tracklist/column-time", "activation"),
+                ("tracklist/column-title", "activation"),
+                ("tracklist/column-transition", "activation"),
+                ("tracklist/reset-columns", "activation"),
+                ("tracklist/table", "track-list"),
+            ],
+        );
+    }
+
+    #[kithara::test]
+    fn the_hosted_module_tabs_keep_their_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Modules,
+            "module tabs",
+            |path| path.starts_with("modules-tabs/"),
+            &[
+                ("modules-tabs/deck", "activation"),
+                ("modules-tabs/deck-micro", "activation"),
+                ("modules-tabs/global-bar", "activation"),
+                ("modules-tabs/layout", "activation"),
+                ("modules-tabs/telemetry", "activation"),
+            ],
+        );
+    }
+
+    #[kithara::test]
+    fn the_hosted_nav_keeps_its_descriptor_backed_controls() {
+        assert_hosted_page_claims(
+            Tab::Atoms,
+            "nav",
+            |path| path.starts_with("gallery/"),
+            &[
+                ("gallery/atoms/item", "activation"),
+                ("gallery/buttons/item", "activation"),
+                ("gallery/cells/item", "activation"),
+                ("gallery/chrome/item", "activation"),
+                ("gallery/faders/item", "activation"),
+                ("gallery/library2/item", "activation"),
+                ("gallery/menu/item", "activation"),
+                ("gallery/micro/item", "activation"),
+                ("gallery/mixer/item", "activation"),
+                ("gallery/modules/item", "activation"),
+                ("gallery/sizes/item", "activation"),
+                ("gallery/stress/item", "activation"),
+                ("gallery/titlebars/item", "activation"),
+                ("gallery/tokens/item", "activation"),
+                ("gallery/tracklist/item", "activation"),
+                ("gallery/tree/item", "activation"),
+                ("gallery/typography/item", "activation"),
+                ("gallery/vis/item", "activation"),
+            ],
+        );
+    }
+
+    fn engine_descriptor_kinds(spec: &ControlSpec) -> &'static [&'static str] {
+        match spec {
+            ControlSpec::Button {
+                icon: Some(IconName::PlayReverse),
+                style,
+                ..
+            } if *style != ButtonStyle::MicroPrimary => &[],
+            ControlSpec::NavItem {
+                icon: IconName::PlayReverse,
+                ..
+            } => &[],
+            ControlSpec::Button { .. }
+            | ControlSpec::NavItem { .. }
+            | ControlSpec::TabLarge { .. }
+            | ControlSpec::Toggle
+            | ControlSpec::Checkbox
+            | ControlSpec::Chip { .. } => &["activation"],
+            ControlSpec::ContextBar { .. } => &["picker"],
+            ControlSpec::Crossfader { .. } => &["crossfader"],
+            ControlSpec::Fader { .. } => &["fader"],
+            ControlSpec::Knob { .. } => &["knob"],
+            ControlSpec::Segmented { .. } => &["segmented"],
+            ControlSpec::TrackList { .. } => &["track-list"],
+            ControlSpec::VuStereo => &["stereo-meter"],
+            ControlSpec::VuVertical { .. } => &["vertical-vu"],
+            ControlSpec::Tree { .. } => &["scroll", "text-input"],
+            ControlSpec::Wave {
+                style: WaveStyle::Hero,
+                ..
+            } => &["hero-wave"],
+            ControlSpec::Wave { .. } => &["wave"],
+            _ => &[],
+        }
+    }
+
+    fn assert_hosted_page_claims(
+        tab: Tab,
+        page: &str,
+        belongs: impl Fn(&str) -> bool,
+        expected: &[(&str, &str)],
+    ) {
+        let ui = compile(
+            tab.entry(),
+            &resolver(),
+            &mock::registry(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("the {tab:?} tab must compile: {error}"));
+        let mut claims = Vec::new();
+        each_control(&ui, &mut |path, spec| {
+            if belongs(path) {
+                for kind in engine_descriptor_kinds(spec) {
+                    let path = if matches!(spec, ControlSpec::Tree { .. }) && *kind == "text-input"
+                    {
+                        format!("{path}/search")
+                    } else {
+                        path.to_owned()
+                    };
+                    claims.push((path, *kind));
+                }
+            }
+        });
+        claims.sort_unstable();
+        let mut expected = expected
+            .iter()
+            .map(|(path, kind)| ((*path).to_owned(), *kind))
+            .collect::<Vec<_>>();
+        expected.sort_unstable();
+        assert_eq!(
+            claims, expected,
+            "the hosted {page} page's engine claims changed; unported controls, passive controls, \
+             and containers are intentionally absent"
+        );
+    }
+
+    fn each_control(ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec)) {
+        fn walk(node: &ExpandedNode, ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec)) {
+            match node {
+                ExpandedNode::Row { children, .. }
+                | ExpandedNode::Column { children, .. }
+                | ExpandedNode::Slot { children, .. } => {
+                    for child in children {
+                        walk(child, ui, visit);
+                    }
+                }
+                ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+                    walk(child, ui, visit);
+                }
+                ExpandedNode::Popover {
+                    anchor, content, ..
+                } => {
+                    walk(anchor, ui, visit);
+                    walk(content, ui, visit);
+                }
+                ExpandedNode::Control { path, spec, .. } => {
+                    visit(ui.resolve(*path), spec);
+                }
+                _ => {}
+            }
+        }
+
+        let mut stack = vec![&ui.root];
+        while let Some(node) = stack.pop() {
+            match node {
+                CompiledNode::Split { children, .. } => {
+                    stack.extend(children.iter().map(|(_, child)| child));
+                }
+                CompiledNode::Optional { child, .. } => stack.push(child),
+                CompiledNode::Module { root, .. } => walk(root, ui, visit),
+                _ => {}
+            }
         }
     }
 
@@ -793,7 +1202,6 @@ mod tests {
                 spec: ControlSpec::TabLarge { .. },
                 ..
             } => paths.push(ui.resolve(*path).to_owned()),
-            ExpandedNode::Control { .. } => {}
             _ => {}
         }
     }
@@ -966,7 +1374,6 @@ mod tests {
                     },
                 ..
             } => queries.push(ui.resolve(*id)),
-            ExpandedNode::Control { .. } => {}
             _ => {}
         }
     }
@@ -983,7 +1390,7 @@ mod tests {
                 }
             }
             CompiledNode::Module { root, .. } => {
-                collect_expanded_context_scopes(root, ui, contexts)
+                collect_expanded_context_scopes(root, ui, contexts);
             }
             _ => {}
         }
@@ -1027,7 +1434,6 @@ mod tests {
                 ui.resolve(*write),
                 scope_items.len(),
             )),
-            ExpandedNode::Control { .. } => {}
             _ => {}
         }
     }

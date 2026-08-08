@@ -2,35 +2,36 @@ use iced::{
     Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::Vertical,
     widget::{
-        Canvas, Row, Space, Stack, button,
-        button::Style as ButtonStyle,
-        canvas::{self, Frame, Geometry, Path, Stroke},
+        Canvas, Row, Space, Stack,
+        canvas::{self, Frame, Geometry},
         column, container,
         container::Style as ContainerStyle,
-        mouse_area,
     },
 };
 
 use crate::{
     layout::FrameSides,
     module::ChromeStyle,
-    render::{Skin, UiEvent, fonts, shaped_text},
-    skin::FontWeight,
+    render::{
+        ChromeLeaf, IcedSkin, InputOwner, Skin, UiEvent, chrome_leaf, fonts, header_chevron,
+        shaped_text,
+    },
     widgets::Widget,
 };
 
 #[derive(bon::Builder)]
-pub(crate) struct ModuleChrome<'a, 'skin, Content, Message> {
-    skin: &'skin Skin,
+pub(crate) struct ModuleChrome<'a, Content> {
+    skin: &'a Skin,
     #[builder(default)]
     style: ChromeStyle,
     content: Content,
     #[builder(default)]
     frame: FrameSides,
     chip: Option<&'a str>,
-    drop: Option<DropZone<Message>>,
+    drop: Option<DropZone>,
     footer: Option<String>,
-    on_toggle: Option<Message>,
+    module: &'a str,
+    input_owner: InputOwner,
     title: Option<&'a str>,
     assign: Vec<&'a str>,
     #[builder(default)]
@@ -39,33 +40,27 @@ pub(crate) struct ModuleChrome<'a, 'skin, Content, Message> {
     corners: bool,
 }
 
-pub(crate) struct DropZone<Message> {
-    pub(crate) on_enter: Message,
-    pub(crate) on_exit: Message,
+#[derive(Clone, Copy)]
+pub(crate) struct DropZone {
     pub(crate) active: bool,
 }
 
-impl<Message> DropZone<Message> {
-    pub(crate) const fn new(on_enter: Message, on_exit: Message, active: bool) -> Self {
-        Self {
-            on_enter,
-            on_exit,
-            active,
-        }
+impl DropZone {
+    pub(crate) const fn new(active: bool) -> Self {
+        Self { active }
     }
 }
 
-impl<'a, Content, Message> ModuleChrome<'a, '_, Content, Message>
+impl<'a, Content> ModuleChrome<'a, Content>
 where
-    Content: Into<Element<'a, Message>>,
-    Message: Clone + 'a,
+    Content: Into<Element<'a, UiEvent>>,
 {
-    pub(crate) fn view(self) -> Element<'a, Message> {
+    pub(crate) fn view(self) -> Element<'a, UiEvent> {
         module_view(self)
     }
 }
 
-impl<'a, Content> Widget<'a> for ModuleChrome<'a, '_, Content, UiEvent>
+impl<'a, Content> Widget<'a> for ModuleChrome<'a, Content>
 where
     Content: Into<Element<'a, UiEvent>>,
 {
@@ -74,22 +69,19 @@ where
     }
 }
 
-fn module_view<'a, Content, Message>(
-    mut chrome: ModuleChrome<'a, '_, Content, Message>,
-) -> Element<'a, Message>
+fn module_view<'a, Content>(mut chrome: ModuleChrome<'a, Content>) -> Element<'a, UiEvent>
 where
-    Content: Into<Element<'a, Message>>,
-    Message: Clone + 'a,
+    Content: Into<Element<'a, UiEvent>>,
 {
     let drop = chrome.drop.take();
-    let accent = chrome.skin.palette.accent;
+    let accent = chrome.skin.palette.accent.into();
     let border_width = chrome.skin.chrome.frame.border_width;
     let shell = match chrome.style {
         ChromeStyle::Full => full(chrome),
         ChromeStyle::Frame => framed(
             chrome.content.into(),
             chrome.skin,
-            chrome.skin.palette.bg_panel,
+            chrome.skin.palette.bg_panel.into(),
             Length::Fill,
             chrome.frame,
             chrome.corners,
@@ -102,18 +94,15 @@ where
     }
 }
 
-/// Reports the pointer crossing the module and outlines it while a drag is
-/// over it. The area publishes without capturing, so the controls inside keep
-/// every event they would have had.
-fn drop_zone<'a, Message>(
-    content: Element<'a, Message>,
-    zone: DropZone<Message>,
+/// Outlines the module while the enclosing host observes pointer crossings.
+/// The host publishes without capturing, so controls inside keep every event
+/// they would have had.
+fn drop_zone<'a>(
+    content: Element<'a, UiEvent>,
+    zone: DropZone,
     accent: Color,
     border_width: f32,
-) -> Element<'a, Message>
-where
-    Message: Clone + 'a,
-{
+) -> Element<'a, UiEvent> {
     let active = zone.active;
     let outlined = container(content)
         .width(Length::Fill)
@@ -126,18 +115,12 @@ where
             };
             ContainerStyle::default().border(border)
         });
-    mouse_area(outlined)
-        .on_enter(zone.on_enter)
-        .on_exit(zone.on_exit)
-        .into()
+    outlined.into()
 }
 
-fn full<'a, Content, Message>(
-    chrome: ModuleChrome<'a, '_, Content, Message>,
-) -> Element<'a, Message>
+fn full<'a, Content>(chrome: ModuleChrome<'a, Content>) -> Element<'a, UiEvent>
 where
-    Content: Into<Element<'a, Message>>,
-    Message: Clone + 'a,
+    Content: Into<Element<'a, UiEvent>>,
 {
     let skin = chrome.skin;
     let metrics = skin.chrome;
@@ -145,9 +128,10 @@ where
         chrome.title,
         chrome.chip,
         chrome.assign,
-        chrome.on_toggle,
+        chrome.module,
         chrome.collapsed,
         skin,
+        chrome.input_owner,
     );
     if chrome.collapsed {
         return framed(
@@ -199,104 +183,57 @@ where
     )
 }
 
-fn header<'a, Message>(
+fn header<'a>(
     title: Option<&'a str>,
     chip: Option<&'a str>,
     assign: Vec<&'a str>,
-    on_toggle: Option<Message>,
+    module: &str,
     collapsed: bool,
-    skin: &Skin,
-) -> Element<'a, Message>
-where
-    Message: Clone + 'a,
-{
+    skin: &'a Skin,
+    input_owner: InputOwner,
+) -> Element<'a, UiEvent> {
     let metrics = skin.chrome;
     let mut children = Vec::with_capacity(5 + assign.len());
     if let Some(chip) = chip {
-        children.push(header_chip(chip, skin));
+        children.push(chrome_leaf(ChromeLeaf::Chip(chip), skin));
     }
     if let Some(title) = title {
-        let background = skin.color(metrics.title_background);
-        let text = skin.color(metrics.title_text);
-        let border = skin.border(metrics.title_frame);
-        children.push(
-            container(
-                shaped_text(title)
-                    .font(fonts::display(FontWeight::Medium))
-                    .size(metrics.title_text_size)
-                    .color(text),
-            )
-            .padding([0.0, metrics.chip_pad])
-            .height(Length::Fill)
-            .align_y(Vertical::Center)
-            .style(move |_| panel_frame_style(background, border))
-            .into(),
-        );
+        children.push(chrome_leaf(ChromeLeaf::Title(title), skin));
         children.push(vertical_line(skin));
     }
     children.push(Space::new().width(Length::Fill).into());
-    children.extend(assign.into_iter().map(|label| header_chip(label, skin)));
+    children.extend(
+        assign
+            .into_iter()
+            .map(|label| chrome_leaf(ChromeLeaf::Chip(label), skin)),
+    );
     let chevron_background = skin.color(metrics.header_background);
     let chevron_border = skin.border(metrics.chevron_frame);
     children.push(
-        container(
-            Canvas::new(Chevron {
-                collapsed,
-                color: skin.color(metrics.chevron_color),
-                line_color: skin.color(metrics.inner_line),
-                icon_size: metrics.chevron_icon_size,
-                stroke_width: metrics.chevron_stroke_width,
-                line_width: metrics.inner_line_width,
-            })
+        container(Space::new())
             .width(Length::Fixed(metrics.chevron_size))
-            .height(Length::Fill),
-        )
-        .width(Length::Fixed(metrics.chevron_size))
-        .height(Length::Fill)
-        .style(move |_| panel_frame_style(chevron_background, chevron_border))
-        .into(),
+            .height(Length::Fill)
+            .style(move |_| panel_frame_style(chevron_background, chevron_border))
+            .into(),
     );
     let content = Row::with_children(children)
         .align_y(Alignment::Center)
         .width(Length::Fill)
         .height(Length::Fill);
+    let content = Stack::with_children([
+        content.into(),
+        header_chevron(module, collapsed, skin, input_owner),
+    ])
+    .width(Length::Fill)
+    .height(Length::Fill);
 
     let background = skin.color(metrics.header_background);
-    let text = skin.color(metrics.title_text);
     let border = skin.border(metrics.header_frame);
-    button(content)
-        .padding(0.0)
+    container(content)
         .width(Length::Fill)
         .height(Length::Fixed(metrics.header_height))
-        .style(move |_theme, _status| ButtonStyle {
-            background: Some(Background::Color(background)),
-            text_color: text,
-            border,
-            ..ButtonStyle::default()
-        })
-        .on_press_maybe(on_toggle)
+        .style(move |_| panel_frame_style(background, border))
         .into()
-}
-
-fn header_chip<'a, Message>(label: &'a str, skin: &Skin) -> Element<'a, Message>
-where
-    Message: 'a,
-{
-    let metrics = skin.chrome;
-    let background = skin.color(metrics.chip_background);
-    let text = skin.color(metrics.chip_text);
-    let border = skin.border(metrics.chip_frame);
-    container(
-        shaped_text(label)
-            .font(fonts::MONO)
-            .size(metrics.chip_text_size)
-            .color(text),
-    )
-    .padding([0.0, metrics.chip_pad])
-    .height(Length::Fill)
-    .align_y(Vertical::Center)
-    .style(move |_| panel_frame_style(background, border))
-    .into()
 }
 
 fn framed<'a, Message>(
@@ -329,73 +266,12 @@ where
         .into()
 }
 
-fn horizontal_line<'a, Message>(skin: &Skin) -> Element<'a, Message>
-where
-    Message: 'a,
-{
-    let color = skin.color(skin.chrome.inner_line);
-    container(Space::new())
-        .width(Length::Fill)
-        .height(Length::Fixed(skin.chrome.inner_line_width))
-        .style(move |_| panel_style(color))
-        .into()
+fn horizontal_line(skin: &Skin) -> Element<'_, UiEvent> {
+    chrome_leaf(ChromeLeaf::HorizontalLine, skin)
 }
 
-fn vertical_line<'a, Message>(skin: &Skin) -> Element<'a, Message>
-where
-    Message: 'a,
-{
-    let color = skin.color(skin.chrome.inner_line);
-    container(Space::new())
-        .width(Length::Fixed(skin.chrome.inner_line_width))
-        .height(Length::Fill)
-        .style(move |_| panel_style(color))
-        .into()
-}
-
-struct Chevron {
-    color: Color,
-    line_color: Color,
-    collapsed: bool,
-    icon_size: f32,
-    line_width: f32,
-    stroke_width: f32,
-}
-
-impl<Message> canvas::Program<Message> for Chevron {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &(),
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: iced::mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(
-            Point::ORIGIN,
-            Size::new(self.line_width, bounds.height),
-            self.line_color,
-        );
-        let center = Point::new(bounds.width / 2.0, bounds.height / 2.0);
-        let half = self.icon_size / 2.0;
-        let rise = self.icon_size / 4.0;
-        let direction = if self.collapsed { 1.0 } else { -1.0 };
-        let path = Path::new(|builder| {
-            builder.move_to(Point::new(center.x - half, center.y - rise * direction));
-            builder.line_to(Point::new(center.x, center.y + rise * direction));
-            builder.line_to(Point::new(center.x + half, center.y - rise * direction));
-        });
-        frame.stroke(
-            &path,
-            Stroke::default()
-                .with_color(self.color)
-                .with_width(self.stroke_width),
-        );
-        vec![frame.into_geometry()]
-    }
+fn vertical_line(skin: &Skin) -> Element<'_, UiEvent> {
+    chrome_leaf(ChromeLeaf::VerticalLine, skin)
 }
 
 fn panel_frame_style(background: Color, border: Border) -> ContainerStyle {

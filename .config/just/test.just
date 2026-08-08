@@ -24,6 +24,32 @@ e2e-resamplers *ARGS:
     just test run --lane=e2e-fused "$@"
     just test run --lane=e2e-glide "$@"
 
+# Both UI hosts drawing the same gallery pages, compared page by page.
+#
+# One binary takes both sets, so a difference between them is a difference
+# between the hosts rather than between two builds of the same documents. Both
+# rasterise on a graphics device, neither opens a window. `parity-budget.txt`
+# prices each page, and a page over its price - or missing from a set - ends
+# this non-zero.
+ui:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=target/parity
+    rm -rf "$dir/iced" "$dir/masonry" "$dir/masks"
+    gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/masonry-host)
+    KITHARA_GALLERY_CAPTURE_OFFSCREEN="$dir/iced" "${gallery[@]}"
+    KITHARA_GALLERY_CAPTURE_MASONRY="$dir/masonry" "${gallery[@]}"
+    KITHARA_GALLERY_COMPARE="$dir/iced:$dir/masonry:$dir/masks" \
+      KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-ui/examples/gallery/parity-budget.txt \
+      "${gallery[@]}"
+
+# The same pages through a real window, which is the only one of the three
+# captures that needs a display. Its job is to say whether the headless iced
+# set draws what a window draws, so compare it against a set photographed at
+# the geometry this one recorded in `frame.txt`.
+ui-window DIR="target/parity/window":
+    KITHARA_GALLERY_CAPTURE={{ DIR }} cargo run -p kithara-ui --example gallery --features kithara-ui/render
+
 # Cobertura and LCOV reports from one instrumented test run.
 coverage:
     #!/usr/bin/env bash

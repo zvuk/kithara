@@ -17,6 +17,10 @@
             (weight: 2.2, node: Module(
                 instance: "library",
                 source: "modules/library.kmodule.ron",
+                with: {
+                    "read": "library.visible_tracks",
+                    "columns": "[Title, Artist, Time]",
+                },
             )),
         ],
     ),

@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use iced::{
     Color, Element, Length,
     widget::{
@@ -6,7 +8,11 @@ use iced::{
     },
 };
 
-use crate::render::fonts;
+use crate::{
+    draw::Outline,
+    module::IconName,
+    render::{fonts, model::TreeIcon},
+};
 
 /// Icon available to renderers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,12 +70,124 @@ pub enum Icon {
     ZoomOut,
 }
 
+pub(crate) fn document_icon(icon: IconName) -> Icon {
+    match icon {
+        IconName::Activity => Icon::Activity,
+        IconName::ChevronDown => Icon::ChevronDown,
+        IconName::ChevronRight => Icon::ChevronRight,
+        IconName::ChevronUp => Icon::ChevronUp,
+        IconName::Circle => Icon::Circle,
+        IconName::Disc => Icon::Disc,
+        IconName::Faders => Icon::Faders,
+        IconName::FastForward => Icon::FastForward,
+        IconName::FolderPlus => Icon::FolderPlus,
+        IconName::Gear => Icon::Gear,
+        IconName::Headphones => Icon::Headphones,
+        IconName::Maximize => Icon::Maximize,
+        IconName::Menu => Icon::Menu,
+        IconName::Monitor => Icon::Monitor,
+        IconName::Play => Icon::Play,
+        IconName::PlayReverse => Icon::PlayReverse,
+        IconName::Playlist => Icon::Playlist,
+        IconName::Plus => Icon::Plus,
+        IconName::Radio => Icon::Radio,
+        IconName::RefreshCw => Icon::RefreshCw,
+        IconName::Rewind => Icon::Rewind,
+        IconName::Save => Icon::Save,
+        IconName::SlidersHorizontal => Icon::SlidersHorizontal,
+        IconName::SpeakerHigh => Icon::SpeakerHigh,
+        IconName::Waveform => Icon::Waveform,
+        IconName::X => Icon::X,
+        IconName::ZoomIn => Icon::ZoomIn,
+        IconName::ZoomOut => Icon::ZoomOut,
+    }
+}
+
+pub(crate) fn tree_icon(icon: TreeIcon) -> Icon {
+    match icon {
+        TreeIcon::Collection => Icon::Collection,
+        TreeIcon::Playlist => Icon::Playlist,
+        TreeIcon::Folder => Icon::Folder,
+        TreeIcon::Plus => Icon::Plus,
+        TreeIcon::Zvuk => Icon::Zvuk,
+        TreeIcon::Search => Icon::Search,
+        TreeIcon::Charts => Icon::Charts,
+        TreeIcon::Monitor => Icon::Monitor,
+        TreeIcon::Home => Icon::Home,
+        TreeIcon::Usb => Icon::Usb,
+        TreeIcon::Instrument => Icon::Instrument,
+        TreeIcon::Waveform => Icon::Waveform,
+        TreeIcon::Clock => Icon::Clock,
+    }
+}
+
 enum IconSource {
     Lucide(lucide_icons::Icon),
-    Svg(&'static [u8]),
+    Svg(&'static Art),
+}
+
+/// One icon's authored art, read into an outline the first time it is asked
+/// for and kept, because a control asks for it once a frame.
+struct Art {
+    document: &'static str,
+    outline: OnceLock<Option<Outline>>,
+}
+
+impl Art {
+    const fn new(document: &'static str) -> Self {
+        Self {
+            document,
+            outline: OnceLock::new(),
+        }
+    }
+
+    fn outline(&'static self) -> Option<&'static Outline> {
+        self.outline
+            .get_or_init(|| match crate::draw::outline(self.document) {
+                Ok(outline) => Some(outline),
+                Err(error) => {
+                    tracing::error!(%error, "an icon's art is not an outline this can draw");
+                    None
+                }
+            })
+            .as_ref()
+    }
+}
+
+mod art {
+    use super::Art;
+
+    pub(super) static PLAY_REVERSE: Art =
+        Art::new(include_str!("../../assets/icons/play-reverse.svg"));
+    pub(super) static ZVUK: Art = Art::new(include_str!("../../assets/icons/zvuk.svg"));
+}
+
+/// What an icon is made of, once its source has been resolved.
+///
+/// Both halves reach the draw list: a glyph as shaped text, an outline as a
+/// filled path. Neither needs a toolkit of its own.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Mark {
+    Glyph(char),
+    Outline(&'static Outline),
 }
 
 impl Icon {
+    pub(crate) fn lucide_glyph(self) -> Option<char> {
+        match source(self) {
+            IconSource::Lucide(icon) => Some(char::from(icon)),
+            IconSource::Svg(_) => None,
+        }
+    }
+
+    /// What this icon draws, or nothing when its art could not be read.
+    pub(crate) fn mark(self) -> Option<Mark> {
+        match source(self) {
+            IconSource::Lucide(icon) => Some(Mark::Glyph(char::from(icon))),
+            IconSource::Svg(art) => art.outline().map(Mark::Outline),
+        }
+    }
+
     /// Renders this icon with the given size and color.
     #[must_use]
     pub fn view<'a, M: 'a>(self, size: f32, color: Color) -> Element<'a, M> {
@@ -79,7 +197,7 @@ impl Icon {
                 .size(size)
                 .color(color)
                 .into(),
-            IconSource::Svg(bytes) => Svg::new(SvgHandle::from_memory(bytes))
+            IconSource::Svg(art) => Svg::new(SvgHandle::from_memory(art.document.as_bytes()))
                 .width(Length::Fixed(size))
                 .height(Length::Fixed(size))
                 .style(move |_theme, _status| svg::Style { color: Some(color) })
@@ -138,8 +256,8 @@ fn source(icon: Icon) -> IconSource {
         Icon::X => IconSource::Lucide(lucide_icons::Icon::X),
         Icon::ZoomIn => IconSource::Lucide(lucide_icons::Icon::ZoomIn),
         Icon::ZoomOut => IconSource::Lucide(lucide_icons::Icon::ZoomOut),
-        Icon::PlayReverse => IconSource::Svg(include_bytes!("../../assets/icons/play-reverse.svg")),
-        Icon::Zvuk => IconSource::Svg(include_bytes!("../../assets/icons/zvuk.svg")),
+        Icon::PlayReverse => IconSource::Svg(&art::PLAY_REVERSE),
+        Icon::Zvuk => IconSource::Svg(&art::ZVUK),
     }
 }
 
@@ -148,14 +266,8 @@ mod tests {
     use kithara_test_utils::kithara;
     use lucide_icons::Icon as Lucide;
 
-    use super::{Icon, IconSource, source};
-
-    fn glyph(icon: Icon) -> Option<char> {
-        match source(icon) {
-            IconSource::Lucide(lucide) => Some(char::from(lucide)),
-            IconSource::Svg(_) => None,
-        }
-    }
+    use super::{Icon, Mark};
+    use crate::draw::{FillRule, Rect};
 
     #[kithara::test]
     fn every_app_menu_glyph_resolves_to_its_lucide_namesake() {
@@ -180,7 +292,7 @@ mod tests {
 
         for (icon, lucide) in table {
             assert_eq!(
-                glyph(icon),
+                icon.lucide_glyph(),
                 Some(char::from(lucide)),
                 "{icon:?} must render {lucide:?}"
             );
@@ -206,17 +318,50 @@ mod tests {
 
         for (icon, wrong) in prohibited {
             assert_ne!(
-                glyph(icon),
+                icon.lucide_glyph(),
                 Some(char::from(wrong)),
                 "{icon:?} must not be substituted by {wrong:?}"
             );
         }
         for (icon, right) in canon {
             assert_eq!(
-                glyph(icon),
+                icon.lucide_glyph(),
                 Some(char::from(right)),
                 "{icon:?} must render {right:?}"
             );
         }
+    }
+
+    #[kithara::test]
+    fn svg_icons_do_not_cross_the_glyph_seam() {
+        assert_eq!(Icon::PlayReverse.lucide_glyph(), None);
+        assert_eq!(Icon::Zvuk.lucide_glyph(), None);
+    }
+
+    /// Both authored icons read as outlines, so neither has to reach a toolkit
+    /// to be seen. One of them fills with the even-odd rule and would be a solid
+    /// blob without it, which is why the rule is asserted rather than assumed.
+    #[kithara::test]
+    fn authored_icons_read_as_outlines_this_can_draw() {
+        let box_of = Rect {
+            h: 1.0,
+            w: 1.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        for icon in [Icon::PlayReverse, Icon::Zvuk] {
+            let Some(Mark::Outline(outline)) = icon.mark() else {
+                panic!("{icon:?} must read as an outline");
+            };
+            assert!(
+                outline.placed(box_of).verbs().len() > 4,
+                "{icon:?} must carry its whole shape"
+            );
+        }
+
+        let Some(Mark::Outline(zvuk)) = Icon::Zvuk.mark() else {
+            panic!("the mark must be an outline");
+        };
+        assert_eq!(zvuk.placed(box_of).rule(), FillRule::EvenOdd);
     }
 }

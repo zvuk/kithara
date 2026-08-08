@@ -1,0 +1,28 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "studio-mixer",
+    root: Column(
+        size: (w: Fill, h: Fill),
+        children: [
+            Row(
+                id: "strips",
+                gap: 0.0,
+                frame: (top: false, right: false, bottom: true, left: false),
+                size: (w: Fill, h: Fill),
+                children: [
+                    Include(id: "a", source: "studio-strip.kmodule.ron"),
+                    Divider(id: "between-strips", size: (w: Fixed(1.0), h: Fill)),
+                    Include(id: "b", source: "studio-strip.kmodule.ron"),
+                ],
+            ),
+            Crossfader(
+                id: "xfade",
+                size: (w: Fill, h: Fixed(64.0)),
+                ticks: true,
+                read: Parameter(id: "gain"),
+                write: Parameter(id: "gain"),
+            ),
+        ],
+    ),
+)

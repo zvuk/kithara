@@ -84,7 +84,7 @@ impl<'a> Widget<'a> for DeckSummary<'_, '_, '_, '_, '_> {
             .align_y(Vertical::Center)
             .clip(true)
             .style(move |_| {
-                ContainerStyle::default().background(Background::Color(palette.bg_panel))
+                ContainerStyle::default().background(Background::Color(palette.bg_panel.into()))
             })
             .into()
     }
@@ -138,7 +138,7 @@ impl<'a> Widget<'a> for Bpm<'_, '_, '_, '_, '_, '_> {
             .center_x(Length::Fill)
             .center_y(Length::Fill)
             .style(move |_| {
-                ContainerStyle::default().background(Background::Color(palette.bg_panel))
+                ContainerStyle::default().background(Background::Color(palette.bg_panel.into()))
             })
             .into()
     }
@@ -183,7 +183,9 @@ impl<'a> Widget<'a> for Time<'_, '_, '_, '_, '_> {
         .center_x(Length::Fill)
         .height(Length::Fill)
         .width(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_deep)))
+        .style(move |_| {
+            ContainerStyle::default().background(Background::Color(palette.bg_deep.into()))
+        })
         .into()
     }
 }

@@ -33,10 +33,6 @@
     layout: (
         grid_gap: 1.0,
         grid_pad: 0.0,
-        fill_weight_scale: 100.0,
-        fill_weight_min: 1.0,
-        size_gap: 0.0,
-        size_pad: 0.0,
     ),
     chrome: (
         frame: (radius: 0.0, border_width: 1.0, border: Line),

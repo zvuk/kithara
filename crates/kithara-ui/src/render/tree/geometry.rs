@@ -5,10 +5,10 @@ use iced::{
 };
 
 use crate::{
-    expand::{ControlSpec, ExpandedNode},
+    expand::ExpandedNode,
     layout::FrameSides,
-    render::{Skin, UiEvent},
-    size::{Dim, SizeSpec, control_size},
+    render::{IcedSkin, Skin, UiEvent},
+    size::{Dim, SizeSpec},
     skin::ColorRole,
     widgets::frame_overlay,
 };
@@ -28,18 +28,12 @@ impl<'a> Rendered<'a> {
     }
 }
 
-pub(super) fn padding(
-    pad: Option<f32>,
-    pad_x: Option<f32>,
-    pad_y: Option<f32>,
-    skin: &Skin,
-) -> Padding {
-    let base = pad.unwrap_or(skin.layout.grid_pad);
+pub(super) fn padding(horizontal: f32, vertical: f32) -> Padding {
     Padding::ZERO
-        .top(pad_y.unwrap_or(base))
-        .bottom(pad_y.unwrap_or(base))
-        .left(pad_x.unwrap_or(base))
-        .right(pad_x.unwrap_or(base))
+        .top(vertical)
+        .bottom(vertical)
+        .left(horizontal)
+        .right(horizontal)
 }
 
 pub(super) fn filled<'a>(
@@ -82,6 +76,7 @@ pub(crate) fn active_tone(
     on.then_some(active).flatten().or(base)
 }
 
+#[cfg(test)]
 pub(super) fn frame_tone(
     frame_color: Option<ColorRole>,
     active_frame_color: Option<ColorRole>,
@@ -94,6 +89,7 @@ pub(super) fn frame_tone(
     )
 }
 
+#[cfg(test)]
 pub(super) fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length) {
     effective_size(node, skin).map_or((Length::Fill, Length::Fill), |size| {
         (
@@ -104,24 +100,7 @@ pub(super) fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length)
 }
 
 pub(super) fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpec> {
-    let declared = match node {
-        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
-            return effective_size(child, skin);
-        }
-        ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin),
-        ExpandedNode::Row { size, .. }
-        | ExpandedNode::Column { size, .. }
-        | ExpandedNode::Slot { size, .. }
-        | ExpandedNode::Control { size, .. } => *size,
-    };
-    declared.or_else(|| match node {
-        ExpandedNode::Control {
-            spec: ControlSpec::TabLarge { .. },
-            ..
-        } => None,
-        ExpandedNode::Control { spec, .. } => Some(control_size(spec, skin.document())),
-        _ => None,
-    })
+    crate::size::effective_size(node, skin.document())
 }
 
 pub(super) fn apply_size<'a>(
@@ -163,7 +142,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        expand::{Binding, BindingKind},
+        expand::{Binding, BindingKind, ControlSpec},
         ids::{InternId, Interner, SourceUri},
         module::{AdaptivePolicy, PopoverAlign, PopoverAt},
     };

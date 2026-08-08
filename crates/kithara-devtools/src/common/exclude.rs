@@ -177,7 +177,7 @@ fn collect_module_ranges(
     }
 }
 
-fn item_attrs(item: &Item) -> &[syn::Attribute] {
+pub(crate) fn item_attrs(item: &Item) -> &[syn::Attribute] {
     match item {
         Item::Const(i) => &i.attrs,
         Item::Enum(i) => &i.attrs,

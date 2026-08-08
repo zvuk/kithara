@@ -6,6 +6,7 @@ use kithara_platform::{
     tokio,
 };
 use kithara_ui::render::fonts;
+use num_traits::cast::AsPrimitive;
 
 use super::{
     app::{Decks, Kithara},
@@ -23,23 +24,94 @@ use crate::{
 /// Error returned by the GUI frontend.
 pub type FrontendError = Box<dyn Error + Send + Sync>;
 
+/// Which host draws the studio.
+///
+/// The retained host is a build the `masonry` feature turns on; without it
+/// there is only one host to pick. Both read the same documents and the same
+/// state, so the choice is the shell and nothing else.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+pub enum Host {
+    /// iced: the tree is rebuilt from the state on every message.
+    #[cfg_attr(not(feature = "masonry"), default)]
+    Immediate,
+    /// masonry and Vello: the tree is kept and told what changed.
+    #[cfg(feature = "masonry")]
+    #[default]
+    Retained,
+}
+
+fn immediate(boot: Boot, palette: gui::GuiPalette) -> Result<(), FrontendError> {
+    let boot = Mutex::new(Some(boot));
+    let daemon = iced::daemon(
+        move || {
+            let boot = boot
+                .lock()
+                .take()
+                .expect("iced boots the application exactly once");
+            Kithara::new(
+                boot.session,
+                boot.decks,
+                boot.catalog,
+                boot.config,
+                boot.studio,
+                palette,
+            )
+        },
+        update::update,
+        view::view,
+    )
+    .title(Kithara::title)
+    .theme(Kithara::theme)
+    .subscription(Kithara::subscription)
+    .default_font(fonts::SANS);
+    fonts::FONT_BYTES
+        .iter()
+        .fold(daemon, |daemon, bytes| daemon.font(*bytes))
+        .run()?;
+    Ok(())
+}
+
+#[cfg(feature = "masonry")]
+fn retained(boot: Boot, palette: gui::GuiPalette) -> Result<(), FrontendError> {
+    super::retained::run(super::retained::Studio::new(
+        boot.session,
+        boot.decks,
+        boot.catalog,
+        boot.config,
+        boot.studio,
+        palette,
+    ))?;
+    Ok(())
+}
+
 mod consts {
-    /// DJ Studio window size in logical pixels. The minimum keeps both deck
-    /// panes wide enough for their fixed transport and timestretch controls.
-    pub(super) const STUDIO_WIDTH: f32 = 1280.0;
-    pub(super) const STUDIO_HEIGHT: f32 = 760.0;
-    pub(super) const STUDIO_MIN_WIDTH: f32 = 1080.0;
-    pub(super) const STUDIO_MIN_HEIGHT: f32 = STUDIO_HEIGHT;
+    /// DJ Studio window size in whole logical points. The minimum keeps both
+    /// deck panes wide enough for their fixed transport and timestretch
+    /// controls; the studio never gets shorter than it opens.
+    pub(super) const STUDIO_WIDTH: u32 = 1280;
+    pub(super) const STUDIO_HEIGHT: u32 = 760;
+    pub(super) const STUDIO_MIN_WIDTH: u32 = 1080;
 }
 use consts::*;
+
+/// The studio window and the smallest box the document is laid out for, in
+/// logical points. Both hosts open the same window.
+pub(crate) const fn studio_size() -> ((u32, u32), (u32, u32)) {
+    (
+        (STUDIO_WIDTH, STUDIO_HEIGHT),
+        (STUDIO_MIN_WIDTH, STUDIO_HEIGHT),
+    )
+}
 
 /// Settings for the studio window. The bar draws the window chrome itself, so
 /// the system decorations stay off; close goes through `close_requests()`,
 /// whose handler exits the app.
 pub(crate) fn window_settings() -> Settings {
+    let (size, min_size) = studio_size();
+    let logical = |(width, height): (u32, u32)| Size::new(width.as_(), height.as_());
     Settings {
-        size: Size::new(STUDIO_WIDTH, STUDIO_HEIGHT),
-        min_size: Some(Size::new(STUDIO_MIN_WIDTH, STUDIO_MIN_HEIGHT)),
+        size: logical(size),
+        min_size: Some(logical(min_size)),
         decorations: false,
         exit_on_close_request: false,
         ..Settings::default()
@@ -54,9 +126,10 @@ struct Boot {
     studio: StudioUi,
 }
 
-/// GUI frontend using iced.
+/// GUI frontend for the studio.
 pub struct GuiFrontend {
     config: AppConfig,
+    host: Host,
     palette: gui::GuiPalette,
 }
 
@@ -65,8 +138,9 @@ impl GuiFrontend {
     ///
     /// # Errors
     /// Returns an error if GUI initialization fails.
-    pub fn new(config: &AppConfig) -> Result<Self, FrontendError> {
+    pub fn new(config: &AppConfig, host: Host) -> Result<Self, FrontendError> {
         Ok(Self {
+            host,
             palette: config.palette.into(),
             config: config.clone(),
         })
@@ -109,45 +183,21 @@ impl GuiFrontend {
             })
             .collect();
 
-        let boot = Mutex::new(Some(Boot {
+        let boot = Boot {
             session,
             studio,
             decks: Decks::new(controllers).ok_or("no decks to render")?,
             catalog: Catalog::new(config.tracks.clone()),
             config: config.clone(),
-        }));
-
-        let daemon = iced::daemon(
-            move || {
-                let boot = boot
-                    .lock()
-                    .take()
-                    .expect("iced boots the application exactly once");
-                Kithara::new(
-                    boot.session,
-                    boot.decks,
-                    boot.catalog,
-                    boot.config,
-                    boot.studio,
-                    palette,
-                )
-            },
-            update::update,
-            view::view,
-        )
-        .title(Kithara::title)
-        .theme(Kithara::theme)
-        .subscription(Kithara::subscription)
-        .default_font(fonts::SANS);
-        let result = fonts::FONT_BYTES
-            .iter()
-            .fold(daemon, |daemon, bytes| daemon.font(*bytes))
-            .run();
+        };
+        let result = match self.host {
+            Host::Immediate => immediate(boot, palette),
+            #[cfg(feature = "masonry")]
+            Host::Retained => retained(boot, palette),
+        };
 
         config.shutdown.cancel();
-        result?;
-
-        Ok(())
+        result
     }
 
     /// Completes GUI shutdown.

@@ -12,7 +12,10 @@
                 id: "content",
                 size: (w: Fill, h: Fill),
                 default: [
-                    Include(id: "layout", source: "library.kmodule.ron"),
+                    Include(id: "layout", source: "library.kmodule.ron", with: {
+                        "read": "library.visible_tracks",
+                        "columns": "[Title, Artist, Time]",
+                    }),
                 ],
             ),
         ],

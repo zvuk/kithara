@@ -228,7 +228,7 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
     };
 
     assert_eq!(global_size.h.min(), 42.0);
-    assert_eq!(deck_size.h.min(), 150.0);
+    assert_eq!(deck_size.h.min(), 152.0);
     assert_eq!(library_size.h.min(), 210.0);
     assert_eq!(
         ui.size.h.min(),

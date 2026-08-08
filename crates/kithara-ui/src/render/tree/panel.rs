@@ -1,54 +1,48 @@
 use iced::Element;
 
-use super::{
-    icon::render_tree_icon,
-    read::{read_scope, resolve},
-};
+use super::{mount::Cx, read_scope, resolve};
 use crate::{
+    atoms::bar::context::{Context, Viewed},
     compile::CompiledUi,
+    draw::Rect,
     expand::Binding,
     ids::InternId,
-    module::{DeckSummaryStyle, TrackColumn},
-    render::{ReadValue, Reads, Skin, UiEvent},
-    widgets::{
-        Widget,
-        deck::{DeckSummary, Time},
-        nav::{ContextBar, Tree},
-        track_list::TrackList,
-        vis::Vis,
-    },
+    module::TrackColumn,
+    render::{InputOwner, ReadValue, Reads, Skin, UiEvent, controls::Paint, scope_picker},
+    text::TextContext,
+    widgets::{Widget, nav::Tree, track_list::TrackList, vis::Vis},
 };
 
-pub(super) fn deck_summary<'a>(
-    style: DeckSummaryStyle,
-    value: Option<&ReadValue<'_>>,
-    scope: &str,
-    reads: &dyn Reads,
-    skin: &Skin,
+/// The context strip, with the menu its scope face opens.
+///
+/// The strip is one painted control on both hosts; only the menu is raised by
+/// the toolkit, and it hangs off the face the painter reports rather than off
+/// the strip.
+pub(super) fn context_bar<'a>(
+    cx: &Cx<'a, '_, '_>,
+    scope: (&[InternId], Option<&Binding>),
+    painter: Context,
+    data: Viewed,
 ) -> Element<'a, UiEvent> {
-    DeckSummary::builder()
-        .style(style)
-        .maybe_value(value)
-        .scope(scope)
-        .reads(reads)
-        .skin(skin)
-        .build()
-        .view()
-}
-
-pub(super) fn time<'a>(
-    value: Option<&ReadValue<'_>>,
-    scope: &'a str,
-    reads: &dyn Reads,
-    skin: &'a Skin,
-) -> Element<'a, UiEvent> {
-    Time::builder()
-        .maybe_value(value)
-        .scope(scope)
-        .reads(reads)
-        .skin(skin)
-        .build()
-        .view()
+    let (scope_items, scope) = scope;
+    let skin = cx.skin;
+    if scope_items.is_empty() {
+        return Paint::new(painter, data, skin).view();
+    }
+    let scope_value = scope.and_then(|binding| resolve(cx.reads, binding, cx.ui));
+    let mut text = TextContext::from(skin.text_resources());
+    let Some(face) = painter.face(&mut text, &data) else {
+        return Paint::new(painter, data, skin).view();
+    };
+    scope_picker(
+        cx.path,
+        scope_items.iter().map(|id| cx.ui.resolve(*id)).collect(),
+        scope_value.as_ref(),
+        skin,
+        cx.owner,
+        Paint::new(painter, data, skin).view(),
+        move |bounds: Rect| Context::placed(face, bounds),
+    )
 }
 
 pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Element<'a, UiEvent> {
@@ -61,13 +55,14 @@ pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Eleme
 
 pub(super) fn track_list<'a>(
     path: &'a str,
-    columns: &[TrackColumn],
-    columns_state: Option<&Binding>,
+    columns: (&[TrackColumn], Option<&Binding>),
     value: Option<&ReadValue<'_>>,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
-    skin: &Skin,
+    skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
+    let (columns, columns_state) = columns;
     TrackList::builder()
         .path(path)
         .columns(columns)
@@ -76,17 +71,19 @@ pub(super) fn track_list<'a>(
         .maybe_value(value)
         .reads(reads)
         .skin(skin)
+        .owner(owner)
         .build()
         .view()
 }
 
-pub(super) fn browser_tree<'a>(
+pub(super) fn tree<'a>(
     path: &'a str,
     query: Option<&Binding>,
     value: Option<&ReadValue<'_>>,
     ui: &CompiledUi,
     reads: &dyn Reads,
-    skin: &Skin,
+    skin: &'a Skin,
+    owner: InputOwner,
 ) -> Element<'a, UiEvent> {
     let query = query
         .and_then(|binding| resolve(reads, binding, ui))
@@ -99,27 +96,7 @@ pub(super) fn browser_tree<'a>(
         .path(path)
         .query(query)
         .maybe_value(value)
-        .icon(render_tree_icon)
-        .skin(skin)
-        .build()
-        .view()
-}
-
-pub(super) fn context_bar<'a>(
-    path: &'a str,
-    scope_items: &[InternId],
-    scope: Option<&Binding>,
-    value: Option<&ReadValue<'_>>,
-    ui: &'a CompiledUi,
-    reads: &dyn Reads,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    let scope_value = scope.and_then(|binding| resolve(reads, binding, ui));
-    ContextBar::builder()
-        .path(path)
-        .scope_items(scope_items.iter().map(|id| ui.resolve(*id)).collect())
-        .maybe_scope_value(scope_value.as_ref())
-        .maybe_value(value)
+        .owner(owner)
         .skin(skin)
         .build()
         .view()

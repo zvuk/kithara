@@ -28,6 +28,9 @@ pub enum UiDocError {
     },
     #[error("{origin}: invalid skin color {value:?}; expected #RRGGBB or #RRGGBBAA")]
     BadColor { origin: SourceUri, value: String },
+    #[cfg(feature = "render")]
+    #[error(transparent)]
+    Text(#[from] crate::text::TextError),
     #[error("{origin}: duplicate id {id:?} at {path}")]
     DuplicateId {
         origin: SourceUri,

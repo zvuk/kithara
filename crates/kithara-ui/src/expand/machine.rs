@@ -3,13 +3,14 @@ use std::collections::BTreeMap;
 use serde::de::DeserializeOwned;
 
 use super::{
-    Binding, BlockSpec, Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec, ExpandedModule,
-    ExpandedNode, SurfaceSpec,
+    Binding, BlockSpec, Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec,
+    ExpandedInclude, ExpandedModule, ExpandedNode, SurfaceSpec,
     binding_subst::{
         intern_binding, intern_optional_binding, intern_optional_text, intern_text, intern_texts,
-        resolve_optional_param, resolve_param, substitute_binding, substitute_map,
+        resolve_optional_param, resolve_param, substitute_binding,
     },
     site::{ControlFields, ExtraBindingRefs, ExtraBindings},
+    structural::{expand_include, walk_child, walk_children},
 };
 use crate::{
     error::UiDocError,
@@ -54,12 +55,14 @@ impl Context<'_> {
     }
 }
 
-/// Cross-cutting expansion state threaded through the recursion: the include
-/// depth cap, the shared node budget, and the per-control validation visitor.
+/// Cross-cutting expansion state threaded through recursion, including the
+/// structural address used to preserve expanded include roots.
 pub(crate) struct Expander<'m, 'v> {
+    pub(super) interner: &'m mut Interner,
+    pub(super) address: Vec<usize>,
+    pub(super) includes: Vec<ExpandedInclude>,
     budget: &'m mut Budget,
     visitor: &'m mut ControlVisitor<'v>,
-    interner: &'m mut Interner,
     in_popover: bool,
     max_depth: usize,
 }
@@ -77,6 +80,8 @@ impl<'m, 'v> Expander<'m, 'v> {
             interner,
             visitor,
             in_popover: false,
+            address: Vec::new(),
+            includes: Vec::new(),
         }
     }
 
@@ -91,6 +96,8 @@ impl<'m, 'v> Expander<'m, 'v> {
             origin: entry.clone(),
             rel: entry.0.clone(),
         })?;
+        self.address.clear();
+        self.includes.clear();
         let root = expand_at(set, entry, args.clone(), prefix.to_owned(), 0, self)?;
         let context = Context {
             set,
@@ -155,11 +162,12 @@ impl<'m, 'v> Expander<'m, 'v> {
             collapsed,
             root,
             chrome: doc.chrome,
+            includes: std::mem::take(&mut self.includes),
         })
     }
 }
 
-fn expand_at(
+pub(super) fn expand_at(
     set: &ModuleSet,
     uri: &SourceUri,
     args: BTreeMap<String, String>,
@@ -254,10 +262,15 @@ fn finish_control(
         .write
         .map(|binding| context.substitute(binding, path))
         .transpose()?;
+    let columns: &[TrackColumn] = match &spec {
+        ControlSpec::TrackList { columns, .. } => columns,
+        _ => &[],
+    };
     (machine.visitor)(
         ControlSite {
             path,
             control,
+            columns,
             read: read.as_ref(),
             write: write.as_ref(),
             columns_state: extra.columns_state,
@@ -405,7 +418,10 @@ fn control_spec(
             path,
         )?,
         ControlNode::TrackList { columns, .. } => {
-            track_list_spec(context, machine, columns, extra)?
+            let columns = context
+                .optional_param(columns.as_ref(), path)?
+                .unwrap_or_default();
+            track_list_spec(context, machine, &columns, extra)?
         }
         ControlNode::Tree { .. } => ControlSpec::Tree {
             query: optional_binding(context, machine, extra.query.as_ref())?,
@@ -532,6 +548,7 @@ fn expand_optional(
             control: node,
             read: Some(&hidden),
             write: None,
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,
@@ -545,7 +562,7 @@ fn expand_optional(
             path: machine.interner.intern(&path, &context.origin)?,
             hidden: intern_binding(machine.interner, &hidden, &context.origin)?,
         },
-        child: Box::new(walk(context, child, depth, machine)?),
+        child: Box::new(walk_child(context, child, 0, depth, machine)?),
     })
 }
 
@@ -575,6 +592,7 @@ fn expand_popover(
             control: node,
             read: Some(&open),
             write: None,
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,
@@ -583,9 +601,9 @@ fn expand_popover(
         },
         &context.origin,
     )?;
-    let anchor = walk(context, anchor, depth, machine)?;
+    let anchor = walk_child(context, anchor, 0, depth, machine)?;
     machine.in_popover = true;
-    let content = walk(context, content, depth, machine);
+    let content = walk_child(context, content, 1, depth, machine);
     machine.in_popover = false;
     Ok(ExpandedNode::Popover {
         at,
@@ -615,6 +633,7 @@ fn expand_pressable(
             control: node,
             read: None,
             write: Some(&press),
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,
@@ -626,20 +645,8 @@ fn expand_pressable(
     Ok(ExpandedNode::Pressable {
         path: machine.interner.intern(&path, &context.origin)?,
         press: intern_binding(machine.interner, &press, &context.origin)?,
-        child: Box::new(walk(context, child, depth, machine)?),
+        child: Box::new(walk_child(context, child, 0, depth, machine)?),
     })
-}
-
-fn walk_children(
-    context: &Context<'_>,
-    children: &[ControlNode],
-    depth: usize,
-    machine: &mut Expander<'_, '_>,
-) -> Result<Vec<ExpandedNode>, UiDocError> {
-    children
-        .iter()
-        .map(|child| walk(context, child, depth, machine))
-        .collect()
 }
 
 fn expand_slot(
@@ -656,25 +663,6 @@ fn expand_slot(
         id: machine.interner.intern(&id.0, &context.origin)?,
         children: walk_children(context, default, depth, machine)?,
     })
-}
-
-fn expand_include(
-    context: &Context<'_>,
-    id: &NodeId,
-    source: &str,
-    with: &BTreeMap<String, String>,
-    depth: usize,
-    machine: &mut Expander<'_, '_>,
-) -> Result<ExpandedNode, UiDocError> {
-    let path = child_path(&context.prefix, id);
-    let args = substitute_map(&context.args, &context.origin, with, &path)?;
-    let target = crate::source::join_rel(crate::source::base_dir(Some(&context.origin)), source)
-        .map(SourceUri)
-        .ok_or_else(|| UiDocError::RootEscape {
-            origin: context.origin.clone(),
-            rel: source.to_owned(),
-        })?;
-    expand_at(context.set, &target, args, path, depth + 1, machine)
 }
 
 fn container_bindings(
@@ -703,6 +691,7 @@ fn container_bindings(
             control: node,
             read: None,
             write: write.as_ref(),
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,
@@ -733,7 +722,7 @@ fn intern_node_id(
         .transpose()
 }
 
-fn walk(
+pub(super) fn walk(
     context: &Context<'_>,
     node: &ControlNode,
     depth: usize,

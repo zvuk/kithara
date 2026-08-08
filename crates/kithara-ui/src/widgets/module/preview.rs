@@ -1,5 +1,5 @@
 use iced::{
-    Element, Length, Point, Rectangle, Renderer, Size, Theme,
+    Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
     widget::{
         Canvas,
         canvas::{self, Frame, Geometry, Stroke},
@@ -53,7 +53,11 @@ impl<Message> canvas::Program<Message> for Preview {
         _cursor: iced::mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_deep);
+        frame.fill_rectangle(
+            Point::ORIGIN,
+            bounds.size(),
+            Color::from(self.palette.bg_deep),
+        );
 
         for area in self.geometry.iter() {
             let mut point = Point::new(area.bounds.x * bounds.width, area.bounds.y * bounds.height);
@@ -62,14 +66,14 @@ impl<Message> canvas::Program<Message> for Preview {
                 area.bounds.height * bounds.height,
             );
             let color = match area.kind {
-                AreaKind::Split => self.palette.line_soft,
+                AreaKind::Split => self.palette.line_soft.into(),
                 AreaKind::Module => {
                     point.x += self.metrics.module_inset;
                     point.y += self.metrics.module_inset;
                     size.width = (size.width - self.metrics.module_inset * 2.0).max(0.0);
                     size.height = (size.height - self.metrics.module_inset * 2.0).max(0.0);
-                    frame.fill_rectangle(point, size, self.palette.bg_panel);
-                    self.palette.line
+                    frame.fill_rectangle(point, size, Color::from(self.palette.bg_panel));
+                    self.palette.line.into()
                 }
             };
             frame.stroke_rectangle(

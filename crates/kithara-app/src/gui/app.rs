@@ -1,14 +1,13 @@
-use iced::{
-    Event as IcedEvent, Subscription, Task, Theme, event,
-    event::Status,
-    keyboard::{Event as KeyboardEvent, Key, key::Named},
-    time as iced_time, window,
-};
+use iced::{Subscription, Task, Theme, event, time as iced_time, window};
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
-    deck::DeckUi, frontend::window_settings, message::Message, studio_ui::StudioUi,
-    subscription::subscription_config, theme,
+    deck::DeckUi,
+    frontend::window_settings,
+    message::Message,
+    studio_ui::{StudioUi, deletes_focused_track},
+    subscription::subscription_config,
+    theme,
 };
 use crate::{
     catalog::Catalog,
@@ -87,7 +86,24 @@ impl Kithara {
     ) -> (Self, Task<Message>) {
         let (window_id, open) = window::open(window_settings());
 
-        let state = Self {
+        (
+            Self::mounted(session, decks, catalog, config, studio, palette, window_id),
+            open.discard(),
+        )
+    }
+
+    /// The same state without a window of iced's: a host that owns its own
+    /// window mounts the studio through here.
+    pub(crate) fn mounted(
+        session: DeckSet,
+        decks: Decks,
+        catalog: Catalog,
+        config: AppConfig,
+        studio: StudioUi,
+        palette: gui::GuiPalette,
+        window_id: window::Id,
+    ) -> Self {
+        Self {
             session,
             decks,
             catalog,
@@ -97,9 +113,7 @@ impl Kithara {
             palette,
             window_id,
             selected_track: None,
-        };
-
-        (state, open.discard())
+        }
     }
 
     /// Time-tick subscription for player state sync plus keyboard. Tick
@@ -114,13 +128,8 @@ impl Kithara {
         );
         subs.push(window::close_requests().map(|_| Message::WindowCloseRequested));
         if cfg.is_keyboard_enabled {
-            subs.push(event::listen_with(|e, status, _window| match e {
-                // Only act on Delete/Backspace the focused widget left
-                IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
-                    key: Key::Named(Named::Delete | Named::Backspace),
-                    ..
-                }) if status == Status::Ignored => Some(Message::DeleteFocusedTrack),
-                _ => None,
+            subs.push(event::listen_with(|event, status, _window| {
+                deletes_focused_track(&event, status).then_some(Message::DeleteFocusedTrack)
             }));
         }
         Subscription::batch(subs)

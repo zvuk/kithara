@@ -126,7 +126,10 @@ default_backend = "wreq"
 feature_arg = "--features"
 loom_lane = "loom"
 # Base features applied to every test lane, including `--flash=off`.
-features = []
+# `kithara-ui/vello-backend` is here because nothing else enables it: only
+# kithara-app turns on `kithara-ui/render`, so without this the Vello painter
+# and its tests would never be compiled by the harness.
+features = ["kithara-ui/vello-backend"]
 
 [test.flash]
 default = true

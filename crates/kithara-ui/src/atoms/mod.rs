@@ -1,7 +1,17 @@
+pub(crate) mod bar;
+pub(crate) mod button;
 pub(crate) mod chip;
+pub(crate) mod deck;
 pub(crate) mod design;
+pub(crate) mod icon;
 pub(crate) mod knob;
+pub(crate) mod label;
 pub(crate) mod meter;
+pub(crate) mod nav_item;
+pub(crate) mod painter;
 pub(crate) mod readout;
+pub(crate) mod tab;
+pub(crate) mod text;
 pub(crate) mod toggle;
 pub(crate) mod vu;
+pub(crate) mod wave;

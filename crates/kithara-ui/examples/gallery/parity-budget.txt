@@ -1,0 +1,38 @@
+# What each gallery page may differ by between the two hosts, in whole percent
+# of pixels, past the rasteriser-noise floor the comparison already applies.
+#
+# A page with no line here is allowed nothing, so a new page has to be priced
+# before the gate passes. These numbers are a debt, not a target: every control
+# that lands must lower the pages it appears on, and no number may rise without
+# a reason written next to it.
+#
+# Measured 2026-08-08 at 1100x720 scale 1, iced through wgpu against masonry
+# through Vello, both clearing to the skin's page colour. The floor is under 1%:
+# the two engines disagree on antialiased edges and on text gamma.
+
+# The undrawn controls. library2 holds the TrackList; vis is a native shader
+# the retained host has no pass for yet.
+15-library2.png            39
+10-vis.png                 20
+# Not accounted for by a missing control — read the masks before lowering.
+03-modules-deck.png        13
+03-modules-telemetry.png    8
+16-stress.png               4
+
+14-tree.png                 3
+08-micro.png                3
+13-tracklist.png            2
+07-tokens.png               2
+17-menu.png                 2
+11-chrome.png               2
+03-modules-layout.png       2
+03-modules-deckmicro.png    2
+03-modules-globalbar.png    2
+09-mixer.png                2
+06-sizes.png                2
+05-cells.png                2
+04-typography.png           2
+12-titlebars.png            2
+02-faders.png               2
+00-atoms.png                2
+01-buttons.png              2

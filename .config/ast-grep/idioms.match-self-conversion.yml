@@ -1,26 +1,23 @@
 id: idioms.match-self-conversion
 message: |
-  `fn name(self) -> Other { match self { ... } }` is a manual conversion.
-  Replace with `impl From<Self> for Other` so callers can use `.into()` /
-  the type system can chain.
+  A `match self` method constructs an owned result in at least one arm.
+  Express the conversion as `From` for the receiver type so callers can use
+  `.into()` and the type system can chain conversions. Plain field projections
+  such as `id`, `*id`, or `self.id` are accessors and are not reported.
 
       // ❌
       impl Codec {
           pub fn container(self) -> ContainerFormat {
-              match self { Self::Mp3 => ContainerFormat::MpegAudio, /* ... */ }
+              match self { Self::Mp3 => ContainerFormat::MpegAudio, Self::Aac => ContainerFormat::Mp4 }
           }
       }
 
       // ✅
       impl From<Codec> for ContainerFormat {
           fn from(c: Codec) -> Self {
-              match c { Codec::Mp3 => Self::MpegAudio, /* ... */ }
+              match c { Codec::Mp3 => Self::MpegAudio, Codec::Aac => Self::Mp4 }
           }
       }
-
-  Suppress with `// ast-grep-ignore: idioms.match-self-conversion` only when
-  the method legitimately can't be a `From` (e.g. result depends on more
-  state than `self`).
 severity: error
 language: Rust
 files:
@@ -32,36 +29,55 @@ ignores:
   - "**/*_tests.rs"
   - "**/tests.rs"
 rule:
-  any:
-    - pattern: |
-        fn $NAME(self) -> $RET {
-            match self { $$$ARMS }
-        }
-    - pattern: |
-        fn $NAME(&self) -> $RET {
-            match self { $$$ARMS }
-        }
-    - pattern: |
-        pub fn $NAME(self) -> $RET {
-            match self { $$$ARMS }
-        }
-    - pattern: |
-        pub fn $NAME(&self) -> $RET {
-            match self { $$$ARMS }
-        }
-    - pattern: |
-        pub(crate) fn $NAME(self) -> $RET {
-            match self { $$$ARMS }
-        }
-    - pattern: |
-        pub(crate) fn $NAME(&self) -> $RET {
-            match self { $$$ARMS }
-        }
+  all:
+    - any:
+        - pattern: |
+            fn $NAME(self) -> $RET {
+                match self { $$$ARMS }
+            }
+        - pattern: |
+            fn $NAME(&self) -> $RET {
+                match self { $$$ARMS }
+            }
+        - pattern: |
+            pub fn $NAME(self) -> $RET {
+                match self { $$$ARMS }
+            }
+        - pattern: |
+            pub fn $NAME(&self) -> $RET {
+                match self { $$$ARMS }
+            }
+        - pattern: |
+            pub(crate) fn $NAME(self) -> $RET {
+                match self { $$$ARMS }
+            }
+        - pattern: |
+            pub(crate) fn $NAME(&self) -> $RET {
+                match self { $$$ARMS }
+            }
+    # At least one arm must BUILD a value rather than hand back a name the arm
+    # pattern bound. Constructing (a path, a call, a macro, a struct literal, a
+    # plain literal) is a conversion; `id` / `*id` / `self.id` is a projection,
+    # and a projection over an enum has no `From` to become.
+    - has:
+        kind: match_arm
+        stopBy: end
+        has:
+          field: value
+          any:
+            - kind: scoped_identifier
+            - kind: call_expression
+            - kind: macro_invocation
+            - kind: struct_expression
+            - kind: boolean_literal
+            - kind: char_literal
+            - kind: float_literal
+            - kind: integer_literal
+            - kind: string_literal
 constraints:
   RET:
     not:
       # `Self` returns are already idiomatic; reference returns (`&T`,
-      # `Option<&T>`, ...) provably cannot be a `From` impl, which consumes
-      # `self` and returns an owned value, so they are accessors, not
-      # conversions. Excluding both keeps the rule on owned `self -> Other`.
+      # `Option<&T>`, ...) are borrowed accessors rather than owned
+      # conversions.
       regex: "Self|&"

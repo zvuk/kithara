@@ -234,6 +234,13 @@ pub(crate) struct ExpandedModule {
     pub(crate) footer: Option<Binding>,
     pub(crate) title: Option<InternId>,
     pub(crate) assign: Vec<InternId>,
+    pub(crate) includes: Vec<ExpandedInclude>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExpandedInclude {
+    pub(crate) address: Box<[usize]>,
+    pub(crate) module: InternId,
 }
 
 /// A block the host may hide: the path that addresses it, and the Bool it
@@ -274,6 +281,8 @@ pub struct DropSpec {
 #[derive(Clone, Copy)]
 pub(crate) struct ControlSite<'a> {
     pub(crate) control: &'a ControlNode,
+    /// Already resolved, so a parameterised list is validated like a literal one.
+    pub(crate) columns: &'a [TrackColumn],
     pub(crate) path: &'a str,
     pub(crate) active: Option<&'a BindingRef>,
     pub(crate) columns_state: Option<&'a BindingRef>,

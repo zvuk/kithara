@@ -1,35 +1,5 @@
-use crate::{
-    compile::{CompiledNode, compiled_node_size, module_size},
-    layout::Axis,
-    size::{Hidden, SizeSpec, combine_horizontal, combine_vertical, is_hidden},
-    skin::SkinDoc,
-};
-
-pub(super) fn node_size(node: &CompiledNode, skin: &SkinDoc, hidden: Hidden<'_>) -> SizeSpec {
-    match node {
-        CompiledNode::Optional { child, .. } => node_size(child, skin, hidden),
-        node if !node.blocks() => compiled_node_size(node),
-        CompiledNode::Split { axis, children, .. } => {
-            let sizes =
-                visible_children(children, hidden).map(|(_, child)| node_size(child, skin, hidden));
-            match axis {
-                Axis::Horizontal => combine_horizontal(sizes),
-                Axis::Vertical => combine_vertical(sizes),
-            }
-        }
-        CompiledNode::Module { chrome, root, .. } => module_size(root, *chrome, skin, hidden),
-    }
-}
-
-pub(super) fn visible_children<'a>(
-    children: &'a [(f32, CompiledNode)],
-    hidden: Hidden<'a>,
-) -> impl Iterator<Item = (f32, &'a CompiledNode)> {
-    children
-        .iter()
-        .filter(move |(_, child)| !is_hidden(child, hidden))
-        .map(|(weight, child)| (*weight, child))
-}
+#[cfg(test)]
+use crate::size::{Hidden, SizeSpec, compiled_node_size_with_hidden as node_size};
 
 #[cfg(test)]
 mod tests {
