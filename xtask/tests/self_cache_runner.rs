@@ -453,6 +453,27 @@ fn source_changes_stale_but_hook_routes_do_not() -> Result<()> {
 }
 
 #[test]
+fn foreign_schema_drift_does_not_wedge_the_cached_transport() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.bootstrap()?);
+    let config = fixture.root.join(".config/xtask.toml");
+    let drifted = format!(
+        "{}\n[ext.apple]\nfield_from_a_later_schema = true\n",
+        fs::read_to_string(&config)?
+    );
+    fs::write(&config, drifted)?;
+
+    let status = fixture.cached(&["self-cache", "status"])?;
+    assert_success(&status);
+    assert_eq!(status.stdout, b"current\n");
+
+    let warm = fixture.just(&fixture.root, &["tooling", "xtask", "--help"], None)?;
+    assert_success(&warm);
+    fixture.assert_no_tool_process();
+    Ok(())
+}
+
+#[test]
 fn linked_worktrees_publish_distinct_caches() -> Result<()> {
     let common = tempfile::tempdir()?;
     let first = Fixture::new()?;

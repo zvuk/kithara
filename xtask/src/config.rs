@@ -16,7 +16,6 @@ pub(crate) struct KitharaExt {
     pub(crate) ci: CiProjectConfig,
     pub(crate) release: ReleaseConfig,
     pub(crate) publish: PublishConfig,
-    xtask: Option<XtaskConfig>,
     agent_hook: Option<AgentHookConfig>,
 }
 
@@ -57,16 +56,6 @@ impl KitharaExt {
             .context("parse project config [ext]")
     }
 
-    pub(crate) fn xtask_cache(&self) -> Result<&XtaskCacheConfig> {
-        let config = self
-            .xtask
-            .as_ref()
-            .and_then(|xtask| xtask.cache.as_ref())
-            .context("ext.xtask.cache is not set in .config/xtask.toml")?;
-        config.validate()?;
-        Ok(config)
-    }
-
     pub(crate) fn agent_hook(&self) -> Result<&AgentHookConfig> {
         let config = self
             .agent_hook
@@ -83,6 +72,22 @@ struct XtaskConfig {
     cache: Option<XtaskCacheConfig>,
 }
 
+/// The self-cache view of `.config/xtask.toml`: `ext.xtask.cache` and nothing
+/// else. A cached binary must stay able to report its own freshness across a
+/// schema change in a section it does not own, or the generation that predates
+/// the change can never be refreshed.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct CacheDocument {
+    ext: CacheExt,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct CacheExt {
+    xtask: XtaskConfig,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct XtaskCacheConfig {
@@ -92,6 +97,21 @@ pub(crate) struct XtaskCacheConfig {
 }
 
 impl XtaskCacheConfig {
+    pub(crate) fn load(root: &Path) -> Result<Self> {
+        let path = root.join(".config/xtask.toml");
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("read project config {}", path.display()))?;
+        let document: CacheDocument = toml::from_str(&text)
+            .with_context(|| format!("parse project config {}", path.display()))?;
+        let config = document
+            .ext
+            .xtask
+            .cache
+            .context("ext.xtask.cache is not set in .config/xtask.toml")?;
+        config.validate()?;
+        Ok(config)
+    }
+
     fn validate(&self) -> Result<()> {
         if self.keep_generations < 2 {
             bail!("ext.xtask.cache.keep_generations must be at least 2");
@@ -335,8 +355,17 @@ mod tests {
     use std::path::PathBuf;
 
     use kithara_devtools::Ctx;
+    use tempfile::TempDir;
 
-    use super::KitharaExt;
+    use super::{KitharaExt, XtaskCacheConfig};
+
+    fn config_root(body: &str) -> (TempDir, PathBuf) {
+        let temp = tempfile::tempdir().expect("create fixture root");
+        let root = temp.path().to_path_buf();
+        std::fs::create_dir_all(root.join(".config")).expect("create config dir");
+        std::fs::write(root.join(".config/xtask.toml"), body).expect("write project config");
+        (temp, root)
+    }
 
     fn ctx_from_config(text: &str) -> Ctx {
         Ctx::new(
@@ -463,14 +492,9 @@ typo = true
     }
 
     #[test]
-    fn self_cache_and_hook_sections_are_required_and_typed() {
+    fn hook_section_is_required_and_typed() {
         let ctx = ctx_from_config(
             r#"
-[ext.xtask.cache]
-extra_inputs = ["justfile"]
-keep_generations = 2
-generation_grace_secs = 3600
-
 [ext.agent_hook]
 destructive_git_override_env = "KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT"
 
@@ -482,21 +506,16 @@ handler = "command-guard"
         );
 
         let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
-        let cache = ext.xtask_cache().expect("resolve xtask cache config");
         let hook = ext.agent_hook().expect("resolve agent hook config");
 
-        assert_eq!(cache.keep_generations, 2);
-        assert_eq!(cache.generation_grace_secs, 3600);
-        assert_eq!(cache.extra_inputs, [PathBuf::from("justfile")]);
         assert_eq!(hook.routes.len(), 1);
     }
 
     #[test]
-    fn missing_self_cache_and_hook_sections_fail_resolution() {
+    fn missing_hook_section_fails_resolution() {
         let ctx = ctx_from_config("");
         let ext = KitharaExt::from_ctx(&ctx).expect("parse empty extension");
 
-        assert!(ext.xtask_cache().is_err());
         assert!(ext.agent_hook().is_err());
     }
 
@@ -523,8 +542,49 @@ handler = "command-guard"
     }
 
     #[test]
+    fn cache_policy_loads_across_schema_drift_it_does_not_own() {
+        let (_temp, root) = config_root(
+            r#"
+[ext.xtask.cache]
+extra_inputs = ["justfile"]
+keep_generations = 2
+generation_grace_secs = 3600
+
+[ext.apple]
+default_simulator = "iPhone 17 Pro Max"
+field_from_a_later_schema = true
+
+[[health.feature_invariants]]
+when_feature = "resample"
+always = ["kithara/resample-glide"]
+"#,
+        );
+
+        let config = XtaskCacheConfig::load(&root).expect("load cache policy");
+
+        assert_eq!(config.keep_generations, 2);
+        assert_eq!(config.extra_inputs, [PathBuf::from("justfile")]);
+    }
+
+    #[test]
+    fn unparsable_project_config_is_a_parse_error() {
+        let (_temp, root) = config_root("this is not valid TOML\n");
+
+        let error = XtaskCacheConfig::load(&root).expect_err("invalid TOML fails");
+
+        assert!(format!("{error:#}").contains("parse"));
+    }
+
+    #[test]
+    fn missing_self_cache_section_fails_resolution() {
+        let (_temp, root) = config_root("[project]\nname = \"fixture\"\n");
+
+        assert!(XtaskCacheConfig::load(&root).is_err());
+    }
+
+    #[test]
     fn owned_self_cache_section_rejects_unknown_fields() {
-        let ctx = ctx_from_config(
+        let (_temp, root) = config_root(
             r#"
 [ext.xtask.cache]
 extra_inputs = []
@@ -534,7 +594,7 @@ typo = true
 "#,
         );
 
-        let error = KitharaExt::from_ctx(&ctx).expect_err("cache typo fails");
+        let error = XtaskCacheConfig::load(&root).expect_err("cache typo fails");
 
         assert!(format!("{error:#}").contains("typo"));
     }

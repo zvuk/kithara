@@ -442,7 +442,7 @@ mod tests {
     use anyhow::Result;
 
     use super::{CacheManifest, Freshness};
-    use crate::config::{KitharaExt, XtaskCacheConfig};
+    use crate::config::XtaskCacheConfig;
 
     fn fixture() -> Result<(tempfile::TempDir, PathBuf, XtaskCacheConfig)> {
         let temp = tempfile::tempdir()?;
@@ -522,12 +522,9 @@ tool_kind = "file-edit"
 handler = "format-edited-paths"
 "#,
         )?;
-        let loaded = KitharaExt::load(&root)?;
+        let loaded = XtaskCacheConfig::load(&root)?;
 
-        assert_eq!(
-            manifest.freshness(&root, loaded.xtask_cache()?)?,
-            Freshness::Current
-        );
+        assert_eq!(manifest.freshness(&root, &loaded)?, Freshness::Current);
         Ok(())
     }
 

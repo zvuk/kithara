@@ -37,7 +37,7 @@ use super::{
     manifest::{CacheManifest, Freshness},
     publish,
 };
-use crate::config::{KitharaExt, XtaskCacheConfig};
+use crate::config::XtaskCacheConfig;
 
 struct Consts;
 
@@ -98,9 +98,8 @@ fn probe() -> Result<()> {
 
 fn status(root: &Path) -> Result<()> {
     let generation = layout::current()?.context("xtask is not running from a cache generation")?;
-    let config = KitharaExt::load(root)?;
-    let config = config.xtask_cache()?;
-    let freshness = generation.manifest.freshness(root, config)?;
+    let config = XtaskCacheConfig::load(root)?;
+    let freshness = generation.manifest.freshness(root, &config)?;
     if let Err(error) = lease::cleanup(
         root,
         &generation.path,
@@ -117,9 +116,8 @@ fn status(root: &Path) -> Result<()> {
 }
 
 fn refresh(root: &Path, force: bool) -> Result<()> {
-    let config = KitharaExt::load(root)?;
-    let config = config.xtask_cache()?;
-    refresh_with(root, config, force, || rebuild(root, config))
+    let config = XtaskCacheConfig::load(root)?;
+    refresh_with(root, &config, force, || rebuild(root, &config))
 }
 
 fn refresh_with<F>(root: &Path, config: &XtaskCacheConfig, force: bool, build: F) -> Result<()>
@@ -144,20 +142,19 @@ where
 }
 
 fn bootstrap(root: &Path, force: bool) -> Result<()> {
-    let config = KitharaExt::load(root)?;
-    let config = config.xtask_cache()?;
+    let config = XtaskCacheConfig::load(root)?;
     let observed = layout::locator_snapshot(root)?;
     let _lock = lease::refresh(root)?;
     let another_bootstrap_published = layout::locator_snapshot(root)? != observed;
     if (!force || another_bootstrap_published)
-        && active_is_current(root, config)
+        && active_is_current(root, &config)
         && active_is_runnable(root)
     {
         return Ok(());
     }
-    rebuild(root, config)?;
+    rebuild(root, &config)?;
     ensure!(
-        active_is_current(root, config) && active_is_runnable(root),
+        active_is_current(root, &config) && active_is_runnable(root),
         "xtask self-cache bootstrap did not publish a runnable current generation"
     );
     Ok(())
