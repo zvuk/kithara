@@ -21,6 +21,9 @@ mod kithara_bufpool;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_broadcast {
+    mod hls_conformance;
+    mod origin;
+    mod origin_tests;
     mod packaging_tests;
 }
 
