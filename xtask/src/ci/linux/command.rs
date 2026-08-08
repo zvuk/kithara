@@ -58,7 +58,12 @@ enum LinuxCommand {
         mint: bool,
     },
     /// Reclaim superseded project images and stale build cache.
-    Cleanup,
+    Cleanup {
+        /// An image this machine is installed to run, named once per image.
+        /// Written by `install-services`, which knows what it installed.
+        #[arg(long = "keep")]
+        keep: Vec<String>,
+    },
     /// Install the Windows guest that serves the Windows lane.
     InstallWindows,
     /// Register the installed Windows guest as a runner and wait for it.
@@ -82,10 +87,7 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
         LinuxCommand::Configure { runner, env_file } => {
             registration::configure(&host, host.runner(runner)?, env_file)
         }
-        LinuxCommand::Cleanup => {
-            let pins = CiPins::load(&args.pins)?;
-            cleanup::run(&process, &pins)
-        }
+        LinuxCommand::Cleanup { keep } => cleanup::run(&process, keep),
         LinuxCommand::InstallServices => {
             let pins = CiPins::load(&args.pins)?;
             let executable = std::env::current_exe().context("locating this executable")?;

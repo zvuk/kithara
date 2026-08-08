@@ -22,34 +22,59 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Which lanes this run is for, decided before any of them start.
+  #
+  # Selecting inside the lane job instead would skip the step and leave the job
+  # green: a run scoped to one lane then reports every other lane as passing,
+  # which is the opposite of what a lane exists to say. A lane that does not run
+  # must produce no job at all.
+  select:
+    name: select lanes
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      lanes: ${{ steps.pick.outputs.lanes }}
+    steps:
+      - name: Pick the lanes
+        id: pick
+        env:
+          # Absent for `workflow_call`, which always means every lane.
+          REQUESTED: ${{ github.event.inputs.lane }}
+        run: |
+          set -euo pipefail
+          configured='["integration-regressions","network","loom","e2e","e2e-fused","e2e-glide","selenium"]'
+          if [ -z "$REQUESTED" ] || [ "$REQUESTED" = all ]; then
+            echo "lanes=$configured" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A lane nobody configured would otherwise select nothing and report a
+          # run that tested nothing as green.
+          if ! echo "$configured" | jq -e --arg lane "$REQUESTED" 'index($lane)' >/dev/null; then
+            echo "::error::no lane named '$REQUESTED'; configured lanes are $configured"
+            exit 1
+          fi
+          printf 'lanes=%s\n' "$(jq -cn --arg lane "$REQUESTED" '[$lane]')" >> "$GITHUB_OUTPUT"
+
   lanes:
     name: ${{ matrix.lane }}
-    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    needs: select
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 180
-    # One red lane must not hide the others: this run exists to enumerate.
-    continue-on-error: true
     strategy:
+      # One red lane must not hide the others: this run exists to enumerate, so
+      # a failure stops neither its siblings nor the report. It does count —
+      # `continue-on-error` here additionally made the run green whatever the
+      # lanes said, so the nightly report had nothing to key on.
       fail-fast: false
       matrix:
-        lane:
-          - integration-regressions
-          - network
-          - loom
-          - e2e
-          - e2e-fused
-          - e2e-glide
-          - selenium
+        lane: ${{ fromJSON(needs.select.outputs.lanes) }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Run the lane
-        if: >-
-          github.event.inputs.lane == ''
-          || github.event.inputs.lane == 'all'
-          || github.event.inputs.lane == matrix.lane
         env:
           LANE: ${{ matrix.lane }}
           # The network lane builds against the production key server. These are

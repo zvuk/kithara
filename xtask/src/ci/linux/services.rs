@@ -66,7 +66,7 @@ pub(super) fn install(
             cpuset, "runner service installed"
         );
     }
-    install_cleanup_timer()?;
+    install_cleanup_timer(&installed_images(host, pins))?;
     process.run("systemctl", &["daemon-reload"], "reload systemd")?;
     for runner in &host.runners {
         process.run(
@@ -83,19 +83,40 @@ pub(super) fn install(
     Ok(())
 }
 
-/// Which images this profile's runners start from, each named once.
-fn required_images<'a>(host: &LinuxHost, pins: &'a CiPins) -> Vec<&'a str> {
+/// The toolchain and runner image of every flavour this profile uses, each
+/// pair named once. A runner image is built on its toolchain, so a machine
+/// serving a lane depends on both.
+fn flavor_images<'a>(host: &LinuxHost, pins: &'a CiPins) -> Vec<(&'a str, &'a str)> {
     let mut images = Vec::new();
     for runner in &host.runners {
-        let image = match runner.flavor {
-            RunnerFlavor::Plain => pins.linux_runner_image.as_str(),
-            RunnerFlavor::Android => pins.linux_android_runner_image.as_str(),
+        let pair = match runner.flavor {
+            RunnerFlavor::Plain => (pins.linux_image.as_str(), pins.linux_runner_image.as_str()),
+            RunnerFlavor::Android => (
+                pins.linux_android_image.as_str(),
+                pins.linux_android_runner_image.as_str(),
+            ),
         };
-        if !images.contains(&image) {
-            images.push(image);
+        if !images.contains(&pair) {
+            images.push(pair);
         }
     }
     images
+}
+
+/// Which images this profile's runners start from, each named once.
+fn required_images<'a>(host: &LinuxHost, pins: &'a CiPins) -> Vec<&'a str> {
+    flavor_images(host, pins)
+        .into_iter()
+        .map(|(_, runner)| runner)
+        .collect()
+}
+
+/// Everything the installed fleet depends on, in the order cleanup is told it.
+fn installed_images<'a>(host: &LinuxHost, pins: &'a CiPins) -> Vec<&'a str> {
+    flavor_images(host, pins)
+        .into_iter()
+        .flat_map(|(toolchain, runner)| [toolchain, runner])
+        .collect()
 }
 
 /// Refuse to install services the machine cannot run.
@@ -135,18 +156,31 @@ fn require_pinned_images(process: &Process, host: &LinuxHost, pins: &CiPins) -> 
 /// Generations share their base layers, so removing five of six freed single
 /// gigabytes rather than the hundreds `docker images` reports per image — the
 /// point is that the count stops growing, not that a run reclaims much.
-fn install_cleanup_timer() -> Result<()> {
-    let service = format!(
+///
+/// The unit names the images to keep rather than reading the pins, because it
+/// runs from a timer with no repository around it — and because what must
+/// survive is what this machine was installed to run, not what the checkout
+/// happens to pin by the time the timer next fires.
+fn cleanup_unit(keep: &[&str]) -> String {
+    format!(
         "[Unit]\n\
          Description=Kithara CI cleanup\n\
          After=docker.service\n\
          Requires=docker.service\n\n\
          [Service]\n\
          Type=oneshot\n\
-         ExecStart={executable} ci linux --config {config} cleanup\n",
+         ExecStart={executable} ci linux --config {config} cleanup{keep}\n",
         executable = LAYOUT.executable,
         config = LINUX_CONFIG_PATH,
-    );
+        keep = keep
+            .iter()
+            .map(|image| format!(" --keep {image}"))
+            .collect::<String>(),
+    )
+}
+
+fn install_cleanup_timer(keep: &[&str]) -> Result<()> {
+    let service = cleanup_unit(keep);
     let timer = "[Unit]\n\
                  Description=Kithara CI cleanup\n\n\
                  [Timer]\n\
@@ -334,6 +368,47 @@ mod tests {
             "{images:?}"
         );
         assert_eq!(images.len(), 2, "each image is named once: {images:?}");
+    }
+
+    /// The timer runs from no particular directory, so its command must be one
+    /// this executable accepts as written. This unit spent every night failing
+    /// on a repository-relative path systemd gave it no repository to resolve.
+    #[test]
+    fn the_cleanup_unit_is_a_command_this_executable_accepts() {
+        let host = host_fixture();
+        let pins = &fixture().pins;
+        let text = cleanup_unit(&installed_images(&host, pins));
+
+        let command = text
+            .lines()
+            .find_map(|line| line.strip_prefix("ExecStart="))
+            .expect("the unit must start something")
+            .split_whitespace()
+            .skip(1)
+            .collect::<Vec<_>>();
+        let argv = std::iter::once("xtask").chain(command.iter().copied());
+        assert!(Cli::try_parse_from(argv).is_ok(), "{command:?}");
+    }
+
+    /// Both lanes' images, and the toolchain each was built on. A runner image
+    /// left without its base is rebuilt from scratch; a base kept without its
+    /// runner is the fleet's image deleted out from under it.
+    #[test]
+    fn the_cleanup_unit_names_every_image_the_fleet_runs() {
+        let host = host_fixture();
+        let pins = &fixture().pins;
+        let text = cleanup_unit(&installed_images(&host, pins));
+        for image in [
+            &pins.linux_image,
+            &pins.linux_runner_image,
+            &pins.linux_android_image,
+            &pins.linux_android_runner_image,
+        ] {
+            assert!(
+                text.contains(&format!("--keep {image}")),
+                "{image}:\n{text}"
+            );
+        }
     }
 
     /// The same contract as the Compose rendering: a unit that does not name
