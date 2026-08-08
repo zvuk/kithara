@@ -25,12 +25,24 @@ _xtask *ARGS: _xtask-ready
 
 [no-exit-message]
 _xtask-refresh:
-    @if just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-cached strict self-cache refresh --force </dev/null; fi; exec just _xtask-bootstrap --force </dev/null
+    @if just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then \
+      if just _xtask-cached strict self-cache refresh --force </dev/null; then exit 0; fi; \
+      printf 'warning: cached xtask self-cache maintenance failed; rebuilding from source\n' >&2; \
+    fi; exec just _xtask-bootstrap --force </dev/null
 
 [no-exit-message]
 [private]
 _xtask-ready:
-    @if ! just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-bootstrap </dev/null >/dev/null; fi; state=$(just _xtask-cached strict self-cache status </dev/null) || exit $?; case "$state" in current) ;; stale) exec just _xtask-cached strict self-cache refresh </dev/null >/dev/null ;; *) printf 'error: invalid xtask cache status: %s\n' "$state" >&2; exit 1 ;; esac
+    @if ! just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-bootstrap </dev/null >/dev/null; fi; \
+      if state=$(just _xtask-cached strict self-cache status </dev/null); then \
+        case "$state" in \
+          current) exit 0 ;; \
+          stale) if just _xtask-cached strict self-cache refresh </dev/null >/dev/null; then exit 0; fi ;; \
+          *) printf 'error: invalid xtask cache status: %s\n' "$state" >&2; exit 1 ;; \
+        esac; \
+      fi; \
+      printf 'warning: cached xtask self-cache maintenance failed; rebuilding from source\n' >&2; \
+      exec just _xtask-bootstrap --force </dev/null >/dev/null
 
 [no-exit-message]
 [positional-arguments]
