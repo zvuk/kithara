@@ -1,54 +1,23 @@
-use std::{io::Cursor, net::TcpStream};
+use std::net::TcpStream;
 
 use kithara::{
     self,
-    decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     platform::{thread, time::Duration},
-    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_integration_tests::goertzel::goertzel_magnitude;
 
-use super::origin::{GRACE, Origin, SAMPLE_RATE, SEGMENT_FRAMES, TONE_HZ, WINDOW};
+use super::origin::{
+    GRACE, Origin, SAMPLE_RATE, SEGMENT_FRAMES, TONE_HZ, WINDOW, assert_carries_the_tone,
+    decode_adts_left,
+};
 
 /// Frames the AAC-LC encoder needs before the tone is fully formed.
 const PRIMING_SKIP_FRAMES: usize = 4_800;
-const TONE_MARGIN: f64 = 50.0;
 const NOT_FOUND: u16 = 404;
 /// Polls allowed while the cancelled origin finishes closing its socket.
 const CONNECT_ATTEMPTS: usize = 200;
 
-fn decode_left_channel(bytes: Vec<u8>) -> Vec<f32> {
-    let mut decoder = DecoderFactory::create_from_media_info(
-        Cursor::new(bytes),
-        &MediaInfo::builder()
-            .codec(AudioCodec::AacLc)
-            .container(ContainerFormat::Adts)
-            .build(),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
-    )
-    .expect("create the ADTS AAC-LC decoder");
-
-    let mut left = Vec::new();
-    while let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode chunk") {
-        let channels = usize::from(chunk.spec().channels);
-        left.extend(chunk.samples.iter().step_by(channels));
-    }
-    left
-}
-
-fn assert_carries_the_tone(pcm: &[f32], label: &str) {
-    let tone = goertzel_magnitude(pcm, TONE_HZ, SAMPLE_RATE);
-    let off_tone = goertzel_magnitude(pcm, TONE_HZ * 3.0, SAMPLE_RATE);
-
-    assert!(
-        tone > off_tone * TONE_MARGIN,
-        "{label}: expected a {TONE_HZ} Hz tone over {} frames: |tone| = {tone:.1}, \
-         |off tone| = {off_tone:.1}",
-        pcm.len()
-    );
+fn assert_tone(pcm: &[f32], label: &str) {
+    assert_carries_the_tone(pcm, TONE_HZ, SAMPLE_RATE, label);
 }
 
 fn listed_sequences(playlist: &str) -> Vec<u64> {
@@ -169,14 +138,14 @@ async fn the_fetched_segments_decode_back_to_the_source_tone() {
         stream.extend_from_slice(&bytes);
     }
 
-    let decoded = decode_left_channel(stream);
+    let decoded = decode_adts_left(stream);
     let expected = usize::try_from(SEGMENT_FRAMES * 4).expect("fits");
     assert!(
         decoded.len() >= expected / 2,
         "expected about {expected} frames of audio, decoded {}",
         decoded.len()
     );
-    assert_carries_the_tone(&decoded[PRIMING_SKIP_FRAMES..], "fetched stream");
+    assert_tone(&decoded[PRIMING_SKIP_FRAMES..], "fetched stream");
 }
 
 #[kithara::test(tokio)]
@@ -204,8 +173,8 @@ async fn stopping_leaves_a_fetchable_vod_tail() {
         .await
         .expect("the tail is fetchable");
 
-    let decoded = decode_left_channel(bytes.to_vec());
-    assert_carries_the_tone(
+    let decoded = decode_adts_left(bytes.to_vec());
+    assert_tone(
         &decoded[PRIMING_SKIP_FRAMES..],
         &format!("segment {joined}"),
     );

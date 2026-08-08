@@ -137,6 +137,7 @@ fn detect_container_from_uri(uri: &str) -> Option<ContainerFormat> {
     let ext = path.rsplit('.').next()?.to_lowercase();
 
     match ext.as_str() {
+        "aac" | "adts" => Some(ContainerFormat::Adts),
         "ts" | "m2ts" => Some(ContainerFormat::MpegTs),
         "mp4" | "m4s" | "m4a" | "m4v" => Some(ContainerFormat::Fmp4),
         "wav" => Some(ContainerFormat::Wav),
@@ -526,6 +527,35 @@ audio_flac.m3u8";
         let init = media.init_segment.expect("init segment");
         assert_eq!(init.uri, "init.mp4");
         assert_eq!(media.detected_container, Some(ContainerFormat::Fmp4));
+    }
+
+    #[kithara::test]
+    fn test_container_from_uri_covers_every_served_extension() {
+        for uri in ["seg/0.aac", "seg/0.adts", "https://host/live/7.AAC?token=x"] {
+            assert_eq!(
+                detect_container_from_uri(uri),
+                Some(ContainerFormat::Adts),
+                "packed audio is what a live origin serves: {uri}"
+            );
+        }
+
+        assert_eq!(
+            detect_container_from_uri("segment0.ts"),
+            Some(ContainerFormat::MpegTs)
+        );
+        assert_eq!(
+            detect_container_from_uri("init.mp4"),
+            Some(ContainerFormat::Fmp4)
+        );
+        assert_eq!(
+            detect_container_from_uri("chunk.m4s"),
+            Some(ContainerFormat::Fmp4)
+        );
+        assert_eq!(
+            detect_container_from_uri("pcm.wav"),
+            Some(ContainerFormat::Wav)
+        );
+        assert_eq!(detect_container_from_uri("opaque.bin"), None);
     }
 
     #[kithara::test]

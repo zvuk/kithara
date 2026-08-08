@@ -1,5 +1,8 @@
+use std::io::Cursor;
+
 use bytes::Bytes;
 use kithara::{
+    decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     net::{HttpClient, NetError, NetOptions},
     platform::{
         CancelScope,
@@ -10,9 +13,13 @@ use kithara::{
         thread,
         time::Duration,
     },
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, FeedChunk, LivePcmFeed};
-use kithara_integration_tests::signal_pcm::signal::{SignalFn, SineWave};
+use kithara_integration_tests::{
+    goertzel::goertzel_magnitude,
+    signal_pcm::signal::{SignalFn, SineWave},
+};
 use url::Url;
 
 pub(super) const CHANNELS: u16 = 2;
@@ -28,6 +35,45 @@ pub(super) const SEGMENT_FRAMES: u64 = 24_000;
 
 /// Frames the feed hands over in one poll.
 const CHUNK_FRAMES: u64 = 2_400;
+
+/// How far the tone must stand over its third harmonic for the signal to be
+/// the one the source put on air.
+const TONE_MARGIN: f64 = 50.0;
+
+/// Decode packed ADTS AAC-LC bytes and keep the left channel.
+pub(super) fn decode_adts_left(bytes: Vec<u8>) -> Vec<f32> {
+    let mut decoder = DecoderFactory::create_from_media_info(
+        Cursor::new(bytes),
+        &MediaInfo::builder()
+            .codec(AudioCodec::AacLc)
+            .container(ContainerFormat::Adts)
+            .build(),
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .expect("create the ADTS AAC-LC decoder");
+
+    let mut left = Vec::new();
+    while let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode chunk") {
+        let channels = usize::from(chunk.spec().channels);
+        left.extend(chunk.samples.iter().step_by(channels));
+    }
+    left
+}
+
+pub(super) fn assert_carries_the_tone(pcm: &[f32], tone_hz: f64, sample_rate: u32, label: &str) {
+    let tone = goertzel_magnitude(pcm, tone_hz, sample_rate);
+    let off_tone = goertzel_magnitude(pcm, tone_hz * 3.0, sample_rate);
+
+    assert!(
+        tone > off_tone * TONE_MARGIN,
+        "{label}: expected a {tone_hz} Hz tone over {} frames: |tone| = {tone:.1}, \
+         |off tone| = {off_tone:.1}",
+        pcm.len()
+    );
+}
 
 /// A live origin under test: a sine feed the test releases in steps, the
 /// service, and an HTTP client pointed at the bound address.

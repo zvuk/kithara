@@ -21,10 +21,13 @@ use kithara::{
     platform::time::Duration,
 };
 
+use crate::signal_pcm::signal::SignalFn;
+
 /// A stateful `PcmReader` for testing facades that depend on audio playback.
 ///
-/// Produces a constant sample value (0.5), tracks seek position and reports
-/// [`ReadOutcome::Eof`] once the total-frame budget is consumed.
+/// Produces a constant sample value (0.5) or a signal function, tracks seek
+/// position and reports [`ReadOutcome::Eof`] once the total-frame budget is
+/// consumed.
 ///
 /// Honours [`PcmControl::set_playback_rate`]: every rendered output frame
 /// consumes `rate` source frames, so the source drains faster above 1.0 and
@@ -36,7 +39,14 @@ pub struct TestPcmReader {
     position_frames: u64,
     rate_bits: AtomicU32,
     total_frames: u64,
-    value: f32,
+    source: Source,
+}
+
+/// What the reader puts in every sample it hands over.
+enum Source {
+    Constant(f32),
+    /// Frame-indexed signal, scaled from 16-bit to the reader's f32 range.
+    Signal(Box<dyn SignalFn>),
 }
 
 /// Default sample value emitted by [`TestPcmReader::new`].
@@ -58,6 +68,17 @@ impl TestPcmReader {
     /// verify which track a rendered PCM window belongs to.
     #[must_use]
     pub fn with_value(spec: PcmSpec, duration_secs: f64, value: f32) -> Self {
+        Self::with_source(spec, duration_secs, Source::Constant(value))
+    }
+
+    /// Create a test reader rendering `signal` at the spec's sample rate, the
+    /// same sample on every channel.
+    #[must_use]
+    pub fn with_signal<S: SignalFn>(spec: PcmSpec, duration_secs: f64, signal: S) -> Self {
+        Self::with_source(spec, duration_secs, Source::Signal(Box::new(signal)))
+    }
+
+    fn with_source(spec: PcmSpec, duration_secs: f64, source: Source) -> Self {
         let total_frames = (f64::from(spec.sample_rate.get()) * duration_secs) as u64;
         Self {
             spec,
@@ -69,7 +90,17 @@ impl TestPcmReader {
             position_frames: 0,
             rate_bits: AtomicU32::new(1.0f32.to_bits()),
             bus: EventBus::default(),
-            value,
+            source,
+        }
+    }
+
+    fn sample_at(&self, frame: u64) -> f32 {
+        match self.source {
+            Source::Constant(value) => value,
+            Source::Signal(ref signal) => {
+                f32::from(signal.sample(frame as usize, self.spec.sample_rate.get()))
+                    / f32::from(i16::MAX)
+            }
         }
     }
 
@@ -147,8 +178,9 @@ impl PcmRead for TestPcmReader {
         }
         let renderable_samples = self.output_frames_left() * channels;
         let to_write = (buf.len() as u64).min(renderable_samples) as usize;
-        for sample in &mut buf[..to_write] {
-            *sample = self.value;
+        let start = self.position_frames;
+        for (index, sample) in buf[..to_write].iter_mut().enumerate() {
+            *sample = self.sample_at(start + index as u64 / channels);
         }
         self.consume(to_write as u64 / channels);
         let new_position = self.frames_to_duration(self.position_frames);
@@ -188,9 +220,10 @@ impl PcmRead for TestPcmReader {
         let frames_per_channel = output[0].len();
         let renderable = self.output_frames_left() as usize;
         let frames_to_write = frames_per_channel.min(renderable);
+        let start = self.position_frames;
         for ch in output.iter_mut().take(channels) {
-            for sample in ch.iter_mut().take(frames_to_write) {
-                *sample = self.value;
+            for (frame, sample) in ch.iter_mut().take(frames_to_write).enumerate() {
+                *sample = self.sample_at(start + frame as u64);
             }
         }
         self.consume(frames_to_write as u64);

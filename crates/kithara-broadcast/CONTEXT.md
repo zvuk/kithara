@@ -72,6 +72,10 @@ Cancelling the token is the other axis: it stops the origin and the worker witho
 
 `LivePcmFeed` is the crate's PCM seam: one `poll` appends interleaved f32 and reports the gap that preceded it plus end-of-stream, so the worker cannot see the producer leave while samples are still pending. `FeedChunk` is deliberately not `#[non_exhaustive]` — implementors outside the crate construct it. A non-zero `dropped` closes the open segment and marks the next one discontinuous; there is no backpressure on the audio path and no silence injection.
 
+`RingFeed` implements that seam over a `ringbuf` consumer and an `Arc<AtomicU64>` of samples the producer lost. Those two types are the whole vocabulary between the broadcast and whoever fills the ring, so a real-time producer reaches the packager without either side depending on the other's crate.
+
+The counter is monotonic, so a poll reports the difference since the previous one and never re-reports a debt. The producer is read as held before the ring is drained: one already gone by then can push nothing more, so a drain that comes back empty is the end of the feed rather than a window between the two reads. End of feed is therefore reported only on an empty drain — the remainder a released producer left behind goes out first.
+
 ## Time base
 
 `Segment::duration_ts` is a `u32` in timescale units, so a segment tops out around 24 hours at 48 kHz; the segmenter errors rather than wrapping when an open segment outgrows it.

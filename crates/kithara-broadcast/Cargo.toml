@@ -27,6 +27,7 @@ arc-swap = { workspace = true }
 axum = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }
+ringbuf = { workspace = true }
 thiserror = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }

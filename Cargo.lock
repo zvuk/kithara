@@ -4397,6 +4397,7 @@ dependencies = [
  "kithara-encode",
  "kithara-platform",
  "kithara-workspace-hack",
+ "ringbuf 0.5.0",
  "thiserror 2.0.18",
  "tower-http 0.7.0",
  "tracing",

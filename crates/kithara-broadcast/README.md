@@ -47,6 +47,7 @@ let snapshot = window.snapshot();
 - `BroadcastConfig` — the audio, the segments, and the address the origin binds.
 - `Broadcast` / `BroadcastHandle` — the live service: URL, status, and the graceful end of the broadcast.
 - `LivePcmFeed` — the PCM seam: non-blocking interleaved f32 plus the gap that preceded it.
+- `RingFeed` — that seam over a `ringbuf` consumer and the producer's drop counter.
 - `Segmenter` — ADTS framing plus segment rotation on the media clock.
 - `Segment` — one closed segment: sequence number, bytes, duration, discontinuity flag.
 - `LiveWindow` — sole owner of the playlist window, its retention, and the playlist text.
