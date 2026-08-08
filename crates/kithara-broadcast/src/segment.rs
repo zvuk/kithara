@@ -63,13 +63,14 @@ impl Segmenter {
     /// cannot carry, and [`BroadcastError::DurationOutOfRange`] when the open
     /// segment outgrows the playlist time base.
     pub fn push(&mut self, unit: &EncodedAccessUnit) -> BroadcastResult<Option<Segment>> {
-        self.packer.pack_into(&unit.bytes, &mut self.frames)?;
-        self.units += 1;
-        self.duration_ts = self.duration_ts.checked_add(unit.duration).ok_or_else(|| {
+        let duration_ts = self.duration_ts.checked_add(unit.duration).ok_or_else(|| {
             BroadcastError::DurationOutOfRange {
                 duration_ts: u64::from(self.duration_ts) + u64::from(unit.duration),
             }
         })?;
+        self.packer.pack_into(&unit.bytes, &mut self.frames)?;
+        self.duration_ts = duration_ts;
+        self.units += 1;
 
         if u64::from(self.duration_ts) >= self.target_ts {
             return Ok(self.close());

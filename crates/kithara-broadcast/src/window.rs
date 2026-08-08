@@ -94,13 +94,7 @@ impl LiveWindow {
     fn render(&self) -> String {
         let evicted = self.segments.len().saturating_sub(self.window);
         let listed = self.segments.range(evicted..);
-        let longest = listed
-            .clone()
-            .map(|segment| u64::from(segment.duration_ts))
-            .max()
-            .unwrap_or_default()
-            .div_ceil(u64::from(self.timescale));
-        let target = longest.max(self.target_seconds);
+        let target = self.target_seconds;
         let media_sequence = listed.clone().next().map_or(0, |segment| segment.seq);
         let discontinuity_sequence = self.discontinuity_sequence;
 
@@ -177,7 +171,7 @@ mod tests {
             window.snapshot().playlist.as_ref(),
             "#EXTM3U\n\
              #EXT-X-VERSION:3\n\
-             #EXT-X-TARGETDURATION:5\n\
+             #EXT-X-TARGETDURATION:4\n\
              #EXT-X-MEDIA-SEQUENCE:4\n\
              #EXT-X-DISCONTINUITY-SEQUENCE:0\n\
              #EXTINF:4.011,\n\
@@ -224,7 +218,7 @@ mod tests {
             window.snapshot().playlist.as_ref(),
             "#EXTM3U\n\
              #EXT-X-VERSION:3\n\
-             #EXT-X-TARGETDURATION:5\n\
+             #EXT-X-TARGETDURATION:4\n\
              #EXT-X-MEDIA-SEQUENCE:0\n\
              #EXT-X-DISCONTINUITY-SEQUENCE:0\n\
              #EXTINF:4.011,\n\
@@ -289,26 +283,25 @@ mod tests {
     }
 
     #[test]
-    fn the_target_duration_rounds_up_the_longest_segment() {
+    fn the_target_duration_is_the_configured_one_whatever_the_window_holds() {
         let mut window = window();
+        let empty = window.snapshot();
 
+        window.push(segment(0, false));
+        let running = window.snapshot();
         window.push(Segment {
-            duration_ts: 3 * Consts::TIMESCALE,
-            ..segment(0, false)
-        });
-        window.push(Segment {
-            duration_ts: 6 * Consts::TIMESCALE + 1,
+            duration_ts: 6 * Consts::TIMESCALE,
             ..segment(1, false)
         });
+        let overlong = window.snapshot();
 
-        assert!(
-            window
-                .snapshot()
-                .playlist
-                .contains("#EXT-X-TARGETDURATION:7\n"),
-            "{}",
-            window.snapshot().playlist
-        );
+        for playlist in [&empty, &running, &overlong] {
+            assert!(
+                playlist.playlist.contains("#EXT-X-TARGETDURATION:4\n"),
+                "a client is told one target duration for the life of the stream: {}",
+                playlist.playlist
+            );
+        }
     }
 
     #[test]

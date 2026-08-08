@@ -1,4 +1,4 @@
-/// The RFC 8216 §3.4 packed-audio timestamp tag: an ID3v2 tag carrying one
+/// The RFC 8216 §3.4 packed-audio timestamp tag: an `ID3v2` tag carrying one
 /// PRIV frame whose body is the segment's first-sample time.
 pub(crate) struct TimestampTag;
 
@@ -60,11 +60,11 @@ impl TimestampTag {
     /// wrapped into the 33 bits an MPEG-2 timestamp carries. Nothing else in
     /// the crate mixes the two time bases.
     pub(crate) fn mpeg_timestamp(media_ts: u64, timescale: u32) -> u64 {
-        let timescale = u128::from(timescale.max(1));
-        let ticks = (u128::from(media_ts) * u128::from(Self::MPEG_TIMESCALE) + timescale / Self::ROUND_TO_NEAREST)
-            / timescale
-            % (1 << Self::TIMESTAMP_BITS);
-        u64::try_from(ticks).unwrap_or_default()
+        let timescale = u128::from(timescale);
+        let scaled = u128::from(media_ts) * u128::from(Self::MPEG_TIMESCALE);
+        let ticks = (scaled + timescale / Self::ROUND_TO_NEAREST) / timescale;
+
+        u64::try_from(ticks % (1 << Self::TIMESTAMP_BITS)).expect("BUG: 33 bits fit a u64")
     }
 }
 

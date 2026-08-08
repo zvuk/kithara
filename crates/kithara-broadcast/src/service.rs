@@ -49,7 +49,7 @@ impl Broadcast {
     /// encoder cannot open, and [`crate::BroadcastError::Bind`] when the
     /// origin cannot bind its address.
     pub fn start<F>(
-        config: BroadcastConfig,
+        config: &BroadcastConfig,
         feed: F,
         parent: Option<CancelToken>,
     ) -> BroadcastResult<BroadcastHandle>
@@ -64,15 +64,14 @@ impl Broadcast {
             config.bit_rate,
             config.sample_rate,
         )?;
-        let segmenter = Segmenter::new(&config)?;
-        let window = LiveWindow::new(&config)?;
+        let segmenter = Segmenter::new(config)?;
+        let window = LiveWindow::new(config)?;
 
         let origin = Arc::new(Origin {
             snapshot: ArcSwap::from_pointee(window.snapshot()),
             master: Arc::from(server::master_playlist(config.bit_rate)),
-            segments: AtomicU64::new(0),
-            dropped: AtomicU64::new(0),
         });
+        let counters = Arc::new(Counters::default());
         let scope = CancelScope::new(parent);
         let addr = server::start(config.bind, Arc::clone(&origin), scope.token())?;
         let stop = Arc::new(AtomicBool::new(false));
@@ -83,6 +82,7 @@ impl Broadcast {
             segmenter,
             window,
             origin: Arc::clone(&origin),
+            counters: Arc::clone(&counters),
             token: scope.token(),
             stop: Arc::clone(&stop),
             samples: Vec::new(),
@@ -92,6 +92,7 @@ impl Broadcast {
         Ok(BroadcastHandle {
             url: Arc::from(format!("http://{addr}/master.m3u8")),
             origin,
+            counters,
             stop,
             worker: Mutex::new(Some(join)),
             scope,
@@ -104,6 +105,7 @@ impl Broadcast {
 pub struct BroadcastHandle {
     url: Arc<str>,
     origin: Arc<Origin>,
+    counters: Arc<Counters>,
     stop: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
     scope: CancelScope,
@@ -128,8 +130,8 @@ impl BroadcastHandle {
         BroadcastStatus {
             url: Arc::clone(&self.url),
             is_live: !self.origin.snapshot.load().is_finished,
-            segments: self.origin.segments.load(Ordering::Relaxed),
-            dropped_samples: self.origin.dropped.load(Ordering::Relaxed),
+            segments: self.counters.segments.load(Ordering::Relaxed),
+            dropped_samples: self.counters.dropped.load(Ordering::Relaxed),
         }
     }
 
@@ -156,9 +158,18 @@ struct Worker<F> {
     segmenter: Segmenter,
     window: LiveWindow,
     origin: Arc<Origin>,
+    counters: Arc<Counters>,
     token: CancelToken,
     stop: Arc<AtomicBool>,
     samples: Vec<f32>,
+}
+
+/// What the broadcast has packaged, for the handle to report. The origin does
+/// not read them.
+#[derive(Debug, Default)]
+struct Counters {
+    segments: AtomicU64,
+    dropped: AtomicU64,
 }
 
 impl<F: LivePcmFeed> Worker<F> {
@@ -193,7 +204,7 @@ impl<F: LivePcmFeed> Worker<F> {
         let chunk = self.feed.poll(&mut self.samples);
 
         if chunk.dropped > 0 {
-            self.origin
+            self.counters
                 .dropped
                 .fetch_add(chunk.dropped, Ordering::Relaxed);
             if let Some(segment) = self.segmenter.mark_drop() {
@@ -217,6 +228,9 @@ impl<F: LivePcmFeed> Worker<F> {
     /// VOD tail.
     fn end(mut self) {
         loop {
+            if self.token.is_cancelled() {
+                return;
+            }
             match self.pump() {
                 Ok(ended) => {
                     if ended || self.samples.is_empty() {
@@ -256,7 +270,7 @@ impl<F: LivePcmFeed> Worker<F> {
 
     fn publish(&mut self, segment: Segment) {
         self.window.push(segment);
-        self.origin.segments.fetch_add(1, Ordering::Relaxed);
+        self.counters.segments.fetch_add(1, Ordering::Relaxed);
         self.origin.snapshot.store(Arc::new(self.window.snapshot()));
     }
 }
@@ -355,7 +369,7 @@ mod tests {
         let mut feed = chunks(6);
         feed.push((Consts::SAMPLE_RATE.into(), pcm(Consts::CHUNK_FRAMES)));
         feed.extend(chunks(6));
-        let handle = Broadcast::start(config(), VecFeed::new(feed, true), None).expect("on air");
+        let handle = Broadcast::start(&config(), VecFeed::new(feed, true), None).expect("on air");
 
         handle.stop();
 
@@ -368,12 +382,13 @@ mod tests {
             handle.status().dropped_samples,
             u64::from(Consts::SAMPLE_RATE)
         );
+        handle.token().cancel();
     }
 
     #[test]
     fn the_end_of_the_feed_finishes_the_stream() {
         let handle =
-            Broadcast::start(config(), VecFeed::new(chunks(8), true), None).expect("on air");
+            Broadcast::start(&config(), VecFeed::new(chunks(8), true), None).expect("on air");
 
         wait_for(&handle, 1);
         while handle.status().is_live {
@@ -385,12 +400,13 @@ mod tests {
             !handle.status().is_live,
             "a producer that left takes the stream off air"
         );
+        handle.token().cancel();
     }
 
     #[test]
     fn stopping_twice_is_the_same_as_stopping_once() {
         let handle =
-            Broadcast::start(config(), VecFeed::new(chunks(8), false), None).expect("on air");
+            Broadcast::start(&config(), VecFeed::new(chunks(8), false), None).expect("on air");
 
         wait_for(&handle, 1);
         handle.stop();
@@ -400,5 +416,6 @@ mod tests {
         assert!(playlist(&handle).contains("#EXT-X-ENDLIST\n"));
         assert!(!after_first.is_live);
         assert_eq!(handle.status().segments, after_first.segments);
+        handle.token().cancel();
     }
 }

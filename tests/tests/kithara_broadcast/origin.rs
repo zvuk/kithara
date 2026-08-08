@@ -57,7 +57,7 @@ impl Origin {
             dropped: Arc::clone(&dropped),
             produced: 0,
         };
-        let handle = Broadcast::start(config, feed, Some(scope.token())).expect("go on air");
+        let handle = Broadcast::start(&config, feed, Some(scope.token())).expect("go on air");
         let base = Url::parse(handle.url()).expect("the handle reports a URL");
         let client = HttpClient::new(NetOptions::default(), scope.token());
 
@@ -72,8 +72,9 @@ impl Origin {
     }
 
     /// Release exactly `segments` segments of tone — plus a half segment the
-    /// packager holds open — and wait for the origin to publish them. The feed
-    /// runs dry there, so the playlist stands still while the test reads it.
+    /// packager holds open — and wait for the origin to publish them. Nothing
+    /// past that ceiling is ever handed over, so the playlist the test reads
+    /// cannot grow another segment behind its back.
     pub(super) fn advance_to(&self, segments: u64) {
         self.released.fetch_max(
             SEGMENT_FRAMES * segments + SEGMENT_FRAMES / 2,

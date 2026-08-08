@@ -10,7 +10,7 @@ use axum::{
 };
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, atomic::AtomicU64},
+    sync::Arc,
     thread,
     tokio::{net::TcpListener as TokioListener, runtime::Builder as RuntimeBuilder},
 };
@@ -24,8 +24,6 @@ use crate::{BroadcastError, BroadcastResult, window::PlaylistSnapshot};
 pub(crate) struct Origin {
     pub(crate) snapshot: ArcSwap<PlaylistSnapshot>,
     pub(crate) master: Arc<str>,
-    pub(crate) segments: AtomicU64,
-    pub(crate) dropped: AtomicU64,
 }
 
 /// Bind the origin and serve it from a runtime of its own.
