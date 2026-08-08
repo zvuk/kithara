@@ -10,6 +10,8 @@ The crate turns `kithara-encode` access units into HLS media segments and serves
 
 `validate` rejects zero audio, a zero window, a segment target shorter than one media tick, and — per RFC 8216 §6.2.2 — a window that spans fewer than three target durations. A short window is a typed `PlaylistTooShort`, never a silent adjustment.
 
+That check covers segments the segmenter cut at the target. A window made of segments an intake gap cut short can still span less than three target durations, because the announced `EXT-X-TARGETDURATION` stays what a client was first told: a constant target duration is the rule a reloading client depends on, and the span recovers as full segments slide in.
+
 ## ADTS framing
 
 Every access unit gets a 7-byte ADTS header (no CRC): MPEG-4, layer 0, `protection_absent`, AAC-LC profile, `buffer_fullness = 0x7FF` (VBR), one raw data block. Each frame is a sync point, so segments are byte-concatenatable and a client joining at any segment decodes it standalone.
@@ -56,7 +58,7 @@ The worker is the sole mutator of the segmenter and the window. It publishes eac
 
 Nothing in the pipeline reads a wall clock: rotation is media-driven and the playlist changes only when a segment closes. The worker's poll backoff paces an empty feed and is not part of the contract.
 
-`stop` ends the broadcast: the worker swallows what the feed still holds, drains the encoder, flushes the tail segment, and publishes the playlist with `EXT-X-ENDLIST`. The origin keeps serving that VOD tail, and repeat calls do nothing. A feed that reports its producer gone — the app disabling the tap, a device rate change, session teardown — takes the same graceful path and leaves the stream off air.
+`stop` ends the broadcast: the worker swallows what the feed still holds, drains the encoder, flushes the tail segment, and publishes the playlist with `EXT-X-ENDLIST`. The origin keeps serving that VOD tail. The first caller takes the join slot and returns once the tail is published; a caller that finds the slot empty returns straight away, because the broadcast is already ending or ended. A feed that reports its producer gone — the app disabling the tap, a device rate change, session teardown — takes the same graceful path and leaves the stream off air.
 
 Cancelling the token is the other axis: it stops the origin and the worker without a tail. `CancelScope::new(parent)` derives the broadcast's subtree, so the app cancels the broadcast by cancelling what it owns. Dropping the handle is passive — it cancels nothing.
 
