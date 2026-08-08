@@ -41,7 +41,7 @@ pub struct EngineImpl {
     runtime: Option<RuntimeHandle>,
     #[field(get, vis = "pub(crate)")]
     pcm_pool: PcmPool,
-    #[field(get = session_handle, vis = "pub(super)")]
+    #[field(get = session_handle, vis = "pub(crate)")]
     session: SessionHandle,
 }
 

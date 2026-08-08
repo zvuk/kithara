@@ -118,17 +118,23 @@ pub struct DeckSet {
     mix: MixState,
     #[field(get)]
     decks: Vec<Deck>,
+    /// The one session every deck joins. It owns the musical grid, so the
+    /// set owns it rather than any single deck: a tempo belongs to the mix,
+    /// not to whichever deck happened to ask for it.
+    #[field(get)]
+    session: SessionHandle,
     next_id: usize,
 }
 
 impl DeckSet {
     #[must_use]
-    pub fn new(decks: Vec<Deck>) -> Self {
+    pub fn new(session: SessionHandle, decks: Vec<Deck>) -> Self {
         let next_id = decks.iter().map(|deck| deck.id.0 + 1).max().unwrap_or(0);
         let mix = MixState::new(decks.len());
         Self {
             mix,
             decks,
+            session,
             next_id,
         }
     }
@@ -272,6 +278,7 @@ mod tests {
 
     fn deck_set_on(count: usize, session: &SessionHandle) -> DeckSet {
         DeckSet::new(
+            session.clone(),
             (0..count)
                 .map(|index| one_deck(DeckId(index), session))
                 .collect(),

@@ -6,7 +6,7 @@ use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::Region;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
-use kithara_play::{PlayerConfig, PlayerImpl};
+use kithara_play::{BeatStart, PlayerConfig, PlayerImpl};
 
 use super::types::{
     AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase,
@@ -67,6 +67,11 @@ pub struct Queue {
     pub(super) autoplay_target: AtomicTrackId,
     pub(super) loader: Arc<Loader>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
+    /// A start planned against the session grid, waiting for its track's
+    /// resource to be rebuilt under the binding. The rebuild is what makes the
+    /// resource follow the grid, so the stamp cannot be sent beside it — only
+    /// after it lands.
+    pub(super) pending_beat_start: Arc<Mutex<Option<(TrackId, BeatStart)>>>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
     /// Serialises a selection-apply against a concurrent [`Queue::select`].
     /// A track's `spawn_apply_after_load` completion and a later `select`
@@ -170,6 +175,7 @@ impl Queue {
             should_autoplay,
             shutdown: cancel,
             navigation: Arc::new(Mutex::new(NavigationState::new())),
+            pending_beat_start: Arc::new(Mutex::new(None)),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
             select_apply: Arc::new(Mutex::new(())),
             #[cfg(any(test, feature = "probe"))]
@@ -190,6 +196,14 @@ impl Queue {
 
     pub(super) fn lock_navigation_mut(&self) -> std::sync::MutexGuard<'_, NavigationState> {
         self.navigation
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(in crate::queue) fn lock_pending_beat_start(
+        &self,
+    ) -> std::sync::MutexGuard<'_, Option<(TrackId, BeatStart)>> {
+        self.pending_beat_start
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }

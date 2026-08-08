@@ -9,9 +9,9 @@ use kithara_stream::{MediaInfo, StreamType};
 use portable_atomic::AtomicF32;
 
 use crate::{
-    effects::timestretch::StretchControls,
     pipeline::config::AudioDecoderConfig,
     renderer::{AudioWorkerHandle, EngineLoad},
+    tempo::TempoSlot,
     traits::AudioEffect,
 };
 
@@ -58,12 +58,11 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// effect chain no longer consumes this value: speed lives in
     /// [`StretchControls`] when a stretch backend is compiled in.
     pub(crate) playback_rate: Option<Arc<AtomicF32>>,
-    /// Live playback-speed controls (plus key-lock + backend when a stretch
-    /// backend is compiled in). `Some` inserts a `TimeStretchProcessor` in the
-    /// source domain on native stretch builds. Without a compiled
-    /// backend, including wasm, no speed DSP is inserted and playback remains
-    /// at unity.
-    pub(crate) stretch: Option<Arc<StretchControls>>,
+    /// What times this deck: live controls, or a binding to the session grid.
+    /// `Some` inserts the matching slot in the source domain. Without a
+    /// compiled exact-span engine, including wasm, an unbound deck falls back
+    /// to unity and a bound one is refused — see [`TempoSlot`].
+    pub(crate) tempo: Option<TempoSlot>,
     /// Optional shared audio worker handle.
     pub(crate) worker: Option<AudioWorkerHandle>,
     /// Shared PCM pool for temporary buffers.
@@ -140,10 +139,10 @@ where
         self.playback_rate.as_ref()
     }
 
-    /// Return the live stretch controls.
+    /// Return the configured tempo slot.
     #[must_use]
-    pub fn stretch(&self) -> Option<&Arc<StretchControls>> {
-        self.stretch.as_ref()
+    pub fn tempo(&self) -> Option<&TempoSlot> {
+        self.tempo.as_ref()
     }
 
     /// Return the configured audio worker.

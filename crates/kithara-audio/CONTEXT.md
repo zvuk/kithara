@@ -81,7 +81,8 @@ mutator of track state through `update_state`. Sub-owners never take
 - `SharedStream<T>` — byte-space ground truth (position, len, phase, byte map,
   anchors, init range). No other owner clones byte-range policy.
 - `ActiveDecode` — the authoritative active `DecoderGeneration`, the optional
-  `IncomingDecode`, the always-on `PcmBlender`, the effect chain, the EOF drain.
+  `IncomingDecode`, the always-on `PcmBlender`, the zero-retention
+  `SourceWindow`, the effect chain, and the EOF drain.
   Each `DecoderGeneration` owns its decoder facts, base offset, install epoch,
   per-generation `GaplessStage`, and staged chunks.
 - `ReadinessGate` — the only owner of byte-range readiness calculations; gate and
@@ -317,11 +318,11 @@ stretch slot exists only when a stretch backend is compiled in and
 `AudioConfig::stretch` is set; without one, including wasm, no speed DSP is
 inserted and PCM output is pinned to 1.0.
 
-**Coordinate space.** The whole pipeline runs in decoder/song time
-(`PcmMeta.timestamp` / `end_timestamp` / `frame_offset`, the seek target, the UI
-playhead). A duration-changing `AudioEffect` is the sole timeline authority: it
-restamps only `spec` + `frames` and carries the consumed input's song-time meta
-forward, so there is no translation layer and no parallel frame counter.
+**Coordinate space.** `PcmMeta.timestamp`, `end_timestamp`, and `frame_offset`
+stay in decoder/song time, while a duration-changing effect rewrites `frames` in
+the output domain. `SourceWindow` is the explicit translation boundary: resume
+and splice frontiers come from its source endpoint minus source frames still held
+by the effect chain, never from transformed output frame counts.
 
 **Sample guard.** `sanitize_sample` (`kithara-decode`, which owns it) runs on the
 *input* of every stage taking untrusted samples: `IsolatorEq::process_sample`
@@ -357,6 +358,108 @@ is a typed config decision, never a runtime fallback chain. Output capacity is a
 correctness invariant, not a knob: the backend reports `output_frames_for_input`
 in the ceil frame domain and the decoder adapter sizes buffers from that.
 
+## Source window
+
+`ActiveDecode` owns a zero-retention `SourceWindow` between `PcmBlender` and the
+effect chain. `admit` records the track-absolute source endpoint and decoded
+sample rate while returning the same `PcmChunk` by move, so forward samples are
+not copied or allocated. After an effect emits, the committed source endpoint is
+the admitted endpoint minus the chain's saturating sum of held source frames.
+`ResumeCursor` records only that committed endpoint; no admitted endpoint means
+the previous proven head remains unchanged. Seek and recreate resets clear the
+window with the effects and EOF drain.
+
+`AudioEffect::held_source_frames` has no default: a wrong answer moves where a
+recreate resumes and where a variant splice lands, so every effect states its own
+hold instead of inheriting a silent zero. The count is on the **source** axis,
+which only a stage owning the source-to-output mapping can express. The chain
+production builds is `[TempoSlot?, ..custom]` and the tempo slot is its sole
+duration-changing stage; an effect behind it that buffered could not name its
+hold in source frames, so such an effect must be sample-synchronous.
+
+## Tempo slot: bound and unbound are exclusive
+
+A deck is timed one of two ways and `TempoSlot` makes that a choice rather than
+two independent options, so it cannot end up on both.
+
+`TempoSlot::Streaming` is the unbound deck: live speed, key-lock and region plan
+drive `TimeStretchProcessor`, and the output span is whatever the streaming
+backend renders — `StretchBackend::process` promises nothing about it.
+
+`TempoSlot::Bound` is a deck placed on the session grid, and it is the inverse
+of the streaming slot: **the producer chooses the output span and the plan
+determines the source span.** Per block `BoundRenderer` asks `SourceSchedule`
+which source coordinate is due at the block's first and last output frame,
+quantizes that continuous span through `ElasticSpanPlan`, and renders it with
+`ElasticEngine::process`, which returns exactly the requested output frames from
+exactly the requested source frames. Nothing here is block-synchronous with the
+audio callback: the only invariant is that bound output frame `n` is played at
+session frame `anchor + n`, so the renderer counts its own emitted frames and
+never consults the playhead. The fractional remainder between blocks lives in
+the plan's `ElasticCursor`; there is no second residual.
+
+`SourceSchedule` is the binding projected onto the deck's own output frames.
+`TrackBinding` (in `kithara-play`) stays the single owner of the session-beat to
+track-beat relation and publishes this projection downward: the analysed map and
+the track beat at output frame zero. The projection reads `TrackBeatMap`, never
+`BeatGrid::bpm` — a drifting grid must be followed by the local slope of the
+segment the playhead is in, and an average tempo would place its beats somewhere
+else.
+
+## Tempo has one owner and the slot is not it
+
+`SessionAnchor` pins the session beat grid to the session clock: one committed
+tempo, valid from the frame the commit took effect, with `beat_at` and
+`frame_at` as exact inverses. It is the sole owner of that relation, and the
+transport owns *when* it changes — every commit republishes an anchor through
+`SessionAnchorCell` and a bound deck reads whichever one is current when it
+plans its next block.
+
+No stage below the transport may hold a tempo of its own, **and a scalar
+captured at bind time is one**. Such a copy is never re-anchored: it silently
+outlives the commit that produced it, so a session tempo change never reaches
+the deck at all and the only way to apply one would be to rebuild the schedule,
+the effect chain and the resource behind it. Rebuilding a decoder because a
+tempo fader moved is the wrong answer to a question that should not be asked.
+
+`SourceSchedule` therefore carries no tempo. What it does own is the deck's own
+anchor pair — the session frame and session beat that output frame zero plays
+at — fixed at bind and never recomputed. Advance is measured *from where the
+deck started*, so a commit bends the grid ahead of the playhead and cannot move
+a frame already rendered. Recomputing the whole elapsed span at the new slope
+would, and it is audible as a jump.
+
+`SessionAnchorCell` is a sequence lock, not a pointer swap: the writer is the
+commit and the commit runs on the audio thread, where building the value behind
+a pointer would allocate. Four scalars, four stores between two counter bumps,
+one writer by construction. Readers retry only across a publish in flight.
+
+Nothing extra is needed for a smooth change. `ElasticSpanPlan` already quantizes
+each block's endpoints and carries the fractional remainder in `ElasticCursor`;
+a commit simply means the next block's plan sees a different slope and the
+cursor carries phase across it. `BoundRenderer` plans ahead of playback, so a
+commit landing between planning and playback leaves that block planned on the
+old slope — correct for the revision it was planned under, per interval-based
+revision validity. It re-plans from the newest anchor on the next block and
+never reinterprets frames already emitted.
+
+The slot is forward-only and retains nothing behind what it has consumed. A plan
+that reaches behind the retained source is a broken contract and is reported as
+`BoundError::BehindWindow`: never clamped to the oldest frame still in hand, and
+never turned into a re-seek.
+
+An exact-span engine returns the whole output span immediately and carries its
+algorithmic latency as **content** delay, not as a frame-count deficit. A bound
+slot at unity therefore emits one output frame per source frame while
+`held_source_frames` still reports the engine's declared source latency: those
+frames were consumed but their content has not left the engine, so the decode
+frontier must stay behind them.
+
+Without a compiled exact-span engine the unbound slot degrades to unity, which
+is a lesser answer but not a wrong one. A bound deck has no such fallback —
+rendering it unbound would put its beats somewhere else — so binding is refused
+with `TempoSlotError::BoundEngineMissing`, surfacing as `PlayError::BindUnavailable`.
+
 ## Time-stretch (speed and key-lock)
 
 Playback speed lives in the source-domain `TimeStretchProcessor`; the resampler
@@ -387,6 +490,13 @@ are stable: 1 = Signalsmith, 2 = Bungee), so an absent backend is
 un-representable rather than a runtime error. With no `stretch-*` feature the
 dependency is not linked and the kind/backend/processor re-exports compile out;
 `StretchControls` still exposes speed and region-plan storage.
+
+While active, `TimeStretchProcessor` reports the backend's source-frame input
+latency clamped to source frames pushed since its last backend reset. Unity
+passthrough reports zero. A real Signalsmith tail drain releases the hold;
+Bungee's no-op flush retains it because that backend drops the tail. This held
+count is the source/output translation used by `SourceWindow`; transformed
+`PcmMeta.frames` is never a decode frontier.
 
 **Region plan (beat-aligned stretch).** The pure region types live in
 `kithara_audio::region` and are re-exported unconditionally. Plans are sorted,

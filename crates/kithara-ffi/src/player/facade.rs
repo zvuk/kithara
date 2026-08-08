@@ -269,6 +269,34 @@ impl AudioPlayer {
         self.inner.set_eq_gain(band, gain_db)
     }
 
+    /// Place the deck on the session grid and start item `index` on the next
+    /// session beat that lands on `quantum`.
+    ///
+    /// `grid` is the host's analysis of that track and `track_beat` is the beat
+    /// of it that should sound on the stamped session beat — `0.0` for the
+    /// track's first analysed beat. `quantum` is counted in session beats:
+    /// `1.0` waits for the next beat, `4.0` for the next bar.
+    ///
+    /// From that point the deck renders as a function of session beat rather
+    /// than its own playback rate, so its beats keep landing on the session's.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError::InvalidArgument`] when `index` names no item with a
+    /// source location, when the grid does not form a usable map, or when
+    /// `track_beat` / `quantum` are not valid coordinates. Nothing is armed in
+    /// that case.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn start_at_beat(
+        &self,
+        index: u32,
+        grid: crate::grid::FfiTrackGrid,
+        track_beat: f64,
+        quantum: f64,
+    ) -> Result<(), FfiError> {
+        self.inner.start_at_beat(index, grid, track_beat, quantum)
+    }
+
     pub fn set_muted(&self, muted: bool) {
         self.inner.set_muted(muted);
     }

@@ -162,6 +162,14 @@ impl StretchBackend for SignalsmithBackend {
         self.out_frames(input_frames).saturating_mul(self.channels)
     }
 
+    fn source_latency_frames(&self) -> usize {
+        if self.flushed {
+            0
+        } else {
+            self.latency.source_frames()
+        }
+    }
+
     fn process(&mut self, input: &[f32], out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
         let in_frames = input.len() / self.channels;
         if in_frames == 0 {

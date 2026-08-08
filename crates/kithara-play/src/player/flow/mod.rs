@@ -5,4 +5,4 @@ mod prepare;
 mod query;
 mod transport;
 
-pub use transport::SelectTransition;
+pub use transport::{BeatStart, SelectTransition};

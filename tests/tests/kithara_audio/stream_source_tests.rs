@@ -1,7 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead, ReadOutcome, StretchControls, StretchKind},
+    decode::PcmMeta,
     events::{AudioEvent, Event, SeekEpoch, SeekLifecycleStage},
     platform::time::{self, Duration, Instant},
     stream::Stream,
@@ -10,6 +11,59 @@ use kithara_integration_tests::{
     create_test_wav, kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
 };
+
+const SOURCE_RATE: u32 = 44_100;
+
+fn exact_wav_config(speed: Option<f32>) -> AudioConfig<MemStream> {
+    let stretch = speed.map(|speed| {
+        let controls = StretchControls::new(speed);
+        controls.set_backend(StretchKind::Signalsmith);
+        controls.set_keylock(true);
+        controls
+    });
+    let stream = MemStreamConfig {
+        source: Some(MemorySource::new(create_test_wav(
+            usize::try_from(SOURCE_RATE).expect("sample rate fits usize") * 2,
+            SOURCE_RATE,
+            2,
+        ))),
+        event_bus: None,
+    };
+
+    AudioConfig::<MemStream>::for_stream(stream)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .maybe_tempo(stretch.map(kithara::audio::TempoSlot::from))
+        .pcm_buffer_chunks(1)
+        .hint("wav".to_owned())
+        .build()
+}
+
+async fn collect_exact_pcm(
+    audio: &mut Audio<Stream<MemStream>>,
+    budget: Duration,
+) -> Vec<(PcmMeta, Vec<u32>)> {
+    let deadline = Instant::now() + budget;
+    let mut chunks = Vec::new();
+    while Instant::now() < deadline {
+        match audio.next_chunk() {
+            Ok(ChunkOutcome::Chunk(chunk)) => chunks.push((
+                chunk.meta,
+                chunk
+                    .samples
+                    .iter()
+                    .map(|sample| sample.to_bits())
+                    .collect(),
+            )),
+            Ok(ChunkOutcome::Pending { .. }) => {
+                time::sleep(Duration::from_millis(1)).await;
+            }
+            Ok(ChunkOutcome::Eof { .. }) => return chunks,
+            Err(error) => panic!("decode failed while collecting PCM: {error}"),
+        }
+    }
+    panic!("timed out collecting exact PCM");
+}
 
 fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
     let wav = create_test_wav(samples, 44_100, 2);
@@ -70,6 +124,24 @@ async fn basic_decode_to_eof() {
         frames >= 8_000,
         "expected at least the input frame count, got {frames}"
     );
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(20)))]
+async fn unity_stretch_pipeline_is_bit_identical_to_the_effect_free_path() {
+    let baseline = {
+        let mut audio = Audio::<Stream<MemStream>>::new(exact_wav_config(None))
+            .await
+            .expect("baseline audio construction");
+        collect_exact_pcm(&mut audio, Duration::from_secs(5)).await
+    };
+    let unity = {
+        let mut audio = Audio::<Stream<MemStream>>::new(exact_wav_config(Some(1.0)))
+            .await
+            .expect("unity audio construction");
+        collect_exact_pcm(&mut audio, Duration::from_secs(5)).await
+    };
+
+    assert_eq!(unity, baseline);
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]

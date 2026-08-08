@@ -19,7 +19,8 @@ use crate::{
     bridge::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
     },
-    rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots},
+    rt::{RenderContext, RenderPass, RenderTargets, TrackSlot, TrackSlots},
+    session::transport::TransportCommitState,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -179,11 +180,23 @@ impl PlayerNodeProcessor {
         }
     }
 
+    /// Render this block without a transport view: no track can be waiting on
+    /// a session beat, so none is promoted.
     pub fn render_audio(
         &mut self,
         buffers: &mut ProcBuffers,
         frames: usize,
         is_playing: bool,
+    ) -> (bool, Option<(f64, f64)>) {
+        self.render_block(buffers, frames, is_playing, None)
+    }
+
+    pub(crate) fn render_block(
+        &mut self,
+        buffers: &mut ProcBuffers,
+        frames: usize,
+        is_playing: bool,
+        context: Option<RenderContext<'_>>,
     ) -> (bool, Option<(f64, f64)>) {
         self.render.render_audio(
             RenderTargets {
@@ -194,6 +207,7 @@ impl PlayerNodeProcessor {
             buffers,
             frames,
             is_playing,
+            context,
         )
     }
 
@@ -309,7 +323,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         info: &ProcInfo,
         mut buffers: ProcBuffers,
         _events: &mut ProcEvents,
-        _extra: &mut ProcExtra,
+        extra: &mut ProcExtra,
     ) -> ProcessStatus {
         self.playback.process_count.fetch_add(1, Ordering::Relaxed);
 
@@ -319,8 +333,13 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         let is_playing = self.playback.playing.load(Ordering::SeqCst);
 
+        // The transport node is a pre-process node, so its committed state is
+        // already in the shared store for this block; a beat-anchored start
+        // resolves against the same commit that stamped the block.
+        let transport = extra.store.try_get::<TransportCommitState>();
+        let context = transport.map(|transport| RenderContext { transport, info });
         let (playback_started, leading_outcome_pos_dur) =
-            self.render_audio(&mut buffers, info.frames, is_playing);
+            self.render_block(&mut buffers, info.frames, is_playing, context);
 
         self.update_position_duration(leading_outcome_pos_dur);
 

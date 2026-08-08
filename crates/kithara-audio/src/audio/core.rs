@@ -13,8 +13,8 @@ use portable_atomic::AtomicF32;
 
 use super::{
     AtomicServiceClass, AudioWorkerHandle, ChunkOutcome, DecodeError, PcmControl, PcmRead,
-    PcmSession, PendingReason, PreloadGate, ReadOutcome, SeekOutcome, ServiceClass,
-    StretchControls, TrackId,
+    PcmSession, PendingReason, PreloadGate, ReadOutcome, SeekOutcome, ServiceClass, TempoSlot,
+    TrackId,
     cursor::ChunkCursor,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
@@ -59,7 +59,7 @@ pub(super) struct Controls {
     pub(super) host_sample_rate: Arc<AtomicU32>,
     pub(super) playback_rate: Arc<AtomicF32>,
     pub(super) service_class: Arc<AtomicServiceClass>,
-    pub(super) stretch: Option<Arc<StretchControls>>,
+    pub(super) tempo: Option<TempoSlot>,
 }
 
 pub(super) struct WorkerLease {
@@ -356,7 +356,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
     }
 
     fn set_playback_rate(&self, rate: f32) {
-        if let Some(controls) = &self.controls.stretch {
+        if let Some(controls) = self.controls.tempo.as_ref().and_then(TempoSlot::streaming) {
             controls.set_speed(rate);
         } else {
             self.controls.playback_rate.store(rate, Ordering::Relaxed);
@@ -467,7 +467,7 @@ mod tests {
                     controls: Controls {
                         host_sample_rate: Arc::new(AtomicU32::new(0)),
                         playback_rate: Arc::new(AtomicF32::new(1.0)),
-                        stretch: None,
+                        tempo: None,
                         service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
                     },
                     spec: PcmMeta::default().spec,

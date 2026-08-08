@@ -6,7 +6,7 @@ use kithara_audio::ServiceClass;
 use kithara_platform::sync::Arc;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
-use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
+use super::{PlayerResource, fade::TrackFade, start::TrackStart, triggers::TrackTriggers};
 use crate::bridge::TrackState;
 
 /// Per-track state in the processor arena.
@@ -21,6 +21,13 @@ pub struct PlayerTrack {
     pub(super) fade: TrackFade,
     #[field(get, copy)]
     pub(super) state: TrackState,
+    /// When this track becomes audible. Read once, when it is promoted.
+    #[field(get, copy)]
+    pub(super) start: TrackStart,
+    /// Offset inside the block a beat-anchored start landed on, consumed by
+    /// the first read after the promotion so the track is silent before its
+    /// own beat.
+    pub(super) start_offset: Option<usize>,
     pub(super) triggers: TrackTriggers,
     /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
     /// Marks a played-out track as eligible to be kept warm at end-of-queue
@@ -83,6 +90,8 @@ impl PlayerTrack {
             playback_rate,
             observed_duration,
             state: TrackState::Preloading,
+            start: TrackStart::default(),
+            start_offset: None,
             state_dirty: false,
             triggers: TrackTriggers::default(),
             fade: TrackFade::new(fade_duration, fade_curve, sample_rate),
@@ -127,6 +136,22 @@ impl PlayerTrack {
     pub fn fade_out(&mut self) {
         self.set_state(TrackState::FadingOut);
         self.fade.fade_out();
+    }
+
+    /// Plan when this track becomes audible.
+    pub fn set_start(&mut self, start: TrackStart) {
+        self.start = start;
+    }
+
+    /// Offset this block's first read must begin at, consumed on read.
+    pub(crate) fn take_start_offset(&mut self) -> Option<usize> {
+        self.start_offset.take()
+    }
+
+    /// Promote a beat-anchored track at `offset` inside the current block.
+    pub fn play_at_offset(&mut self, offset: usize) {
+        self.start_offset = Some(offset);
+        self.play();
     }
 
     /// Instantly start playing at full volume.

@@ -12,3 +12,4 @@ pub(crate) mod seek;
 pub(crate) mod source;
 pub(crate) mod stream;
 pub(crate) mod track;
+pub(crate) mod window;

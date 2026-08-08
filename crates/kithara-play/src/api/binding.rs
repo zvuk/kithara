@@ -1,9 +1,9 @@
 use std::num::NonZeroU32;
 
-use kithara_audio::{BeatMapError, SourceFrame, TrackBeat, TrackBeatMap, analysis::TrackAnalysis};
+use kithara_audio::{
+    BeatMapError, SessionBeat, SourceFrame, TrackBeat, TrackBeatMap, analysis::TrackAnalysis,
+};
 use kithara_events::PlaybackDirection;
-
-use super::SessionBeat;
 
 /// A track cannot participate in session synchronization.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -88,11 +88,11 @@ impl TrackBinding {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{BeatGrid, BeatMapError, TrackBeat, analysis::TrackAnalysis};
+    use kithara_audio::{BeatGrid, BeatMapError, SessionBeat, TrackBeat, analysis::TrackAnalysis};
     use kithara_events::PlaybackDirection;
     use kithara_test_utils::kithara;
 
-    use super::{SessionBeat, SyncUnavailable, TrackBinding};
+    use super::{SyncUnavailable, TrackBinding};
 
     fn sample_rate() -> NonZeroU32 {
         NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero")

@@ -22,6 +22,7 @@ mod pipeline;
 mod region;
 pub(crate) mod renderer;
 mod runtime;
+pub mod tempo;
 mod traits;
 mod waveform;
 
@@ -30,13 +31,15 @@ pub use blob::frame::BlobError;
 pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
     limiter::{LimiterError, PeakLimiter},
-    timestretch::StretchControls,
 };
 pub use exports::*;
 pub use kithara_resampler::{
     NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality,
 };
-pub use musical::{BeatMapError, CoordinateError, SourceFrame, TrackBeat, TrackBeatMap};
+pub use musical::{
+    BeatMapError, CoordinateError, ScheduleError, SessionAnchor, SessionAnchorCell, SessionBeat,
+    SessionFrame, SourceFrame, SourceSchedule, TrackBeat, TrackBeatMap,
+};
 pub use pipeline::{
     config::{AudioConfig, AudioDecoderConfig, DecoderResamplerSettings},
     fetch::{EpochValidator, Fetch},
@@ -45,6 +48,7 @@ pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
 pub use renderer::{
     AudioWorkerHandle, AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass,
 };
+pub use tempo::{StretchControls, TempoSlot, TempoSlotError};
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead, PcmReader,
     PcmSession, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,

@@ -1,6 +1,6 @@
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
-use kithara_audio::{EngineLoad, StretchControls};
+use kithara_audio::{EngineLoad, SessionBeat, SourceSchedule, StretchControls, TempoSlot};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_platform::{
@@ -14,7 +14,7 @@ use super::{
     state::{ItemQueue, PlayerParams, PlayerPhase},
 };
 use crate::{
-    api::{PlayerEvent, PlayerStatus},
+    api::{PlayerEvent, PlayerStatus, TrackBinding},
     bridge::PlayerCmd,
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
@@ -32,6 +32,10 @@ pub(crate) struct PlayerCore {
     pub(crate) engine_load: Arc<EngineLoad>,
 
     pub(crate) timestretch: Arc<StretchControls>,
+    /// Session-grid binding for this deck. `Some` puts every prepared
+    /// resource on the exact-span slot instead of the streaming one; the two
+    /// are exclusive by construction.
+    pub(crate) binding: Mutex<Option<Arc<SourceSchedule>>>,
     pub(crate) byte_pool: BytePool,
     /// Engine drops last — worker shutdown happens after all tracks
     /// unregister and after `items` releases their resources.
@@ -58,6 +62,61 @@ pub(crate) struct PlayerCore {
 /// `Mutex<PlayerPhase>` carrying the slot / ABR handle / armed-next, while
 /// `core` holds the phase-neutral fields. `phase` is declared first so it
 /// drops before `core.engine`.
+impl PlayerImpl {
+    /// Places this deck on the session grid, so its analysed beats land on
+    /// stamped session beats.
+    ///
+    /// `at` is the session beat the deck's output frame zero plays on, which is
+    /// what makes the schedule's origin the track beat due there. Anchoring the
+    /// schedule anywhere else — the live position, say — would offset every
+    /// rendered frame by the wait before the start.
+    ///
+    /// The binding is taken at one revision and stays fixed: every frame after
+    /// the first follows the analysed map's local slope. Resources prepared
+    /// after this call render through the exact-span slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayError::BindUnavailable`] when the session has committed
+    /// no grid yet, or the track has no usable analysed map at `at`.
+    pub(crate) fn bind(&self, binding: &TrackBinding, at: SessionBeat) -> Result<(), PlayError> {
+        let anchor = self.core.engine.session_handle().anchor()?;
+        if anchor.load().is_none() {
+            return Err(PlayError::BindUnavailable {
+                reason: "the session has committed no tempo grid yet".to_owned(),
+            });
+        }
+        // `at` fixes only where the deck *starts* on the track: its first
+        // output frame plays the track beat due on that session beat. How far
+        // it then advances is counted by the renderer, not derived from a pin
+        // on the session's frame axis, which a resume moves.
+        let origin = binding
+            .track_beat_at(at)
+            .map_err(|reason| PlayError::BindUnavailable {
+                reason: reason.to_string(),
+            })?;
+        *self.core.binding.lock() = Some(Arc::new(SourceSchedule::new(
+            binding.map().clone(),
+            origin,
+            binding.direction(),
+            anchor,
+        )));
+        Ok(())
+    }
+}
+
+impl PlayerCore {
+    /// The slot every prepared resource is timed by. Bound wins when a
+    /// binding is installed: a deck asked to follow the session grid must not
+    /// quietly keep the streaming path.
+    pub(crate) fn tempo_slot(&self) -> TempoSlot {
+        self.binding.lock().clone().map_or_else(
+            || TempoSlot::Streaming(Arc::clone(&self.timestretch)),
+            TempoSlot::Bound,
+        )
+    }
+}
+
 pub struct PlayerImpl {
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore,
@@ -104,6 +163,7 @@ impl PlayerImpl {
             byte_pool: config.byte_pool,
             status: Mutex::default(),
             items: ItemQueue::new(bus),
+            binding: Mutex::default(),
         };
         Self {
             core,

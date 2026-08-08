@@ -6,7 +6,7 @@ use firewheel::{
         filter::smoothing_filter::DEFAULT_SETTLE_EPSILON,
         mix::{Mix, MixDSP},
     },
-    node::ProcBuffers,
+    node::{ProcBuffers, ProcInfo},
     param::smoother::SmootherConfig,
 };
 use kithara_bufpool::{PcmBuf, PcmPool};
@@ -17,11 +17,12 @@ use tracing::warn;
 
 use super::{
     processor::{PlayerNodeProcessor, StreamShape},
-    track::{RtSink, TrackReadOutcome},
+    track::{RtSink, TrackReadOutcome, TrackStart},
 };
 use crate::{
     bridge::{PlayerNotification, RtMetrics, TrackState},
     rt::{TrackSlot, TrackSlots},
+    session::transport::TransportCommitState,
 };
 
 type ActiveTrackEntry = (usize, TrackSlot, bool);
@@ -29,6 +30,16 @@ type ActiveTrackEntry = (usize, TrackSlot, bool);
 #[derive(Clone, Copy)]
 struct Handover {
     offset: usize,
+}
+
+/// The committed transport as this block sees it.
+///
+/// One immutable view per block: the transport node runs before the player
+/// node and leaves its state in the shared proc store, so a beat-anchored
+/// start resolves against the same commit that stamped the block.
+pub(crate) struct RenderContext<'a> {
+    pub(crate) transport: &'a TransportCommitState,
+    pub(crate) info: &'a ProcInfo,
 }
 
 pub(crate) struct RenderTargets<'a> {
@@ -79,6 +90,7 @@ impl RenderPass {
         buffers: &mut ProcBuffers,
         frames: usize,
         is_playing: bool,
+        context: Option<RenderContext<'_>>,
     ) -> (bool, Option<(f64, f64)>) {
         let mut playback_started = false;
         let mut leading_outcome_pos_dur: Option<(f64, f64)> = None;
@@ -125,6 +137,9 @@ impl RenderPass {
             ch_buffer.fill(0.0);
         }
         let tracks = targets.tracks;
+        if let Some(context) = context {
+            promote_beat_anchored(tracks, &context, frames);
+        }
         let mut sink = RtSink::new(targets.notification_tx, targets.metrics);
         let loaded_tracks: SmallVec<[(TrackSlot, TrackState); PlayerNodeProcessor::MAX_TRACKS]> =
             tracks
@@ -156,10 +171,10 @@ impl RenderPass {
             }
 
             let mut read_outcome = {
-                let Some(outcome) = tracks
-                    .at_mut(*track_handle)
-                    .map(|track| track.read(&mut read_bufs, &mut mix_bufs, 0..frames, &mut sink))
-                else {
+                let Some(outcome) = tracks.at_mut(*track_handle).map(|track| {
+                    let start = track.take_start_offset().unwrap_or(0).min(frames);
+                    track.read(&mut read_bufs, &mut mix_bufs, start..frames, &mut sink)
+                }) else {
                     continue;
                 };
                 playback_started = true;
@@ -261,6 +276,36 @@ impl RenderPass {
             capacity = capacity.min(buf.len());
         }
         self.capacity = capacity;
+    }
+}
+
+/// Promotes every preloading track whose stamped beat falls inside this block.
+///
+/// A track whose beat is not here yet, or whose plan was made against a
+/// transport that has since been re-committed, stays preloading: the resolver
+/// answers `None`, and there is no offset to guess.
+fn promote_beat_anchored(
+    tracks: &mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
+    context: &RenderContext<'_>,
+    frames: usize,
+) {
+    let pending: SmallVec<[(TrackSlot, usize); PlayerNodeProcessor::MAX_TRACKS]> = tracks
+        .iter()
+        .filter(|(_, track)| track.state() == TrackState::Preloading)
+        .filter_map(|(slot, track)| match track.start() {
+            TrackStart::Session { target, revision } => context
+                .transport
+                .offset_for_beat(context.info, target, revision)
+                .filter(|offset| *offset < frames)
+                .map(|offset| (slot, offset)),
+            TrackStart::Handover => None,
+        })
+        .collect();
+
+    for (slot, offset) in pending {
+        if let Some(track) = tracks.at_mut(slot) {
+            track.play_at_offset(offset);
+        }
     }
 }
 

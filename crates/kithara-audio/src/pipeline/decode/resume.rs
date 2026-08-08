@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use kithara_decode::{PcmChunk, duration_for_frames};
+use kithara_decode::duration_for_frames;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::StreamType;
 
@@ -9,6 +9,7 @@ use crate::pipeline::{
     rebuild::{RecreateCause, RecreateNext, RecreateState},
     seek::{SeekContext, SeekEngine, SeekRequest, anchor},
     stream::shared::SharedStream,
+    window::SourceEnd,
 };
 
 #[derive(fieldwork::Fieldwork)]
@@ -58,15 +59,10 @@ impl ResumeCursor {
         self.host_rate.load(Ordering::Acquire)
     }
 
-    pub(crate) fn record(&mut self, chunk: &PcmChunk, epoch: u64) {
-        self.decode_head = Some((
-            epoch,
-            chunk
-                .meta
-                .frame_offset
-                .saturating_add(u64::from(chunk.meta.frames)),
-            chunk.meta.spec.sample_rate.get(),
-        ));
+    pub(crate) fn record(&mut self, source_end: Option<SourceEnd>, epoch: u64) {
+        if let Some(source_end) = source_end {
+            self.decode_head = Some((epoch, source_end.frame, source_end.rate));
+        }
     }
 
     pub(crate) fn resume_position(
@@ -130,5 +126,28 @@ impl ResumeCursor {
                 emit_request: false,
             }),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn missing_source_end_preserves_the_last_proven_head() {
+        let mut cursor = ResumeCursor::new(Arc::new(AtomicU32::new(48_000)), false, 48_000);
+        cursor.record(
+            Some(SourceEnd {
+                frame: 512,
+                rate: 48_000,
+            }),
+            7,
+        );
+
+        cursor.record(None, 7);
+
+        assert_eq!(cursor.decode_head(7), Some((512, 48_000)));
     }
 }

@@ -311,6 +311,7 @@ impl Queue {
         };
         let player = Arc::clone(&self.player);
         let tracks = Arc::clone(&self.tracks);
+        let pending_beat_start = Arc::clone(&self.pending_beat_start);
         let pending_select = Arc::clone(&self.pending_select);
         let navigation = Arc::clone(&self.navigation);
         let select_apply = Arc::clone(&self.select_apply);
@@ -356,6 +357,29 @@ impl Queue {
 
             player.replace_item(index, resource);
             tracks.set_status(id, TrackStatus::Loaded);
+
+            // The resource this landing carries was built under the binding,
+            // so this is the first moment the stamp has a bound track to
+            // address. Arming moves it into the processor as preloading,
+            // which is the only state a stamped start resolves from.
+            let beat_start = {
+                let mut slot = pending_beat_start
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let taken = match *slot {
+                    Some((pending, start)) if pending == id => {
+                        *slot = None;
+                        Some(start)
+                    }
+                    _ => None,
+                };
+                drop(slot);
+                taken
+            };
+            if let Some(start) = beat_start {
+                super::grid::arm_landed_beat_start(&player, index, id, start);
+                return;
+            }
             if tracks.lock().get(index).is_some_and(|entry| entry.id == id) {
                 bus.publish(QueueEvent::NextTrackReady { id, index });
             }

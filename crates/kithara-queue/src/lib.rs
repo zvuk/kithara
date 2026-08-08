@@ -13,6 +13,7 @@ mod track;
 pub use config::QueueConfig;
 pub use error::QueueError;
 pub use kithara_events::{QueueEvent, TrackId, TrackStatus};
+pub use kithara_play::{BeatQuantum, TrackAnalysis, TrackBeat};
 pub use navigation::{NavigationState, RepeatMode};
 pub use queue::{PlaybackView, Queue, Transition};
 pub use track::{TrackEntry, TrackSource};

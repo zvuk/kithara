@@ -34,6 +34,9 @@ pub trait StretchBackend: Send + 'static {
     /// scratch once and stays alloc-free on the produce-core.
     fn max_output_samples(&self, input_frames: usize) -> usize;
 
+    /// Source-frame input latency currently held by the backend.
+    fn source_latency_frames(&self) -> usize;
+
     /// Push interleaved `input`; append whatever interleaved output is ready.
     ///
     /// Output frame count is governed by the ratio and may burst (latency

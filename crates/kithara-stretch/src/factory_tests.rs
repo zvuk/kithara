@@ -51,6 +51,10 @@ fn smoke(kind: StretchKind) {
         out.len(),
         max_output_samples
     );
+    assert!(
+        backend.source_latency_frames() > 0,
+        "{kind}: processed backend must report input latency"
+    );
 }
 
 #[cfg(feature = "stretch-signalsmith")]
@@ -59,8 +63,43 @@ fn builds_and_processes_signalsmith_backend() {
     smoke(StretchKind::Signalsmith);
 }
 
+#[cfg(feature = "stretch-signalsmith")]
+#[test]
+fn signalsmith_flush_releases_source_latency() {
+    let options = options();
+    let mut backend = build_backend(StretchKind::Signalsmith, &options);
+    let mut out = Vec::new();
+    backend
+        .process(&interleaved_stereo(), &mut out)
+        .expect("Signalsmith process must succeed");
+    assert!(backend.source_latency_frames() > 0);
+
+    backend
+        .flush(&mut out)
+        .expect("Signalsmith flush must succeed");
+
+    assert_eq!(backend.source_latency_frames(), 0);
+}
+
 #[cfg(feature = "stretch-bungee")]
 #[test]
 fn builds_and_processes_bungee_backend() {
     smoke(StretchKind::Bungee);
+}
+
+#[cfg(feature = "stretch-bungee")]
+#[test]
+fn bungee_noop_flush_preserves_source_latency() {
+    let options = options();
+    let mut backend = build_backend(StretchKind::Bungee, &options);
+    let mut out = Vec::new();
+    backend
+        .process(&interleaved_stereo(), &mut out)
+        .expect("Bungee process must succeed");
+    let held = backend.source_latency_frames();
+    assert!(held > 0);
+
+    backend.flush(&mut out).expect("Bungee flush must succeed");
+
+    assert_eq!(backend.source_latency_frames(), held);
 }

@@ -51,6 +51,7 @@ pub struct TimeStretchProcessor {
     applied_pitch: f64,
     /// Last stretch factor pushed to the backend; avoids redundant updates.
     applied_stretch: f64,
+    source_frames_pushed: u64,
 }
 
 impl TimeStretchProcessor {
@@ -79,6 +80,7 @@ impl TimeStretchProcessor {
             scratch: Vec::new(),
             plan: None,
             region: None,
+            source_frames_pushed: 0,
         }
     }
 
@@ -109,6 +111,7 @@ impl TimeStretchProcessor {
                 warn!(error = %e, "time-stretch flush at region boundary failed");
             }
             self.backend.reset();
+            self.source_frames_pushed = 0;
         }
         match self.backend.set_ratio(stretch) {
             Ok(()) => self.applied_stretch = stretch,
@@ -158,6 +161,7 @@ impl TimeStretchProcessor {
         self.applied_stretch = f64::NAN;
         self.applied_pitch = f64::NAN;
         self.active = false;
+        self.source_frames_pushed = 0;
     }
 
     /// Region covering `frame`, plus whether the playhead just crossed out
@@ -185,6 +189,7 @@ impl TimeStretchProcessor {
         self.applied_stretch = f64::NAN;
         self.applied_pitch = f64::NAN;
         self.active = false;
+        self.source_frames_pushed = 0;
     }
 
     /// Pull the live region plan handle; on a swap drop the region cursor.
@@ -273,10 +278,21 @@ impl AudioEffect for TimeStretchProcessor {
                 warn!(error = %e, "time-stretch backend process failed; dropping chunk");
                 return None;
             }
+            self.source_frames_pushed = self
+                .source_frames_pushed
+                .saturating_add(u64::try_from(sub).unwrap_or(u64::MAX));
             consumed += sub;
             frame = frame.saturating_add(span);
         }
         self.emit()
+    }
+
+    fn held_source_frames(&self) -> u64 {
+        if !self.active {
+            return 0;
+        }
+        let latency = u64::try_from(self.backend.source_latency_frames()).unwrap_or(u64::MAX);
+        latency.min(self.source_frames_pushed)
     }
 
     fn reset(&mut self) {
@@ -287,6 +303,7 @@ impl AudioEffect for TimeStretchProcessor {
         self.applied_pitch = f64::NAN;
         self.active = false;
         self.region = None;
+        self.source_frames_pushed = 0;
     }
 }
 
@@ -582,6 +599,40 @@ mod tests {
             stretched.len() > block.len() * 24,
             "half-speed key-lock should lengthen output after a live speed change"
         );
+    }
+
+    #[kithara::test]
+    fn held_source_frames_tracks_only_active_stretch() {
+        let controls = StretchControls::new(0.5);
+        controls.set_keylock(true);
+        controls.set_backend(StretchKind::default());
+        let mut fx = processor(Arc::clone(&controls));
+        let block = sine(4096);
+
+        let _ = fx.process(chunk(&block));
+        assert!(
+            fx.held_source_frames() > 0,
+            "non-unity stretch must retain source input"
+        );
+
+        controls.set_speed(1.0);
+        let unity = fx.process(chunk(&block)).expect("unity bypass emits");
+        assert_eq!(&unity.samples[..], &block[..]);
+        assert_eq!(fx.held_source_frames(), 0);
+    }
+
+    #[cfg(feature = "stretch-signalsmith")]
+    #[kithara::test]
+    fn signalsmith_tail_drain_releases_held_source_frames() {
+        let mut fx = keylocked(StretchKind::Signalsmith, 0.5);
+        let block = sine(4096);
+        let _ = fx.process(chunk(&block));
+        assert!(fx.held_source_frames() > 0);
+
+        let tail = fx.flush().expect("Signalsmith must emit its tail once");
+
+        assert!(!tail.samples.is_empty());
+        assert_eq!(fx.held_source_frames(), 0);
     }
 
     /// Flipping key-lock mid-stream switches from vinyl pitch shift to

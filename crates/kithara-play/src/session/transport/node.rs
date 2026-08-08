@@ -8,6 +8,8 @@ use firewheel::{
         NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
+use kithara_audio::SessionAnchorCell;
+use kithara_platform::sync::Arc;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
@@ -22,31 +24,43 @@ pub(crate) fn install<B: AudioBackend>(
     ctx: &mut FirewheelCtx<B>,
 ) -> Result<TransportControl, &'static str> {
     let (observation_input, observation_output) = triple_buffer(&TransportObservation::default());
+    let anchor = SessionAnchorCell::new();
     let store = ctx
         .proc_store_mut()
         .ok_or("session transport store is unavailable while the stream is running")?;
     store
-        .insert(TransportCommitState::default())
+        .insert(TransportCommitState::new(Arc::clone(&anchor)))
         .map_err(|_| "session transport state store slot already exists")?;
     store
         .insert(TransportObservationInput::new(observation_input))
         .map_err(|_| "session transport observation store slot already exists")?;
     let node_id = ctx.add_node(SessionTransportNode, None);
-    Ok(TransportControl::new(node_id, observation_output))
+    Ok(TransportControl::new(node_id, observation_output, anchor))
 }
 
 #[derive(Debug)]
 pub(crate) struct TransportControl {
+    /// The grid this transport publishes; handed to every deck that binds.
+    anchor: Arc<SessionAnchorCell>,
     node_id: NodeID,
     observation: Output<TransportObservation>,
 }
 
 impl TransportControl {
-    const fn new(node_id: NodeID, observation: Output<TransportObservation>) -> Self {
+    const fn new(
+        node_id: NodeID,
+        observation: Output<TransportObservation>,
+        anchor: Arc<SessionAnchorCell>,
+    ) -> Self {
         Self {
+            anchor,
             node_id,
             observation,
         }
+    }
+
+    pub(crate) fn anchor(&self) -> Arc<SessionAnchorCell> {
+        Arc::clone(&self.anchor)
     }
 
     delegate::delegate! {

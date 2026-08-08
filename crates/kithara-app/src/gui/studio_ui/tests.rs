@@ -396,6 +396,27 @@ fn the_deck_transport_carries_the_zoom_pair() {
     }
 }
 
+/// Each deck can be put on the session grid from its own transport row, and
+/// the button addresses that deck alone — a SYNC that reached the other deck
+/// would place the wrong track on the beat.
+#[kithara::test]
+fn every_deck_transport_carries_its_own_sync() {
+    let ui = compile_studio(DeckLayout::Dual).unwrap();
+    let controls = controls(&ui);
+    for letter in ["a", "b"] {
+        let want = format!("deck-{letter}/sync");
+        let (_, keys) = controls
+            .iter()
+            .find(|(path, _)| **path == want)
+            .unwrap_or_else(|| panic!("missing control `{want}`"));
+        let binding = format!("deck.transport.sync_to_session@deck={letter}");
+        assert!(
+            keys.contains(&binding.as_str()),
+            "`{want}` must bind `{binding}`, got {keys:?}"
+        );
+    }
+}
+
 #[kithara::test]
 fn a_layout_addresses_only_the_decks_it_lays_out() {
     for layout in LAYOUTS {

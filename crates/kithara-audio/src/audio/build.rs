@@ -166,7 +166,7 @@ where
             pcm_buffer_chunks,
             pcm_pool,
             playback_rate: config_playback_rate,
-            stretch,
+            tempo,
             engine_load,
             decoder,
             preload_chunks,
@@ -223,7 +223,8 @@ where
         let metadata = decoder.metadata();
         let epoch = Arc::new(AtomicU64::new(0));
         let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
-        let effects = create_effects(initial_spec, stretch.as_ref(), &pcm_pool, custom_effects);
+        let effects = create_effects(initial_spec, tempo.as_ref(), &pcm_pool, custom_effects)
+            .map_err(|_| DecodeError::BackendUnavailable { backend: "elastic" })?;
         log_pipeline_ready(initial_spec, &host_sample_rate);
 
         let abr_handle = shared_stream.abr_handle();
@@ -290,7 +291,7 @@ where
             },
             controls: Controls {
                 playback_rate,
-                stretch,
+                tempo,
                 host_sample_rate: registered.host_sample_rate,
                 service_class: registered.service_class,
             },

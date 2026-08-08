@@ -29,6 +29,7 @@ use crate::{
         seek::{ResumeState, SeekEngine, emit::commit_outcome},
         stream::shared::SharedStream,
         track::{TrackFailure, WaitingReason},
+        window::{SourceEnd, SourceWindow},
     },
     renderer::{apply_effects, reset_effects},
     traits::AudioEffect,
@@ -158,6 +159,7 @@ pub(crate) struct ActiveDecode {
     #[field(get, vis = "pub(crate)", copy)]
     gapless_mode: GaplessMode,
     effects: Vec<Box<dyn AudioEffect>>,
+    window: SourceWindow,
 }
 
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
@@ -194,6 +196,7 @@ impl ActiveDecode {
             effects,
             drain,
             incoming: None,
+            window: SourceWindow::default(),
         }
     }
 
@@ -229,12 +232,19 @@ impl ActiveDecode {
 
     pub(crate) fn next_output(&mut self) -> Option<PcmChunk> {
         while let Some(chunk) = self.active.next() {
-            let chunk = self.blender.process_active(chunk);
+            let chunk = self.window.admit(self.blender.process_active(chunk));
             if let Some(output) = apply_effects(&mut self.effects, chunk) {
                 return Some(output);
             }
         }
         None
+    }
+
+    pub(crate) fn source_end(&self) -> Option<SourceEnd> {
+        let held_source_frames = self.effects.iter().fold(0_u64, |total, effect| {
+            total.saturating_add(effect.held_source_frames())
+        });
+        self.window.emitted(held_source_frames)
     }
 
     delegate::delegate! {
@@ -263,6 +273,7 @@ impl ActiveDecode {
     pub(crate) fn reset(&mut self) {
         reset_effects(&mut self.effects);
         self.drain.reset();
+        self.window.clear();
     }
 
     #[kithara::rtsan_allow_blocking]

@@ -51,6 +51,7 @@ use crate::{
         },
     },
     renderer::AudioWorkerSource,
+    traits::AudioEffect,
 };
 
 pub(super) fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
@@ -63,9 +64,9 @@ pub(super) fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
 pub(super) struct Consts;
 
 impl Consts {
-    const CHANNELS: u16 = 2;
+    pub(super) const CHANNELS: u16 = 2;
     pub(super) const ROUTE_CHUNK_FRAMES: usize = 256;
-    const ROUTE_SAMPLE_RATE: u32 = 48_000;
+    pub(super) const ROUTE_SAMPLE_RATE: u32 = 48_000;
     pub(super) const SAMPLE_RATE: u32 = 44_100;
     const TONE_HZ: f64 = 440.0;
 }
@@ -732,9 +733,9 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
 /// the container origin, exactly like the Apple fMP4 segment path. A flat
 /// source has neither, so no recreate origin other than `base_offset` is
 /// even reachable on it.
-struct RouteParams {
-    segmented: bool,
-    initial_host_rate: u32,
+pub(super) struct RouteParams {
+    pub(super) segmented: bool,
+    pub(super) initial_host_rate: u32,
 }
 
 pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
@@ -746,6 +747,13 @@ pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture 
 }
 
 async fn route_source(params: RouteParams) -> RouteFixture {
+    route_source_with_effects(params, Vec::new()).await
+}
+
+pub(super) async fn route_source_with_effects(
+    params: RouteParams,
+    effects: Vec<Box<dyn AudioEffect>>,
+) -> RouteFixture {
     let control = Arc::new(TestControl::new(media_info(0)));
     let drops = Arc::new(Mutex::new(Vec::new()));
     let host_sample_rate = Arc::new(AtomicU32::new(params.initial_host_rate));
@@ -800,7 +808,7 @@ async fn route_source(params: RouteParams) -> RouteFixture {
         playback_resampler_backend: "none",
         recreate_on_host_rate_change: true,
     }
-    .into_parts(Vec::new(), shared_stream.seek_observe().epoch());
+    .into_parts(effects, shared_stream.seek_observe().epoch());
     let parts = SourceParts::new(
         &shared_stream,
         decode,
@@ -846,7 +854,7 @@ fn peak_first_diff(left: &[f32], center: usize, half: usize) -> f32 {
     peak
 }
 
-fn next_test_chunk(
+pub(super) fn next_test_chunk(
     source: &mut StreamAudioSource<TestStream>,
     route_recreated: &mut bool,
 ) -> PcmChunk {

@@ -61,6 +61,10 @@ impl AudioEffect for EqEffect {
         None
     }
 
+    fn held_source_frames(&self) -> u64 {
+        0
+    }
+
     fn process(&mut self, mut chunk: PcmChunk) -> Option<PcmChunk> {
         let channels = self.channels as usize;
         if channels == 0 {

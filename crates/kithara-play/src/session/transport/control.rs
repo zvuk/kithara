@@ -1,14 +1,19 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
+use kithara_audio::{SessionAnchorCell, SessionBeat, SessionFrame};
 use kithara_events::TransportEvent;
+use kithara_platform::sync::Arc;
 
-use super::commit::{
-    RenderFrame, SessionTransportCommit, TransportBoundary, TransportCommitResult,
-    TransportCommitStamp, TransportObservation,
+use super::{
+    TransportControl,
+    commit::{
+        SessionTransportCommit, TransportBoundary, TransportCommitResult, TransportCommitStamp,
+        TransportObservation,
+    },
 };
 use crate::{
-    api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
+    api::{SessionTransportSnapshot, Tempo, TransportRevision},
     session::{SessionError, state::SessionState},
 };
 
@@ -153,6 +158,18 @@ pub(crate) fn snapshot<B: AudioBackend>(
         .ok_or(SessionError::TransportNotProcessed)
 }
 
+/// The grid decks bind to. Installed with the transport node, so a session
+/// that has one at all has it before any deck can ask.
+pub(crate) fn anchor<B: AudioBackend>(
+    state: &SessionState<B>,
+) -> Result<Arc<SessionAnchorCell>, SessionError> {
+    state
+        .transport_control
+        .as_ref()
+        .map(TransportControl::anchor)
+        .ok_or(SessionError::TransportNotProcessed)
+}
+
 fn ensure_no_pending_commit<B: AudioBackend>(state: &SessionState<B>) -> Result<(), SessionError> {
     if state.transport.pending_revision().is_some() {
         return Err(SessionError::TransportNotProcessed);
@@ -200,7 +217,7 @@ fn schedule_commit<B: AudioBackend>(
 
 fn commit_boundary<B: AudioBackend>(
     state: &SessionState<B>,
-) -> Result<(RenderFrame, NonZeroU32), SessionError> {
+) -> Result<(SessionFrame, NonZeroU32), SessionError> {
     let ctx = state.ctx.as_ref().ok_or(SessionError::NoContext)?;
     let stream_info = ctx.stream_info().ok_or(SessionError::NoContext)?;
     let lead_frames = state
@@ -213,7 +230,7 @@ fn commit_boundary<B: AudioBackend>(
         .0
         .checked_add(lead_frames)
         .ok_or(SessionError::TransportFrameExhausted)?;
-    Ok((RenderFrame::new(target_frame), stream_info.sample_rate))
+    Ok((SessionFrame::new(target_frame), stream_info.sample_rate))
 }
 
 fn queue_stamp<B: AudioBackend>(

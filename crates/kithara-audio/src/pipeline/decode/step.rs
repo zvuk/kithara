@@ -16,6 +16,7 @@ use crate::{
         gapless::visible_duration,
         seek::skip::apply as apply_skip,
         track::{TrackFailure, WaitingReason},
+        window::SourceEnd,
     },
 };
 
@@ -39,7 +40,7 @@ pub(crate) fn tick<T: StreamType>(
             return DecodeAction::SeekInterrupted;
         }
         if let Some(chunk) = core.next_output() {
-            return produced(chunk, epoch, &mut ctx);
+            return produced(chunk, core.source_end(), epoch, &mut ctx);
         }
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
@@ -62,7 +63,7 @@ pub(crate) fn tick<T: StreamType>(
             Ok(DecoderChunkOutcome::Eof) => {
                 core.set_tail_compensation();
                 if let Some(chunk) = core.next_output() {
-                    return produced(chunk, epoch, &mut ctx);
+                    return produced(chunk, core.source_end(), epoch, &mut ctx);
                 }
                 if let FormatDecision::Recreate(recreate) =
                     detect(ctx.stream, core.active(), ctx.seek_observe)
@@ -70,7 +71,7 @@ pub(crate) fn tick<T: StreamType>(
                     return DecodeAction::StartRecreate(recreate);
                 }
                 if let Some(chunk) = core.next_drain() {
-                    return produced(chunk, epoch, &mut ctx);
+                    return produced(chunk, core.source_end(), epoch, &mut ctx);
                 }
                 if let Some(emit) = ctx.emit {
                     emit.enqueue(AudioEvent::EndOfStream.into());
@@ -105,6 +106,7 @@ pub(crate) fn tick<T: StreamType>(
 
 pub(crate) fn produced<T: StreamType>(
     chunk: PcmChunk,
+    source_end: Option<SourceEnd>,
     epoch: u64,
     ctx: &mut DecodeCtx<'_, T>,
 ) -> DecodeAction {
@@ -128,7 +130,7 @@ pub(crate) fn produced<T: StreamType>(
             .into(),
         );
     }
-    ctx.cursor.record(&chunk, epoch);
+    ctx.cursor.record(source_end, epoch);
     DecodeAction::Produced(Fetch::data(chunk, epoch))
 }
 

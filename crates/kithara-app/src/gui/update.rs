@@ -7,7 +7,7 @@ use super::{
     app::Kithara,
     deck::{self, DeckMsg},
     message::Message,
-    mix, studio_ui,
+    mix, studio_ui, transport,
 };
 use crate::{
     catalog,
@@ -41,6 +41,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
         Message::Mix(msg) => {
             mix::handle(state, msg);
+            Task::none()
+        }
+        Message::Transport(msg) => {
+            transport::handle(state, msg);
             Task::none()
         }
         Message::DeleteFocusedTrack => {

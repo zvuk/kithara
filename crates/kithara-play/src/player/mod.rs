@@ -6,4 +6,4 @@ mod state;
 pub use core::PlayerImpl;
 
 pub use config::PlayerConfig;
-pub use flow::SelectTransition;
+pub use flow::{BeatStart, SelectTransition};

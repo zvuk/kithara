@@ -4,7 +4,7 @@ use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
 use kithara_audio::{
-    AudioDecoderConfig, AudioWorkerHandle, DecoderResamplerSettings, EngineLoad, StretchControls,
+    AudioDecoderConfig, AudioWorkerHandle, DecoderResamplerSettings, EngineLoad, TempoSlot,
 };
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_events::EventBus;
@@ -78,10 +78,11 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// Shared playback rate atomic for the audio pipeline resampler in the
     /// non-tempo (no-`stretch`) chain.
     pub(crate) playback_rate: Option<Arc<AtomicF32>>,
-    /// Live time-stretch controls (speed + key-lock + backend). `Some` selects
-    /// tempo mode; the same `Arc` must flow to every track so live changes
-    /// reach the running effect chain. `None` keeps the resampler-first chain.
-    pub(crate) stretch: Option<Arc<StretchControls>>,
+    /// What times this deck: live stretch controls, or a binding to the
+    /// session grid. `Some` selects tempo mode; the same slot must flow to
+    /// every track so live changes reach the running effect chain. `None`
+    /// keeps the resampler-first chain.
+    pub(crate) tempo: Option<TempoSlot>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     pub(crate) worker: Option<AudioWorkerHandle>,
     /// Shared PCM pool for temporary buffers.

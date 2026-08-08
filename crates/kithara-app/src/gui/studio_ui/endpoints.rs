@@ -109,6 +109,12 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Command,
+        id: "deck.transport.sync_to_session",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
         id: "deck.transport.seek_normalized",
         value: ValueKind::Scalar,
         scopes: Endpoint::DECK,
