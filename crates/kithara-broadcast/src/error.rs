@@ -1,6 +1,9 @@
+use std::{io, net::SocketAddr};
+
+use kithara_encode::EncodeError;
 use thiserror::Error;
 
-/// Errors raised while packaging a live stream.
+/// Errors raised while packaging or serving a live stream.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum BroadcastError {
@@ -27,6 +30,16 @@ pub enum BroadcastError {
         span_ts: u64,
         minimum_ts: u64,
     },
+
+    #[error("the origin cannot bind {addr}")]
+    Bind {
+        addr: SocketAddr,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("the live encoder failed")]
+    Encode(#[from] EncodeError),
 }
 
 /// Result type for live packaging operations.

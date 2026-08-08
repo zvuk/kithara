@@ -10,9 +10,21 @@
 
 # kithara-broadcast
 
-Live HLS packaging core. It frames AAC-LC access units as ADTS behind the RFC 8216 §3.4 timestamp tag, rotates segments on the media clock, and keeps a sliding playlist window whose snapshot carries the rendered media playlist and the segments a client can still fetch. Segments live in memory as `bytes::Bytes`.
+Live HLS origin. It encodes a PCM feed to AAC-LC, frames the access units as ADTS behind the RFC 8216 §3.4 timestamp tag, rotates segments on the media clock, keeps a sliding playlist window, and serves master playlist, media playlist, and segments over HTTP. Segments live in memory as `bytes::Bytes`.
 
 ## Usage
+
+```rust
+use kithara_broadcast::{Broadcast, BroadcastConfig};
+
+let config = BroadcastConfig::builder().sample_rate(48_000).channels(2).build();
+let handle = Broadcast::start(config, feed, Some(parent))?;
+
+println!("on air at {}", handle.url());
+handle.stop();
+```
+
+The packaging core is usable on its own — `Segmenter` and `LiveWindow` take the same config and own no threads:
 
 ```rust
 use kithara_broadcast::{BroadcastConfig, LiveWindow, Segmenter};
@@ -32,12 +44,14 @@ let snapshot = window.snapshot();
 
 ## Key types
 
-- `BroadcastConfig` — the audio and the segments the packager cuts.
+- `BroadcastConfig` — the audio, the segments, and the address the origin binds.
+- `Broadcast` / `BroadcastHandle` — the live service: URL, status, and the graceful end of the broadcast.
+- `LivePcmFeed` — the PCM seam: non-blocking interleaved f32 plus the gap that preceded it.
 - `Segmenter` — ADTS framing plus segment rotation on the media clock.
 - `Segment` — one closed segment: sequence number, bytes, duration, discontinuity flag.
 - `LiveWindow` — sole owner of the playlist window, its retention, and the playlist text.
 - `PlaylistSnapshot` — value view of the stream: playlist text, fetchable segments, end-of-stream flag.
 
-Takes access units from `kithara-encode`. Speaks no HTTP and owns no threads.
+Takes access units from `kithara-encode`.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

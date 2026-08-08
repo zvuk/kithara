@@ -21,11 +21,15 @@ tls-rustls = ["kithara-encode/tls-rustls"]
 
 [dependencies]
 kithara-encode = { workspace = true }
-kithara-platform = { workspace = true }
+kithara-platform = { workspace = true, features = ["tokio-net"] }
 
+arc-swap = { workspace = true }
+axum = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }

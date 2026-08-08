@@ -2,11 +2,11 @@
 
 Contracts and invariants for the kithara-broadcast crate; the README is the overview.
 
-The crate is a pure packaging core: it turns `kithara-encode` access units into HLS media segments and playlist text. It performs no I/O, spawns no threads, and holds no clock — the caller drives it.
+The crate turns `kithara-encode` access units into HLS media segments and serves them: a packaging core with no clock of its own, and a service that drives it from a PCM feed and publishes it over HTTP.
 
 ## Configuration
 
-`BroadcastConfig` is the single knob surface. `Segmenter` and `LiveWindow` both take it, so the sample rate is the media timescale everywhere and no caller can pair a segmenter with a window that disagrees about time.
+`BroadcastConfig` is the single knob surface. `Segmenter`, `LiveWindow`, and `Broadcast::start` all take it, so the sample rate is the media timescale everywhere and no caller can pair a segmenter with a window that disagrees about time.
 
 `validate` rejects zero audio, a zero window, a segment target shorter than one media tick, and — per RFC 8216 §6.2.2 — a window that spans fewer than three target durations. A short window is a typed `PlaylistTooShort`, never a silent adjustment.
 
@@ -47,6 +47,28 @@ Sequence numbers count emitted segments from zero. An empty buffer emits nothing
 `snapshot` returns a value: the playlist text, the retained segments, and whether the stream ended. Both payloads sit behind an `Arc`, so a snapshot is cheap to clone and hand to concurrent readers. `finished` is the authority on end-of-stream; `EXT-X-ENDLIST` is how the playlist renders it, and a reader answers the question from the flag.
 
 The rendered playlist is version 3. `EXT-X-TARGETDURATION` is the configured segment target rounded up to whole seconds, raised only if a listed segment is longer — a client is told one value for the life of the stream, and a window of drop-truncated segments cannot lower it. `EXT-X-MEDIA-SEQUENCE` is the first listed segment's sequence number and `EXT-X-DISCONTINUITY-SEQUENCE` follows it on every playlist, counting the discontinuous segments that have left the listed window; a client reloading after the window slid past a discontinuity can place it. Each segment carries `EXTINF` with three decimals and the URI `seg/<seq>.aac`, and a discontinuous segment is preceded by `EXT-X-DISCONTINUITY`. `finish` appends `EXT-X-ENDLIST`, which turns the tail into a valid VOD playlist; the owner stops pushing at that point.
+
+## Service lifecycle
+
+`Broadcast::start` binds the origin before it returns, so the URL on the handle is one a client can already reach. Two threads run behind it: a worker that polls the feed and packages it, and a thread with a current-thread runtime that serves axum.
+
+The worker is the sole mutator of the segmenter and the window. It publishes each closed segment by swapping a whole `PlaylistSnapshot` into an `ArcSwap`, so a request never waits on the worker and the two threads share no lock. The handle's join slot is the crate's only mutex and the serving path never touches it.
+
+Nothing in the pipeline reads a wall clock: rotation is media-driven and the playlist changes only when a segment closes. The worker's poll backoff paces an empty feed and is not part of the contract.
+
+`stop` ends the broadcast: the worker swallows what the feed still holds, drains the encoder, flushes the tail segment, and publishes the playlist with `EXT-X-ENDLIST`. The origin keeps serving that VOD tail, and repeat calls do nothing. A feed that reports its producer gone — the app disabling the tap, a device rate change, session teardown — takes the same graceful path and leaves the stream off air.
+
+Cancelling the token is the other axis: it stops the origin and the worker without a tail. `CancelScope::new(parent)` derives the broadcast's subtree, so the app cancels the broadcast by cancelling what it owns. Dropping the handle is passive — it cancels nothing.
+
+## What the origin serves
+
+`GET /master.m3u8` always answers: one `EXT-X-STREAM-INF` with `CODECS="mp4a.40.2"`, a `BANDWIDTH` of the audio bit rate plus the ADTS framing margin, and the URI `v/0/live.m3u8`. The `/v/0/` prefix reserves the variant slot for a later ladder.
+
+`GET /v/0/live.m3u8` answers 404 until the first segment exists: an empty playlist is not a stream a client can start on. Playlists carry `application/vnd.apple.mpegurl` and `Cache-Control: no-store`; segments carry `audio/aac`. A segment past the retention is 404. CORS is permissive so a browser player can join.
+
+## Intake
+
+`LivePcmFeed` is the crate's PCM seam: one `poll` appends interleaved f32 and reports the gap that preceded it plus end-of-stream, so the worker cannot see the producer leave while samples are still pending. `FeedChunk` is deliberately not `#[non_exhaustive]` — implementors outside the crate construct it. A non-zero `dropped` closes the open segment and marks the next one discontinuous; there is no backpressure on the audio path and no silence injection.
 
 ## Time base
 
