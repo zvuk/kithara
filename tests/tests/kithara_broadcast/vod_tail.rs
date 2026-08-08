@@ -6,7 +6,7 @@ use kithara::{
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
-    platform::CancelToken,
+    platform::{CancelToken, time::Duration},
     stream::Stream,
 };
 use url::Url;
@@ -26,9 +26,10 @@ const READ_BUF_SAMPLES: usize = 4_096;
 /// stops, its master URL is a VOD stream `Audio<Stream<Hls>>` plays.
 ///
 /// `flash(false)`: the origin serves from a runtime of its own while the
-/// client's decode worker paces itself, and a virtual clock only advances once
-/// every participant is waiting — the two never both wait.
-#[kithara::test(tokio, flash(false))]
+/// client decodes on its worker. Under the virtual clock the client stalls
+/// after fetching every segment; on the real clock it plays them. The reads
+/// park on the real clock too, so the timeout is what bounds them.
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn the_production_client_plays_the_stopped_broadcast() {
     let origin = Origin::start();
     origin.advance_to(SEGMENTS);
@@ -62,8 +63,8 @@ async fn the_production_client_plays_the_stopped_broadcast() {
     let left = read_left_channel(&mut audio, (PRIMING_SKIP_FRAMES + READ_FRAMES) * channels);
 
     assert!(
-        left.len() >= PRIMING_SKIP_FRAMES + READ_FRAMES / 2,
-        "the client must play well past the encoder's priming, got {} frames",
+        left.len() >= PRIMING_SKIP_FRAMES + READ_FRAMES,
+        "the client must play past the encoder's priming, got {} frames",
         left.len()
     );
     assert_carries_the_tone(

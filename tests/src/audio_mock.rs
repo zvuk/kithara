@@ -94,10 +94,14 @@ impl TestPcmReader {
         }
     }
 
-    fn sample_at(&self, frame: u64) -> f32 {
+    /// Sample the source `output_frame` frames into a read that began at
+    /// source frame `start`. One output frame spends `rate` source frames, the
+    /// same conversion [`Self::consume`] accounts the position by.
+    fn sample_at(&self, start: u64, output_frame: u64) -> f32 {
         match self.source {
             Source::Constant(value) => value,
             Source::Signal(ref signal) => {
+                let frame = start + (output_frame as f64 * self.rate()) as u64;
                 f32::from(signal.sample(frame as usize, self.spec.sample_rate.get()))
                     / f32::from(i16::MAX)
             }
@@ -180,7 +184,7 @@ impl PcmRead for TestPcmReader {
         let to_write = (buf.len() as u64).min(renderable_samples) as usize;
         let start = self.position_frames;
         for (index, sample) in buf[..to_write].iter_mut().enumerate() {
-            *sample = self.sample_at(start + index as u64 / channels);
+            *sample = self.sample_at(start, index as u64 / channels);
         }
         self.consume(to_write as u64 / channels);
         let new_position = self.frames_to_duration(self.position_frames);
@@ -223,7 +227,7 @@ impl PcmRead for TestPcmReader {
         let start = self.position_frames;
         for ch in output.iter_mut().take(channels) {
             for (frame, sample) in ch.iter_mut().take(frames_to_write).enumerate() {
-                *sample = self.sample_at(start + frame as u64);
+                *sample = self.sample_at(start, frame as u64);
             }
         }
         self.consume(frames_to_write as u64);

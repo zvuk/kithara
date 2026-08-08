@@ -74,7 +74,9 @@ Cancelling the token is the other axis: it stops the origin and the worker witho
 
 `RingFeed` implements that seam over a `ringbuf` consumer and an `Arc<AtomicU64>` of samples the producer lost. Those two types are the whole vocabulary between the broadcast and whoever fills the ring, so a real-time producer reaches the packager without either side depending on the other's crate.
 
-The counter is monotonic, so a poll reports the difference since the previous one and never re-reports a debt. The producer is read as held before the ring is drained: one already gone by then can push nothing more, so a drain that comes back empty is the end of the feed rather than a window between the two reads. End of feed is therefore reported only on an empty drain — the remainder a released producer left behind goes out first.
+The counter is monotonic, so a poll reports the difference since the previous one and never re-reports a debt. It carries no position, so the gap it reports is located to the poll that saw it and not to a point inside that poll's samples.
+
+The producer is read as held before the ring is drained, so one already gone by then can push nothing more and an empty drain is the end of the feed. End of feed is therefore reported only on an empty drain — the remainder a released producer left behind goes out first.
 
 ## Time base
 

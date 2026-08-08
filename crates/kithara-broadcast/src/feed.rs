@@ -52,9 +52,9 @@ impl RingFeed {
 }
 
 impl LivePcmFeed for RingFeed {
-    /// The producer is read as held before the ring is drained: a producer
-    /// already gone by then can push nothing more, so a drain that comes back
-    /// empty is the end of the feed and not a window between the two reads.
+    /// The producer is read as held before the ring is drained, so one already
+    /// gone by then can push nothing more and an empty drain is the end of the
+    /// feed.
     fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk {
         let total = self.drops.load(Ordering::Relaxed);
         let dropped = total.saturating_sub(self.counted);
