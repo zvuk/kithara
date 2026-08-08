@@ -10,6 +10,7 @@ use kithara::{
             Arc,
             atomic::{AtomicU64, Ordering},
         },
+        thread,
         time::Duration,
     },
     play::{Cmd, MixTapWriter, Resource, SessionDispatcher},
@@ -39,9 +40,6 @@ const TARGET: Duration = Duration::from_millis(500);
 const WINDOW: usize = 6;
 /// Frames the AAC-LC encoder needs before the tone is fully formed.
 const PRIMING_SKIP_FRAMES: usize = 4_410;
-/// Frames a tone assertion needs under it to mean anything: a quarter second
-/// spans a hundred periods of [`TONE_HZ`].
-const TONE_FRAMES: usize = 11_025;
 /// Blocks a wait on the packager may render before it is a hang.
 const MAX_BLOCKS: usize = 2_000;
 
@@ -169,6 +167,15 @@ impl OnAir {
         self.drops.load(Ordering::Relaxed)
     }
 
+    /// Wait for the packager to close another segment, which it can only do by
+    /// eating its way through what the ring holds.
+    fn wait_for_drain(&self) {
+        let target = self.handle.status().segments + 1;
+        while self.handle.status().segments < target {
+            thread::paced_backoff(Duration::from_millis(1));
+        }
+    }
+
     async fn get(&self, path: &str) -> Vec<u8> {
         let url = self.base.join(path).expect("a servable path");
         self.client
@@ -247,9 +254,9 @@ async fn the_engine_mix_reaches_an_http_client_as_the_source_tone() {
         "a ring sized for the whole render leaves the packager no reason to drop"
     );
     assert!(
-        decoded.len() >= PRIMING_SKIP_FRAMES + TONE_FRAMES,
-        "the fetched segments must decode {TONE_FRAMES} frames past the encoder's priming, \
-         got {} frames",
+        decoded.len() >= TONE_RENDER_FRAMES / 2,
+        "the fetched segments must carry the tone that went on air, got {} of \
+         {TONE_RENDER_FRAMES} frames",
         decoded.len()
     );
     assert_carries_the_tone(
@@ -287,6 +294,7 @@ async fn a_ring_the_render_outruns_breaks_the_served_playlist() {
         "the render must outrun a {TIGHT_RING}-sample ring"
     );
 
+    on_air.wait_for_drain();
     render_tone(&harness, TAIL_FRAMES);
     on_air.handle.stop();
 

@@ -7,11 +7,13 @@ use ringbuf::{
     traits::{Consumer, Observer},
 };
 
-/// What one [`LivePcmFeed::poll`] saw: the gap that preceded the samples it
-/// appended, and whether the producer is gone.
+/// What one [`LivePcmFeed::poll`] saw: the gap it found alongside the samples
+/// it appended, and whether the producer is gone.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FeedChunk {
-    /// Samples the producer dropped since the previous poll.
+    /// Samples the producer dropped since the previous poll. A feed that knows
+    /// where its gap fell reports it before the samples that follow it; one
+    /// counting alone locates it no closer than the poll.
     pub dropped: u64,
     /// The producer will send nothing further.
     pub has_ended: bool,
@@ -19,12 +21,12 @@ pub struct FeedChunk {
 
 /// The broadcast's PCM intake: interleaved f32 read without blocking.
 ///
-/// One poll is one consistent view of the feed — the gap, the samples that
-/// follow it, and end-of-stream — so the worker cannot see the producer leave
-/// while samples are still pending.
+/// One poll is one consistent view of the feed — the gap, the samples, and
+/// end-of-stream — so the worker cannot see the producer leave while samples
+/// are still pending.
 pub trait LivePcmFeed: Send {
     /// Append whatever interleaved audio is ready onto `out` and report the
-    /// gap that preceded it. Returns without waiting when nothing is ready.
+    /// gap that came with it. Returns without waiting when nothing is ready.
     fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk;
 }
 
