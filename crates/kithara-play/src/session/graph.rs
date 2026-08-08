@@ -62,11 +62,11 @@ pub(super) mod tap {
         if state.mix_tap.is_some() {
             return Err(SessionError::MixTapActive);
         }
-        state.mix_tap = Some(MixTap::Requested(writer));
         let Some(limiter_id) = state.session_limiter_node_id else {
+            state.mix_tap = Some(MixTap::Requested(writer));
             return Ok(());
         };
-        install_requested(state, limiter_id)
+        install(state, limiter_id, writer)
     }
 
     pub(in crate::session) fn disable<B: AudioBackend>(state: &mut SessionState<B>) {
@@ -84,18 +84,33 @@ pub(super) mod tap {
         }
     }
 
-    /// Hang a requested tap off `limiter_id`. Called both when the session
-    /// output is built and when a tap arrives at a running session.
+    /// Hand a tap that was armed before the session output existed to the
+    /// freshly built graph.
     pub(in crate::session) fn install_requested<B: AudioBackend>(
         state: &mut SessionState<B>,
         limiter_id: NodeID,
     ) -> Result<(), SessionError> {
-        let Some(writer) = MixTap::take_requested(&mut state.mix_tap) else {
+        let Some(MixTap::Requested(writer)) = state.mix_tap.take() else {
             return Ok(());
         };
+        install(state, limiter_id, writer)
+    }
+
+    fn install<B: AudioBackend>(
+        state: &mut SessionState<B>,
+        limiter_id: NodeID,
+        writer: MixTapWriter,
+    ) -> Result<(), SessionError> {
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
         let tap_id = fw_ctx.add_node(TapNode::new(writer), None);
-        connect_stereo(fw_ctx, limiter_id, tap_id, "connect limiter->mix_tap")?;
+        if let Err(err) = connect_stereo(fw_ctx, limiter_id, tap_id, "connect limiter->mix_tap") {
+            // Unconnected input ports read as cleared buffers, so a sink left
+            // behind would feed the consumer silence it reads as the mix.
+            if let Err(remove_err) = fw_ctx.remove_node(tap_id) {
+                warn!(?remove_err, "failed to remove the unconnected mix tap node");
+            }
+            return Err(err);
+        }
         if let Err(err) = fw_ctx.update() {
             warn!("graph update after mix tap install failed: {err:?}");
         }

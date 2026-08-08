@@ -269,7 +269,7 @@ mod tests {
         bridge::MixTapWriter,
         session::{
             protocol::{Cmd, PlayerLevel, Reply, SessionError},
-            state::SessionState,
+            state::{MixTap, SessionState},
         },
     };
 
@@ -752,7 +752,10 @@ mod tests {
             ),
             Reply::Ok
         ));
-        assert!(state.mix_tap.is_some(), "the tap reached the session graph");
+        assert!(
+            matches!(state.mix_tap, Some(MixTap::Installed(_))),
+            "a tap armed on a running session reaches the graph at once"
+        );
 
         assert!(
             matches!(

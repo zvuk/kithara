@@ -89,19 +89,6 @@ pub(super) enum MixTap {
     Installed(NodeID),
 }
 
-impl MixTap {
-    /// Take the writer while it still waits for a graph to hang off.
-    pub(super) fn take_requested(slot: &mut Option<Self>) -> Option<MixTapWriter> {
-        match slot.take() {
-            Some(Self::Requested(writer)) => Some(writer),
-            other => {
-                *slot = other;
-                None
-            }
-        }
-    }
-}
-
 pub struct SessionState<B: AudioBackend> {
     pub(super) ctx: Option<FirewheelCtx<B>>,
     pub(super) transport_control: Option<TransportControl>,

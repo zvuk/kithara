@@ -14,9 +14,10 @@ use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 const TRACK_SECS: f64 = 0.1;
-/// Long enough to render the whole 100 ms track and a silent tail after it.
-const BLOCKS: usize = 12;
-const ROOMY_CAPACITY: usize = 32_768;
+/// 10_240 frames: past the budget the smoke test allows the decode worker for
+/// the same 100 ms fixture, so the render reaches the silence after the track.
+const BLOCKS: usize = 20;
+const ROOMY_CAPACITY: usize = 65_536;
 
 fn make_resource() -> Resource {
     let spec = PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
@@ -97,6 +98,61 @@ fn mix_tap_matches_graph_out_bit_exactly() {
         "the render must reach past the track into silence"
     );
     assert_eq!(tapped, rendered, "mix tap must be bit-exact with graph_out");
+}
+
+#[kithara::test]
+fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for() {
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder().build(),
+        SAMPLE_RATE,
+    );
+    let mut tap = harness
+        .session()
+        .enable_mix_tap(ROOMY_CAPACITY)
+        .expect("arm the mix tap before a session output exists");
+    assert!(tap.drain().is_empty(), "an idle session feeds nothing");
+
+    harness.player().insert(make_resource(), None, None);
+    harness
+        .player()
+        .select_item(0, true)
+        .expect("select first queue item");
+
+    let rendered = render_blocks(&harness, BLOCKS);
+    assert_eq!(
+        tap.drain(),
+        rendered,
+        "the waiting tap catches the mix from the first block the graph renders"
+    );
+}
+
+#[kithara::test]
+fn the_tap_keeps_feeding_across_a_device_route_restart() {
+    let harness = playing_harness();
+    let mut tap = harness
+        .session()
+        .enable_mix_tap(ROOMY_CAPACITY)
+        .expect("enable mix tap");
+    render_blocks(&harness, 2);
+    assert!(!tap.drain().is_empty(), "the feed runs before the restart");
+
+    harness
+        .session()
+        .exec_ok(Cmd::InvalidateAudioRoute {
+            reason: String::from("mix tap route restart"),
+        })
+        .expect("invalidate the audio route");
+
+    let rendered = render_blocks(&harness, 4);
+    assert!(
+        tap.writer_alive(),
+        "a stream restart at the same rate keeps the producer"
+    );
+    assert_eq!(
+        tap.drain(),
+        rendered,
+        "the same producer carries the mix rendered after the restart"
+    );
 }
 
 #[kithara::test]

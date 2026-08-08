@@ -24,6 +24,7 @@ pub struct NodeInputs {
 ///
 /// `pcm` carries the post-limiter mix as interleaved stereo `f32` (LRLR);
 /// `drops` counts the samples the ring had no room for.
+#[non_exhaustive]
 pub struct MixTapWriter {
     pub(crate) pcm: HeapProd<f32>,
     pub(crate) drops: Arc<AtomicU64>,

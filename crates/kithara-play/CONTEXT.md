@@ -298,16 +298,16 @@ fail in practice and the processor holds the DSP directly.
 `Cmd::EnableMixTap` hangs `rt/tap.rs`'s `TapNode` off the session limiter beside `graph_out`:
 stereo in, zero outputs, `ProcessStatus::ClearAllOutputs`. Firewheel's compiler sorts every node
 topologically and keeps a sink with no outgoing edges in the schedule, so the extra
-`limiter -> tap` edge is an addition to the terminal chain and the device path is byte-identical
-with or without it - the tap sees exactly the samples `graph_out` receives.
+`limiter -> tap` edge is an addition to the terminal chain: the tap reads the limiter's output
+buffer that `graph_out` interleaves into the device, and writes nothing anywhere.
 
 The processor owns the `MixTapWriter` (`bridge/channels.rs`): a `ringbuf::HeapProd<f32>` carrying
 the mix as interleaved stereo (LRLR) and an `Arc<AtomicU64>` drop counter. The ring's capacity is
 the caller's to choose, and the node keeps it as handed over. Pushes are frame-aligned, because a
 half frame lost to a full ring would swap L and R for the rest of the feed; an even capacity
 therefore accounts for every sample. **The counter is in samples** - frames x 2 - monotonic and
-`Relaxed`: the consumer reads deltas, and a non-zero delta means that many interleaved samples are
-missing from the PCM it received.
+`Relaxed`, which orders it against nothing in the ring: a delta locates its gap no more precisely
+than the window drained around it, and that is the resolution a consumer may claim.
 
 `SessionState.mix_tap` is the one owner of both states a tap has: `Requested` while it waits for a
 session output to hang off - enabling before the first `start_player` is allowed, and
@@ -317,10 +317,18 @@ consumer keeps its feed.
 
 `DisableMixTap` and idle teardown release the producer, which the consumer observes as
 `Observer::write_is_held() == false` and reads as end of feed. Removed nodes ride the returned
-schedule back to the control thread, so the writer and its scratch buffer are freed there rather
-than on the audio thread. A stream restart keeps the tap running: Firewheel constructs a processor
-once per node, so `stop_stream` / `start_stream` reuse the one holding the writer. Arming a tap
-against a fresh context is the consumer's call; the session carries none across contexts.
+schedule back to the control thread, so the writer is freed there rather than on the audio thread.
+
+A stream restart keeps the tap running: Firewheel constructs a processor once per node, so
+`stop_stream` / `start_stream` reuse the one holding the writer. **A restart that lands on a
+different device rate ends the feed instead**, because the ring carries bare samples and a consumer
+holding it would read the new rate as the old one. `new_stream` compares rates and releases the
+producer on the control thread; `state.mix_tap` still reads `Installed`, so the consumer's path
+back on air is `DisableMixTap` and a fresh `EnableMixTap`.
+
+The consumer owns the end of the tap's life: dropping its ring half leaves the node feeding a ring
+nobody reads, and the node cannot resign on its own (releasing the producer there would free memory
+on the audio thread). A consumer that stops reading sends `DisableMixTap`.
 
 ## Route Changes
 
