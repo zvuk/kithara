@@ -6,7 +6,7 @@ use kithara::{
 };
 
 use super::origin::{
-    GRACE, Origin, SAMPLE_RATE, SEGMENT_FRAMES, TONE_HZ, WINDOW, assert_carries_the_tone,
+    GRACE, Origin, Playlist, SAMPLE_RATE, SEGMENT_FRAMES, TONE_HZ, WINDOW, assert_carries_the_tone,
     decode_adts_left,
 };
 
@@ -16,24 +16,6 @@ const CONNECT_ATTEMPTS: usize = 200;
 
 fn assert_tone(pcm: &[f32], label: &str) {
     assert_carries_the_tone(pcm, TONE_HZ, SAMPLE_RATE, label);
-}
-
-fn listed_sequences(playlist: &str) -> Vec<u64> {
-    playlist
-        .lines()
-        .filter_map(|line| line.strip_prefix("seg/"))
-        .filter_map(|line| line.strip_suffix(".aac"))
-        .map(|seq| seq.parse().expect("a segment sequence number"))
-        .collect()
-}
-
-fn tag_value(playlist: &str, tag: &str) -> u64 {
-    playlist
-        .lines()
-        .find_map(|line| line.strip_prefix(tag))
-        .unwrap_or_else(|| panic!("{tag} is missing from {playlist}"))
-        .parse()
-        .expect("a numeric tag value")
 }
 
 #[kithara::test(tokio)]
@@ -60,28 +42,24 @@ async fn the_live_playlist_slides_a_bounded_window() {
     let origin = Origin::start();
     origin.advance_to(3);
 
-    let early = origin.media_playlist().await;
-    let target = tag_value(&early, "#EXT-X-TARGETDURATION:");
-    assert!(!early.contains("#EXT-X-ENDLIST"), "the stream is live");
-    assert_eq!(tag_value(&early, "#EXT-X-MEDIA-SEQUENCE:"), 0);
-    assert_eq!(listed_sequences(&early).len(), 3);
+    let early = Playlist::parse(origin.media_playlist().await);
+    let target = early.target;
+    assert!(!early.text.contains("#EXT-X-ENDLIST"), "the stream is live");
+    assert_eq!(early.media_sequence, 0);
+    assert_eq!(early.entries.len(), 3);
 
     origin.advance_to(u64::try_from(WINDOW).expect("fits") + 3);
-    let late = origin.media_playlist().await;
+    let late = Playlist::parse(origin.media_playlist().await);
 
-    assert!(!late.contains("#EXT-X-ENDLIST"));
-    assert_eq!(
-        listed_sequences(&late).len(),
-        WINDOW,
-        "the window is bounded"
-    );
+    assert!(!late.text.contains("#EXT-X-ENDLIST"));
+    assert_eq!(late.entries.len(), WINDOW, "the window is bounded");
     assert!(
-        tag_value(&late, "#EXT-X-MEDIA-SEQUENCE:") > 0,
-        "the media sequence advances once the window is full: {late}"
+        late.media_sequence > 0,
+        "the media sequence advances once the window is full: {}",
+        late.text
     );
     assert_eq!(
-        tag_value(&late, "#EXT-X-TARGETDURATION:"),
-        target,
+        late.target, target,
         "the target duration a client was told cannot change"
     );
 
@@ -102,11 +80,11 @@ async fn an_evicted_segment_outlives_the_playlist_by_the_grace() {
     let origin = Origin::start();
     origin.advance_to(u64::try_from(WINDOW + GRACE).expect("fits") + 1);
 
-    let playlist = origin.media_playlist().await;
-    let listed = listed_sequences(&playlist);
+    let playlist = Playlist::parse(origin.media_playlist().await);
+    let listed = playlist.sequences();
     let first_listed = listed.first().copied().expect("a listed segment");
 
-    assert!(first_listed > 0, "the window has slid: {playlist}");
+    assert!(first_listed > 0, "the window has slid: {}", playlist.text);
     assert!(
         origin
             .get(&format!("v/0/seg/{}.aac", first_listed - 1))
@@ -126,9 +104,9 @@ async fn the_fetched_segments_decode_back_to_the_source_tone() {
     let origin = Origin::start();
     origin.advance_to(4);
 
-    let playlist = origin.media_playlist().await;
+    let playlist = Playlist::parse(origin.media_playlist().await);
     let mut stream = Vec::new();
-    for seq in listed_sequences(&playlist) {
+    for seq in playlist.sequences() {
         let bytes = origin
             .get(&format!("v/0/seg/{seq}.aac"))
             .await
@@ -152,14 +130,15 @@ async fn stopping_leaves_a_fetchable_vod_tail() {
     origin.advance_to(3);
     origin.handle.stop();
 
-    let playlist = origin.media_playlist().await;
+    let playlist = Playlist::parse(origin.media_playlist().await);
     assert!(
-        playlist.contains("#EXT-X-ENDLIST\n"),
-        "a stopped stream is a VOD playlist: {playlist}"
+        playlist.text.contains("#EXT-X-ENDLIST\n"),
+        "a stopped stream is a VOD playlist: {}",
+        playlist.text
     );
     assert!(!origin.handle.status().is_live);
 
-    let listed = listed_sequences(&playlist);
+    let listed = playlist.sequences();
     let joined = listed
         .iter()
         .rev()

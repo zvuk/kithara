@@ -34,14 +34,14 @@ fn sine(frames: usize) -> Vec<f32> {
 }
 
 fn encode_stream(samples: &[f32]) -> EncodedTrack {
-    let mut encoder = StreamEncoder::new(
-        StreamBackend::Ffmpeg,
-        SAMPLE_RATE,
-        CHANNELS,
-        BIT_RATE,
-        SAMPLE_RATE,
-    )
-    .expect("open the streaming AAC-LC encoder");
+    let mut encoder = StreamEncoder::builder()
+        .backend(StreamBackend::Ffmpeg)
+        .sample_rate(SAMPLE_RATE)
+        .channels(CHANNELS)
+        .bit_rate(BIT_RATE)
+        .timescale(SAMPLE_RATE)
+        .build()
+        .expect("open the streaming AAC-LC encoder");
 
     let mut access_units = Vec::new();
     for chunk in samples.chunks(PUSH_FRAMES * usize::from(CHANNELS)) {

@@ -149,13 +149,15 @@ impl<F: LivePcmFeed> Worker<F> {
         let window = LiveWindow::new(config)?;
         Ok(Self {
             feed,
-            encoder: Some(StreamEncoder::new(
-                StreamBackend::Fdk,
-                config.sample_rate,
-                config.channels,
-                config.bit_rate,
-                config.sample_rate,
-            )?),
+            encoder: Some(
+                StreamEncoder::builder()
+                    .backend(StreamBackend::Fdk)
+                    .sample_rate(config.sample_rate)
+                    .channels(config.channels)
+                    .bit_rate(config.bit_rate)
+                    .timescale(config.sample_rate)
+                    .build()?,
+            ),
             segmenter: Segmenter::new(config)?,
             origin: Arc::new(Origin {
                 snapshot: ArcSwap::from_pointee(window.snapshot()),
@@ -218,13 +220,25 @@ impl<F: LivePcmFeed> Worker<F> {
 
     fn end(mut self) {
         self.feed.close();
+        if !self.drain_feed() {
+            return;
+        }
+        self.finish_encoder();
+        if let Some(segment) = self.segmenter.flush() {
+            self.publish(segment);
+        }
 
+        self.window.finish();
+        self.origin.snapshot.store(Arc::new(self.window.snapshot()));
+    }
+
+    fn drain_feed(&mut self) -> bool {
         loop {
             if self.token.is_cancelled() {
-                return;
+                return false;
             }
             match self.pump() {
-                Ok(true) => break,
+                Ok(true) => return true,
                 Ok(false) => {
                     if self.samples.is_empty() {
                         thread::paced_backoff(Self::POLL);
@@ -232,11 +246,13 @@ impl<F: LivePcmFeed> Worker<F> {
                 }
                 Err(error) => {
                     tracing::error!(%error, "the live packager stopped draining");
-                    break;
+                    return true;
                 }
             }
         }
+    }
 
+    fn finish_encoder(&mut self) {
         if let Some(encoder) = self.encoder.take() {
             match encoder.finish() {
                 Ok(units) => {
@@ -253,12 +269,6 @@ impl<F: LivePcmFeed> Worker<F> {
                 Err(error) => tracing::error!(%error, "the live encoder failed to drain"),
             }
         }
-        if let Some(segment) = self.segmenter.flush() {
-            self.publish(segment);
-        }
-
-        self.window.finish();
-        self.origin.snapshot.store(Arc::new(self.window.snapshot()));
     }
 
     fn publish(&mut self, segment: Segment) {

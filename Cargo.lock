@@ -4503,6 +4503,7 @@ dependencies = [
 name = "kithara-encode"
 version = "0.0.1-alpha4"
 dependencies = [
+ "bon",
  "fdk-aac-sys",
  "ffmpeg-next",
  "kithara-stream",

@@ -34,6 +34,101 @@ const CHUNK_FRAMES: u64 = 2_400;
 
 const TONE_MARGIN: f64 = 50.0;
 
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct PlaylistEntry {
+    pub(super) extinf: String,
+    pub(super) uri: String,
+    pub(super) seconds: f64,
+    pub(super) discontinuity: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct Playlist {
+    pub(super) text: String,
+    pub(super) target: f64,
+    pub(super) target_text: String,
+    pub(super) media_sequence: u64,
+    pub(super) discontinuity_sequence: u64,
+    pub(super) entries: Vec<PlaylistEntry>,
+}
+
+impl Playlist {
+    pub(super) fn parse(text: String) -> Self {
+        let mut entries = Vec::new();
+        let mut extinf: Option<(String, f64)> = None;
+        let mut discontinuity = false;
+        for line in text.lines() {
+            if line == "#EXT-X-DISCONTINUITY" {
+                discontinuity = true;
+            } else if let Some(value) = line.strip_prefix("#EXTINF:") {
+                let seconds = value
+                    .trim_end_matches(',')
+                    .parse()
+                    .expect("EXTINF carries a duration");
+                extinf = Some((line.to_owned(), seconds));
+            } else if !line.starts_with('#') && !line.is_empty() {
+                let (extinf, seconds) = extinf.take().expect("a segment URI follows its EXTINF");
+                entries.push(PlaylistEntry {
+                    extinf,
+                    uri: line.to_owned(),
+                    seconds,
+                    discontinuity,
+                });
+                discontinuity = false;
+            }
+        }
+
+        let target_text = tag(&text, "#EXT-X-TARGETDURATION:").to_owned();
+        Self {
+            target: target_text.parse().expect("a numeric target duration"),
+            target_text,
+            media_sequence: tag(&text, "#EXT-X-MEDIA-SEQUENCE:")
+                .parse()
+                .expect("a numeric media sequence"),
+            discontinuity_sequence: tag(&text, "#EXT-X-DISCONTINUITY-SEQUENCE:")
+                .parse()
+                .expect("a numeric discontinuity sequence"),
+            entries,
+            text,
+        }
+    }
+
+    pub(super) fn spans(&self) -> f64 {
+        self.entries.iter().map(|entry| entry.seconds).sum()
+    }
+
+    pub(super) fn sequences(&self) -> Vec<u64> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .uri
+                    .strip_prefix("seg/")
+                    .and_then(|uri| uri.strip_suffix(".aac"))
+                    .expect("a segment URI")
+                    .parse()
+                    .expect("a segment sequence number")
+            })
+            .collect()
+    }
+
+    pub(super) fn uris_after_last_discontinuity(&self) -> Option<Vec<&str>> {
+        let start = self.entries.iter().rposition(|entry| entry.discontinuity)?;
+        Some(
+            self.entries[start..]
+                .iter()
+                .map(|entry| entry.uri.as_str())
+                .collect(),
+        )
+    }
+}
+
+fn tag<'a>(text: &'a str, tag: &str) -> &'a str {
+    text.lines()
+        .find_map(|line| line.strip_prefix(tag))
+        .unwrap_or_else(|| panic!("{tag} is missing from {text}"))
+}
+
 pub(super) fn decode_adts_left(bytes: Vec<u8>) -> Vec<f32> {
     let mut decoder = DecoderFactory::create_from_media_info(
         Cursor::new(bytes),

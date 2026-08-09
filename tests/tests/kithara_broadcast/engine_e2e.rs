@@ -24,7 +24,7 @@ use url::Url;
 
 use super::{
     offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions},
-    origin::{assert_carries_the_tone, decode_adts_left},
+    origin::{Playlist, assert_carries_the_tone, decode_adts_left},
 };
 
 const SESSION_RATE: u32 = 44_100;
@@ -84,20 +84,6 @@ fn render_tone(harness: &OfflinePlayerHarness, frames: usize) {
 
 fn left_channel(interleaved: &[f32]) -> Vec<f32> {
     interleaved.iter().step_by(2).copied().collect()
-}
-
-fn segments_after_break(playlist: &str) -> Option<Vec<String>> {
-    let mut listed = Vec::new();
-    let mut broke = false;
-    for line in playlist.lines() {
-        if line == "#EXT-X-DISCONTINUITY" {
-            broke = true;
-            listed.clear();
-        } else if !line.starts_with('#') && !line.is_empty() {
-            listed.push(line.to_owned());
-        }
-    }
-    broke.then_some(listed)
 }
 
 struct OnAir {
@@ -169,13 +155,10 @@ impl OnAir {
     }
 
     async fn listed_stream(&self) -> Vec<u8> {
-        let playlist = self.media_playlist().await;
+        let playlist = Playlist::parse(self.media_playlist().await);
         let mut stream = Vec::new();
-        for uri in playlist
-            .lines()
-            .filter(|line| !line.starts_with('#') && !line.is_empty())
-        {
-            stream.extend_from_slice(&self.get(&format!("v/0/{uri}")).await);
+        for entry in &playlist.entries {
+            stream.extend_from_slice(&self.get(&format!("v/0/{}", entry.uri)).await);
         }
         stream
     }
@@ -253,9 +236,12 @@ async fn a_ring_the_render_outruns_breaks_the_served_playlist() {
     render_tone(&harness, TAIL_FRAMES);
     on_air.handle.stop();
 
-    let playlist = on_air.media_playlist().await;
-    let after_break = segments_after_break(&playlist).unwrap_or_else(|| {
-        panic!("a gap the real-time node counted must reach the client as a break: {playlist}")
+    let playlist = Playlist::parse(on_air.media_playlist().await);
+    let after_break = playlist.uris_after_last_discontinuity().unwrap_or_else(|| {
+        panic!(
+            "a gap the real-time node counted must reach the client as a break: {}",
+            playlist.text
+        )
     });
     assert!(
         on_air.handle.status().dropped_samples > 0,

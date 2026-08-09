@@ -10,4 +10,7 @@ pub(crate) mod stream;
 pub(crate) use ffmpeg::codec::encoder::find as find_encoder;
 use ffmpeg_next as ffmpeg;
 
-pub(crate) use self::core::{RebaseRates, build_direct_filter, ensure_ffmpeg_initialized};
+pub(crate) use self::core::{
+    PacketCodec, RebaseRates, build_direct_filter, collect_encoded_packets,
+    ensure_ffmpeg_initialized,
+};

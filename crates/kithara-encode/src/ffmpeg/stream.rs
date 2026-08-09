@@ -1,22 +1,21 @@
 use std::mem::size_of;
 
 use ffmpeg::{
-    ChannelLayout, Dictionary, Error as FfmpegError, Packet, Rational,
+    ChannelLayout, Dictionary, Error as FfmpegError, Rational,
     codec::{
         Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
         flag::Flags as CodecFlags,
     },
-    error::EAGAIN,
     filter::Graph as FilterGraph,
     format::{Sample, sample::Type as SampleType},
     frame::Audio as AudioFrame,
-    rescale::Rescale,
 };
 use ffmpeg_next as ffmpeg;
 use kithara_stream::AudioCodec;
 
 use super::{
-    RebaseRates, build_direct_filter, ensure_ffmpeg_initialized, find_encoder,
+    PacketCodec, RebaseRates, build_direct_filter, collect_encoded_packets,
+    ensure_ffmpeg_initialized, find_encoder,
     pcm::{drain_filtered_frames, flush_filter, send_eof_to_encoder, send_frame_to_filter},
 };
 use crate::{
@@ -127,6 +126,7 @@ impl FfmpegStream {
             self.rates,
             &mut self.timestamp_origin,
             &mut units,
+            PacketCodec::Aac,
         )?;
         Ok(units)
     }
@@ -136,7 +136,13 @@ impl FfmpegStream {
         let timestamp_origin = &mut self.timestamp_origin;
         let mut units = Vec::new();
         drain_filtered_frames(&mut self.filter, &mut self.encoder, |encoder| {
-            collect_encoded_packets(encoder, rates, timestamp_origin, &mut units)
+            collect_encoded_packets(
+                encoder,
+                rates,
+                timestamp_origin,
+                &mut units,
+                PacketCodec::Aac,
+            )
         })?;
         Ok(units)
     }
@@ -157,55 +163,4 @@ fn positive_i32(value: u32, field: &'static str) -> EncodeResult<i32> {
         .ok()
         .filter(|value| *value > 0)
         .ok_or_else(|| EncodeError::InvalidInput(format!("{field} must be > 0, got {value}")))
-}
-
-fn collect_encoded_packets(
-    encoder: &mut AudioEncoder,
-    rates: RebaseRates,
-    timestamp_origin: &mut Option<i64>,
-    units: &mut Vec<EncodedAccessUnit>,
-) -> Result<(), FfmpegError> {
-    let mut encoded = Packet::empty();
-    loop {
-        match encoder.receive_packet(&mut encoded) {
-            Ok(()) => {}
-            Err(FfmpegError::Eof | FfmpegError::Other { errno: EAGAIN }) => return Ok(()),
-            Err(error) => return Err(error),
-        }
-        if encoded.size() == 0 {
-            continue;
-        }
-
-        let raw_pts = encoded.pts().unwrap_or_default();
-        let raw_dts = encoded.dts().unwrap_or_default();
-        let origin = *timestamp_origin.get_or_insert(raw_pts.min(raw_dts));
-        let start = raw_pts.saturating_sub(origin).max(0);
-        let end = start.saturating_add(encoded.duration().max(0));
-
-        let pts = rescale_timestamp(start, rates);
-        units.push(EncodedAccessUnit {
-            bytes: encoded.data().unwrap_or(&[]).to_vec(),
-            pts,
-            dts: rescale_timestamp(raw_dts.saturating_sub(origin).max(0), rates),
-            duration: {
-                let duration = rescale_timestamp(end, rates).saturating_sub(pts);
-                u32::try_from(duration).unwrap_or_else(|_| {
-                    tracing::error!(
-                        packet_duration = duration,
-                        "BUG: AAC packet duration exceeds u32::MAX in the target time base"
-                    );
-                    0
-                })
-            },
-            is_sync: encoded.is_key(),
-        });
-    }
-}
-
-fn rescale_timestamp(value: i64, rates: RebaseRates) -> u64 {
-    let rescaled = value.rescale(rates.encoder, rates.target).max(0);
-    u64::try_from(rescaled).unwrap_or_else(|_| {
-        tracing::error!(rescaled, "BUG: rescaled timestamp exceeds u64::MAX");
-        0
-    })
 }

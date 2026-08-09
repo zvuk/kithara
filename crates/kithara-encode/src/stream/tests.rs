@@ -16,14 +16,14 @@ fn encode_in_chunks(
     chunk_frames: usize,
     timescale: u32,
 ) -> Vec<EncodedAccessUnit> {
-    let mut encoder = StreamEncoder::new(
-        backend,
-        Consts::SAMPLE_RATE,
-        Consts::CHANNELS,
-        Consts::BIT_RATE,
-        timescale,
-    )
-    .expect("stream encoder");
+    let mut encoder = StreamEncoder::builder()
+        .backend(backend)
+        .sample_rate(Consts::SAMPLE_RATE)
+        .channels(Consts::CHANNELS)
+        .bit_rate(Consts::BIT_RATE)
+        .timescale(timescale)
+        .build()
+        .expect("stream encoder");
     let mut units = Vec::new();
     for chunk in samples.chunks(chunk_frames * usize::from(Consts::CHANNELS)) {
         units.extend(encoder.push(chunk).expect("push"));
@@ -94,14 +94,14 @@ fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
     const TIMESCALE: u32 = 90_000;
 
     let samples = TestPcm::sawtooth(Consts::FRAMES, SOURCE_RATE, Consts::CHANNELS).samples_f32();
-    let mut encoder = StreamEncoder::new(
-        backend,
-        SOURCE_RATE,
-        Consts::CHANNELS,
-        Consts::BIT_RATE,
-        TIMESCALE,
-    )
-    .expect("stream encoder");
+    let mut encoder = StreamEncoder::builder()
+        .backend(backend)
+        .sample_rate(SOURCE_RATE)
+        .channels(Consts::CHANNELS)
+        .bit_rate(Consts::BIT_RATE)
+        .timescale(TIMESCALE)
+        .build()
+        .expect("stream encoder");
     let mut units = encoder.push(&samples).expect("push");
     units.extend(encoder.finish().expect("finish"));
 
@@ -125,27 +125,27 @@ fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
 
 fn new_rejects_a_channel_count_the_encoder_cannot_carry(backend: StreamBackend) {
     assert!(
-        StreamEncoder::new(
-            backend,
-            Consts::SAMPLE_RATE,
-            9,
-            Consts::BIT_RATE,
-            Consts::SAMPLE_RATE
-        )
-        .is_err(),
+        StreamEncoder::builder()
+            .backend(backend)
+            .sample_rate(Consts::SAMPLE_RATE)
+            .channels(9)
+            .bit_rate(Consts::BIT_RATE)
+            .timescale(Consts::SAMPLE_RATE)
+            .build()
+            .is_err(),
         "AAC-LC carries no 9-channel layout"
     );
 }
 
 fn push_rejects_a_partial_frame(backend: StreamBackend) {
-    let mut encoder = StreamEncoder::new(
-        backend,
-        Consts::SAMPLE_RATE,
-        Consts::CHANNELS,
-        Consts::BIT_RATE,
-        Consts::SAMPLE_RATE,
-    )
-    .expect("stream encoder");
+    let mut encoder = StreamEncoder::builder()
+        .backend(backend)
+        .sample_rate(Consts::SAMPLE_RATE)
+        .channels(Consts::CHANNELS)
+        .bit_rate(Consts::BIT_RATE)
+        .timescale(Consts::SAMPLE_RATE)
+        .build()
+        .expect("stream encoder");
 
     let error = encoder.push(&[0.0, 0.0, 0.0]).expect_err("partial frame");
 
@@ -158,7 +158,13 @@ fn new_rejects_audio_no_backend_can_carry(backend: StreamBackend) {
         (Consts::SAMPLE_RATE, 0, Consts::SAMPLE_RATE),
         (Consts::SAMPLE_RATE, Consts::CHANNELS, 0),
     ] {
-        let error = StreamEncoder::new(backend, sample_rate, channels, Consts::BIT_RATE, timescale)
+        let error = StreamEncoder::builder()
+            .backend(backend)
+            .sample_rate(sample_rate)
+            .channels(channels)
+            .bit_rate(Consts::BIT_RATE)
+            .timescale(timescale)
+            .build()
             .map(|_| ())
             .expect_err("zero is not audio");
 

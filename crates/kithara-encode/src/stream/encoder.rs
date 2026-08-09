@@ -1,3 +1,5 @@
+use bon::bon;
+
 #[cfg(feature = "fdk-aac")]
 use crate::fdk::aac_lc::FdkStream;
 #[cfg(feature = "ffmpeg")]
@@ -49,6 +51,7 @@ pub struct StreamEncoder {
     channels: u16,
 }
 
+#[bon]
 impl StreamEncoder {
     /// Samples per channel in one AAC-LC access unit.
     pub const FRAME_SAMPLES: usize = 1024;
@@ -59,6 +62,7 @@ impl StreamEncoder {
     ///
     /// Returns invalid input for a zero sample rate, channel count, or timescale,
     /// and a backend error when the encoder cannot open the requested audio.
+    #[builder]
     pub fn new(
         backend: StreamBackend,
         sample_rate: u32,

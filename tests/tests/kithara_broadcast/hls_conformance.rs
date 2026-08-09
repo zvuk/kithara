@@ -1,6 +1,6 @@
 use kithara_integration_tests::packed_audio::{PackedSegment, TIMESTAMP_BITS};
 
-use super::origin::{Origin, SAMPLE_RATE, WINDOW};
+use super::origin::{Origin, Playlist, SAMPLE_RATE, WINDOW};
 
 const POLLS: usize = 4;
 const SEGMENTS_PER_POLL: u64 = 2;
@@ -8,70 +8,6 @@ const MIN_TARGETS: f64 = 3.0;
 const AU_SLACK: f64 = 1.0;
 const SAMPLES_PER_AU: f64 = 1_024.0;
 const TIMESTAMP_SLACK: u64 = 1;
-
-#[derive(Debug, Clone, PartialEq)]
-struct Entry {
-    extinf: String,
-    uri: String,
-    seconds: f64,
-}
-
-#[derive(Debug, Clone)]
-struct Playlist {
-    text: String,
-    target: f64,
-    target_text: String,
-    media_sequence: u64,
-    discontinuity_sequence: u64,
-    entries: Vec<Entry>,
-}
-
-impl Playlist {
-    fn parse(text: String) -> Self {
-        let mut entries = Vec::new();
-        let mut extinf: Option<(String, f64)> = None;
-        for line in text.lines() {
-            if let Some(value) = line.strip_prefix("#EXTINF:") {
-                let seconds = value
-                    .trim_end_matches(',')
-                    .parse()
-                    .expect("EXTINF carries a duration");
-                extinf = Some((line.to_owned(), seconds));
-            } else if !line.starts_with('#') && !line.is_empty() {
-                let (extinf, seconds) = extinf.take().expect("a segment URI follows its EXTINF");
-                entries.push(Entry {
-                    extinf,
-                    uri: line.to_owned(),
-                    seconds,
-                });
-            }
-        }
-
-        let target_text = tag(&text, "#EXT-X-TARGETDURATION:").to_owned();
-        Self {
-            target: target_text.parse().expect("a numeric target duration"),
-            target_text,
-            media_sequence: tag(&text, "#EXT-X-MEDIA-SEQUENCE:")
-                .parse()
-                .expect("a numeric media sequence"),
-            discontinuity_sequence: tag(&text, "#EXT-X-DISCONTINUITY-SEQUENCE:")
-                .parse()
-                .expect("a numeric discontinuity sequence"),
-            entries,
-            text,
-        }
-    }
-
-    fn spans(&self) -> f64 {
-        self.entries.iter().map(|entry| entry.seconds).sum()
-    }
-}
-
-fn tag<'a>(text: &'a str, tag: &str) -> &'a str {
-    text.lines()
-        .find_map(|line| line.strip_prefix(tag))
-        .unwrap_or_else(|| panic!("{tag} is missing from {text}"))
-}
 
 #[kithara::test(tokio)]
 async fn the_live_playlist_obeys_the_reload_rules() {

@@ -15,13 +15,13 @@ impl AacFFmpegEncoder {
         request.validate()?;
 
         let pcm = request.pcm;
-        let mut encoder = StreamEncoder::new(
-            StreamBackend::Ffmpeg,
-            pcm.sample_rate(),
-            pcm.channels(),
-            request.bit_rate,
-            request.timescale,
-        )?;
+        let mut encoder = StreamEncoder::builder()
+            .backend(StreamBackend::Ffmpeg)
+            .sample_rate(pcm.sample_rate())
+            .channels(pcm.channels())
+            .bit_rate(request.bit_rate)
+            .timescale(request.timescale)
+            .build()?;
 
         let mut access_units: Vec<EncodedAccessUnit> = Vec::new();
         pump_pcm_samples(pcm, Self::frame_samples(), |samples| {
@@ -94,14 +94,14 @@ mod tests {
         let pcm = TestPcm::sawtooth(Consts::FRAMES, Consts::SAMPLE_RATE, Consts::CHANNELS);
         let offline = encode_offline(&pcm);
 
-        let mut encoder = StreamEncoder::new(
-            StreamBackend::Ffmpeg,
-            Consts::SAMPLE_RATE,
-            Consts::CHANNELS,
-            Consts::BIT_RATE,
-            Consts::SAMPLE_RATE,
-        )
-        .expect("stream encoder");
+        let mut encoder = StreamEncoder::builder()
+            .backend(StreamBackend::Ffmpeg)
+            .sample_rate(Consts::SAMPLE_RATE)
+            .channels(Consts::CHANNELS)
+            .bit_rate(Consts::BIT_RATE)
+            .timescale(Consts::SAMPLE_RATE)
+            .build()
+            .expect("stream encoder");
         let mut streamed = encoder.push(&pcm.samples_f32()).expect("push");
         streamed.extend(encoder.finish().expect("finish"));
 
