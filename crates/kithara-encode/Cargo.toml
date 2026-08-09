@@ -9,7 +9,15 @@ description = "Synchronous audio encoding with packaged and byte outputs"
 publish = false
 
 [features]
-default = ["client-reqwest", "tls-rustls"]
+default = ["ffmpeg", "fdk-aac", "client-reqwest", "tls-rustls"]
+# In-tree fdk-aac, built from vendored sources: HE-AAC v1/v2 offline and the
+# streaming AAC-LC the live broadcast runs on. Carries no system dependency,
+# so a distributed binary needs nothing installed on the user's machine.
+fdk-aac = ["dep:fdk-aac-sys"]
+# System FFmpeg: byte encoding, FLAC, and the offline AAC-LC fixtures. Links
+# against the FFmpeg on the build and run host, so a consumer that ships
+# binaries keeps it off.
+ffmpeg = ["dep:ffmpeg-next", "dep:tempfile"]
 # HTTP backend forwarding. This crate encodes and never speaks HTTP, but it
 # takes its media types from kithara-stream, which reaches kithara-net, and
 # kithara-net refuses to build without a backend.
@@ -28,10 +36,9 @@ tracing = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
-fdk-aac = { workspace = true }
-fdk-aac-sys = { workspace = true }
-ffmpeg-next = { workspace = true }
-tempfile = { workspace = true }
+fdk-aac-sys = { workspace = true, optional = true }
+ffmpeg-next = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
 
 [lints]
 workspace = true

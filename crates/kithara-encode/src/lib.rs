@@ -16,18 +16,26 @@
 
 mod error;
 mod factory;
+#[cfg(not(target_arch = "wasm32"))]
+mod offline;
+#[cfg(not(target_arch = "wasm32"))]
+mod stream;
+#[cfg(test)]
+mod test_pcm;
 mod traits;
 mod types;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
 mod fdk;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "ffmpeg"))]
 mod ffmpeg;
 
 pub use error::{EncodeError, EncodeResult};
 pub use factory::EncoderFactory;
+#[cfg(all(not(target_arch = "wasm32"), feature = "ffmpeg"))]
+pub use ffmpeg::flac::normalize_flac_codec_config;
 #[cfg(not(target_arch = "wasm32"))]
-pub use ffmpeg::{flac::normalize_flac_codec_config, stream::StreamEncoder};
+pub use stream::{StreamBackend, StreamEncoder};
 pub use traits::InnerEncoder;
 pub use types::{
     BytesEncodeRequest, BytesEncodeTarget, EncodedAccessUnit, EncodedBytes, EncodedTrack,

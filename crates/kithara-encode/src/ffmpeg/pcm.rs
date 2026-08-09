@@ -137,7 +137,7 @@ pub(crate) fn drain_filtered_frames(
 #[cfg(test)]
 mod tests {
     use super::pump_pcm_samples;
-    use crate::ffmpeg::test_pcm::TestPcm;
+    use crate::test_pcm::TestPcm;
 
     #[test]
     fn i16_input_scales_onto_the_full_scale_f32_range() {

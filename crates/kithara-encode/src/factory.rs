@@ -1,7 +1,7 @@
 use kithara_stream::AudioCodec;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::ffmpeg::FfmpegEncoder;
+use crate::offline::OfflineEncoder;
 use crate::{
     error::{EncodeError, EncodeResult},
     traits::InnerEncoder,
@@ -20,12 +20,8 @@ impl EncoderFactory {
     pub fn create_bytes(target: crate::BytesEncodeTarget) -> EncodeResult<Box<dyn InnerEncoder>> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            match target {
-                crate::BytesEncodeTarget::Mp3
-                | crate::BytesEncodeTarget::Flac
-                | crate::BytesEncodeTarget::Aac
-                | crate::BytesEncodeTarget::M4a => Ok(Box::new(FfmpegEncoder)),
-            }
+            let _ = target;
+            Ok(Box::new(OfflineEncoder))
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -44,12 +40,8 @@ impl EncoderFactory {
     pub fn create_packaged(codec: AudioCodec) -> EncodeResult<Box<dyn InnerEncoder>> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            match codec {
-                AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac => {
-                    Ok(Box::new(FfmpegEncoder))
-                }
-                codec => Err(EncodeError::UnsupportedCodec(codec)),
-            }
+            let _ = codec;
+            Ok(Box::new(OfflineEncoder))
         }
 
         #[cfg(target_arch = "wasm32")]

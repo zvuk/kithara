@@ -7,7 +7,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_broadcast::{BroadcastConfig, LiveWindow, PlaylistSnapshot, Segmenter};
-use kithara_encode::StreamEncoder;
+use kithara_encode::{StreamBackend, StreamEncoder};
 use kithara_integration_tests::{
     goertzel::goertzel_magnitude,
     signal_pcm::signal::{SignalFn, SineWave},
@@ -44,7 +44,7 @@ fn broadcast(samples: &[f32]) -> PlaylistSnapshot {
         .bit_rate(BIT_RATE)
         .segment_target(TARGET)
         .build();
-    let mut encoder = StreamEncoder::new(SAMPLE_RATE, CHANNELS, BIT_RATE, SAMPLE_RATE)
+    let mut encoder = StreamEncoder::new(StreamBackend::Ffmpeg, SAMPLE_RATE, CHANNELS, BIT_RATE, SAMPLE_RATE)
         .expect("open the streaming AAC-LC encoder");
     let mut segmenter = Segmenter::new(&config).expect("open the segmenter");
     let mut window = LiveWindow::new(&config).expect("open the window");

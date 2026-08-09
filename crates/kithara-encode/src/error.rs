@@ -36,7 +36,7 @@ impl EncodeError {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "ffmpeg"))]
 impl From<ffmpeg_next::Error> for EncodeError {
     fn from(error: ffmpeg_next::Error) -> Self {
         Self::Backend(Box::new(error))

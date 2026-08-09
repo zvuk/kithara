@@ -1,5 +1,5 @@
 use arc_swap::ArcSwap;
-use kithara_encode::StreamEncoder;
+use kithara_encode::{StreamBackend, StreamEncoder};
 use kithara_platform::{
     CancelScope, CancelToken,
     sync::{
@@ -166,6 +166,7 @@ impl<F: LivePcmFeed> Worker<F> {
         Ok(Self {
             feed,
             encoder: Some(StreamEncoder::new(
+                StreamBackend::Ffmpeg,
                 config.sample_rate,
                 config.channels,
                 config.bit_rate,

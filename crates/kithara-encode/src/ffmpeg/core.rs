@@ -7,14 +7,8 @@ use ffmpeg::{
     format as av_format,
 };
 use ffmpeg_next as ffmpeg;
-use kithara_stream::AudioCodec;
 
-use super::{aac::AacFFmpegEncoder, flac::FlacFFmpegEncoder};
-use crate::{
-    BytesEncodeRequest, EncodeError, EncodeResult, EncodedBytes, EncodedTrack, InnerEncoder,
-    PackagedEncodeRequest,
-    fdk::aac_he::{AacHeEncoder, AacHeProfile},
-};
+use crate::EncodeError;
 
 /// Source/target time bases for rescaling encoded packets, shared by the
 /// AAC and FLAC `collect_encoded_packets` helpers.
@@ -22,38 +16,6 @@ use crate::{
 pub(crate) struct RebaseRates {
     pub(crate) encoder: Rational,
     pub(crate) target: Rational,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct FfmpegEncoder;
-
-impl InnerEncoder for FfmpegEncoder {
-    fn encode_bytes(&self, request: BytesEncodeRequest<'_>) -> EncodeResult<EncodedBytes> {
-        super::bytes::encode_bytes_audio(&request)
-    }
-
-    fn encode_packaged(&self, request: PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
-        let codec = request
-            .media_info
-            .codec
-            .ok_or(EncodeError::InvalidMediaInfo("codec"))?;
-        match codec {
-            AudioCodec::AacLc => AacFFmpegEncoder::encode(&request),
-            AudioCodec::AacHe => AacHeEncoder::encode(&request, AacHeProfile::V1),
-            AudioCodec::AacHeV2 => AacHeEncoder::encode(&request, AacHeProfile::V2),
-            AudioCodec::Flac => FlacFFmpegEncoder::encode(&request),
-            codec => Err(EncodeError::UnsupportedCodec(codec)),
-        }
-    }
-
-    fn packaged_frame_samples(&self, codec: AudioCodec) -> EncodeResult<usize> {
-        match codec {
-            AudioCodec::AacLc => Ok(AacFFmpegEncoder::frame_samples()),
-            AudioCodec::AacHe | AudioCodec::AacHeV2 => Ok(AacHeEncoder::frame_samples()),
-            AudioCodec::Flac => Ok(FlacFFmpegEncoder::frame_samples()),
-            codec => Err(EncodeError::UnsupportedCodec(codec)),
-        }
-    }
 }
 
 pub(crate) fn ensure_ffmpeg_initialized() -> Result<(), EncodeError> {

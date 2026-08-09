@@ -5,7 +5,7 @@ use kithara::{
     decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_encode::{EncodedTrack, StreamEncoder};
+use kithara_encode::{EncodedTrack, StreamBackend, StreamEncoder};
 use kithara_integration_tests::{
     encode_ext::mux_fmp4_bytes,
     fixture_protocol::GaplessEncoding,
@@ -34,7 +34,7 @@ fn sine(frames: usize) -> Vec<f32> {
 }
 
 fn encode_stream(samples: &[f32]) -> EncodedTrack {
-    let mut encoder = StreamEncoder::new(SAMPLE_RATE, CHANNELS, BIT_RATE, SAMPLE_RATE)
+    let mut encoder = StreamEncoder::new(StreamBackend::Ffmpeg, SAMPLE_RATE, CHANNELS, BIT_RATE, SAMPLE_RATE)
         .expect("open the streaming AAC-LC encoder");
 
     let mut access_units = Vec::new();

@@ -1,8 +1,9 @@
 use kithara_stream::AudioCodec;
 
-use super::{pcm::pump_pcm_samples, stream::StreamEncoder};
+use super::pcm::pump_pcm_samples;
 use crate::{
     EncodeResult,
+    stream::{StreamBackend, StreamEncoder},
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
@@ -17,6 +18,7 @@ impl AacFFmpegEncoder {
 
         let pcm = request.pcm;
         let mut encoder = StreamEncoder::new(
+            StreamBackend::Ffmpeg,
             pcm.sample_rate(),
             pcm.channels(),
             request.bit_rate,
@@ -59,7 +61,8 @@ mod tests {
     use super::{AacFFmpegEncoder, PackagedEncodeRequest};
     use crate::{
         EncodedTrack,
-        ffmpeg::{stream::StreamEncoder, test_pcm::TestPcm},
+        stream::{StreamBackend, StreamEncoder},
+        test_pcm::TestPcm,
     };
 
     struct Consts;
@@ -94,6 +97,7 @@ mod tests {
         let offline = encode_offline(&pcm);
 
         let mut encoder = StreamEncoder::new(
+            StreamBackend::Ffmpeg,
             Consts::SAMPLE_RATE,
             Consts::CHANNELS,
             Consts::BIT_RATE,

@@ -19,17 +19,13 @@ use super::{
     RebaseRates, build_direct_filter, ensure_ffmpeg_initialized, find_encoder,
     pcm::{drain_filtered_frames, flush_filter, send_eof_to_encoder, send_frame_to_filter},
 };
-use crate::{EncodeError, EncodeResult, types::EncodedAccessUnit};
+use crate::{EncodeError, EncodeResult, stream::StreamParams, types::EncodedAccessUnit};
 
 /// Sample format the encoder takes from callers.
 const INPUT_FORMAT: Sample = Sample::F32(SampleType::Packed);
 
-/// Streaming AAC-LC encoder: interleaved f32 in, encoded access units out.
-///
-/// One instance encodes one continuous stream; [`push`](Self::push) returns the
-/// access units the pushed audio completed, [`finish`](Self::finish) drains the
-/// encoder's remaining frames.
-pub struct StreamEncoder {
+/// `FFmpeg`'s AAC encoder behind [`crate::StreamEncoder`].
+pub(crate) struct FfmpegStream {
     encoder: AudioEncoder,
     filter: FilterGraph,
     channels: u16,
@@ -39,31 +35,16 @@ pub struct StreamEncoder {
     next_pts: i64,
 }
 
-impl StreamEncoder {
-    /// Samples per channel in one AAC-LC access unit.
-    pub const FRAME_SAMPLES: usize = 1024;
-
-    /// Open an AAC-LC encoder for `sample_rate`/`channels` audio, emitting
-    /// access-unit timestamps in `timescale` units.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EncodeError::InvalidInput`] for a zero sample rate, channel
-    /// count, or timescale, and [`EncodeError::UnsupportedCodec`] when the
-    /// linked `FFmpeg` has no AAC encoder.
-    pub fn new(
-        sample_rate: u32,
-        channels: u16,
-        bit_rate: u64,
-        timescale: u32,
-    ) -> EncodeResult<Self> {
+impl FfmpegStream {
+    pub(crate) fn new(params: &StreamParams) -> EncodeResult<Self> {
+        let StreamParams {
+            sample_rate,
+            channels,
+            bit_rate,
+            timescale,
+        } = *params;
         let rate = positive_i32(sample_rate, "sample_rate")?;
         let target_rate = positive_i32(timescale, "timescale")?;
-        if channels == 0 {
-            return Err(EncodeError::InvalidInput(
-                "channels must be > 0, got 0".to_owned(),
-            ));
-        }
 
         ensure_ffmpeg_initialized()?;
 
@@ -108,26 +89,8 @@ impl StreamEncoder {
         })
     }
 
-    /// Encode interleaved `samples` and return the access units they completed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EncodeError::InvalidInput`] when the slice length is not a
-    /// multiple of the channel count, and [`EncodeError::Backend`] when
-    /// `FFmpeg` rejects the frame.
-    pub fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        if samples.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let channels = usize::from(self.channels);
-        if !samples.len().is_multiple_of(channels) {
-            return Err(EncodeError::InvalidInput(format!(
-                "interleaved sample count {} is not a multiple of {channels} channels",
-                samples.len()
-            )));
-        }
-        let frames = samples.len() / channels;
+    pub(crate) fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
+        let frames = samples.len() / usize::from(self.channels);
         let frame_count = i32::try_from(frames).map_err(|_| {
             EncodeError::InvalidInput(format!("push of {frames} frames does not fit one frame"))
         })?;
@@ -153,12 +116,7 @@ impl StreamEncoder {
         Ok(self.drain_filter()?)
     }
 
-    /// Flush the encoder and return its remaining access units.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EncodeError::Backend`] when `FFmpeg` fails to drain.
-    pub fn finish(mut self) -> EncodeResult<Vec<EncodedAccessUnit>> {
+    pub(crate) fn finish(mut self) -> EncodeResult<Vec<EncodedAccessUnit>> {
         flush_filter(&mut self.filter)?;
         let mut units = self.drain_filter()?;
         send_eof_to_encoder(&mut self.encoder)?;
@@ -241,149 +199,4 @@ fn rescale_timestamp(value: i64, rates: RebaseRates) -> u64 {
         tracing::error!(rescaled, "BUG: rescaled timestamp exceeds u64::MAX");
         0
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::StreamEncoder;
-    use crate::{EncodeError, EncodedAccessUnit, ffmpeg::test_pcm::TestPcm};
-
-    struct Consts;
-
-    impl Consts {
-        const BIT_RATE: u64 = 128_000;
-        const CHANNELS: u16 = 2;
-        const FRAMES: usize = 4_096;
-        const SAMPLE_RATE: u32 = 48_000;
-    }
-
-    fn encode_in_chunks(
-        samples: &[f32],
-        chunk_frames: usize,
-        timescale: u32,
-    ) -> Vec<EncodedAccessUnit> {
-        let mut encoder = StreamEncoder::new(
-            Consts::SAMPLE_RATE,
-            Consts::CHANNELS,
-            Consts::BIT_RATE,
-            timescale,
-        )
-        .expect("stream encoder");
-        let mut units = Vec::new();
-        for chunk in samples.chunks(chunk_frames * usize::from(Consts::CHANNELS)) {
-            units.extend(encoder.push(chunk).expect("push"));
-        }
-        units.extend(encoder.finish().expect("finish"));
-        units
-    }
-
-    #[test]
-    fn chunking_does_not_change_the_encoded_stream() {
-        let samples =
-            TestPcm::sawtooth(Consts::FRAMES, Consts::SAMPLE_RATE, Consts::CHANNELS).samples_f32();
-
-        let whole = encode_in_chunks(&samples, Consts::FRAMES, Consts::SAMPLE_RATE);
-        let framed = encode_in_chunks(&samples, StreamEncoder::FRAME_SAMPLES, Consts::SAMPLE_RATE);
-        let ragged = encode_in_chunks(&samples, 333, Consts::SAMPLE_RATE);
-
-        assert!(!whole.is_empty(), "encoder produced no access units");
-        assert_eq!(whole, framed);
-        assert_eq!(whole, ragged);
-    }
-
-    #[test]
-    fn timestamps_start_at_zero_and_advance_by_one_frame() {
-        let frame_samples =
-            u64::try_from(StreamEncoder::FRAME_SAMPLES).expect("frame size fits u64");
-        let pushed_frames = u64::try_from(Consts::FRAMES).expect("frame count fits u64");
-        let samples =
-            TestPcm::sawtooth(Consts::FRAMES, Consts::SAMPLE_RATE, Consts::CHANNELS).samples_f32();
-
-        for timescale in [Consts::SAMPLE_RATE, 90_000] {
-            let rescale =
-                |frames: u64| frames * u64::from(timescale) / u64::from(Consts::SAMPLE_RATE);
-            let units = encode_in_chunks(&samples, StreamEncoder::FRAME_SAMPLES, timescale);
-
-            let mut expected_pts = 0;
-            for unit in &units {
-                assert!(!unit.bytes.is_empty(), "access unit payload is empty");
-                assert!(unit.is_sync, "every AAC-LC access unit is a sync point");
-                assert_eq!(unit.pts, expected_pts, "timescale {timescale}");
-                assert_eq!(unit.dts, unit.pts, "AAC access units are not reordered");
-                assert_eq!(
-                    u64::from(unit.duration),
-                    rescale(frame_samples),
-                    "timescale {timescale}"
-                );
-                expected_pts += u64::from(unit.duration);
-            }
-
-            assert_eq!(
-                expected_pts,
-                rescale(pushed_frames) + rescale(frame_samples),
-                "the flush adds exactly one priming frame"
-            );
-        }
-    }
-
-    #[test]
-    fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline() {
-        const SOURCE_RATE: u32 = 44_100;
-        const TIMESCALE: u32 = 90_000;
-
-        let samples =
-            TestPcm::sawtooth(Consts::FRAMES, SOURCE_RATE, Consts::CHANNELS).samples_f32();
-        let mut encoder =
-            StreamEncoder::new(SOURCE_RATE, Consts::CHANNELS, Consts::BIT_RATE, TIMESCALE)
-                .expect("stream encoder");
-        let mut units = encoder.push(&samples).expect("push");
-        units.extend(encoder.finish().expect("finish"));
-
-        let mut expected_pts = 0;
-        for unit in &units {
-            assert_eq!(
-                unit.pts, expected_pts,
-                "durations must tile the pts timeline"
-            );
-            expected_pts += u64::from(unit.duration);
-        }
-
-        let frames =
-            u64::try_from(Consts::FRAMES + StreamEncoder::FRAME_SAMPLES).expect("fits u64");
-        let ticks = frames * u64::from(TIMESCALE);
-        assert_eq!(
-            expected_pts,
-            (ticks + u64::from(SOURCE_RATE) / 2) / u64::from(SOURCE_RATE),
-            "the stream ends on the rounded rescale of the encoded frames"
-        );
-    }
-
-    #[test]
-    fn new_rejects_a_channel_count_the_encoder_cannot_carry() {
-        assert!(
-            StreamEncoder::new(
-                Consts::SAMPLE_RATE,
-                9,
-                Consts::BIT_RATE,
-                Consts::SAMPLE_RATE
-            )
-            .is_err(),
-            "AAC-LC carries no 9-channel layout"
-        );
-    }
-
-    #[test]
-    fn push_rejects_a_partial_frame() {
-        let mut encoder = StreamEncoder::new(
-            Consts::SAMPLE_RATE,
-            Consts::CHANNELS,
-            Consts::BIT_RATE,
-            Consts::SAMPLE_RATE,
-        )
-        .expect("stream encoder");
-
-        let error = encoder.push(&[0.0, 0.0, 0.0]).expect_err("partial frame");
-
-        assert!(matches!(error, EncodeError::InvalidInput(_)), "{error}");
-    }
 }
