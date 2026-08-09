@@ -2,7 +2,7 @@ use std::net::TcpStream;
 
 use kithara::{
     self,
-    platform::{thread, time, time::Duration},
+    platform::{thread, time::Duration},
 };
 
 use super::origin::{
@@ -191,7 +191,9 @@ async fn a_live_origin_leaves_the_virtual_clock_free() {
     let origin = Origin::start();
     origin.advance_to(1);
 
-    time::sleep(A_DAY).await;
+    // The rewriter keys on the last two path segments and takes this call onto
+    // the engine, so naming the module here would leave the import unused.
+    kithara::platform::time::sleep(A_DAY).await;
 
     assert!(origin.handle.status().is_live);
 }

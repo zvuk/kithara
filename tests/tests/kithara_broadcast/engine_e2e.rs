@@ -228,10 +228,14 @@ fn the_session_renders_the_source_tone() {
 /// The acceptance path: what the engine mixes is what an HTTP client fetches
 /// off the origin and decodes.
 ///
-/// `flash(false)`: the packager runs on a thread of its own while this one
-/// drives the render and the origin serves from a third. Under the virtual
-/// clock the packager never observes the audio the render hands it; on the
-/// real clock it does.
+/// `flash(false)`: the packager backs off an empty feed with `paced_backoff`,
+/// which on the sim path waits for a clock advance, and the engine advances
+/// only once every participant is parked on a wait it wrapped. This body holds
+/// its participant slot straight through — the render loop is synchronous CPU
+/// work and `stop()` blocks on a thread join, and the lexical rewriter reaches
+/// a body's `time::sleep` rather than either of those. The session's own
+/// engine registers a timed waiter, which is what makes the packager's backoff
+/// wait rather than fall through to a plain yield.
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn the_engine_mix_reaches_an_http_client_as_the_source_tone() {
     /// Deep enough for every block the render can produce, so a gap here would

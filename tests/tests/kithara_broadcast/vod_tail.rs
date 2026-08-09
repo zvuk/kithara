@@ -25,9 +25,10 @@ const READ_BUF_SAMPLES: usize = 4_096;
 /// The production client against the production origin: once the broadcast
 /// stops, its master URL is a VOD stream `Audio<Stream<Hls>>` plays.
 ///
-/// `flash(false)`: the origin serves from a runtime of its own while the
-/// client decodes on its worker. Under the virtual clock the client stalls
-/// after fetching every segment; on the real clock it plays them. The reads
+/// `flash(false)` for the reason `engine_e2e` records: this body polls
+/// synchronously — `advance_to` and the `Pending` read loop both spin without
+/// parking on a wait the engine wrapped — so it holds its participant slot and
+/// the clock the client's workers back off against never advances. The reads
 /// park on the real clock too, so the timeout is what bounds them.
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn the_production_client_plays_the_stopped_broadcast() {
