@@ -1,13 +1,7 @@
-//! Readers for the packed-audio segments a live HLS origin serves: the
-//! RFC 8216 §3.4 ID3 timestamp prefix and the ADTS frames behind it.
-
-/// Owner the §3.4 PRIV frame must be keyed by.
 pub const TIMESTAMP_OWNER: &[u8] = b"com.apple.streaming.transportStreamTimestamp\0";
 
-/// Timescale the §3.4 timestamp is expressed in.
 pub const MPEG_TIMESCALE: u64 = 90_000;
 
-/// Bits the §3.4 timestamp wraps at.
 pub const TIMESTAMP_BITS: u32 = 33;
 
 const TAG_HEADER_LEN: usize = 10;
@@ -21,7 +15,6 @@ const SAMPLE_RATES: [u32; 13] = [
     7_350,
 ];
 
-/// One ADTS frame as its header describes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdtsFrame {
     pub offset: usize,
@@ -31,8 +24,6 @@ pub struct AdtsFrame {
     pub channels: u8,
 }
 
-/// One packed-audio segment: the timestamp it opens with and the frames that
-/// tile the rest of it.
 #[derive(Debug, Clone)]
 pub struct PackedSegment {
     pub timestamp: u64,
@@ -42,12 +33,6 @@ pub struct PackedSegment {
 }
 
 impl PackedSegment {
-    /// Read a segment, insisting it is exactly a §3.4 tag followed by whole
-    /// ADTS frames.
-    ///
-    /// # Errors
-    ///
-    /// Returns a description of the first byte that breaks the shape.
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let (timestamp_bytes, prefix_len) = read_timestamp(bytes)?;
         let frames = read_frames(&bytes[prefix_len..], prefix_len)?;
@@ -60,7 +45,6 @@ impl PackedSegment {
         })
     }
 
-    /// Media duration the frames carry, in the sample rate they declare.
     #[must_use]
     pub fn frame_seconds(&self) -> f64 {
         let rate = self.frames.first().map_or(0, |frame| frame.sample_rate);
@@ -70,7 +54,6 @@ impl PackedSegment {
         (self.frames.len() as f64) * (SAMPLES_PER_FRAME as f64) / f64::from(rate)
     }
 
-    /// The timestamp the next segment must open with.
     #[must_use]
     pub fn next_timestamp(&self) -> u64 {
         let rate = self.frames.first().map_or(0, |frame| frame.sample_rate);
@@ -102,14 +85,14 @@ fn read_timestamp(bytes: &[u8]) -> Result<([u8; TIMESTAMP_LEN], usize), String> 
         .ok_or_else(|| format!("PRIV frame claims {body_len} bytes the tag does not hold"))?;
     if !body.starts_with(TIMESTAMP_OWNER) {
         return Err(format!(
-            "PRIV owner is {:?}, not the §3.4 timestamp owner",
+            "PRIV owner is {:?}, not the section 3.4 timestamp owner",
             String::from_utf8_lossy(&body[..body.len().min(TIMESTAMP_OWNER.len())])
         ));
     }
 
     let timestamp: [u8; TIMESTAMP_LEN] = body[TIMESTAMP_OWNER.len()..]
         .try_into()
-        .map_err(|_| format!("§3.4 timestamp is {} bytes, not 8", body.len()))?;
+        .map_err(|_| format!("section 3.4 timestamp is {} bytes, not 8", body.len()))?;
     Ok((timestamp, TAG_HEADER_LEN + tag_len))
 }
 

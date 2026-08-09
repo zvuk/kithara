@@ -18,8 +18,6 @@ use ringbuf::traits::{Observer, Producer};
 
 use crate::bridge::MixTapWriter;
 
-/// Sink hanging off the session limiter beside `graph_out`: stereo in, no
-/// outputs, the final mix copied out to one control-plane consumer.
 pub(crate) struct TapNode {
     writer: Mutex<Option<MixTapWriter>>,
 }
@@ -68,9 +66,6 @@ impl TapProcessor {
         }
     }
 
-    /// The ring carries bare samples, so a feed that outlived a rate change
-    /// would be read at the wrong rate. Release it and let the consumer see
-    /// the end of the feed.
     fn adopt_rate(&mut self, sample_rate: NonZeroU32) {
         if sample_rate != self.sample_rate {
             self.writer = None;

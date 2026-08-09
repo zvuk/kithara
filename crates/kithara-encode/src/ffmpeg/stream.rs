@@ -25,10 +25,8 @@ use crate::{
     types::EncodedAccessUnit,
 };
 
-/// Sample format the encoder takes from callers.
 const INPUT_FORMAT: Sample = Sample::F32(SampleType::Packed);
 
-/// `FFmpeg`'s AAC encoder behind [`crate::StreamEncoder`].
 pub(crate) struct FfmpegStream {
     encoder: AudioEncoder,
     filter: FilterGraph,
@@ -204,9 +202,6 @@ fn collect_encoded_packets(
     }
 }
 
-/// Rescale an encoder-domain timestamp into the target time base. Access-unit
-/// boundaries are rescaled, so a duration is always the gap between two
-/// rescaled positions and the timeline stays consistent for any ratio.
 fn rescale_timestamp(value: i64, rates: RebaseRates) -> u64 {
     let rescaled = value.rescale(rates.encoder, rates.target).max(0);
     u64::try_from(rescaled).unwrap_or_else(|_| {

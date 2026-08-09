@@ -21,8 +21,6 @@ impl BytesEncodeTargetExt for BytesEncodeTarget {
     }
 }
 
-/// Mux a packaged track into one fMP4 byte stream — init segment followed by
-/// every media segment — the form an in-memory decoder reads.
 pub fn mux_fmp4_bytes(track: &EncodedTrack, gapless: GaplessEncoding) -> Vec<u8> {
     let packaged = mux_audio_track(track, gapless).expect("mux packaged track into fMP4");
     let mut bytes = packaged.init_segment.as_ref().clone();

@@ -2,8 +2,6 @@
 use crate::EncodeError;
 use crate::{BytesEncodeRequest, EncodeResult, EncodedBytes};
 
-/// Complete encoded bytes for a finite PCM source. `FFmpeg` muxes them; without
-/// it this crate has no byte encoder at all.
 pub(crate) fn encode(request: &BytesEncodeRequest<'_>) -> EncodeResult<EncodedBytes> {
     #[cfg(feature = "ffmpeg")]
     {

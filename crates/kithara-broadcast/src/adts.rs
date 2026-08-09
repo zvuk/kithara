@@ -2,7 +2,6 @@ use std::ops::RangeInclusive;
 
 use crate::{BroadcastError, BroadcastResult};
 
-/// Frames AAC-LC access units as ADTS: one 7-byte header per access unit.
 #[derive(Debug)]
 pub(crate) struct AdtsPacker {
     sample_rate_index: u8,
@@ -10,10 +9,8 @@ pub(crate) struct AdtsPacker {
 }
 
 impl AdtsPacker {
-    /// Bytes an ADTS header without CRC occupies.
     pub(crate) const HEADER_LEN: usize = 7;
 
-    /// Largest access unit the 13-bit `frame_length` field can carry.
     pub(crate) const MAX_PAYLOAD: usize = (1 << 13) - 1 - Self::HEADER_LEN;
 
     const CHANNEL_CONFIGS: RangeInclusive<u8> = 1..=6;
@@ -26,14 +23,6 @@ impl AdtsPacker {
         8_000, 7_350,
     ];
 
-    /// Fix the header fields a stream of `sample_rate`/`channels` audio shares.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BroadcastError::UnsupportedSampleRate`] for a rate outside the
-    /// ADTS sampling-frequency table and
-    /// [`BroadcastError::UnsupportedChannels`] for a channel count ADTS has no
-    /// configuration for.
     pub(crate) fn new(sample_rate: u32, channels: u16) -> BroadcastResult<Self> {
         let sample_rate_index = Self::SAMPLE_RATES
             .iter()
@@ -51,12 +40,6 @@ impl AdtsPacker {
         })
     }
 
-    /// Append the ADTS frame carrying `payload` to `out`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BroadcastError::PayloadTooLarge`] when the access unit does not
-    /// fit one ADTS frame.
     pub(crate) fn pack_into(&self, payload: &[u8], out: &mut Vec<u8>) -> BroadcastResult<()> {
         let payload_len = u16::try_from(payload.len())
             .ok()

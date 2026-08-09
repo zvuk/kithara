@@ -82,8 +82,6 @@ pub(super) fn prepare_eq_layout(mut eq_layout: Vec<EqBandConfig>) -> (Vec<EqBand
     (eq_layout, gains)
 }
 
-/// The session mix tap, before and after it reaches the graph. One field, so
-/// "a tap is requested" and "a tap is running" cannot disagree.
 pub(super) enum MixTap {
     Requested(MixTapWriter),
     Installed(NodeID),

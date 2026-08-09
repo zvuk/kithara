@@ -5,8 +5,7 @@ use kithara_platform::time::Duration;
 
 use crate::{BroadcastError, BroadcastResult};
 
-/// Everything one live broadcast is built from: the audio it encodes, the
-/// segments it cuts, and the address its origin binds.
+/// Audio, segmentation, retention, and origin settings for a live broadcast.
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct BroadcastConfig {
@@ -30,8 +29,7 @@ impl BroadcastConfig {
     /// AAC-LC bit rate the encoder targets.
     pub const BIT_RATE: u64 = 128_000;
 
-    /// Loopback on an ephemeral port: the bound address is read back from the
-    /// handle.
+    /// Loopback on an ephemeral port.
     pub const BIND: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 
     /// Channel count of the mix.
@@ -49,18 +47,10 @@ impl BroadcastConfig {
     /// Segments a client sees in the playlist.
     pub const WINDOW: usize = 6;
 
-    /// Milliseconds the segment target is expressed in per media second.
     const MILLIS_PER_SECOND: u64 = 1_000;
 
-    /// Target durations RFC 8216 §6.2.2 asks a live playlist to span.
     const MIN_TARGETS: u64 = 3;
 
-    /// Media ticks one segment is cut at, in `sample_rate` units.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BroadcastError::InvalidConfig`] when the target rounds to no
-    /// ticks at all.
     pub(crate) fn target_ticks(&self) -> BroadcastResult<u64> {
         u64::try_from(self.segment_target.as_millis())
             .ok()
@@ -72,25 +62,10 @@ impl BroadcastConfig {
             })
     }
 
-    /// `EXT-X-TARGETDURATION` the playlist announces: the target rounded up to
-    /// whole seconds, constant for the life of the stream.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BroadcastError::InvalidConfig`] when the target rounds to no
-    /// ticks at all.
     pub(crate) fn target_seconds(&self) -> BroadcastResult<u64> {
         Ok(self.target_ticks()?.div_ceil(u64::from(self.sample_rate)))
     }
 
-    /// Reject audio the packager cannot describe and a window too short to
-    /// serve.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BroadcastError::InvalidConfig`] for a zero field and
-    /// [`BroadcastError::PlaylistTooShort`] when the window spans fewer than
-    /// three target durations.
     pub(crate) fn validate(&self) -> BroadcastResult<()> {
         if self.sample_rate == 0 {
             return Err(BroadcastError::InvalidConfig {

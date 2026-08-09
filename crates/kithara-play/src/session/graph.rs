@@ -84,8 +84,6 @@ pub(super) mod tap {
         }
     }
 
-    /// Hand a tap that was armed before the session output existed to the
-    /// freshly built graph.
     pub(in crate::session) fn install_requested<B: AudioBackend>(
         state: &mut SessionState<B>,
         limiter_id: NodeID,
@@ -104,8 +102,6 @@ pub(super) mod tap {
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
         let tap_id = fw_ctx.add_node(TapNode::new(writer), None);
         if let Err(err) = connect_stereo(fw_ctx, limiter_id, tap_id, "connect limiter->mix_tap") {
-            // Unconnected input ports read as cleared buffers, so a sink left
-            // behind would feed the consumer silence it reads as the mix.
             if let Err(remove_err) = fw_ctx.remove_node(tap_id) {
                 warn!(?remove_err, "failed to remove the unconnected mix tap node");
             }

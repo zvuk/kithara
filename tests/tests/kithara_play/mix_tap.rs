@@ -14,8 +14,6 @@ use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 const TRACK_SECS: f64 = 0.1;
-/// 10_240 frames: past the budget the smoke test allows the decode worker for
-/// the same 100 ms fixture, so the render reaches the silence after the track.
 const BLOCKS: usize = 20;
 const ROOMY_CAPACITY: usize = 65_536;
 
@@ -26,8 +24,6 @@ fn make_resource() -> Resource {
     ))
 }
 
-/// A harness with one mock track playing, rendered far enough that the
-/// session graph (and its limiter) is live.
 fn playing_harness() -> OfflinePlayerHarness {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder().build(),
@@ -52,8 +48,6 @@ fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) -> Vec<f32> {
     rendered
 }
 
-/// Topology anchor: the tap is a stereo-in / zero-out sink hanging off the
-/// limiter *beside* `graph_out`. Firewheel must schedule it every block.
 #[kithara::test]
 fn zero_output_sink_is_processed_beside_graph_out() {
     let harness = playing_harness();

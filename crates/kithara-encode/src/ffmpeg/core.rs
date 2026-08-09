@@ -10,8 +10,6 @@ use ffmpeg_next as ffmpeg;
 
 use crate::EncodeError;
 
-/// Source/target time bases for rescaling encoded packets, shared by the
-/// AAC and FLAC `collect_encoded_packets` helpers.
 #[derive(Clone, Copy)]
 pub(crate) struct RebaseRates {
     pub(crate) encoder: Rational,

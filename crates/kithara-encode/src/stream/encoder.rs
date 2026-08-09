@@ -12,31 +12,23 @@ use crate::{
     not(any(feature = "ffmpeg", feature = "fdk-aac"))
 ))]
 compile_error!(
-    "kithara-encode: enable an encode backend — `ffmpeg` for the offline byte, \
+    "kithara-encode: enable an encode backend - `ffmpeg` for the offline byte, \
      FLAC and packaged paths, `fdk-aac` for HE-AAC and the streaming AAC-LC \
      the live broadcast runs on. With neither, this crate encodes nothing."
 );
 
-/// Backend a [`StreamEncoder`] runs on, chosen by the caller.
-///
-/// Variants are gated on cargo features: a variant exists in the type only when
-/// its backend is compiled in, so asking for one this build does not carry is a
-/// compile error. Failures of the chosen backend are terminal — there is no
-/// fallback to the other one.
+/// Caller-selected backend for a [`StreamEncoder`].
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamBackend {
-    /// `FFmpeg`'s AAC encoder, linked against the system `FFmpeg` (requires the
-    /// `ffmpeg` feature).
+    /// System-FFmpeg AAC encoder.
     #[cfg(feature = "ffmpeg")]
     Ffmpeg,
-    /// In-tree `fdk-aac`, built from vendored sources (requires the `fdk-aac`
-    /// feature).
+    /// Vendored fdk-aac encoder.
     #[cfg(feature = "fdk-aac")]
     Fdk,
 }
 
-/// Audio the caller hands one stream, validated once for every backend.
 #[derive(Clone, Copy)]
 pub(crate) struct StreamParams {
     pub(crate) sample_rate: u32,
@@ -45,20 +37,13 @@ pub(crate) struct StreamParams {
     pub(crate) timescale: u32,
 }
 
-/// What every AAC-LC backend does with a stream of whole frames. `push` takes
-/// interleaved f32 the caller already checked, `finish` drains what the encoder
-/// still holds.
 pub(crate) trait AacStream: Send {
     fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>>;
 
     fn finish(self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>>;
 }
 
-/// Streaming AAC-LC encoder: interleaved f32 in, encoded access units out.
-///
-/// One instance encodes one continuous stream; [`push`](Self::push) returns the
-/// access units the pushed audio completed, [`finish`](Self::finish) drains the
-/// encoder's remaining frames.
+/// Continuous AAC-LC encoder from interleaved f32 to raw access units.
 pub struct StreamEncoder {
     inner: Box<dyn AacStream>,
     channels: u16,
@@ -68,14 +53,12 @@ impl StreamEncoder {
     /// Samples per channel in one AAC-LC access unit.
     pub const FRAME_SAMPLES: usize = 1024;
 
-    /// Open `backend` on `sample_rate`/`channels` audio, emitting access-unit
-    /// timestamps in `timescale` units.
+    /// Open a backend with explicit audio and timestamp parameters.
     ///
     /// # Errors
     ///
-    /// Returns [`EncodeError::InvalidInput`] for a zero sample rate, channel
-    /// count, or timescale, and a backend error when the chosen encoder cannot
-    /// carry the requested audio.
+    /// Returns invalid input for a zero sample rate, channel count, or timescale,
+    /// and a backend error when the encoder cannot open the requested audio.
     pub fn new(
         backend: StreamBackend,
         sample_rate: u32,
@@ -101,13 +84,11 @@ impl StreamEncoder {
         Ok(Self { inner, channels })
     }
 
-    /// Encode interleaved `samples` and return the access units they completed.
+    /// Encode whole interleaved frames and return completed access units.
     ///
     /// # Errors
     ///
-    /// Returns [`EncodeError::InvalidInput`] when the slice length is not a
-    /// multiple of the channel count, and [`EncodeError::Backend`] when the
-    /// encoder rejects the audio.
+    /// Returns invalid input for partial frames and backend encode failures.
     pub fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
         if samples.is_empty() {
             return Ok(Vec::new());
@@ -123,11 +104,11 @@ impl StreamEncoder {
         self.inner.push(samples)
     }
 
-    /// Flush the encoder and return its remaining access units.
+    /// Drain and return remaining access units.
     ///
     /// # Errors
     ///
-    /// Returns [`EncodeError::Backend`] when the encoder fails to drain.
+    /// Returns an error when the backend cannot drain.
     pub fn finish(self) -> EncodeResult<Vec<EncodedAccessUnit>> {
         self.inner.finish()
     }

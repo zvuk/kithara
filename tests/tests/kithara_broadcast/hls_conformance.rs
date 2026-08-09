@@ -1,22 +1,12 @@
-//! RFC 8216 conformance of the served stream: playlist reload rules (§6.2.2),
-//! segment duration bounds (§4.3.3.1), and packed-audio segment shape (§3.4).
-
 use kithara_integration_tests::packed_audio::{PackedSegment, TIMESTAMP_BITS};
 
 use super::origin::{Origin, SAMPLE_RATE, WINDOW};
 
-/// Polls the reload rules are checked across.
 const POLLS: usize = 4;
-/// Segments the stream advances by between two polls: fewer than the window,
-/// so consecutive playlists always overlap.
 const SEGMENTS_PER_POLL: u64 = 2;
-/// Target durations a live playlist must span (§6.2.2).
 const MIN_TARGETS: f64 = 3.0;
-/// Access units the frame count may differ from the declared EXTINF by.
 const AU_SLACK: f64 = 1.0;
-/// Samples one AAC-LC access unit carries.
 const SAMPLES_PER_AU: f64 = 1_024.0;
-/// Ticks the ID3 timestamp may differ by, the conversion rounding to nearest.
 const TIMESTAMP_SLACK: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -209,7 +199,7 @@ async fn every_segment_is_a_packed_audio_segment() {
         assert_eq!(
             segment.timestamp >> TIMESTAMP_BITS,
             0,
-            "{}: the §3.4 timestamp uses 33 bits",
+            "{}: the section 3.4 timestamp uses 33 bits",
             entry.uri
         );
         assert_eq!(

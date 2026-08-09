@@ -9,9 +9,6 @@ use crate::{
     PackagedEncodeRequest,
 };
 
-/// Offline encoding over a finite PCM source: complete encoded bytes and
-/// packaged access units. Each codec is routed to the backend that owns it, and
-/// one whose backend this build does not carry is unsupported.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct OfflineEncoder;
 

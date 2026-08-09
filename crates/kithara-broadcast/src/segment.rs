@@ -5,7 +5,7 @@ use crate::{
     BroadcastError, BroadcastResult, adts::AdtsPacker, config::BroadcastConfig, id3::TimestampTag,
 };
 
-/// One closed media segment: ADTS frames plus the playlist facts about them.
+/// A closed ADTS media segment and its playlist metadata.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Segment {
@@ -30,14 +30,11 @@ pub struct Segmenter {
 }
 
 impl Segmenter {
-    /// Open a segmenter for the audio `config` describes.
+    /// Open a segmenter for validated, ADTS-representable audio.
     ///
     /// # Errors
     ///
-    /// Returns [`BroadcastError::InvalidConfig`] or
-    /// [`BroadcastError::PlaylistTooShort`] for a configuration the packager
-    /// cannot serve, and the [`AdtsPacker`] error for audio ADTS cannot
-    /// describe.
+    /// Returns an error for invalid configuration or unsupported ADTS audio.
     pub fn new(config: &BroadcastConfig) -> BroadcastResult<Self> {
         config.validate()?;
 
@@ -54,14 +51,11 @@ impl Segmenter {
         })
     }
 
-    /// Append `unit` to the open segment, closing it once the accumulated media
-    /// duration reaches the target.
+    /// Append an access unit and close the segment once it reaches the target.
     ///
     /// # Errors
     ///
-    /// Returns the [`AdtsPacker`] error for an access unit one ADTS frame
-    /// cannot carry, and [`BroadcastError::DurationOutOfRange`] when the open
-    /// segment outgrows the playlist time base.
+    /// Returns an error for an oversized ADTS frame or segment duration.
     pub fn push(&mut self, unit: &EncodedAccessUnit) -> BroadcastResult<Option<Segment>> {
         let duration_ts = self.duration_ts.checked_add(unit.duration).ok_or_else(|| {
             BroadcastError::DurationOutOfRange {
@@ -85,7 +79,7 @@ impl Segmenter {
         closed
     }
 
-    /// Close the open segment, if any.
+    /// Close the open segment.
     pub fn flush(&mut self) -> Option<Segment> {
         self.close()
     }

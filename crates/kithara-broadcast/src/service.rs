@@ -19,7 +19,7 @@ use crate::{
     window::LiveWindow,
 };
 
-/// What a broadcast looks like from the outside while it runs.
+/// Current public state of a broadcast.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct BroadcastStatus {
@@ -31,24 +31,16 @@ pub struct BroadcastStatus {
     pub dropped_samples: u64,
 }
 
-/// Entry point of the live HLS origin.
+/// Live HLS origin entry point.
 pub struct Broadcast;
 
 impl Broadcast {
-    /// Take `feed` on air: one worker packages it while an HTTP origin serves
-    /// the sliding window.
-    ///
-    /// The returned handle carries the URL of the bound origin. `parent` owns
-    /// the broadcast's lifetime — cancelling it stops both threads.
+    /// Start packaging `feed` and bind the origin before returning its handle.
+    /// Cancelling `parent` stops both worker and origin threads.
     ///
     /// # Errors
     ///
-    /// Returns [`crate::BroadcastError::InvalidConfig`] or
-    /// [`crate::BroadcastError::PlaylistTooShort`] for an unservable
-    /// configuration, [`crate::BroadcastError::Encode`] when the AAC-LC
-    /// encoder cannot open, [`crate::BroadcastError::Bind`] when the origin
-    /// cannot bind its address, and [`crate::BroadcastError::Serve`] when it
-    /// cannot start the thread behind that address.
+    /// Returns an error when configuration, encoding, binding, or serving fails.
     pub fn start<F>(
         config: &BroadcastConfig,
         feed: F,
@@ -77,8 +69,7 @@ impl Broadcast {
     }
 }
 
-/// Owner of one live broadcast: the URL it serves, what it has packaged, and
-/// the two threads behind it.
+/// Handle owning a live broadcast and its threads.
 pub struct BroadcastHandle {
     url: Arc<str>,
     origin: Arc<Origin>,
@@ -112,9 +103,8 @@ impl BroadcastHandle {
         }
     }
 
-    /// End the broadcast: the worker swallows what the feed still holds,
-    /// finishes the encoder, and publishes the playlist with `EXT-X-ENDLIST`.
-    /// The origin keeps serving that tail. Repeat calls do nothing.
+    /// Finish handed-over audio and keep serving the resulting VOD tail.
+    /// Repeated calls have no effect.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
 
@@ -127,8 +117,6 @@ impl BroadcastHandle {
     }
 }
 
-/// The packaging loop: feed → encoder → segmenter → window → published
-/// snapshot.
 struct Worker<F> {
     feed: F,
     encoder: Option<StreamEncoder>,
@@ -141,8 +129,6 @@ struct Worker<F> {
     samples: Vec<f32>,
 }
 
-/// What the broadcast has packaged, for the handle to report. The origin does
-/// not read them.
 #[derive(Debug, Default)]
 struct Counters {
     segments: AtomicU64,
@@ -150,10 +136,8 @@ struct Counters {
 }
 
 impl<F: LivePcmFeed> Worker<F> {
-    /// Backoff between polls of an empty feed, far below one segment.
     const POLL: Duration = Duration::from_millis(2);
 
-    /// Build the packaging loop and the origin state it publishes into.
     fn new(
         config: &BroadcastConfig,
         feed: F,
@@ -207,7 +191,6 @@ impl<F: LivePcmFeed> Worker<F> {
         }
     }
 
-    /// One poll of the feed, packaged. Returns whether the producer is gone.
     fn pump(&mut self) -> BroadcastResult<bool> {
         self.samples.clear();
         let chunk = self.feed.poll(&mut self.samples);
@@ -233,8 +216,6 @@ impl<F: LivePcmFeed> Worker<F> {
         Ok(chunk.has_ended)
     }
 
-    /// Swallow what the feed still holds, drain the encoder, and publish the
-    /// VOD tail.
     fn end(mut self) {
         self.feed.close();
 
@@ -313,8 +294,6 @@ mod tests {
         const TARGET: Duration = Duration::from_millis(500);
     }
 
-    /// Feed of prepared chunks: each poll hands over one, and the feed reports
-    /// end-of-stream only when it was built to.
     struct VecFeed {
         chunks: VecDeque<(u64, Vec<f32>)>,
         ends: bool,
@@ -351,8 +330,6 @@ mod tests {
         }
     }
 
-    /// Feed with audio ready every other poll, the way a producer filling a
-    /// ring in bursts leaves it.
     struct BurstFeed {
         chunks: VecDeque<Vec<f32>>,
         ready: bool,
@@ -388,8 +365,6 @@ mod tests {
         }
     }
 
-    /// Drive one worker to its end on this thread and read back what the origin
-    /// would serve. `stop` is the flag the handle sets.
     fn run_worker<F: LivePcmFeed>(feed: F, config: &BroadcastConfig, stop: bool) -> Arc<str> {
         let scope = CancelScope::new(None);
         let worker = Worker::new(config, feed, scope.token(), Arc::new(AtomicBool::new(stop)))
@@ -400,8 +375,6 @@ mod tests {
         Arc::clone(&origin.snapshot.load().playlist)
     }
 
-    /// Each listed segment as the media seconds it announces and whether the
-    /// playlist breaks the timeline in front of it.
     fn listed_segments(playlist: &str) -> Vec<(bool, f64)> {
         let mut listed = Vec::new();
         let mut broke = false;
@@ -418,7 +391,6 @@ mod tests {
         listed
     }
 
-    /// Media seconds the playlist announces across the segments it lists.
     fn listed_seconds(playlist: &str) -> f64 {
         listed_segments(playlist)
             .iter()
@@ -426,8 +398,6 @@ mod tests {
             .sum()
     }
 
-    /// Alternating full-scale steps: enough for the encoder to produce access
-    /// units, and the playlist is what these tests read.
     fn pcm(frames: usize) -> Vec<f32> {
         (0..frames * usize::from(BroadcastConfig::CHANNELS))
             .map(|index| {
@@ -501,13 +471,8 @@ mod tests {
 
     #[test]
     fn the_break_falls_behind_the_audio_the_gap_came_after() {
-        /// Half a second of audio per chunk, far past what the encoder holds
-        /// between a push and the access units it hands back.
         const CHUNK: usize = 24_000;
         const CHUNK_SECONDS: f64 = 0.5;
-        /// Halfway between the two chunks that came ahead of the gap and the
-        /// one that followed it: a break in place has the first two in front of
-        /// it and the third behind, whatever the encoder's framing shifts.
         const MIDPOINT: f64 = 1.5 * CHUNK_SECONDS;
 
         let feed = VecFeed::new(
@@ -539,10 +504,7 @@ mod tests {
 
     #[test]
     fn stopping_puts_everything_the_feed_holds_on_air() {
-        /// Chunks the feed still holds when the stop lands: more than the one
-        /// poll a drain that judged the feed by an empty poll would take.
         const HELD: usize = 8;
-        /// Media seconds the encoder's framing shifts the tail by.
         const SLACK: f64 = 0.05;
 
         let held_seconds = f64::from(

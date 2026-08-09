@@ -14,9 +14,6 @@ pub struct EncoderFactory;
 impl EncoderFactory {
     /// Create an encoder backend for complete encoded bytes.
     ///
-    /// The backend takes the target from the request, and reports one it cannot
-    /// serve when it encodes.
-    ///
     /// # Errors
     ///
     /// Returns an error when encoding is unavailable on the current target.

@@ -25,10 +25,6 @@ use crate::signal_pcm::signal::SignalFn;
 
 /// A stateful `PcmReader` for testing facades that depend on audio playback.
 ///
-/// Produces a constant sample value (0.5) or a signal function, tracks seek
-/// position and reports [`ReadOutcome::Eof`] once the total-frame budget is
-/// consumed.
-///
 /// Honours [`PcmControl::set_playback_rate`]: every rendered output frame
 /// consumes `rate` source frames, so the source drains faster above 1.0 and
 /// slower below it, exactly as a stretching reader does.
@@ -42,10 +38,8 @@ pub struct TestPcmReader {
     source: Source,
 }
 
-/// What the reader puts in every sample it hands over.
 enum Source {
     Constant(f32),
-    /// Frame-indexed signal, scaled from 16-bit to the reader's f32 range.
     Signal(Box<dyn SignalFn>),
 }
 
@@ -71,8 +65,6 @@ impl TestPcmReader {
         Self::with_source(spec, duration_secs, Source::Constant(value))
     }
 
-    /// Create a test reader rendering `signal` at the spec's sample rate, the
-    /// same sample on every channel.
     #[must_use]
     pub fn with_signal<S: SignalFn>(spec: PcmSpec, duration_secs: f64, signal: S) -> Self {
         Self::with_source(spec, duration_secs, Source::Signal(Box::new(signal)))
@@ -94,9 +86,6 @@ impl TestPcmReader {
         }
     }
 
-    /// Sample the source `output_frame` frames into a read that began at
-    /// source frame `start`. One output frame spends `rate` source frames, the
-    /// same conversion [`Self::consume`] accounts the position by.
     fn sample_at(&self, start: u64, output_frame: u64) -> f32 {
         match self.source {
             Source::Constant(value) => value,

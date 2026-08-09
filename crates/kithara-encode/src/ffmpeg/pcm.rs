@@ -10,13 +10,10 @@ use ffmpeg_next as ffmpeg;
 
 use crate::{EncodeResult, PcmSource};
 
-/// Sample format of the interleaved i16 bytes [`PcmSource`] yields.
 pub(crate) const PCM_INPUT_FORMAT: Sample = Sample::I16(SampleType::Packed);
 
 const I16_SCALE: f32 = 32_768.0;
 
-/// Read the source in `chunk_frames` steps and hand over whole frames only,
-/// together with the index of the first frame in the chunk.
 fn pump_pcm_bytes<E>(
     pcm: &dyn PcmSource,
     chunk_frames: usize,
@@ -51,7 +48,6 @@ fn pump_pcm_bytes<E>(
     Ok(())
 }
 
-/// Hand each chunk of the source over as interleaved f32.
 pub(crate) fn pump_pcm_samples(
     pcm: &dyn PcmSource,
     chunk_frames: usize,

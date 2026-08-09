@@ -25,7 +25,6 @@ use crate::{
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
-/// FLAC encoder using `FFmpeg`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FlacFFmpegEncoder;
 
@@ -190,14 +189,11 @@ fn extract_flac_codec_config(pcm: &dyn crate::PcmSource) -> EncodeResult<Vec<u8>
     extract_stream_info_from_flac_bytes(&encoded.bytes)
 }
 
-/// Normalize a raw FLAC codec config blob to a 34-byte STREAMINFO body.
-///
-/// Accepts either a bare 34-byte STREAMINFO, a metadata block carrying
-/// STREAMINFO, or a leading `fLaC` magic followed by metadata blocks.
+/// Normalize bare or metadata-wrapped FLAC config to a 34-byte STREAMINFO body.
 ///
 /// # Errors
 ///
-/// Returns [`EncodeError`] if no STREAMINFO body can be located in `raw`.
+/// Returns an error when `raw` contains no STREAMINFO body.
 pub fn normalize_flac_codec_config(raw: &[u8]) -> EncodeResult<Vec<u8>> {
     if raw.len() == FlacFFmpegEncoder::FLAC_STREAMINFO_LEN {
         return Ok(raw.to_vec());
@@ -318,9 +314,6 @@ fn collect_encoded_packets(
     }
 }
 
-/// Rescale an encoder-domain timestamp into the target time base. Access-unit
-/// boundaries are rescaled, so a duration is always the gap between two
-/// rescaled positions and the timeline stays consistent for any ratio.
 fn rescale_timestamp(value: i64, rates: RebaseRates) -> u64 {
     let rescaled = value.rescale(rates.encoder, rates.target).max(0);
     u64::try_from(rescaled).unwrap_or_else(|_| {

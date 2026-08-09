@@ -7,8 +7,6 @@ use crate::{
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
-/// Offline AAC-LC encoding: the whole PCM source pushed through
-/// [`StreamEncoder`], then flushed.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AacFFmpegEncoder;
 

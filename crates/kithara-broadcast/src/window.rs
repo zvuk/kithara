@@ -5,8 +5,7 @@ use kithara_platform::sync::Arc;
 
 use crate::{BroadcastResult, config::BroadcastConfig, segment::Segment};
 
-/// Value view of the live stream: rendered playlist plus the segments a client
-/// can still fetch. Cloning shares both.
+/// Shareable view of a rendered playlist and its retained segments.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct PlaylistSnapshot {
@@ -26,8 +25,7 @@ impl PlaylistSnapshot {
     }
 }
 
-/// Sole owner of the live playlist window: it slides the window, retains
-/// evicted segments for the grace, and renders the media playlist.
+/// Owner of the live playlist window and grace retention.
 #[derive(Debug)]
 pub struct LiveWindow {
     window: usize,
@@ -40,13 +38,11 @@ pub struct LiveWindow {
 }
 
 impl LiveWindow {
-    /// Open the window `config` describes.
+    /// Open the window described by a valid broadcast configuration.
     ///
     /// # Errors
     ///
-    /// Returns [`BroadcastError::InvalidConfig`] or
-    /// [`BroadcastError::PlaylistTooShort`] for a configuration the packager
-    /// cannot serve.
+    /// Returns an error when the configuration cannot form a valid window.
     pub fn new(config: &BroadcastConfig) -> BroadcastResult<Self> {
         config.validate()?;
 
@@ -81,7 +77,7 @@ impl LiveWindow {
         self.finished = true;
     }
 
-    /// Current playlist text and retained segments.
+    /// Snapshot the playlist and retained segments.
     #[must_use]
     pub fn snapshot(&self) -> PlaylistSnapshot {
         PlaylistSnapshot {

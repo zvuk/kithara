@@ -32,7 +32,6 @@ fn encode_in_chunks(
     units
 }
 
-/// The same audio pushed in any chunking yields the same access units.
 fn chunking_does_not_change_the_encoded_stream(backend: StreamBackend) {
     let samples =
         TestPcm::sawtooth(Consts::FRAMES, Consts::SAMPLE_RATE, Consts::CHANNELS).samples_f32();
@@ -51,10 +50,6 @@ fn chunking_does_not_change_the_encoded_stream(backend: StreamBackend) {
     assert_eq!(whole, ragged);
 }
 
-/// Timestamps start at zero and every access unit carries one frame, on a
-/// timescale that divides the sample rate and on one that does not. The stream
-/// covers the pushed audio plus the backend's priming, which is what proves the
-/// flush hands the tail back.
 fn timestamps_start_at_zero_and_advance_by_one_frame(
     backend: StreamBackend,
     priming_frames: usize,
@@ -91,8 +86,6 @@ fn timestamps_start_at_zero_and_advance_by_one_frame(
     }
 }
 
-/// Access-unit boundaries are what gets rescaled, so durations tile the pts
-/// timeline even when the timescale ratio is fractional.
 fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
     backend: StreamBackend,
     priming_frames: usize,
@@ -177,7 +170,6 @@ fn new_rejects_audio_no_backend_can_carry(backend: StreamBackend) {
 mod ffmpeg {
     use super::{StreamBackend, StreamEncoder};
 
-    /// `FFmpeg`'s AAC encoder holds one frame of priming and flushes it.
     const PRIMING_FRAMES: usize = StreamEncoder::FRAME_SAMPLES;
     const BACKEND: StreamBackend = StreamBackend::Ffmpeg;
 
@@ -219,8 +211,6 @@ mod ffmpeg {
 mod fdk {
     use super::{StreamBackend, StreamEncoder};
 
-    /// libfdk reports a 2048-sample AAC-LC delay, which the flush pads out to
-    /// two access units.
     const PRIMING_FRAMES: usize = 2 * StreamEncoder::FRAME_SAMPLES;
     const BACKEND: StreamBackend = StreamBackend::Fdk;
 

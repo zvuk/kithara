@@ -25,22 +25,15 @@ use url::Url;
 pub(super) const CHANNELS: u16 = 2;
 pub(super) const SAMPLE_RATE: u32 = 48_000;
 pub(super) const TONE_HZ: f64 = 440.0;
-/// Half-second segments keep the tests short; the window still spans the three
-/// target durations RFC 8216 §6.2.2 asks for.
 pub(super) const TARGET: Duration = Duration::from_millis(500);
 pub(super) const WINDOW: usize = 6;
 pub(super) const GRACE: usize = 3;
-/// Frames of one target segment at [`SAMPLE_RATE`].
 pub(super) const SEGMENT_FRAMES: u64 = 24_000;
 
-/// Frames the feed hands over in one poll.
 const CHUNK_FRAMES: u64 = 2_400;
 
-/// How far the tone must stand over its third harmonic for the signal to be
-/// the one the source put on air.
 const TONE_MARGIN: f64 = 50.0;
 
-/// Decode packed ADTS AAC-LC bytes and keep the left channel.
 pub(super) fn decode_adts_left(bytes: Vec<u8>) -> Vec<f32> {
     let mut decoder = DecoderFactory::create_from_media_info(
         Cursor::new(bytes),
@@ -75,8 +68,6 @@ pub(super) fn assert_carries_the_tone(pcm: &[f32], tone_hz: f64, sample_rate: u3
     );
 }
 
-/// A live origin under test: a sine feed the test releases in steps, the
-/// service, and an HTTP client pointed at the bound address.
 pub(super) struct Origin {
     pub(super) handle: BroadcastHandle,
     released: Arc<AtomicU64>,
@@ -118,10 +109,6 @@ impl Origin {
         }
     }
 
-    /// Release exactly `segments` segments of tone — plus a half segment the
-    /// packager holds open — and wait for the origin to publish them. Nothing
-    /// past that ceiling is ever handed over, so the playlist the test reads
-    /// cannot grow another segment behind its back.
     pub(super) fn advance_to(&self, segments: u64) {
         self.released.fetch_max(
             SEGMENT_FRAMES * segments + SEGMENT_FRAMES / 2,
@@ -132,14 +119,10 @@ impl Origin {
         }
     }
 
-    /// Report `samples` the producer lost, which the feed hands to the worker
-    /// with its next poll.
     pub(super) fn drop_samples(&self, samples: u64) {
         self.dropped.fetch_add(samples, Ordering::Release);
     }
 
-    /// Fetch `path` relative to the master playlist, reporting the HTTP status
-    /// when the origin refuses.
     pub(super) async fn get(&self, path: &str) -> Result<Bytes, u16> {
         let url = self.base.join(path).expect("a servable path");
         match self.client.get_bytes(url, None).await {
@@ -149,13 +132,11 @@ impl Origin {
         }
     }
 
-    /// The media playlist as text.
     pub(super) async fn media_playlist(&self) -> String {
         let bytes = self.get("v/0/live.m3u8").await.expect("a live playlist");
         String::from_utf8(bytes.to_vec()).expect("the playlist is text")
     }
 
-    /// Stop serving and let both threads go.
     pub(super) fn shutdown(&self) {
         self.scope.cancel();
     }
@@ -167,8 +148,6 @@ impl Drop for Origin {
     }
 }
 
-/// Sine the test releases in steps: a poll hands over what has been released
-/// and nothing more, and only a close ends the feed.
 struct PacedSine {
     released: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,

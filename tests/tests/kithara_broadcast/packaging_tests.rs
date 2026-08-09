@@ -36,7 +36,6 @@ fn sine(frames: usize) -> Vec<f32> {
     samples
 }
 
-/// Run interleaved f32 through the whole packaging chain and stop the stream.
 fn broadcast(samples: &[f32]) -> PlaylistSnapshot {
     let config = BroadcastConfig::builder()
         .sample_rate(SAMPLE_RATE)

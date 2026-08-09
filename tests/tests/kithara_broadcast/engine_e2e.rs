@@ -27,20 +27,13 @@ use super::{
     origin::{assert_carries_the_tone, decode_adts_left},
 };
 
-/// The engine session's rate. It reaches the broadcast as it is: the packager
-/// takes its timescale from whoever feeds it.
 const SESSION_RATE: u32 = 44_100;
 const TONE_HZ: f64 = 440.0;
 const BLOCK_FRAMES: usize = 512;
-/// Long enough for the tap to fill several segments and outlast the render.
 const TRACK_SECS: f64 = 6.0;
-/// Half-second segments at [`SESSION_RATE`]: six of them span the three target
-/// durations RFC 8216 §6.2.2 asks a live window for.
 const TARGET: Duration = Duration::from_millis(500);
 const WINDOW: usize = 6;
-/// Frames the AAC-LC encoder needs before the tone is fully formed.
 const PRIMING_SKIP_FRAMES: usize = 4_410;
-/// Blocks a wait on the packager may render before it is a hang.
 const MAX_BLOCKS: usize = 2_000;
 
 fn tone_resource() -> Resource {
@@ -52,8 +45,6 @@ fn tone_resource() -> Resource {
     ))
 }
 
-/// A session with the tone playing, rendered far enough that the session graph
-/// and its limiter are live.
 fn playing_harness() -> OfflinePlayerHarness {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder().build(),
@@ -78,9 +69,6 @@ fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) -> Vec<f32> {
     rendered
 }
 
-/// Render until `frames` of audible mix have gone by. The decode worker fills
-/// the graph at its own pace, so counting blocks would count whatever silence
-/// the render outran; counting signal is what the tap is judged on.
 fn render_tone(harness: &OfflinePlayerHarness, frames: usize) {
     let mut audible = 0;
     for _ in 0..MAX_BLOCKS {
@@ -98,8 +86,6 @@ fn left_channel(interleaved: &[f32]) -> Vec<f32> {
     interleaved.iter().step_by(2).copied().collect()
 }
 
-/// Segment URIs the playlist lists after its last break, or `None` when it
-/// announces no break at all.
 fn segments_after_break(playlist: &str) -> Option<Vec<String>> {
     let mut listed = Vec::new();
     let mut broke = false;
@@ -114,8 +100,6 @@ fn segments_after_break(playlist: &str) -> Option<Vec<String>> {
     broke.then_some(listed)
 }
 
-/// The session on air: the tap's ring is the broadcast's intake, and the
-/// origin the worker publishes to is reachable over HTTP.
 struct OnAir {
     handle: BroadcastHandle,
     scope: CancelScope,
@@ -125,8 +109,6 @@ struct OnAir {
 }
 
 impl OnAir {
-    /// Hang a `ring_samples`-deep tap off the session limiter and take the
-    /// broadcast on air behind it.
     fn start(harness: &OfflinePlayerHarness, ring_samples: usize) -> Self {
         let (pcm, samples) = HeapRb::<f32>::new(ring_samples).split();
         let drops = Arc::new(AtomicU64::new(0));
@@ -162,14 +144,10 @@ impl OnAir {
         }
     }
 
-    /// Samples the real-time node found no room for, as it counts them.
     fn tap_drops(&self) -> u64 {
         self.drops.load(Ordering::Relaxed)
     }
 
-    /// Wait until the service has counted every sample the real-time node
-    /// lost. Past that point the packager is level with the ring, the break is
-    /// behind it, and audio rendered next goes into the discontinuous segment.
     fn wait_for_drain(&self) {
         let lost = self.tap_drops();
         while self.handle.status().dropped_samples < lost {
@@ -190,7 +168,6 @@ impl OnAir {
         String::from_utf8(self.get("v/0/live.m3u8").await).expect("the playlist is text")
     }
 
-    /// Every segment the playlist lists, concatenated in playlist order.
     async fn listed_stream(&self) -> Vec<u8> {
         let playlist = self.media_playlist().await;
         let mut stream = Vec::new();
@@ -210,8 +187,6 @@ impl Drop for OnAir {
     }
 }
 
-/// What the session renders is the tone the broadcast tests then chase through
-/// the encoder and the origin.
 #[kithara::test]
 fn the_session_renders_the_source_tone() {
     let harness = playing_harness();
@@ -226,18 +201,9 @@ fn the_session_renders_the_source_tone() {
     );
 }
 
-/// The acceptance path: what the engine mixes is what an HTTP client fetches
-/// off the origin and decodes.
-///
-/// `flash(false)`: this body raises a session engine and polls synchronously,
-/// which is the pair `kithara-broadcast/CONTEXT.md` names as the one the
-/// simulated clock cannot serve.
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn the_engine_mix_reaches_an_http_client_as_the_source_tone() {
-    /// Deep enough for every block the render can produce, so a gap here would
-    /// be the packager falling behind rather than the ring running out.
     const ROOMY_RING: usize = MAX_BLOCKS * BLOCK_FRAMES * 2;
-    /// Two and a half seconds of tone: five half-second segments.
     const TONE_RENDER_FRAMES: usize = 110_250;
 
     let harness = playing_harness();
@@ -267,22 +233,11 @@ async fn the_engine_mix_reaches_an_http_client_as_the_source_tone() {
     );
 }
 
-/// The other end of the same path: a ring the real-time node overruns becomes
-/// an `EXT-X-DISCONTINUITY` in the playlist a client reloads. `flash(false)`
-/// for the reason above.
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn a_ring_the_render_outruns_breaks_the_served_playlist() {
-    /// A quarter second of stereo: the render fills it long before the
-    /// packager can encode its way through.
     const TIGHT_RING: usize = 22_050;
-    /// Tone rendered before the break is judged: far past the ring, so the
-    /// producer must lose some of it.
     const OVERRUN_FRAMES: usize = 110_250;
-    /// Tone rendered after it, sized under the ring so whatever the break cost,
-    /// this much reaches the encoder whole.
     const TAIL_FRAMES: usize = 8_820;
-    /// Frames the audio after the break must carry to judge its tone: a tenth
-    /// of a second spans forty periods of [`TONE_HZ`].
     const TAIL_TONE_FRAMES: usize = 4_410;
 
     let harness = playing_harness();

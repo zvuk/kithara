@@ -20,10 +20,7 @@ pub struct NodeInputs {
     pub(crate) trash_tx: HeapProd<PlayerTrack>,
 }
 
-/// RT-owned producer half of the session mix tap.
-///
-/// `pcm` carries the post-limiter mix as interleaved stereo `f32` (LRLR);
-/// `drops` counts the samples the ring had no room for.
+/// Producer for interleaved stereo mix samples and their drop count.
 #[non_exhaustive]
 pub struct MixTapWriter {
     pub(crate) pcm: HeapProd<f32>,

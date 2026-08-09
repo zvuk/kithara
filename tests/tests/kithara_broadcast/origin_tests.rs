@@ -10,10 +10,8 @@ use super::origin::{
     decode_adts_left,
 };
 
-/// Frames the AAC-LC encoder needs before the tone is fully formed.
 const PRIMING_SKIP_FRAMES: usize = 4_800;
 const NOT_FOUND: u16 = 404;
-/// Polls allowed while the cancelled origin finishes closing its socket.
 const CONNECT_ATTEMPTS: usize = 200;
 
 fn assert_tone(pcm: &[f32], label: &str) {
@@ -180,19 +178,13 @@ async fn stopping_leaves_a_fetchable_vod_tail() {
     );
 }
 
-/// The origin blocks on its socket rather than on a wait the virtual clock can
-/// see, so a broadcast that counted it as a clock participant would freeze
-/// every waiter in the process. This wait is one no real-time budget covers.
 #[kithara::test(tokio, timeout(Duration::from_secs(20)))]
 async fn a_live_origin_leaves_the_virtual_clock_free() {
-    /// A day of virtual time: on a clock that advances it costs nothing.
     const A_DAY: Duration = Duration::from_secs(86_400);
 
     let origin = Origin::start();
     origin.advance_to(1);
 
-    // The rewriter keys on the last two path segments and takes this call onto
-    // the engine, so naming the module here would leave the import unused.
     kithara::platform::time::sleep(A_DAY).await;
 
     assert!(origin.handle.status().is_live);

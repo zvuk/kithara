@@ -1,42 +1,29 @@
-/// The RFC 8216 §3.4 packed-audio timestamp tag: an `ID3v2` tag carrying one
-/// PRIV frame whose body is the segment's first-sample time.
 pub(crate) struct TimestampTag;
 
 impl TimestampTag {
-    /// Bytes of the whole tag: two ten-byte headers, the owner, and the
-    /// timestamp.
     pub(crate) const LEN: usize =
         Self::TAG_HEADER_LEN + Self::FRAME_HEADER_LEN + Self::OWNER.len() + Self::TIMESTAMP_LEN;
 
     const FRAME_HEADER_LEN: usize = 10;
 
-    /// Syncsafe frame size: the owner plus the timestamp.
     const FRAME_SIZE: [u8; 4] = [0, 0, 0, 53];
 
-    /// Timescale MPEG-2 timestamps live in.
     const MPEG_TIMESCALE: u64 = 90_000;
 
-    /// Owner the PRIV frame is keyed by, NUL-terminated as ID3 requires.
     const OWNER: &'static [u8] = b"com.apple.streaming.transportStreamTimestamp\0";
 
     const TAG_HEADER_LEN: usize = 10;
 
-    /// Syncsafe tag size: everything past the tag header.
     const TAG_SIZE: [u8; 4] = [0, 0, 0, 63];
 
-    /// Halves of a tick added before truncating, so the conversion rounds to
-    /// the nearest tick.
     const ROUND_TO_NEAREST: u128 = 2;
 
-    /// Bits the MPEG-2 timestamp wraps at.
     const TIMESTAMP_BITS: u32 = 33;
 
     const TIMESTAMP_LEN: usize = 8;
 
     const VERSION: [u8; 3] = [4, 0, 0];
 
-    /// Render the tag that opens a segment whose first sample sits at
-    /// `media_ts` of a `timescale`-tick media clock.
     pub(crate) fn render(media_ts: u64, timescale: u32) -> [u8; Self::LEN] {
         let mut tag = [0_u8; Self::LEN];
 
@@ -56,9 +43,6 @@ impl TimestampTag {
         tag
     }
 
-    /// The `timescale` ↔ 90 kHz conversion, rounded to the nearest tick and
-    /// wrapped into the 33 bits an MPEG-2 timestamp carries. Nothing else in
-    /// the crate mixes the two time bases.
     pub(crate) fn mpeg_timestamp(media_ts: u64, timescale: u32) -> u64 {
         let timescale = u128::from(timescale);
         let scaled = u128::from(media_ts) * u128::from(Self::MPEG_TIMESCALE);

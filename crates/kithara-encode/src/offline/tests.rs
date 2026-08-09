@@ -1,6 +1,3 @@
-//! A build without `FFmpeg` still answers every offline route, and answers the
-//! ones it cannot serve with an error rather than a panic.
-
 use kithara_stream::AudioCodec;
 
 use super::packaged::OfflineEncoder;

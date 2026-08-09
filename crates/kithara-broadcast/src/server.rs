@@ -17,23 +17,12 @@ use tower_http::cors::CorsLayer;
 
 use crate::{BroadcastError, BroadcastResult, window::PlaylistSnapshot};
 
-/// What the worker publishes and the origin serves. The snapshot is swapped
-/// whole, so no request ever waits on the worker.
 #[derive(Debug)]
 pub(crate) struct Origin {
     pub(crate) snapshot: ArcSwap<PlaylistSnapshot>,
     pub(crate) master: Arc<str>,
 }
 
-/// Bind the origin and serve it from a runtime of its own.
-///
-/// The socket is bound before this returns, so the reported address is the one
-/// clients can already reach.
-///
-/// # Errors
-///
-/// Returns [`BroadcastError::Bind`] when the address cannot be bound and
-/// [`BroadcastError::Serve`] when the serving thread cannot start.
 pub(crate) fn start(
     bind: SocketAddr,
     origin: Arc<Origin>,
@@ -53,7 +42,6 @@ pub(crate) fn start(
     Ok(addr)
 }
 
-/// Media playlist of the one variant this origin publishes.
 pub(crate) fn master_playlist(bit_rate: u64) -> String {
     let bandwidth = bit_rate + bit_rate / Consts::BANDWIDTH_MARGIN;
     format!(
@@ -68,8 +56,6 @@ pub(crate) fn master_playlist(bit_rate: u64) -> String {
 struct Consts;
 
 impl Consts {
-    /// Denominator of the ADTS framing overhead the advertised bandwidth adds
-    /// to the audio bit rate.
     const BANDWIDTH_MARGIN: u64 = 20;
 
     const MEDIA_PLAYLIST: &'static str = "v/0/live.m3u8";

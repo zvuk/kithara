@@ -82,8 +82,6 @@ impl OfflineSession {
         }
     }
 
-    /// Route the session's post-limiter mix into a ring of `capacity`
-    /// interleaved samples and return its control half.
     pub fn enable_mix_tap(&self, capacity: usize) -> Result<MixTapProbe, PlayError> {
         let (pcm_tx, pcm_rx) = HeapRb::<f32>::new(capacity).split();
         let drops = Arc::new(AtomicU64::new(0));
@@ -118,8 +116,6 @@ impl Default for OfflineSession {
     }
 }
 
-/// Control half of the session mix tap: interleaved stereo PCM plus the
-/// counter of samples the RT node found no room for.
 pub struct MixTapProbe {
     drops: Arc<AtomicU64>,
     pcm: HeapCons<f32>,
@@ -135,7 +131,6 @@ impl MixTapProbe {
         self.drops.load(Ordering::Relaxed)
     }
 
-    /// Whether the RT producer half is still held by the graph.
     #[must_use]
     pub fn writer_alive(&self) -> bool {
         self.pcm.write_is_held()

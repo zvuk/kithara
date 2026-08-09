@@ -1,5 +1,3 @@
-/// Magnitude of `freq_hz` in `samples`, the single-bin DFT the signal tests use
-/// to assert that a decoded tone survived a codec round trip.
 #[must_use]
 pub fn goertzel_magnitude(samples: &[f32], freq_hz: f64, sample_rate: u32) -> f64 {
     let omega = 2.0 * std::f64::consts::PI * freq_hz / f64::from(sample_rate);

@@ -133,9 +133,6 @@ struct DirectEncoder {
     filter: ffmpeg::filter::Graph,
 }
 
-/// Codec/format config for [`DirectEncoder::new`], separate from the
-/// mutable `octx`: the `output_path` (drives codec lookup), the
-/// `target` format, and the source `sample_rate` / `channels`.
 #[derive(Clone, Copy)]
 struct DirectEncodeConfig<'a> {
     target: &'a EncodeTarget,

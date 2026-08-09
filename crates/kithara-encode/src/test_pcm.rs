@@ -6,7 +6,6 @@ const SAWTOOTH_PERIOD: u32 = 65_536;
 const SAWTOOTH_CENTER: i32 = 32_768;
 const I16_SCALE: f32 = 32_768.0;
 
-/// Interleaved packed i16 input the encoder contract tests share.
 pub(crate) struct TestPcm {
     bytes: Vec<u8>,
     channels: u16,
@@ -52,8 +51,6 @@ impl TestPcm {
         }
     }
 
-    /// The same signal as interleaved f32, scaled the way the encoder scales
-    /// its own i16 input.
     pub(crate) fn samples_f32(&self) -> Vec<f32> {
         self.bytes
             .chunks_exact(size_of::<i16>())

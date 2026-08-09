@@ -1,7 +1,4 @@
-//! # Kithara Broadcast
-//!
-//! Live HLS origin: ADTS framing of AAC-LC access units, media-clock segment
-//! rotation, a sliding playlist window, and the HTTP service that serves them.
+//! Live HLS packaging and origin service for AAC-LC PCM feeds.
 
 mod adts;
 mod config;

@@ -16,7 +16,6 @@ impl Consts {
     const SBR_ON: u32 = 1;
 }
 
-/// One open fdk-aac encoder.
 pub(crate) struct Encoder {
     handle: sys::HANDLE_AACENCODER,
 }
@@ -26,8 +25,6 @@ pub(crate) struct Encoder {
 // deliberately absent: two threads must not encode through one handle.
 unsafe impl Send for Encoder {}
 
-/// What the encoder is opened for. `sbr` sets the SBR mode the HE profiles
-/// need; AAC-LC leaves the parameter alone.
 pub(crate) struct EncoderParams {
     pub(crate) aot: sys::AUDIO_OBJECT_TYPE,
     pub(crate) bit_rate: u32,
@@ -36,7 +33,6 @@ pub(crate) struct EncoderParams {
     pub(crate) sbr: bool,
 }
 
-/// What one `aacEncEncode` call moved.
 pub(crate) struct EncodeInfo {
     pub(crate) input_consumed: usize,
     pub(crate) output_size: usize,
@@ -119,8 +115,6 @@ impl Encoder {
         Ok(info)
     }
 
-    /// Signal end of input and take what the encoder still holds. `None` is the
-    /// encoder reporting it has nothing left.
     pub(crate) fn flush(&mut self, output: &mut [u8]) -> EncodeResult<Option<EncodeInfo>> {
         const END_OF_INPUT: i32 = -1;
 
@@ -216,7 +210,6 @@ impl Drop for Encoder {
     }
 }
 
-/// The `AudioSpecificConfig` the encoder reports for the audio it was opened on.
 pub(crate) fn audio_specific_config(info: &sys::AACENC_InfoStruct) -> Vec<u8> {
     let len = info.confSize as usize;
     info.confBuf[..len].to_vec()

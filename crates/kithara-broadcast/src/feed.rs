@@ -7,52 +7,34 @@ use ringbuf::{
     traits::{Consumer, Observer},
 };
 
-/// What one [`LivePcmFeed::poll`] saw: the gap it found alongside the samples
-/// it appended, and whether the producer is gone.
+/// Result of one non-blocking feed poll.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FeedChunk {
-    /// Samples the producer lost behind the audio this poll appended, so the
-    /// gap sits between that audio and whatever the next poll brings. A
-    /// counter alone locates it no closer than the poll that saw it.
+    /// Samples lost after the audio appended by this poll.
     pub dropped: u64,
     /// The producer will send nothing further.
     pub has_ended: bool,
 }
 
-/// The broadcast's PCM intake: interleaved f32 read without blocking.
-///
-/// One poll is one consistent view of the feed — the gap, the samples, and
-/// end-of-stream — so the worker cannot see the producer leave while samples
-/// are still pending.
+/// Non-blocking interleaved-f32 intake for a live broadcast.
 pub trait LivePcmFeed: Send {
-    /// Append whatever interleaved audio is ready onto `out` and report the
-    /// gap that came behind it. Returns without waiting when nothing is ready.
+    /// Append ready audio and report the gap behind it without waiting.
     fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk;
 
-    /// Draw the line under the feed: what the producer has already handed over
-    /// still goes out poll by poll, and the feed reports its end once that is
-    /// gone.
-    ///
-    /// An implementor owes that end within a finite number of polls, because
-    /// [`crate::BroadcastHandle::stop`] blocks until it arrives.
+    /// Bound the feed at already handed-over audio and report its end finitely.
     fn close(&mut self);
 }
 
-/// Intake over the SPSC ring a real-time producer writes the mix into, paired
-/// with the monotonic counter of samples that producer found no room for.
-///
-/// The ring and the counter are the whole vocabulary between the two sides, so
-/// whoever fills the ring stays unknown to the broadcast.
+/// Feed over an SPSC PCM ring and its monotonic dropped-sample counter.
 pub struct RingFeed {
     pcm: HeapCons<f32>,
     drops: Arc<AtomicU64>,
     counted: u64,
-    /// Samples left of what the ring held when the feed was closed.
     last: Option<usize>,
 }
 
 impl RingFeed {
-    /// Take the consumer half of the mix ring and the producer's drop counter.
+    /// Take the PCM consumer and the producer's dropped-sample counter.
     #[must_use]
     pub fn new(pcm: HeapCons<f32>, drops: Arc<AtomicU64>) -> Self {
         Self {
@@ -65,10 +47,6 @@ impl RingFeed {
 }
 
 impl LivePcmFeed for RingFeed {
-    /// The producer is read as held before the ring is drained, so one already
-    /// gone by then can push nothing more and an empty drain is the end of the
-    /// feed. The drop counter is read after the drain, so a loss this poll
-    /// reports fell no earlier than the end of the audio it hands over.
     fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk {
         let held = self.pcm.write_is_held();
         let take = self.last.unwrap_or_else(|| self.pcm.occupied_len());
@@ -88,9 +66,6 @@ impl LivePcmFeed for RingFeed {
         FeedChunk { dropped, has_ended }
     }
 
-    /// The ring holds every sample the producer handed over, and only this side
-    /// takes them out, so what it holds now is the whole of the feed's last
-    /// audio.
     fn close(&mut self) {
         self.last = Some(self.pcm.occupied_len());
     }

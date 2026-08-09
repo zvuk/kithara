@@ -13,22 +13,11 @@ use url::Url;
 
 use super::origin::{Origin, SAMPLE_RATE, TONE_HZ, assert_carries_the_tone};
 
-/// Segments the broadcast puts on air before it stops.
 const SEGMENTS: u64 = 4;
-/// Frames the AAC-LC encoder needs before the tone is fully formed.
 const PRIMING_SKIP_FRAMES: usize = 4_800;
-/// Frames of the tail the assertion reads, well inside what four half-second
-/// segments hold.
 const READ_FRAMES: usize = 44_100;
 const READ_BUF_SAMPLES: usize = 4_096;
 
-/// The production client against the production origin: once the broadcast
-/// stops, its master URL is a VOD stream `Audio<Stream<Hls>>` plays.
-///
-/// `flash(false)`: this body raises an HLS client and polls synchronously —
-/// `advance_to` and the `Pending` read loop both spin — which is the pair
-/// `kithara-broadcast/CONTEXT.md` names as the one the simulated clock cannot
-/// serve. The reads park on the real clock too, so the timeout bounds them.
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn the_production_client_plays_the_stopped_broadcast() {
     let origin = Origin::start();
@@ -75,8 +64,6 @@ async fn the_production_client_plays_the_stopped_broadcast() {
     );
 }
 
-/// Drain up to `samples` interleaved samples and keep the left channel. Reads
-/// park until the worker commits, so `Pending` is transient.
 fn read_left_channel(audio: &mut Audio<Stream<Hls>>, samples: usize) -> Vec<f32> {
     let channels = usize::from(audio.spec().channels);
     let mut buf = vec![0.0f32; READ_BUF_SAMPLES];

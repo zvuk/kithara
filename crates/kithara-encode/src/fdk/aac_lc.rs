@@ -16,8 +16,6 @@ impl Consts {
     const MIN_SAMPLE_RATE: u32 = 8_000;
 }
 
-/// In-tree fdk-aac AAC-LC encoder behind [`crate::StreamEncoder`]. Raw access
-/// units: whoever carries them adds the transport headers.
 pub(crate) struct FdkStream {
     encoder: Encoder,
     channels: usize,
@@ -100,8 +98,6 @@ impl FdkStream {
         })
     }
 
-    /// Encode every whole frame the buffer holds. The cursor is what the
-    /// encoder has taken, so a push of any size costs one shift at the end.
     fn drain_full_frames(&mut self) -> EncodeResult<Vec<EncodedAccessUnit>> {
         let frame_input = self.frame_samples * self.channels;
         let mut units = Vec::new();
@@ -126,8 +122,6 @@ impl FdkStream {
         Ok(units)
     }
 
-    /// Access-unit boundaries are what gets rescaled, so durations tile the pts
-    /// timeline exactly even when the ratio is fractional.
     fn access_unit(&mut self, size: usize) -> EncodeResult<EncodedAccessUnit> {
         let frame_samples = u64::try_from(self.frame_samples).map_err(|_| {
             EncodeError::backend_message("frame size does not fit into u64".to_owned())
@@ -158,8 +152,6 @@ impl FdkStream {
     }
 }
 
-/// libfdk reads i16, and a sample past full scale is clamped onto it. A sample
-/// that is not a number carries no signal and lands on silence.
 fn to_i16(sample: f32) -> i16 {
     let scaled = (sample * Consts::I16_SCALE)
         .round()
