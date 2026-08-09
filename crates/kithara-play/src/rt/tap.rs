@@ -97,16 +97,16 @@ impl AudioNodeProcessor for TapProcessor {
                 .fetch_add(dropped_samples(info.frames, 0, stereo), Ordering::Relaxed);
             return ProcessStatus::ClearAllOutputs;
         };
-        // Frame-aligned pushes keep the consumer's channel order intact under
-        // overflow: a lost half-frame would swap L and R for good.
         let frames = info
             .frames
             .min(writer.pcm.vacant_len() / stereo)
             .min(left.len())
             .min(right.len());
-        let pushed = writer
-            .pcm
-            .push_iter((0..frames).flat_map(|frame| [left[frame], right[frame]]));
+        let interleaved = left[..frames]
+            .iter()
+            .zip(&right[..frames])
+            .flat_map(|(&left, &right)| [left, right]);
+        let pushed = writer.pcm.push_iter(interleaved);
         let dropped = dropped_samples(info.frames, pushed, stereo);
         if dropped > 0 {
             writer.drops.fetch_add(dropped, Ordering::Relaxed);
