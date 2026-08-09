@@ -1,6 +1,9 @@
 #[cfg(not(feature = "gui"))]
 compile_error!("`kithara` binary requires the `gui` feature");
 
+#[cfg(feature = "broadcast")]
+mod broadcast;
+
 use std::sync::OnceLock;
 
 use clap::Parser;
@@ -31,6 +34,11 @@ struct Args {
     /// Enabled by default during testing phase.
     #[arg(long, default_value_t = true)]
     insecure: bool,
+
+    /// Stream the studio mix from a local HLS URL printed to the log.
+    #[cfg(feature = "broadcast")]
+    #[arg(long)]
+    broadcast: bool,
 }
 
 type AppError = Box<dyn std::error::Error + Send + Sync>;
@@ -94,6 +102,12 @@ fn main() -> AppResult {
         .build();
 
     let session = app_session_handle();
+    #[cfg(feature = "broadcast")]
+    let _broadcast = if args.broadcast {
+        broadcast::BroadcastState::start(&session, &shutdown)
+    } else {
+        None
+    };
     let mut deck_set = DeckSet::new(vec![
         Deck::build(DeckId(0), &config, &session),
         Deck::build(DeckId(1), &config, &session),
@@ -105,4 +119,20 @@ fn main() -> AppResult {
     frontend.shutdown()?;
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "broadcast"))]
+mod tests {
+    use clap::Parser;
+
+    use super::Args;
+
+    #[test]
+    fn broadcast_flag_is_opt_in() {
+        let without = Args::try_parse_from(["kithara"]).expect("default arguments");
+        let with = Args::try_parse_from(["kithara", "--broadcast"]).expect("broadcast flag");
+
+        assert!(!without.broadcast);
+        assert!(with.broadcast);
+    }
 }
