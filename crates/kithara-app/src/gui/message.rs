@@ -1,5 +1,8 @@
 use kithara_ui::render::{UiEvent, WindowCommand};
 
+#[cfg(feature = "broadcast")]
+use kithara_platform::time::Duration;
+
 use crate::deck::{DeckId, EqMode};
 
 /// All GUI events flow through this enum.
@@ -8,6 +11,10 @@ use crate::deck::{DeckId, EqMode};
 /// [`super::deck::DeckMsg`] and know nothing about deck identity.
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
+    #[cfg(feature = "broadcast")]
+    BroadcastToggle,
+    #[cfg(feature = "broadcast")]
+    BroadcastStopped(Option<Duration>),
     /// Raw event from the compiled studio UI; translated by
     /// [`super::studio_ui::translate`].
     Ui(UiEvent),

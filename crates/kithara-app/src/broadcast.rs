@@ -1,10 +1,12 @@
-use std::error::Error;
+use std::{error::Error, mem};
 
 use kithara::play::{Cmd, MixTapWriter, SessionHandle};
 use kithara_broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, atomic::AtomicU64},
+    time::{Duration, Instant},
+    tokio::task,
 };
 use ringbuf::{HeapRb, traits::Split};
 
@@ -19,13 +21,16 @@ pub(super) struct BroadcastService {
 enum Phase {
     Off,
     Requested,
-    Running { _state: BroadcastState },
+    Running { state: BroadcastState },
+    Stopping,
 }
 
 struct BroadcastState {
     handle: BroadcastHandle,
     session: SessionHandle,
 }
+
+pub(super) struct BroadcastStop(BroadcastState);
 
 impl BroadcastService {
     pub(super) fn new(session: SessionHandle, shutdown: CancelToken, requested: bool) -> Self {
@@ -41,6 +46,13 @@ impl BroadcastService {
     }
 
     pub(super) fn poll(&mut self) {
+        if matches!(
+            &self.phase,
+            Phase::Running { state } if !state.handle.status().is_live
+        ) {
+            self.phase = Phase::Off;
+            return;
+        }
         if !matches!(self.phase, Phase::Requested) {
             return;
         }
@@ -56,11 +68,48 @@ impl BroadcastService {
         match start(&self.session, &self.shutdown, &config) {
             Ok(state) => {
                 tracing::info!(url = state.handle.url(), "broadcast is live");
-                self.phase = Phase::Running { _state: state };
+                self.phase = Phase::Running { state };
             }
             Err(error) => {
                 tracing::error!(%error, "broadcast did not start");
                 self.phase = Phase::Off;
+            }
+        }
+    }
+
+    pub(super) fn toggle(&mut self) -> Option<BroadcastStop> {
+        match mem::replace(&mut self.phase, Phase::Off) {
+            Phase::Off => self.phase = Phase::Requested,
+            Phase::Requested => {}
+            Phase::Running { state } => {
+                self.phase = Phase::Stopping;
+                return Some(BroadcastStop(state));
+            }
+            Phase::Stopping => self.phase = Phase::Stopping,
+        }
+        None
+    }
+
+    pub(super) fn complete_stop(&mut self) {
+        if matches!(self.phase, Phase::Stopping) {
+            self.phase = Phase::Off;
+        }
+    }
+}
+
+impl BroadcastStop {
+    fn run_blocking(self) -> Duration {
+        let started = Instant::now();
+        self.0.handle.stop();
+        started.elapsed()
+    }
+
+    pub(super) async fn run(self) -> Option<Duration> {
+        match task::spawn_blocking(move || self.run_blocking()).await {
+            Ok(duration) => Some(duration),
+            Err(error) => {
+                tracing::error!(%error, "broadcast stop worker failed");
+                None
             }
         }
     }
@@ -130,25 +179,58 @@ fn ring_capacity(sample_rate: u32) -> BroadcastResult<usize> {
 mod tests {
     use kithara::play::{PlayError, Reply, SessionDispatcher};
     use kithara_platform::sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU32, Ordering},
     };
 
     use super::*;
 
-    struct SampleRateSession(AtomicU32);
+    struct SampleRateSession {
+        sample_rate: AtomicU32,
+        tap: Mutex<Option<MixTapWriter>>,
+    }
+
+    impl SampleRateSession {
+        fn new(sample_rate: u32) -> Self {
+            Self {
+                sample_rate: AtomicU32::new(sample_rate),
+                tap: Mutex::new(None),
+            }
+        }
+    }
 
     impl SessionDispatcher for SampleRateSession {
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            assert!(matches!(cmd, Cmd::QuerySampleRate));
-            let sample_rate = self.0.load(Ordering::Relaxed);
-            Ok(Reply::SampleRate((sample_rate != 0).then_some(sample_rate)))
+            match cmd {
+                Cmd::QuerySampleRate => {
+                    let sample_rate = self.sample_rate.load(Ordering::Relaxed);
+                    Ok(Reply::SampleRate((sample_rate != 0).then_some(sample_rate)))
+                }
+                Cmd::EnableMixTap { writer } => {
+                    *self.tap.lock() = Some(writer);
+                    Ok(Reply::Ok)
+                }
+                Cmd::DisableMixTap => {
+                    self.tap.lock().take();
+                    Ok(Reply::Ok)
+                }
+                _ => panic!("unexpected session command"),
+            }
         }
+    }
+
+    fn running_service() -> (BroadcastService, Arc<SampleRateSession>) {
+        let dispatcher = Arc::new(SampleRateSession::new(48_000));
+        let session = SessionHandle::new(dispatcher.clone());
+        let mut service = BroadcastService::new(session, CancelToken::root(), true);
+        service.poll();
+        assert!(matches!(service.phase, Phase::Running { .. }));
+        (service, dispatcher)
     }
 
     #[test]
     fn configuration_waits_for_the_measured_session_sample_rate() {
-        let dispatcher = Arc::new(SampleRateSession(AtomicU32::new(0)));
+        let dispatcher = Arc::new(SampleRateSession::new(0));
         let session = SessionHandle::new(dispatcher.clone());
         let mut service = BroadcastService::new(session.clone(), CancelToken::root(), true);
 
@@ -156,12 +238,43 @@ mod tests {
         assert!(matches!(service.phase, Phase::Requested));
         assert!(measured_config(&session).unwrap().is_none());
 
-        dispatcher.0.store(48_000, Ordering::Relaxed);
+        dispatcher.sample_rate.store(48_000, Ordering::Relaxed);
         let config = measured_config(&session)
             .unwrap()
             .expect("measured sample rate");
 
         assert_eq!(config.sample_rate, 48_000);
+    }
+
+    #[test]
+    fn stopping_returns_a_job_and_finishes_only_on_completion() {
+        let (mut service, _) = running_service();
+
+        let stop = service.toggle().expect("running broadcast stop job");
+        assert!(matches!(service.phase, Phase::Stopping));
+
+        let _duration = stop.run_blocking();
+        assert!(matches!(service.phase, Phase::Stopping));
+        service.complete_stop();
+        assert!(matches!(service.phase, Phase::Off));
+        service.shutdown.cancel();
+    }
+
+    #[test]
+    fn producer_end_is_observed_by_the_existing_poll() {
+        let (mut service, dispatcher) = running_service();
+        dispatcher.tap.lock().take();
+
+        for _ in 0..1_000 {
+            service.poll();
+            if matches!(service.phase, Phase::Off) {
+                break;
+            }
+            kithara_platform::thread::paced_backoff(Duration::from_millis(1));
+        }
+
+        assert!(matches!(service.phase, Phase::Off));
+        service.shutdown.cancel();
     }
 
     #[test]

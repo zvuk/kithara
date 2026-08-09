@@ -11,6 +11,12 @@ The GUI owns the phase so the startup intent survives the interval before the fi
 the session output. App-root cancellation ends the origin and encoder; dropping the running phase
 releases the mix tap.
 
+Turning a running broadcast off moves its handle into an iced task immediately and marks the
+service `Stopping`. The task delegates the blocking feed close, encoder drain, and worker join to
+Tokio's blocking pool; only its completion message changes the service to `Off`. The existing GUI
+tick polls `BroadcastHandle::status`, so a producer released by a device-rate change also moves the
+service to `Off` without another timer.
+
 ## Studio UI host
 
 The studio is a compiled `kithara-ui` document set; `gui::studio_ui` is the host side of it. `StudioRegistry` declares

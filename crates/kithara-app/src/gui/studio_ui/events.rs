@@ -141,11 +141,15 @@ fn zoom_control(
 /// silences the decks it stops laying out: a deck the user cannot see must
 /// not keep playing.
 fn bar_control(cache: &mut StudioCache, control: &str, action: &ControlAction) -> Option<Message> {
-    let ("decks", ControlAction::SelectIndex(index)) = (control, action) else {
-        return None;
-    };
-    cache.set_layout(DeckLayout::from_index(*index)?);
-    Some(Message::PauseHiddenDecks)
+    match (control, action) {
+        #[cfg(feature = "broadcast")]
+        ("broadcast", ControlAction::Activate) => Some(Message::BroadcastToggle),
+        ("decks", ControlAction::SelectIndex(index)) => {
+            cache.set_layout(DeckLayout::from_index(*index)?);
+            Some(Message::PauseHiddenDecks)
+        }
+        _ => None,
+    }
 }
 
 fn mixer_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
