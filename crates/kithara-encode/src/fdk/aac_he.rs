@@ -65,7 +65,7 @@ impl AacHeEncoder {
             )));
         }
 
-        let encoder = Encoder::new(&EncoderParams {
+        let mut encoder = Encoder::new(&EncoderParams {
             aot: profile.aot(),
             bit_rate: request.bit_rate.try_into().map_err(|_| {
                 EncodeError::InvalidInput("bit_rate does not fit into u32".to_owned())

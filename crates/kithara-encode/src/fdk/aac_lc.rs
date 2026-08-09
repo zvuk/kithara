@@ -1,9 +1,10 @@
 use fdk_aac_sys as sys;
+use num_traits::cast;
 
 use super::encoder::{Encoder, EncoderParams};
 use crate::{
     error::{EncodeError, EncodeResult},
-    stream::{StreamEncoder, StreamParams},
+    stream::{AacStream, StreamEncoder, StreamParams},
     types::EncodedAccessUnit,
 };
 
@@ -22,10 +23,33 @@ pub(crate) struct FdkStream {
     channels: usize,
     frame_samples: usize,
     pending: Vec<i16>,
+    taken: usize,
     output: Vec<u8>,
     emitted: u64,
     sample_rate: u32,
     timescale: u32,
+}
+
+impl AacStream for FdkStream {
+    fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
+        self.pending.extend(samples.iter().copied().map(to_i16));
+        self.drain_full_frames()
+    }
+
+    fn finish(mut self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>> {
+        let mut units = self.drain_full_frames()?;
+        if !self.pending.is_empty() {
+            self.pending.resize(self.frame_samples * self.channels, 0);
+            units.extend(self.drain_full_frames()?);
+        }
+
+        while let Some(encoded) = self.encoder.flush(&mut self.output)? {
+            if encoded.output_size > 0 {
+                units.push(self.access_unit(encoded.output_size)?);
+            }
+        }
+        Ok(units)
+    }
 }
 
 impl FdkStream {
@@ -68,6 +92,7 @@ impl FdkStream {
             channels,
             frame_samples,
             pending: Vec::with_capacity(frame_samples * channels),
+            taken: 0,
             output: vec![0; Consts::ACCESS_UNIT_CAPACITY],
             emitted: 0,
             sample_rate,
@@ -75,107 +100,69 @@ impl FdkStream {
         })
     }
 
-    pub(crate) fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        self.pending.extend(samples.iter().copied().map(to_i16));
-        self.drain_full_frames()
-    }
-
-    pub(crate) fn finish(mut self) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        let mut units = self.drain_full_frames()?;
-        if !self.pending.is_empty() {
-            self.pending.resize(self.frame_samples * self.channels, 0);
-            units.extend(self.drain_full_frames()?);
-        }
-
-        while let Some(encoded) = self.encoder.flush(&mut self.output)? {
-            if encoded.output_size == 0 {
-                continue;
-            }
-            let unit = Self::access_unit(
-                &self.output[..encoded.output_size],
-                self.emitted,
-                self.frame_samples,
-                self.sample_rate,
-                self.timescale,
-            )?;
-            self.emitted += 1;
-            units.push(unit);
-        }
-        Ok(units)
-    }
-
+    /// Encode every whole frame the buffer holds. The cursor is what the
+    /// encoder has taken, so a push of any size costs one shift at the end.
     fn drain_full_frames(&mut self) -> EncodeResult<Vec<EncodedAccessUnit>> {
         let frame_input = self.frame_samples * self.channels;
         let mut units = Vec::new();
-        while self.pending.len() >= frame_input {
+        while self.pending.len() - self.taken >= frame_input {
+            let frame_end = self.taken + frame_input;
             let encoded = self
                 .encoder
-                .encode(&self.pending[..frame_input], &mut self.output)?;
-            if encoded.input_consumed == 0 {
-                break;
+                .encode(&self.pending[self.taken..frame_end], &mut self.output)?;
+            if encoded.input_consumed != frame_input {
+                return Err(EncodeError::backend_message(format!(
+                    "fdk-aac took {} samples of a {frame_input} sample frame",
+                    encoded.input_consumed
+                )));
             }
-            self.pending.drain(..encoded.input_consumed);
+            self.taken = frame_end;
             if encoded.output_size > 0 {
-                let unit = Self::access_unit(
-                    &self.output[..encoded.output_size],
-                    self.emitted,
-                    self.frame_samples,
-                    self.sample_rate,
-                    self.timescale,
-                )?;
-                self.emitted += 1;
-                units.push(unit);
+                units.push(self.access_unit(encoded.output_size)?);
             }
         }
+        self.pending.drain(..self.taken);
+        self.taken = 0;
         Ok(units)
     }
 
     /// Access-unit boundaries are what gets rescaled, so durations tile the pts
     /// timeline exactly even when the ratio is fractional.
-    fn access_unit(
-        bytes: &[u8],
-        index: u64,
-        frame_samples: usize,
-        sample_rate: u32,
-        timescale: u32,
-    ) -> EncodeResult<EncodedAccessUnit> {
-        let frame_samples = u64::try_from(frame_samples).map_err(|_| {
+    fn access_unit(&mut self, size: usize) -> EncodeResult<EncodedAccessUnit> {
+        let frame_samples = u64::try_from(self.frame_samples).map_err(|_| {
             EncodeError::backend_message("frame size does not fit into u64".to_owned())
         })?;
-        let pts = rescale(index * frame_samples, sample_rate, timescale)?;
-        let end = rescale((index + 1) * frame_samples, sample_rate, timescale)?;
+        let pts = self.rescale(self.emitted * frame_samples)?;
+        let end = self.rescale((self.emitted + 1) * frame_samples)?;
         let duration = u32::try_from(end.saturating_sub(pts)).map_err(|_| {
             EncodeError::backend_message(
                 "access-unit duration does not fit into u32 in the target time base".to_owned(),
             )
         })?;
+        self.emitted += 1;
 
         Ok(EncodedAccessUnit {
-            bytes: bytes.to_vec(),
+            bytes: self.output[..size].to_vec(),
             pts,
             dts: pts,
             duration,
             is_sync: true,
         })
     }
+
+    fn rescale(&self, frames: u64) -> EncodeResult<u64> {
+        let sample_rate = u128::from(self.sample_rate);
+        let ticks = u128::from(frames) * u128::from(self.timescale) + sample_rate / 2;
+        u64::try_from(ticks / sample_rate)
+            .map_err(|_| EncodeError::backend_message("timestamp does not fit into u64".to_owned()))
+    }
 }
 
-fn rescale(frames: u64, sample_rate: u32, timescale: u32) -> EncodeResult<u64> {
-    let sample_rate = u128::from(sample_rate);
-    let ticks = u128::from(frames) * u128::from(timescale) + sample_rate / 2;
-    u64::try_from(ticks / sample_rate)
-        .map_err(|_| EncodeError::backend_message("timestamp does not fit into u64".to_owned()))
-}
-
+/// libfdk reads i16, and a sample past full scale is clamped onto it. A sample
+/// that is not a number carries no signal and lands on silence.
 fn to_i16(sample: f32) -> i16 {
-    let scaled = (sample * Consts::I16_SCALE).clamp(f32::from(i16::MIN), f32::from(i16::MAX));
-    #[cfg_attr(
-        all(),
-        expect(
-            clippy::cast_possible_truncation,
-            reason = "the value is clamped onto the i16 range on the line above"
-        )
-    )]
-    let sample = scaled as i16;
-    sample
+    let scaled = (sample * Consts::I16_SCALE)
+        .round()
+        .clamp(f32::from(i16::MIN), f32::from(i16::MAX));
+    cast(scaled).unwrap_or(0)
 }

@@ -19,7 +19,11 @@ use super::{
     RebaseRates, build_direct_filter, ensure_ffmpeg_initialized, find_encoder,
     pcm::{drain_filtered_frames, flush_filter, send_eof_to_encoder, send_frame_to_filter},
 };
-use crate::{EncodeError, EncodeResult, stream::StreamParams, types::EncodedAccessUnit};
+use crate::{
+    EncodeError, EncodeResult,
+    stream::{AacStream, StreamParams},
+    types::EncodedAccessUnit,
+};
 
 /// Sample format the encoder takes from callers.
 const INPUT_FORMAT: Sample = Sample::F32(SampleType::Packed);
@@ -89,7 +93,7 @@ impl FfmpegStream {
         })
     }
 
-    pub(crate) fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
+    fn encode(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
         let frames = samples.len() / usize::from(self.channels);
         let frame_count = i32::try_from(frames).map_err(|_| {
             EncodeError::InvalidInput(format!("push of {frames} frames does not fit one frame"))
@@ -116,7 +120,7 @@ impl FfmpegStream {
         Ok(self.drain_filter()?)
     }
 
-    pub(crate) fn finish(mut self) -> EncodeResult<Vec<EncodedAccessUnit>> {
+    fn drain(mut self) -> EncodeResult<Vec<EncodedAccessUnit>> {
         flush_filter(&mut self.filter)?;
         let mut units = self.drain_filter()?;
         send_eof_to_encoder(&mut self.encoder)?;
@@ -137,6 +141,16 @@ impl FfmpegStream {
             collect_encoded_packets(encoder, rates, timestamp_origin, &mut units)
         })?;
         Ok(units)
+    }
+}
+
+impl AacStream for FfmpegStream {
+    fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
+        self.encode(samples)
+    }
+
+    fn finish(self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>> {
+        self.drain()
     }
 }
 

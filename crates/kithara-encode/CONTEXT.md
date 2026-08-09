@@ -14,7 +14,7 @@ Two encoders live here and the caller names the one it wants. `ffmpeg` links the
 
 `StreamEncoder` is the canonical AAC-LC encode path. `new(backend, sample_rate, channels, bit_rate, timescale)` opens one encoder for one continuous stream; `push` takes **interleaved f32** and returns the access units that audio completed; `finish` flushes the encoder and returns the rest. The instance lives for the whole stream — a per-segment encoder would restart the priming frame and click at every boundary.
 
-- `push` takes full frames: a slice whose length is not a multiple of the channel count is rejected. Samples are expected in `[-1.0, 1.0]`; the encoder passes larger magnitudes through to `FFmpeg`, where the outcome depends on the linked encoder's sample format.
+- `push` takes full frames: a slice whose length is not a multiple of the channel count is rejected. Samples are expected in `[-1.0, 1.0]`; `FFmpeg` takes larger magnitudes through to the linked encoder, where the outcome depends on its sample format, and fdk clamps them onto full scale.
 - The filter graph holds up to `FRAME_SAMPLES - 1` samples between calls and hands the encoder whole frames, so chunk size does not reach the encoder: the same audio pushed in any chunking yields byte-identical access units with identical timestamps. `finish` is what releases the tail.
 - A `push` that returns a backend error leaves the encoder mid-frame — drop it and open a new one rather than pushing again.
 - Timestamps start at 0 and access-unit boundaries are what gets rescaled into `1/timescale`, so durations tile the pts timeline exactly even when the ratio is fractional. Each access unit carries `FRAME_SAMPLES` (1024) samples per channel and is a sync point, and `pts == dts`.

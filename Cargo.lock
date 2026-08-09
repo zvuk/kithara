@@ -4507,6 +4507,7 @@ dependencies = [
  "ffmpeg-next",
  "kithara-stream",
  "kithara-workspace-hack",
+ "num-traits",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",

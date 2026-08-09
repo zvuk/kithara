@@ -14,6 +14,9 @@ pub struct EncoderFactory;
 impl EncoderFactory {
     /// Create an encoder backend for complete encoded bytes.
     ///
+    /// The backend takes the target from the request, and reports one it cannot
+    /// serve when it encodes.
+    ///
     /// # Errors
     ///
     /// Returns an error when encoding is unavailable on the current target.
@@ -40,8 +43,9 @@ impl EncoderFactory {
     pub fn create_packaged(codec: AudioCodec) -> EncodeResult<Box<dyn InnerEncoder>> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let _ = codec;
-            Ok(Box::new(OfflineEncoder))
+            let encoder = OfflineEncoder;
+            encoder.packaged_frame_samples(codec)?;
+            Ok(Box::new(encoder))
         }
 
         #[cfg(target_arch = "wasm32")]

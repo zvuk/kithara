@@ -110,7 +110,7 @@ impl Encoder {
         Ok(encoder)
     }
 
-    pub(crate) fn encode(&self, input: &[i16], output: &mut [u8]) -> EncodeResult<EncodeInfo> {
+    pub(crate) fn encode(&mut self, input: &[i16], output: &mut [u8]) -> EncodeResult<EncodeInfo> {
         let input_samples = i32::try_from(input.len()).map_err(|_| {
             EncodeError::backend_message("input sample count does not fit into i32".to_owned())
         })?;
@@ -121,7 +121,7 @@ impl Encoder {
 
     /// Signal end of input and take what the encoder still holds. `None` is the
     /// encoder reporting it has nothing left.
-    pub(crate) fn flush(&self, output: &mut [u8]) -> EncodeResult<Option<EncodeInfo>> {
+    pub(crate) fn flush(&mut self, output: &mut [u8]) -> EncodeResult<Option<EncodeInfo>> {
         const END_OF_INPUT: i32 = -1;
 
         let (code, info) = self.run(&[], output, END_OF_INPUT)?;
@@ -142,7 +142,7 @@ impl Encoder {
     }
 
     fn run(
-        &self,
+        &mut self,
         input: &[i16],
         output: &mut [u8],
         input_samples: i32,
