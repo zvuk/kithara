@@ -54,6 +54,8 @@ The rendered playlist is version 3. `EXT-X-TARGETDURATION` is the configured seg
 
 `Broadcast::start` binds the origin before it returns, so the URL on the handle is one a client can already reach. Two threads run behind it: a worker that polls the feed and packages it, and a thread with a current-thread runtime that serves axum.
 
+The serving thread is a plain OS thread. `kithara-platform`'s spawns enrol a thread as a dedicated virtual-time pacer, and a pacer holds the quiescence engine until it parks on a wait the engine wrapped; a thread that hosts a tokio runtime parks in the OS event loop instead, so enrolling it freezes the virtual clock for every waiter in the process. The worker is the opposite case and keeps the platform spawn: it paces itself on the media clock and parks on waits the engine sees.
+
 The worker is the sole mutator of the segmenter and the window. It publishes each closed segment by swapping a whole `PlaylistSnapshot` into an `ArcSwap`, so no request ever waits on the worker. The handle's join slot is the crate's only mutex and the serving path never touches it; the counters the handle reports are the worker's alone, and the origin does not read them.
 
 Nothing in the pipeline reads a wall clock: rotation is media-driven and the playlist changes only when a segment closes. The worker's poll backoff paces an empty feed and is not part of the contract.

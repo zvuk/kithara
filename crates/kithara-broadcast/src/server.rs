@@ -11,7 +11,6 @@ use axum::{
 use kithara_platform::{
     CancelToken,
     sync::Arc,
-    thread,
     tokio::{net::TcpListener as TokioListener, runtime::Builder as RuntimeBuilder},
 };
 use tower_http::cors::CorsLayer;
@@ -33,7 +32,8 @@ pub(crate) struct Origin {
 ///
 /// # Errors
 ///
-/// Returns [`BroadcastError::Bind`] when the address cannot be bound.
+/// Returns [`BroadcastError::Bind`] when the address cannot be bound and
+/// [`BroadcastError::Serve`] when the serving thread cannot start.
 pub(crate) fn start(
     bind: SocketAddr,
     origin: Arc<Origin>,
@@ -46,9 +46,10 @@ pub(crate) fn start(
         .and_then(|addr| listener.set_nonblocking(true).map(|()| addr))
         .map_err(|source| BroadcastError::Bind { addr: bind, source })?;
 
-    thread::spawn_named("kithara-broadcast-origin", move || {
-        serve(listener, origin, token);
-    });
+    std::thread::Builder::new()
+        .name(Consts::THREAD.to_owned())
+        .spawn(move || serve(listener, origin, token))
+        .map_err(|source| BroadcastError::Serve { addr, source })?;
     Ok(addr)
 }
 
@@ -78,6 +79,8 @@ impl Consts {
     const SEGMENT_SUFFIX: &'static str = ".aac";
 
     const SEGMENT_TYPE: &'static str = "audio/aac";
+
+    const THREAD: &'static str = "kithara-broadcast-origin";
 }
 
 fn serve(listener: TcpListener, origin: Arc<Origin>, token: CancelToken) {

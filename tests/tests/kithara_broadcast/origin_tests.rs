@@ -2,7 +2,7 @@ use std::net::TcpStream;
 
 use kithara::{
     self,
-    platform::{thread, time::Duration},
+    platform::{thread, time, time::Duration},
 };
 
 use super::origin::{
@@ -178,6 +178,22 @@ async fn stopping_leaves_a_fetchable_vod_tail() {
         &decoded[PRIMING_SKIP_FRAMES..],
         &format!("segment {joined}"),
     );
+}
+
+/// The origin blocks on its socket rather than on a wait the virtual clock can
+/// see, so a broadcast that counted it as a clock participant would freeze
+/// every waiter in the process. This wait is one no real-time budget covers.
+#[kithara::test(tokio, timeout(Duration::from_secs(20)))]
+async fn a_live_origin_leaves_the_virtual_clock_free() {
+    /// A day of virtual time: on a clock that advances it costs nothing.
+    const A_DAY: Duration = Duration::from_secs(86_400);
+
+    let origin = Origin::start();
+    origin.advance_to(1);
+
+    time::sleep(A_DAY).await;
+
+    assert!(origin.handle.status().is_live);
 }
 
 #[kithara::test(tokio)]

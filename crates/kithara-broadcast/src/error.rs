@@ -38,6 +38,13 @@ pub enum BroadcastError {
         source: io::Error,
     },
 
+    #[error("the origin cannot start the thread that serves {addr}")]
+    Serve {
+        addr: SocketAddr,
+        #[source]
+        source: io::Error,
+    },
+
     #[error("the live encoder failed")]
     Encode(#[from] EncodeError),
 }
