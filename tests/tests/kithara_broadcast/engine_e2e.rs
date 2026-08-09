@@ -167,11 +167,12 @@ impl OnAir {
         self.drops.load(Ordering::Relaxed)
     }
 
-    /// Wait for the packager to close another segment, which it can only do by
-    /// eating its way through what the ring holds.
+    /// Wait until the service has counted every sample the real-time node
+    /// lost. Past that point the packager is level with the ring, the break is
+    /// behind it, and audio rendered next goes into the discontinuous segment.
     fn wait_for_drain(&self) {
-        let target = self.handle.status().segments + 1;
-        while self.handle.status().segments < target {
+        let lost = self.tap_drops();
+        while self.handle.status().dropped_samples < lost {
             thread::paced_backoff(Duration::from_millis(1));
         }
     }

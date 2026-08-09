@@ -20,7 +20,7 @@ tls-native = ["kithara-encode/tls-native"]
 tls-rustls = ["kithara-encode/tls-rustls"]
 
 [dependencies]
-kithara-encode = { workspace = true }
+kithara-encode = { workspace = true, features = ["fdk-aac"] }
 kithara-platform = { workspace = true, features = ["tokio-net"] }
 
 arc-swap = { workspace = true }

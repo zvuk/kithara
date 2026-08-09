@@ -4,6 +4,8 @@ Contracts and invariants for the kithara-broadcast crate; the README is the over
 
 The crate turns `kithara-encode` access units into HLS media segments and serves them: a packaging core with no clock of its own, and a service that drives it from a PCM feed and publishes it over HTTP.
 
+The encoder it opens is `kithara-encode`'s fdk-aac AAC-LC backend, asked for by name. That backend builds from vendored sources into the binary, so a broadcast needs no FFmpeg on the machine it runs on and none in a shipped application. libfdk's vendored `FDK_archdef.h` has no branch for MSVC on ARM64, so a broadcast cannot be built for `aarch64-pc-windows-msvc`.
+
 ## Configuration
 
 `BroadcastConfig` is the single knob surface. `Segmenter`, `LiveWindow`, and `Broadcast::start` all take it, so the sample rate is the media timescale everywhere and no caller can pair a segmenter with a window that disagrees about time.
@@ -26,7 +28,7 @@ RFC 8216 §3.4 requires every packed-audio segment to open with an ID3v2 tag who
 
 `TimestampTag::mpeg_timestamp` is the only place the media timescale and the 90 kHz MPEG-2 domain meet: it rounds to the nearest 90 kHz tick and wraps at 33 bits. Everything else in the crate counts in the configured sample rate.
 
-The stream clock counts encoded audio only. `mark_drop` closes a segment and marks the next one discontinuous; it does not synthesise a gap in the timestamps, because `EXT-X-DISCONTINUITY` is what tells a client the timeline broke. The encoder runs across the gap and holds its own delay of audio when the cut lands, so the discontinuous segment opens with the last of what came ahead of the gap. A gap the last poll of a broadcast reports leaves the whole of that delay there, since `finish` drains it into the discontinuous tail segment.
+The stream clock counts encoded audio only. `mark_drop` closes a segment and marks the next one discontinuous; it does not synthesise a gap in the timestamps, because `EXT-X-DISCONTINUITY` is what tells a client the timeline broke. The encoder runs across the gap and holds its own delay — two access units of priming — when the cut lands, so the discontinuous segment opens with the last of what came ahead of the gap. A gap the last poll of a broadcast reports leaves the whole of that delay there, since `finish` drains it into the discontinuous tail segment.
 
 symphonia's ADTS reader resyncs to the next sync word on every frame, so the prefix costs the in-tree decode path nothing.
 

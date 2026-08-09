@@ -166,7 +166,7 @@ impl<F: LivePcmFeed> Worker<F> {
         Ok(Self {
             feed,
             encoder: Some(StreamEncoder::new(
-                StreamBackend::Ffmpeg,
+                StreamBackend::Fdk,
                 config.sample_rate,
                 config.channels,
                 config.bit_rate,
