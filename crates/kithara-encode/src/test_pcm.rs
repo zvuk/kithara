@@ -14,6 +14,7 @@ pub(crate) struct TestPcm {
 }
 
 impl TestPcm {
+    #[cfg(feature = "ffmpeg")]
     pub(crate) fn from_samples(samples: &[i16], sample_rate: u32, channels: u16) -> Self {
         Self::from_bytes(
             samples
@@ -25,6 +26,7 @@ impl TestPcm {
         )
     }
 
+    #[cfg(feature = "ffmpeg")]
     pub(crate) fn from_bytes(bytes: Vec<u8>, sample_rate: u32, channels: u16) -> Self {
         Self {
             bytes,

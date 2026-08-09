@@ -1,3 +1,5 @@
+#[cfg(feature = "fdk-aac")]
+use crate::fdk::aac_lc::FdkStream;
 #[cfg(feature = "ffmpeg")]
 use crate::ffmpeg::stream::FfmpegStream;
 use crate::{
@@ -28,6 +30,10 @@ pub enum StreamBackend {
     /// `ffmpeg` feature).
     #[cfg(feature = "ffmpeg")]
     Ffmpeg,
+    /// In-tree `fdk-aac`, built from vendored sources (requires the `fdk-aac`
+    /// feature).
+    #[cfg(feature = "fdk-aac")]
+    Fdk,
 }
 
 /// Audio the caller hands one stream, validated once for every backend.
@@ -52,6 +58,8 @@ pub struct StreamEncoder {
 enum Inner {
     #[cfg(feature = "ffmpeg")]
     Ffmpeg(FfmpegStream),
+    #[cfg(feature = "fdk-aac")]
+    Fdk(FdkStream),
 }
 
 impl StreamEncoder {
@@ -84,6 +92,8 @@ impl StreamEncoder {
         let inner = match backend {
             #[cfg(feature = "ffmpeg")]
             StreamBackend::Ffmpeg => Inner::Ffmpeg(FfmpegStream::new(&params)?),
+            #[cfg(feature = "fdk-aac")]
+            StreamBackend::Fdk => Inner::Fdk(FdkStream::new(&params)?),
         };
 
         Ok(Self { inner, channels })
@@ -111,6 +121,8 @@ impl StreamEncoder {
         match &mut self.inner {
             #[cfg(feature = "ffmpeg")]
             Inner::Ffmpeg(stream) => stream.push(samples),
+            #[cfg(feature = "fdk-aac")]
+            Inner::Fdk(stream) => stream.push(samples),
         }
     }
 
@@ -123,6 +135,8 @@ impl StreamEncoder {
         match self.inner {
             #[cfg(feature = "ffmpeg")]
             Inner::Ffmpeg(stream) => stream.finish(),
+            #[cfg(feature = "fdk-aac")]
+            Inner::Fdk(stream) => stream.finish(),
         }
     }
 }
@@ -158,6 +172,13 @@ mod tests {
     impl Consts {
         const BIT_RATE: u64 = 128_000;
         const CHANNELS: u16 = 2;
+        /// `FFmpeg`'s AAC encoder holds one frame of priming and flushes it.
+        #[cfg(feature = "ffmpeg")]
+        const FFMPEG_PRIMING_FRAMES: usize = StreamEncoder::FRAME_SAMPLES;
+        /// fdk-aac reports a 2048-sample AAC-LC delay, which the flush pads out
+        /// to two access units.
+        #[cfg(feature = "fdk-aac")]
+        const FDK_PRIMING_FRAMES: usize = 2 * StreamEncoder::FRAME_SAMPLES;
         const FRAMES: usize = 4_096;
         const SAMPLE_RATE: u32 = 48_000;
     }
@@ -328,10 +349,6 @@ mod tests {
         }
     }
 
-    /// `FFmpeg`'s AAC encoder holds one frame of priming and flushes it.
-    #[cfg(feature = "ffmpeg")]
-    const FFMPEG_PRIMING_FRAMES: usize = StreamEncoder::FRAME_SAMPLES;
-
     #[cfg(feature = "ffmpeg")]
     #[test]
     fn ffmpeg_chunking_does_not_change_the_encoded_stream() {
@@ -343,7 +360,7 @@ mod tests {
     fn ffmpeg_timestamps_start_at_zero_and_advance_by_one_frame() {
         timestamps_start_at_zero_and_advance_by_one_frame(
             StreamBackend::Ffmpeg,
-            FFMPEG_PRIMING_FRAMES,
+            Consts::FFMPEG_PRIMING_FRAMES,
         );
     }
 
@@ -352,7 +369,7 @@ mod tests {
     fn ffmpeg_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline() {
         a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
             StreamBackend::Ffmpeg,
-            FFMPEG_PRIMING_FRAMES,
+            Consts::FFMPEG_PRIMING_FRAMES,
         );
     }
 
@@ -372,5 +389,69 @@ mod tests {
     #[test]
     fn ffmpeg_new_rejects_audio_no_backend_can_carry() {
         new_rejects_audio_no_backend_can_carry(StreamBackend::Ffmpeg);
+    }
+
+    #[cfg(feature = "fdk-aac")]
+    #[test]
+    fn fdk_chunking_does_not_change_the_encoded_stream() {
+        chunking_does_not_change_the_encoded_stream(StreamBackend::Fdk);
+    }
+
+    #[cfg(feature = "fdk-aac")]
+    #[test]
+    fn fdk_timestamps_start_at_zero_and_advance_by_one_frame() {
+        timestamps_start_at_zero_and_advance_by_one_frame(
+            StreamBackend::Fdk,
+            Consts::FDK_PRIMING_FRAMES,
+        );
+    }
+
+    #[cfg(feature = "fdk-aac")]
+    #[test]
+    fn fdk_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline() {
+        a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
+            StreamBackend::Fdk,
+            Consts::FDK_PRIMING_FRAMES,
+        );
+    }
+
+    #[cfg(feature = "fdk-aac")]
+    #[test]
+    fn fdk_new_rejects_a_channel_count_the_encoder_cannot_carry() {
+        new_rejects_a_channel_count_the_encoder_cannot_carry(StreamBackend::Fdk);
+    }
+
+    #[cfg(feature = "fdk-aac")]
+    #[test]
+    fn fdk_push_rejects_a_partial_frame() {
+        push_rejects_a_partial_frame(StreamBackend::Fdk);
+    }
+
+    #[cfg(feature = "fdk-aac")]
+    #[test]
+    fn fdk_new_rejects_audio_no_backend_can_carry() {
+        new_rejects_audio_no_backend_can_carry(StreamBackend::Fdk);
+    }
+
+    /// The flush is what carries the tail of a live stream into the last
+    /// segment, so it has to hand back at least the audio that was pushed.
+    #[cfg(feature = "fdk-aac")]
+    #[test]
+    fn fdk_finish_drains_every_pushed_frame() {
+        let samples =
+            TestPcm::sawtooth(Consts::FRAMES, Consts::SAMPLE_RATE, Consts::CHANNELS).samples_f32();
+        let units = encode_in_chunks(
+            StreamBackend::Fdk,
+            &samples,
+            StreamEncoder::FRAME_SAMPLES,
+            Consts::SAMPLE_RATE,
+        );
+
+        let encoded = units.len() * StreamEncoder::FRAME_SAMPLES;
+        assert!(
+            encoded >= Consts::FRAMES,
+            "flushed {encoded} frames of a {} frame stream",
+            Consts::FRAMES
+        );
     }
 }

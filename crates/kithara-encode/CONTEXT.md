@@ -4,15 +4,23 @@ Contracts and invariants for the kithara-encode crate; the README is the overvie
 
 The crate owns two roles: streaming AAC-LC encoding for the live broadcast path, and offline encoding that `kithara-integration-tests` uses to generate encoded fixtures and packaged tracks. It consumes canonical `AudioCodec`, `ContainerFormat`, and `MediaInfo` from `kithara-stream`.
 
+## Backends
+
+Two encoders live here and the caller names the one it wants. `ffmpeg` links the system `FFmpeg` and owns byte encoding, FLAC, and the offline AAC-LC fixtures; `fdk-aac` builds from vendored sources into the binary and owns HE-AAC v1/v2 offline plus the streaming AAC-LC a live broadcast runs on. Both are default features, and a build with neither stops at a `compile_error!`.
+
+`StreamBackend` follows `kithara-decode`'s `DecoderBackend`: a variant exists only where its feature is compiled in, so asking for a backend this build does not carry is a compile error rather than a runtime miss, and a backend that fails is terminal — neither one stands in for the other. The offline routes answer per codec instead: a codec whose backend is configured out is `UnsupportedCodec`, and byte encoding without `ffmpeg` is `InvalidInput`.
+
 ## Streaming encoding
 
-`StreamEncoder` is the canonical AAC-LC encode path. `new(sample_rate, channels, bit_rate, timescale)` opens one encoder for one continuous stream; `push` takes **interleaved f32** and returns the access units that audio completed; `finish` flushes the encoder and returns the rest. The instance lives for the whole stream — a per-segment encoder would restart the priming frame and click at every boundary.
+`StreamEncoder` is the canonical AAC-LC encode path. `new(backend, sample_rate, channels, bit_rate, timescale)` opens one encoder for one continuous stream; `push` takes **interleaved f32** and returns the access units that audio completed; `finish` flushes the encoder and returns the rest. The instance lives for the whole stream — a per-segment encoder would restart the priming frame and click at every boundary.
 
 - `push` takes full frames: a slice whose length is not a multiple of the channel count is rejected. Samples are expected in `[-1.0, 1.0]`; the encoder passes larger magnitudes through to `FFmpeg`, where the outcome depends on the linked encoder's sample format.
 - The filter graph holds up to `FRAME_SAMPLES - 1` samples between calls and hands the encoder whole frames, so chunk size does not reach the encoder: the same audio pushed in any chunking yields byte-identical access units with identical timestamps. `finish` is what releases the tail.
 - A `push` that returns a backend error leaves the encoder mid-frame — drop it and open a new one rather than pushing again.
-- Timestamps are rescaled from `1/sample_rate` to `1/timescale` and normalized against the first packet, so a stream starts at 0 and its first `FRAME_SAMPLES` decode to encoder priming. Access-unit boundaries are what gets rescaled, so durations tile the pts timeline exactly even when the ratio is fractional. Each access unit carries `FRAME_SAMPLES` (1024) samples per channel; the flush emits the zero-padded tail frame plus one priming frame.
-- The encoder takes the source's own channel layout: a channel count AAC-LC has no layout for fails in `new` rather than being silently downmixed or upmixed.
+- Timestamps start at 0 and access-unit boundaries are what gets rescaled into `1/timescale`, so durations tile the pts timeline exactly even when the ratio is fractional. Each access unit carries `FRAME_SAMPLES` (1024) samples per channel and is a sync point, and `pts == dts`.
+- The encoder takes the source's own channel layout: a channel count AAC-LC has no layout for fails in `new` rather than being silently downmixed or upmixed. fdk carries 1 to 6 channels and audio from 8 kHz to 96 kHz.
+- Priming is measured per backend, not assumed: past the pushed audio `FFmpeg` hands back one `FRAME_SAMPLES` frame and fdk two. Whoever judges the decoded signal skips the larger of the two.
+- fdk takes the pushed f32 down to i16, which is the input libfdk reads; `FFmpeg` encodes the f32 as it comes. Its access units carry no transport header, and its stream ends on libfdk's own end-of-input signal — that signal is what puts the tail of a broadcast into the last segment.
 
 ## PCM input contract
 
@@ -24,7 +32,7 @@ The crate owns two roles: streaming AAC-LC encoding for the live broadcast path,
 
 Routing inside the single `InnerEncoder` implementation:
 
-- `AacLc` — `StreamEncoder` fed the whole source, natural frame 1024 samples.
+- `AacLc` — `StreamEncoder` on the `FFmpeg` backend fed the whole source, natural frame 1024 samples.
 - `AacHe` / `AacHeV2` — in-tree fdk-aac `AacHeEncoder` (AOT SBR / PS), natural frame 2048 samples, **stereo input only**.
 - `Flac` — FFmpeg FLAC, natural frame 4608 samples.
 - Any other codec — `EncodeError::UnsupportedCodec`.
@@ -47,3 +55,5 @@ Routing inside the single `InnerEncoder` implementation:
 ## Platform
 
 FFmpeg is initialized once per process behind a `OnceLock`. On `wasm32` the ffmpeg and fdk modules are not compiled at all, `StreamEncoder` is absent, and every factory entry point returns `EncodeError::InvalidInput("encoding is not supported on wasm32")`.
+
+libfdk's vendored `FDK_archdef.h` has no branch for MSVC on ARM64, so the `fdk-aac` feature does not build for `aarch64-pc-windows-msvc`.

@@ -1,13 +1,9 @@
-use std::{
-    cmp,
-    mem::{MaybeUninit, size_of, size_of_val, zeroed},
-    os::raw::c_void,
-    ptr,
-};
+use std::{cmp, mem::size_of};
 
 use fdk_aac_sys as sys;
 use kithara_stream::{AudioCodec, ContainerFormat};
 
+use super::encoder::{Encoder, EncoderParams, audio_specific_config};
 use crate::{
     EncodeError, EncodeResult,
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest, PcmSource},
@@ -17,7 +13,6 @@ struct Consts;
 impl Consts {
     const ACCESS_UNIT_CAPACITY: usize = 8 * 1024;
     const CHANNELS: u16 = 2;
-    const ENCODER_MODULES: u32 = 0;
     const FRAME_BUFFER_COUNT: usize = 2;
     const FRAME_OUTPUT_SAMPLES: usize = 2048;
 }
@@ -71,11 +66,13 @@ impl AacHeEncoder {
         }
 
         let encoder = Encoder::new(&EncoderParams {
-            profile,
-            sample_rate,
+            aot: profile.aot(),
             bit_rate: request.bit_rate.try_into().map_err(|_| {
                 EncodeError::InvalidInput("bit_rate does not fit into u32".to_owned())
             })?,
+            channels,
+            sample_rate,
+            sbr: true,
         })?;
         let info = encoder.info()?;
         let default_frame_input = Consts::FRAME_OUTPUT_SAMPLES * usize::from(channels);
@@ -85,7 +82,7 @@ impl AacHeEncoder {
             .filter(|n| *n > 0)
             .unwrap_or(default_frame_input);
 
-        let asc = Encoder::audio_specific_config(&info);
+        let asc = audio_specific_config(&info);
 
         let mut units: Vec<EncodedAccessUnit> = Vec::new();
         let mut pts: u64 = 0;
@@ -190,182 +187,4 @@ where
         }
     }
     Ok(())
-}
-
-struct Encoder {
-    handle: sys::HANDLE_AACENCODER,
-}
-
-struct EncoderParams {
-    profile: AacHeProfile,
-    bit_rate: u32,
-    sample_rate: u32,
-}
-
-struct EncodeInfo {
-    input_consumed: usize,
-    output_size: usize,
-}
-
-impl Encoder {
-    fn new(params: &EncoderParams) -> EncodeResult<Self> {
-        let mut handle: sys::HANDLE_AACENCODER = ptr::null_mut();
-        // SAFETY: aacEncOpen writes a valid handle on AACENC_OK.
-        unsafe {
-            check(sys::aacEncOpen(
-                &mut handle as *mut _,
-                Consts::ENCODER_MODULES,
-                u32::from(Consts::CHANNELS),
-            ))?;
-        }
-        let encoder = Self { handle };
-        let aot = u32::try_from(params.profile.aot()).map_err(|_| {
-            EncodeError::backend_message("audio object type does not fit into u32".to_owned())
-        })?;
-        let channel_mode = u32::try_from(sys::CHANNEL_MODE_MODE_2).map_err(|_| {
-            EncodeError::backend_message("channel mode does not fit into u32".to_owned())
-        })?;
-
-        // SAFETY: handle is non-null after aacEncOpen succeeded.
-        unsafe {
-            check(sys::aacEncoder_SetParam(
-                handle,
-                sys::AACENC_PARAM_AACENC_AOT,
-                aot,
-            ))?;
-            check(sys::aacEncoder_SetParam(
-                handle,
-                sys::AACENC_PARAM_AACENC_SAMPLERATE,
-                params.sample_rate,
-            ))?;
-            check(sys::aacEncoder_SetParam(
-                handle,
-                sys::AACENC_PARAM_AACENC_CHANNELMODE,
-                channel_mode,
-            ))?;
-            check(sys::aacEncoder_SetParam(
-                handle,
-                sys::AACENC_PARAM_AACENC_BITRATE,
-                params.bit_rate,
-            ))?;
-            check(sys::aacEncoder_SetParam(
-                handle,
-                sys::AACENC_PARAM_AACENC_BITRATEMODE,
-                0,
-            ))?;
-            check(sys::aacEncoder_SetParam(
-                handle,
-                sys::AACENC_PARAM_AACENC_TRANSMUX,
-                0,
-            ))?;
-            check(sys::aacEncoder_SetParam(
-                handle,
-                sys::AACENC_PARAM_AACENC_SBR_MODE,
-                1,
-            ))?;
-            check(sys::aacEncEncode(
-                handle,
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null_mut(),
-            ))?;
-        }
-
-        Ok(encoder)
-    }
-
-    fn audio_specific_config(info: &sys::AACENC_InfoStruct) -> Vec<u8> {
-        let len = info.confSize as usize;
-        info.confBuf[..len].to_vec()
-    }
-
-    fn encode(&self, input: &[i16], output: &mut [u8]) -> EncodeResult<EncodeInfo> {
-        let input_len = input.len();
-        let mut input_buf_ptr = input.as_ptr().cast_mut();
-        let mut input_buf_ident: i32 = sys::AACENC_BufferIdentifier_IN_AUDIO_DATA as i32;
-        let mut input_buf_size: i32 = i32::try_from(size_of_val(input))
-            .map_err(|_| EncodeError::backend_message("input slice too large".to_owned()))?;
-        let mut input_buf_el_size: i32 = i32::try_from(size_of::<i16>()).map_err(|_| {
-            EncodeError::backend_message("input sample size does not fit into i32".to_owned())
-        })?;
-        let input_desc = sys::AACENC_BufDesc {
-            numBufs: 1,
-            bufs: ptr::addr_of_mut!(input_buf_ptr).cast::<*mut c_void>(),
-            bufferIdentifiers: &mut input_buf_ident,
-            bufSizes: &mut input_buf_size,
-            bufElSizes: &mut input_buf_el_size,
-        };
-
-        let mut output_buf_ptr = output.as_mut_ptr();
-        let mut output_buf_ident: i32 = sys::AACENC_BufferIdentifier_OUT_BITSTREAM_DATA as i32;
-        let mut output_buf_size: i32 = i32::try_from(output.len())
-            .map_err(|_| EncodeError::backend_message("output slice too large".to_owned()))?;
-        let mut output_buf_el_size: i32 = i32::try_from(size_of::<u8>()).map_err(|_| {
-            EncodeError::backend_message("output element size does not fit into i32".to_owned())
-        })?;
-        let output_desc = sys::AACENC_BufDesc {
-            numBufs: 1,
-            bufs: ptr::addr_of_mut!(output_buf_ptr).cast::<*mut c_void>(),
-            bufferIdentifiers: &mut output_buf_ident,
-            bufSizes: &mut output_buf_size,
-            bufElSizes: &mut output_buf_el_size,
-        };
-
-        let input_samples = i32::try_from(input_len).map_err(|_| {
-            EncodeError::backend_message("input sample count does not fit into i32".to_owned())
-        })?;
-        let in_args = sys::AACENC_InArgs {
-            numInSamples: input_samples,
-            numAncBytes: 0,
-        };
-        // SAFETY: AACENC_OutArgs is a C POD whose zero value is valid input.
-        let mut out_args: sys::AACENC_OutArgs = unsafe { zeroed() };
-
-        // SAFETY: descriptors reference valid slices for the duration of this call.
-        unsafe {
-            check(sys::aacEncEncode(
-                self.handle,
-                &input_desc,
-                &output_desc,
-                &in_args,
-                &mut out_args,
-            ))?;
-        }
-
-        Ok(EncodeInfo {
-            input_consumed: usize::try_from(out_args.numInSamples).unwrap_or(0),
-            output_size: usize::try_from(out_args.numOutBytes).unwrap_or(0),
-        })
-    }
-
-    fn info(&self) -> EncodeResult<sys::AACENC_InfoStruct> {
-        let mut info: MaybeUninit<sys::AACENC_InfoStruct> = MaybeUninit::uninit();
-        // SAFETY: aacEncInfo initializes the struct before returning AACENC_OK.
-        unsafe {
-            check(sys::aacEncInfo(self.handle, info.as_mut_ptr()))?;
-            Ok(info.assume_init())
-        }
-    }
-}
-
-impl Drop for Encoder {
-    fn drop(&mut self) {
-        if !self.handle.is_null() {
-            // SAFETY: this instance owns the handle returned by aacEncOpen.
-            unsafe {
-                sys::aacEncClose(&mut self.handle as *mut _);
-            }
-        }
-    }
-}
-
-fn check(code: sys::AACENC_ERROR) -> EncodeResult<()> {
-    if code == sys::AACENC_ERROR_AACENC_OK {
-        Ok(())
-    } else {
-        Err(EncodeError::backend_message(format!(
-            "fdk-aac encoder error: {code:?}"
-        )))
-    }
 }
