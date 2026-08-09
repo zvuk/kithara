@@ -18,7 +18,7 @@ Two encoders live here and the caller names the one it wants. `ffmpeg` links the
 - The filter graph holds up to `FRAME_SAMPLES - 1` samples between calls and hands the encoder whole frames, so chunk size does not reach the encoder: the same audio pushed in any chunking yields byte-identical access units with identical timestamps. `finish` is what releases the tail.
 - A `push` that returns a backend error leaves the encoder mid-frame — drop it and open a new one rather than pushing again.
 - Timestamps start at 0 and access-unit boundaries are what gets rescaled into `1/timescale`, so durations tile the pts timeline exactly even when the ratio is fractional. Each access unit carries `FRAME_SAMPLES` (1024) samples per channel and is a sync point, and `pts == dts`.
-- The encoder takes the source's own channel layout: a channel count AAC-LC has no layout for fails in `new` rather than being silently downmixed or upmixed. fdk carries 1 to 6 channels and audio from 8 kHz to 96 kHz.
+- The encoder takes the source's own channel layout: finishing the builder fails when AAC-LC has no layout for the requested channel count rather than silently downmixing or upmixing. fdk carries 1 to 6 channels and audio from 8 kHz to 96 kHz.
 - Priming is measured per backend, not assumed: past the pushed audio `FFmpeg` hands back one `FRAME_SAMPLES` frame and fdk two. Whoever judges the decoded signal skips the larger of the two.
 - fdk takes the pushed f32 down to i16, which is the input libfdk reads; `FFmpeg` encodes the f32 as it comes. Its access units carry no transport header, and its stream ends on libfdk's own end-of-input signal — that signal is what puts the tail of a broadcast into the last segment.
 
