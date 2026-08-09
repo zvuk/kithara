@@ -219,6 +219,8 @@ fn handle_load(state: &mut Kithara, index: usize, id: DeckId) {
 /// Every deck advances on the same tick: a deck the user is not looking at
 /// still plays, streams and needs its continuous values pulled.
 fn handle_tick(state: &mut Kithara) {
+    #[cfg(feature = "broadcast")]
+    state.broadcast.poll();
     for deck in state.decks.iter() {
         let _ = deck.controller.queue().tick();
         deck.controller.refresh_continuous();

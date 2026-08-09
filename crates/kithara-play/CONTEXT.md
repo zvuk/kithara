@@ -295,6 +295,11 @@ fail in practice and the processor holds the DSP directly.
 
 ## Session Mix Tap
 
+`Cmd::QuerySampleRate` reports `Option<u32>` from Firewheel's current `stream_info`: `None` means
+the session has not measured an output yet. `sample_rate_hint` remains input to stream creation and
+restart, never an observed-rate reply. Consumers that require the device fact wait for `Some`;
+playback policy may explicitly choose its configured rate while no stream exists.
+
 `Cmd::EnableMixTap` hangs `rt/tap.rs`'s `TapNode` off the session limiter beside `graph_out`:
 stereo in, zero outputs, `ProcessStatus::ClearAllOutputs`. Firewheel's compiler sorts every node
 topologically and keeps a sink with no outgoing edges in the schedule, so the extra

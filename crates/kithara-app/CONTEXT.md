@@ -5,13 +5,11 @@ Contracts and invariants for the kithara-app crate; the README is the overview.
 ## Broadcast service
 
 The optional `broadcast` feature only adds application-owned service wiring. The `--broadcast`
-flag reads the shared session's sample rate, arms its single mix tap before any track needs to
-start, and retains the broadcast handle for the application lifetime. App-root cancellation ends
-the origin and encoder; dropping the app state releases the mix tap. This first slice never calls
-the handle's blocking `stop` method.
-
-Before the first session output exists, the current sample-rate query exposes the session hint;
-making that value provenance-aware against the eventual device rate belongs to `kithara-play`.
+flag records a `Requested` phase until the shared session exposes Firewheel's measured output
+sample rate, then configures both the ring and encoder from that fact and arms the single mix tap.
+The GUI owns the phase so the startup intent survives the interval before the first deck creates
+the session output. App-root cancellation ends the origin and encoder; dropping the running phase
+releases the mix tap.
 
 ## Studio UI host
 

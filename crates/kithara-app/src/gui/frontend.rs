@@ -47,6 +47,8 @@ pub(crate) fn window_settings() -> Settings {
 }
 
 struct Boot {
+    #[cfg(feature = "broadcast")]
+    broadcast: crate::broadcast::BroadcastService,
     config: AppConfig,
     catalog: Catalog,
     session: DeckSet,
@@ -56,6 +58,8 @@ struct Boot {
 
 /// GUI frontend using iced.
 pub struct GuiFrontend {
+    #[cfg(feature = "broadcast")]
+    broadcast: Option<crate::broadcast::BroadcastService>,
     config: AppConfig,
     palette: gui::GuiPalette,
 }
@@ -67,9 +71,23 @@ impl GuiFrontend {
     /// Returns an error if GUI initialization fails.
     pub fn new(config: &AppConfig) -> Result<Self, FrontendError> {
         Ok(Self {
+            #[cfg(feature = "broadcast")]
+            broadcast: None,
             palette: config.palette.into(),
             config: config.clone(),
         })
+    }
+
+    #[cfg(feature = "broadcast")]
+    pub fn request_broadcast(
+        &mut self,
+        session: kithara::play::SessionHandle,
+        shutdown: kithara_platform::CancelToken,
+        requested: bool,
+    ) {
+        self.broadcast = Some(crate::broadcast::BroadcastService::new(
+            session, shutdown, requested,
+        ));
     }
 
     /// Runs the GUI event loop until the application exits.
@@ -110,6 +128,11 @@ impl GuiFrontend {
             .collect();
 
         let boot = Mutex::new(Some(Boot {
+            #[cfg(feature = "broadcast")]
+            broadcast: self
+                .broadcast
+                .take()
+                .ok_or("broadcast service was not configured")?,
             session,
             studio,
             decks: Decks::new(controllers).ok_or("no decks to render")?,
@@ -130,6 +153,8 @@ impl GuiFrontend {
                     boot.config,
                     boot.studio,
                     palette,
+                    #[cfg(feature = "broadcast")]
+                    boot.broadcast,
                 )
             },
             update::update,

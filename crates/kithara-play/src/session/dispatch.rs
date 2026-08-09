@@ -103,7 +103,7 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
                 .ctx
                 .as_ref()
                 .and_then(FirewheelCtx::stream_info)
-                .map_or(state.sample_rate_hint, |si| si.sample_rate.get());
+                .map(|info| info.sample_rate.get());
             trace_stream_info(state, "query-sample-rate");
             Reply::SampleRate(sample_rate)
         }
@@ -392,6 +392,34 @@ mod tests {
             Reply::Err(err) => panic!("player registration failed: {err}"),
             _ => panic!("player registration returned unexpected reply"),
         }
+    }
+
+    #[kithara::test]
+    fn sample_rate_query_reports_only_measured_stream_state() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::QuerySampleRate),
+            Reply::SampleRate(None)
+        ));
+
+        let player_id = register_player(&mut state);
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::StartPlayer {
+                    player_id,
+                    sample_rate: 48_000,
+                    master_volume: 1.0,
+                },
+            ),
+            Reply::Ok
+        ));
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::QuerySampleRate),
+            Reply::SampleRate(Some(48_000))
+        ));
     }
 
     #[kithara::test]

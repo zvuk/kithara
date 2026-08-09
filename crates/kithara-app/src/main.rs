@@ -1,9 +1,6 @@
 #[cfg(not(feature = "gui"))]
 compile_error!("`kithara` binary requires the `gui` feature");
 
-#[cfg(feature = "broadcast")]
-mod broadcast;
-
 use std::sync::OnceLock;
 
 use clap::Parser;
@@ -102,18 +99,14 @@ fn main() -> AppResult {
         .build();
 
     let session = app_session_handle();
-    #[cfg(feature = "broadcast")]
-    let _broadcast = if args.broadcast {
-        broadcast::BroadcastState::start(&session, &shutdown)
-    } else {
-        None
-    };
     let mut deck_set = DeckSet::new(vec![
         Deck::build(DeckId(0), &config, &session),
         Deck::build(DeckId(1), &config, &session),
     ]);
     deck_set.commit(deck_set.mix().clone())?;
     let mut frontend = GuiFrontend::new(&config)?;
+    #[cfg(feature = "broadcast")]
+    frontend.request_broadcast(session, shutdown.clone(), args.broadcast);
     frontend.start(&deck_set)?;
     frontend.run_loop(deck_set)?;
     frontend.shutdown()?;

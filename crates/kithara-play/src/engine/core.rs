@@ -292,7 +292,10 @@ impl EngineImpl {
         if !self.running.load(Ordering::Acquire) {
             return self.config.sample_rate;
         }
-        self.session.query_sample_rate(self.config.sample_rate)
+        match self.session.measured_sample_rate() {
+            Ok(Some(sample_rate)) => sample_rate,
+            Ok(None) | Err(_) => self.config.sample_rate,
+        }
     }
 
     pub fn master_volume(&self) -> f32 {

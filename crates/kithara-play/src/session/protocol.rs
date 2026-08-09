@@ -149,7 +149,7 @@ mod wire {
         SessionDucking(SessionDuckingMode),
         SessionTransport(SessionTransportSnapshot),
         SlotAllocated(AllocatedSlot),
-        SampleRate(u32),
+        SampleRate(Option<u32>),
         Err(SessionError),
     }
 
@@ -217,11 +217,12 @@ mod handle {
             .map(|_| ())
         }
 
-        #[must_use]
-        pub fn query_sample_rate(&self, fallback: u32) -> u32 {
-            match self.exec(Cmd::QuerySampleRate) {
-                Ok(Reply::SampleRate(sr)) => sr,
-                _ => fallback,
+        pub fn measured_sample_rate(&self) -> Result<Option<u32>, PlayError> {
+            match self.exec_ok(Cmd::QuerySampleRate)? {
+                Reply::SampleRate(sample_rate) => Ok(sample_rate),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session sample rate query".into(),
+                )),
             }
         }
 
