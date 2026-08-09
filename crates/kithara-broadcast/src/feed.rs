@@ -32,6 +32,9 @@ pub trait LivePcmFeed: Send {
     /// Draw the line under the feed: what the producer has already handed over
     /// still goes out poll by poll, and the feed reports its end once that is
     /// gone.
+    ///
+    /// An implementor owes that end within a finite number of polls, because
+    /// [`crate::BroadcastHandle::stop`] blocks until it arrives.
     fn close(&mut self);
 }
 
@@ -64,18 +67,19 @@ impl RingFeed {
 impl LivePcmFeed for RingFeed {
     /// The producer is read as held before the ring is drained, so one already
     /// gone by then can push nothing more and an empty drain is the end of the
-    /// feed.
+    /// feed. The drop counter is read after the drain, so a loss this poll
+    /// reports fell no earlier than the end of the audio it hands over.
     fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk {
-        let total = self.drops.load(Ordering::Relaxed);
-        let dropped = total.saturating_sub(self.counted);
-        self.counted = total;
-
         let held = self.pcm.write_is_held();
         let take = self.last.unwrap_or_else(|| self.pcm.occupied_len());
         let pending = out.len();
         out.resize(pending + take, 0.0);
         let taken = self.pcm.pop_slice(&mut out[pending..]);
         out.truncate(pending + taken);
+
+        let total = self.drops.load(Ordering::Relaxed);
+        let dropped = total.saturating_sub(self.counted);
+        self.counted = total;
 
         let has_ended = self.last.as_mut().map_or(!held && taken == 0, |last| {
             *last -= taken;

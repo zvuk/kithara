@@ -54,7 +54,7 @@ The rendered playlist is version 3. `EXT-X-TARGETDURATION` is the configured seg
 
 `Broadcast::start` binds the origin before it returns, so the URL on the handle is one a client can already reach. Two threads run behind it: a worker that polls the feed and packages it, and a thread with a current-thread runtime that serves axum.
 
-The serving thread is a plain OS thread. `kithara-platform`'s spawns enrol a thread as a dedicated virtual-time pacer, and a pacer holds the quiescence engine until it parks on a wait the engine wrapped; a thread that hosts a tokio runtime parks in the OS event loop instead, so enrolling it freezes the virtual clock for every waiter in the process. The worker is the opposite case and keeps the platform spawn: it paces itself on the media clock and parks on waits the engine sees.
+The serving thread is a plain OS thread. `kithara-platform`'s spawns enrol a thread as a dedicated virtual-time pacer, and a pacer holds the quiescence engine until it parks on a wait the engine wrapped; a thread that hosts a tokio runtime parks in the OS event loop instead, so enrolling it freezes the virtual clock for every waiter in the process. The cost is that the serving thread sits outside `active_named_thread_count`, so a leak detector counting named threads does not see it; the origin's shutdown is judged on its socket instead. The worker goes up through the platform spawn: it paces itself on the media clock and parks on waits the engine sees.
 
 The worker is the sole mutator of the segmenter and the window. It publishes each closed segment by swapping a whole `PlaylistSnapshot` into an `ArcSwap`, so no request ever waits on the worker. The handle's join slot is the crate's only mutex and the serving path never touches it; the counters the handle reports are the worker's alone, and the origin does not read them.
 
@@ -78,7 +78,7 @@ Cancelling the token is the other axis: it stops the origin and the worker witho
 
 `LivePcmFeed` is the crate's PCM seam: one `poll` appends interleaved f32 and reports the gap that came behind that audio plus end-of-stream, so the worker cannot see the producer leave while samples are still pending. `close` is the other half of the seam: it draws the line under the feed at what the producer has already handed over, and the feed goes on serving polls until that audio is gone and then reports its end. `FeedChunk` is deliberately not `#[non_exhaustive]` — implementors outside the crate construct it. There is no backpressure on the audio path and no silence injection.
 
-The worker frames a poll's audio first and applies its `dropped` after, so the closed segment carries the audio the gap came behind and `EXT-X-DISCONTINUITY` opens the segment the audio past the gap goes into. A ring loses samples only while it is full, so everything one poll drains was written ahead of the loss the same poll reports — which is what puts the break behind that audio rather than in front of it.
+The worker frames a poll's audio first and applies its `dropped` after, so the closed segment carries the audio the gap came behind and `EXT-X-DISCONTINUITY` opens the segment the audio past the gap goes into. `RingFeed` earns that ordering by reading the drop counter after it drains the ring: a ring loses samples only while it is full, so a loss counted by then fell at or past the end of what the poll hands over. A loss the producer takes during the drain is counted the same poll and puts the break one poll early, which costs a client one resynchronisation on a timeline that held.
 
 `RingFeed` implements that seam over a `ringbuf` consumer and an `Arc<AtomicU64>` of samples the producer lost. Those two types are the whole vocabulary between the broadcast and whoever fills the ring, so a real-time producer reaches the packager without either side depending on the other's crate.
 
@@ -86,7 +86,7 @@ The counter is monotonic, so a poll reports the difference since the previous on
 
 The producer is read as held before the ring is drained, so one already gone by then can push nothing more and an empty drain is the end of the feed. End of feed is therefore reported only on an empty drain — the remainder a released producer left behind goes out first.
 
-`close` reads what the ring holds at that moment. Only the broadcast side takes samples out, so that count is audio already in hand: the polls that follow hand over exactly it, and the one that exhausts it reports the end.
+`close` reads what the ring holds at that moment. Only the broadcast side takes samples out, so that count is audio already in hand and the next poll hands over all of it and reports the end.
 
 ## Time base
 

@@ -46,8 +46,9 @@ impl Broadcast {
     /// Returns [`crate::BroadcastError::InvalidConfig`] or
     /// [`crate::BroadcastError::PlaylistTooShort`] for an unservable
     /// configuration, [`crate::BroadcastError::Encode`] when the AAC-LC
-    /// encoder cannot open, and [`crate::BroadcastError::Bind`] when the
-    /// origin cannot bind its address.
+    /// encoder cannot open, [`crate::BroadcastError::Bind`] when the origin
+    /// cannot bind its address, and [`crate::BroadcastError::Serve`] when it
+    /// cannot start the thread behind that address.
     pub fn start<F>(
         config: &BroadcastConfig,
         feed: F,
@@ -56,37 +57,13 @@ impl Broadcast {
     where
         F: LivePcmFeed + 'static,
     {
-        config.validate()?;
-
-        let encoder = StreamEncoder::new(
-            config.sample_rate,
-            config.channels,
-            config.bit_rate,
-            config.sample_rate,
-        )?;
-        let segmenter = Segmenter::new(config)?;
-        let window = LiveWindow::new(config)?;
-
-        let origin = Arc::new(Origin {
-            snapshot: ArcSwap::from_pointee(window.snapshot()),
-            master: Arc::from(server::master_playlist(config.bit_rate)),
-        });
-        let counters = Arc::new(Counters::default());
         let scope = CancelScope::new(parent);
-        let addr = server::start(config.bind, Arc::clone(&origin), scope.token())?;
         let stop = Arc::new(AtomicBool::new(false));
+        let worker = Worker::new(config, feed, scope.token(), Arc::clone(&stop))?;
 
-        let worker = Worker {
-            feed,
-            encoder: Some(encoder),
-            segmenter,
-            window,
-            origin: Arc::clone(&origin),
-            counters: Arc::clone(&counters),
-            token: scope.token(),
-            stop: Arc::clone(&stop),
-            samples: Vec::new(),
-        };
+        let origin = Arc::clone(&worker.origin);
+        let counters = Arc::clone(&worker.counters);
+        let addr = server::start(config.bind, Arc::clone(&origin), scope.token())?;
         let join = thread::spawn_named("kithara-broadcast-worker", move || worker.run());
 
         Ok(BroadcastHandle {
@@ -175,6 +152,37 @@ struct Counters {
 impl<F: LivePcmFeed> Worker<F> {
     /// Backoff between polls of an empty feed, far below one segment.
     const POLL: Duration = Duration::from_millis(2);
+
+    /// Build the packaging loop and the origin state it publishes into.
+    fn new(
+        config: &BroadcastConfig,
+        feed: F,
+        token: CancelToken,
+        stop: Arc<AtomicBool>,
+    ) -> BroadcastResult<Self> {
+        config.validate()?;
+
+        let window = LiveWindow::new(config)?;
+        Ok(Self {
+            feed,
+            encoder: Some(StreamEncoder::new(
+                config.sample_rate,
+                config.channels,
+                config.bit_rate,
+                config.sample_rate,
+            )?),
+            segmenter: Segmenter::new(config)?,
+            origin: Arc::new(Origin {
+                snapshot: ArcSwap::from_pointee(window.snapshot()),
+                master: Arc::from(server::master_playlist(config.bit_rate)),
+            }),
+            window,
+            counters: Arc::new(Counters::default()),
+            token,
+            stop,
+            samples: Vec::new(),
+        })
+    }
 
     fn run(mut self) {
         while !self.token.is_cancelled() {
@@ -282,8 +290,6 @@ impl<F: LivePcmFeed> Worker<F> {
 mod tests {
     use std::collections::VecDeque;
 
-    use arc_swap::ArcSwap;
-    use kithara_encode::StreamEncoder;
     use kithara_platform::{
         CancelScope,
         sync::{Arc, atomic::AtomicBool},
@@ -291,13 +297,10 @@ mod tests {
         time::Duration,
     };
 
-    use super::{Broadcast, BroadcastHandle, Counters, Worker};
+    use super::{Broadcast, BroadcastHandle, Worker};
     use crate::{
         config::BroadcastConfig,
         feed::{FeedChunk, LivePcmFeed},
-        segment::Segmenter,
-        server::{self, Origin},
-        window::LiveWindow,
     };
 
     struct Consts;
@@ -387,31 +390,10 @@ mod tests {
     /// Drive one worker to its end on this thread and read back what the origin
     /// would serve. `stop` is the flag the handle sets.
     fn run_worker<F: LivePcmFeed>(feed: F, config: &BroadcastConfig, stop: bool) -> Arc<str> {
-        let window = LiveWindow::new(config).expect("window");
-        let origin = Arc::new(Origin {
-            snapshot: ArcSwap::from_pointee(window.snapshot()),
-            master: Arc::from(server::master_playlist(config.bit_rate)),
-        });
         let scope = CancelScope::new(None);
-        let worker = Worker {
-            feed,
-            encoder: Some(
-                StreamEncoder::new(
-                    config.sample_rate,
-                    config.channels,
-                    config.bit_rate,
-                    config.sample_rate,
-                )
-                .expect("encoder"),
-            ),
-            segmenter: Segmenter::new(config).expect("segmenter"),
-            window,
-            origin: Arc::clone(&origin),
-            counters: Arc::new(Counters::default()),
-            token: scope.token(),
-            stop: Arc::new(AtomicBool::new(stop)),
-            samples: Vec::new(),
-        };
+        let worker = Worker::new(config, feed, scope.token(), Arc::new(AtomicBool::new(stop)))
+            .expect("worker");
+        let origin = Arc::clone(&worker.origin);
 
         worker.run();
         Arc::clone(&origin.snapshot.load().playlist)
@@ -559,19 +541,20 @@ mod tests {
         /// Chunks the feed still holds when the stop lands: more than the one
         /// poll a drain that judged the feed by an empty poll would take.
         const HELD: usize = 8;
-        /// Media seconds those chunks carry at [`Consts::SAMPLE_RATE`].
-        const HELD_SECONDS: f64 = 0.8;
         /// Media seconds the encoder's framing shifts the tail by.
         const SLACK: f64 = 0.05;
 
+        let held_seconds = f64::from(
+            u32::try_from(HELD * Consts::CHUNK_FRAMES).expect("the held audio fits a count"),
+        ) / f64::from(Consts::SAMPLE_RATE);
         let feed = BurstFeed::new((0..HELD).map(|_| pcm(Consts::CHUNK_FRAMES)));
 
         let playlist = run_worker(feed, &config(), true);
 
         assert!(
-            listed_seconds(&playlist) >= HELD_SECONDS - SLACK,
+            listed_seconds(&playlist) >= held_seconds - SLACK,
             "a stop airs the audio the feed holds, not the audio one poll \
-             happened to catch: {HELD_SECONDS} s went in, {playlist}"
+             happened to catch: {held_seconds} s went in, {playlist}"
         );
     }
 

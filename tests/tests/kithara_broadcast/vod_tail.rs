@@ -25,11 +25,10 @@ const READ_BUF_SAMPLES: usize = 4_096;
 /// The production client against the production origin: once the broadcast
 /// stops, its master URL is a VOD stream `Audio<Stream<Hls>>` plays.
 ///
-/// `flash(false)` for the reason `engine_e2e` records: this body polls
-/// synchronously — `advance_to` and the `Pending` read loop both spin without
-/// parking on a wait the engine wrapped — so it holds its participant slot and
-/// the clock the client's workers back off against never advances. The reads
-/// park on the real clock too, so the timeout is what bounds them.
+/// `flash(false)`: this body raises an HLS client and polls synchronously —
+/// `advance_to` and the `Pending` read loop both spin — which is the pair
+/// `kithara-broadcast/CONTEXT.md` names as the one the simulated clock cannot
+/// serve. The reads park on the real clock too, so the timeout bounds them.
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn the_production_client_plays_the_stopped_broadcast() {
     let origin = Origin::start();
