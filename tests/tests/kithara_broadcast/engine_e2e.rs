@@ -95,6 +95,10 @@ struct OnAir {
 }
 
 impl OnAir {
+    /// Polls the segment count must repeat before the packager counts as idle.
+    const SETTLED_POLLS: usize = 3;
+    const SETTLE_POLL: Duration = Duration::from_millis(20);
+
     fn start(harness: &OfflinePlayerHarness, ring_samples: usize) -> Self {
         let (pcm, samples) = HeapRb::<f32>::new(ring_samples).split();
         let drops = Arc::new(AtomicU64::new(0));
@@ -134,10 +138,23 @@ impl OnAir {
         self.drops.load(Ordering::Relaxed)
     }
 
-    fn wait_for_drain(&self) {
+    /// Wait until the packager has eaten the ring empty: with the render
+    /// stopped, the segment count settles once there is nothing left to
+    /// package. Audio pushed after that starts against an empty ring, so a
+    /// render that fits the ring cannot break the stream a second time.
+    fn wait_until_drained(&self) {
         let lost = self.tap_drops();
         while self.handle.status().dropped_samples < lost {
             thread::paced_backoff(Duration::from_millis(1));
+        }
+
+        let mut settled = 0;
+        let mut last = self.handle.status().segments;
+        while settled < Self::SETTLED_POLLS {
+            thread::paced_backoff(Self::SETTLE_POLL);
+            let segments = self.handle.status().segments;
+            settled = if segments == last { settled + 1 } else { 0 };
+            last = segments;
         }
     }
 
@@ -232,7 +249,7 @@ async fn a_ring_the_render_outruns_breaks_the_served_playlist() {
         "the render must outrun a {TIGHT_RING}-sample ring"
     );
 
-    on_air.wait_for_drain();
+    on_air.wait_until_drained();
     render_tone(&harness, TAIL_FRAMES);
     on_air.handle.stop();
 

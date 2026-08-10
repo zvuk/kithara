@@ -157,6 +157,9 @@ async fn stopping_leaves_a_fetchable_vod_tail() {
     );
 }
 
+/// A day of virtual time costs nothing on a clock that advances, and a real
+/// one has no such day to spare — so this reads the simulated clock only.
+#[cfg(feature = "flash")]
 #[kithara::test(tokio, timeout(Duration::from_secs(20)))]
 async fn a_live_origin_leaves_the_virtual_clock_free() {
     const A_DAY: Duration = Duration::from_secs(86_400);

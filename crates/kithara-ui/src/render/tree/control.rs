@@ -142,14 +142,10 @@ pub(super) fn render_control<'a>(
             tone,
             active_tone,
             active,
-        } => status_dot(
-            *label,
-            active_tone
-                .filter(|_| read_flag(active.as_ref(), reads, ui))
-                .unwrap_or(*tone),
-            ui,
-            skin,
-        ),
+        } => {
+            let on = read_flag(active.as_ref(), reads, ui);
+            status_dot(*label, *tone, *active_tone, on, ui, skin)
+        }
         ControlSpec::Swatch { role, label } => swatch(*role, *label, ui, skin),
         ControlSpec::Cell { label, highlighted } => cell(*label, *highlighted, ui, skin),
         ControlSpec::Readout {

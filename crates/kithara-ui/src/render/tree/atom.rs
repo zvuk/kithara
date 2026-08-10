@@ -211,12 +211,14 @@ pub(super) fn swatch<'a>(
 pub(super) fn status_dot<'a>(
     label: InternId,
     tone: Tone,
+    active_tone: Option<Tone>,
+    is_active: bool,
     ui: &'a CompiledUi,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
     StatusDot::builder()
         .label(ui.resolve(label))
-        .tone(tone)
+        .tone(active_tone.filter(|_| is_active).unwrap_or(tone))
         .skin(skin)
         .build()
         .view()

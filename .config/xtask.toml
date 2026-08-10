@@ -105,6 +105,13 @@ at_least_one_of = [
 when_feature = "stretch-signalsmith"
 at_least_one_of = [["stretch-signalsmith", "stretch-bungee"]]
 
+# `ffmpeg` names only kithara-encode. Without an encode backend the crate
+# encodes nothing and says so with compile_error!, so the empty combination is
+# not a build to check.
+[[health.feature_invariants]]
+when_feature = "ffmpeg"
+at_least_one_of = [["ffmpeg", "fdk-aac"]]
+
 # Forced rather than chosen: apple, android and webcodecs are gated on
 # target_os as well as on their feature, so off those targets symphonia is the
 # only backend whose variant survives and there is nothing to choose between.
