@@ -9,7 +9,8 @@ pub(crate) const ENCODERS: &[&str] = &["fdk-aac", "fdk-aac-sys", "ffmpeg-next", 
 
 // Keeping byte-neutral crates separate makes every addition an explicit
 // cache-invalidation decision.
-pub(crate) const NON_ENCODING_DEPENDENCIES: &[&str] = &["tempfile", "thiserror", "tracing"];
+pub(crate) const NON_ENCODING_DEPENDENCIES: &[&str] =
+    &["bon", "num-traits", "tempfile", "thiserror", "tracing"];
 
 pub(crate) struct Lockfile {
     packages: Vec<Value>,

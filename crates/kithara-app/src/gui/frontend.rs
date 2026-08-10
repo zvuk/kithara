@@ -48,7 +48,7 @@ pub(crate) fn window_settings() -> Settings {
 
 struct Boot {
     #[cfg(feature = "broadcast")]
-    broadcast: crate::broadcast::BroadcastService,
+    broadcast: crate::broadcast::Broadcaster,
     config: AppConfig,
     catalog: Catalog,
     session: DeckSet,
@@ -59,7 +59,7 @@ struct Boot {
 /// GUI frontend using iced.
 pub struct GuiFrontend {
     #[cfg(feature = "broadcast")]
-    broadcast: Option<crate::broadcast::BroadcastService>,
+    broadcast: Option<crate::broadcast::Broadcaster>,
     config: AppConfig,
     palette: gui::GuiPalette,
 }
@@ -85,7 +85,7 @@ impl GuiFrontend {
         shutdown: kithara_platform::CancelToken,
         requested: bool,
     ) {
-        self.broadcast = Some(crate::broadcast::BroadcastService::new(
+        self.broadcast = Some(crate::broadcast::Broadcaster::new(
             session, shutdown, requested,
         ));
     }

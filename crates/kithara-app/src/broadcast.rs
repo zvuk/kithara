@@ -12,7 +12,7 @@ use ringbuf::{HeapRb, traits::Split};
 
 type BroadcastResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-pub(super) struct BroadcastService {
+pub(super) struct Broadcaster {
     session: SessionHandle,
     shutdown: CancelToken,
     phase: Phase,
@@ -32,7 +32,7 @@ struct BroadcastState {
 
 pub(super) struct BroadcastStop(BroadcastState);
 
-impl BroadcastService {
+impl Broadcaster {
     pub(super) fn new(session: SessionHandle, shutdown: CancelToken, requested: bool) -> Self {
         Self {
             session,
@@ -238,23 +238,23 @@ mod tests {
         }
     }
 
-    fn running_service() -> (BroadcastService, Arc<SampleRateSession>) {
+    fn running_broadcaster() -> (Broadcaster, Arc<SampleRateSession>) {
         let dispatcher = Arc::new(SampleRateSession::new(48_000));
         let session = SessionHandle::new(dispatcher.clone());
-        let mut service = BroadcastService::new(session, CancelToken::root(), true);
-        service.poll();
-        assert!(matches!(service.phase, Phase::Running { .. }));
-        (service, dispatcher)
+        let mut broadcaster = Broadcaster::new(session, CancelToken::root(), true);
+        broadcaster.poll();
+        assert!(matches!(broadcaster.phase, Phase::Running { .. }));
+        (broadcaster, dispatcher)
     }
 
     #[test]
     fn configuration_waits_for_the_measured_session_sample_rate() {
         let dispatcher = Arc::new(SampleRateSession::new(0));
         let session = SessionHandle::new(dispatcher.clone());
-        let mut service = BroadcastService::new(session.clone(), CancelToken::root(), true);
+        let mut broadcaster = Broadcaster::new(session.clone(), CancelToken::root(), true);
 
-        service.poll();
-        assert!(matches!(service.phase, Phase::Requested));
+        broadcaster.poll();
+        assert!(matches!(broadcaster.phase, Phase::Requested));
         assert!(measured_config(&session).unwrap().is_none());
 
         dispatcher.sample_rate.store(48_000, Ordering::Relaxed);
@@ -267,33 +267,33 @@ mod tests {
 
     #[test]
     fn stopping_returns_a_job_and_finishes_only_on_completion() {
-        let (mut service, _) = running_service();
+        let (mut broadcaster, _) = running_broadcaster();
 
-        let stop = service.toggle().expect("running broadcast stop job");
-        assert!(matches!(service.phase, Phase::Stopping));
+        let stop = broadcaster.toggle().expect("running broadcast stop job");
+        assert!(matches!(broadcaster.phase, Phase::Stopping));
 
         let _duration = stop.run_blocking();
-        assert!(matches!(service.phase, Phase::Stopping));
-        service.complete_stop();
-        assert!(matches!(service.phase, Phase::Off));
-        service.shutdown.cancel();
+        assert!(matches!(broadcaster.phase, Phase::Stopping));
+        broadcaster.complete_stop();
+        assert!(matches!(broadcaster.phase, Phase::Off));
+        broadcaster.shutdown.cancel();
     }
 
     #[test]
     fn producer_end_is_observed_by_the_existing_poll() {
-        let (mut service, dispatcher) = running_service();
+        let (mut broadcaster, dispatcher) = running_broadcaster();
         dispatcher.tap.lock().take();
 
         for _ in 0..1_000 {
-            service.poll();
-            if matches!(service.phase, Phase::Off) {
+            broadcaster.poll();
+            if matches!(broadcaster.phase, Phase::Off) {
                 break;
             }
             kithara_platform::thread::paced_backoff(Duration::from_millis(1));
         }
 
-        assert!(matches!(service.phase, Phase::Off));
-        service.shutdown.cancel();
+        assert!(matches!(broadcaster.phase, Phase::Off));
+        broadcaster.shutdown.cancel();
     }
 
     #[test]

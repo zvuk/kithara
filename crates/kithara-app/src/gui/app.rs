@@ -26,7 +26,7 @@ use crate::{
 /// window.
 pub(crate) struct Kithara {
     #[cfg(feature = "broadcast")]
-    pub(crate) broadcast: crate::broadcast::BroadcastService,
+    pub(crate) broadcast: crate::broadcast::Broadcaster,
     /// Needed to build a track source when the catalog loads onto a deck.
     pub(crate) config: AppConfig,
     /// The app's track list; decks load from it.
@@ -87,7 +87,7 @@ impl Kithara {
         config: AppConfig,
         studio: StudioUi,
         palette: gui::GuiPalette,
-        #[cfg(feature = "broadcast")] broadcast: crate::broadcast::BroadcastService,
+        #[cfg(feature = "broadcast")] broadcast: crate::broadcast::Broadcaster,
     ) -> (Self, Task<Message>) {
         let (window_id, open) = window::open(window_settings());
 
