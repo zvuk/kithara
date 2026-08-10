@@ -1,6 +1,7 @@
 use kithara_ui::render::{Node, Scope};
 
 use super::{
+    broadcast::BroadcastNode,
     deck::{DeckNode, DecksNode, EngineNode},
     library::LibraryNode,
     mix::{MixNode, StripsNode},
@@ -9,6 +10,7 @@ use super::{
 use crate::gui::app::Kithara;
 
 pub(in crate::gui) struct StudioRoot<'a> {
+    broadcast: BroadcastNode<'a>,
     engine: EngineNode,
     library: LibraryNode<'a>,
     mix: MixNode<'a>,
@@ -38,7 +40,16 @@ impl<'a> StudioRoot<'a> {
             decks.len(),
         );
 
+        #[cfg(feature = "broadcast")]
+        let broadcast = BroadcastNode::new(
+            state.broadcast.is_on_air(),
+            state.broadcast.url().unwrap_or_default(),
+        );
+        #[cfg(not(feature = "broadcast"))]
+        let broadcast = BroadcastNode::new(false, "");
+
         Self {
+            broadcast,
             library,
             decks,
             engine,
@@ -52,6 +63,7 @@ impl<'a> StudioRoot<'a> {
 impl<'a, 'b: 'a> Node<'a> for &'a StudioRoot<'b> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let node: Box<dyn Node<'a> + 'a> = match segment {
+            "broadcast" => Box::new(self.broadcast),
             "library" => Box::new(&self.library),
             "deck" => Box::new(DecksNode::new(&self.decks)),
             "engine" => Box::new(self.engine),
@@ -127,6 +139,7 @@ mod tests {
             let drag = DragNode::new(library.title(0), Some(1), decks.len());
 
             StudioRoot {
+                broadcast: BroadcastNode::new(false, ""),
                 library,
                 decks,
                 engine,

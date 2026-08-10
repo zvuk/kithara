@@ -11,6 +11,12 @@ The GUI owns the phase so the startup intent survives the interval before the fi
 the session output. App-root cancellation ends the origin and encoder; dropping the running phase
 releases the mix tap.
 
+The bar cell that drives it is a `StatusDot` reading `broadcast.on_air`, pressed through
+`broadcast.toggle`. The design canon puts this control in the app menu and a recorder module, and
+the studio has neither, so the owner placed it in the bar beside the CPU cell; its anatomy is the
+canon's own REC cell. A build without the feature reads `broadcast.hidden` as true and drops the
+cell rather than showing one that can never light.
+
 Turning a running broadcast off moves its handle into an iced task immediately and marks the
 service `Stopping`. The task delegates the blocking feed close, encoder drain, and worker join to
 Tokio's blocking pool; only its completion message changes the service to `Off`. The existing GUI

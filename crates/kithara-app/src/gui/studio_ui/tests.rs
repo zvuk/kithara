@@ -201,6 +201,40 @@ fn the_cpu_cell_reads_engine_load_as_a_bar_and_a_number() {
     }
 }
 
+/// The bar cell that takes the mix on air: one press target on the toggle,
+/// and a dot that reads whether the stream is serving.
+#[kithara::test]
+fn the_bar_carries_the_broadcast_cell() {
+    for layout in LAYOUTS {
+        let ui = compile_studio(layout).unwrap();
+
+        assert!(
+            controls(&ui).contains(&("bar/broadcast", vec!["broadcast.toggle"])),
+            "{layout:?}: the broadcast cell must press the toggle command",
+        );
+
+        let mut dots = Vec::new();
+        each_node(&ui, &mut |node| {
+            if let ExpandedNode::Control {
+                path,
+                spec: ControlSpec::StatusDot { active, .. },
+                ..
+            } = node
+            {
+                dots.push((
+                    ui.resolve(*path),
+                    active.as_ref().map(|binding| ui.resolve(binding.key)),
+                ));
+            }
+        });
+        assert_eq!(
+            dots,
+            [("bar/broadcast-dot", Some("broadcast.on_air"))],
+            "{layout:?}",
+        );
+    }
+}
+
 #[kithara::test]
 fn the_bar_owns_the_window_chrome() {
     for layout in LAYOUTS {

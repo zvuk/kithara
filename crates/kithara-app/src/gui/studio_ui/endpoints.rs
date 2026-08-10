@@ -246,6 +246,30 @@ static ENDPOINTS: &[Endpoint] = &[
         scopes: Endpoint::GLOBAL,
     },
     Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "broadcast.hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "broadcast.on_air",
+        value: ValueKind::Bool,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "broadcast.url",
+        value: ValueKind::Text,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "broadcast.toggle",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
         category: EndpointCategory::Model,
         id: "deck.stream.quality",
         value: ValueKind::Text,

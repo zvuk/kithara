@@ -95,6 +95,19 @@ impl BroadcastService {
             self.phase = Phase::Off;
         }
     }
+
+    /// The stream is serving. A request waiting for the device rate is not yet
+    /// on air, and neither is a stop that has not finished draining.
+    pub(super) const fn is_on_air(&self) -> bool {
+        matches!(self.phase, Phase::Running { .. })
+    }
+
+    pub(super) fn url(&self) -> Option<&str> {
+        match &self.phase {
+            Phase::Running { state } => Some(state.handle.url()),
+            Phase::Off | Phase::Requested | Phase::Stopping => None,
+        }
+    }
 }
 
 impl BroadcastStop {
@@ -115,9 +128,18 @@ impl BroadcastStop {
     }
 }
 
-impl BroadcastState {
+struct Ring;
+
+impl Ring {
     const CHANNELS: usize = 2;
-    const RING_SECONDS: usize = 2;
+    const SECONDS: usize = 2;
+
+    /// Interleaved samples the mix tap may run ahead of the packager by.
+    fn capacity(sample_rate: usize) -> Option<usize> {
+        sample_rate
+            .checked_mul(Self::CHANNELS)
+            .and_then(|capacity| capacity.checked_mul(Self::SECONDS))
+    }
 }
 
 impl Drop for BroadcastState {
@@ -169,10 +191,7 @@ fn ring_capacity(sample_rate: u32) -> BroadcastResult<usize> {
         return Err("session returned zero sample rate".into());
     }
 
-    sample_rate
-        .checked_mul(BroadcastState::CHANNELS)
-        .and_then(|capacity| capacity.checked_mul(BroadcastState::RING_SECONDS))
-        .ok_or_else(|| "broadcast ring capacity overflow".into())
+    Ring::capacity(sample_rate).ok_or_else(|| "broadcast ring capacity overflow".into())
 }
 
 #[cfg(test)]

@@ -1,7 +1,6 @@
-use kithara_ui::render::{UiEvent, WindowCommand};
-
 #[cfg(feature = "broadcast")]
 use kithara_platform::time::Duration;
+use kithara_ui::render::{UiEvent, WindowCommand};
 
 use crate::deck::{DeckId, EqMode};
 

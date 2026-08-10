@@ -43,6 +43,39 @@
                     ),
                 ],
             ),
+            Optional(
+                id: "broadcast-slot",
+                hidden: Telemetry(id: "broadcast.hidden"),
+                child: Row(
+                    id: "broadcast-group",
+                    gap: 0.0,
+                    pad: 0.0,
+                    size: (w: Shrink, h: Fill),
+                    children: [
+                        Divider(id: "before-broadcast"),
+                        Pressable(
+                            id: "broadcast",
+                            press: Command(id: "broadcast.toggle"),
+                            child: Row(
+                                id: "broadcast-cell",
+                                gap: 6.0,
+                                pad: 11.0,
+                                size: (w: Shrink, h: Fill),
+                                children: [
+                                    StatusDot(
+                                        id: "broadcast-dot",
+                                        label: "REC",
+                                        tone: Neutral,
+                                        size: (w: Shrink, h: Fill),
+                                        active: Telemetry(id: "broadcast.on_air"),
+                                        active_tone: Danger,
+                                    ),
+                                ],
+                            ),
+                        ),
+                    ],
+                ),
+            ),
             Divider(id: "before-window"),
             WindowControls(id: "window", style: Standard),
         ],
