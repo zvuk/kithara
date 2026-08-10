@@ -30,8 +30,8 @@ pub use api::{
 pub use bridge::{
     AllocatedSlot, Cmd, CmdMsg, MixTapWriter, NodeInputs, PlaybackShared, PlaybackSnapshot,
     PlayerId, PlayerLevel, PlayerNotification, Reply, SessionDispatcher, SessionError,
-    SessionHandle, SessionState, SharedEq, SlotControl, StartStreamFn, TrackPlaybackStopReason,
-    TrackState, TrackTransition, run_cmd,
+    SessionHandle, SessionSampleRate, SessionState, SharedEq, SlotControl, StartStreamFn,
+    TrackPlaybackStopReason, TrackState, TrackTransition, run_cmd,
 };
 pub use engine::{EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;

@@ -3,7 +3,7 @@ use tracing::{debug, trace, warn};
 
 use super::{
     graph::{controls, lifecycle, player_index, slots, tap},
-    protocol::{Cmd, PlayerId, Reply, SessionError},
+    protocol::{Cmd, PlayerId, Reply, SessionError, SessionSampleRate},
     state::{SessionState, register_player},
     transport,
 };
@@ -99,13 +99,16 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
         },
         Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),
         Cmd::QuerySampleRate => {
-            let sample_rate = state
+            let measured = state
                 .ctx
                 .as_ref()
                 .and_then(FirewheelCtx::stream_info)
                 .map(|info| info.sample_rate.get());
             trace_stream_info(state, "query-sample-rate");
-            Reply::SampleRate(sample_rate)
+            Reply::SampleRate(SessionSampleRate {
+                measured,
+                requested: state.sample_rate_hint,
+            })
         }
         Cmd::Tick => tick_session(state),
     }
@@ -395,14 +398,22 @@ mod tests {
     }
 
     #[kithara::test]
-    fn sample_rate_query_reports_only_measured_stream_state() {
+    fn sample_rate_query_separates_the_measured_stream_from_the_request() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::QuerySampleRate),
-            Reply::SampleRate(None)
-        ));
+        let Reply::SampleRate(before) = run_cmd(&mut state, Cmd::QuerySampleRate) else {
+            panic!("the sample-rate query answers with a sample rate");
+        };
+        assert_eq!(
+            before.measured, None,
+            "a session with no stream has measured nothing"
+        );
+        assert_eq!(
+            before.output(),
+            SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
+            "until a stream exists the resampler is built for the requested rate"
+        );
 
         let player_id = register_player(&mut state);
         assert!(matches!(
@@ -418,7 +429,10 @@ mod tests {
         ));
         assert!(matches!(
             run_cmd(&mut state, Cmd::QuerySampleRate),
-            Reply::SampleRate(Some(48_000))
+            Reply::SampleRate(SessionSampleRate {
+                measured: Some(48_000),
+                requested: 48_000,
+            })
         ));
     }
 

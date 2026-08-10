@@ -181,7 +181,8 @@ fn start(
 
 fn measured_config(session: &SessionHandle) -> BroadcastResult<Option<BroadcastConfig>> {
     Ok(session
-        .measured_sample_rate()?
+        .sample_rate()?
+        .measured
         .map(|sample_rate| BroadcastConfig::builder().sample_rate(sample_rate).build()))
 }
 
@@ -196,7 +197,7 @@ fn ring_capacity(sample_rate: u32) -> BroadcastResult<usize> {
 
 #[cfg(test)]
 mod tests {
-    use kithara::play::{PlayError, Reply, SessionDispatcher};
+    use kithara::play::{PlayError, Reply, SessionDispatcher, SessionSampleRate};
     use kithara_platform::sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -210,6 +211,10 @@ mod tests {
     }
 
     impl SampleRateSession {
+        /// What the mock session asked the device for; the broadcast reads only
+        /// the measured rate, so this stands apart from it.
+        const REQUESTED_RATE: u32 = 44_100;
+
         fn new(sample_rate: u32) -> Self {
             Self {
                 sample_rate: AtomicU32::new(sample_rate),
@@ -223,7 +228,10 @@ mod tests {
             match cmd {
                 Cmd::QuerySampleRate => {
                     let sample_rate = self.sample_rate.load(Ordering::Relaxed);
-                    Ok(Reply::SampleRate((sample_rate != 0).then_some(sample_rate)))
+                    Ok(Reply::SampleRate(SessionSampleRate::new(
+                        (sample_rate != 0).then_some(sample_rate),
+                        Self::REQUESTED_RATE,
+                    )))
                 }
                 Cmd::EnableMixTap { writer } => {
                     *self.tap.lock() = Some(writer);
