@@ -33,15 +33,11 @@ struct BroadcastState {
 pub(super) struct BroadcastStop(BroadcastState);
 
 impl Broadcaster {
-    pub(super) fn new(session: SessionHandle, shutdown: CancelToken, requested: bool) -> Self {
+    pub(super) const fn new(session: SessionHandle, shutdown: CancelToken) -> Self {
         Self {
             session,
             shutdown,
-            phase: if requested {
-                Phase::Requested
-            } else {
-                Phase::Off
-            },
+            phase: Phase::Off,
         }
     }
 
@@ -249,7 +245,11 @@ mod tests {
     fn running_broadcaster() -> (Broadcaster, Arc<SampleRateSession>) {
         let dispatcher = Arc::new(SampleRateSession::new(48_000));
         let session = SessionHandle::new(dispatcher.clone());
-        let mut broadcaster = Broadcaster::new(session, CancelToken::root(), true);
+        let mut broadcaster = Broadcaster::new(session, CancelToken::root());
+        assert!(
+            broadcaster.toggle().is_none(),
+            "a stopped stream has no job"
+        );
         broadcaster.poll();
         assert!(matches!(broadcaster.phase, Phase::Running { .. }));
         (broadcaster, dispatcher)
@@ -259,8 +259,9 @@ mod tests {
     fn configuration_waits_for_the_measured_session_sample_rate() {
         let dispatcher = Arc::new(SampleRateSession::new(0));
         let session = SessionHandle::new(dispatcher.clone());
-        let mut broadcaster = Broadcaster::new(session.clone(), CancelToken::root(), true);
+        let mut broadcaster = Broadcaster::new(session.clone(), CancelToken::root());
 
+        broadcaster.toggle();
         broadcaster.poll();
         assert!(matches!(broadcaster.phase, Phase::Requested));
         assert!(measured_config(&session).unwrap().is_none());

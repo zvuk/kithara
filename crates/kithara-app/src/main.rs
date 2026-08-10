@@ -31,10 +31,6 @@ struct Args {
     /// Enabled by default during testing phase.
     #[arg(long, default_value_t = true)]
     insecure: bool,
-
-    /// Stream the studio mix from a local HLS URL printed to the log.
-    #[arg(long)]
-    broadcast: bool,
 }
 
 type AppError = Box<dyn std::error::Error + Send + Sync>;
@@ -104,26 +100,10 @@ fn main() -> AppResult {
     ]);
     deck_set.commit(deck_set.mix().clone())?;
     let mut frontend = GuiFrontend::new(&config)?;
-    frontend.request_broadcast(session, shutdown.clone(), args.broadcast);
+    frontend.attach_broadcast(session, shutdown.clone());
     frontend.start(&deck_set)?;
     frontend.run_loop(deck_set)?;
     frontend.shutdown()?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use clap::Parser;
-
-    use super::Args;
-
-    #[test]
-    fn broadcast_flag_is_opt_in() {
-        let without = Args::try_parse_from(["kithara"]).expect("default arguments");
-        let with = Args::try_parse_from(["kithara", "--broadcast"]).expect("broadcast flag");
-
-        assert!(!without.broadcast);
-        assert!(with.broadcast);
-    }
 }

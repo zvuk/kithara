@@ -5,22 +5,17 @@ Contracts and invariants for the kithara-app crate; the README is the overview.
 ## Broadcast service
 
 The crate owns only the service wiring; the packaging and the origin belong to `kithara-broadcast`.
-The `--broadcast` flag records a `Requested` phase until the shared session exposes Firewheel's
-measured output sample rate, then configures both the ring and encoder from that fact and arms the
-single mix tap. The GUI owns the phase so the startup intent survives the interval before the first
-deck creates the session output. App-root cancellation ends the origin and encoder; dropping the
-running phase releases the mix tap.
+A request stays `Requested` until the session exposes its measured output rate, which configures
+both the ring and the encoder and arms the single mix tap. App-root cancellation ends the origin and
+encoder; dropping the running phase releases the tap.
 
-The bar cell that drives it is a `StatusDot` reading `broadcast.on_air`, pressed through
-`broadcast.toggle`. The design canon puts this control in the app menu and a recorder module, and
-the studio has neither, so the owner placed it in the bar beside the CPU cell; its anatomy is the
-canon's own REC cell.
+Stopping blocks — it closes the feed, drains the encoder and joins the worker — so the toggle moves
+the handle into an iced task and marks the service `Stopping`; only that task's completion message
+makes it `Off`. The GUI tick polls `BroadcastHandle::status`, so a producer released by a
+device-rate change reaches `Off` through the same path.
 
-Turning a running broadcast off moves its handle into an iced task immediately and marks the
-service `Stopping`. The task delegates the blocking feed close, encoder drain, and worker join to
-Tokio's blocking pool; only its completion message changes the service to `Off`. The existing GUI
-tick polls `BroadcastHandle::status`, so a producer released by a device-rate change also moves the
-service to `Off` without another timer.
+The design canon puts this control in the app menu and a recorder module, and the studio has
+neither, so the owner placed the canon's REC cell in the bar beside the CPU cell.
 
 ## Studio UI host
 
