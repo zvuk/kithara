@@ -173,6 +173,8 @@ pub enum ControlSpec {
     StatusDot {
         label: InternId,
         tone: Tone,
+        active_tone: Option<Tone>,
+        active: Option<Binding>,
     },
     Swatch {
         role: ColorRole,

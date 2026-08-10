@@ -67,9 +67,9 @@ impl ExtraBindings {
             _ => None,
         };
         let active = match control {
-            ControlNode::Text { active, .. } | ControlNode::Glyph { active, .. } => {
-                substituted(active.as_ref(), context, path)?
-            }
+            ControlNode::Text { active, .. }
+            | ControlNode::Glyph { active, .. }
+            | ControlNode::StatusDot { active, .. } => substituted(active.as_ref(), context, path)?,
             _ => None,
         };
         Ok(Self {

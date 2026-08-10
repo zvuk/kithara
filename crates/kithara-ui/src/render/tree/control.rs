@@ -137,7 +137,19 @@ pub(super) fn render_control<'a>(
         ControlSpec::Checkbox => checkbox(path, value, skin),
         ControlSpec::Segmented { items } => segmented(path, items, value, ui, skin),
         ControlSpec::Select { label } => select(*label, ui, skin),
-        ControlSpec::StatusDot { label, tone } => status_dot(*label, *tone, ui, skin),
+        ControlSpec::StatusDot {
+            label,
+            tone,
+            active_tone,
+            active,
+        } => status_dot(
+            *label,
+            active_tone
+                .filter(|_| read_flag(active.as_ref(), reads, ui))
+                .unwrap_or(*tone),
+            ui,
+            skin,
+        ),
         ControlSpec::Swatch { role, label } => swatch(*role, *label, ui, skin),
         ControlSpec::Cell { label, highlighted } => cell(*label, *highlighted, ui, skin),
         ControlSpec::Readout {

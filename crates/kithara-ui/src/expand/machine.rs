@@ -423,9 +423,16 @@ fn control_spec(
         ControlNode::Select { label, .. } => ControlSpec::Select {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
         },
-        ControlNode::StatusDot { label, tone, .. } => ControlSpec::StatusDot {
+        ControlNode::StatusDot {
+            label,
+            tone,
+            active_tone,
+            ..
+        } => ControlSpec::StatusDot {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
             tone: *tone,
+            active_tone: *active_tone,
+            active: optional_binding(context, machine, extra.active.as_ref())?,
         },
         ControlNode::Swatch { role, label, .. } => ControlSpec::Swatch {
             role: *role,

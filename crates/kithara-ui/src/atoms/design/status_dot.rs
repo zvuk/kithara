@@ -31,10 +31,7 @@ impl<'a> Widget<'a> for StatusDot<'a, '_> {
             .style(move |_| {
                 ContainerStyle::default()
                     .background(Background::Color(dot_color))
-                    .border(Border {
-                        radius: (metrics.dot_size / 2.0).into(),
-                        ..Border::default()
-                    })
+                    .border(Border::default())
             });
         Row::with_children([
             dot.into(),

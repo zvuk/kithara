@@ -571,6 +571,10 @@ pub enum ControlNode {
         label: String,
         #[serde(default)]
         tone: Tone,
+        #[serde(default)]
+        active_tone: Option<Tone>,
+        #[serde(default)]
+        active: Option<BindingRef>,
     },
     Swatch {
         id: NodeId,

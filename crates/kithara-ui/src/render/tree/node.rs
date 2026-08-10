@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Element, Length,
+    Alignment, Element, Length, mouse,
     widget::{Column, Row, Space, Stack, container, mouse_area},
 };
 use num_traits::cast::AsPrimitive;
@@ -285,6 +285,7 @@ fn render_node<'a>(
             let path = ui.resolve(*path);
             Rendered::leading(
                 mouse_area(render_node(child, ui, reads, skin))
+                    .interaction(mouse::Interaction::Pointer)
                     .on_press(control_event(path, ControlAction::Activate))
                     .on_right_press(control_event(path, ControlAction::SecondaryActivate))
                     .into(),

@@ -350,7 +350,7 @@
         size: (w: Fixed(64.0), h: Fixed(18.0)),
         dot_size: 6.0,
         gap: 6.0,
-        text: (size: 9.0, weight: Medium),
+        text: (size: 10.0, weight: Normal),
         text_color: TextDim,
     ),
     swatch: (
