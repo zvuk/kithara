@@ -142,7 +142,6 @@ fn zoom_control(
 /// not keep playing.
 fn bar_control(cache: &mut StudioCache, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
-        #[cfg(feature = "broadcast")]
         ("broadcast", ControlAction::Activate) => Some(Message::BroadcastToggle),
         ("decks", ControlAction::SelectIndex(index)) => {
             cache.set_layout(DeckLayout::from_index(*index)?);

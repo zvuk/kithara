@@ -40,16 +40,11 @@ impl<'a> StudioRoot<'a> {
             decks.len(),
         );
 
-        #[cfg(feature = "broadcast")]
-        let broadcast = BroadcastNode::new(
-            state.broadcast.is_on_air(),
-            state.broadcast.url().unwrap_or_default(),
-        );
-        #[cfg(not(feature = "broadcast"))]
-        let broadcast = BroadcastNode::new(false, "");
-
         Self {
-            broadcast,
+            broadcast: BroadcastNode::new(
+                state.broadcast.is_on_air(),
+                state.broadcast.url().unwrap_or_default(),
+            ),
             library,
             decks,
             engine,

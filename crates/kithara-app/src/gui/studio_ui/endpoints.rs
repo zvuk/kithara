@@ -247,12 +247,6 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
-        id: "broadcast.hidden",
-        value: ValueKind::Bool,
-        scopes: Endpoint::GLOBAL,
-    },
-    Endpoint {
-        category: EndpointCategory::Telemetry,
         id: "broadcast.on_air",
         value: ValueKind::Bool,
         scopes: Endpoint::GLOBAL,

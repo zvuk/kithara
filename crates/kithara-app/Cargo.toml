@@ -18,12 +18,11 @@ default = ["gui", "analysis-waveform", "beat-nn", "stretch-signalsmith"]
 # HTTP stack lands in each build. The dev-only kithara-net mirrors the same
 # per-target split (see the target `dev-dependencies` below) so test builds
 # stay single-stack too.
-client-reqwest = ["kithara/client-reqwest", "kithara-broadcast?/client-reqwest", "kithara-queue/client-reqwest"]
-client-wreq = ["kithara/client-wreq", "kithara-broadcast?/client-wreq", "kithara-queue/client-wreq"]
-tls-rustls = ["kithara/tls-rustls", "kithara-broadcast?/tls-rustls", "kithara-queue/tls-rustls"]
-tls-native = ["kithara/tls-native", "kithara-broadcast?/tls-native", "kithara-queue/tls-native"]
+client-reqwest = ["kithara/client-reqwest", "kithara-broadcast/client-reqwest", "kithara-queue/client-reqwest"]
+client-wreq = ["kithara/client-wreq", "kithara-broadcast/client-wreq", "kithara-queue/client-wreq"]
+tls-rustls = ["kithara/tls-rustls", "kithara-broadcast/tls-rustls", "kithara-queue/tls-rustls"]
+tls-native = ["kithara/tls-native", "kithara-broadcast/tls-native", "kithara-queue/tls-native"]
 gui = ["dep:iced", "dep:kithara-ui"]
-broadcast = ["dep:kithara-broadcast", "dep:ringbuf"]
 # NN beat/downbeat detection.
 beat-nn = ["kithara/beat-nn"]
 # Waveform analysis for the deck overview.
@@ -84,8 +83,8 @@ url = { workspace = true }
 # backend at all.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["symphonia", "client-reqwest", "tls-rustls"] }
-kithara-broadcast = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"], optional = true }
-ringbuf = { workspace = true, optional = true }
+kithara-broadcast = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
+ringbuf = { workspace = true }
 
 # HE-AAC v1/v2 through libfdk. Its vendored `FDK_archdef.h` has no branch for
 # MSVC on ARM64 and stops at `fatal error C1021: invalid preprocessor command`,
@@ -95,8 +94,8 @@ kithara = { workspace = true, default-features = false, features = ["fdk-aac"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["apple", "client-wreq"] }
-kithara-broadcast = { workspace = true, default-features = false, features = ["client-wreq"], optional = true }
-ringbuf = { workspace = true, optional = true }
+kithara-broadcast = { workspace = true, default-features = false, features = ["client-wreq"] }
+ringbuf = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

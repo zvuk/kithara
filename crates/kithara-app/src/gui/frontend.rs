@@ -47,7 +47,6 @@ pub(crate) fn window_settings() -> Settings {
 }
 
 struct Boot {
-    #[cfg(feature = "broadcast")]
     broadcast: crate::broadcast::Broadcaster,
     config: AppConfig,
     catalog: Catalog,
@@ -58,7 +57,6 @@ struct Boot {
 
 /// GUI frontend using iced.
 pub struct GuiFrontend {
-    #[cfg(feature = "broadcast")]
     broadcast: Option<crate::broadcast::Broadcaster>,
     config: AppConfig,
     palette: gui::GuiPalette,
@@ -71,14 +69,12 @@ impl GuiFrontend {
     /// Returns an error if GUI initialization fails.
     pub fn new(config: &AppConfig) -> Result<Self, FrontendError> {
         Ok(Self {
-            #[cfg(feature = "broadcast")]
             broadcast: None,
             palette: config.palette.into(),
             config: config.clone(),
         })
     }
 
-    #[cfg(feature = "broadcast")]
     pub fn request_broadcast(
         &mut self,
         session: kithara::play::SessionHandle,
@@ -128,7 +124,6 @@ impl GuiFrontend {
             .collect();
 
         let boot = Mutex::new(Some(Boot {
-            #[cfg(feature = "broadcast")]
             broadcast: self
                 .broadcast
                 .take()
@@ -153,7 +148,6 @@ impl GuiFrontend {
                     boot.config,
                     boot.studio,
                     palette,
-                    #[cfg(feature = "broadcast")]
                     boot.broadcast,
                 )
             },

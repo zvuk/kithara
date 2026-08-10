@@ -25,7 +25,6 @@ use crate::{
 /// what belongs to no single deck: the highlighted catalog row and the studio
 /// window.
 pub(crate) struct Kithara {
-    #[cfg(feature = "broadcast")]
     pub(crate) broadcast: crate::broadcast::Broadcaster,
     /// Needed to build a track source when the catalog loads onto a deck.
     pub(crate) config: AppConfig,
@@ -87,12 +86,11 @@ impl Kithara {
         config: AppConfig,
         studio: StudioUi,
         palette: gui::GuiPalette,
-        #[cfg(feature = "broadcast")] broadcast: crate::broadcast::Broadcaster,
+        broadcast: crate::broadcast::Broadcaster,
     ) -> (Self, Task<Message>) {
         let (window_id, open) = window::open(window_settings());
 
         let state = Self {
-            #[cfg(feature = "broadcast")]
             broadcast,
             session,
             decks,

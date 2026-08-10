@@ -33,7 +33,6 @@ struct Args {
     insecure: bool,
 
     /// Stream the studio mix from a local HLS URL printed to the log.
-    #[cfg(feature = "broadcast")]
     #[arg(long)]
     broadcast: bool,
 }
@@ -105,7 +104,6 @@ fn main() -> AppResult {
     ]);
     deck_set.commit(deck_set.mix().clone())?;
     let mut frontend = GuiFrontend::new(&config)?;
-    #[cfg(feature = "broadcast")]
     frontend.request_broadcast(session, shutdown.clone(), args.broadcast);
     frontend.start(&deck_set)?;
     frontend.run_loop(deck_set)?;
@@ -114,7 +112,7 @@ fn main() -> AppResult {
     Ok(())
 }
 
-#[cfg(all(test, feature = "broadcast"))]
+#[cfg(test)]
 mod tests {
     use clap::Parser;
 
