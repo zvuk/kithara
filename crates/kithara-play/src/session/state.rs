@@ -16,7 +16,7 @@ use super::{
     transport::{SessionTransportState, TransportControl, install},
 };
 use crate::{
-    api::{SessionDuckingMode, SlotId},
+    api::{SessionDuckingMode, SlotId, TrackBinding},
     bridge::{MixTapWriter, SharedEq},
     rt::{LimiterNode, MasterEqNode},
 };
@@ -30,6 +30,7 @@ pub(super) struct SlotNodes {
 }
 
 pub(super) struct PlayerState {
+    pub(super) binding: Option<TrackBinding>,
     pub(super) bus: EventBus,
     pub(super) master_eq_memo: Option<Memo<MasterEqNode>>,
     pub(super) master_eq_node_id: Option<NodeID>,
@@ -57,6 +58,7 @@ impl PlayerState {
         let shared_eq = SharedEq::new(band_count);
         shared_eq.replace(&gains);
         Self {
+            binding: None,
             bus,
             eq_layout,
             pcm_pool,

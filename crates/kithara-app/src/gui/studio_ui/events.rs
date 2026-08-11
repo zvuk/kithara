@@ -13,6 +13,7 @@ use crate::{
         deck::{DeckMsg, TEMPO_STEP},
         message::Message,
         mix::MixMsg,
+        transport::TransportMsg,
     },
 };
 
@@ -80,6 +81,9 @@ fn deck_control(
             steps.mul_add(TEMPO_STEP, state.decks.get(id)?.view.timestretch.tempo),
         ),
         ("tempo", ControlAction::Activate) => DeckMsg::SetTempo(0.0),
+        ("sync", ControlAction::Activate) => {
+            return Some(Message::Transport(TransportMsg::ToggleSync(id)));
+        }
         ("play", ControlAction::Activate) => DeckMsg::TogglePlayPause,
         ("prev", ControlAction::Activate) => DeckMsg::Prev,
         ("next", ControlAction::Activate) => DeckMsg::Next,

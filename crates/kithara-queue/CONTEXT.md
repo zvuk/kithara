@@ -114,6 +114,15 @@ eviction closes the race where a fast loader planted the resource *before* the
 override ran. Pinned by `tests/tests/kithara_queue/track_switch_race.rs`. Re-selecting
 the already-playing track is a no-op apart from dropping stale pending state.
 
+## Beat-grid starts
+
+`Queue::start_at_beat` owns the cold-deck SYNC path: it binds first, waits for
+the resource to land, then arms the stamped start. A current deck with a
+positive playback rate is rejected as `QueueError::NotReady(track_id)` before
+any binding is published. The GUI gesture has no in-flight phase-handoff
+contract, so it must not turn a running track into a decode failure or queue
+advance.
+
 ## Advance and auto-advance
 
 `advance_to_next` resolves the next entry from a read-only navigation snapshot

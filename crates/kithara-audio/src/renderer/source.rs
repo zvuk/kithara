@@ -1,4 +1,4 @@
-use kithara_decode::PcmChunk;
+use kithara_decode::{DecodeResult, PcmChunk};
 use kithara_platform::sync::Arc;
 use kithara_stream::SeekObserve;
 
@@ -67,11 +67,14 @@ pub trait AudioWorkerSource: Send + 'static {
 pub(crate) fn apply_effects(
     effects: &mut [Box<dyn AudioEffect>],
     mut chunk: PcmChunk,
-) -> Option<PcmChunk> {
+) -> DecodeResult<Option<PcmChunk>> {
     for effect in &mut *effects {
-        chunk = effect.process(chunk)?;
+        let Some(output) = effect.process(chunk)? else {
+            return Ok(None);
+        };
+        chunk = output;
     }
-    Some(chunk)
+    Ok(Some(chunk))
 }
 
 /// Reset effects chain (e.g. after seek).

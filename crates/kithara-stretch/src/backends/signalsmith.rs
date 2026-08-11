@@ -54,6 +54,9 @@ impl SignalsmithBackend {
 pub struct SignalsmithElastic {
     inner: Stretch,
     capabilities: ElasticCapabilities,
+    channels: usize,
+    flushed: bool,
+    ratio: f64,
 }
 
 impl SignalsmithElastic {
@@ -62,7 +65,13 @@ impl SignalsmithElastic {
     const MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 4.0 / 3.0;
     const MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 2.0 / 3.0;
 
-    fn rate_envelope() -> Result<ElasticRateEnvelope, ElasticError> {
+    /// Declared source-frame advance supported by the exact-span engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ElasticError`] when the declared bounds do not form a
+    /// representable envelope.
+    pub fn rate_envelope() -> Result<ElasticRateEnvelope, ElasticError> {
         ElasticRateEnvelope::try_from(
             Self::MIN_SOURCE_FRAMES_PER_OUTPUT..=Self::MAX_SOURCE_FRAMES_PER_OUTPUT,
         )
@@ -88,6 +97,9 @@ impl ElasticEngine for SignalsmithElastic {
         Ok(Self {
             inner,
             capabilities: ElasticCapabilities::new(config, latency, rate_envelope),
+            channels: config.channels(),
+            flushed: false,
+            ratio: 1.0,
         })
     }
 
@@ -103,12 +115,83 @@ impl ElasticEngine for SignalsmithElastic {
     ) -> Result<(), ElasticError> {
         self.capabilities
             .validate(request, source.len(), output.len())?;
+        self.flushed = false;
         self.inner.process(source, output);
         Ok(())
     }
 
     fn reset(&mut self) -> Result<(), ElasticError> {
         self.inner.reset();
+        self.flushed = false;
+        Ok(())
+    }
+}
+
+impl StretchBackend for SignalsmithElastic {
+    fn flush(&mut self, out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
+        if self.flushed {
+            return Ok(());
+        }
+        self.flushed = true;
+        let tail = self
+            .capabilities
+            .latency()
+            .output_frames()
+            .saturating_mul(self.channels);
+        let start = out.len();
+        out.resize(start + tail, 0.0);
+        self.inner.flush(&mut out[start..]);
+        Ok(())
+    }
+
+    fn max_output_samples(&self, input_frames: usize) -> usize {
+        let frames_f64: f64 = input_frames.as_();
+        let frames: usize = num_traits::cast((frames_f64 * self.ratio).round()).unwrap_or(0);
+        frames.saturating_mul(self.channels)
+    }
+
+    fn source_latency_frames(&self) -> usize {
+        if self.flushed {
+            0
+        } else {
+            self.capabilities.latency().source_frames()
+        }
+    }
+
+    fn process(&mut self, input: &[f32], out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
+        let in_frames = input.len() / self.channels;
+        if in_frames == 0 {
+            return Ok(());
+        }
+        self.flushed = false;
+        let start = out.len();
+        let want = self.max_output_samples(in_frames);
+        out.resize(start + want, 0.0);
+        self.inner.process(input, &mut out[start..]);
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.inner.reset();
+        self.flushed = false;
+    }
+
+    fn set_pitch(&mut self, scale: f64) -> Result<(), StretchBackendError> {
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(StretchBackendError::Param(format!("pitch scale {scale}")));
+        }
+        let mult: f32 = num_traits::cast(scale).unwrap_or(1.0);
+        self.inner.set_transpose_factor(mult, None);
+        Ok(())
+    }
+
+    fn set_ratio(&mut self, stretch: f64) -> Result<(), StretchBackendError> {
+        if !stretch.is_finite() || stretch <= 0.0 {
+            return Err(StretchBackendError::Param(format!(
+                "stretch ratio {stretch}"
+            )));
+        }
+        self.ratio = stretch;
         Ok(())
     }
 }
@@ -160,6 +243,14 @@ impl StretchBackend for SignalsmithBackend {
 
     fn max_output_samples(&self, input_frames: usize) -> usize {
         self.out_frames(input_frames).saturating_mul(self.channels)
+    }
+
+    fn source_latency_frames(&self) -> usize {
+        if self.flushed {
+            0
+        } else {
+            self.latency.source_frames()
+        }
     }
 
     fn process(&mut self, input: &[f32], out: &mut Vec<f32>) -> Result<(), StretchBackendError> {

@@ -6,6 +6,7 @@ pub mod asset;
 pub(crate) mod bridge;
 pub mod cipher;
 pub mod config;
+pub mod grid;
 pub(crate) mod inner;
 pub(crate) mod layout;
 pub mod logging;

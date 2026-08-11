@@ -15,6 +15,7 @@
 
 mod access;
 mod engine_events;
+mod grid;
 mod lifecycle;
 mod passthrough;
 mod playback;

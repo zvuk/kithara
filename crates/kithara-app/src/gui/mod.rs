@@ -7,6 +7,7 @@ mod studio_reads;
 mod studio_ui;
 mod subscription;
 mod theme;
+mod transport;
 mod update;
 mod view;
 

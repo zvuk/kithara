@@ -2,7 +2,7 @@ use std::fmt;
 
 use kithara_platform::sync::Arc;
 
-use crate::rt::track::PlayerResource;
+use crate::rt::track::{PlayerResource, TrackStart};
 
 /// Commands sent from the main thread to the processor.
 pub enum PlayerCmd {
@@ -28,6 +28,8 @@ pub enum PlayerCmd {
     SetPrefetchDuration(f32),
     /// Update the playback rate for all active tracks.
     SetPlaybackRate(f32),
+    /// Plan when a loaded track becomes audible.
+    SetTrackStart { src: Arc<str>, start: TrackStart },
 }
 
 impl fmt::Debug for PlayerCmd {
@@ -53,6 +55,11 @@ impl fmt::Debug for PlayerCmd {
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
             Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),
             Self::SetPlaybackRate(r) => f.debug_tuple("SetPlaybackRate").field(r).finish(),
+            Self::SetTrackStart { src, start } => f
+                .debug_struct("SetTrackStart")
+                .field("src", src)
+                .field("start", start)
+                .finish(),
         }
     }
 }

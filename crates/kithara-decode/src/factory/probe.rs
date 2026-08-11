@@ -1,11 +1,11 @@
-use std::io::{Read, Seek, SeekFrom};
+use std::io::SeekFrom;
 
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::{
     error::{DecodeError, DecodeResult},
-    mp4::sniff_mp4_fragmented,
-    traits::BoxedSource,
+    mp4::{sniff_mp4_codec, sniff_mp4_fragmented},
+    traits::DecoderInput,
 };
 
 /// Hints for codec probing.
@@ -21,16 +21,45 @@ pub(crate) struct ProbeHint {
     pub(crate) mime: Option<String>,
 }
 
-/// Resolve `(codec, container)` from a probe hint.
-pub(super) fn resolve_codec_container(
+/// Completes `hint` against the bytes, then resolves `(codec, container)`.
+///
+/// One function because there is one question: a hint built from a file
+/// extension and one built from `MediaInfo` are indistinguishable by the time
+/// a decoder has to be chosen, and both entry points reach here.
+///
+/// Order matters. The container is sniffed *before* the codec is resolved,
+/// because the codec's last resort is the container it sits in — resolving the
+/// codec first means a source whose extension says nothing fails while its
+/// first twelve bytes name the format outright.
+pub(super) fn resolve_against_source(
     hint: &ProbeHint,
+    source: &mut dyn DecoderInput,
 ) -> DecodeResult<(AudioCodec, Option<ContainerFormat>)> {
-    Ok((probe_codec(hint)?, hint.container))
+    let mut hint = hint.clone();
+    if hint.container.is_none() {
+        hint.container = sniff_container_from_source(source);
+    }
+    // MP4/M4A is container-only — AAC, ALAC and FLAC all live there — so the
+    // sample-entry tag is what picks the backend.
+    if hint.codec.is_none()
+        && matches!(
+            hint.container,
+            Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
+        )
+    {
+        hint.codec = sniff_mp4_codec(source).and_then(codec_from_mp4_fourcc);
+        if source.seek(SeekFrom::Start(0)).is_err() {
+            return Err(DecodeError::ProbeFailed);
+        }
+    }
+    Ok((probe_codec(&hint)?, hint.container))
 }
 
 /// Non-fatal byte sniff for inputs that genuinely arrive without container
 /// metadata; HLS should normally supply this through `MediaInfo`.
-pub(super) fn sniff_container_from_source(source: &mut BoxedSource) -> Option<ContainerFormat> {
+pub(super) fn sniff_container_from_source(
+    source: &mut dyn DecoderInput,
+) -> Option<ContainerFormat> {
     const PREFIX_LEN: usize = 12;
 
     if source.seek(SeekFrom::Start(0)).is_err() {
@@ -50,7 +79,10 @@ pub(super) fn sniff_container_from_source(source: &mut BoxedSource) -> Option<Co
     container
 }
 
-fn sniff_container_from_prefix(prefix: &[u8], source: &mut BoxedSource) -> Option<ContainerFormat> {
+fn sniff_container_from_prefix(
+    prefix: &[u8],
+    source: &mut dyn DecoderInput,
+) -> Option<ContainerFormat> {
     if prefix.starts_with(b"fLaC") {
         return Some(ContainerFormat::Flac);
     }
@@ -61,7 +93,7 @@ fn sniff_container_from_prefix(prefix: &[u8], source: &mut BoxedSource) -> Optio
         return Some(ContainerFormat::Ogg);
     }
     if is_mp4_prefix(prefix) {
-        return sniff_mp4_fragmented(&mut **source).map(|fragmented| {
+        return sniff_mp4_fragmented(source).map(|fragmented| {
             if fragmented {
                 ContainerFormat::Fmp4
             } else {
@@ -69,13 +101,10 @@ fn sniff_container_from_prefix(prefix: &[u8], source: &mut BoxedSource) -> Optio
             }
         });
     }
-    if is_adts_sync(prefix) {
-        return Some(ContainerFormat::Adts);
-    }
-    if prefix.starts_with(b"ID3") || is_mp3_sync(prefix) {
+    if prefix.starts_with(b"ID3") {
         return Some(ContainerFormat::MpegAudio);
     }
-    None
+    mpeg_sync_container(prefix)
 }
 
 fn is_mp4_prefix(prefix: &[u8]) -> bool {
@@ -84,12 +113,35 @@ fn is_mp4_prefix(prefix: &[u8]) -> bool {
         .is_some_and(|kind| kind == b"ftyp" || kind == b"styp")
 }
 
-fn is_adts_sync(prefix: &[u8]) -> bool {
-    prefix.len() >= 2 && prefix[0] == 0xff && (prefix[1] & 0xf0) == 0xf0
-}
+/// What an MPEG sync word introduces, if anything.
+///
+/// One function because there is one header. ADTS and MPEG audio share their
+/// leading sync bits, so they cannot be recognised independently: asking two
+/// questions in sequence makes the answer depend on which is asked first, and
+/// the ordinary MP3 frame satisfies both. The layer field is the discriminator
+/// — ADTS syncs on twelve bits and its layer is `00` by specification, MPEG
+/// audio syncs on eleven and always names Layer I, II or III. Testing the sync
+/// alone claims every common MP3 frame (`0xFB` is MPEG-1 Layer III) and hands
+/// it to an AAC decoder.
+fn mpeg_sync_container(prefix: &[u8]) -> Option<ContainerFormat> {
+    /// Low sync bits every member of the family asserts.
+    const SYNC: u8 = 0b1110_0000;
+    /// The twelfth sync bit, which only ADTS asserts.
+    const ADTS_SYNC: u8 = 0b1111_0000;
+    /// Layer field: zero for ADTS, a named layer for MPEG audio.
+    const LAYER: u8 = 0b0000_0110;
 
-fn is_mp3_sync(prefix: &[u8]) -> bool {
-    prefix.len() >= 2 && prefix[0] == 0xff && (prefix[1] & 0xe0) == 0xe0
+    let [0xff, second, ..] = prefix else {
+        return None;
+    };
+    if second & SYNC != SYNC {
+        return None;
+    }
+    if second & LAYER == 0 {
+        (second & ADTS_SYNC == ADTS_SYNC).then_some(ContainerFormat::Adts)
+    } else {
+        Some(ContainerFormat::MpegAudio)
+    }
 }
 
 /// Probe codec from hints.
@@ -205,6 +257,78 @@ mod tests {
             .join("../../assets/hls")
             .join(name);
         std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+    }
+
+    /// A source that arrives with no usable extension still names its own
+    /// format in its first bytes, and that has to be enough.
+    ///
+    /// This is why the container is sniffed *before* the codec is resolved:
+    /// the codec's last resort is the container it sits in, so resolving the
+    /// codec against hints alone refuses the source before anyone looks at it.
+    #[kithara::test]
+    fn a_source_with_no_extension_is_identified_by_its_bytes() {
+        // An MPEG audio frame header: sync word plus MPEG-1 Layer III.
+        let mut source: BoxedSource = Box::new(Cursor::new(vec![0xff, 0xfb, 0x90, 0x00]));
+
+        let (codec, container) = resolve_against_source(&ProbeHint::default(), &mut *source)
+            .expect("invariant: the frame header identifies the format");
+
+        assert_eq!(codec, AudioCodec::Mp3);
+        assert_eq!(container, Some(ContainerFormat::MpegAudio));
+    }
+
+    /// ADTS and MPEG audio share a sync word; the layer field is the only
+    /// thing that separates them, and getting it wrong hands every common MP3
+    /// frame to an AAC decoder.
+    /// 0xFB is MPEG-1 Layer III — the ordinary MP3 header — and it satisfies
+    /// a twelve-bit sync, so a sync-only test hands it to an AAC decoder.
+    #[kithara::test]
+    fn an_mpeg_layer_three_frame_reads_as_mpeg_audio() {
+        assert_eq!(
+            mpeg_sync_container(&[0xff, 0xfb]),
+            Some(ContainerFormat::MpegAudio)
+        );
+    }
+
+    /// 0xF1 is MPEG-4 AAC with the layer field zeroed, as ADTS requires.
+    #[kithara::test]
+    fn an_adts_frame_reads_as_adts() {
+        assert_eq!(
+            mpeg_sync_container(&[0xff, 0xf1]),
+            Some(ContainerFormat::Adts)
+        );
+    }
+
+    /// An eleven-bit sync with a zero layer is neither: ADTS needs the twelfth
+    /// bit and MPEG audio needs a layer.
+    #[kithara::test]
+    fn a_sync_word_naming_no_layer_and_no_adts_is_neither() {
+        assert_eq!(mpeg_sync_container(&[0xff, 0xe1]), None);
+    }
+
+    /// An ID3 tag in front of the audio names the same thing.
+    #[kithara::test]
+    fn an_id3_tagged_source_is_identified_by_its_bytes() {
+        let mut tagged = b"ID3\x04\x00\x00\x00\x00\x00\x00".to_vec();
+        tagged.extend_from_slice(&[0xff, 0xfb, 0x90, 0x00]);
+        let mut source: BoxedSource = Box::new(Cursor::new(tagged));
+
+        let (codec, _) = resolve_against_source(&ProbeHint::default(), &mut *source)
+            .expect("invariant: the tag identifies the format");
+
+        assert_eq!(codec, AudioCodec::Mp3);
+    }
+
+    /// Bytes that name nothing are still refused: the sniff is a resort, not a
+    /// guess.
+    #[kithara::test]
+    fn a_source_that_names_nothing_is_still_refused() {
+        let mut source: BoxedSource = Box::new(Cursor::new(vec![0x00; 64]));
+
+        assert!(matches!(
+            resolve_against_source(&ProbeHint::default(), &mut *source),
+            Err(DecodeError::ProbeFailed)
+        ));
     }
 
     #[kithara::test]

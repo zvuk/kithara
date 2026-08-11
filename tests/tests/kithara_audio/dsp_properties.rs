@@ -83,6 +83,7 @@ fn settle(eq: &mut EqEffect, pool: &PcmPool, spec: PcmSpec) {
 
 fn process_eq(eq: &mut EqEffect, pool: &PcmPool, spec: PcmSpec, samples: Vec<f32>) -> Vec<f32> {
     eq.process(pcm_chunk(pool, spec, samples))
+        .expect("EqEffect processing must succeed")
         .expect("EqEffect must emit the chunk it was handed")
         .samples
         .to_vec()

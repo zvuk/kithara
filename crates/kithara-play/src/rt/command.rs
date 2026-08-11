@@ -110,6 +110,11 @@ impl PlayerNodeProcessor {
                 PlayerCmd::SetPlaybackRate(rate) => {
                     self.apply_playback_rate(rate);
                 }
+                PlayerCmd::SetTrackStart { src, start } => {
+                    if let Some(track) = self.tracks.get_mut(&src) {
+                        track.set_start(start);
+                    }
+                }
             }
         }
     }

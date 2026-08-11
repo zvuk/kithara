@@ -6,12 +6,12 @@ use kithara_platform::sync::Arc;
 use super::{Cmd, Reply, SessionDispatcher, SessionState, run_cmd};
 use crate::error::PlayError;
 
-struct NoopBackend {
+pub(crate) struct NoopBackend {
     _processor: Option<FirewheelProcessor<Self>>,
 }
 
 #[derive(Clone)]
-struct NoopConfig {
+pub(crate) struct NoopConfig {
     sample_rate: u32,
 }
 
@@ -25,7 +25,7 @@ impl Default for NoopConfig {
 
 #[derive(Debug, thiserror::Error)]
 #[error("noop backend error")]
-struct NoopBackendError;
+pub(crate) struct NoopBackendError;
 
 impl AudioBackend for NoopBackend {
     type Config = NoopConfig;
@@ -96,4 +96,8 @@ impl SessionDispatcher for TestSession {
 pub(crate) fn test_session() -> Arc<dyn SessionDispatcher> {
     TEST_STATE.with(|state| state.replace(SessionState::new(start_noop_stream)));
     Arc::new(TestSession)
+}
+
+pub(crate) fn test_state() -> SessionState<NoopBackend> {
+    SessionState::new(start_noop_stream)
 }

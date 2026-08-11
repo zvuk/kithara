@@ -38,7 +38,7 @@ async fn run_analysis(
         BeatAnalysisConfig::default(),
         PcmPool::default(),
     );
-    let mut rx = runner.analyze(config);
+    let mut rx = runner.analyze(config, std::sync::Arc::from("fixture"));
 
     // Staged analysis can emit twice (waveform, then waveform+beat).
     let mut last = None;

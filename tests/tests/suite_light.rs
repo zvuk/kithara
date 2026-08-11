@@ -58,6 +58,8 @@ mod kithara_decode {
 
 mod kithara_app {
     #[cfg(not(target_arch = "wasm32"))]
+    mod beat_match;
+    #[cfg(not(target_arch = "wasm32"))]
     mod waveform_analyzer;
 }
 

@@ -31,14 +31,18 @@ fn pop_std(values: &[f64]) -> f64 {
     (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n).sqrt()
 }
 
-/// Step 1: drop downbeats closer than `min_gap` to their predecessor
-/// (detector double-detections, e.g. halving errors).
-pub(super) fn filter_downbeats(db: Vec<f64>, min_gap: f64) -> Vec<f64> {
-    let Some(&first) = db.first() else {
-        return db;
+/// Step 1: drop marks closer than `min_gap` to their predecessor (detector
+/// double-detections, e.g. halving errors).
+///
+/// Applies to beats as much as to downbeats: a doubled beat is counted as a
+/// whole beat by everything downstream, which moves the beat map, the phase a
+/// deck is placed at, and the tempo read off the marks.
+pub(super) fn filter_close(marks: Vec<f64>, min_gap: f64) -> Vec<f64> {
+    let Some(&first) = marks.first() else {
+        return marks;
     };
     let mut kept = vec![first];
-    for &t in &db[1..] {
+    for &t in &marks[1..] {
         if let Some(&last) = kept.last()
             && t - last < min_gap
         {

@@ -30,6 +30,6 @@ pub use core::{item, layout, observer, types};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native::{FFI_RUNTIME, Inner, event_bridge};
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{asset, cipher, config, logging, salt};
+pub use native::{asset, cipher, config, grid, logging, salt};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web::inner::Inner;

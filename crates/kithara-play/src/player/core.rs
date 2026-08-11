@@ -1,6 +1,6 @@
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
-use kithara_audio::{EngineLoad, StretchControls};
+use kithara_audio::{EngineLoad, SessionBeat, SourceSchedule, StretchControls, TempoSlot};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_platform::{
@@ -14,7 +14,7 @@ use super::{
     state::{ItemQueue, PlayerParams, PlayerPhase},
 };
 use crate::{
-    api::{PlayerEvent, PlayerStatus},
+    api::{PlayerEvent, PlayerStatus, TrackBinding},
     bridge::PlayerCmd,
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
@@ -32,6 +32,7 @@ pub(crate) struct PlayerCore {
     pub(crate) engine_load: Arc<EngineLoad>,
 
     pub(crate) timestretch: Arc<StretchControls>,
+    pub(crate) tempo: TempoSlot,
     pub(crate) byte_pool: BytePool,
     /// Engine drops last — worker shutdown happens after all tracks
     /// unregister and after `items` releases their resources.
@@ -58,6 +59,72 @@ pub(crate) struct PlayerCore {
 /// `Mutex<PlayerPhase>` carrying the slot / ABR handle / armed-next, while
 /// `core` holds the phase-neutral fields. `phase` is declared first so it
 /// drops before `core.engine`.
+impl PlayerImpl {
+    /// Places this deck on the session grid, so its analysed beats land on
+    /// stamped session beats.
+    ///
+    /// `at` is the session beat the deck's output frame zero plays on, which is
+    /// what makes the schedule's origin the track beat due there. Anchoring the
+    /// schedule anywhere else — the live position, say — would offset every
+    /// rendered frame by the wait before the start.
+    ///
+    /// The binding is taken at one revision and stays fixed: every frame after
+    /// the first follows the analysed map's local slope. Resources prepared
+    /// after this call render through the exact-span slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayError::BindUnavailable`] when the session has committed
+    /// no grid yet or the track has no usable analysed map at `at`. Returns a
+    /// typed session error when the current tempo is outside the bound
+    /// engine's declared rate envelope.
+    pub(crate) fn bind(&self, binding: &TrackBinding, at: SessionBeat) -> Result<(), PlayError> {
+        let anchor = self.core.engine.session_handle().anchor()?;
+        if anchor.load().is_none() {
+            return Err(PlayError::BindUnavailable {
+                reason: "the session has committed no tempo grid yet".to_owned(),
+            });
+        }
+        // `at` fixes only where the deck *starts* on the track: its first
+        // output frame plays the track beat due on that session beat. How far
+        // it then advances is counted by the renderer, not derived from a pin
+        // on the session's frame axis, which a resume moves.
+        let origin = binding
+            .track_beat_at(at)
+            .map_err(|reason| PlayError::BindUnavailable {
+                reason: reason.to_string(),
+            })?;
+        let schedule = Arc::new(SourceSchedule::new(
+            binding.map().clone(),
+            origin,
+            binding.direction(),
+            anchor,
+        ));
+        let player_id = self.core.engine.ensure_player_id()?;
+        self.core
+            .engine
+            .session_handle()
+            .bind_player(player_id, binding.clone(), at)?;
+        self.core.tempo.bind(schedule, at);
+        Ok(())
+    }
+
+    pub(crate) fn unbind(&self) -> Result<(), PlayError> {
+        let player_id = self.core.engine.ensure_player_id()?;
+        self.core.engine.session_handle().unbind_player(player_id)?;
+        if let Some(rate) = self.core.tempo.unbind() {
+            self.set_rate(rate);
+        }
+        Ok(())
+    }
+}
+
+impl PlayerCore {
+    pub(crate) fn tempo_slot(&self) -> TempoSlot {
+        self.tempo.clone()
+    }
+}
+
 pub struct PlayerImpl {
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore,
@@ -95,11 +162,14 @@ impl PlayerImpl {
 
         // Seed the single speed source with the configured default rate.
         config.timestretch.set_speed(config.default_rate);
+        let timestretch = Arc::clone(&config.timestretch);
+        let tempo = TempoSlot::from(Arc::clone(&timestretch));
         let core = PlayerCore {
             engine,
             engine_load: Arc::new(EngineLoad::default()),
             params: PlayerParams::from(&config),
-            timestretch: config.timestretch,
+            timestretch,
+            tempo,
             gapless_mode: config.gapless_mode,
             byte_pool: config.byte_pool,
             status: Mutex::default(),

@@ -434,7 +434,8 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
     let host_sample_rate = Arc::new(AtomicU32::new(Consts::SAMPLE_RATE));
     let pcm_pool = PcmPool::default().clone();
     let effects =
-        crate::pipeline::config::create_effects(initial_spec, None, &pcm_pool, Vec::new());
+        crate::pipeline::config::create_effects(initial_spec, None, &pcm_pool, Vec::new())
+            .expect("invariant: an unbound chain always builds");
     let factory_byte_len = Arc::new(AtomicU64::new(0));
     let decoder_factory = DecoderFactory::new(
         move |mut reader, info| {

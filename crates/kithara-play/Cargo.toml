@@ -133,7 +133,7 @@ bevy_platform = { workspace = true }
 firewheel-web-audio = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-audio = { workspace = true, features = ["probe"] }
+kithara-audio = { workspace = true, features = ["probe", "stretch-signalsmith"] }
 kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 

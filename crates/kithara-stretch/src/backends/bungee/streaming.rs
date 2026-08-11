@@ -94,6 +94,7 @@ pub(crate) struct BungeeBackend {
     ratio: f64,
     channels: usize,
     max_input_frames: usize,
+    source_latency_frames: usize,
 }
 
 impl BungeeBackend {
@@ -145,6 +146,7 @@ impl BungeeBackend {
             out_planar,
             ratio: 1.0,
             pitch: 1.0,
+            source_latency_frames: 0,
         }
     }
 }
@@ -164,6 +166,10 @@ impl StretchBackend for BungeeBackend {
         let out_frames: usize =
             num_traits::cast((frames_f64 * self.ratio).ceil()).unwrap_or(usize::MAX);
         out_frames.saturating_mul(self.channels)
+    }
+
+    fn source_latency_frames(&self) -> usize {
+        self.source_latency_frames
     }
 
     fn process(&mut self, input: &[f32], out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
@@ -206,6 +212,18 @@ impl StretchBackend for BungeeBackend {
                 out_frames,
                 self.pitch,
             );
+            let source_latency = stream.latency();
+            if !source_latency.is_finite() || source_latency < 0.0 {
+                return Err(StretchBackendError::Process(format!(
+                    "invalid bungee input latency {source_latency}"
+                )));
+            }
+            self.source_latency_frames =
+                num_traits::cast(source_latency.ceil()).ok_or_else(|| {
+                    StretchBackendError::Process(format!(
+                        "bungee input latency {source_latency} is out of range"
+                    ))
+                })?;
             let rendered = rendered.min(cap);
             let output = self.out_planar.as_ref();
             let base = out.len();
@@ -222,6 +240,7 @@ impl StretchBackend for BungeeBackend {
             let sample_rate = self.inner.as_ref().map_or(1, Stream::sample_rate);
             self.inner = Stream::new(sample_rate, spec_channels, self.max_input_frames).ok();
         }
+        self.source_latency_frames = 0;
     }
 
     fn set_pitch(&mut self, scale: f64) -> Result<(), StretchBackendError> {
@@ -240,5 +259,39 @@ impl StretchBackend for BungeeBackend {
         }
         self.ratio = stretch;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_bufpool::PcmPool;
+
+    use super::*;
+
+    #[test]
+    fn source_latency_matches_bungee_and_clears_on_reset() {
+        let options = StretchOptions::builder()
+            .sample_rate(48_000)
+            .channels(2)
+            .max_input_frames(4_096)
+            .pool(PcmPool::default())
+            .build();
+        let mut backend = BungeeBackend::new(&options);
+        backend.set_ratio(1.5).expect("valid stretch ratio");
+        let mut out = Vec::new();
+        backend
+            .process(&vec![0.25; 8_192], &mut out)
+            .expect("Bungee process must succeed");
+        let measured = backend
+            .inner
+            .as_ref()
+            .expect("Bungee stream must be available")
+            .latency();
+        let expected: usize = num_traits::cast(measured.ceil()).expect("latency must fit usize");
+        assert_eq!(backend.source_latency_frames(), expected);
+
+        backend.reset();
+
+        assert_eq!(backend.source_latency_frames(), 0);
     }
 }

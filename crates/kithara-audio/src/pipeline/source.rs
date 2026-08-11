@@ -62,18 +62,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(crate) variant_control: Option<Arc<dyn VariantControl>>,
     pub(crate) readiness: ReadinessGate,
     pub(crate) rebuild: RebuildPort<T>,
-    /// Absolute content frame offset just past the most recently emitted chunk
-    /// (the producer's decode head), tagged with its epoch. A mid-playback
-    /// variant-switch recreate continues the new decoder from here — NOT from
-    /// the consumer's lagging `committed_position`: the chunks in
-    /// `[committed..decode_head]` are already queued in the outlet ring (a
-    /// `FormatBoundary` recreate neither flushes it nor bumps the seek epoch),
-    /// so resuming at `committed` would re-emit them and rewind content. Stored
-    /// as an exact frame plus the sample rate of that produced chunk, then
-    /// converted back with `duration_for_frames`; the demuxer quantizes the
-    /// seek landing to a sample and `frame_offset_for` rounds to the nearest
-    /// frame, so the rebuilt decoder relabels its first chunk at this point. See
-    /// `execute_recreation`.
+    /// Epoch-tagged raw and emitted source endpoints. ABR splice planning uses
+    /// the raw decoder head; decoder recreation resumes from emitted source.
     pub(crate) resume: ResumeCursor,
     /// `(seek_epoch, target)` of the most recent applied seek.
     /// `committed_position` lags `target` until the seek's first
@@ -313,7 +303,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             return;
         };
 
-        let landing_frontier = match self.resume.decode_head(self.seek_obs.epoch()) {
+        let landing_frontier = match self.resume.raw_decode_head(self.seek_obs.epoch()) {
             Some((frame, rate)) => OutgoingFrontier::Exact { frame, rate },
             None => OutgoingFrontier::Awaiting,
         };

@@ -227,9 +227,11 @@ fn loaded_deck_letters(entry: &CatalogEntry, decks: &Decks) -> String {
         .collect()
 }
 
+/// The deck's own tempo, from the same reading SYNC matches against. A readout
+/// taken from `BeatGrid::bpm` would name a tempo the deck is not at — see
+/// [`crate::beatmatch::deck_bpm`].
 pub(in crate::gui) fn analysis_bpm(ui: &UiState) -> Option<f32> {
-    let bpm = ui.analysis.as_ref()?.beat()?.bpm();
-    bpm.is_finite().then(|| bpm.as_())
+    crate::beatmatch::deck_bpm(ui.analysis.as_ref()?).map(AsPrimitive::as_)
 }
 
 fn format_quality(ui: &UiState) -> String {

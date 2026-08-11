@@ -94,10 +94,13 @@ fn main() -> AppResult {
         .build();
 
     let session = app_session_handle();
-    let mut deck_set = DeckSet::new(vec![
-        Deck::build(DeckId(0), &config, &session),
-        Deck::build(DeckId(1), &config, &session),
-    ]);
+    let mut deck_set = DeckSet::new(
+        session.clone(),
+        vec![
+            Deck::build(DeckId(0), &config, &session),
+            Deck::build(DeckId(1), &config, &session),
+        ],
+    );
     deck_set.commit(deck_set.mix().clone())?;
     let mut frontend = GuiFrontend::new(&config)?;
     frontend.attach_broadcast(session, shutdown.clone());

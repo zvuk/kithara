@@ -34,6 +34,8 @@ pub(crate) struct Kithara {
     pub(crate) decks: Decks,
     /// One EQ topology shared by every deck in the studio.
     pub(crate) eq_mode: EqMode,
+    /// A deck waiting to join the session grid, until the graph commits one.
+    pub(crate) pending_sync: Option<DeckId>,
     pub(crate) palette: gui::GuiPalette,
 
     /// The studio window; window-chrome commands execute against it.
@@ -98,6 +100,7 @@ impl Kithara {
             config,
             studio,
             eq_mode: EqMode::default(),
+            pending_sync: None,
             palette,
             window_id,
             selected_track: None,

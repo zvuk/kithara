@@ -7,7 +7,7 @@ use super::{
     app::Kithara,
     deck::{self, DeckMsg},
     message::Message,
-    mix, studio_ui,
+    mix, studio_ui, transport,
 };
 use crate::{
     catalog,
@@ -55,6 +55,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
         Message::Mix(msg) => {
             mix::handle(state, msg);
+            Task::none()
+        }
+        Message::Transport(msg) => {
+            transport::handle(state, msg);
             Task::none()
         }
         Message::DeleteFocusedTrack => {
@@ -242,6 +246,7 @@ fn handle_tick(state: &mut Kithara) {
         let _ = deck.controller.queue().tick();
         deck.controller.refresh_continuous();
     }
+    transport::tick(state);
 }
 
 /// One consistent snapshot per deck per frame, taken after the update. The

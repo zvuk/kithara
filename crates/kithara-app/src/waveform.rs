@@ -73,7 +73,11 @@ impl TrackAnalysisRunner {
     /// Cancel any prior run and queue `config` for analysis.
     /// Staged results arrive on the returned receiver,
     /// which closes when the run ends; nothing arrives on failure/cancel.
-    pub fn analyze(&mut self, config: AppResourceConfig) -> watch::Receiver<Option<TrackAnalysis>> {
+    pub fn analyze(
+        &mut self,
+        config: AppResourceConfig,
+        track: Arc<str>,
+    ) -> watch::Receiver<Option<TrackAnalysis>> {
         self.clear();
 
         let run = self.worker.child_token();
@@ -83,6 +87,7 @@ impl TrackAnalysisRunner {
             config,
             run.clone(),
             tx,
+            track,
         ));
         self.current = Some(RunHandle { task, cancel: run });
         rx
@@ -110,11 +115,12 @@ async fn run_analysis(
     config: AppResourceConfig,
     cancel: CancelToken,
     tx: watch::Sender<Option<TrackAnalysis>>,
+    track: Arc<str>,
 ) {
-    let Some(reader) = open_reader(config, &cancel).await else {
+    let Some(reader) = open_reader(config, &cancel, &track).await else {
         return;
     };
-    let mut rx = worker.analyze(reader, cancel);
+    let mut rx = worker.analyze(reader, cancel, track);
 
     while rx.changed().await.is_ok() {
         let analysis = rx.borrow().clone();
@@ -131,6 +137,7 @@ async fn run_analysis(
 async fn open_reader(
     mut config: AppResourceConfig,
     cancel: &CancelToken,
+    label: &str,
 ) -> Option<Box<dyn PcmReader>> {
     if cancel.is_cancelled() {
         return None;
@@ -139,12 +146,12 @@ async fn open_reader(
     let mut resource = match Resource::new(config).await {
         Ok(r) => r,
         Err(e) => {
-            warn!(?e, "analysis: resource open failed");
+            warn!(?e, track = %label, "analysis: resource open failed");
             return None;
         }
     };
     if let Err(e) = resource.preload().await {
-        warn!(?e, "analysis: preload failed");
+        warn!(?e, track = %label, "analysis: preload failed");
         return None;
     }
     Some(resource.into())

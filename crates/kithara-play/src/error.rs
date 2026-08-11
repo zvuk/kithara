@@ -62,6 +62,11 @@ pub enum PlayError {
     #[error("session activation failed: {reason}")]
     SessionActivationFailed { reason: String },
 
+    /// The deck cannot be placed on the session grid: the track has no usable
+    /// analysed map, or the committed tempo does not define a beat advance.
+    #[error("cannot bind this deck to the session grid: {reason}")]
+    BindUnavailable { reason: String },
+
     #[error("session category not supported: {reason}")]
     SessionCategoryUnsupported { reason: String },
 

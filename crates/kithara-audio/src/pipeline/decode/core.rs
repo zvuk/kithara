@@ -33,6 +33,7 @@ use crate::{
         seek::{ResumeState, SeekEngine, emit::commit_outcome},
         stream::shared::SharedStream,
         track::{TrackFailure, WaitingReason},
+        window::{SourceEnd, SourceWindow},
     },
     renderer::{apply_effects, reset_effects},
     traits::AudioEffect,
@@ -162,6 +163,7 @@ pub(crate) struct ActiveDecode {
     #[field(get, vis = "pub(crate)", copy)]
     gapless_mode: GaplessMode,
     effects: Vec<Box<dyn AudioEffect>>,
+    window: SourceWindow,
     rejected_chunk: Option<PcmChunk>,
     stage_error: Option<DecodeError>,
 }
@@ -201,6 +203,7 @@ impl ActiveDecode {
             effects,
             drain,
             incoming: None,
+            window: SourceWindow::default(),
             rejected_chunk: None,
             stage_error: None,
         }
@@ -232,7 +235,7 @@ impl ActiveDecode {
         outcome
     }
 
-    pub(crate) fn next_drain(&mut self) -> Option<PcmChunk> {
+    pub(crate) fn next_drain(&mut self) -> DecodeResult<Option<PcmChunk>> {
         self.drain.next(&mut self.effects)
     }
 
@@ -275,12 +278,19 @@ impl ActiveDecode {
             let Some(chunk) = next else {
                 return Ok(None);
             };
-            cursor.record(&chunk, epoch);
-            let chunk = self.blender.process_active(chunk);
-            if let Some(output) = apply_effects(&mut self.effects, chunk) {
+            cursor.record_raw_decode(&chunk, epoch);
+            let chunk = self.window.admit(self.blender.process_active(chunk));
+            if let Some(output) = apply_effects(&mut self.effects, chunk)? {
                 return Ok(Some(output));
             }
         }
+    }
+
+    pub(crate) fn source_end(&self) -> Option<SourceEnd> {
+        let held_source_frames = self.effects.iter().fold(0_u64, |total, effect| {
+            total.saturating_add(effect.held_source_frames())
+        });
+        self.window.emitted(held_source_frames)
     }
 
     fn outgoing_holdback_is_active(&self) -> bool {
@@ -362,6 +372,7 @@ impl ActiveDecode {
         self.blender.reset();
         reset_effects(&mut self.effects);
         self.drain.reset();
+        self.window.clear();
     }
 
     #[kithara::rtsan_allow_blocking]
@@ -427,6 +438,14 @@ mod tests {
     use super::*;
     use crate::pipeline::decode::transition::IncomingPrime;
 
+    fn resume_cursor(spec: PcmSpec) -> ResumeCursor {
+        ResumeCursor::new(
+            Arc::new(AtomicU32::new(spec.sample_rate.get())),
+            false,
+            spec.sample_rate.get(),
+        )
+    }
+
     #[kithara::test]
     fn configured_container_selects_the_incoming_reader_profile() {
         let factory = DecoderFactory::new(
@@ -454,12 +473,8 @@ mod tests {
     fn steady_output_bypasses_transition_staging() {
         let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut cursor = resume_cursor(spec);
         let initial_capacity = decode.active().staged_capacity();
-        let mut cursor = ResumeCursor::new(
-            Arc::new(AtomicU32::new(spec.sample_rate.get())),
-            false,
-            spec.sample_rate.get(),
-        );
         decode
             .push(PcmChunk::new(
                 PcmMeta {
@@ -608,6 +623,7 @@ mod tests {
             VariantIndex::new(1),
         );
         let mut decode = ActiveDecode::new(active, GaplessMode::Disabled, Vec::new());
+        let mut cursor = resume_cursor(spec);
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -625,11 +641,6 @@ mod tests {
                 PcmPool::default().attach(samples),
             ))
             .expect("valid fixture PCM enters prepared holdback");
-        let mut cursor = ResumeCursor::new(
-            Arc::new(AtomicU32::new(spec.sample_rate.get())),
-            false,
-            spec.sample_rate.get(),
-        );
 
         assert!(
             decode
@@ -832,6 +843,7 @@ mod tests {
             VariantIndex::new(1),
         );
         let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut cursor = resume_cursor(spec);
         let frames = u32::try_from(decode.blender.join_frame_count()).expect("test join fits u32");
         let samples = usize::try_from(frames)
             .expect("test join fits usize")
@@ -858,11 +870,6 @@ mod tests {
                 rate: spec.sample_rate.get(),
             },
         });
-        let mut cursor = ResumeCursor::new(
-            Arc::new(AtomicU32::new(spec.sample_rate.get())),
-            false,
-            spec.sample_rate.get(),
-        );
 
         assert!(
             !decode.transition_holds_output(),
@@ -890,6 +897,7 @@ mod tests {
             VariantIndex::new(1),
         );
         let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut cursor = resume_cursor(spec);
         decode.active.stage(PcmChunk::new(
             PcmMeta {
                 spec,
@@ -905,11 +913,6 @@ mod tests {
                 rate: spec.sample_rate.get(),
             },
         });
-        let mut cursor = ResumeCursor::new(
-            Arc::new(AtomicU32::new(spec.sample_rate.get())),
-            false,
-            spec.sample_rate.get(),
-        );
 
         assert!(!decode.transition_holds_output());
         let output = decode

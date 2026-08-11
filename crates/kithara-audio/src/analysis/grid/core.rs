@@ -2,7 +2,7 @@ use bon::Builder;
 use num_traits::cast::ToPrimitive;
 
 use super::{
-    clean::{bar_gaps, classify_outliers, filter_downbeats, find_stable_window, median},
+    clean::{bar_gaps, classify_outliers, filter_close, find_stable_window, median},
     fit::{GridFitCtx, anchored_boundaries, build_segments},
 };
 use crate::{analysis::beat::detector::RawBeats, waveform::BeatGrid};
@@ -77,7 +77,7 @@ impl Default for GridParams {
 /// uniform-ratio segments. Positions convert from seconds to source frames at `sample_rate`.
 pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) -> BeatGrid {
     let sr = f64::from(sample_rate);
-    let beats = secs_to_frames(&raw.beats, sr);
+    let beats = clean_beats(&raw.beats, sr, params);
 
     let mut db: Vec<f64> = raw
         .downbeats
@@ -93,7 +93,7 @@ pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) 
     // Nominal-bar seed for the double-detection filter and the trust band:
     // the global median gap is robust against scattered double detections.
     let nominal_seed = median(&bar_gaps(&db));
-    let db = filter_downbeats(db, params.min_gap_ratio * nominal_seed);
+    let db = filter_close(db, params.min_gap_ratio * nominal_seed);
     let downbeats = positions_to_frames(&db);
 
     // Degraded mode (per plan): too short / no stable tempo region means no
@@ -115,13 +115,22 @@ pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) 
     BeatGrid::new(bar_to_bpm(nominal_bar, sr), beats, downbeats, segments)
 }
 
-fn secs_to_frames(secs: &[f32], sr: f64) -> Vec<u64> {
-    let mut out: Vec<u64> = secs
+/// Beat marks in source frames, with the detector's double-detections
+/// dropped — the same step 1 the downbeats already get.
+///
+/// Without it a doubled beat is a whole beat to everything downstream: the
+/// beat map counts it, so the track beat under a playhead is wrong, and so is
+/// the tempo anything reads off the marks. Measured on a real record, the raw
+/// marks held gaps from 80 ms to 500 ms against a beat of 470.
+fn clean_beats(secs: &[f32], sr: f64, params: &GridParams) -> Vec<u64> {
+    let mut marks: Vec<f64> = secs
         .iter()
-        .filter_map(|&t| (f64::from(t) * sr).round().to_u64())
+        .map(|&t| f64::from(t) * sr)
+        .filter(|p| p.is_finite() && *p >= 0.0)
         .collect();
-    out.sort_unstable();
-    out
+    marks.sort_by(f64::total_cmp);
+    let nominal = median(&bar_gaps(&marks));
+    positions_to_frames(&filter_close(marks, params.min_gap_ratio * nominal))
 }
 
 fn positions_to_frames(positions: &[f64]) -> Vec<u64> {
@@ -158,6 +167,50 @@ mod tests {
             downbeats,
             beats: Vec::new(),
         }
+    }
+
+    /// A doubled beat is a whole beat to the beat map, so it moves the track
+    /// beat under a playhead and the tempo anything reads off the marks. The
+    /// downbeats have always been filtered for this; the beats are too.
+    #[test]
+    fn a_doubled_beat_is_dropped_like_a_doubled_downbeat() {
+        let beat = 0.5f32;
+        let mut beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * beat).collect();
+        let doubles: Vec<f32> = beats.iter().step_by(8).map(|t| t + beat * 0.1).collect();
+        beats.extend(doubles);
+        beats.sort_by(f32::total_cmp);
+
+        let grid = build_grid(
+            &RawBeats {
+                downbeats: steady(0.0, 2.0, 16),
+                beats,
+            },
+            Consts::SR,
+            &GridParams::default(),
+        );
+
+        assert_eq!(
+            grid.beats().len(),
+            64,
+            "the doubled strikes must be dropped"
+        );
+    }
+
+    /// The filter drops what is too close, never what is merely uneven: a
+    /// record that genuinely slows down keeps every beat it played.
+    #[test]
+    fn an_evenly_spaced_beat_track_survives_the_filter_whole() {
+        let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.5).collect();
+        let grid = build_grid(
+            &RawBeats {
+                downbeats: steady(0.0, 2.0, 16),
+                beats,
+            },
+            Consts::SR,
+            &GridParams::default(),
+        );
+
+        assert_eq!(grid.beats().len(), 64, "no clean beat may be dropped");
     }
 
     /// `bars + 1` downbeats starting at `start`, one every `bar` seconds.

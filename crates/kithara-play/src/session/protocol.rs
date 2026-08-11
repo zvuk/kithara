@@ -1,12 +1,15 @@
 mod wire {
     use firewheel::FirewheelCtx;
-    use kithara_audio::EqBandConfig;
+    use kithara_audio::{CoordinateError, EqBandConfig, SessionAnchorCell, SessionBeat};
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
-    use kithara_platform::sync::mpsc;
+    use kithara_platform::sync::{Arc, mpsc};
 
     use crate::{
-        api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{
+            SessionDuckingMode, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
+            TrackBinding,
+        },
         bridge::{MixTapWriter, SlotControl},
     };
 
@@ -50,6 +53,36 @@ mod wire {
         TransportFrameExhausted,
         #[error("session transport revision is exhausted")]
         TransportRevisionExhausted,
+        #[error("bound player {player_id} has no compiled exact-span engine")]
+        BoundEngineUnavailable { player_id: PlayerId },
+        #[error(
+            "session tempo {beats_per_minute} BPM asks bound player {player_id} for unsupported elastic source rate {source_frames_per_output}"
+        )]
+        BoundTempoOutsideEnvelope {
+            player_id: PlayerId,
+            beats_per_minute: f64,
+            source_frames_per_output: f64,
+        },
+        #[error(
+            "bound player {player_id} cannot resolve the committed session span {start_beat}..{end_beat}"
+        )]
+        BoundSpanOutsideMap {
+            player_id: PlayerId,
+            start_beat: f64,
+            end_beat: f64,
+        },
+        #[error("bound player {player_id} has an invalid session span")]
+        BoundSpanCoordinate {
+            player_id: PlayerId,
+            #[source]
+            reason: CoordinateError,
+        },
+        #[error("bound player {player_id} has an unusable track binding")]
+        BoundBindingUnavailable {
+            player_id: PlayerId,
+            #[source]
+            reason: SyncUnavailable,
+        },
         #[error("stream stopped: {reason}; restart failed: {source}")]
         RestartFailed { reason: String, r#source: String },
     }
@@ -62,6 +95,14 @@ mod wire {
             pcm_pool: PcmPool,
         },
         UnregisterPlayer {
+            player_id: PlayerId,
+        },
+        BindPlayer {
+            player_id: PlayerId,
+            binding: TrackBinding,
+            at: SessionBeat,
+        },
+        UnbindPlayer {
             player_id: PlayerId,
         },
         StartPlayer {
@@ -114,6 +155,7 @@ mod wire {
             target: SessionBeat,
         },
         QuerySessionTransport,
+        QuerySessionAnchor,
         InvalidateAudioRoute {
             reason: String,
         },
@@ -148,6 +190,7 @@ mod wire {
         PlayerRegistered(PlayerId),
         SessionDucking(SessionDuckingMode),
         SessionTransport(SessionTransportSnapshot),
+        SessionAnchor(Arc<SessionAnchorCell>),
         SlotAllocated(AllocatedSlot),
         SampleRate(SessionSampleRate),
         Err(SessionError),
@@ -190,13 +233,18 @@ mod wire {
 }
 
 mod handle {
-    use kithara_audio::EqBandConfig;
+    use kithara_audio::{EqBandConfig, SessionAnchorCell, SessionBeat};
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
 
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionSampleRate};
-    use crate::{api::SlotId, error::PlayError};
+    use super::wire::{
+        AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate,
+    };
+    use crate::{
+        api::{SessionTransportSnapshot, SlotId, Tempo, TrackBinding},
+        error::PlayError,
+    };
 
     pub trait SessionDispatcher: Send + Sync + 'static {
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
@@ -237,6 +285,76 @@ mod handle {
                 pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
                 pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError>;
             }
+        }
+
+        /// The committed session transport as the audio graph last processed it.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`PlayError`] when the session rejects the query or the
+        /// transport has not been processed yet.
+        pub fn transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
+            match self.exec_ok(Cmd::QuerySessionTransport)? {
+                Reply::SessionTransport(snapshot) => Ok(snapshot),
+                _ => Err(PlayError::Session(SessionError::TransportNotProcessed)),
+            }
+        }
+
+        /// Commits a session tempo, in force from the next block boundary.
+        ///
+        /// The grid every bound deck follows. This is the session's own tempo,
+        /// not a deck's playback speed: a deck's speed knob moves that deck,
+        /// this moves what "on the beat" means for all of them.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`PlayError`] when the session rejects the commit — a
+        /// commit is already in flight, or the transport is not installed.
+        pub fn set_session_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::SetSessionTempo { tempo }).map(drop)
+        }
+
+        /// Starts or stops the session clock.
+        ///
+        /// A stopped transport holds its beat, so a deck armed on a coming
+        /// beat waits rather than drifting.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`PlayError`] when the session rejects the commit.
+        pub fn set_session_playing(&self, playing: bool) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::SetSessionPlaying { playing }).map(drop)
+        }
+
+        /// The session grid a deck binds to, shared so a tempo commit reaches
+        /// every bound deck without any of them holding a copy.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`PlayError`] when the session has no transport installed.
+        pub fn anchor(&self) -> Result<Arc<SessionAnchorCell>, PlayError> {
+            match self.exec_ok(Cmd::QuerySessionAnchor)? {
+                Reply::SessionAnchor(anchor) => Ok(anchor),
+                _ => Err(PlayError::Session(SessionError::TransportNotProcessed)),
+            }
+        }
+
+        pub(crate) fn bind_player(
+            &self,
+            player_id: PlayerId,
+            binding: TrackBinding,
+            at: SessionBeat,
+        ) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::BindPlayer {
+                player_id,
+                binding,
+                at,
+            })
+            .map(drop)
+        }
+
+        pub(crate) fn unbind_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::UnbindPlayer { player_id }).map(drop)
         }
 
         pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {

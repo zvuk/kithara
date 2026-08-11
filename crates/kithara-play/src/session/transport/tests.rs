@@ -11,19 +11,34 @@ use firewheel::{
         ProcStore, ProcStreamCtx, ProcessStatus, StreamStatus,
     },
 };
+use kithara_audio::{
+    BeatGrid, SessionAnchorCell, SessionBeat, SessionFrame, TrackBeat, analysis::TrackAnalysis,
+};
+use kithara_bufpool::PcmPool;
+use kithara_events::{EventBus, PlaybackDirection};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
+    bind_player,
     commit::{
-        RenderFrame, SessionTransportCommit, TransportCommitEvent, TransportCommitResult,
-        TransportCommitStamp, TransportObservation, TransportProcessError,
+        SessionTransportCommit, TransportCommitEvent, TransportCommitResult, TransportCommitStamp,
+        TransportObservation, TransportProcessError,
     },
     node::SessionTransportProcessor,
     process::{TransportCommitState, TransportObservationInput, process_transport},
+    seed_committed_transport, set_tempo,
 };
-use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
+use crate::{
+    api::{SessionTransportSnapshot, Tempo, TrackBinding, TransportRevision},
+    session::{
+        Cmd, PlayerId, Reply, SessionError, SessionState, run_cmd,
+        state::register_player,
+        testing::{NoopBackend, test_state},
+    },
+};
 
 const BLOCK_FRAMES: usize = 480;
 const SAMPLE_RATE: u32 = 48_000;
@@ -44,6 +59,122 @@ fn commit(tempo: f64, playing: bool, revision: TransportRevision) -> SessionTran
         playing,
         revision,
     )
+}
+
+fn tempo(beats_per_minute: f64) -> Tempo {
+    Tempo::new(beats_per_minute).expect("invariant: fixture tempo is valid")
+}
+
+fn track_binding(beats_per_minute: u32) -> TrackBinding {
+    let frames_per_beat = u64::from(SAMPLE_RATE) * 60 / u64::from(beats_per_minute);
+    let analysis = TrackAnalysis::with_source_rate(
+        Some(BeatGrid::new(
+            f64::from(beats_per_minute),
+            (0..=4).map(|beat| beat * frames_per_beat).collect(),
+            vec![0],
+            Vec::new(),
+        )),
+        None,
+        frames_per_beat * 5,
+        sample_rate(),
+    );
+    TrackBinding::new(
+        &analysis,
+        sample_rate(),
+        SessionBeat::default(),
+        TrackBeat::default(),
+        PlaybackDirection::Forward,
+    )
+    .expect("invariant: fixture binding is valid")
+}
+
+fn register_deck(state: &mut SessionState<NoopBackend>) -> PlayerId {
+    register_player(state, EventBus::default(), Vec::new(), PcmPool::default())
+}
+
+fn started_state(beats_per_minute: f64) -> (SessionState<NoopBackend>, PlayerId) {
+    let mut state = test_state();
+    let player_id = register_deck(&mut state);
+    match run_cmd(
+        &mut state,
+        Cmd::StartPlayer {
+            master_volume: 1.0,
+            player_id,
+            sample_rate: SAMPLE_RATE,
+        },
+    ) {
+        Reply::Ok => {}
+        Reply::Err(error) => panic!("fixture player start failed: {error}"),
+        _ => panic!("fixture player start returned an unexpected reply"),
+    }
+    seed_committed_transport(&mut state, tempo(beats_per_minute), sample_rate())
+        .expect("invariant: fixture transport is committed");
+    (state, player_id)
+}
+
+fn state_with_bound_decks(track_tempos: &[u32]) -> SessionState<NoopBackend> {
+    let (mut state, first_player_id) = started_state(90.0);
+    for (index, track_tempo) in track_tempos.iter().copied().enumerate() {
+        let player_id = if index == 0 {
+            first_player_id
+        } else {
+            register_deck(&mut state)
+        };
+        bind_player(
+            &mut state,
+            player_id,
+            track_binding(track_tempo),
+            SessionBeat::default(),
+        )
+        .expect("invariant: fixture binding fits the committed tempo");
+    }
+    state
+}
+
+#[kithara::test]
+fn a_commit_inside_every_deck_envelope_is_accepted() {
+    let mut state = state_with_bound_decks(&[120, 75]);
+
+    assert!(set_tempo(&mut state, tempo(95.0)).is_ok());
+}
+
+#[kithara::test]
+fn a_commit_outside_one_deck_envelope_is_refused_typed() {
+    let mut state = state_with_bound_decks(&[120, 75]);
+
+    assert!(matches!(
+        set_tempo(&mut state, tempo(120.0)),
+        Err(SessionError::BoundTempoOutsideEnvelope { .. })
+    ));
+}
+
+#[kithara::test]
+fn a_refused_commit_leaves_the_previously_committed_tempo_in_force() {
+    let mut state = state_with_bound_decks(&[120, 75]);
+    let _ = set_tempo(&mut state, tempo(120.0));
+
+    assert_eq!(
+        state.transport.accepted().map(|commit| commit.tempo()),
+        Some(tempo(90.0))
+    );
+}
+
+#[kithara::test]
+fn a_bind_the_engine_cannot_render_is_refused_before_the_decks_state_moves() {
+    let (mut state, player_id) = started_state(90.0);
+
+    let result = bind_player(
+        &mut state,
+        player_id,
+        track_binding(60),
+        SessionBeat::default(),
+    );
+
+    assert!(matches!(
+        result,
+        Err(SessionError::BoundTempoOutsideEnvelope { .. })
+    ));
+    assert!(state.players.iter().all(|player| player.binding.is_none()));
 }
 
 fn proc_info_at(clock_samples: i64) -> ProcInfo {
@@ -73,7 +204,11 @@ fn proc_extra() -> (ProcExtra, Output<TransportObservation>) {
     let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
     let (observation_input, observation_output) = triple_buffer(&TransportObservation::default());
     let mut store = ProcStore::with_capacity(2);
-    assert!(store.insert(TransportCommitState::default()).is_ok());
+    assert!(
+        store
+            .insert(TransportCommitState::new(SessionAnchorCell::new()))
+            .is_ok()
+    );
     assert!(
         store
             .insert(TransportObservationInput::new(observation_input))
@@ -175,7 +310,7 @@ fn active_harness() -> (
     let (mut extra, mut output) = proc_extra();
     let mut processor = SessionTransportProcessor;
     let active = commit(120.0, true, TransportRevision::FIRST);
-    let stamp = TransportCommitStamp::new(None, active, RenderFrame::new(0), sample_rate());
+    let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     process_node(
         &mut processor,
         &proc_info_at(0),
@@ -197,7 +332,7 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
 
@@ -241,7 +376,7 @@ fn relocation_commit_reanchors_the_exact_target_beat() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -271,7 +406,7 @@ fn inactive_transport_publishes_a_frozen_position() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         paused,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -307,7 +442,7 @@ fn late_transport_commit_is_rejected_without_changing_the_active_commit() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -352,7 +487,7 @@ fn stale_transport_commit_is_rejected_without_breaking_the_clock() {
     let stamp = TransportCommitStamp::new(
         Some(stale),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -387,7 +522,7 @@ fn transport_abort_is_idempotent() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -426,7 +561,7 @@ fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -455,7 +590,7 @@ fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
 fn duplicate_stage_in_one_block_is_rejected() {
     let (mut extra, _output) = proc_extra();
     let active = commit(120.0, true, TransportRevision::FIRST);
-    let stamp = TransportCommitStamp::new(None, active, RenderFrame::new(0), sample_rate());
+    let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     assert_eq!(
         process_result(
             &proc_info_at(0),
@@ -498,7 +633,7 @@ fn stage_for_another_sample_rate_is_rejected() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         commit(60.0, true, second_revision()),
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         foreign_rate,
     );
 
@@ -526,7 +661,7 @@ fn apply_for_another_sample_rate_is_rejected() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -562,7 +697,7 @@ fn a_failing_block_rejects_the_pending_stamp_and_still_publishes() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         commit(60.0, true, second_revision()),
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -587,4 +722,74 @@ fn a_failing_block_rejects_the_pending_stamp_and_still_publishes() {
         "the control thread must learn about the dropped stamp from a failing block"
     );
     assert!(observed.snapshot().is_some());
+}
+
+/// Frames per beat of the harness commit: 48000 Hz at 120 BPM.
+const FRAMES_PER_BEAT: i64 = 24_000;
+
+/// Tier A. A stamped beat resolves to its own frame, so the offset a track is
+/// started at is the frame the beat is on — not the block it falls in, not a
+/// rounded boundary. Zero frames of error is the whole point of the anchor.
+#[kithara::test]
+fn a_stamped_beat_resolves_to_its_exact_frame() {
+    let (_processor, extra, _output, _active) = active_harness();
+    let state = extra
+        .store
+        .try_get::<TransportCommitState>()
+        .expect("invariant: the harness installed the transport state");
+    let block = i64::try_from(BLOCK_FRAMES).expect("invariant: the block fits i64");
+
+    for beat in 1..5_i64 {
+        let frame = beat * FRAMES_PER_BEAT;
+        let block_start = frame - frame.rem_euclid(block);
+        let target = SessionBeat::new(
+            beat.to_f64()
+                .ok_or(())
+                .expect("invariant: the beat is representable"),
+        )
+        .expect("invariant: the beat is finite");
+
+        let offset =
+            state.offset_for_beat(&proc_info_at(block_start), target, TransportRevision::FIRST);
+
+        assert_eq!(
+            offset,
+            Some(usize::try_from(frame - block_start).expect("invariant: the offset fits usize")),
+            "beat {beat} must resolve to frame {frame}"
+        );
+    }
+}
+
+/// A beat that is not inside this block has no offset here. The render pass
+/// asks again next block rather than starting early.
+#[kithara::test]
+fn a_beat_outside_the_block_has_no_offset() {
+    let (_processor, extra, _output, _active) = active_harness();
+    let state = extra
+        .store
+        .try_get::<TransportCommitState>()
+        .expect("invariant: the harness installed the transport state");
+    let target = SessionBeat::new(1.0).expect("invariant: the beat is finite");
+
+    let offset = state.offset_for_beat(&proc_info_at(0), target, TransportRevision::FIRST);
+
+    assert_eq!(offset, None);
+}
+
+/// A start planned against a superseded commit is dropped, not re-aimed: the
+/// frame it was computed for is no longer the frame that beat lands on.
+#[kithara::test]
+fn a_stale_revision_yields_no_offset() {
+    let (_processor, extra, _output, _active) = active_harness();
+    let state = extra
+        .store
+        .try_get::<TransportCommitState>()
+        .expect("invariant: the harness installed the transport state");
+    let target = SessionBeat::new(1.0).expect("invariant: the beat is finite");
+    let block = i64::try_from(BLOCK_FRAMES).expect("invariant: the block fits i64");
+    let block_start = FRAMES_PER_BEAT - FRAMES_PER_BEAT.rem_euclid(block);
+
+    let offset = state.offset_for_beat(&proc_info_at(block_start), target, second_revision());
+
+    assert_eq!(offset, None);
 }

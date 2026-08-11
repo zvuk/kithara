@@ -50,7 +50,13 @@ impl BungeeElastic {
     const LATENCY_PROBE_BLOCKS: usize = 4;
     const LATENCY_PROBE_FRAMES: usize = 8192;
 
-    fn rate_envelope() -> Result<ElasticRateEnvelope, ElasticError> {
+    /// Declared source-frame advance supported by the exact-span engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ElasticError`] when the declared bounds cannot form a valid
+    /// rate envelope.
+    pub fn rate_envelope() -> Result<ElasticRateEnvelope, ElasticError> {
         ElasticRateEnvelope::try_from(
             Self::MIN_SOURCE_FRAMES_PER_OUTPUT..=Self::MAX_SOURCE_FRAMES_PER_OUTPUT,
         )

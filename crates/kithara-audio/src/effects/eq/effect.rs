@@ -1,4 +1,4 @@
-use kithara_decode::PcmChunk;
+use kithara_decode::{DecodeResult, PcmChunk};
 
 use super::{EqBandConfig, IsolatorEq};
 use crate::AudioEffect;
@@ -61,10 +61,14 @@ impl AudioEffect for EqEffect {
         None
     }
 
-    fn process(&mut self, mut chunk: PcmChunk) -> Option<PcmChunk> {
+    fn held_source_frames(&self) -> u64 {
+        0
+    }
+
+    fn process(&mut self, mut chunk: PcmChunk) -> DecodeResult<Option<PcmChunk>> {
         let channels = self.channels as usize;
         if channels == 0 {
-            return Some(chunk);
+            return Ok(Some(chunk));
         }
 
         let samples = &mut chunk.samples;
@@ -76,7 +80,7 @@ impl AudioEffect for EqEffect {
             }
         }
 
-        Some(chunk)
+        Ok(Some(chunk))
     }
 
     fn reset(&mut self) {
@@ -131,7 +135,10 @@ mod tests {
             (pcm.iter().map(|s| s * s).sum::<f32>() / f32::from(num_frames)).sqrt();
 
         let chunk = test_chunk(spec, pcm);
-        let output = eq.process(chunk).unwrap();
+        let output = eq
+            .process(chunk)
+            .expect("EQ processing must succeed")
+            .expect("EQ emits synchronously");
         let out = &output.samples[..];
 
         let steady = &out[4096..];
@@ -336,7 +343,10 @@ mod tests {
             .map(|i| (2.0 * PI * 1000.0 * f32::from(i + 4096) / 44100.0).sin())
             .collect();
         let chunk = test_chunk(spec, signal);
-        let output = eq.process(chunk).unwrap();
+        let output = eq
+            .process(chunk)
+            .expect("EQ processing must succeed")
+            .expect("EQ emits synchronously");
         let out = &output.samples[..];
 
         let max_diff = out
@@ -367,7 +377,7 @@ mod tests {
 
         let pcm = vec![0.5f32; sample_len];
         let chunk = test_chunk(spec, pcm);
-        let result = eq.process(chunk);
+        let result = eq.process(chunk).expect("EQ processing must succeed");
         assert!(result.is_some());
         assert_eq!(result.unwrap().samples.len(), sample_len);
     }
@@ -397,7 +407,10 @@ mod tests {
 
             let pcm: Vec<f32> = (0u16..1024).map(|i| (f32::from(i) * 0.1).sin()).collect();
             let chunk = test_chunk(spec, pcm);
-            let output = eq.process(chunk).unwrap();
+            let output = eq
+                .process(chunk)
+                .expect("EQ processing must succeed")
+                .expect("EQ emits synchronously");
             for (i, &s) in output.samples.iter().enumerate() {
                 assert!(s.is_finite(), "round {round} sample {i}: got {s}");
             }
@@ -417,7 +430,10 @@ mod tests {
         pcm[20] = f32::INFINITY;
         pcm[30] = f32::NEG_INFINITY;
         let chunk = test_chunk(spec, pcm);
-        let output = eq.process(chunk).unwrap();
+        let output = eq
+            .process(chunk)
+            .expect("EQ processing must succeed")
+            .expect("EQ emits synchronously");
 
         for (i, &s) in output.samples.iter().enumerate() {
             assert!(s.is_finite(), "sample {i}: got {s}");
@@ -442,7 +458,10 @@ mod tests {
 
             let pcm: Vec<f32> = (0u16..512).map(|i| (f32::from(i) * 0.3).sin()).collect();
             let chunk = test_chunk(spec, pcm);
-            let output = eq.process(chunk).unwrap();
+            let output = eq
+                .process(chunk)
+                .expect("EQ processing must succeed")
+                .expect("EQ emits synchronously");
             for &s in &output.samples[..] {
                 assert!(s.is_finite());
             }
@@ -592,7 +611,10 @@ mod tests {
         let input_rms: f32 = (pcm.iter().map(|s| s * s).sum::<f32>() / num_frames as f32).sqrt();
 
         let chunk = test_chunk(spec, pcm);
-        let output = eq.process(chunk).unwrap();
+        let output = eq
+            .process(chunk)
+            .expect("EQ processing must succeed")
+            .expect("EQ emits synchronously");
         let out = &output.samples[..];
 
         let steady = &out[4096..];

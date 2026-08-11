@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     io::{Error as IoError, ErrorKind},
+    num::NonZeroU32,
 };
 
 use kithara::{
@@ -203,6 +204,8 @@ enum AnalysisBytesError {
     Fingerprint,
     #[display("track analysis blob is too large")]
     TooLarge,
+    #[display("track analysis blob carries a beat grid but no source rate")]
+    BeatWithoutSourceRate,
     #[display("track analysis blob is corrupt")]
     Corrupt,
 }
@@ -223,6 +226,15 @@ fn analysis_to_bytes(
     write_section(&mut out, &waveform)?;
     write_section(&mut out, &beat)?;
     out.extend_from_slice(&analysis.source_frames().to_le_bytes());
+    // The rate the source frames are counted in. Without it an analysis
+    // cannot be placed on a beat grid at all, so a cache that drops it serves
+    // a track that can never be synced.
+    out.extend_from_slice(
+        &analysis
+            .source_sample_rate()
+            .map_or(0, NonZeroU32::get)
+            .to_le_bytes(),
+    );
     Ok(out)
 }
 
@@ -247,6 +259,13 @@ fn analysis_from_bytes(
     let waveform_bytes = read_section(bytes, &mut cursor)?;
     let beat_bytes = read_section(bytes, &mut cursor)?;
     let source_frames = read_u64(bytes, &mut cursor)?;
+    // The rate is a trailing optional so that blobs written before it existed
+    // still decode, rather than every cached waveform on disk being thrown
+    // away to add a field an analysis is allowed to lack.
+    let source_sample_rate = (cursor < bytes.len())
+        .then(|| read_u32(bytes, &mut cursor))
+        .transpose()?
+        .and_then(NonZeroU32::new);
     if cursor != bytes.len() {
         return Err(AnalysisBytesError::Corrupt);
     }
@@ -259,7 +278,18 @@ fn analysis_from_bytes(
         .then(|| BeatGrid::try_from(beat_bytes))
         .transpose()
         .map_err(|_| AnalysisBytesError::Corrupt)?;
-    Ok(TrackAnalysis::new(beat, waveform, source_frames))
+    // Beat markers are frame counts, so without the rate they name no instant:
+    // the beat map refuses to build, and nothing can read a tempo or a phase
+    // off them. Such a blob is an analysis missing the half it is wanted for,
+    // and serving it would pin the track to that state forever — the cache
+    // never re-analyses a hit. Reported as unreadable so it is re-analysed.
+    if beat.is_some() && source_sample_rate.is_none() {
+        return Err(AnalysisBytesError::BeatWithoutSourceRate);
+    }
+    Ok(source_sample_rate.map_or_else(
+        || TrackAnalysis::new(beat.clone(), waveform.clone(), source_frames),
+        |rate| TrackAnalysis::with_source_rate(beat.clone(), waveform.clone(), source_frames, rate),
+    ))
 }
 
 fn write_section(out: &mut Vec<u8>, section: &[u8]) -> Result<(), AnalysisBytesError> {
@@ -309,7 +339,7 @@ fn read_array<const N: usize>(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{num::NonZeroU32, path::Path};
 
     // The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
@@ -349,8 +379,70 @@ mod tests {
         )
     }
 
+    /// A beat grid always arrives with the rate its markers are frames of;
+    /// the codec refuses the pair without it, so the fixture carries it.
     fn full_analysis() -> TrackAnalysis {
-        TrackAnalysis::new(Some(grid()), Some(wave()), 1_234_567)
+        TrackAnalysis::with_source_rate(Some(grid()), Some(wave()), 1_234_567, fixture_rate())
+    }
+
+    fn fixture_rate() -> NonZeroU32 {
+        NonZeroU32::new(44_100).expect("invariant: the fixture rate is non-zero")
+    }
+
+    fn waveform_only_analysis() -> TrackAnalysis {
+        TrackAnalysis::new(None, Some(wave()), 1_234_567)
+    }
+
+    /// A cached analysis has to come back able to place a track on a beat
+    /// grid, and the source rate is what makes that possible: without it a
+    /// binding is refused outright, so a cache that drops it serves a track
+    /// that can never be synced.
+    #[kithara::test]
+    fn the_codec_round_trips_the_source_sample_rate() {
+        let rate = fixture_rate();
+        let analysis = TrackAnalysis::with_source_rate(Some(grid()), Some(wave()), 1_234_567, rate);
+
+        let bytes = analysis_to_bytes(&analysis, FP).expect("encodes");
+        let back = analysis_from_bytes(&bytes, FP).expect("decodes");
+
+        assert_eq!(back.source_sample_rate(), Some(rate));
+    }
+
+    /// An analysis that never had a rate must not gain one from the cache.
+    #[kithara::test]
+    fn the_codec_keeps_an_absent_source_rate_absent() {
+        let bytes = analysis_to_bytes(&waveform_only_analysis(), FP).expect("encodes");
+        let back = analysis_from_bytes(&bytes, FP).expect("decodes");
+
+        assert_eq!(back.source_sample_rate(), None);
+    }
+
+    /// A waveform-only blob written before the rate existed is an analysis
+    /// without one, not a stale format. Refusing it would discard every cached
+    /// waveform on disk to add a field it never needed.
+    #[kithara::test]
+    fn a_waveform_blob_without_the_trailing_rate_still_decodes() {
+        let mut bytes = analysis_to_bytes(&waveform_only_analysis(), FP).expect("encodes");
+        bytes.truncate(bytes.len() - 4);
+
+        let back = analysis_from_bytes(&bytes, FP).expect("a rate-less waveform is an analysis");
+
+        assert!(back.waveform().is_some(), "the waveform survives");
+    }
+
+    /// Beat markers are frame counts: without the rate they name no instant,
+    /// so the map refuses to build and no tempo or phase can be read. Serving
+    /// such a blob would pin the track there for good — a cache hit is never
+    /// re-analysed — so it has to read as unreadable instead.
+    #[kithara::test]
+    fn a_beat_blob_without_the_trailing_rate_is_refused() {
+        let mut bytes = analysis_to_bytes(&full_analysis(), FP).expect("encodes");
+        bytes.truncate(bytes.len() - 4);
+
+        assert!(matches!(
+            analysis_from_bytes(&bytes, FP),
+            Err(AnalysisBytesError::BeatWithoutSourceRate)
+        ));
     }
 
     fn wave_only() -> TrackAnalysis {
@@ -425,7 +517,7 @@ mod tests {
 
     #[kithara::test]
     fn codec_round_trips_beat_only() {
-        let analysis = TrackAnalysis::new(Some(grid()), None, 0);
+        let analysis = TrackAnalysis::with_source_rate(Some(grid()), None, 0, fixture_rate());
         let bytes = analysis_to_bytes(&analysis, FP).expect("encodes");
         let back = analysis_from_bytes(&bytes, FP).expect("decodes");
         assert!(back.waveform().is_none());

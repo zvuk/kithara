@@ -15,16 +15,12 @@ use kithara_stream::{
     ReaderWarmup, needs_exact_byte_sizes,
 };
 
-use super::probe::{
-    ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
-    resolve_codec_container, sniff_container_from_source,
-};
+use super::probe::{ProbeHint, container_from_extension, resolve_against_source};
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use crate::GaplessInfo;
 use crate::{
     Decoder,
     error::{DecodeError, DecodeResult},
-    mp4::sniff_mp4_codec,
     traits::BoxedSource,
 };
 
@@ -237,9 +233,10 @@ impl DecoderFactory {
     ///
     /// # Errors
     ///
-    /// Returns `DecodeError::ProbeFailed` when the hint is missing or too
-    /// weak to pick a codec, and `DecodeError::*` for backend failures.
-    /// No fallback — callers must supply a usable hint.
+    /// Returns `DecodeError::ProbeFailed` when neither the extension nor the
+    /// source's own bytes identify a codec, and `DecodeError::*` for backend
+    /// failures. The hint is completed against the bytes on the shared path,
+    /// so an extension-less source is not refused before it is looked at.
     pub fn create_with_probe<R, B>(
         source: R,
         hint: Option<&str>,
@@ -249,24 +246,15 @@ impl DecoderFactory {
         R: Read + Seek + Send + Sync + 'static,
         B: ResamplerBackend,
     {
-        let mut source = source;
-        let mut probe_hint = ProbeHint {
-            container: hint.and_then(container_from_extension),
-            extension: hint.map(String::from),
-            ..Default::default()
-        };
-
-        // WHY: MP4/M4A is container-only (AAC/ALAC/FLAC all live there); sniff the `stsd` sample-entry tag to pick the right codec backend.
-        if matches!(
-            probe_hint.container,
-            Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
-        ) && let Some(codec) = sniff_mp4_codec(&mut source).and_then(codec_from_mp4_fourcc)
-        {
-            probe_hint.codec = Some(codec);
-        }
-
-        probe_codec(&probe_hint)?;
-        Self::create(source, &probe_hint, config)
+        Self::create(
+            source,
+            &ProbeHint {
+                container: hint.and_then(container_from_extension),
+                extension: hint.map(String::from),
+                ..Default::default()
+            },
+            config,
+        )
     }
 
     pub(super) fn dispatch_backend<B>(
@@ -277,10 +265,7 @@ impl DecoderFactory {
     where
         B: ResamplerBackend,
     {
-        let (codec, mut container) = resolve_codec_container(hint)?;
-        if container.is_none() {
-            container = sniff_container_from_source(&mut source);
-        }
+        let (codec, container) = resolve_against_source(hint, &mut *source)?;
 
         tracing::debug!(
             ?codec,

@@ -52,6 +52,15 @@
                         style: Transport,
                         write: Command(id: "deck.transport.next", with: { "deck": "$deck" }),
                     ),
+                    Button(
+                        id: "sync",
+                        size: (w: Fixed(48.0), h: Fill),
+                        label: "SYNC",
+                        style: Transport,
+                        frame: (top: false, right: false, bottom: false, left: true),
+                        read: Parameter(id: "deck.transport.synced", with: { "deck": "$deck" }),
+                        write: Command(id: "deck.transport.sync", with: { "deck": "$deck" }),
+                    ),
                     Slot(id: "gap", size: (w: Fill, h: Fill)),
                     Button(
                         id: "zoom-out",

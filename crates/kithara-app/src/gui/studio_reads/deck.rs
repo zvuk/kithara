@@ -78,6 +78,9 @@ impl<'a> Node<'a> for DeckNode<'a> {
             "tempo" => Box::new(TempoNode {
                 timestretch: self.view.timestretch,
             }),
+            "transport" => Box::new(TransportNode {
+                sync: self.view.sync,
+            }),
             "eq" => Box::new(EqNode {
                 ui: self.ui,
                 cache: self.cache,
@@ -92,6 +95,23 @@ impl<'a> Node<'a> for DeckNode<'a> {
             _ => return None,
         };
         Some(node)
+    }
+}
+
+/// The deck's grid mode. Read so the control shows what is in force rather
+/// than what was last pressed.
+#[derive(Clone, Copy)]
+struct TransportNode {
+    sync: bool,
+}
+
+impl<'a> Node<'a> for TransportNode {
+    fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
+        let value = match segment {
+            "synced" => ReadValue::Bool(self.sync),
+            _ => return None,
+        };
+        Some(Box::new(Value(value)))
     }
 }
 

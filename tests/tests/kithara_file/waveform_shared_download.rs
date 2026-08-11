@@ -110,7 +110,7 @@ async fn waveform_and_player_share_one_get() {
         BeatAnalysisConfig::default(),
         PcmPool::default(),
     );
-    let mut analysis_rx = runner.analyze(waveform_cfg);
+    let mut analysis_rx = runner.analyze(waveform_cfg, std::sync::Arc::from("fixture"));
 
     let player = Audio::<Stream<File>>::new(player_cfg)
         .await

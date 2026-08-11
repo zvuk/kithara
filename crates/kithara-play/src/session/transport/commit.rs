@@ -1,6 +1,8 @@
 use std::num::NonZeroU32;
 
-use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
+use kithara_audio::{SessionBeat, SessionFrame};
+
+use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum TransportBoundary {
@@ -47,15 +49,6 @@ impl SessionTransportCommit {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, derive_more::Into)]
-pub(crate) struct RenderFrame(i64);
-
-impl RenderFrame {
-    pub(crate) const fn new(value: i64) -> Self {
-        Self(value)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, vis = "pub(crate)")]
 pub(crate) struct TransportCommitStamp {
@@ -64,7 +57,7 @@ pub(crate) struct TransportCommitStamp {
     #[field(get, copy)]
     previous: Option<SessionTransportCommit>,
     #[field(get, copy)]
-    target_frame: RenderFrame,
+    target_frame: SessionFrame,
     #[field(get, copy)]
     next: SessionTransportCommit,
 }
@@ -73,7 +66,7 @@ impl TransportCommitStamp {
     pub(crate) const fn new(
         previous: Option<SessionTransportCommit>,
         next: SessionTransportCommit,
-        target_frame: RenderFrame,
+        target_frame: SessionFrame,
         sample_rate: NonZeroU32,
     ) -> Self {
         Self {

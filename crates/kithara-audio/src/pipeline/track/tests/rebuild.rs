@@ -65,12 +65,51 @@ pub(super) fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
     data
 }
 
+#[derive(Default)]
+pub(super) struct BufferThenHalveFrames {
+    buffered: Option<PcmChunk>,
+}
+
+impl AudioEffect for BufferThenHalveFrames {
+    fn flush(&mut self) -> Option<PcmChunk> {
+        self.buffered.take().and_then(halve_frames)
+    }
+
+    fn held_source_frames(&self) -> u64 {
+        self.buffered
+            .as_ref()
+            .map_or(0, |chunk| u64::from(chunk.meta.frames))
+    }
+
+    fn process(&mut self, chunk: PcmChunk) -> DecodeResult<Option<PcmChunk>> {
+        Ok(self.buffered.replace(chunk).and_then(halve_frames))
+    }
+
+    fn reset(&mut self) {
+        self.buffered = None;
+    }
+}
+
+fn halve_frames(mut chunk: PcmChunk) -> Option<PcmChunk> {
+    let frames = chunk.meta.frames / 2;
+    let samples = usize::try_from(frames)
+        .ok()?
+        .checked_mul(usize::from(chunk.meta.spec.channels))?;
+    chunk.samples.truncate(samples);
+    chunk.meta.frames = frames;
+    chunk.meta.end_timestamp = duration_for_frames(
+        chunk.meta.spec.sample_rate.get(),
+        chunk.meta.frame_offset.saturating_add(u64::from(frames)),
+    );
+    Some(chunk)
+}
+
 pub(super) struct Consts;
 
 impl Consts {
-    const CHANNELS: u16 = 2;
+    pub(super) const CHANNELS: u16 = 2;
     pub(super) const ROUTE_CHUNK_FRAMES: usize = 256;
-    const ROUTE_SAMPLE_RATE: u32 = 48_000;
+    pub(super) const ROUTE_SAMPLE_RATE: u32 = 48_000;
     pub(super) const SAMPLE_RATE: u32 = 44_100;
     const TONE_HZ: f64 = 440.0;
 }
@@ -796,14 +835,18 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
 /// the container origin, exactly like the Apple fMP4 segment path. A flat
 /// source has neither, so no recreate origin other than `base_offset` is
 /// even reachable on it.
-struct RouteParams {
+pub(super) struct RouteParams {
+    pub(super) active_timeline_gap: u64,
+    pub(super) incoming_timeline_gap: u64,
+    pub(super) segmented: bool,
+    pub(super) initial_host_rate: u32,
+}
+
+#[derive(Default)]
+struct RouteDecoderParams {
     chunks_before_eof: Option<usize>,
     gapless: Option<GaplessInfo>,
     incoming_chunks_before_eof: Option<usize>,
-    active_timeline_gap: u64,
-    incoming_timeline_gap: u64,
-    segmented: bool,
-    initial_host_rate: u32,
 }
 
 pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
@@ -814,11 +857,8 @@ pub(super) async fn route_signal_source_with_effects(
     initial_host_rate: u32,
     effects: Vec<Box<dyn AudioEffect>>,
 ) -> RouteFixture {
-    route_source(
+    route_source_with_effects(
         RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: None,
             active_timeline_gap: 0,
             incoming_timeline_gap: 0,
             initial_host_rate,
@@ -829,21 +869,33 @@ pub(super) async fn route_signal_source_with_effects(
     .await
 }
 
+async fn route_source(params: RouteParams) -> RouteFixture {
+    route_source_with_effects(params, Vec::new()).await
+}
+
+pub(super) async fn route_source_with_effects(
+    params: RouteParams,
+    effects: Vec<Box<dyn AudioEffect>>,
+) -> RouteFixture {
+    route_source_with_decoder(params, effects, RouteDecoderParams::default()).await
+}
+
 pub(super) async fn route_signal_source_with_gapless(
     initial_host_rate: u32,
     gapless: GaplessInfo,
 ) -> RouteFixture {
-    route_source(
+    route_source_with_decoder(
         RouteParams {
-            chunks_before_eof: None,
-            gapless: Some(gapless),
-            incoming_chunks_before_eof: None,
             active_timeline_gap: 0,
             incoming_timeline_gap: 0,
             initial_host_rate,
             segmented: false,
         },
         Vec::new(),
+        RouteDecoderParams {
+            gapless: Some(gapless),
+            ..Default::default()
+        },
     )
     .await
 }
@@ -853,17 +905,19 @@ pub(super) async fn route_signal_source_with_gapless_eof(
     gapless: GaplessInfo,
     chunks_before_eof: usize,
 ) -> RouteFixture {
-    route_source(
+    route_source_with_decoder(
         RouteParams {
-            chunks_before_eof: Some(chunks_before_eof),
-            gapless: Some(gapless),
-            incoming_chunks_before_eof: None,
             active_timeline_gap: 0,
             incoming_timeline_gap: 0,
             initial_host_rate,
             segmented: false,
         },
         Vec::new(),
+        RouteDecoderParams {
+            chunks_before_eof: Some(chunks_before_eof),
+            gapless: Some(gapless),
+            ..Default::default()
+        },
     )
     .await
 }
@@ -872,28 +926,33 @@ pub(super) async fn route_signal_source_with_finite_incoming(
     initial_host_rate: u32,
     incoming_chunks_before_eof: usize,
 ) -> RouteFixture {
-    route_source(
+    route_source_with_decoder(
         RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: Some(incoming_chunks_before_eof),
             active_timeline_gap: 0,
             incoming_timeline_gap: 0,
             initial_host_rate,
             segmented: false,
         },
         Vec::new(),
+        RouteDecoderParams {
+            incoming_chunks_before_eof: Some(incoming_chunks_before_eof),
+            ..Default::default()
+        },
     )
     .await
 }
 
-async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -> RouteFixture {
+async fn route_source_with_decoder(
+    params: RouteParams,
+    effects: Vec<Box<dyn AudioEffect>>,
+    decoder: RouteDecoderParams,
+) -> RouteFixture {
     let control = Arc::new(TestControl::new(media_info(0)));
     let drops = Arc::new(Mutex::new(Vec::new()));
     let host_sample_rate = Arc::new(AtomicU32::new(params.initial_host_rate));
-    let chunks_before_eof = params.chunks_before_eof;
-    let gapless = params.gapless;
-    let incoming_chunks_before_eof = params.incoming_chunks_before_eof;
+    let chunks_before_eof = decoder.chunks_before_eof;
+    let gapless = decoder.gapless;
+    let incoming_chunks_before_eof = decoder.incoming_chunks_before_eof;
     let active_timeline_gap = params.active_timeline_gap;
     let incoming_timeline_gap = params.incoming_timeline_gap;
     let segmented = params.segmented;
@@ -984,18 +1043,12 @@ pub(super) async fn route_signal_source_with_gaps(
     active_timeline_gap: u64,
     incoming_timeline_gap: u64,
 ) -> RouteFixture {
-    route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: None,
-            active_timeline_gap,
-            incoming_timeline_gap,
-            initial_host_rate: Consts::SAMPLE_RATE,
-            segmented: false,
-        },
-        Vec::new(),
-    )
+    route_source(RouteParams {
+        active_timeline_gap,
+        incoming_timeline_gap,
+        initial_host_rate: Consts::SAMPLE_RATE,
+        segmented: false,
+    })
     .await
 }
 
@@ -1026,7 +1079,7 @@ fn peak_first_diff(left: &[f32], center: usize, half: usize) -> f32 {
     peak
 }
 
-fn next_test_chunk(
+pub(super) fn next_test_chunk(
     source: &mut StreamAudioSource<TestStream>,
     route_recreated: &mut bool,
 ) -> PcmChunk {
@@ -1371,6 +1424,54 @@ async fn rebuilding_decoder_completion_installs_once() {
 }
 
 #[kithara::test(tokio)]
+async fn format_boundary_rebuild_rebases_raw_frontier_to_emitted_source() {
+    let RouteFixture {
+        control,
+        drops,
+        mut source,
+        ..
+    } = route_signal_source_with_effects(
+        Consts::SAMPLE_RATE,
+        vec![Box::new(BufferThenHalveFrames::default())],
+    )
+    .await;
+    let TrackStep::Produced(_) = source.step_track() else {
+        panic!("the buffering effect must emit its first completed source span");
+    };
+    let epoch = source.seek_obs.epoch();
+    let emitted = source
+        .resume
+        .emitted_source_head(epoch)
+        .expect("the effect output must prove an emitted source head");
+    assert!(
+        source
+            .resume
+            .raw_decode_head(epoch)
+            .is_some_and(|raw| raw.0 > emitted.0),
+        "the fixture requires discarded raw source ahead of emitted audio",
+    );
+
+    let build = BuildId::fixture(7);
+    control.set_media_info(media_info(1));
+    enter_rebuilding(&mut source, 7, recreate_state(1));
+    push_route_completion(&source, build, DecoderBuildPurpose::Replacement, 2, drops);
+    source.flush_deferred();
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    assert!(matches!(source.state, CurrentFsm::Decoding(_)));
+    assert_eq!(source.resume.emitted_source_head(epoch), Some(emitted));
+    assert_eq!(source.resume.raw_decode_head(epoch), Some(emitted));
+
+    control.set_exact_plan(exact_incoming_plan());
+    source.flush_deferred();
+    assert_eq!(
+        control.landing(),
+        Some(duration_for_frames(emitted.1, emitted.0)),
+        "the next ABR plan must start from the rebuilt decoder's exact resume point",
+    );
+}
+
+#[kithara::test(tokio)]
 async fn rebuilding_decoder_completion_emits_decoder_changed_cause() {
     let RebuildFixture {
         drops, mut source, ..
@@ -1537,18 +1638,12 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin() {
         host_sample_rate,
         mut source,
         ..
-    } = route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: None,
-            active_timeline_gap: 0,
-            incoming_timeline_gap: 0,
-            initial_host_rate: Consts::SAMPLE_RATE,
-            segmented: true,
-        },
-        Vec::new(),
-    )
+    } = route_source(RouteParams {
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate: Consts::SAMPLE_RATE,
+        segmented: true,
+    })
     .await;
 
     let mut route_recreated = false;

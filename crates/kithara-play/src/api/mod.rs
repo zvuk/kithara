@@ -8,7 +8,7 @@ pub use binding::{SyncUnavailable, TrackBinding};
 pub use equalizer::Equalizer;
 pub use mix::{CrossfaderBus, crossfader_gain};
 pub use transport::{
-    SessionBeat, SessionBeatError, SessionTransportSnapshot, Tempo, TempoError, TransportRevision,
+    BeatQuantum, BeatQuantumError, SessionTransportSnapshot, Tempo, TempoError, TransportRevision,
 };
 pub use types::{
     DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection, PlayerEvent,

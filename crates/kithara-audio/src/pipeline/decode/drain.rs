@@ -1,4 +1,4 @@
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_decode::{DecodeResult, PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, AudioFormat, DeferredBus, Event};
 use kithara_stream::PlayheadWrite;
 
@@ -23,9 +23,12 @@ impl EofDrain {
         }
     }
 
-    pub(crate) fn next(&mut self, effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmChunk> {
+    pub(crate) fn next(
+        &mut self,
+        effects: &mut [Box<dyn AudioEffect>],
+    ) -> DecodeResult<Option<PcmChunk>> {
         if effects.is_empty() {
-            return None;
+            return Ok(None);
         }
         if !self.active {
             self.exhausted.fill(false);
@@ -90,20 +93,20 @@ fn pull(
     effects: &mut [Box<dyn AudioEffect>],
     exhausted: &mut [bool],
     stage: usize,
-) -> Option<PcmChunk> {
+) -> DecodeResult<Option<PcmChunk>> {
     if stage == 0 {
-        return effects[0].flush();
+        return Ok(effects[0].flush());
     }
     loop {
         if !exhausted[stage] {
-            if let Some(chunk) = pull(effects, exhausted, stage - 1) {
-                if let Some(output) = effects[stage].process(chunk) {
-                    return Some(output);
+            if let Some(chunk) = pull(effects, exhausted, stage - 1)? {
+                if let Some(output) = effects[stage].process(chunk)? {
+                    return Ok(Some(output));
                 }
                 continue;
             }
             exhausted[stage] = true;
         }
-        return effects[stage].flush();
+        return Ok(effects[stage].flush());
     }
 }

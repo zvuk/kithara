@@ -16,6 +16,7 @@ use crate::{
         gapless::visible_duration,
         seek::skip::apply as apply_skip,
         track::{TrackFailure, WaitingReason},
+        window::SourceEnd,
     },
 };
 
@@ -42,7 +43,7 @@ pub(crate) fn tick<T: StreamType>(
             return decode_failed(core, error, &ctx);
         }
         match core.next_output(&mut *ctx.cursor, epoch) {
-            Ok(Some(chunk)) => return produced(chunk, epoch, &mut ctx),
+            Ok(Some(chunk)) => return produced(chunk, core.source_end(), epoch, &mut ctx),
             Ok(None) => {}
             Err(error) => return decode_failed(core, error, &ctx),
         }
@@ -72,7 +73,7 @@ pub(crate) fn tick<T: StreamType>(
             Ok(DecoderChunkOutcome::Eof) => {
                 core.finish_active();
                 match core.next_output_unheld(&mut *ctx.cursor, epoch) {
-                    Ok(Some(chunk)) => return produced(chunk, epoch, &mut ctx),
+                    Ok(Some(chunk)) => return produced(chunk, core.source_end(), epoch, &mut ctx),
                     Ok(None) => {}
                     Err(error) => return decode_failed(core, error, &ctx),
                 }
@@ -81,8 +82,10 @@ pub(crate) fn tick<T: StreamType>(
                 {
                     return DecodeAction::StartRecreate(recreate);
                 }
-                if let Some(chunk) = core.next_drain() {
-                    return produced(chunk, epoch, &mut ctx);
+                match core.next_drain() {
+                    Ok(Some(chunk)) => return produced(chunk, core.source_end(), epoch, &mut ctx),
+                    Ok(None) => {}
+                    Err(error) => return decode_failed(core, error, &ctx),
                 }
                 if let Some(emit) = ctx.emit {
                     emit.enqueue(AudioEvent::EndOfStream.into());
@@ -123,6 +126,7 @@ fn decode_failed<T: StreamType>(
 
 pub(crate) fn produced<T: StreamType>(
     chunk: PcmChunk,
+    source_end: Option<SourceEnd>,
     epoch: u64,
     ctx: &mut DecodeCtx<'_, T>,
 ) -> DecodeAction {
@@ -146,6 +150,7 @@ pub(crate) fn produced<T: StreamType>(
             .into(),
         );
     }
+    ctx.cursor.record_emitted_source(source_end, epoch);
     DecodeAction::Produced(Fetch::data(chunk, epoch))
 }
 

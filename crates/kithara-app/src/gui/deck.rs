@@ -34,6 +34,9 @@ impl DeckUi {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DeckView {
     pub(crate) timestretch: TimestretchState,
+    /// SYNC is a mode, not a shot. While it is on, this deck starts and seeks
+    /// on the session grid rather than wherever the gesture landed.
+    pub(crate) sync: bool,
 }
 
 /// Tempo travel either way, in percent: tempo spans `-TEMPO_RANGE` to
@@ -114,7 +117,7 @@ fn toggle_play_pause(deck: &DeckUi) {
     }
 }
 
-fn seek_to(deck: &DeckUi, pos: f64) {
+pub(super) fn seek_to(deck: &DeckUi, pos: f64) {
     deck.controller.mutate(|st| {
         st.is_seeking = false;
         st.seek_position = pos;
@@ -163,7 +166,7 @@ fn delete_track(deck: &mut DeckUi) {
 }
 
 /// Live tempo: clamp to the travel and mirror the speed to this deck's queue.
-fn set_tempo(deck: &mut DeckUi, tempo: f32) {
+pub(super) fn set_tempo(deck: &mut DeckUi, tempo: f32) {
     let timestretch = &mut deck.view.timestretch;
     timestretch.tempo = tempo.clamp(-TEMPO_RANGE, TEMPO_RANGE);
     deck.controller.queue().set_rate(timestretch.speed());

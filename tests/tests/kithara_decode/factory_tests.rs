@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicU64;
 use kithara::{
     self,
     bufpool::{BytePool, PcmPool},
-    decode::{DecodeError, DecoderBackend, DecoderConfig, DecoderFactory},
+    decode::{DecoderBackend, DecoderConfig, DecoderFactory},
     platform::sync::Arc,
     resampler::NoResamplerBackend,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
@@ -54,16 +54,20 @@ fn decoder_config_custom_apple_backend_preserves_fields() {
 }
 
 #[kithara::test]
-fn create_with_probe_without_hint_fails_with_probe_failed() {
-    let result = DecoderFactory::create_with_probe(
+fn create_with_probe_without_hint_sniffs_mp3_bytes() {
+    let decoder = DecoderFactory::create_with_probe(
         Cursor::new(TEST_MP3_BYTES.to_vec()),
         None,
         DecoderConfig::<NoResamplerBackend>::builder()
             .byte_pool(BytePool::default())
             .pcm_pool(PcmPool::default())
             .build(),
-    );
-    assert!(matches!(result, Err(DecodeError::ProbeFailed)));
+    )
+    .expect("BUG: hintless MP3 bytes should produce a decoder");
+
+    let spec = decoder.spec();
+    assert!(spec.channels > 0);
+    assert!(spec.sample_rate.get() > 0);
 }
 
 #[kithara::test]

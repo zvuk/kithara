@@ -19,6 +19,18 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
+        Cmd::BindPlayer {
+            player_id,
+            binding,
+            at,
+        } => match transport::bind_player(state, player_id, binding, at) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
+        Cmd::UnbindPlayer { player_id } => match transport::unbind_player(state, player_id) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
         Cmd::StartPlayer {
             master_volume,
             player_id,
@@ -95,6 +107,10 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
         },
         Cmd::QuerySessionTransport => match transport::snapshot(state) {
             Ok(snapshot) => Reply::SessionTransport(snapshot),
+            Err(err) => Reply::Err(err),
+        },
+        Cmd::QuerySessionAnchor => match transport::anchor(state) {
+            Ok(anchor) => Reply::SessionAnchor(anchor),
             Err(err) => Reply::Err(err),
         },
         Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),

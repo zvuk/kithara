@@ -159,8 +159,8 @@ impl PcmControl for FakeReader {
 }
 
 mod node {
-    #[cfg(feature = "analysis-beat")]
     use kithara_platform::sync::Arc;
+    #[cfg(feature = "analysis-beat")]
     use kithara_platform::{CancelToken, sync::mpsc, tokio::sync::watch};
     #[cfg(feature = "analysis-beat")]
     use kithara_resampler::rubato::RubatoBackend;
@@ -210,6 +210,7 @@ mod node {
         let (jobs, receiver) = mpsc::channel();
         let (tx, _results) = watch::channel(None);
         jobs.send(Job {
+            track: Arc::from("fixture"),
             tx,
             reader: Box::new(FakeReader::chunked_with_pending(&sine(1024), 1)),
             cancel: CancelToken::root(),
@@ -228,6 +229,7 @@ mod node {
         let (tx, results) = watch::channel(None);
         let cancel = CancelToken::root();
         jobs.send(Job {
+            track: Arc::from("fixture"),
             tx,
             reader: Box::new(FakeReader::chunked(&sine(1024), 1)),
             cancel: cancel.clone(),
@@ -254,6 +256,7 @@ mod node {
         let (jobs, receiver) = mpsc::channel();
         let (tx, mut results) = watch::channel(None);
         jobs.send(Job {
+            track: Arc::from("fixture"),
             reader,
             tx,
             cancel: cancel.clone(),
@@ -378,7 +381,7 @@ mod node {
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "analysis-waveform"))]
 mod worker {
-    use kithara_platform::CancelToken;
+    use kithara_platform::{CancelToken, sync::Arc};
     use kithara_resampler::NoResamplerBackend;
     use kithara_test_utils::kithara;
 
@@ -398,6 +401,7 @@ mod worker {
         let mut rx = worker.analyze(
             Box::new(FakeReader::chunked(&sine(8192), 3)),
             worker.child_token(),
+            Arc::from("fixture"),
         );
         rx.changed().await.expect("worker sends a result");
         assert!(rx.borrow().as_ref().is_some_and(|a| a.waveform().is_some()));
@@ -410,11 +414,16 @@ mod worker {
 
         let stale = worker.child_token();
         stale.cancel();
-        let mut stale_rx = worker.analyze(Box::new(FakeReader::chunked(&sine(8192), 3)), stale);
+        let mut stale_rx = worker.analyze(
+            Box::new(FakeReader::chunked(&sine(8192), 3)),
+            stale,
+            Arc::from("stale"),
+        );
 
         let mut live_rx = worker.analyze(
             Box::new(FakeReader::chunked(&sine(8192), 3)),
             worker.child_token(),
+            Arc::from("live"),
         );
         live_rx.changed().await.expect("live job completes");
         assert!(live_rx.borrow().is_some());

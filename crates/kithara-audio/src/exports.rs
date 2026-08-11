@@ -7,6 +7,6 @@ pub use kithara_resampler::rubato::{RubatoAlgorithm, RubatoBackend, RubatoConfig
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
-pub use crate::effects::timestretch::{StretchKind, TimeStretchProcessor};
+pub use crate::tempo::streaming::{StretchKind, TimeStretchProcessor};
 #[cfg(feature = "analysis-waveform")]
 pub use crate::waveform::WaveformAnalyzer;

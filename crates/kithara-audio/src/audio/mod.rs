@@ -13,7 +13,7 @@ pub use seek::SeekHandle;
 pub(crate) use crate::{
     AudioConfig, AudioDecoderConfig, AudioEffect, AudioWorkerHandle, ChunkOutcome, DecodeError,
     EngineLoad, Fetch, PcmControl, PcmRead, PcmSession, PendingReason, PreloadGate, ReadOutcome,
-    SeekOutcome, ServiceClass, StretchControls,
+    SeekOutcome, ServiceClass,
     pipeline::{
         config::create_effects,
         consumer::{ConsumerPhase, FailureSource},
@@ -26,4 +26,5 @@ pub(crate) use crate::{
     },
     renderer::{ThreadWake, TrackId, TrackRegistration, WorkerWakeBridge},
     runtime::{AtomicServiceClass, Inlet, Outlet, WakeSignal, connect},
+    tempo::TempoSlot,
 };

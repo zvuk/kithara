@@ -55,6 +55,14 @@ The produce path must stay allocation-free in steady state: callers ask
 then reuse the same output buffer across chunks. Backends that need planar scratch use the `PcmPool`
 supplied in `StretchOptions`; no backend owns a global pool.
 
+`source_latency_frames()` reports source input accepted but not yet represented
+at the output frontier. Signalsmith reports its prepared input latency until its
+one-shot tail flush drains it, then zero. Bungee caches
+`ceil(Stream::latency())` after each successful process because Bungee's output
+position is fractional in input-frame coordinates; a fresh or reset stream
+reports zero until it processes input. Bungee's no-op flush leaves the cached
+latency unchanged because its tail is dropped rather than drained.
+
 `flush(out)` drains the buffered tail at end of stream or at a real region ratio boundary. It is a
 one-shot tail drain: repeated flushes without new input or `reset` append nothing, so an EOF drain
 can loop until it yields an empty append. A backend that cannot expose a true tail drain must

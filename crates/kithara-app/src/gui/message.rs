@@ -20,6 +20,8 @@ pub(crate) enum Message {
     SetEqMode(EqMode),
     /// Session-mix edit (crossfader, trim).
     Mix(super::mix::MixMsg),
+    /// Edit to the session's own musical grid, shared by every deck.
+    Transport(super::transport::TransportMsg),
     /// Delete the current track of the focused deck (keyboard shortcut;
     /// the subscription has no access to the focus).
     DeleteFocusedTrack,

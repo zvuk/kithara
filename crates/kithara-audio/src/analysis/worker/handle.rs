@@ -1,4 +1,8 @@
-use kithara_platform::{CancelToken, sync::mpsc, tokio::sync::watch};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, mpsc},
+    tokio::sync::watch,
+};
 use kithara_resampler::ResamplerBackend;
 use tracing::warn;
 
@@ -55,12 +59,21 @@ where
         &self,
         reader: Box<dyn PcmReader>,
         cancel: CancelToken,
+        track: Arc<str>,
     ) -> watch::Receiver<Option<TrackAnalysis>> {
         let (tx, rx) = watch::channel(None);
-        if self.jobs.send(Job { reader, cancel, tx }).is_err() {
-            warn!("analysis worker stopped; job dropped");
-        } else {
-            self.scheduler.wake();
+        match self.jobs.send(Job {
+            reader,
+            cancel,
+            tx,
+            track,
+        }) {
+            Ok(()) => self.scheduler.wake(),
+            // The channel hands the job back, so the track it was for is still
+            // there to name.
+            Err(returned) => {
+                warn!(track = %returned.0.track, "analysis worker stopped; job dropped");
+            }
         }
         rx
     }

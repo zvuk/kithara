@@ -1,4 +1,4 @@
-use kithara_platform::{CancelToken, tokio::sync::watch};
+use kithara_platform::{CancelToken, sync::Arc, tokio::sync::watch};
 use kithara_resampler::ResamplerBackend;
 use tracing::{debug, warn};
 
@@ -12,6 +12,9 @@ pub(crate) struct Job {
     pub(crate) reader: Box<dyn PcmReader>,
     pub(crate) cancel: CancelToken,
     pub(crate) tx: watch::Sender<Option<TrackAnalysis>>,
+    /// What this run is analysing. A cancellation or a stall says nothing
+    /// without it: several tracks are in flight and they preempt each other.
+    pub(crate) track: Arc<str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,6 +31,7 @@ where
 {
     reader: Box<dyn PcmReader>,
     cancel: CancelToken,
+    track: Arc<str>,
     analyzers: Option<TrackAnalyzers<B>>,
     waveform: Option<Waveform>,
     tx: watch::Sender<Option<TrackAnalysis>>,
@@ -44,6 +48,7 @@ where
             cancel: job.cancel,
             phase: TaskPhase::Decode,
             reader: job.reader,
+            track: job.track,
             tx: job.tx,
             waveform: None,
         }
@@ -86,6 +91,7 @@ where
         let source_frames = analyzers.source_frames();
         let source_sample_rate = analyzers.source_sample_rate();
         let beat = analyzers.finish_beat(detector);
+        debug!(track = %self.track, found = beat.is_some(), "analysis finished the beat pass");
         self.tx
             .send(Some(TrackAnalysis::with_source_rate(
                 beat,
@@ -132,7 +138,7 @@ where
         detector: Option<&mut Detector>,
     ) -> TickResult {
         if self.cancel.is_cancelled() {
-            debug!("analysis cancelled");
+            debug!(track = %self.track, phase = ?self.phase, "analysis cancelled");
             self.phase = TaskPhase::Done;
             return TickResult::Progress;
         }

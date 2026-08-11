@@ -101,21 +101,21 @@ fn apply_recreate_next<T: StreamType>(
 fn finish_format_boundary_rebuild<T: StreamType>(
     src: &mut StreamAudioSource<T>,
 ) -> RecreateOutcome {
-    // Continue the new decoder from the producer's decode head, not the
-    // consumer's lagging `committed`: chunks in [committed..decode_head]
+    // Continue the new decoder from the producer's emitted source head, not the
+    // consumer's lagging `committed`: chunks before that source endpoint
     // are already queued in the outlet ring (a FormatBoundary recreate
     // neither flushes it nor bumps the seek epoch), so resuming at
     // `committed` re-emits them — duplicated content, a backward phase
-    // jump. The decode head is an exact frame; the demuxer quantizes the
+    // jump. The emitted source head is an exact frame; the demuxer quantizes the
     // seek landing to a sample, and `frame_offset_for` rounds that back
     // to the nearest frame (consistent with `frames_to_trim`), so the
-    // rebuilt decoder relabels its first chunk at exactly `decode_head`.
+    // rebuilt decoder relabels its first chunk at exactly that endpoint.
     let committed = src.playhead.position();
     let epoch_now = src.seek_engine.epoch();
     // `resume_target` wins only while the target has NOT yet
-    // materialized in produced chunks (`target > decode_head`);
+    // materialized in produced chunks (`target > emitted_source_head`);
     // comparing against the consumer's lagging `committed` mislabels
-    // the warmed-up case and re-emits `[target..decode_head)`.
+    // the warmed-up case and re-emits already-produced source.
     let target_time =
         src.resume
             .resume_position(epoch_now, committed, src.seek_engine.resume_target());
@@ -183,6 +183,7 @@ pub(super) fn finish_rebuild<T: StreamType>(
     };
     let duration = generation.decoder().duration();
     let old = src.decode.replace_active(generation);
+    src.resume.rebase_raw_to_emitted(src.seek_engine.epoch());
     src.retired.retire_generation(old);
     debug!(
         ?duration,
@@ -203,7 +204,7 @@ pub(super) fn finish_rebuild<T: StreamType>(
             },
         );
     }
-    let outcome = if recreate_resumes_decode_head(&recreate) {
+    let outcome = if recreate_resumes_emitted_source(&recreate) {
         finish_format_boundary_rebuild(src)
     } else {
         RecreateOutcome::Done
@@ -339,6 +340,6 @@ pub(super) fn wait_for_source_on_recreate<T: StreamType>(
     TrackStep::Blocked(WaitingReason::Waiting)
 }
 
-fn recreate_resumes_decode_head(recreate: &RecreateState) -> bool {
+fn recreate_resumes_emitted_source(recreate: &RecreateState) -> bool {
     recreate.cause == RecreateCause::FormatBoundary && matches!(recreate.next, RecreateNext::Decode)
 }

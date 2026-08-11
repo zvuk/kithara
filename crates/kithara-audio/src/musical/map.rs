@@ -140,6 +140,8 @@ pub struct TrackBeatMap {
     #[field(get, copy)]
     source_frame_count: u64,
     #[field(skip)]
+    marker_ordinals: Vec<f64>,
+    #[field(skip)]
     source_markers: Vec<SourceFrame>,
     #[field(skip)]
     zero_index: usize,
@@ -168,31 +170,36 @@ impl TrackBeatMap {
         )
     }
 
-    /// Maps a track beat within the analysed marker domain to a source frame.
+    /// Maps a track beat within the source extent to a source frame.
     ///
-    /// Returns `None` before the first marker or after the last marker.
+    /// Returns `None` outside the source extent.
     #[must_use]
     pub fn source_frame_at(&self, beat: TrackBeat) -> Option<SourceFrame> {
         let zero = self.zero_index.to_f64()?;
         let ordinal = f64::from(beat) + zero;
-        let last = self.source_markers.len().checked_sub(1)?;
-        let last_f64 = last.to_f64()?;
-        if ordinal < 0.0 || ordinal > last_f64 {
+        let first_ordinal = *self.marker_ordinals.first()?;
+        let last_ordinal = *self.marker_ordinals.last()?;
+        if ordinal < first_ordinal || ordinal > last_ordinal {
             return None;
         }
-        if ordinal == last_f64 {
-            return self.source_markers.get(last).copied();
+        if ordinal == last_ordinal {
+            return self.source_markers.last().copied();
         }
-        let segment = ordinal.floor().to_usize()?;
+        let upper = self
+            .marker_ordinals
+            .partition_point(|marker| *marker <= ordinal);
+        let segment = upper.checked_sub(1)?;
+        let start_ordinal = *self.marker_ordinals.get(segment)?;
+        let end_ordinal = *self.marker_ordinals.get(segment + 1)?;
         let start = f64::from(*self.source_markers.get(segment)?);
         let end = f64::from(*self.source_markers.get(segment + 1)?);
-        let fraction = ordinal - segment.to_f64()?;
+        let fraction = (ordinal - start_ordinal) / (end_ordinal - start_ordinal);
         SourceFrame::new(start + (end - start) * fraction).ok()
     }
 
-    /// Maps a host-rate source frame within the analysed marker domain to a track beat.
+    /// Maps a host-rate source frame within the source extent to a track beat.
     ///
-    /// Returns `None` before the first marker or after the last marker.
+    /// Returns `None` outside the source extent.
     #[must_use]
     pub fn track_beat_at(&self, source: SourceFrame) -> Option<TrackBeat> {
         let first = self.source_markers.first()?;
@@ -211,7 +218,10 @@ impl TrackBeatMap {
         let start = f64::from(self.source_markers[segment]);
         let end = f64::from(self.source_markers[segment + 1]);
         let fraction = (f64::from(source) - start) / (end - start);
-        let beat = segment.to_f64()? - self.zero_index.to_f64()? + fraction;
+        let start_ordinal = self.marker_ordinals[segment];
+        let end_ordinal = self.marker_ordinals[segment + 1];
+        let ordinal = start_ordinal + (end_ordinal - start_ordinal) * fraction;
+        let beat = ordinal - self.zero_index.to_f64()?;
         TrackBeat::new(beat).ok()
     }
 
@@ -226,13 +236,19 @@ impl TrackBeatMap {
                 count: grid.beats().len(),
             });
         }
-        let last_index = grid.beats().len() - 1;
-        track_beat_for_index(last_index, 0)?;
         let source_frame_count =
             scale_source_frame_count(source_frames, source_rate, host_sample_rate)?;
 
         let scale = f64::from(host_sample_rate.get()) / f64::from(source_rate.get());
-        let mut source_markers = Vec::with_capacity(grid.beats().len());
+        let source_extent = SourceFrame::try_from(source_frames)
+            .and_then(|frame| SourceFrame::new(f64::from(frame) * scale))
+            .map_err(|_| BeatMapError::SourceExtentOutOfRange {
+                source_frames,
+                source_sample_rate: source_rate.get(),
+                host_sample_rate: host_sample_rate.get(),
+            })?;
+        let mut marker_ordinals = Vec::with_capacity(grid.beats().len() + 2);
+        let mut source_markers = Vec::with_capacity(grid.beats().len() + 2);
         for (index, &frame) in grid.beats().iter().enumerate() {
             if index > 0 && frame <= grid.beats()[index - 1] {
                 return Err(BeatMapError::NonIncreasingMarker { index });
@@ -247,6 +263,7 @@ impl TrackBeatMap {
             let source = SourceFrame::try_from(frame)
                 .and_then(|frame| SourceFrame::new(f64::from(frame) * scale))
                 .map_err(|source| BeatMapError::SourceCoordinate { index, source })?;
+            marker_ordinals.push(index.to_f64().ok_or(BeatMapError::MarkerCountTooLarge)?);
             source_markers.push(source);
         }
 
@@ -272,11 +289,27 @@ impl TrackBeatMap {
             .collect::<Result<Vec<_>, _>>()?;
         let beats_per_bar = consistent_meter(&downbeat_indices);
 
+        if grid.beats()[0] > 0 {
+            let first = f64::from(source_markers[0]);
+            let slope = f64::from(source_markers[1]) - first;
+            marker_ordinals.insert(0, -first / slope);
+            source_markers.insert(0, SourceFrame::default());
+        }
+        if grid.beats()[grid.beats().len() - 1] < source_frames {
+            let last = source_markers.len() - 1;
+            let slope = f64::from(source_markers[last]) - f64::from(source_markers[last - 1]);
+            let ordinal = marker_ordinals[last]
+                + (f64::from(source_extent) - f64::from(source_markers[last])) / slope;
+            marker_ordinals.push(ordinal);
+            source_markers.push(source_extent);
+        }
+
         Ok(Self {
             beats_per_bar,
             downbeats,
             host_sample_rate,
             source_frame_count,
+            marker_ordinals,
             source_markers,
             zero_index,
         })
@@ -441,15 +474,89 @@ mod tests {
     }
 
     #[kithara::test]
-    fn source_frame_at_returns_none_outside_marker_domain() {
+    fn a_beat_before_the_seeded_start_resolves_to_no_source_frame() {
         let analysis = analysis_with_grid(vec![100, 200, 300], 400, 48_000);
         let map = TrackBeatMap::new(&analysis, sample_rate(48_000))
             .expect("invariant: valid bounded beat map");
-        let before = TrackBeat::new(-0.5).expect("invariant: negative track beats are valid");
-        let after = TrackBeat::new(2.5).expect("invariant: finite track beat is valid");
+        let before = TrackBeat::new(-1.5).expect("invariant: negative track beats are valid");
 
         assert_eq!(map.source_frame_at(before), None);
+    }
+
+    #[kithara::test]
+    fn a_beat_past_the_seeded_end_resolves_to_no_source_frame() {
+        let analysis = analysis_with_grid(vec![100, 200, 300], 400, 48_000);
+        let map = TrackBeatMap::new(&analysis, sample_rate(48_000))
+            .expect("invariant: valid bounded beat map");
+        let after = TrackBeat::new(3.5).expect("invariant: finite track beat is valid");
+
         assert_eq!(map.source_frame_at(after), None);
+    }
+
+    #[kithara::test]
+    fn a_position_before_the_first_detected_beat_resolves_to_a_track_beat() {
+        let analysis = analysis_with_grid(vec![100, 200, 300], 400, 48_000);
+        let map = TrackBeatMap::new(&analysis, sample_rate(48_000))
+            .expect("invariant: valid beat map with an intro");
+        let source = SourceFrame::new(50.0).expect("invariant: intro position is valid");
+        let expected = TrackBeat::new(-0.5).expect("invariant: expected beat is finite");
+
+        assert_eq!(map.track_beat_at(source), Some(expected));
+    }
+
+    #[kithara::test]
+    fn a_position_after_the_last_detected_beat_resolves_to_a_track_beat() {
+        let analysis = analysis_with_grid(vec![100, 200, 300], 400, 48_000);
+        let map = TrackBeatMap::new(&analysis, sample_rate(48_000))
+            .expect("invariant: valid beat map with an outro");
+        let source = SourceFrame::new(350.0).expect("invariant: outro position is valid");
+        let expected = TrackBeat::new(2.5).expect("invariant: expected beat is finite");
+
+        assert_eq!(map.track_beat_at(source), Some(expected));
+    }
+
+    #[kithara::test]
+    fn the_beat_ordinal_of_every_detected_beat_is_unchanged_by_the_seeding() {
+        let beats = vec![100, 200, 300, 400];
+        let grid = BeatGrid::new(120.0, beats.clone(), vec![300], Vec::new());
+        let analysis = TrackAnalysis::with_source_rate(Some(grid), None, 500, sample_rate(48_000));
+        let map = TrackBeatMap::new(&analysis, sample_rate(48_000))
+            .expect("invariant: valid beat map with seeded edges");
+
+        for (frame, expected) in beats.into_iter().zip([-2.0, -1.0, 0.0, 1.0]) {
+            let source = SourceFrame::try_from(frame)
+                .expect("invariant: detected beat frame is exactly representable");
+            let expected =
+                TrackBeat::new(expected).expect("invariant: expected beat ordinal is finite");
+
+            assert_eq!(map.track_beat_at(source), Some(expected));
+        }
+    }
+
+    #[kithara::test]
+    fn a_position_outside_the_source_extent_still_resolves_to_nothing() {
+        let analysis = analysis_with_grid(vec![100, 200, 300], 400, 48_000);
+        let map = TrackBeatMap::new(&analysis, sample_rate(48_000))
+            .expect("invariant: valid bounded beat map");
+        let source = SourceFrame::new(401.0).expect("invariant: source position is valid");
+
+        assert_eq!(map.track_beat_at(source), None);
+    }
+
+    #[kithara::test]
+    fn a_track_whose_first_detected_beat_is_already_at_frame_zero_gains_no_duplicate_marker() {
+        let analysis = analysis_with_grid(vec![0, 100, 200], 300, 48_000);
+        let map = TrackBeatMap::new(&analysis, sample_rate(48_000))
+            .expect("invariant: valid beat map starting at frame zero");
+        let zero = SourceFrame::default();
+
+        assert_eq!(
+            map.source_markers
+                .iter()
+                .filter(|marker| **marker == zero)
+                .count(),
+            1
+        );
     }
 
     #[kithara::test]

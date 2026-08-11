@@ -569,9 +569,9 @@ impl<T: StreamType> Stream<T> {
     /// spin — no `yield_now`/`notify_one` on the forbid-blocking produce core.
     /// The audio worker (the FSM's recreate/boundary seeks and the decoder's
     /// `OffsetReader`) seeks through this; the off-RT [`Seek::seek`] adapter
-    /// primes inline instead. The seeked range's readiness is discovered by the
-    /// next `probe_read` (park-on-not-ready), and the armed peer wake — flushed
-    /// by the shell — drives the fetch.
+    /// primes inline instead. An unresolved target arms the peer wake, flushed
+    /// by the shell, so the next `probe_read` can park while the peer drives the
+    /// fetch. A ready target needs no peer work.
     ///
     /// # Errors
     ///
@@ -579,9 +579,13 @@ impl<T: StreamType> Stream<T> {
     pub fn probe_seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         let new_pos = self.resolve_seek_target(pos, self.source.len())?;
         self.source.set_position(new_pos);
-        // The reader cursor moved on the produce core: arm the peer so it
-        // re-targets fetches around the new position. The shell flushes it.
-        self.arm_peer_wake();
+        let target = new_pos..new_pos.saturating_add(1);
+        if !matches!(
+            self.source.phase_at(target),
+            SourcePhase::Ready | SourcePhase::Eof
+        ) {
+            self.arm_peer_wake();
+        }
         Ok(new_pos)
     }
 
@@ -774,6 +778,7 @@ mod tests {
         position: Arc<AtomicU64>,
         seek: Arc<SeekState>,
         anchor: Option<SourceSeekAnchor>,
+        phase: SourcePhase,
         peer_wake: Option<Arc<DeferredWake>>,
         data: Vec<u8>,
         reads: VecDeque<ScriptRead>,
@@ -795,6 +800,7 @@ mod tests {
                 playhead: Arc::new(PlayheadState::new()),
                 position: Arc::new(AtomicU64::new(0)),
                 anchor: None,
+                phase: SourcePhase::Waiting,
                 reads: reads.into_iter().collect(),
                 ready_end: None,
                 segments: Vec::new(),
@@ -815,6 +821,11 @@ mod tests {
 
         fn with_peer_wake(mut self, wake: Arc<DeferredWake>) -> Self {
             self.peer_wake = Some(wake);
+            self
+        }
+
+        fn with_phase(mut self, phase: SourcePhase) -> Self {
+            self.phase = phase;
             self
         }
     }
@@ -845,7 +856,7 @@ mod tests {
         }
 
         fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-            SourcePhase::Waiting
+            self.phase
         }
 
         fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
@@ -1134,6 +1145,28 @@ mod tests {
         assert!(
             wake.flush(),
             "probe_seek armed the peer wake on the produce core; the shell flushes it"
+        );
+    }
+
+    #[kithara::test]
+    #[case(SourcePhase::Ready)]
+    #[case(SourcePhase::Eof)]
+    fn probe_seek_over_resolved_range_does_not_arm_peer_wake(#[case] phase: SourcePhase) {
+        let wake = Arc::new(DeferredWake::default());
+        let source = ScriptSource::new(Arc::new(SeekState::new()), [], [], vec![0u8; 100])
+            .with_phase(phase)
+            .with_peer_wake(Arc::clone(&wake));
+        let mut stream = Stream::<DummyType> { source };
+
+        let pos = stream
+            .probe_seek(SeekFrom::Start(42))
+            .expect("absolute on-core seek within range");
+
+        assert_eq!(pos, 42);
+        assert_eq!(stream.source.position(), 42, "cursor moved to the target");
+        assert!(
+            !wake.flush(),
+            "a resolved target must not schedule an empty peer poll"
         );
     }
 

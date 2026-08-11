@@ -244,6 +244,12 @@ impl AnalysisController {
             let Some(source) = queue.track_source(track_id) else {
                 continue;
             };
+            // Names the track in every log line the run emits. Several runs are
+            // in flight at once and they preempt each other, so a cancellation
+            // that does not say whose it was says nothing.
+            let label: Arc<str> = source
+                .uri()
+                .map_or_else(|| Arc::from("<no uri>"), Arc::from);
 
             let Some(cfg) = resource_config_from_source(source, config) else {
                 continue;
@@ -277,7 +283,7 @@ impl AnalysisController {
                         self.displayed = None;
                     }
 
-                    let rx = self.runner.analyze(cfg);
+                    let rx = self.runner.analyze(cfg, label);
                     self.current = Some(Run {
                         target,
                         rx,

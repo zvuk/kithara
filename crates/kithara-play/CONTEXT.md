@@ -43,6 +43,19 @@ also need playlist/segment headers keep the same immutable `Arc<DomainKeyPolicy>
 
 ## Tempo & Key-Lock
 
+The session owns admission for bound-deck tempo. Each registered player contributes its canonical
+`TrackBinding`; binding and tempo commits resolve one exact-span render block through that map and
+ask the selected elastic engine's declared envelope whether the resulting source-frames-per-output
+rate is supported. A refusal is typed and happens before the binding or transport revision changes.
+The check currently uses the raw binding ratio; beat-multiple locking is not yet part of the bound
+schedule.
+
+`PlayerCore` owns one `TempoSlot` for the deck. Every prepared resource receives a clone of that
+same handle, so `bind` publishes `Converging` only after session admission succeeds and the worker
+promotes it to `Bound` after exact-span output. `unbind` removes the session binding first, then
+returns the same stage to `Free` at its last rendered rate. Neither transition loads a resource,
+replaces an effect chain, recreates a decoder, or issues a seek.
+
 `kithara_audio::StretchControls` (one `Arc` per deck, in `PlayerConfig.timestretch`) is the single
 source of truth for playback speed, shared between the UI and the worker effect chain, which reads
 it each chunk. It always carries `speed` + `region_plan`; with a stretch backend compiled in
@@ -292,6 +305,40 @@ change, idle teardown) rebuilds it with a fresh envelope. Player start/stop only
 disconnects player master nodes and never creates a per-player limiter. The session constants
 (ceiling `0.98`, release `50 ms`, stereo) are const-asserted valid, so limiter construction cannot
 fail in practice and the processor holds the DSP directly.
+
+## Beat-Anchored Starts
+
+`PlayerImpl::start_at_beat` (`player/flow/transport.rs`) is the single entry point that puts a deck
+on the session grid. Binding and starting are one call because they are one decision: a deck told to
+begin on a beat has to render as a function of session beat from that point, and a start planted on
+a free-running deck would land its first frame right and every frame after it wrong.
+
+The caller names a **quantum** (`BeatQuantum`, in session beats: `1.0` next beat, `4.0` next bar),
+not an absolute `SessionBeat`. An absolute target would have to be computed from the transport's own
+position, read at a moment the caller cannot observe atomically with the commit it is aiming at.
+`SessionTransportSnapshot::next_beat_on` resolves the quantum against the very snapshot the binding
+is taken from, so the answer cannot be stale. It snaps *strictly* forward: a position already on the
+grid names a frame the current block has passed, and arming there would never resolve.
+
+The anchor pair is `track_anchor` ↔ `target`, never `track_anchor` ↔ the live position. `bind` takes
+the anchoring beat explicitly (`bind(&binding, tempo, at)`) and makes the schedule's origin the track
+beat due at `at`, because the deck's output frame zero plays on the stamped beat. Anchoring the
+schedule at the position read a moment earlier would carry the whole wait-before-start into every
+rendered frame.
+
+`TrackStart::Session { target, revision }` (`rt/track/start.rs`) carries the revision as part of the
+plan, not as a hint. `TransportCommitState::offset_for_beat` answers `None` to three different
+questions — no anchor, the revision moved, the beat is not in this block — and none of them may
+become a guessed offset: the render pass simply asks again next block. A start computed against a
+commit that has since been superseded is dropped rather than re-aimed, because the frame it was
+computed for is no longer the frame that beat lands on.
+
+Two consumers reach this. `kithara-app`'s per-deck SYNC button (`gui/deck.rs::sync_to_session`,
+quantum = one bar) and the FFI `AudioPlayer::start_at_beat`, which takes the host's own grid as
+`FfiTrackGrid` — Kithara does not analyse tracks on an FFI host's behalf, and the record is that
+host's markers in Kithara's coordinates so nothing is re-derived on the way in. The FFI method is
+native-only: the wasm inner proxies every call through a worker command protocol that has no arm for
+it.
 
 ## Session Mix Tap
 

@@ -1,15 +1,24 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
+use kithara_audio::{
+    SessionAnchor, SessionAnchorCell, SessionBeat, SessionFrame, SourceFrame, bound_rate_supported,
+    bound_render_span_frames,
+};
 use kithara_events::TransportEvent;
+use kithara_platform::sync::Arc;
+use num_traits::ToPrimitive;
 
-use super::commit::{
-    RenderFrame, SessionTransportCommit, TransportBoundary, TransportCommitResult,
-    TransportCommitStamp, TransportObservation,
+use super::{
+    TransportControl,
+    commit::{
+        SessionTransportCommit, TransportBoundary, TransportCommitResult, TransportCommitStamp,
+        TransportObservation,
+    },
 };
 use crate::{
-    api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
-    session::{SessionError, state::SessionState},
+    api::{SessionTransportSnapshot, Tempo, TrackBinding, TransportRevision},
+    session::{PlayerId, SessionError, graph::player_index, state::SessionState},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,6 +92,30 @@ impl SessionTransportState {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn seed_committed_transport<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    tempo: Tempo,
+    sample_rate: NonZeroU32,
+) -> Result<(), SessionError> {
+    let active = SessionTransportCommit::new(tempo, true, TransportRevision::FIRST);
+    state.transport.phase = TransportPhase::Stable { active };
+    state.transport.ledger = TransportLedger {
+        completed: Some(TransportRevision::FIRST),
+        last: Some(TransportRevision::FIRST),
+        rejected: None,
+    };
+    let anchor = SessionAnchor::new(
+        SessionFrame::new(0),
+        SessionBeat::default(),
+        tempo.beats_per_second(),
+        sample_rate,
+    )
+    .map_err(|_| SessionError::TransportFrameExhausted)?;
+    super::anchor(state)?.publish(anchor);
+    Ok(())
+}
+
 pub(crate) fn set_tempo<B: AudioBackend>(
     state: &mut SessionState<B>,
     tempo: Tempo,
@@ -93,8 +126,9 @@ pub(crate) fn set_tempo<B: AudioBackend>(
         return Ok(());
     }
     ensure_no_pending_commit(state)?;
-    let revision = next_revision(state)?;
     let (target_frame, sample_rate) = commit_boundary(state)?;
+    ensure_tempo_renderable(state, tempo, target_frame, sample_rate)?;
+    let revision = next_revision(state)?;
     let next = SessionTransportCommit::new(
         tempo,
         accepted.is_none_or(|commit| commit.is_playing()),
@@ -103,6 +137,40 @@ pub(crate) fn set_tempo<B: AudioBackend>(
     let stamp =
         TransportCommitStamp::new(state.transport.observed(), next, target_frame, sample_rate);
     schedule_commit(state, next, stamp)
+}
+
+pub(crate) fn bind_player<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    player_id: PlayerId,
+    binding: TrackBinding,
+    at: SessionBeat,
+) -> Result<(), SessionError> {
+    let _ = refresh_observation(state)?;
+    ensure_no_pending_commit(state)?;
+    let tempo = state
+        .transport
+        .accepted()
+        .ok_or(SessionError::TransportNotProcessed)?
+        .tempo();
+    let sample_rate = state
+        .ctx
+        .as_ref()
+        .and_then(FirewheelCtx::stream_info)
+        .map(|info| info.sample_rate)
+        .ok_or(SessionError::NoContext)?;
+    let index = player_index(state, player_id)?;
+    ensure_binding_renderable(player_id, &binding, at, tempo, sample_rate)?;
+    state.players[index].binding = Some(binding);
+    Ok(())
+}
+
+pub(crate) fn unbind_player<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    player_id: PlayerId,
+) -> Result<(), SessionError> {
+    let index = player_index(state, player_id)?;
+    state.players[index].binding = None;
+    Ok(())
 }
 
 pub(crate) fn set_playing<B: AudioBackend>(
@@ -153,11 +221,118 @@ pub(crate) fn snapshot<B: AudioBackend>(
         .ok_or(SessionError::TransportNotProcessed)
 }
 
+/// The grid decks bind to. Installed with the transport node, so a session
+/// that has one at all has it before any deck can ask.
+pub(crate) fn anchor<B: AudioBackend>(
+    state: &SessionState<B>,
+) -> Result<Arc<SessionAnchorCell>, SessionError> {
+    state
+        .transport_control
+        .as_ref()
+        .map(TransportControl::anchor)
+        .ok_or(SessionError::TransportNotProcessed)
+}
+
 fn ensure_no_pending_commit<B: AudioBackend>(state: &SessionState<B>) -> Result<(), SessionError> {
     if state.transport.pending_revision().is_some() {
         return Err(SessionError::TransportNotProcessed);
     }
     Ok(())
+}
+
+fn ensure_tempo_renderable<B: AudioBackend>(
+    state: &SessionState<B>,
+    tempo: Tempo,
+    target_frame: SessionFrame,
+    sample_rate: NonZeroU32,
+) -> Result<(), SessionError> {
+    if state.players.iter().all(|player| player.binding.is_none()) {
+        return Ok(());
+    }
+    let previous = state
+        .transport
+        .observed()
+        .ok_or(SessionError::TransportNotProcessed)?;
+    let anchor = state
+        .transport_control
+        .as_ref()
+        .and_then(|control| control.anchor().load())
+        .ok_or(SessionError::TransportNotProcessed)?;
+    let start = if previous.is_playing() {
+        anchor
+            .beat_at(target_frame)
+            .map_err(|_| SessionError::TransportFrameExhausted)?
+    } else {
+        anchor.beat()
+    };
+    state
+        .players
+        .iter()
+        .filter_map(|player| {
+            player
+                .binding
+                .as_ref()
+                .map(|binding| (player.player_id, binding))
+        })
+        .try_for_each(|(player_id, binding)| {
+            ensure_binding_renderable(player_id, binding, start, tempo, sample_rate)
+        })
+}
+
+fn ensure_binding_renderable(
+    player_id: PlayerId,
+    binding: &TrackBinding,
+    start: SessionBeat,
+    tempo: Tempo,
+    sample_rate: NonZeroU32,
+) -> Result<(), SessionError> {
+    let output_frames =
+        bound_render_span_frames().ok_or(SessionError::BoundEngineUnavailable { player_id })?;
+    let output_frame = i64::try_from(output_frames)
+        .map(SessionFrame::new)
+        .map_err(|_| SessionError::TransportFrameExhausted)?;
+    let span = SessionAnchor::new(
+        SessionFrame::new(0),
+        start,
+        tempo.beats_per_second(),
+        sample_rate,
+    )
+    .map_err(|reason| SessionError::BoundSpanCoordinate { player_id, reason })?;
+    let end = span
+        .beat_at(output_frame)
+        .map_err(|reason| SessionError::BoundSpanCoordinate { player_id, reason })?;
+    let source_start = resolve_source_frame(player_id, binding, start, start, end)?;
+    let source_end = resolve_source_frame(player_id, binding, end, start, end)?;
+    let output_frames = output_frames
+        .to_f64()
+        .ok_or(SessionError::TransportFrameExhausted)?;
+    let rate = (f64::from(source_end) - f64::from(source_start)).abs() / output_frames;
+    match bound_rate_supported(rate) {
+        Some(true) => Ok(()),
+        Some(false) => Err(SessionError::BoundTempoOutsideEnvelope {
+            player_id,
+            beats_per_minute: tempo.beats_per_minute(),
+            source_frames_per_output: rate,
+        }),
+        None => Err(SessionError::BoundEngineUnavailable { player_id }),
+    }
+}
+
+fn resolve_source_frame(
+    player_id: PlayerId,
+    binding: &TrackBinding,
+    beat: SessionBeat,
+    start: SessionBeat,
+    end: SessionBeat,
+) -> Result<SourceFrame, SessionError> {
+    binding
+        .source_frame_at(beat)
+        .map_err(|reason| SessionError::BoundBindingUnavailable { player_id, reason })?
+        .ok_or_else(|| SessionError::BoundSpanOutsideMap {
+            player_id,
+            start_beat: f64::from(start),
+            end_beat: f64::from(end),
+        })
 }
 
 fn next_revision<B: AudioBackend>(
@@ -200,7 +375,7 @@ fn schedule_commit<B: AudioBackend>(
 
 fn commit_boundary<B: AudioBackend>(
     state: &SessionState<B>,
-) -> Result<(RenderFrame, NonZeroU32), SessionError> {
+) -> Result<(SessionFrame, NonZeroU32), SessionError> {
     let ctx = state.ctx.as_ref().ok_or(SessionError::NoContext)?;
     let stream_info = ctx.stream_info().ok_or(SessionError::NoContext)?;
     let lead_frames = state
@@ -213,7 +388,7 @@ fn commit_boundary<B: AudioBackend>(
         .0
         .checked_add(lead_frames)
         .ok_or(SessionError::TransportFrameExhausted)?;
-    Ok((RenderFrame::new(target_frame), stream_info.sample_rate))
+    Ok((SessionFrame::new(target_frame), stream_info.sample_rate))
 }
 
 fn queue_stamp<B: AudioBackend>(

@@ -24,13 +24,6 @@ smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-bufpool = { workspace = true, optional = true }
-signalsmith-stretch = { workspace = true, optional = true }
-
 # `bungee-sys` builds its C++ through `cmake`, which fails under MSVC (see
 # `windows_build_env` in xtask's Windows lane for the toolchain fight this
 # crate is not worth having on that target). wasm32 already excludes the
@@ -40,6 +33,13 @@ signalsmith-stretch = { workspace = true, optional = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
 bungee-rs = { workspace = true, optional = true }
 fast-interleave = { workspace = true, optional = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-bufpool = { workspace = true, optional = true }
+signalsmith-stretch = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"] }
