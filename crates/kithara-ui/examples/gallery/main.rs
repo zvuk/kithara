@@ -24,10 +24,14 @@ struct Consts;
 impl Consts {
     const HEIGHT: f32 = 720.0;
     const STRESS_TICK_MS: u64 = 16;
-    const WIDTH: f32 = 1100.0;
+    const WIDTH: f32 = 1300.0;
 }
 
 const ASSETS: &[(&str, &str)] = &[
+    (
+        "gallery-clock.klayout.ron",
+        include_str!("assets/gallery-clock.klayout.ron"),
+    ),
     (
         "gallery-atoms.klayout.ron",
         include_str!("assets/gallery-atoms.klayout.ron"),
@@ -55,6 +59,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "gallery-menu.klayout.ron",
         include_str!("assets/gallery-menu.klayout.ron"),
+    ),
+    (
+        "gallery-pivot.klayout.ron",
+        include_str!("assets/gallery-pivot.klayout.ron"),
     ),
     (
         "gallery-micro.klayout.ron",
@@ -141,6 +149,34 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("../../assets/modules/app-menu/window-row.kmodule.ron"),
     ),
     (
+        "modules/deck/key-lock.kmodule.ron",
+        include_str!("../../assets/modules/deck/key-lock.kmodule.ron"),
+    ),
+    (
+        "modules/deck/overview-row.kmodule.ron",
+        include_str!("../../assets/modules/deck/overview-row.kmodule.ron"),
+    ),
+    (
+        "modules/master-clock.kmodule.ron",
+        include_str!("../../assets/modules/master-clock.kmodule.ron"),
+    ),
+    (
+        "modules/master-clock/source-row.kmodule.ron",
+        include_str!("../../assets/modules/master-clock/source-row.kmodule.ron"),
+    ),
+    (
+        "modules/pivot-portals.kmodule.ron",
+        include_str!("../../assets/modules/pivot-portals.kmodule.ron"),
+    ),
+    (
+        "modules/pivot-portals/row.kmodule.ron",
+        include_str!("../../assets/modules/pivot-portals/row.kmodule.ron"),
+    ),
+    (
+        "modules/pivot-portals/track-row.kmodule.ron",
+        include_str!("../../assets/modules/pivot-portals/track-row.kmodule.ron"),
+    ),
+    (
         "modules/module-deck-micro.kmodule.ron",
         include_str!("assets/modules/module-deck-micro.kmodule.ron"),
     ),
@@ -207,6 +243,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/cells.kmodule.ron",
         include_str!("assets/modules/tabs/cells.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/clock.kmodule.ron",
+        include_str!("assets/modules/tabs/clock.kmodule.ron"),
     ),
     (
         "modules/tabs/chrome-full-all.kmodule.ron",

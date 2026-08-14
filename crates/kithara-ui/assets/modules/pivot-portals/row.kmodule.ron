@@ -1,0 +1,27 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "pivot-portal-row",
+    chrome: Plain,
+    parameters: ["portal"],
+    root: Pressable(
+        id: "select",
+        press: Command(id: "pivot.portal.select", with: { "portal": "$portal" }),
+        child: Row(
+            size: (w: Fill, h: Fixed(13.222222)),
+            gap: 8.0,
+            pad_x: 12.0,
+            active: Model(id: "pivot.portal.active", with: { "portal": "$portal" }),
+            active_background: BgSelect,
+            frame: (top: false, right: false, bottom: true, left: false),
+            frame_color: LineInner,
+            children: [
+                Text(id: "ratio", style: Mono, color: Muted, active_color: Accent, active: Model(id: "pivot.portal.active", with: { "portal": "$portal" }), read: Model(id: "pivot.portal.ratio", with: { "portal": "$portal" }), size: (w: Fixed(44.0), h: Fill)),
+                Text(id: "bpm", style: Mono, color: TextDim, active_color: Text, active: Model(id: "pivot.portal.active", with: { "portal": "$portal" }), read: Model(id: "pivot.portal.bpm", with: { "portal": "$portal" }), size: (w: Fixed(58.0), h: Fill)),
+                Text(id: "pulse", style: Mono, color: TextDim, read: Model(id: "pivot.portal.pulse", with: { "portal": "$portal" }), size: (w: Fixed(56.0), h: Fill)),
+                Text(id: "loop", style: PivotSmall, color: TextDim, read: Model(id: "pivot.portal.loop", with: { "portal": "$portal" }), size: (w: Fixed(52.0), h: Fill)),
+                Text(id: "stretch", style: PivotSmall, color: Muted, align: End, read: Model(id: "pivot.portal.stretch", with: { "portal": "$portal" }), size: (w: Fill, h: Fill)),
+            ],
+        ),
+    ),
+)

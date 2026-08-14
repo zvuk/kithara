@@ -12,7 +12,8 @@ pub use address::{Node, Scope, Walk};
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub use icons::Icon;
 pub use model::{
-    ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
+    PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TrackRow, TreeIcon,
+    TreeRow, WaveBucket, WaveformView,
 };
 pub use skin::Skin;
 pub use typography::shaped_text;

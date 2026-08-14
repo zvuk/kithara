@@ -38,6 +38,7 @@
         (depth: 0, label: "History", icon: Clock, count: Some(21)),
     ],
     tracks: [
+        (title: "slowtechno_mas-5", artist: "—", time: "3:51", search: "slowtechno_mas-5 93.50 11m", deck: "", bpm: "93.50", key: "11m", energy: 48, transition: "MANUAL PITCH"),
         (title: "MoonShine_Secret", artist: "teo_van_bo", time: "6:00", search: "teo_van_bo 128.00 7m", deck: "B", bpm: "128.00", key: "7m", energy: 76, transition: "FILTER FADE"),
         (title: "Night Express", artist: "Anna Nova", time: "4:42", search: "Night Express Anna Nova 126.00 10m", deck: "C", bpm: "126.00", key: "10m", energy: 68, transition: "EQ SWAP"),
         (title: "Glass Horizon", artist: "North Arcade", time: "5:18", search: "Glass Horizon North Arcade 124.00 4m", deck: "D", bpm: "124.00", key: "4m", energy: 54, transition: "LOOP EXIT"),

@@ -109,7 +109,8 @@ pub(super) fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpe
             return effective_size(child, skin);
         }
         ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin),
-        ExpandedNode::Row { size, .. }
+        ExpandedNode::Scroll { size, .. }
+        | ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
         | ExpandedNode::Slot { size, .. }
         | ExpandedNode::Control { size, .. } => *size,

@@ -172,9 +172,19 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
             TextStyle::VisMeta | TextStyle::VisTitle => {
                 SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.header_height))
             }
-            TextStyle::BrandSmall | TextStyle::Mono | TextStyle::Caption => {
-                SizeSpec::new(Dim::Shrink, Dim::Fill)
-            }
+            TextStyle::BrandSmall
+            | TextStyle::Mono
+            | TextStyle::PivotArrow
+            | TextStyle::PivotDuration
+            | TextStyle::PivotFooter
+            | TextStyle::PivotLabel
+            | TextStyle::PivotRatio
+            | TextStyle::PivotSmall
+            | TextStyle::PivotTrackArtist
+            | TextStyle::PivotTrackTitle
+            | TextStyle::PivotTitle
+            | TextStyle::PivotValue
+            | TextStyle::Caption => SizeSpec::new(Dim::Shrink, Dim::Fill),
             TextStyle::Body
             | TextStyle::Brand
             | TextStyle::DeckLetter
@@ -213,6 +223,8 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::Fader { .. } => skin.fader.size,
         ControlSpec::Wave { .. } => skin.wave.size,
         ControlSpec::Vis => skin.vis.size,
+        ControlSpec::PortalMap => skin.portal_map.size,
+        ControlSpec::Range => skin.range.size,
         ControlSpec::TrackList { .. } => skin.track_list.size,
         ControlSpec::Tree { .. } => skin.tree.size,
         ControlSpec::ContextBar { .. } => {
@@ -245,7 +257,9 @@ pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
         | ExpandedNode::Column { children, .. }
         | ExpandedNode::Slot { children, .. } => children.iter().any(has_blocks),
         ExpandedNode::Popover { anchor, .. } => has_blocks(anchor),
-        ExpandedNode::Pressable { child, .. } => has_blocks(child),
+        ExpandedNode::Pressable { child, .. } | ExpandedNode::Scroll { child, .. } => {
+            has_blocks(child)
+        }
         ExpandedNode::Control { .. } => false,
     }
 }
@@ -274,7 +288,8 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
         ExpandedNode::Optional { .. }
         | ExpandedNode::Popover { .. }
         | ExpandedNode::Pressable { .. } => None,
-        ExpandedNode::Row { size, .. }
+        ExpandedNode::Scroll { size, .. }
+        | ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
         | ExpandedNode::Slot { size, .. }
         | ExpandedNode::Control { size, .. } => *size,
@@ -288,6 +303,7 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
             compute_size(child, skin, hidden)
         }
         ExpandedNode::Popover { anchor, .. } => compute_size(anchor, skin, hidden),
+        ExpandedNode::Scroll { child, .. } => compute_size(child, skin, hidden),
         ExpandedNode::Row {
             children,
             gap,
@@ -459,6 +475,7 @@ mod tests {
             pad_x: None,
             pad_y: None,
             frame: None,
+            frame_color: None,
             background: None,
             background_alpha: None,
             surface: None,

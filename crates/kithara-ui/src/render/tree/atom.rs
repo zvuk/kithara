@@ -5,8 +5,15 @@ use crate::{
     atoms::{
         chip::Chip,
         design::{
-            cell::Cell, crossfader::Crossfader, meter::Meter, segmented::Segmented, select::Select,
-            status_dot::StatusDot, swatch::Swatch,
+            cell::Cell,
+            crossfader::Crossfader,
+            meter::Meter,
+            portal_map::{PortalMap, PortalMapData},
+            range::Range,
+            segmented::Segmented,
+            select::Select,
+            status_dot::StatusDot,
+            swatch::Swatch,
         },
         knob::Knob,
         meter::StereoMeter,
@@ -137,6 +144,38 @@ pub(super) fn meter<'a>(value: Option<&ReadValue<'_>>, skin: &'a Skin) -> Elemen
         .view()
 }
 
+pub(super) fn portal_map<'a>(
+    value: Option<&ReadValue<'_>>,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    let value = match value {
+        Some(ReadValue::PortalMap(view)) => Some(PortalMapData::from(*view)),
+        _ => None,
+    };
+    PortalMap::builder()
+        .maybe_value(value)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+pub(super) fn range<'a>(
+    path: &'a str,
+    value: Option<&ReadValue<'_>>,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    let value = match value {
+        Some(ReadValue::Range(value)) => Some(*value),
+        _ => None,
+    };
+    Range::builder()
+        .path(path)
+        .maybe_value(value)
+        .skin(skin)
+        .build()
+        .view()
+}
+
 pub(super) fn knob<'a>(
     path: &'a str,
     label: Option<&'a str>,
@@ -210,6 +249,7 @@ pub(super) fn swatch<'a>(
 
 pub(super) fn status_dot<'a>(
     label: InternId,
+    dot_size: Option<f32>,
     tone: Tone,
     active_tone: Option<Tone>,
     is_active: bool,
@@ -218,6 +258,7 @@ pub(super) fn status_dot<'a>(
 ) -> Element<'a, UiEvent> {
     StatusDot::builder()
         .label(ui.resolve(label))
+        .maybe_dot_size(dot_size)
         .tone(active_tone.filter(|_| is_active).unwrap_or(tone))
         .skin(skin)
         .build()

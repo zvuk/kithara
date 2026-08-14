@@ -13,6 +13,7 @@ use crate::{
 pub(crate) struct StatusDot<'a, 'skin> {
     skin: &'skin Skin,
     label: &'a str,
+    dot_size: Option<f32>,
     tone: Tone,
 }
 
@@ -26,13 +27,16 @@ impl<'a> Widget<'a> for StatusDot<'a, '_> {
             Tone::Danger => self.skin.palette.danger,
         };
         let dot = container(Space::new())
-            .width(Length::Fixed(metrics.dot_size))
-            .height(Length::Fixed(metrics.dot_size))
+            .width(Length::Fixed(self.dot_size.unwrap_or(metrics.dot_size)))
+            .height(Length::Fixed(self.dot_size.unwrap_or(metrics.dot_size)))
             .style(move |_| {
                 ContainerStyle::default()
                     .background(Background::Color(dot_color))
                     .border(Border::default())
             });
+        if self.label.is_empty() {
+            return dot.into();
+        }
         Row::with_children([
             dot.into(),
             shaped_text(self.label)

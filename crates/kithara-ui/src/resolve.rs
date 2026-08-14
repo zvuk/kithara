@@ -91,7 +91,9 @@ fn walk_includes(
             }
             Ok(())
         }
-        ControlNode::Optional { child, .. } | ControlNode::Pressable { child, .. } => {
+        ControlNode::Optional { child, .. }
+        | ControlNode::Pressable { child, .. }
+        | ControlNode::Scroll { child, .. } => {
             walk_includes(resolver, origin, child, limits, set, stack, depth)
         }
         ControlNode::Popover {
@@ -133,6 +135,8 @@ fn walk_includes(
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
         | ControlNode::Vis { .. }
+        | ControlNode::PortalMap { .. }
+        | ControlNode::Range { .. }
         | ControlNode::TrackList { .. }
         | ControlNode::Tree { .. }
         | ControlNode::ContextBar { .. }

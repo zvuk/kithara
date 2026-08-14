@@ -25,6 +25,29 @@ pub struct WaveformView<'a> {
     pub r#loop: Option<[f32; 2]>,
 }
 
+/// One destination tempo drawn by a portal map.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PortalTarget {
+    pub bpm: f32,
+    pub is_selected: bool,
+}
+
+/// Borrowed tempo-ratio map exposed to renderers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PortalMapView<'a> {
+    pub master: f32,
+    pub min: f32,
+    pub max: f32,
+    pub targets: &'a [PortalTarget],
+}
+
+/// Normalized lower and upper values exposed to a range control.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ScalarRange {
+    pub min: f32,
+    pub max: f32,
+}
+
 /// Icon associated with a renderer-facing tree row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -80,6 +103,8 @@ pub enum ReadValue<'a> {
     Scalar(f64),
     Stereo(StereoLevels),
     Waveform(WaveformView<'a>),
+    PortalMap(PortalMapView<'a>),
+    Range(ScalarRange),
     TrackList(&'a [TrackRow<'a>]),
     Tree(&'a [TreeRow<'a>]),
 }

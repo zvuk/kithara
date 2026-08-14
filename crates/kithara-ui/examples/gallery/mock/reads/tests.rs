@@ -230,7 +230,7 @@ fn tracklist_width_write_is_host_owned_and_clamped() {
     assert_eq!(
         reads.get(endpoint),
         Some(ReadValue::Scalar(f64::from(
-            kithara_ui::builtin::skin().track_list.min_column_width
+            builtin::skin().track_list.min_column_width
         )))
     );
 }
@@ -630,4 +630,94 @@ fn a_track_menu_action_closes_the_menu_and_reports_itself() {
 fn breadcrumb_data_excludes_the_scope_prefix() {
     assert!(!CATALOG.breadcrumb.is_empty());
     assert!(!CATALOG.breadcrumb.contains('\u{203a}'));
+}
+
+#[kithara::test]
+fn clock_controls_update_source_tempo_grid_and_key_lock() {
+    let mut reads = MockReads::default();
+
+    reads.apply(
+        "clock/master-clock/source-c/select",
+        &ControlAction::Activate,
+    );
+    assert_eq!(reads.get("clock.source"), Some(ReadValue::Text("C")));
+    assert_eq!(
+        reads.get("clock.source.active@source=c"),
+        Some(ReadValue::Bool(true))
+    );
+
+    reads.apply("clock/master-clock/nudge/up", &ControlAction::Activate);
+    assert_eq!(reads.get("clock.bpm"), Some(ReadValue::Text("124.01")));
+    reads.apply("clock/master-clock/grid/click", &ControlAction::Activate);
+    assert_eq!(reads.get("clock.grid.click"), Some(ReadValue::Bool(true)));
+    reads.apply("clock/key-lock/toggle", &ControlAction::Activate);
+    assert_eq!(
+        reads.get("deck.key.locked@deck=a"),
+        Some(ReadValue::Bool(false))
+    );
+    reads.apply(
+        "clock/master-clock/link-panel/link-toggle",
+        &ControlAction::Activate,
+    );
+    assert_eq!(
+        reads.get("clock.link.enabled"),
+        Some(ReadValue::Bool(false))
+    );
+    reads.apply(
+        "clock/master-clock/midi-panel/midi-send",
+        &ControlAction::Activate,
+    );
+    assert_eq!(reads.get("clock.midi.send"), Some(ReadValue::Bool(true)));
+}
+
+#[kithara::test]
+fn pivot_controls_follow_the_handoff_ratio_range_and_loop_contract() {
+    let mut reads = MockReads::default();
+
+    assert_eq!(
+        reads.get("pivot.selected.ratio"),
+        Some(ReadValue::Text("4:3"))
+    );
+    assert_eq!(
+        reads.get("pivot.selected.target"),
+        Some(ReadValue::Text("93.00"))
+    );
+    assert_eq!(
+        reads.get("pivot.track.title@track=0"),
+        Some(ReadValue::Text("slowtechno_mas-5"))
+    );
+    let Some(ReadValue::PortalMap(map)) = reads.get("pivot.map") else {
+        panic!("expected portal map");
+    };
+    assert_eq!(map.master, 124.0);
+    assert!(map.targets.iter().any(|target| target.is_selected));
+
+    reads.apply(
+        "pivot/table/portal-scroll/portal-list/row-0/select",
+        &ControlAction::Activate,
+    );
+    assert_eq!(
+        reads.get("pivot.selected.ratio"),
+        Some(ReadValue::Text("12:11"))
+    );
+    assert_eq!(
+        reads.get("pivot.portal.active@portal=0"),
+        Some(ReadValue::Bool(true))
+    );
+
+    reads.apply("pivot/range/min", &ControlAction::SetScalar(1.0));
+    assert_eq!(
+        reads.get("pivot.range.min_label"),
+        Some(ReadValue::Text("168"))
+    );
+    let Some(ReadValue::Range(range)) = reads.get("pivot.range") else {
+        panic!("expected range");
+    };
+    assert!(((range.max - range.min) - 8.0 / 140.0).abs() < f32::EPSILON);
+
+    reads.apply("pivot/family/leap", &ControlAction::Activate);
+    assert_eq!(reads.get("pivot.family.leap"), Some(ReadValue::Bool(true)));
+
+    reads.apply("pivot/loops/mul-4", &ControlAction::Activate);
+    assert_eq!(reads.get("pivot.multiplier.4"), Some(ReadValue::Bool(true)));
 }

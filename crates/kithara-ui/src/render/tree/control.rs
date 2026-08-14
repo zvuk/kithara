@@ -2,8 +2,8 @@ use iced::alignment::Horizontal;
 
 use super::{
     atom::{
-        cell, checkbox, chip, crossfader, fader, glyph, knob, meter, nav_item, readout, segmented,
-        select, status_dot, swatch, tab_large, toggle, vu_stereo, vu_vertical,
+        cell, checkbox, chip, crossfader, fader, glyph, knob, meter, nav_item, portal_map, range,
+        readout, segmented, select, status_dot, swatch, tab_large, toggle, vu_stereo, vu_vertical,
     },
     geometry::Rendered,
     icon::render_icon,
@@ -135,12 +135,13 @@ pub(super) fn render_control<'a>(
         ControlSpec::Select { label } => select(*label, ui, skin),
         ControlSpec::StatusDot {
             label,
+            dot_size,
             tone,
             active_tone,
             active,
         } => {
             let on = read_flag(active.as_ref(), reads, ui);
-            status_dot(*label, *tone, *active_tone, on, ui, skin)
+            status_dot(*label, *dot_size, *tone, *active_tone, on, ui, skin)
         }
         ControlSpec::Swatch { role, label } => swatch(*role, *label, ui, skin),
         ControlSpec::Cell { label, highlighted } => cell(*label, *highlighted, ui, skin),
@@ -154,6 +155,8 @@ pub(super) fn render_control<'a>(
         ControlSpec::VuStereo => vu_stereo(path, value, skin),
         ControlSpec::VuVertical { ticks } => vu_vertical(path, *ticks, value, skin),
         ControlSpec::Vis => vis(value, reads),
+        ControlSpec::PortalMap => portal_map(value, skin),
+        ControlSpec::Range => range(path, value, skin),
         ControlSpec::Wave { style, badge, zoom } => MiniWave::builder()
             .path(path)
             .style(*style)

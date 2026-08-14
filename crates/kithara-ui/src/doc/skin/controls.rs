@@ -138,6 +138,38 @@ pub struct VisSkin {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
+pub struct PortalMapSkin {
+    pub size: SizeSpec,
+    pub axis_inset_x: f32,
+    pub axis_offset_bottom: f32,
+    pub arc_height_scale: f32,
+    pub arc_top_inset: f32,
+    pub line_width: f32,
+    pub selected_line_width: f32,
+    pub marker_size: f32,
+    pub tick_height: f32,
+    pub tick_step: f32,
+    pub label_offset_x: f32,
+    pub label_offset_y: f32,
+    pub label: FontSkin,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct RangeSkin {
+    pub rail_background: ColorRole,
+    pub selection_color: ColorRole,
+    pub size: SizeSpec,
+    pub thumb_color: ColorRole,
+    pub rail_height: f32,
+    pub thumb_height: f32,
+    pub thumb_width: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ToggleSkin {
     pub active_frame: FrameSkin,
     pub inactive_frame: FrameSkin,
@@ -175,11 +207,18 @@ pub struct ReadoutSkin {
 pub struct ChipSkin {
     pub deck_text: FontSkin,
     pub routing_text: FontSkin,
+    pub pivot_family_text: TextRoleSkin,
+    pub pivot_multiplier_text: TextRoleSkin,
     pub active_frame: FrameSkin,
     pub inactive_frame: FrameSkin,
+    pub pivot_frame: FrameSkin,
     pub size: SizeSpec,
     pub padding_x: f32,
     pub padding_y: f32,
+    pub pivot_family_padding_x: f32,
+    pub pivot_family_padding_y: f32,
+    pub pivot_multiplier_padding_x: f32,
+    pub pivot_multiplier_padding_y: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -245,6 +284,16 @@ pub struct TextSkin {
     pub deck_letter: TextRoleSkin,
     pub micro_label: TextRoleSkin,
     pub mono: TextRoleSkin,
+    pub pivot_arrow: TextRoleSkin,
+    pub pivot_duration: TextRoleSkin,
+    pub pivot_footer: TextRoleSkin,
+    pub pivot_label: TextRoleSkin,
+    pub pivot_ratio: TextRoleSkin,
+    pub pivot_small: TextRoleSkin,
+    pub pivot_track_artist: TextRoleSkin,
+    pub pivot_track_title: TextRoleSkin,
+    pub pivot_title: TextRoleSkin,
+    pub pivot_value: TextRoleSkin,
     pub section: TextRoleSkin,
     pub telemetry: TextRoleSkin,
     pub track_title: TextRoleSkin,

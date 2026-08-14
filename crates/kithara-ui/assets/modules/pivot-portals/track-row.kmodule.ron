@@ -1,0 +1,19 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "pivot-track-row",
+    chrome: Plain,
+    parameters: ["track"],
+    root: Row(
+        size: (w: Fill, h: Fixed(24.0)),
+        gap: 10.0,
+        pad_x: 12.0,
+        frame: (top: false, right: false, bottom: true, left: false),
+        children: [
+            Text(id: "title", style: PivotTrackTitle, read: Model(id: "pivot.track.title", with: { "track": "$track" }), size: (w: Fill, h: Fill)),
+            Text(id: "artist", style: PivotTrackArtist, color: Muted, read: Model(id: "pivot.track.artist", with: { "track": "$track" }), size: (w: Fixed(110.0), h: Fill)),
+            Text(id: "bpm", style: Mono, color: TextDim, align: End, read: Model(id: "pivot.track.bpm", with: { "track": "$track" }), size: (w: Fixed(48.0), h: Fill)),
+            Text(id: "key", style: Mono, color: Accent, align: End, read: Model(id: "pivot.track.key", with: { "track": "$track" }), size: (w: Fixed(32.0), h: Fill)),
+        ],
+    ),
+)

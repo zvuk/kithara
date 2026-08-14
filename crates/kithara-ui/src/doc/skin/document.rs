@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use super::{
     controls::{
         ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, CrossfaderSkin, FaderSkin, KnobSkin,
-        MenuSkin, NavSkin, ReadoutSkin, SegmentedSkin, SelectSkin, StatusDotSkin, SwatchSkin,
-        TabLargeSkin, TextInputSkin, TextSkin, ToggleSkin, VisSkin, VuStereoSkin, VuVerticalSkin,
+        MenuSkin, NavSkin, PortalMapSkin, RangeSkin, ReadoutSkin, SegmentedSkin, SelectSkin,
+        StatusDotSkin, SwatchSkin, TabLargeSkin, TextInputSkin, TextSkin, ToggleSkin, VisSkin,
+        VuStereoSkin, VuVerticalSkin,
     },
     panels::{
         DeckSkin, DividerSkin, DragSkin, GlobalBarSkin, LayoutPreviewSkin, MeterSkin, PopSkin,
@@ -43,6 +44,8 @@ pub struct SkinDoc {
     pub nav: NavSkin,
     pub palette: PaletteDoc,
     pub pop: PopSkin,
+    pub portal_map: PortalMapSkin,
+    pub range: RangeSkin,
     pub readout: ReadoutSkin,
     pub segmented: SegmentedSkin,
     pub select: SelectSkin,

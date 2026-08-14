@@ -1,6 +1,8 @@
+mod clock;
 mod consts;
 mod endpoints;
 mod menu;
+mod pivot;
 mod quality;
 mod reads;
 

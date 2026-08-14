@@ -1,0 +1,49 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "deck-overview-row",
+    chrome: Plain,
+    parameters: ["deck", "letter"],
+    root: Row(
+        gap: 0.0,
+        size: (w: Fill, h: Fixed(46.0)),
+        children: [
+            Row(
+                id: "letter-cell",
+                size: (w: Fixed(30.0), h: Fill),
+                background: BgPanel,
+                frame: (top: false, right: true, bottom: false, left: false),
+                children: [
+                    Text(
+                        id: "letter",
+                        size: (w: Fill, h: Fill),
+                        style: DeckLetter,
+                        align: Center,
+                        label: "$letter",
+                        active: Telemetry(id: "deck.focused", with: { "deck": "$deck" }),
+                    ),
+                ],
+            ),
+            Wave(
+                id: "wave",
+                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+                write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
+            ),
+            Row(
+                id: "remain-cell",
+                size: (w: Fixed(66.0), h: Fill),
+                background: BgPanel,
+                frame: (top: false, right: false, bottom: false, left: true),
+                children: [
+                    Text(
+                        id: "remain",
+                        size: (w: Fill, h: Fill),
+                        style: Telemetry,
+                        align: Center,
+                        read: Telemetry(id: "deck.playback.remain", with: { "deck": "$deck" }),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

@@ -1,6 +1,6 @@
 use iced::{
     Alignment, Element, Length, mouse,
-    widget::{Column, Row, Space, Stack, container, mouse_area},
+    widget::{Column, Row, Space, Stack, container, mouse_area, scrollable},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -8,7 +8,7 @@ use super::{
     control::render_control,
     geometry::{
         Rendered, active_tone, apply_size, bordered, content_size, effective_size, filled,
-        frame_tone, padding,
+        frame_tone, length_for, padding,
     },
     read::{read_flag, resolve},
     size::{node_size, visible_children},
@@ -45,7 +45,10 @@ pub(super) fn render_compiled<'a>(
                             weight,
                             skin,
                         ))
-                        .height(Length::Fill)
+                        .height(length_for(
+                            node_size(child, skin.document(), hidden).h,
+                            Length::Fill,
+                        ))
                         .into()
                 }))
                 .width(Length::Fill)
@@ -220,6 +223,7 @@ fn render_node<'a>(
             pad_x,
             pad_y,
             frame,
+            frame_color,
             background,
             background_alpha,
             surface,
@@ -244,7 +248,7 @@ fn render_node<'a>(
                     skin,
                 ),
                 *frame,
-                frame_tone(None, None, false, skin),
+                frame_tone(*frame_color, None, false, skin),
                 size,
                 skin,
             ),
@@ -291,6 +295,7 @@ fn render_node<'a>(
                     .into(),
             )
         }
+        ExpandedNode::Scroll { child, .. } => render_scroll(child, size, ui, reads, skin),
         ExpandedNode::Slot { children, .. } => Rendered::leading(
             container(
                 Column::with_children(
@@ -307,6 +312,21 @@ fn render_node<'a>(
         } => render_control(*path, spec, read.as_ref(), ui, reads, skin),
     };
     apply_size(rendered, effective_size(node, skin))
+}
+
+fn render_scroll<'a>(
+    child: &ExpandedNode,
+    size: (Length, Length),
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &'a Skin,
+) -> Rendered<'a> {
+    Rendered::leading(
+        scrollable(render_node(child, ui, reads, skin))
+            .width(size.0)
+            .height(size.1)
+            .into(),
+    )
 }
 
 fn control_event(path: &str, action: ControlAction) -> UiEvent {

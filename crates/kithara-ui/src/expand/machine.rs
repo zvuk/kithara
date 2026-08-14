@@ -209,19 +209,31 @@ fn context_bar_spec(
     })
 }
 
+struct StatusDotFields<'a> {
+    label: &'a str,
+    dot_size: Option<f32>,
+    tone: Tone,
+    active_tone: Option<Tone>,
+}
+
 fn status_dot_spec(
     context: &Context<'_>,
     machine: &mut Expander<'_, '_>,
-    label: &str,
-    tone: Tone,
-    active_tone: Option<Tone>,
+    fields: &StatusDotFields<'_>,
     extra: &ExtraBindings,
     path: &str,
 ) -> Result<ControlSpec, UiDocError> {
     Ok(ControlSpec::StatusDot {
-        label: intern_text(context, machine.interner, label, path, &context.origin)?,
-        tone,
-        active_tone,
+        label: intern_text(
+            context,
+            machine.interner,
+            fields.label,
+            path,
+            &context.origin,
+        )?,
+        dot_size: fields.dot_size,
+        tone: fields.tone,
+        active_tone: fields.active_tone,
         active: optional_binding(context, machine, extra.active.as_ref())?,
     })
 }
@@ -334,14 +346,6 @@ fn control_spec(
     machine: &mut Expander<'_, '_>,
 ) -> Result<Option<ControlSpec>, UiDocError> {
     let spec = match control {
-        ControlNode::DeckSummary { style, .. } => ControlSpec::DeckSummary { style: *style },
-        ControlNode::Brand { .. } => ControlSpec::Brand,
-        ControlNode::Spacer { .. } => ControlSpec::Spacer,
-        ControlNode::Divider { .. } => ControlSpec::Divider,
-        ControlNode::PresetSelector { .. } => ControlSpec::PresetSelector,
-        ControlNode::SettingsButton { .. } => ControlSpec::SettingsButton,
-        ControlNode::WindowDrag { .. } => ControlSpec::WindowDrag,
-        ControlNode::WindowControls { style, .. } => ControlSpec::WindowControls { style: *style },
         ControlNode::Glyph {
             icon,
             active_icon,
@@ -357,18 +361,6 @@ fn control_spec(
             active_color: context.optional_param(active_color.as_ref(), path)?,
             active: optional_binding(context, machine, extra.active.as_ref())?,
         },
-        ControlNode::Time { .. } => ControlSpec::Time,
-        ControlNode::Scalar { format, framed, .. } => ControlSpec::Scalar {
-            format: *format,
-            framed: *framed,
-        },
-        ControlNode::Crossfader { ticks, .. } => ControlSpec::Crossfader { ticks: *ticks },
-        ControlNode::Vis { .. } => ControlSpec::Vis,
-        ControlNode::Toggle { .. } => ControlSpec::Toggle,
-        ControlNode::Checkbox { .. } => ControlSpec::Checkbox,
-        ControlNode::Meter { .. } => ControlSpec::Meter,
-        ControlNode::VuStereo { .. } => ControlSpec::VuStereo,
-        ControlNode::VuVertical { ticks, .. } => ControlSpec::VuVertical { ticks: *ticks },
         ControlNode::TitleBar { label, .. } => title_bar_spec(context, machine, label, path)?,
         ControlNode::Text {
             style,
@@ -442,10 +434,22 @@ fn control_spec(
         },
         ControlNode::StatusDot {
             label,
+            dot_size,
             tone,
             active_tone,
             ..
-        } => status_dot_spec(context, machine, label, *tone, *active_tone, extra, path)?,
+        } => status_dot_spec(
+            context,
+            machine,
+            &StatusDotFields {
+                label,
+                dot_size: *dot_size,
+                tone: *tone,
+                active_tone: *active_tone,
+            },
+            extra,
+            path,
+        )?,
         ControlNode::Swatch { role, label, .. } => ControlSpec::Swatch {
             role: *role,
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
@@ -473,15 +477,47 @@ fn control_spec(
         ControlNode::Knob { label, .. } => ControlSpec::Knob {
             label: optional_text(context, machine, label.as_deref(), path)?,
         },
+        _ => return Ok(fixed_control_spec(control)),
+    };
+    Ok(Some(spec))
+}
+
+fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
+    match control {
+        ControlNode::DeckSummary { style, .. } => Some(ControlSpec::DeckSummary { style: *style }),
+        ControlNode::Brand { .. } => Some(ControlSpec::Brand),
+        ControlNode::Spacer { .. } => Some(ControlSpec::Spacer),
+        ControlNode::Divider { .. } => Some(ControlSpec::Divider),
+        ControlNode::PresetSelector { .. } => Some(ControlSpec::PresetSelector),
+        ControlNode::SettingsButton { .. } => Some(ControlSpec::SettingsButton),
+        ControlNode::WindowDrag { .. } => Some(ControlSpec::WindowDrag),
+        ControlNode::WindowControls { style, .. } => {
+            Some(ControlSpec::WindowControls { style: *style })
+        }
+        ControlNode::Time { .. } => Some(ControlSpec::Time),
+        ControlNode::Scalar { format, framed, .. } => Some(ControlSpec::Scalar {
+            format: *format,
+            framed: *framed,
+        }),
+        ControlNode::Crossfader { ticks, .. } => Some(ControlSpec::Crossfader { ticks: *ticks }),
+        ControlNode::Vis { .. } => Some(ControlSpec::Vis),
+        ControlNode::PortalMap { .. } => Some(ControlSpec::PortalMap),
+        ControlNode::Range { .. } => Some(ControlSpec::Range),
+        ControlNode::Toggle { .. } => Some(ControlSpec::Toggle),
+        ControlNode::Checkbox { .. } => Some(ControlSpec::Checkbox),
+        ControlNode::Meter { .. } => Some(ControlSpec::Meter),
+        ControlNode::VuStereo { .. } => Some(ControlSpec::VuStereo),
+        ControlNode::VuVertical { ticks, .. } => Some(ControlSpec::VuVertical { ticks: *ticks }),
         ControlNode::Row { .. }
         | ControlNode::Column { .. }
+        | ControlNode::Scroll { .. }
         | ControlNode::Include { .. }
         | ControlNode::Optional { .. }
         | ControlNode::Popover { .. }
         | ControlNode::Pressable { .. }
-        | ControlNode::Slot { .. } => return Ok(None),
-    };
-    Ok(Some(spec))
+        | ControlNode::Slot { .. } => None,
+        _ => unreachable!("dynamic controls are handled before fixed controls"),
+    }
 }
 
 fn optional_text(
@@ -797,36 +833,13 @@ fn walk(
                 children: walk_children(context, children, depth, machine)?,
             })
         }
-        ControlNode::Column {
-            id,
-            size,
-            gap,
-            align,
-            pad,
-            pad_x,
-            pad_y,
-            frame,
-            background,
-            background_alpha,
-            write,
-            children,
-        } => {
+        column @ ControlNode::Column { .. } => expand_column(context, column, depth, machine),
+        ControlNode::Scroll { id, size, child } => {
             machine.budget.charge(&context.origin)?;
-            let declared = (id.as_ref(), write.as_ref(), None);
-            let (surface, _) = container_bindings(context, node, declared, machine)?;
-            Ok(ExpandedNode::Column {
-                surface,
-                id: intern_node_id(id.as_ref(), context, machine)?,
+            Ok(ExpandedNode::Scroll {
+                id: machine.interner.intern(&id.0, &context.origin)?,
                 size: *size,
-                gap: *gap,
-                align: *align,
-                pad: *pad,
-                pad_x: *pad_x,
-                pad_y: *pad_y,
-                frame: *frame,
-                background: *background,
-                background_alpha: *background_alpha,
-                children: walk_children(context, children, depth, machine)?,
+                child: Box::new(walk(context, child, depth, machine)?),
             })
         }
         ControlNode::Slot { id, size, default } => {
@@ -882,6 +895,8 @@ fn walk(
         | ControlNode::Fader { id, adaptive, .. }
         | ControlNode::Wave { id, adaptive, .. }
         | ControlNode::Vis { id, adaptive, .. }
+        | ControlNode::PortalMap { id, adaptive, .. }
+        | ControlNode::Range { id, adaptive, .. }
         | ControlNode::TrackList { id, adaptive, .. }
         | ControlNode::Tree { id, adaptive, .. }
         | ControlNode::ContextBar { id, adaptive, .. }
@@ -907,6 +922,50 @@ fn walk(
             )
         }
     }
+}
+
+fn expand_column(
+    context: &Context<'_>,
+    node: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    let ControlNode::Column {
+        id,
+        size,
+        gap,
+        align,
+        pad,
+        pad_x,
+        pad_y,
+        frame,
+        frame_color,
+        background,
+        background_alpha,
+        write,
+        children,
+    } = node
+    else {
+        unreachable!("expand_column is called only for a column")
+    };
+    machine.budget.charge(&context.origin)?;
+    let declared = (id.as_ref(), write.as_ref(), None);
+    let (surface, _) = container_bindings(context, node, declared, machine)?;
+    Ok(ExpandedNode::Column {
+        surface,
+        id: intern_node_id(id.as_ref(), context, machine)?,
+        size: *size,
+        gap: *gap,
+        align: *align,
+        pad: *pad,
+        pad_x: *pad_x,
+        pad_y: *pad_y,
+        frame: *frame,
+        frame_color: *frame_color,
+        background: *background,
+        background_alpha: *background_alpha,
+        children: walk_children(context, children, depth, machine)?,
+    })
 }
 
 #[cfg(test)]

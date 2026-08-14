@@ -11,6 +11,8 @@ pub enum ValueKind {
     Stereo,
     Text,
     Waveform,
+    PortalMap,
+    Range,
     TrackList,
     Tree,
 }

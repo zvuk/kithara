@@ -1,0 +1,139 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "pivot-portals",
+    chrome: Plain,
+    root: Column(
+        size: (w: Fill, h: Shrink),
+        gap: 0.0,
+        children: [
+            Row(
+                id: "header",
+                size: (w: Fill, h: Fixed(28.0)),
+                gap: 0.0,
+                background: BgPanel,
+                frame: (top: false, right: false, bottom: true, left: false),
+                frame_color: Line,
+                children: [
+                    Row(id: "title", size: (w: Fixed(148.429688), h: Fill), gap: 7.0, pad_x: 11.0, frame: (top: false, right: true, bottom: false, left: false), frame_color: LineInner, children: [
+                        Glyph(id: "icon", icon: Orbit, style: MenuCell, color: Accent, size: (w: Fixed(11.0), h: Fill)),
+                        Text(id: "label", style: PivotTitle, label: "ПИВОТ-ПОРТАЛ", size: (w: Fill, h: Fill)),
+                    ]),
+                    Row(id: "master", size: (w: Fixed(124.835938), h: Fill), gap: 6.0, pad_x: 11.0, frame: (top: false, right: true, bottom: false, left: false), frame_color: LineInner, children: [
+                        Text(id: "master-label", style: PivotLabel, label: "МАСТЕР", size: (w: Shrink, h: Fill)),
+                        Text(id: "master-value", style: Mono, color: Accent, read: Model(id: "pivot.master.label"), size: (w: Shrink, h: Fill)),
+                    ]),
+                    Slot(id: "header-space", size: (w: Fill, h: Fill)),
+                    Row(id: "family", size: (w: Fixed(153.796875), h: Fill), gap: 8.0, pad_x: 11.0, frame: (top: false, right: false, bottom: false, left: true), frame_color: LineInner, children: [
+                        Text(id: "family-label", style: PivotLabel, label: "РАТИО", size: (w: Shrink, h: Fill)),
+                        Row(id: "family-chips", size: (w: Fixed(93.109375), h: Fill), gap: 4.0, children: [
+                            Chip(id: "step", style: PivotFamily, label: "STEP", read: Model(id: "pivot.family.step"), write: Command(id: "pivot.family.step"), size: (w: Fixed(44.554688), h: Fixed(16.5))),
+                            Chip(id: "leap", style: PivotFamily, label: "LEAP", read: Model(id: "pivot.family.leap"), write: Command(id: "pivot.family.leap"), size: (w: Fixed(44.554688), h: Fixed(16.5))),
+                        ]),
+                    ]),
+                    Row(id: "range-cell", size: (w: Fixed(280.0), h: Fill), gap: 9.0, pad_x: 12.0, frame: (top: false, right: false, bottom: false, left: true), frame_color: LineInner, children: [
+                        Text(id: "range-label", style: PivotLabel, label: "ДИАПАЗОН", size: (w: Fill, h: Fill)),
+                        Text(id: "range-min", style: PivotSmall, color: TextDim, align: End, read: Model(id: "pivot.range.min_label"), size: (w: Shrink, h: Fill)),
+                        Range(id: "range", read: Model(id: "pivot.range"), write: Parameter(id: "pivot.range"), size: (w: Fill, h: Fixed(16.0))),
+                        Text(id: "range-max", style: PivotSmall, color: TextDim, read: Model(id: "pivot.range.max_label"), size: (w: Shrink, h: Fill)),
+                    ]),
+                ],
+            ),
+            Row(
+                id: "body",
+                gap: 0.0,
+                size: (w: Fill, h: Shrink),
+                children: [
+                    Column(
+                        id: "table",
+                        size: (w: Fixed(420.0), h: Shrink),
+                        gap: 0.0,
+                        frame: (top: false, right: true, bottom: false, left: false),
+                        frame_color: Line,
+                        children: [
+                            Row(id: "columns", size: (w: Fill, h: Fixed(22.0)), gap: 8.0, pad_x: 12.0, background: BgFooter, frame: (top: false, right: false, bottom: true, left: false), frame_color: LineInner, children: [
+                                Text(id: "ratio", style: PivotLabel, label: "РАТИО", size: (w: Fixed(44.0), h: Fill)),
+                                Text(id: "bpm", style: PivotLabel, label: "ТЕМП", size: (w: Fixed(58.0), h: Fill)),
+                                Text(id: "pulse", style: PivotLabel, label: "ПИВОТ", size: (w: Fixed(56.0), h: Fill)),
+                                Text(id: "loop", style: PivotLabel, label: "ЦИКЛ", size: (w: Fixed(52.0), h: Fill)),
+                                Text(id: "stretch", style: PivotLabel, label: "ВМЕСТО СТРЕТЧА", align: End, size: (w: Fill, h: Fill)),
+                            ]),
+                            Scroll(id: "portal-scroll", size: (w: Fill, h: Fixed(238.0)), child: Column(id: "portal-list", gap: 0.0, children: [
+                                Optional(id: "row-0-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "0" }), child: Include(id: "row-0", source: "pivot-portals/row.kmodule.ron", with: { "portal": "0" })),
+                                Optional(id: "row-1-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "1" }), child: Include(id: "row-1", source: "pivot-portals/row.kmodule.ron", with: { "portal": "1" })),
+                                Optional(id: "row-2-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "2" }), child: Include(id: "row-2", source: "pivot-portals/row.kmodule.ron", with: { "portal": "2" })),
+                                Optional(id: "row-3-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "3" }), child: Include(id: "row-3", source: "pivot-portals/row.kmodule.ron", with: { "portal": "3" })),
+                                Optional(id: "row-4-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "4" }), child: Include(id: "row-4", source: "pivot-portals/row.kmodule.ron", with: { "portal": "4" })),
+                                Optional(id: "row-5-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "5" }), child: Include(id: "row-5", source: "pivot-portals/row.kmodule.ron", with: { "portal": "5" })),
+                                Optional(id: "row-6-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "6" }), child: Include(id: "row-6", source: "pivot-portals/row.kmodule.ron", with: { "portal": "6" })),
+                                Optional(id: "row-7-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "7" }), child: Include(id: "row-7", source: "pivot-portals/row.kmodule.ron", with: { "portal": "7" })),
+                                Optional(id: "row-8-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "8" }), child: Include(id: "row-8", source: "pivot-portals/row.kmodule.ron", with: { "portal": "8" })),
+                                Optional(id: "row-9-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "9" }), child: Include(id: "row-9", source: "pivot-portals/row.kmodule.ron", with: { "portal": "9" })),
+                                Optional(id: "row-10-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "10" }), child: Include(id: "row-10", source: "pivot-portals/row.kmodule.ron", with: { "portal": "10" })),
+                                Optional(id: "row-11-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "11" }), child: Include(id: "row-11", source: "pivot-portals/row.kmodule.ron", with: { "portal": "11" })),
+                                Optional(id: "row-12-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "12" }), child: Include(id: "row-12", source: "pivot-portals/row.kmodule.ron", with: { "portal": "12" })),
+                                Optional(id: "row-13-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "13" }), child: Include(id: "row-13", source: "pivot-portals/row.kmodule.ron", with: { "portal": "13" })),
+                                Optional(id: "row-14-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "14" }), child: Include(id: "row-14", source: "pivot-portals/row.kmodule.ron", with: { "portal": "14" })),
+                                Optional(id: "row-15-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "15" }), child: Include(id: "row-15", source: "pivot-portals/row.kmodule.ron", with: { "portal": "15" })),
+                                Optional(id: "row-16-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "16" }), child: Include(id: "row-16", source: "pivot-portals/row.kmodule.ron", with: { "portal": "16" })),
+                                Optional(id: "row-17-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "17" }), child: Include(id: "row-17", source: "pivot-portals/row.kmodule.ron", with: { "portal": "17" })),
+                            ])),
+                        ],
+                    ),
+                    Column(id: "portal-panel", size: (w: Fill, h: Shrink), gap: 0.0, children: [
+                        Column(id: "selected", size: (w: Fill, h: Fixed(77.0)), gap: 0.0, align: Center, frame: (top: false, right: false, bottom: true, left: false), frame_color: LineInner, children: [
+                            Slot(id: "selected-top-space", size: (w: Fill, h: Fixed(12.0))),
+                            Text(id: "selected-ratio", style: PivotRatio, read: Model(id: "pivot.selected.ratio"), align: Center, size: (w: Fill, h: Fixed(12.0))),
+                            Slot(id: "selected-ratio-gap", size: (w: Fill, h: Fixed(2.0))),
+                            Row(id: "selected-bpm", size: (w: Fill, h: Fixed(26.0)), gap: 10.0, children: [
+                                Slot(id: "selected-left-space", size: (w: Fill, h: Fill)),
+                                Text(id: "selected-master", style: PivotValue, color: Text, read: Model(id: "pivot.selected.master"), size: (w: Shrink, h: Fill)),
+                                Column(id: "selected-arrow-column", size: (w: Shrink, h: Fill), gap: 0.0, children: [
+                                    Slot(id: "selected-arrow-space", size: (w: Fill, h: Fixed(7.0))),
+                                    Text(id: "selected-arrow", style: PivotArrow, color: Muted, label: "↔", size: (w: Shrink, h: Fixed(19.0))),
+                                ]),
+                                Text(id: "selected-target", style: PivotValue, color: WaveHigh, read: Model(id: "pivot.selected.target"), size: (w: Shrink, h: Fill)),
+                                Slot(id: "selected-right-space", size: (w: Fill, h: Fill)),
+                            ]),
+                            Slot(id: "selected-value-gap", size: (w: Fill, h: Fixed(2.0))),
+                            Text(id: "selected-pulse", style: Mono, color: Accent, align: Center, read: Model(id: "pivot.selected.pulse"), size: (w: Fill, h: Fixed(12.0))),
+                            Slot(id: "selected-bottom-space", size: (w: Fill, h: Fixed(11.0))),
+                        ]),
+                        Row(id: "map-frame", size: (w: Fill, h: Fixed(118.0)), frame: (top: false, right: false, bottom: true, left: false), frame_color: LineInner, children: [
+                            PortalMap(id: "map", read: Model(id: "pivot.map"), size: (w: Fill, h: Fill)),
+                        ]),
+                        Row(id: "loops", size: (w: Fill, h: Fixed(34.0)), gap: 10.0, pad_x: 12.0, frame: (top: false, right: false, bottom: true, left: false), children: [
+                            Text(id: "loops-label", style: PivotLabel, label: "ЦИКЛ ДЕКИ", size: (w: Fill, h: Fill)),
+                            Row(id: "loop-values", size: (w: Fixed(155.09375), h: Fill), gap: 5.0, children: [
+                                Text(id: "loop-a-label", style: PivotSmall, color: Accent, label: "A", size: (w: Fixed(5.421875), h: Fill)),
+                                Row(id: "loop-a-box", size: (w: Fixed(26.0), h: Fixed(18.0)), pad_x: 6.0, frame: (top: true, right: true, bottom: true, left: true), frame_color: Accent, children: [Text(id: "loop-a", style: Mono, color: Accent, align: Center, read: Model(id: "pivot.selected.loop_a"), size: (w: Fill, h: Fill))]),
+                                Text(id: "loop-b-label", style: PivotSmall, color: WaveHigh, label: "B", size: (w: Fixed(5.421875), h: Fill)),
+                                Row(id: "loop-b-box", size: (w: Fixed(26.0), h: Fixed(18.0)), pad_x: 6.0, frame: (top: true, right: true, bottom: true, left: true), frame_color: WaveHigh, children: [Text(id: "loop-b", style: Mono, color: WaveHigh, align: Center, read: Model(id: "pivot.selected.loop_b"), size: (w: Fill, h: Fill))]),
+                                Text(id: "duration", style: PivotDuration, read: Model(id: "pivot.selected.duration"), size: (w: Fill, h: Fill)),
+                            ]),
+                            Slot(id: "loops-space", size: (w: Fill, h: Fill)),
+                            Row(id: "multipliers", size: (w: Fixed(88.53125), h: Fill), gap: 4.0, children: [
+                                Chip(id: "mul-1", style: PivotMultiplier, label: "×1", read: Model(id: "pivot.multiplier.1"), write: Command(id: "pivot.multiplier.1"), size: (w: Fixed(26.84375), h: Fixed(16.5))),
+                                Chip(id: "mul-2", style: PivotMultiplier, label: "×2", read: Model(id: "pivot.multiplier.2"), write: Command(id: "pivot.multiplier.2"), size: (w: Fixed(26.84375), h: Fixed(16.5))),
+                                Chip(id: "mul-4", style: PivotMultiplier, label: "×4", read: Model(id: "pivot.multiplier.4"), write: Command(id: "pivot.multiplier.4"), size: (w: Fixed(26.84375), h: Fixed(16.5))),
+                            ]),
+                        ]),
+                        Row(id: "tracks-header", size: (w: Fill, h: Fixed(22.0)), pad_x: 12.0, background: BgFooter, frame: (top: false, right: false, bottom: true, left: false), frame_color: LineInner, children: [
+                            Text(id: "tracks-label", style: PivotLabel, label: "ТРЕКИ В КОЛЛЕКЦИИ НА ЭТОМ ТЕМПЕ", size: (w: Fill, h: Fill)),
+                        ]),
+                        Optional(id: "track-0-block", hidden: Model(id: "pivot.track.hidden", with: { "track": "0" }), child: Include(id: "track-0", source: "pivot-portals/track-row.kmodule.ron", with: { "track": "0" })),
+                        Optional(id: "track-1-block", hidden: Model(id: "pivot.track.hidden", with: { "track": "1" }), child: Include(id: "track-1", source: "pivot-portals/track-row.kmodule.ron", with: { "track": "1" })),
+                        Optional(id: "track-2-block", hidden: Model(id: "pivot.track.hidden", with: { "track": "2" }), child: Include(id: "track-2", source: "pivot-portals/track-row.kmodule.ron", with: { "track": "2" })),
+                        Optional(id: "no-tracks", hidden: Model(id: "pivot.no_tracks.hidden"), child: Row(id: "no-tracks-row", size: (w: Fill, h: Fixed(24.0)), pad_x: 12.0, frame: (top: false, right: false, bottom: true, left: false), children: [
+                            Text(id: "no-tracks-label", style: PivotSmall, color: Muted, read: Model(id: "pivot.no_tracks.label"), size: (w: Fill, h: Fill)),
+                        ])),
+                    ]),
+                ],
+            ),
+            Row(id: "footer", size: (w: Fill, h: Fixed(26.0)), gap: 8.0, pad_x: 12.0, frame: (top: true, right: false, bottom: false, left: false), frame_color: Line, children: [
+                StatusDot(id: "footer-led", label: "", dot_size: 5.0, tone: Success, size: (w: Fixed(5.0), h: Fill)),
+                Text(id: "footer-hint", style: PivotFooter, color: TextDim, read: Model(id: "pivot.footer.hint"), size: (w: Fill, h: Fill)),
+            ]),
+        ],
+    ),
+)

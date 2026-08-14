@@ -40,6 +40,8 @@
             Include(id: "library2", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "LIBRARY V2", "tab": "gallery.tab.library2" }),
             Include(id: "stress", source: "nav/item.kmodule.ron", with: { "icon": "SpeakerHigh", "label": "STRESS", "tab": "gallery.tab.stress" }),
             Include(id: "menu", source: "nav/item.kmodule.ron", with: { "icon": "Menu", "label": "MENU", "tab": "gallery.tab.menu" }),
+            Include(id: "clock", source: "nav/item.kmodule.ron", with: { "icon": "Clock", "label": "CLOCK", "tab": "gallery.tab.clock" }),
+            Include(id: "pivot", source: "nav/item.kmodule.ron", with: { "icon": "Activity", "label": "PIVOT", "tab": "gallery.tab.pivot" }),
         ],
     ),
 )

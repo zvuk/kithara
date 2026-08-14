@@ -434,6 +434,21 @@ one template each (`window-row`, `module-cell`, `layout-row`, `toggle-row`, `hin
 often as the menu needs through `Include`. Each instance's control paths are
 `app-menu/<include id>/<node id>`, so the template's own ids stay plain.
 
+## Clock And Pivot Ownership
+
+`assets/modules/master-clock.kmodule.ron`, the deck key-lock and overview row, and
+`assets/modules/pivot-portals.kmodule.ron` are shipped component documents over host-owned timing
+state. They are not builtin studio presets: the Gallery embeds them explicitly and supplies mock
+endpoints, while a production host must supply its measured clock sources, transport state and
+portal policy. The documents retain no tempo, source, range, Link or MIDI state.
+
+`PortalMap` and `Range` are the dedicated renderer primitives in this group. `PortalMap` copies one
+`PortalMapView` snapshot for the iced canvas lifetime and draws the declared master, range and
+target arcs with `SkinDoc.portal_map` geometry. `Range` reads normalized bounds and emits a scalar
+at `<control-path>/min` or `<control-path>/max`; the host owns snapping and the minimum gap. The
+generic `Scroll` document container provides the bounded portal table. Selection, portal
+enumeration and timing decisions remain host-owned.
+
 ## Stream Quality Ownership
 
 `assets/modules/deck/quality.kmodule.ron` is the deck's stream-quality cell and its menu, taken per

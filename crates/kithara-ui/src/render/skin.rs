@@ -7,10 +7,10 @@ use crate::{
     skin::{
         ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, CrossfaderSkin,
         DeckSkin, DividerSkin, DragSkin, FaderSkin, FrameSkin, GlobalBarSkin, KnobSkin,
-        LayoutPreviewSkin, LayoutSkin, MenuSkin, MeterSkin, NavSkin, PopSkin, ReadoutSkin,
-        SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin, TabLargeSkin, TelemetrySkin,
-        TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin, VisSkin, VuStereoSkin,
-        VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
+        LayoutPreviewSkin, LayoutSkin, MenuSkin, MeterSkin, NavSkin, PopSkin, PortalMapSkin,
+        RangeSkin, ReadoutSkin, SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin,
+        TabLargeSkin, TelemetrySkin, TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin,
+        VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
     },
 };
 
@@ -37,6 +37,8 @@ pub struct Skin {
     pub meter: MeterSkin,
     pub nav: NavSkin,
     pub pop: PopSkin,
+    pub portal_map: PortalMapSkin,
+    pub range: RangeSkin,
     pub readout: ReadoutSkin,
     pub palette: RenderPalette,
     pub segmented: SegmentedSkin,
@@ -152,6 +154,8 @@ impl Skin {
             text: document.text,
             menu: document.menu,
             pop: document.pop,
+            portal_map: document.portal_map,
+            range: document.range,
             segmented: document.segmented,
             select: document.select,
             status_dot: document.status_dot,

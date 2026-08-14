@@ -8,8 +8,10 @@ use kithara_ui::{
 use num_traits::cast::AsPrimitive;
 
 use super::{
+    clock::ClockState,
     consts::Consts,
     menu::{ContextState, MenuState},
+    pivot::PivotState,
     quality::QualityState,
 };
 use crate::{
@@ -26,8 +28,10 @@ pub(crate) struct MockReads {
     tracklist_widths: BTreeMap<TrackColumn, f64>,
     collapsed: BTreeSet<String>,
     context: ContextState,
+    clock: ClockState,
     transport: DeckTransport,
     menu: MenuState,
+    pivot: PivotState,
     mixer: MixerState,
     #[field(get, vis = "pub(crate)", copy)]
     active_module: ModuleDemo,
@@ -95,12 +99,14 @@ impl Default for MockReads {
             chip_active: true,
             chip_inactive: false,
             collapsed: BTreeSet::new(),
+            clock: ClockState::default(),
             context: ContextState::default(),
             knobs: [0.35, 0.5, 0.65, 0.8],
             levels_volume: 0.7,
             library_query: String::new(),
             library_scope: 0,
             menu: MenuState::default(),
+            pivot: PivotState::default(),
             mixer: MixerState::default(),
             quality: QualityState::default(),
             segmented_index: 2.0,
@@ -135,6 +141,12 @@ impl Default for MockReads {
 
 impl MockReads {
     fn activate(&mut self, path: &str) {
+        if self.clock.activate(path) {
+            return;
+        }
+        if self.pivot.activate(path) {
+            return;
+        }
         if self.menu.activate(path) {
             return;
         }
@@ -192,6 +204,10 @@ impl MockReads {
             ControlAction::Activate => self.activate(path),
             ControlAction::SecondaryActivate => self.context.secondary(path),
             ControlAction::SelectIndex(index) => self.select_index(path, *index),
+            ControlAction::StepScalar(steps) if path.contains("clock") => {
+                self.clock.step(f64::from(*steps) * 0.01);
+            }
+            ControlAction::StepScalar(_) => {}
             _ => {}
         }
     }
@@ -260,6 +276,9 @@ impl MockReads {
     }
 
     fn set_scalar(&mut self, path: &str, value: f64) {
+        if self.pivot.set_scalar(path, value) {
+            return;
+        }
         if self.mixer.set_scalar(path, value) {
             return;
         }
@@ -342,6 +361,8 @@ impl MockReads {
             "gallery.tab.library2" => self.active_tab == Tab::Library2,
             "gallery.tab.stress" => self.active_tab == Tab::Stress,
             "gallery.tab.menu" => self.active_tab == Tab::Menu,
+            "gallery.tab.clock" => self.active_tab == Tab::Clock,
+            "gallery.tab.pivot" => self.active_tab == Tab::Pivot,
             "gallery.module.deck" => self.active_module == ModuleDemo::Deck,
             "gallery.module.deck_micro" => self.active_module == ModuleDemo::DeckMicro,
             "gallery.module.global_bar" => self.active_module == ModuleDemo::GlobalBar,
@@ -411,6 +432,18 @@ impl Reads for MockReads {
             return Some(value);
         }
         if let Some(value) = self.quality.get(endpoint) {
+            return Some(value);
+        }
+        if let Some(value) = self.clock.get(
+            endpoint,
+            &self.transport,
+            &self.waveform,
+            &self.wave_beats,
+            &self.wave_downbeats,
+        ) {
+            return Some(value);
+        }
+        if let Some(value) = self.pivot.get(endpoint) {
             return Some(value);
         }
         // The gallery hosts one virtual deck: every scope suffix resolves to

@@ -1,0 +1,36 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "deck-key-lock",
+    chrome: Plain,
+    parameters: ["deck"],
+    root: Row(
+        size: (w: Fixed(124.0), h: Fixed(30.0)),
+        gap: 0.0,
+        children: [
+            Button(
+                id: "down",
+                label: "<",
+                style: Transport,
+                write: Command(id: "deck.key.transpose_down", with: { "deck": "$deck" }),
+                size: (w: Fixed(28.0), h: Fill),
+            ),
+            Button(
+                id: "toggle",
+                label: "KEY LOCK",
+                icon: Some(Lock),
+                style: Transport,
+                read: Model(id: "deck.key.locked", with: { "deck": "$deck" }),
+                write: Command(id: "deck.key.toggle_lock", with: { "deck": "$deck" }),
+                size: (w: Fixed(68.0), h: Fill),
+            ),
+            Button(
+                id: "up",
+                label: ">",
+                style: Transport,
+                write: Command(id: "deck.key.transpose_up", with: { "deck": "$deck" }),
+                size: (w: Fixed(28.0), h: Fill),
+            ),
+        ],
+    ),
+)
