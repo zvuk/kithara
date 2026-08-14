@@ -48,7 +48,7 @@ jobs:
           # `apple:e2e` serves them on hardware. A lane this fleet cannot run is
           # left out entirely, producing no job at all rather than a red one or
           # a skipped-but-green one.
-          configured='["integration-regressions","network","loom","selenium-firefox"]'
+          configured='["broadcast","integration-regressions","network","loom","selenium-firefox"]'
           if [ -z "$REQUESTED" ] || [ "$REQUESTED" = all ]; then
             echo "lanes=$configured" >> "$GITHUB_OUTPUT"
             exit 0

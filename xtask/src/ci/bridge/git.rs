@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use super::{
     api::{Github, Gitlab},
     command::BridgeConfig,
+    control::{ControlChange, classify},
     model::CONTROL_PATHS,
 };
 
@@ -140,6 +141,33 @@ impl GitRepo {
             .filter(|path| !path.is_empty())
             .map(str::to_owned)
             .collect())
+    }
+
+    /// The subset of [`Self::changed_control_paths`] that does not survive the
+    /// additive test: an entry the judge already had was edited or removed.
+    /// Adding a lane beside the existing ones is not one of those, so it no
+    /// longer costs the author a separate merge request.
+    pub(super) fn weakening_control_paths(&self, base: &str, head: &str) -> Result<Vec<String>> {
+        let mut weakening = Vec::new();
+        for path in self.changed_control_paths(base, head)? {
+            let before = self.file_at(base, &path)?;
+            let after = self.file_at(head, &path)?;
+            if classify(&path, before.as_deref(), after.as_deref()) == ControlChange::Weakening {
+                weakening.push(path);
+            }
+        }
+        Ok(weakening)
+    }
+
+    /// Content of `path` at `reference`, or `None` when it is absent there.
+    /// Non-UTF-8 content reads as absent on purpose: the classifier cannot
+    /// judge bytes it cannot compare, and the caller treats that as weakening.
+    fn file_at(&self, reference: &str, path: &str) -> Result<Option<String>> {
+        if !self.exists_at(reference, path)? {
+            return Ok(None);
+        }
+        let bytes = self.run(&["show", &format!("{reference}:{path}")], None)?;
+        Ok(String::from_utf8(bytes).ok())
     }
 
     pub(super) fn judged_commit(&self, base: &str, head: &str) -> Result<String> {
@@ -353,7 +381,7 @@ mod tests {
         }
     }
 
-    fn repository() -> (TempDir, GitRepo, String, String, String) {
+    fn repository() -> (TempDir, GitRepo, String, String, String, String) {
         let state = TempDir::new().unwrap();
         let repo = GitRepo::new(state.path(), &config(state.path())).unwrap();
         let work = state.path().join("work");
@@ -362,8 +390,14 @@ mod tests {
         git(&work, &["config", "user.email", "t@e.st"]);
         git(&work, &["config", "user.name", "test"]);
         fs::create_dir_all(work.join("xtask/src")).unwrap();
+        fs::create_dir_all(work.join(".config")).unwrap();
         fs::write(work.join("xtask/src/main.rs"), "// trusted\n").unwrap();
         fs::write(work.join(".gitlab-ci.yml"), "trusted\n").unwrap();
+        fs::write(
+            work.join(".config/xtask.toml"),
+            "[test.lanes.loom]\nfeatures = [\"loom\"]\n",
+        )
+        .unwrap();
         fs::write(work.join("src.rs"), "base\n").unwrap();
         git(&work, &["add", "--all"]);
         git(&work, &["commit", "--quiet", "-m", "base"]);
@@ -371,6 +405,23 @@ mod tests {
             .unwrap()
             .trim()
             .to_owned();
+
+        git(&work, &["checkout", "--quiet", "-b", "additive"]);
+        fs::write(
+            work.join(".config/xtask.toml"),
+            "[test.lanes.loom]\nfeatures = [\"loom\"]\n\n[test.lanes.broadcast]\nfeatures = [\"broadcast\"]\n",
+        )
+        .unwrap();
+        git(&work, &["add", "--all"]);
+        git(
+            &work,
+            &["commit", "--quiet", "-m", "a lane beside the others"],
+        );
+        let additive = String::from_utf8(git_in(&work, &["rev-parse", "HEAD"]).unwrap())
+            .unwrap()
+            .trim()
+            .to_owned();
+        git(&work, &["checkout", "--quiet", "main"]);
 
         fs::write(work.join("src.rs"), "product\n").unwrap();
         git(&work, &["add", "--all"]);
@@ -390,9 +441,15 @@ mod tests {
             .to_owned();
         git(
             &work,
-            &["push", "--quiet", repo.root.to_str().unwrap(), "main"],
+            &[
+                "push",
+                "--quiet",
+                repo.root.to_str().unwrap(),
+                "main",
+                "additive",
+            ],
         );
-        (state, repo, base, product, head)
+        (state, repo, base, product, head, additive)
     }
 
     fn blob(repo: &GitRepo, reference: &str, path: &str) -> String {
@@ -405,7 +462,7 @@ mod tests {
 
     #[test]
     fn judged_commit_combines_product_head_with_trusted_base_controls() {
-        let (_state, repo, base, _product, head) = repository();
+        let (_state, repo, base, _product, head, _additive) = repository();
         let judged = repo.judged_commit(&base, &head).unwrap();
 
         assert_eq!(blob(&repo, &judged, "src.rs"), "product\n");
@@ -415,7 +472,7 @@ mod tests {
 
     #[test]
     fn judged_commit_is_deterministic_for_the_exact_key() {
-        let (_state, repo, base, _product, head) = repository();
+        let (_state, repo, base, _product, head, _additive) = repository();
         assert_eq!(
             repo.judged_commit(&base, &head).unwrap(),
             repo.judged_commit(&base, &head).unwrap()
@@ -424,7 +481,7 @@ mod tests {
 
     #[test]
     fn product_only_head_has_no_control_changes_and_needs_no_overlay_commit() {
-        let (_state, repo, base, product, _head) = repository();
+        let (_state, repo, base, product, _head, _additive) = repository();
 
         assert!(
             repo.changed_control_paths(&base, &product)
@@ -436,9 +493,37 @@ mod tests {
 
     #[test]
     fn control_path_changes_are_detected_before_judging() {
-        let (_state, repo, base, _product, head) = repository();
+        let (_state, repo, base, _product, head, _additive) = repository();
         let paths = repo.changed_control_paths(&base, &head).unwrap();
 
         assert_eq!(paths, [".gitlab-ci.yml", "xtask/src/main.rs"]);
+    }
+
+    /// The shape a pull request has when it adds a lane: the control file
+    /// changed, but every lane that already judged is still there, unedited.
+    /// Such a change no longer costs its author a separate merge request.
+    #[test]
+    fn a_lane_added_beside_the_others_does_not_weaken_the_judge() {
+        let (_state, repo, base, _product, _head, additive) = repository();
+
+        assert_eq!(
+            repo.changed_control_paths(&base, &additive).unwrap(),
+            [".config/xtask.toml"]
+        );
+        assert!(
+            repo.weakening_control_paths(&base, &additive)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn rewriting_a_control_file_weakens_the_judge() {
+        let (_state, repo, base, _product, head, _additive) = repository();
+
+        assert_eq!(
+            repo.weakening_control_paths(&base, &head).unwrap(),
+            [".gitlab-ci.yml", "xtask/src/main.rs"]
+        );
     }
 }

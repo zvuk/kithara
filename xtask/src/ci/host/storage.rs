@@ -253,13 +253,30 @@ impl<'a> HostStorage<'a> {
             self.prune_retired_caches(Duration::ZERO)?;
             final_pressure = self.worst_pressure()?.0;
         }
+        let free = self.free_bytes()?;
         info!(
-            free_bytes = self.free_bytes()?,
+            free_bytes = free,
+            freed_bytes = free.saturating_sub(initial),
             ?final_pressure,
             "cleanup completed"
         );
         if final_pressure == Pressure::Reject {
             bail!("CI volume remains above the new-job threshold after cleanup");
+        }
+        // A pass that runs every step and moves nothing is the failure this
+        // host spent hours in: `Aggressive` in, `Aggressive` out, `bytes_freed=0`
+        // from each budget, and `cleanup completed` in the log every hour while
+        // jobs were already being refused. Reporting success there is what made
+        // it invisible — the steps ran, so nothing looked broken, and the space
+        // was held by things no step owns. Relief is the result this is for;
+        // performing the steps is not.
+        if final_pressure >= Pressure::Aggressive && final_pressure >= pressure {
+            bail!(
+                "cleanup left {} at {final_pressure:?} with {free} bytes free, unchanged from \
+                 {pressure:?}: every step this owns is already at its floor, so what is holding \
+                 the space is not build caches",
+                volume.display()
+            );
         }
         Ok(())
     }
@@ -1295,6 +1312,25 @@ mod tests {
         storage.cleanup().unwrap();
 
         assert!(review.is_dir());
+    }
+
+    /// The hourly pass this host actually ran: in at `Aggressive`, every step
+    /// executed, out at `Aggressive`, logged as completed. Reported as success
+    /// it hid a machine that was already refusing jobs.
+    #[test]
+    fn a_pass_that_leaves_the_pressure_where_it_found_it_is_a_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_pressure_sequence([
+            Pressure::Aggressive,
+            Pressure::Aggressive,
+            Pressure::Aggressive,
+        ]);
+
+        assert!(storage.cleanup().is_err());
     }
 
     #[test]

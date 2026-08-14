@@ -6,5 +6,6 @@ mod services;
 mod storage;
 mod system;
 mod toolchain;
+mod windows;
 
 pub(crate) use command::{HostArgs, run};

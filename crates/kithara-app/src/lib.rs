@@ -3,6 +3,7 @@ compile_error!("Enable at least one frontend feature: `gui` or `lib-only`");
 
 mod analysis;
 pub mod baked;
+#[cfg(feature = "gui")]
 mod broadcast;
 pub mod catalog;
 pub mod config;

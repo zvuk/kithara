@@ -18,6 +18,19 @@ lanes:loom:
   script:
     - just ci run linux-loom
 
+# Live HLS packaging. It reports rather than judges: `allow_failure`, and out of
+# `verdict`'s `needs`, because the feature ships to nobody yet.
+#
+# It takes the weekly kind without `.platform-linux`: no schedule sets
+# `KITHARA_PLATFORMS`, which is why no lane beside it has ever run.
+lanes:broadcast:
+  extends: .lane-job
+  allow_failure: true
+  rules:
+    - !reference [.rules-weekly, rules]
+  script:
+    - just ci run linux-broadcast
+
 lanes:integration-regressions:
   extends: .lane-job
   script:

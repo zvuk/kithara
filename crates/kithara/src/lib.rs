@@ -32,6 +32,11 @@ pub mod audio {
     pub use kithara_audio::*;
 }
 
+#[cfg(feature = "broadcast")]
+pub mod broadcast {
+    pub use kithara_broadcast::*;
+}
+
 pub mod bufpool {
     pub use kithara_bufpool::*;
 }

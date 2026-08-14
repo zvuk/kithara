@@ -37,6 +37,7 @@ impl Consts {
 # suffix_args = []
 # default_features = []
 # default_flash = true
+# default_no_block = false
 # passthrough = ""
 #
 # [test.net_backends.default]

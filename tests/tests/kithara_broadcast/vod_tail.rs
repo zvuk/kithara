@@ -21,7 +21,7 @@ const READ_BUF_SAMPLES: usize = 4_096;
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn the_production_client_plays_the_stopped_broadcast() {
     let origin = Origin::start();
-    origin.advance_to(SEGMENTS);
+    origin.advance_to(SEGMENTS).await;
     origin.handle.stop();
 
     let store = AssetStore::builder()

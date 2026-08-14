@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf, process::Output};
+use std::{env, ffi::OsStr, path::PathBuf, process::Output};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
@@ -37,6 +37,7 @@ pub(crate) enum Lane {
     LinuxTest,
     LinuxDoc,
     LinuxLoom,
+    LinuxBroadcast,
     LinuxIntegrationRegressions,
     LinuxSeleniumFirefox,
     LinuxCoverage,
@@ -100,6 +101,7 @@ impl Lane {
             | Self::LinuxTest
             | Self::LinuxDoc
             | Self::LinuxLoom
+            | Self::LinuxBroadcast
             | Self::LinuxIntegrationRegressions
             | Self::LinuxSeleniumFirefox
             | Self::LinuxCoverage
@@ -271,6 +273,25 @@ fn retire_sccache_server(process: &Process) -> Result<()> {
     )
 }
 
+fn execute_lane(
+    process: &Process,
+    uses_sccache: bool,
+    has_server_uds: bool,
+    dispatch: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if uses_sccache {
+        retire_sccache_server(process)?;
+        if has_server_uds {
+            process.run("sccache", &["--start-server"], "start the compiler cache")?;
+        }
+    }
+    let result = dispatch();
+    if uses_sccache {
+        process.best_effort("sccache", &["--show-stats"], "sccache statistics");
+    }
+    result
+}
+
 pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let lane_name = args
         .lane
@@ -309,19 +330,18 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let swiftpm_cache = environment.swiftpm_cache.clone();
     let temp = environment.temp.clone();
     let uses_sccache = environment.uses_sccache();
-    let process = Process::new(&ctx.root, environment.vars());
+    let vars = environment.vars();
+    let has_server_uds = vars.contains_key(OsStr::new("SCCACHE_SERVER_UDS"));
+    let process = Process::new(&ctx.root, vars);
     // sccache is a daemon, and a running one keeps the cache directory it was
     // started with — a client inherits the server's configuration, not its
     // own. An executor that outlives a job therefore carries the previous
     // job's cache location into this one, and a stale location that no longer
     // exists fails every compilation while reporting only that a C compiler
     // exited 254. Retire the server so it restarts with what this job asked
-    // for; the cache on disk is untouched.
-    if uses_sccache {
-        retire_sccache_server(&process)?;
-    }
-
-    let result = match args.lane {
+    // for; the cache on disk is untouched. Shared-host Unix sockets need one
+    // explicit start before Cargo's parallel compilers can race to start it.
+    execute_lane(&process, uses_sccache, has_server_uds, || match args.lane {
         Lane::AppleLint => lane::apple::lint(&process, &ci_config, args.kind),
         Lane::AppleMsrv => lane::apple::msrv(&process, &ci_config),
         Lane::AppleTest => lane::apple::test(&process, &ci_config, args.kind),
@@ -338,6 +358,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::LinuxTest => lane::linux::test(&process),
         Lane::LinuxDoc => lane::linux::configured(&process, "doc"),
         Lane::LinuxLoom => lane::linux::configured(&process, "loom"),
+        Lane::LinuxBroadcast => lane::linux::configured(&process, "broadcast"),
         Lane::LinuxIntegrationRegressions => {
             lane::linux::configured(&process, "integration-regressions")
         }
@@ -366,24 +387,26 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
         Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, args.kind),
         Lane::Verdict => verdict::lane(&ctx.root, environment.shared_root(), args.kind),
-    };
-    if uses_sccache {
-        process.best_effort("sccache", &["--show-stats"], "sccache statistics");
-    }
-    result
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::{collections::BTreeMap, ffi::OsString, os::unix::fs::PermissionsExt};
     use std::{collections::BTreeSet, fs, path::Path};
 
     use clap::{Parser, ValueEnum};
 
+    #[cfg(unix)]
+    use super::execute_lane;
     use super::{
         CacheGroup, Consts, Lane, LinuxImageAttestation, linux_image_diagnosis,
         require_provisioned_linux_image, sccache_server_is_stopped,
     };
     use crate::Cli;
+    #[cfg(unix)]
+    use crate::ci::process::Process;
 
     /// Lane names cross a language boundary: the enum is Rust, the schedule is
     /// pipeline YAML, and nothing but this test connects them. Renaming a lane
@@ -405,6 +428,86 @@ mod tests {
             );
         }
         lanes
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sccache_lifecycle_precedes_real_lane_dispatch() {
+        const UDS_READY: &str = "--stop-server\n--start-server\nlane\n--show-stats\n";
+        const NON_UDS: &str = "--stop-server\nlane\n--show-stats\n";
+
+        let directory = tempfile::tempdir().unwrap();
+        let bin = directory.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        let sccache = bin.join("sccache");
+        fs::write(
+            &sccache,
+            r#"#!/bin/sh
+printf '%s\n' "$1" >> "$KITHARA_TEST_TRACE"
+case "$1:$KITHARA_TEST_SCENARIO" in
+    --stop-server:already-stopped)
+        printf 'Stopping sccache server...\n'
+        printf "%s\n" "sccache: error: couldn't connect to server" \
+            "sccache: caused by: No such file or directory (os error 2)" >&2
+        exit 2
+        ;;
+    --stop-server:stop-failure) exit 7 ;;
+    --start-server:start-failure) exit 8 ;;
+    --stop-server:*|--start-server:*|--show-stats:*) exit 0 ;;
+esac
+exit 19
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&sccache).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&sccache, permissions).unwrap();
+        let trace = directory.path().join("trace");
+
+        for (scenario, uses_sccache, has_server_uds, expected_trace) in [
+            ("success", true, true, UDS_READY),
+            ("already-stopped", true, true, UDS_READY),
+            ("stop-failure", true, true, "--stop-server\n"),
+            (
+                "start-failure",
+                true,
+                true,
+                "--stop-server\n--start-server\n",
+            ),
+            ("success", true, false, NON_UDS),
+            ("success", false, false, "lane\n"),
+        ] {
+            let _ = fs::remove_file(&trace);
+            let process = Process::new(
+                directory.path(),
+                BTreeMap::from([
+                    (OsString::from("PATH"), bin.clone().into_os_string()),
+                    (
+                        OsString::from("KITHARA_TEST_SCENARIO"),
+                        OsString::from(scenario),
+                    ),
+                    (
+                        OsString::from("KITHARA_TEST_TRACE"),
+                        trace.clone().into_os_string(),
+                    ),
+                ]),
+            );
+
+            let outcome = execute_lane(&process, uses_sccache, has_server_uds, || {
+                let mut sequence = fs::read_to_string(&trace).unwrap_or_default();
+                sequence.push_str("lane\n");
+                fs::write(&trace, sequence)?;
+                Ok(())
+            });
+
+            let succeeds = !scenario.ends_with("failure");
+            assert_eq!(outcome.is_ok(), succeeds, "{scenario}: {outcome:?}");
+            assert_eq!(
+                fs::read_to_string(&trace).unwrap(),
+                expected_trace,
+                "{scenario}"
+            );
+        }
     }
 
     #[test]

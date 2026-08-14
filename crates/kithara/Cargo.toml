@@ -29,6 +29,7 @@ client-reqwest = [
     "kithara-net?/client-reqwest",
     "kithara-stream/client-reqwest",
     "kithara-assets?/client-reqwest",
+    "kithara-broadcast?/client-reqwest",
     "kithara-file?/client-reqwest",
     "kithara-hls?/client-reqwest",
     "kithara-play/client-reqwest",
@@ -43,6 +44,7 @@ client-wreq = [
     "kithara-net?/client-wreq",
     "kithara-stream/client-wreq",
     "kithara-assets?/client-wreq",
+    "kithara-broadcast?/client-wreq",
     "kithara-file?/client-wreq",
     "kithara-hls?/client-wreq",
     "kithara-play/client-wreq",
@@ -57,6 +59,7 @@ tls-rustls = [
     "kithara-net?/tls-rustls",
     "kithara-stream/tls-rustls",
     "kithara-assets?/tls-rustls",
+    "kithara-broadcast?/tls-rustls",
     "kithara-file?/tls-rustls",
     "kithara-hls?/tls-rustls",
     "kithara-play/tls-rustls",
@@ -71,6 +74,7 @@ tls-native = [
     "kithara-net?/tls-native",
     "kithara-stream/tls-native",
     "kithara-assets?/tls-native",
+    "kithara-broadcast?/tls-native",
     "kithara-file?/tls-native",
     "kithara-hls?/tls-native",
     "kithara-play/tls-native",
@@ -81,6 +85,8 @@ tls-native = [
     "kithara-events/tls-native",
     "kithara-abr?/tls-native",
 ]
+# Live HLS packaging: take a PCM feed on air as an HLS origin. Off by default.
+broadcast = ["dep:kithara-broadcast"]
 # Enable the Symphonia software decoder path. Disable to compile with
 # only a hardware backend (apple/android) and no software fallback.
 symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia", "kithara-queue?/symphonia"]
@@ -189,6 +195,7 @@ full = ["file", "hls", "assets", "net", "bufpool"]
 kithara-abr = { workspace = true, optional = true, default-features = false }
 kithara-assets = { workspace = true, optional = true }
 kithara-audio = { workspace = true, default-features = false }
+kithara-broadcast = { workspace = true, optional = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-drm = { workspace = true, optional = true }

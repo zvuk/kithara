@@ -1,9 +1,7 @@
 use std::net::TcpStream;
 
-use kithara::{
-    self,
-    platform::{thread, time::Duration},
-};
+use kithara::{self, platform::time::Duration};
+use kithara_integration_tests::waits::wait_until;
 
 use super::origin::{
     GRACE, Origin, Playlist, SAMPLE_RATE, SEGMENT_FRAMES, TONE_HZ, WINDOW, assert_carries_the_tone,
@@ -12,7 +10,8 @@ use super::origin::{
 
 const PRIMING_SKIP_FRAMES: usize = 4_800;
 const NOT_FOUND: u16 = 404;
-const CONNECT_ATTEMPTS: usize = 200;
+/// Non-progress watchdog: a cancelled token closes the socket at once.
+const TEARDOWN_DEADLINE: Duration = Duration::from_secs(10);
 
 fn assert_tone(pcm: &[f32], label: &str) {
     assert_carries_the_tone(pcm, TONE_HZ, SAMPLE_RATE, label);
@@ -32,7 +31,7 @@ async fn the_media_playlist_arrives_only_once_a_segment_exists() {
         "the master playlist stands before the first segment"
     );
 
-    origin.advance_to(1);
+    origin.advance_to(1).await;
 
     assert!(origin.get("v/0/live.m3u8").await.is_ok());
 }
@@ -40,7 +39,7 @@ async fn the_media_playlist_arrives_only_once_a_segment_exists() {
 #[kithara::test(tokio)]
 async fn the_live_playlist_slides_a_bounded_window() {
     let origin = Origin::start();
-    origin.advance_to(3);
+    origin.advance_to(3).await;
 
     let early = Playlist::parse(origin.media_playlist().await);
     let target = early.target;
@@ -48,7 +47,9 @@ async fn the_live_playlist_slides_a_bounded_window() {
     assert_eq!(early.media_sequence, 0);
     assert_eq!(early.entries.len(), 3);
 
-    origin.advance_to(u64::try_from(WINDOW).expect("fits") + 3);
+    origin
+        .advance_to(u64::try_from(WINDOW).expect("fits") + 3)
+        .await;
     let late = Playlist::parse(origin.media_playlist().await);
 
     assert!(!late.text.contains("#EXT-X-ENDLIST"));
@@ -78,7 +79,9 @@ async fn the_live_playlist_slides_a_bounded_window() {
 #[kithara::test(tokio)]
 async fn an_evicted_segment_outlives_the_playlist_by_the_grace() {
     let origin = Origin::start();
-    origin.advance_to(u64::try_from(WINDOW + GRACE).expect("fits") + 1);
+    origin
+        .advance_to(u64::try_from(WINDOW + GRACE).expect("fits") + 1)
+        .await;
 
     let playlist = Playlist::parse(origin.media_playlist().await);
     let listed = playlist.sequences();
@@ -102,7 +105,7 @@ async fn an_evicted_segment_outlives_the_playlist_by_the_grace() {
 #[kithara::test(tokio)]
 async fn the_fetched_segments_decode_back_to_the_source_tone() {
     let origin = Origin::start();
-    origin.advance_to(4);
+    origin.advance_to(4).await;
 
     let playlist = Playlist::parse(origin.media_playlist().await);
     let mut stream = Vec::new();
@@ -127,7 +130,7 @@ async fn the_fetched_segments_decode_back_to_the_source_tone() {
 #[kithara::test(tokio)]
 async fn stopping_leaves_a_fetchable_vod_tail() {
     let origin = Origin::start();
-    origin.advance_to(3);
+    origin.advance_to(3).await;
     origin.handle.stop();
 
     let playlist = Playlist::parse(origin.media_playlist().await);
@@ -165,7 +168,7 @@ async fn a_live_origin_leaves_the_virtual_clock_free() {
     const A_DAY: Duration = Duration::from_secs(86_400);
 
     let origin = Origin::start();
-    origin.advance_to(1);
+    origin.advance_to(1).await;
 
     kithara::platform::time::sleep(A_DAY).await;
 
@@ -175,7 +178,7 @@ async fn a_live_origin_leaves_the_virtual_clock_free() {
 #[kithara::test(tokio)]
 async fn cancelling_the_parent_stops_the_origin_and_the_worker() {
     let origin = Origin::start();
-    origin.advance_to(2);
+    origin.advance_to(2).await;
     let addr = origin
         .handle
         .url()
@@ -186,14 +189,9 @@ async fn cancelling_the_parent_stops_the_origin_and_the_worker() {
     origin.shutdown();
     origin.handle.stop();
 
-    for attempt in 0..CONNECT_ATTEMPTS {
-        if TcpStream::connect(&addr).is_err() {
-            return;
-        }
-        assert!(
-            attempt + 1 < CONNECT_ATTEMPTS,
-            "the origin still accepts connections after its token was cancelled"
-        );
-        thread::paced_backoff(Duration::from_millis(5));
-    }
+    wait_until(TEARDOWN_DEADLINE, "the origin stops listening", || {
+        TcpStream::connect(&addr).is_err()
+    })
+    .await
+    .expect("the origin still accepts connections after its token was cancelled");
 }

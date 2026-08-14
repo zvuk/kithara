@@ -51,6 +51,51 @@ Write-Host '==> Licence state'
 & cscript.exe //nologo "$env:SystemRoot\System32\slmgr.vbs" /dli
 
 $settings = Get-Content 'E:\guest.json' -Raw | ConvertFrom-Json
+
+# Everything this guest writes goes on the second disk, not the system image.
+#
+# A qcow2 grows to cover every block written into it and never shrinks on its
+# own, so the page file alone — which Windows sizes to memory — charges the
+# image as much as the guest has RAM, permanently. The host cannot shrink it in
+# place, and copying it needs as much free space as the image is large, which a
+# full volume by definition does not have. Held on a disk of its own the growth
+# stays where it can be discarded.
+#
+# Absence is tolerated: a guest built before this disk existed still installs,
+# it just keeps charging its system image.
+$data = Get-Disk | Where-Object { $_.PartitionStyle -eq 'RAW' } | Select-Object -First 1
+if ($data) {
+    Write-Host '==> Preparing the data disk'
+    $data | Initialize-Disk -PartitionStyle GPT -PassThru |
+        New-Partition -DriveLetter D -UseMaximumSize |
+        Format-Volume -FileSystem NTFS -NewFileSystemLabel 'kithara-data' -Confirm:$false |
+        Out-Null
+
+    New-Item -ItemType Directory -Force -Path 'D:\temp', 'D:\build' | Out-Null
+    # Both scopes: the runner service does not inherit a user's environment.
+    foreach ($scope in 'Machine', 'User') {
+        [Environment]::SetEnvironmentVariable('TEMP', 'D:\temp', $scope)
+        [Environment]::SetEnvironmentVariable('TMP', 'D:\temp', $scope)
+    }
+    $env:TEMP = 'D:\temp'
+    $env:TMP = 'D:\temp'
+
+    # The page file moves only after the automatic one is disabled; setting a
+    # second one while Windows still manages its own leaves both in place, and
+    # the one on C: is the one that was costing the image.
+    $computer = Get-WmiObject -Class Win32_ComputerSystem -EnableAllPrivileges
+    if ($computer.AutomaticManagedPagefile) {
+        $computer.AutomaticManagedPagefile = $false
+        $computer.Put() | Out-Null
+    }
+    Get-WmiObject -Class Win32_PageFileSetting | ForEach-Object { $_.Delete() }
+    Set-WmiInstance -Class Win32_PageFileSetting `
+        -Arguments @{ Name = 'D:\pagefile.sys'; InitialSize = 4096; MaximumSize = 16384 } |
+        Out-Null
+} else {
+    Write-Host '==> No data disk attached; this guest writes into its system image'
+}
+
 $root = 'C:\kithara-ci'
 New-Item -ItemType Directory -Force -Path $root, "$root\downloads" | Out-Null
 

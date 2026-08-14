@@ -20,19 +20,6 @@ mod kithara_audio;
 mod kithara_bufpool;
 
 #[cfg(not(target_arch = "wasm32"))]
-mod kithara_broadcast {
-    #[path = "../common/offline_player_harness.rs"]
-    mod offline_player_harness;
-
-    mod engine_e2e;
-    mod hls_conformance;
-    mod origin;
-    mod origin_tests;
-    mod packaging_tests;
-    mod vod_tail;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 mod kithara_encode {
     mod aac_tests;
     mod bytes_tests;

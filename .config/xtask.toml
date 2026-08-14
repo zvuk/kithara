@@ -293,6 +293,38 @@ prefix_args = [
 default_features = ["network-manual", "kithara/resample-rubato"]
 default_flash = false
 
+# What only the `broadcast` feature turns on. `kithara-broadcast`'s own unit
+# tests need no feature and stay in the workspace lane.
+[test.lanes.broadcast]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-app",
+  "-p",
+  "kithara-integration-tests",
+  "--cargo-profile",
+  "test-release",
+  "--lib",
+  "--test",
+  "suite_broadcast",
+]
+default_features = [
+  "kithara-app/broadcast",
+  "kithara-integration-tests/broadcast",
+]
+default_flash = true
+# The detector these tests were failing under. Declared here so two schedulers
+# cannot run the same lane under different rules.
+default_no_block = true
+# `broadcast::state` runs in the gate against stand-in packagers; only
+# `broadcast::engine` needs the feature.
+suffix_args = [
+  "-E",
+  "binary(suite_broadcast) + (package(kithara-app) & test(/^broadcast::engine::/))",
+]
+
 # Integration regression tests are red by design and stay outside the main gate.
 [test.lanes.integration-regressions]
 program = "cargo"

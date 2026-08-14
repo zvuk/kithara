@@ -240,12 +240,12 @@ pub struct ProjectIdentity {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HealthConfig {
+    /// Backend groups a crate refuses to be built without.
+    pub feature_invariants: Vec<FeatureInvariant>,
     /// Crates excluded from the `cargo hack --feature-powerset` stage.
     pub feature_powerset_exclude: Vec<String>,
     /// Crates excluded from whole-workspace stages (semver, nextest, doc-test).
     pub workspace_exclude: Vec<String>,
-    /// Backend groups a crate refuses to be built without.
-    pub feature_invariants: Vec<FeatureInvariant>,
 }
 
 /// A rule some crates state with `compile_error!`: this build needs a backend.
@@ -258,12 +258,12 @@ pub struct HealthConfig {
 pub struct FeatureInvariant {
     /// Feature whose presence marks a crate as carrying this rule.
     pub when_feature: String,
-    /// Groups the powerset must pick from rather than leave empty.
-    pub at_least_one_of: Vec<Vec<String>>,
     /// Features every combination carries. A group of one is expressed here:
     /// `--at-least-one-of` needs two or more names, and where only one backend
     /// survives its target gate there is nothing to choose between.
     pub always: Vec<String>,
+    /// Groups the powerset must pick from rather than leave empty.
+    pub at_least_one_of: Vec<Vec<String>>,
 }
 
 impl FeatureInvariant {
@@ -363,6 +363,9 @@ pub struct TestNetBackendConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct TestLaneConfig {
     pub default_flash: Option<bool>,
+    /// Poll-blocking detector default for this lane, so two schedulers cannot
+    /// run the same lane under different rules.
+    pub default_no_block: Option<bool>,
     pub passthrough: String,
     pub program: String,
     pub default_features: Vec<String>,

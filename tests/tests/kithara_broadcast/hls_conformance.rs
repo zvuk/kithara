@@ -16,7 +16,9 @@ async fn the_live_playlist_obeys_the_reload_rules() {
 
     let mut polls = Vec::with_capacity(POLLS);
     for poll in 0..POLLS {
-        origin.advance_to(listed + SEGMENTS_PER_POLL * u64::try_from(poll).expect("fits"));
+        origin
+            .advance_to(listed + SEGMENTS_PER_POLL * u64::try_from(poll).expect("fits"))
+            .await;
         polls.push(Playlist::parse(origin.media_playlist().await));
     }
 
@@ -75,11 +77,11 @@ async fn the_live_playlist_obeys_the_reload_rules() {
 async fn a_gap_in_the_feed_is_signalled_for_a_client_to_resynchronise() {
     let origin = Origin::start();
     let listed = u64::try_from(WINDOW).expect("the window fits");
-    origin.advance_to(2);
+    origin.advance_to(2).await;
     let before = Playlist::parse(origin.media_playlist().await);
 
     origin.drop_samples(u64::from(SAMPLE_RATE));
-    origin.advance_to(5);
+    origin.advance_to(5).await;
     let marked = Playlist::parse(origin.media_playlist().await);
 
     assert!(
@@ -97,7 +99,7 @@ async fn a_gap_in_the_feed_is_signalled_for_a_client_to_resynchronise() {
         "a listed discontinuity is still the client's to see"
     );
 
-    origin.advance_to(listed + 4);
+    origin.advance_to(listed + 4).await;
     let slid = Playlist::parse(origin.media_playlist().await);
 
     assert!(
@@ -116,7 +118,9 @@ async fn a_gap_in_the_feed_is_signalled_for_a_client_to_resynchronise() {
 #[kithara::test(tokio)]
 async fn every_segment_is_a_packed_audio_segment() {
     let origin = Origin::start();
-    origin.advance_to(u64::try_from(WINDOW).expect("fits"));
+    origin
+        .advance_to(u64::try_from(WINDOW).expect("fits"))
+        .await;
 
     let playlist = Playlist::parse(origin.media_playlist().await);
     let mut segments = Vec::new();
@@ -179,7 +183,7 @@ async fn every_segment_is_a_packed_audio_segment() {
 #[kithara::test(tokio)]
 async fn a_stopped_playlist_is_frozen() {
     let origin = Origin::start();
-    origin.advance_to(3);
+    origin.advance_to(3).await;
     origin.handle.stop();
 
     let first = origin.media_playlist().await;

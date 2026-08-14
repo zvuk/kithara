@@ -56,40 +56,52 @@ pub(crate) fn select_evictions(mut entries: Vec<CacheEntry>, budget_bytes: u64) 
     evictions
 }
 
+/// The budget is what the host can afford in total, not what one checkout may
+/// keep.
+///
+/// Applied per directory it never fires on a machine that is running out:
+/// three checkouts holding 14, 7 and 22 GB were each under a 25 GB budget, so
+/// every hourly pass reported `bytes_freed=0` while the volume they share sat
+/// at `Aggressive` and jobs were already being refused. A checkout an active
+/// job holds cannot be evicted, but the room it occupies is still spent, so it
+/// is charged against the ceiling rather than excused from it.
 pub(crate) fn enforce_budget(target_dirs: &[PathBuf], budget_bytes: u64) -> Result<()> {
     let mut target_dirs = target_dirs.to_vec();
     target_dirs.sort();
-    for target_dir in target_dirs {
-        enforce_target_budget(&target_dir, budget_bytes)?;
+    let mut candidates = Vec::new();
+    let mut held_bytes = 0_u64;
+    let mut locks = Vec::new();
+    for target_dir in &target_dirs {
+        let contents = candidate_entries(target_dir)?;
+        locks.extend(contents.locks);
+        let bytes = total_bytes(&contents.entries);
+        if contents.active {
+            held_bytes = held_bytes.saturating_add(bytes);
+            info!(
+                path = %target_dir.display(),
+                bytes_before = bytes,
+                bytes_freed = 0,
+                budget_bytes,
+                "keeping active build cache"
+            );
+            continue;
+        }
+        candidates.extend(contents.entries);
     }
-    Ok(())
+    evict_to_budget(candidates, held_bytes, budget_bytes)
 }
 
-fn enforce_target_budget(target_dir: &Path, budget_bytes: u64) -> Result<()> {
-    let CacheContents {
-        entries,
-        active,
-        locks: _locks,
-    } = candidate_entries(target_dir)?;
-    let bytes_before = entries
+fn total_bytes(entries: &[CacheEntry]) -> u64 {
+    entries
         .iter()
         .map(|entry| entry.size_bytes)
-        .fold(0_u64, u64::saturating_add);
-    if active {
-        info!(
-            path = %target_dir.display(),
-            bytes_before,
-            bytes_freed = 0,
-            budget_bytes,
-            "keeping active build cache"
-        );
-        return Ok(());
-    }
-    let evictions = select_evictions(entries, budget_bytes);
-    let bytes_freed = evictions
-        .iter()
-        .map(|entry| entry.size_bytes)
-        .fold(0_u64, u64::saturating_add);
+        .fold(0_u64, u64::saturating_add)
+}
+
+fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u64) -> Result<()> {
+    let bytes_before = total_bytes(&candidates).saturating_add(held_bytes);
+    let evictions = select_evictions(candidates, budget_bytes.saturating_sub(held_bytes));
+    let bytes_freed = total_bytes(&evictions);
 
     // Cargo fingerprints describe a complete profile tree, so removing files
     // within one can leave its dependency artifacts inconsistent.
@@ -98,11 +110,8 @@ fn enforce_target_budget(target_dir: &Path, budget_bytes: u64) -> Result<()> {
             .with_context(|| format!("removing build cache entry {}", entry.path.display()))?;
     }
     info!(
-        path = %target_dir.display(),
         bytes_before,
-        bytes_freed,
-        budget_bytes,
-        "build cache budget enforced"
+        bytes_freed, held_bytes, budget_bytes, "build cache budget enforced"
     );
     Ok(())
 }
@@ -274,6 +283,36 @@ mod tests {
             .collect();
 
         assert_eq!(paths, ["a", "b"].map(PathBuf::from));
+    }
+
+    /// Each checkout under the budget while the host they share is out of room
+    /// is the state that produced `bytes_freed=0` on every pass for hours.
+    #[test]
+    fn the_budget_is_a_ceiling_over_every_checkout_together() {
+        let root = tempfile::tempdir().unwrap();
+        let first = checkout_target(root.path(), "one", 100_000);
+        let second = checkout_target(root.path(), "two", 100_000);
+        let budget = 150_000;
+        assert!(
+            occupied(&first) < budget,
+            "each checkout is under the budget"
+        );
+
+        enforce_budget(&[first.clone(), second.clone()], budget).unwrap();
+
+        assert!(occupied(&first) + occupied(&second) <= budget);
+    }
+
+    fn checkout_target(root: &Path, name: &str, bytes: usize) -> PathBuf {
+        let target = root.join(name);
+        let profile = target.join("debug");
+        fs::create_dir_all(&profile).unwrap();
+        fs::write(profile.join("artifact"), vec![0_u8; bytes]).unwrap();
+        target
+    }
+
+    fn occupied(target: &Path) -> u64 {
+        total_bytes(&candidate_entries(target).unwrap().entries)
     }
 
     #[test]

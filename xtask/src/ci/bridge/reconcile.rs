@@ -166,7 +166,9 @@ impl Bridge {
         require_sha("GitHub pull request", &pull.head_sha)?;
         self.repo
             .fetch_pull_head(&self.github, pull.number, &pull.head_sha)?;
-        let changed_controls = self.repo.changed_control_paths(base_sha, &pull.head_sha)?;
+        let changed_controls = self
+            .repo
+            .weakening_control_paths(base_sha, &pull.head_sha)?;
         let entry = ledger.reserve(&pull.head_sha, base_sha)?;
         if reject_control_changes(
             pull.number,
@@ -286,7 +288,7 @@ fn reject_control_changes(
     }
 
     let detail = format!(
-        "GitHub PR #{pull_number} changes protected CI control paths: {}. Port these changes through a reviewed GitLab merge request",
+        "GitHub PR #{pull_number} weakens the trusted CI judge in {}: an entry that already existed was changed or removed. Port these changes through a reviewed GitLab merge request",
         paths.join(", ")
     );
     report(head_sha, "failure", &detail)?;

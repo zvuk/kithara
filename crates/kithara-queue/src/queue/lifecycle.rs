@@ -176,6 +176,22 @@ impl Queue {
         id
     }
 
+    /// Test helper: put `id` into the state a track reaches after natural
+    /// EOF — selected in navigation and already consumed by the player.
+    /// The next advance onto it must reload it (repeat-one) instead of
+    /// picking a pre-loaded successor.
+    #[cfg(any(test, feature = "probe"))]
+    pub fn mark_played_for_test(&self, id: TrackId) {
+        let index = {
+            let guard = self.lock_tracks();
+            guard.iter().position(|e| e.id == id)
+        };
+        if let Some(index) = index {
+            self.lock_navigation_mut().select(index);
+            self.set_status(id, TrackStatus::Consumed);
+        }
+    }
+
     /// Remove a track from the queue by id.
     ///
     /// If the removed track is currently playing:

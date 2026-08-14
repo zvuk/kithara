@@ -4,8 +4,12 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use super::{
-    runners::RunnerManager, services::ServiceInstaller, storage::HostStorage, system::SystemSetup,
+    runners::RunnerManager,
+    services::ServiceInstaller,
+    storage::HostStorage,
+    system::SystemSetup,
     toolchain::ToolchainInstaller,
+    windows::{Boot, WindowsHost},
 };
 use crate::ci::{
     config::{CiConfig, PINS_PATH},
@@ -55,6 +59,13 @@ enum HostCommand {
     SmokeAndroid,
     /// Serve `GitLab` jobs from throwaway macOS VMs.
     RunMacosRunner,
+    /// Start the Windows guest that serves the Windows lane.
+    RunWindowsGuest {
+        /// Boot the Microsoft media with the answer file instead of the
+        /// installed disk.
+        #[arg(long)]
+        install: bool,
+    },
     /// Reject a job before it can fill or damage the CI volume.
     Preflight,
     /// Remove expired job state and bounded cache entries.
@@ -98,6 +109,13 @@ pub(crate) fn run(args: &HostArgs) -> Result<()> {
         HostCommand::SmokeLinux => RunnerManager::new(&config, &process).smoke_linux(),
         HostCommand::SmokeAndroid => RunnerManager::new(&config, &process).smoke_android(),
         HostCommand::RunMacosRunner => RunnerManager::new(&config, &process).run_macos_runner(),
+        HostCommand::RunWindowsGuest { install } => {
+            WindowsHost::new(&config, &process)?.start(if *install {
+                Boot::Install
+            } else {
+                Boot::Installed
+            })
+        }
         HostCommand::Preflight => HostStorage::new(&config, &process)?.preflight(),
         HostCommand::Cleanup => HostStorage::new(&config, &process)?.cleanup(),
         HostCommand::Health => HostStorage::new(&config, &process)?.health(),

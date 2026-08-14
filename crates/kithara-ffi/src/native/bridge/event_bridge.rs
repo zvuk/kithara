@@ -335,6 +335,7 @@ impl EventBridge {
         cancel: CancelToken,
     ) -> JoinHandle<()> {
         spawn(move || {
+            let _rt = crate::FFI_RUNTIME.enter();
             let interval = Duration::from_millis(Self::TIME_POLL_INTERVAL_MS);
             let mut last_time: Option<f64> = None;
             let mut last_duration: Option<f64> = None;
@@ -515,5 +516,73 @@ mod tests {
                 auto_skipped: true,
             }] if *id == item_id && reason == "network timeout"
         ));
+    }
+
+    async fn wait_for_status(
+        events: &mut EventReceiver,
+        id: TrackId,
+        status: TrackStatus,
+        timeout_ms: u64,
+    ) -> bool {
+        let wait = async {
+            while let Ok(Envelope { event, .. }) = events.recv().await {
+                if matches!(
+                    event,
+                    Event::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
+                        if seen == id && *seen_status == status
+                ) {
+                    return true;
+                }
+            }
+            false
+        };
+        kithara_platform::time::timeout(Duration::from_millis(timeout_ms), wait)
+            .await
+            .unwrap_or(false)
+    }
+
+    /// The polling thread drives `Queue::tick`, and a natural EOF on a
+    /// repeat-one track makes that tick respawn the consumed track's load
+    /// — async work that panics without an ambient runtime. The thread is
+    /// a plain OS thread, so it only has one if it enters `FFI_RUNTIME`
+    /// itself.
+    #[kithara::test(tokio)]
+    async fn polling_thread_reloads_a_consumed_track_after_eof() {
+        let queue = Arc::new(Queue::new(kithara_queue::QueueConfig::default()));
+        let id = queue.register_for_test();
+        queue.mark_played_for_test(id);
+        queue.set_repeat(kithara_queue::RepeatMode::One);
+        queue.set_rate(1.0);
+
+        let mut events = queue.subscribe();
+        queue
+            .bus()
+            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
+                src: Arc::from(format!("test://memory/{}", id.as_u64())),
+                item_id: None,
+            }));
+
+        let cancel = CancelToken::root();
+        let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
+        let thread = EventBridge::spawn_time_thread(
+            Arc::clone(&queue),
+            observer,
+            Arc::new(Mutex::new(ItemRegistry::default())),
+            Arc::new(Mutex::new(None)),
+            cancel.clone(),
+        );
+
+        let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
+        cancel.cancel();
+        let joined = thread.join();
+
+        assert!(
+            reload_started,
+            "tick after EOF must restart the consumed repeat-one track"
+        );
+        assert!(
+            joined.is_ok(),
+            "polling thread must survive the reload it starts"
+        );
     }
 }

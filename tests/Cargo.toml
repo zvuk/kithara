@@ -58,6 +58,9 @@ network-manual = []
 # doesn't try to spin up trunk + a webdriver. Run via
 # `just test run --lane=selenium-firefox`.
 selenium = []
+# Live HLS packaging. `suite_broadcast` requires it, so `just test` never runs
+# it; `just test run --lane=broadcast` does.
+broadcast = ["kithara/broadcast"]
 # Deterministic virtual-clock test mode. Routes the platform's blocking waits
 # (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed
 # waits collapse to virtual time. Off by default; enabling it compiles every
@@ -120,32 +123,6 @@ uuid = { workspace = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
 kithara = { workspace = true, features = ["fdk-aac"] }
 
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
-kithara = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
-
-# --- Apple hardware backend (macOS/iOS only) ---
-# Forwarded so `DecoderBackend::Apple` is in scope for tests that
-# parametrise over backends. The variant is `#[cfg]`-gated on
-# `feature = "apple"` + matching `target_os`, so without these entries
-# the test crate cannot reference it.
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["apple", "client-wreq"] }
-
-# --- Native-only dependencies ---
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, features = [
-    "full",
-    "queue",
-    "probe",
-    "mock",
-    "symphonia",
-    "stretch-signalsmith",
-    "backend-cpal",
-    "tokio-net",
-    "tokio-rt-multi-thread",
-] }
-kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
-
 # `bungee-sys` builds through `cmake`/MSVC and fails there; `kithara-stretch`
 # already drops the dependency for that target (see its `Cargo.toml`), so
 # requesting the feature here would compile a module whose imports do not
@@ -154,7 +131,6 @@ kithara-app = { workspace = true, default-features = false, features = ["analysi
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
 kithara = { workspace = true, features = ["stretch-bungee"] }
 
-kithara-broadcast = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 # Only `architecture_trace` reaches for it, and that module is already native
 # only: the crate's LSP client builds file URLs, which `url` offers everywhere
 # but wasm.
@@ -198,6 +174,32 @@ tower-http = { workspace = true }
 
 # Mocking
 unimock = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
+kithara = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
+
+# --- Apple hardware backend (macOS/iOS only) ---
+# Forwarded so `DecoderBackend::Apple` is in scope for tests that
+# parametrise over backends. The variant is `#[cfg]`-gated on
+# `feature = "apple"` + matching `target_os`, so without these entries
+# the test crate cannot reference it.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara = { workspace = true, features = ["apple", "client-wreq"] }
+
+# --- Native-only dependencies ---
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara = { workspace = true, features = [
+    "full",
+    "queue",
+    "probe",
+    "mock",
+    "symphonia",
+    "stretch-signalsmith",
+    "backend-cpal",
+    "tokio-net",
+    "tokio-rt-multi-thread",
+] }
+kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -271,6 +273,11 @@ path = "tests/suite_heavy.rs"
 [[test]]
 name = "suite_stress"
 path = "tests/suite_stress.rs"
+
+[[test]]
+name = "suite_broadcast"
+path = "tests/suite_broadcast.rs"
+required-features = ["broadcast"]
 
 [[test]]
 name = "suite_e2e"

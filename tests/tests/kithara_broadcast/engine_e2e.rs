@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
+    broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed},
     decode::PcmSpec,
     net::{HttpClient, NetOptions},
     platform::{
@@ -10,14 +11,13 @@ use kithara::{
             Arc,
             atomic::{AtomicU64, Ordering},
         },
-        thread,
         time::Duration,
     },
     play::{Cmd, MixTapWriter, Resource, SessionDispatcher},
 };
-use kithara_broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed};
 use kithara_integration_tests::{
     audio_mock::TestPcmReader, offline::resource_from_reader, signal_pcm::signal::SineWave,
+    waits::wait_until,
 };
 use ringbuf::{HeapRb, traits::Split};
 use url::Url;
@@ -87,17 +87,40 @@ fn left_channel(interleaved: &[f32]) -> Vec<f32> {
 }
 
 struct OnAir {
+    drops: Arc<AtomicU64>,
     handle: BroadcastHandle,
     scope: CancelScope,
     client: HttpClient,
     base: Url,
-    drops: Arc<AtomicU64>,
 }
 
 impl OnAir {
+    /// Non-progress watchdog: the waits resolve as soon as the packager reports.
+    const DRAIN_DEADLINE: Duration = Duration::from_secs(20);
     /// Polls the segment count must repeat before the packager counts as idle.
     const SETTLED_POLLS: usize = 3;
-    const SETTLE_POLL: Duration = Duration::from_millis(20);
+
+    async fn get(&self, path: &str) -> Vec<u8> {
+        let url = self.base.join(path).expect("a servable path");
+        self.client
+            .get_bytes(url, None)
+            .await
+            .unwrap_or_else(|error| panic!("the origin refused {path}: {error}"))
+            .to_vec()
+    }
+
+    async fn listed_stream(&self) -> Vec<u8> {
+        let playlist = Playlist::parse(self.media_playlist().await);
+        let mut stream = Vec::new();
+        for entry in &playlist.entries {
+            stream.extend_from_slice(&self.get(&format!("v/0/{}", entry.uri)).await);
+        }
+        stream
+    }
+
+    async fn media_playlist(&self) -> String {
+        String::from_utf8(self.get("v/0/live.m3u8").await).expect("the playlist is text")
+    }
 
     fn start(harness: &OfflinePlayerHarness, ring_samples: usize) -> Self {
         let (pcm, samples) = HeapRb::<f32>::new(ring_samples).split();
@@ -142,42 +165,26 @@ impl OnAir {
     /// stopped, the segment count settles once there is nothing left to
     /// package. Audio pushed after that starts against an empty ring, so a
     /// render that fits the ring cannot break the stream a second time.
-    fn wait_until_drained(&self) {
+    async fn wait_until_drained(&self) {
         let lost = self.tap_drops();
-        while self.handle.status().dropped_samples < lost {
-            thread::paced_backoff(Duration::from_millis(1));
-        }
+        wait_until(Self::DRAIN_DEADLINE, "the packager reads the drops", || {
+            self.handle.status().dropped_samples >= lost
+        })
+        .await
+        .expect("the packager accounts for every dropped sample");
 
+        // `u64::MAX` is no segment count, so the first observation resets the
+        // counter and the settle window stays three later polls.
         let mut settled = 0;
-        let mut last = self.handle.status().segments;
-        while settled < Self::SETTLED_POLLS {
-            thread::paced_backoff(Self::SETTLE_POLL);
+        let mut last = u64::MAX;
+        wait_until(Self::DRAIN_DEADLINE, "the segment count settles", || {
             let segments = self.handle.status().segments;
             settled = if segments == last { settled + 1 } else { 0 };
             last = segments;
-        }
-    }
-
-    async fn get(&self, path: &str) -> Vec<u8> {
-        let url = self.base.join(path).expect("a servable path");
-        self.client
-            .get_bytes(url, None)
-            .await
-            .unwrap_or_else(|error| panic!("the origin refused {path}: {error}"))
-            .to_vec()
-    }
-
-    async fn media_playlist(&self) -> String {
-        String::from_utf8(self.get("v/0/live.m3u8").await).expect("the playlist is text")
-    }
-
-    async fn listed_stream(&self) -> Vec<u8> {
-        let playlist = Playlist::parse(self.media_playlist().await);
-        let mut stream = Vec::new();
-        for entry in &playlist.entries {
-            stream.extend_from_slice(&self.get(&format!("v/0/{}", entry.uri)).await);
-        }
-        stream
+            settled >= Self::SETTLED_POLLS
+        })
+        .await
+        .expect("the packager stops producing segments once the ring is empty");
     }
 }
 
@@ -249,7 +256,7 @@ async fn a_ring_the_render_outruns_breaks_the_served_playlist() {
         "the render must outrun a {TIGHT_RING}-sample ring"
     );
 
-    on_air.wait_until_drained();
+    on_air.wait_until_drained().await;
     render_tone(&harness, TAIL_FRAMES);
     on_air.handle.stop();
 
