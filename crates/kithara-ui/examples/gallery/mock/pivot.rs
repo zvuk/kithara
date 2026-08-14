@@ -293,40 +293,41 @@ impl PivotState {
     }
 
     fn rebuild_selected(&mut self) {
+        let copy = CATALOG.pivot;
         let Some(portal) = self.selected.and_then(|index| self.portals.get(index)) else {
             self.selected_view = SelectedView {
                 ratio: "—".to_owned(),
                 master: format!("{:.2}", self.master),
                 target: "—".to_owned(),
-                pulse: "ПУЛЬС —".to_owned(),
+                pulse: copy.pulse_empty.clone(),
                 duration: "—".to_owned(),
                 loop_a: "—".to_owned(),
                 loop_b: "—".to_owned(),
-                hint: "НЕТ ПОРТАЛОВ В ЭТОМ ДИАПАЗОНЕ — РАСШИРЬ ДИАПАЗОН ИЛИ СМЕНИ СЕМЕЙСТВО РАТИО"
-                    .to_owned(),
-                none: "НЕТ ТРЕКОВ ДЛЯ ТЕКУЩЕГО ПОРТАЛА".to_owned(),
+                hint: copy.hint_empty.clone(),
+                none: copy.tracks_empty.clone(),
             };
             return;
         };
         let multiplier = [1, 2, 4][self.multiplier];
+        let loop_a = (portal.loop_master * multiplier).to_string();
+        let loop_b = (portal.loop_target * multiplier).to_string();
+        let pulse = format!("{:.2}", portal.pulse);
         self.selected_view = SelectedView {
             ratio: portal.ratio.clone(),
             master: format!("{:.2}", self.master),
             target: portal.bpm_label.clone(),
-            pulse: format!("ПУЛЬС {:.2}", portal.pulse),
-            duration: format!("ТАКТА · ≈ {:.1} С", portal.duration),
-            loop_a: (portal.loop_master * multiplier).to_string(),
-            loop_b: (portal.loop_target * multiplier).to_string(),
-            hint: format!(
-                "НИ ОДИН ТРЕК НЕ РАСТЯНУТ · ОБЩИЙ ПУЛЬС {:.2} BPM · ДЕКИ СХОДЯТСЯ КАЖДЫЕ {} / {} ТАКТА",
-                portal.pulse,
-                portal.loop_master * multiplier,
-                portal.loop_target * multiplier
+            pulse: fill(&copy.pulse, &[("pulse", &pulse)]),
+            duration: fill(
+                &copy.duration,
+                &[("duration", &format!("{:.1}", portal.duration))],
             ),
-            none: format!(
-                "НЕТ ТРЕКОВ БЛИЗКО К {:.2} — ПОРТАЛ ВСЁ РАВНО РАБОЧИЙ ДЛЯ ЛЮБОГО ТРЕКА С РУЧНЫМ ПИТЧЕМ",
-                portal.bpm
+            hint: fill(
+                &copy.hint,
+                &[("pulse", &pulse), ("loop_a", &loop_a), ("loop_b", &loop_b)],
             ),
+            none: fill(&copy.tracks, &[("bpm", &format!("{:.2}", portal.bpm))]),
+            loop_a,
+            loop_b,
         };
     }
 
@@ -357,6 +358,14 @@ enum Selection {
 
 fn distance(left: f32, right: f32) -> f32 {
     (left - right).abs()
+}
+
+fn fill(template: &str, slots: &[(&str, &str)]) -> String {
+    slots
+        .iter()
+        .fold(template.to_owned(), |text, (name, value)| {
+            text.replace(&format!("{{{name}}}"), value)
+        })
 }
 
 fn scope_index(scope: &str, name: &str) -> Option<usize> {

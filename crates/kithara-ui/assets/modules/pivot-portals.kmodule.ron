@@ -15,20 +15,20 @@
                 frame: (top: false, right: false, bottom: true, left: false),
                 frame_color: Line,
                 children: [
-                    Row(id: "title", size: (w: Fixed(148.429688), h: Fill), gap: 7.0, pad_x: 11.0, frame: (top: false, right: true, bottom: false, left: false), frame_color: LineInner, children: [
+                    Row(id: "title", size: (w: Fixed(148.0), h: Fill), gap: 7.0, pad_x: 11.0, frame: (top: false, right: true, bottom: false, left: false), frame_color: LineInner, children: [
                         Glyph(id: "icon", icon: Orbit, style: MenuCell, color: Accent, size: (w: Fixed(11.0), h: Fill)),
                         Text(id: "label", style: PivotTitle, label: "ПИВОТ-ПОРТАЛ", size: (w: Fill, h: Fill)),
                     ]),
-                    Row(id: "master", size: (w: Fixed(124.835938), h: Fill), gap: 6.0, pad_x: 11.0, frame: (top: false, right: true, bottom: false, left: false), frame_color: LineInner, children: [
+                    Row(id: "master", size: (w: Fixed(125.0), h: Fill), gap: 6.0, pad_x: 11.0, frame: (top: false, right: true, bottom: false, left: false), frame_color: LineInner, children: [
                         Text(id: "master-label", style: PivotLabel, label: "МАСТЕР", size: (w: Shrink, h: Fill)),
                         Text(id: "master-value", style: Mono, color: Accent, read: Model(id: "pivot.master.label"), size: (w: Shrink, h: Fill)),
                     ]),
                     Slot(id: "header-space", size: (w: Fill, h: Fill)),
-                    Row(id: "family", size: (w: Fixed(153.796875), h: Fill), gap: 8.0, pad_x: 11.0, frame: (top: false, right: false, bottom: false, left: true), frame_color: LineInner, children: [
+                    Row(id: "family", size: (w: Fixed(154.0), h: Fill), gap: 8.0, pad_x: 11.0, frame: (top: false, right: false, bottom: false, left: true), frame_color: LineInner, children: [
                         Text(id: "family-label", style: PivotLabel, label: "РАТИО", size: (w: Shrink, h: Fill)),
-                        Row(id: "family-chips", size: (w: Fixed(93.109375), h: Fill), gap: 4.0, children: [
-                            Chip(id: "step", style: PivotFamily, label: "STEP", read: Model(id: "pivot.family.step"), write: Command(id: "pivot.family.step"), size: (w: Fixed(44.554688), h: Fixed(16.5))),
-                            Chip(id: "leap", style: PivotFamily, label: "LEAP", read: Model(id: "pivot.family.leap"), write: Command(id: "pivot.family.leap"), size: (w: Fixed(44.554688), h: Fixed(16.5))),
+                        Row(id: "family-chips", size: (w: Fixed(94.0), h: Fill), gap: 4.0, children: [
+                            Chip(id: "step", style: PivotFamily, label: "STEP", read: Model(id: "pivot.family.step"), write: Command(id: "pivot.family.step"), size: (w: Fixed(45.0), h: Fixed(16.5))),
+                            Chip(id: "leap", style: PivotFamily, label: "LEAP", read: Model(id: "pivot.family.leap"), write: Command(id: "pivot.family.leap"), size: (w: Fixed(45.0), h: Fixed(16.5))),
                         ]),
                     ]),
                     Row(id: "range-cell", size: (w: Fixed(280.0), h: Fill), gap: 9.0, pad_x: 12.0, frame: (top: false, right: false, bottom: false, left: true), frame_color: LineInner, children: [
@@ -104,18 +104,18 @@
                         ]),
                         Row(id: "loops", size: (w: Fill, h: Fixed(34.0)), gap: 10.0, pad_x: 12.0, frame: (top: false, right: false, bottom: true, left: false), children: [
                             Text(id: "loops-label", style: PivotLabel, label: "ЦИКЛ ДЕКИ", size: (w: Fill, h: Fill)),
-                            Row(id: "loop-values", size: (w: Fixed(155.09375), h: Fill), gap: 5.0, children: [
-                                Text(id: "loop-a-label", style: PivotSmall, color: Accent, label: "A", size: (w: Fixed(5.421875), h: Fill)),
+                            Row(id: "loop-values", size: (w: Fixed(155.0), h: Fill), gap: 5.0, children: [
+                                Text(id: "loop-a-label", style: PivotSmall, color: Accent, label: "A", size: (w: Fixed(6.0), h: Fill)),
                                 Row(id: "loop-a-box", size: (w: Fixed(26.0), h: Fixed(18.0)), pad_x: 6.0, frame: (top: true, right: true, bottom: true, left: true), frame_color: Accent, children: [Text(id: "loop-a", style: Mono, color: Accent, align: Center, read: Model(id: "pivot.selected.loop_a"), size: (w: Fill, h: Fill))]),
-                                Text(id: "loop-b-label", style: PivotSmall, color: WaveHigh, label: "B", size: (w: Fixed(5.421875), h: Fill)),
+                                Text(id: "loop-b-label", style: PivotSmall, color: WaveHigh, label: "B", size: (w: Fixed(6.0), h: Fill)),
                                 Row(id: "loop-b-box", size: (w: Fixed(26.0), h: Fixed(18.0)), pad_x: 6.0, frame: (top: true, right: true, bottom: true, left: true), frame_color: WaveHigh, children: [Text(id: "loop-b", style: Mono, color: WaveHigh, align: Center, read: Model(id: "pivot.selected.loop_b"), size: (w: Fill, h: Fill))]),
                                 Text(id: "duration", style: PivotDuration, read: Model(id: "pivot.selected.duration"), size: (w: Fill, h: Fill)),
                             ]),
                             Slot(id: "loops-space", size: (w: Fill, h: Fill)),
-                            Row(id: "multipliers", size: (w: Fixed(88.53125), h: Fill), gap: 4.0, children: [
-                                Chip(id: "mul-1", style: PivotMultiplier, label: "×1", read: Model(id: "pivot.multiplier.1"), write: Command(id: "pivot.multiplier.1"), size: (w: Fixed(26.84375), h: Fixed(16.5))),
-                                Chip(id: "mul-2", style: PivotMultiplier, label: "×2", read: Model(id: "pivot.multiplier.2"), write: Command(id: "pivot.multiplier.2"), size: (w: Fixed(26.84375), h: Fixed(16.5))),
-                                Chip(id: "mul-4", style: PivotMultiplier, label: "×4", read: Model(id: "pivot.multiplier.4"), write: Command(id: "pivot.multiplier.4"), size: (w: Fixed(26.84375), h: Fixed(16.5))),
+                            Row(id: "multipliers", size: (w: Fixed(89.0), h: Fill), gap: 4.0, children: [
+                                Chip(id: "mul-1", style: PivotMultiplier, label: "×1", read: Model(id: "pivot.multiplier.1"), write: Command(id: "pivot.multiplier.1"), size: (w: Fixed(27.0), h: Fixed(16.5))),
+                                Chip(id: "mul-2", style: PivotMultiplier, label: "×2", read: Model(id: "pivot.multiplier.2"), write: Command(id: "pivot.multiplier.2"), size: (w: Fixed(27.0), h: Fixed(16.5))),
+                                Chip(id: "mul-4", style: PivotMultiplier, label: "×4", read: Model(id: "pivot.multiplier.4"), write: Command(id: "pivot.multiplier.4"), size: (w: Fixed(27.0), h: Fixed(16.5))),
                             ]),
                         ]),
                         Row(id: "tracks-header", size: (w: Fill, h: Fixed(22.0)), pad_x: 12.0, background: BgFooter, frame: (top: false, right: false, bottom: true, left: false), frame_color: LineInner, children: [

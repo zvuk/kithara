@@ -11,8 +11,22 @@ struct MockData {
     breadcrumb: String,
     footer_tokens_anatomy: String,
     title: String,
+    pivot: PivotCopy,
     tracks: Vec<MockTrack>,
     tree: Vec<MockTreeRow>,
+}
+
+/// Pivot copy lives in the asset so the sources stay ASCII; `{name}` slots are
+/// filled by `mock::pivot`.
+#[derive(Deserialize)]
+pub(crate) struct PivotCopy {
+    pub(crate) pulse: String,
+    pub(crate) pulse_empty: String,
+    pub(crate) duration: String,
+    pub(crate) hint: String,
+    pub(crate) hint_empty: String,
+    pub(crate) tracks: String,
+    pub(crate) tracks_empty: String,
 }
 
 #[derive(Deserialize)]
@@ -88,6 +102,7 @@ pub(crate) struct Catalog {
     pub(crate) breadcrumb: &'static str,
     pub(crate) footer_tokens_anatomy: &'static str,
     pub(crate) title: &'static str,
+    pub(crate) pivot: &'static PivotCopy,
     pub(crate) vis_indices: [&'static str; 3],
     pub(crate) vis_presets: [&'static str; 3],
 }
@@ -133,6 +148,7 @@ fn load_catalog() -> Catalog {
         artist: &data.artist,
         breadcrumb: &data.breadcrumb,
         footer_tokens_anatomy: &data.footer_tokens_anatomy,
+        pivot: &data.pivot,
         vis_indices: [
             data.vis_indices.0.as_str(),
             data.vis_indices.1.as_str(),
