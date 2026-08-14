@@ -1,6 +1,4 @@
-use kithara_ui::render::{ReadValue, WaveformView};
-
-use crate::mock_transport::DeckTransport;
+use kithara_ui::render::ReadValue;
 
 const SOURCES: [Source; 8] = [
     Source::new("auto", "AUTO", "124.00", "FOLLOW", "+0.0 ms", "0.00%"),
@@ -117,14 +115,7 @@ impl ClockState {
         true
     }
 
-    pub(super) fn get<'a>(
-        &'a self,
-        endpoint: &str,
-        transport: &'a DeckTransport,
-        waveform: &'a [kithara_ui::render::WaveBucket],
-        beats: &'a [f32],
-        downbeats: &'a [f32],
-    ) -> Option<ReadValue<'a>> {
+    pub(super) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
         let source = scope_value(scope, "source")
             .and_then(|id| SOURCES.iter().find(|source| source.id == id));
@@ -154,15 +145,6 @@ impl ClockState {
             "clock.source.stretch" => ReadValue::Text(source?.stretch),
             "clock.source.synced" => ReadValue::Bool(source?.id != "c" && source?.id != "d"),
             "deck.key.locked" => ReadValue::Bool(self.key_locked),
-            "deck.focused" => ReadValue::Bool(true),
-            "deck.playback.waveform" => ReadValue::Waveform(WaveformView {
-                buckets: waveform,
-                beats,
-                downbeats,
-                bpm: Some(124.0),
-                r#loop: transport.loop_region(),
-                cues: transport.cues(),
-            }),
             _ => return None,
         };
         Some(value)

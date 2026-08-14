@@ -482,6 +482,8 @@ fn control_spec(
     Ok(Some(spec))
 }
 
+/// Specs for controls that need no context; the match stays exhaustive so a new
+/// `ControlNode` has to be classified here rather than falling through silently.
 fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
     match control {
         ControlNode::DeckSummary { style, .. } => Some(ControlSpec::DeckSummary { style: *style }),
@@ -515,8 +517,27 @@ fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
         | ControlNode::Optional { .. }
         | ControlNode::Popover { .. }
         | ControlNode::Pressable { .. }
-        | ControlNode::Slot { .. } => None,
-        _ => unreachable!("dynamic controls are handled before fixed controls"),
+        | ControlNode::Slot { .. }
+        | ControlNode::Glyph { .. }
+        | ControlNode::TitleBar { .. }
+        | ControlNode::Text { .. }
+        | ControlNode::NavItem { .. }
+        | ControlNode::TabLarge { .. }
+        | ControlNode::Button { .. }
+        | ControlNode::Bpm { .. }
+        | ControlNode::Fader { .. }
+        | ControlNode::Wave { .. }
+        | ControlNode::TrackList { .. }
+        | ControlNode::Tree { .. }
+        | ControlNode::ContextBar { .. }
+        | ControlNode::Segmented { .. }
+        | ControlNode::Select { .. }
+        | ControlNode::StatusDot { .. }
+        | ControlNode::Swatch { .. }
+        | ControlNode::Cell { .. }
+        | ControlNode::Readout { .. }
+        | ControlNode::Chip { .. }
+        | ControlNode::Knob { .. } => None,
     }
 }
 

@@ -207,7 +207,6 @@ impl MockReads {
             ControlAction::StepScalar(steps) if path.contains("clock") => {
                 self.clock.step(f64::from(*steps) * 0.01);
             }
-            ControlAction::StepScalar(_) => {}
             _ => {}
         }
     }
@@ -434,13 +433,7 @@ impl Reads for MockReads {
         if let Some(value) = self.quality.get(endpoint) {
             return Some(value);
         }
-        if let Some(value) = self.clock.get(
-            endpoint,
-            &self.transport,
-            &self.waveform,
-            &self.wave_beats,
-            &self.wave_downbeats,
-        ) {
+        if let Some(value) = self.clock.get(endpoint) {
             return Some(value);
         }
         if let Some(value) = self.pivot.get(endpoint) {
@@ -513,6 +506,7 @@ impl Reads for MockReads {
             "deck.playback.duration_secs" => ReadValue::Scalar(Consts::DURATION_SECS),
             "deck.playback.looping" => ReadValue::Bool(self.transport.loop_region().is_some()),
             "deck.playback.reverse" => ReadValue::Bool(self.transport.reverse()),
+            "deck.focused" => ReadValue::Bool(true),
             "deck.playback.synced" | "mock.button.sync" => ReadValue::Bool(self.button_sync),
             "deck.playback.tempo" => ReadValue::Text(Consts::TEMPO),
             "deck.playback.waveform" => ReadValue::Waveform(WaveformView {

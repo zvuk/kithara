@@ -1,14 +1,16 @@
 use iced::{
-    Element, Length, Point, Rectangle, Renderer, Size, Theme,
+    Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::Vertical,
+    mouse::Cursor,
     widget::{
         Space,
         canvas::{self, Canvas, Frame, Geometry, Path, Stroke},
+        text::Shaping,
     },
 };
 
 use crate::{
-    render::{PortalMapView, PortalTarget, Skin, UiEvent, fonts},
+    render::{PortalMapView, PortalTarget, Skin, UiEvent, fonts, theme::RenderPalette},
     skin::PortalMapSkin,
     widgets::Widget,
 };
@@ -55,7 +57,7 @@ impl From<PortalMapView<'_>> for PortalMapData {
 
 struct PortalMapCanvas {
     metrics: PortalMapSkin,
-    palette: crate::render::theme::RenderPalette,
+    palette: RenderPalette,
     view: PortalMapData,
 }
 
@@ -68,7 +70,7 @@ impl canvas::Program<UiEvent> for PortalMapCanvas {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: iced::mouse::Cursor,
+        _cursor: Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_inset);
@@ -135,14 +137,20 @@ impl Scale {
     }
 }
 
+const MAX_TICKS: f32 = 512.0;
+
 fn draw_ticks(
     frame: &mut Frame,
     scale: Scale,
     axis_y: f32,
     metrics: PortalMapSkin,
-    palette: crate::render::theme::RenderPalette,
+    palette: RenderPalette,
 ) {
-    let mut bpm = (scale.min / metrics.tick_step).ceil() * metrics.tick_step;
+    let step = metrics.tick_step;
+    if !step.is_finite() || step <= 0.0 || scale.span / step > MAX_TICKS {
+        return;
+    }
+    let mut bpm = (scale.min / step).ceil() * step;
     let max = scale.min + scale.span;
     while bpm <= max {
         let x = scale.x(bpm).round();
@@ -158,10 +166,10 @@ fn draw_ticks(
             size: metrics.label.size.into(),
             font: fonts::mono(metrics.label.weight),
             align_y: Vertical::Center,
-            shaping: iced::widget::text::Shaping::Advanced,
+            shaping: Shaping::Advanced,
             ..canvas::Text::default()
         });
-        bpm += metrics.tick_step;
+        bpm += step;
     }
 }
 
@@ -172,7 +180,7 @@ fn draw_arc(
     axis_y: f32,
     selected: bool,
     metrics: PortalMapSkin,
-    palette: crate::render::theme::RenderPalette,
+    palette: RenderPalette,
 ) {
     let radius = (target_x - master_x).abs() / 2.0;
     let center = (master_x + target_x) / 2.0;
@@ -200,7 +208,7 @@ fn draw_arc(
     );
 }
 
-fn draw_marker(frame: &mut Frame, x: f32, axis_y: f32, size: f32, color: iced::Color) {
+fn draw_marker(frame: &mut Frame, x: f32, axis_y: f32, size: f32, color: Color) {
     frame.fill_rectangle(
         Point::new(x - size / 2.0, axis_y - size / 2.0),
         Size::new(size, size),

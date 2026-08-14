@@ -40,8 +40,8 @@ enum Family {
 }
 
 struct Portal {
-    p: u16,
-    q: u16,
+    loop_master: u16,
+    loop_target: u16,
     bpm: f32,
     pulse: f32,
     duration: f32,
@@ -222,7 +222,7 @@ impl PivotState {
                 .portals
                 .iter()
                 .enumerate()
-                .min_by_key(|(_, portal)| portal.p + portal.q)
+                .min_by_key(|(_, portal)| portal.loop_master + portal.loop_target)
                 .map(|(index, _)| index),
             Selection::Current => self
                 .selected
@@ -246,30 +246,31 @@ impl PivotState {
         self.rebuild_selected();
     }
 
-    fn portal(&self, n: u16, d: u16) -> Option<Portal> {
-        let bpm = (self.master * f32::from(n) / f32::from(d) * 100.0).round() / 100.0;
+    fn portal(&self, numerator: u16, denominator: u16) -> Option<Portal> {
+        let bpm =
+            (self.master * f32::from(numerator) / f32::from(denominator) * 100.0).round() / 100.0;
         if bpm < self.min || bpm > self.max || distance(bpm, self.master) < 0.05 {
             return None;
         }
-        let mut pulse = self.master / f32::from(d);
+        let mut pulse = self.master / f32::from(denominator);
         while pulse < 40.0 {
             pulse *= 2.0;
         }
         while pulse > 170.0 {
             pulse /= 2.0;
         }
-        let duration = f32::from(d) * 4.0 * 60.0 / self.master;
+        let duration = f32::from(denominator) * 4.0 * 60.0 / self.master;
         let stretch = (bpm / self.master - 1.0) * 100.0;
         Some(Portal {
-            p: d,
-            q: n,
+            loop_master: denominator,
+            loop_target: numerator,
             bpm,
             pulse,
             duration,
-            ratio: format!("{d}:{n}"),
+            ratio: format!("{denominator}:{numerator}"),
             bpm_label: format!("{bpm:.2}"),
             pulse_label: format!("{pulse:.2}"),
-            loop_label: format!("{d} / {n}"),
+            loop_label: format!("{denominator} / {numerator}"),
             stretch_label: format!(
                 "{}{:.2}%",
                 if stretch >= 0.0 { "+" } else { "−" },
@@ -314,13 +315,13 @@ impl PivotState {
             target: portal.bpm_label.clone(),
             pulse: format!("ПУЛЬС {:.2}", portal.pulse),
             duration: format!("ТАКТА · ≈ {:.1} С", portal.duration),
-            loop_a: (portal.p * multiplier).to_string(),
-            loop_b: (portal.q * multiplier).to_string(),
+            loop_a: (portal.loop_master * multiplier).to_string(),
+            loop_b: (portal.loop_target * multiplier).to_string(),
             hint: format!(
                 "НИ ОДИН ТРЕК НЕ РАСТЯНУТ · ОБЩИЙ ПУЛЬС {:.2} BPM · ДЕКИ СХОДЯТСЯ КАЖДЫЕ {} / {} ТАКТА",
                 portal.pulse,
-                portal.p * multiplier,
-                portal.q * multiplier
+                portal.loop_master * multiplier,
+                portal.loop_target * multiplier
             ),
             none: format!(
                 "НЕТ ТРЕКОВ БЛИЗКО К {:.2} — ПОРТАЛ ВСЁ РАВНО РАБОЧИЙ ДЛЯ ЛЮБОГО ТРЕКА С РУЧНЫМ ПИТЧЕМ",
@@ -367,9 +368,11 @@ fn scope_index(scope: &str, name: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn default_step_portal_matches_the_handoff() {
         let state = PivotState::default();
         let selected = state
@@ -377,12 +380,12 @@ mod tests {
             .and_then(|index| state.portals.get(index))
             .unwrap();
 
-        assert_eq!((selected.p, selected.q), (4, 3));
+        assert_eq!((selected.loop_master, selected.loop_target), (4, 3));
         assert_eq!(selected.bpm, 93.0);
         assert_eq!(selected.pulse, 62.0);
     }
 
-    #[test]
+    #[kithara::test]
     fn range_keeps_an_eight_bpm_gap_and_two_bpm_steps() {
         let mut state = PivotState::default();
 

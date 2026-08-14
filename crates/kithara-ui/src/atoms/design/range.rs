@@ -49,7 +49,7 @@ enum Handle {
 }
 
 #[derive(Default)]
-pub(crate) struct RangeState {
+struct RangeState {
     active: Option<Handle>,
 }
 
@@ -166,9 +166,11 @@ fn nearest_handle(value: f32, range: ScalarRange) -> Handle {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn nearest_handle_breaks_a_tie_toward_minimum() {
         let range = ScalarRange { min: 0.2, max: 0.8 };
 
