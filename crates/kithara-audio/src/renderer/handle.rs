@@ -105,10 +105,13 @@ impl kithara_stream::WorkerWake for WorkerWakeBridge {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::{
+        num::NonZeroU32,
+        sync::atomic::{AtomicBool, Ordering},
+    };
 
     use kithara_bufpool::PcmPool;
-    use kithara_decode::{PcmChunk, PcmMeta};
+    use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
     use kithara_events::{DeferredBus, Event, EventBus};
     use kithara_platform::{
         sync::Arc,
@@ -121,15 +124,30 @@ mod tests {
     use super::*;
     use crate::{
         pipeline::{
+            config::PresentationChain,
             fetch::Fetch,
             track::{TrackStep, WaitingReason},
         },
-        renderer::{AudioWorkerSource, MockSource, PreloadGate, ServiceClass, ThreadWake},
-        runtime::{AtomicServiceClass, connect},
+        renderer::{
+            AudioWorkerSource, MockSource, OutputDisposition, PreloadGate, PresentedPcm,
+            ServiceClass, ThreadWake, presentation_cell,
+        },
+        runtime::{AtomicServiceClass, connect, connect_strict},
     };
 
     fn empty_chunk() -> PcmChunk {
-        PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+        let spec = PcmSpec::new(
+            2,
+            NonZeroU32::new(48_000).expect("fixture rate is non-zero"),
+        );
+        PcmChunk::new(
+            PcmMeta {
+                spec,
+                frames: 512,
+                ..Default::default()
+            },
+            PcmPool::default().attach(vec![0.0; 512 * usize::from(spec.channels)]),
+        )
     }
 
     struct FailingSource {
@@ -160,21 +178,26 @@ mod tests {
         source: S,
         ringbuf_capacity: usize,
         preload_chunks: usize,
-    ) -> (
-        TrackRegistration,
-        crate::runtime::Inlet<Fetch<PcmChunk>>,
-        Arc<PreloadGate>,
-    )
+    ) -> (TrackRegistration, TestConsumer, Arc<PreloadGate>)
     where
         S: AudioWorkerSource<Chunk = PcmChunk> + 'static,
     {
         let wake = Arc::new(ThreadWake::default());
-        let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake));
-        let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(ringbuf_capacity + 2, None);
+        let (outlet, inlet) = connect_strict::<Fetch<PresentedPcm>>(ringbuf_capacity, Some(wake));
+        let (trash_outlet, trash_inlet) = connect::<OutputDisposition>(ringbuf_capacity + 2, None);
         let preload_gate = Arc::new(PreloadGate::default());
+        let (presentation, _frontier) = presentation_cell(0);
 
         let reg = TrackRegistration {
+            chain: PresentationChain::identity(Vec::new()),
+            initial_spec: PcmSpec::new(
+                2,
+                NonZeroU32::new(48_000).expect("fixture rate is non-zero"),
+            ),
             outlet,
+            pcm_pool: PcmPool::default(),
+            presentation,
+            raw_buffer_chunks: ringbuf_capacity,
             trash_inlet,
             preload_chunks,
             source: Box::new(source),
@@ -184,18 +207,45 @@ mod tests {
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::Audible)),
             engine_load: None,
         };
-        (reg, inlet, preload_gate)
+        (
+            reg,
+            TestConsumer {
+                inlet,
+                trash_outlet,
+            },
+            preload_gate,
+        )
+    }
+
+    struct TestConsumer {
+        inlet: crate::runtime::Inlet<Fetch<PresentedPcm>>,
+        trash_outlet: crate::runtime::Outlet<OutputDisposition>,
+    }
+
+    impl TestConsumer {
+        fn try_pop(&mut self, worker: &AudioWorkerHandle) -> Option<()> {
+            let fetch = self.inlet.try_pop()?;
+            if let Fetch::Data { data, .. } = fetch {
+                assert!(
+                    self.trash_outlet.try_push(data.returned()).is_ok(),
+                    "fixture PCM trash ring must accept every consumed final block"
+                );
+            }
+            worker.wake();
+            Some(())
+        }
     }
 
     fn wait_for_chunks(
-        rx: &mut crate::runtime::Inlet<Fetch<PcmChunk>>,
+        worker: &AudioWorkerHandle,
+        rx: &mut TestConsumer,
         count: usize,
         timeout: Duration,
     ) -> usize {
         let start = Instant::now();
         let mut received = 0;
         while received < count && start.elapsed() < timeout {
-            if rx.try_pop().is_some() {
+            if rx.try_pop(worker).is_some() {
                 received += 1;
             } else {
                 thread_sleep(Duration::from_millis(1));
@@ -230,7 +280,7 @@ mod tests {
 
         let _id = handle.register_track(reg);
 
-        let received = wait_for_chunks(&mut data_rx, 5, Duration::from_secs(5));
+        let received = wait_for_chunks(&handle, &mut data_rx, 5, Duration::from_secs(5));
         assert!(received >= 5, "expected >=5 chunks, got {received}");
 
         handle.shutdown();
@@ -246,8 +296,8 @@ mod tests {
         let _id_a = handle.register_track(reg_a);
         let _id_b = handle.register_track(reg_b);
 
-        let a = wait_for_chunks(&mut rx_a, 3, Duration::from_secs(5));
-        let b = wait_for_chunks(&mut rx_b, 3, Duration::from_secs(5));
+        let a = wait_for_chunks(&handle, &mut rx_a, 3, Duration::from_secs(5));
+        let b = wait_for_chunks(&handle, &mut rx_b, 3, Duration::from_secs(5));
         assert!(a >= 3, "track A: expected >=3 chunks, got {a}");
         assert!(b >= 3, "track B: expected >=3 chunks, got {b}");
 
@@ -266,8 +316,8 @@ mod tests {
 
         thread_sleep(Duration::from_millis(100));
 
-        let a = wait_for_chunks(&mut rx_a, 1, Duration::from_millis(100));
-        let b = wait_for_chunks(&mut rx_b, 1, Duration::from_millis(50));
+        let a = wait_for_chunks(&handle, &mut rx_a, 1, Duration::from_millis(100));
+        let b = wait_for_chunks(&handle, &mut rx_b, 1, Duration::from_millis(50));
         assert!(a >= 1, "track A should receive chunks");
         assert_eq!(b, 0, "track B should receive nothing (not ready)");
 
@@ -284,12 +334,12 @@ mod tests {
 
         thread_sleep(Duration::from_millis(50));
 
-        let first = rx.try_pop();
+        let first = rx.try_pop(&handle);
         assert!(first.is_some(), "should have at least one chunk");
 
         thread_sleep(Duration::from_millis(50));
 
-        let second = rx.try_pop();
+        let second = rx.try_pop(&handle);
         assert!(second.is_some(), "overflow slot should have been flushed");
 
         handle.shutdown();
@@ -305,7 +355,7 @@ mod tests {
         let _id_a = handle.register_track(reg_a);
         let _id_b = handle.register_track(reg_b);
 
-        let b = wait_for_chunks(&mut rx_b, 3, Duration::from_secs(5));
+        let b = wait_for_chunks(&handle, &mut rx_b, 3, Duration::from_secs(5));
         assert!(
             b >= 3,
             "track B should keep working after track A panics, got {b}"
@@ -324,7 +374,7 @@ mod tests {
 
         let _id = handle.register_track(reg);
 
-        let got = wait_for_chunks(&mut rx, 2, Duration::from_secs(5));
+        let got = wait_for_chunks(&handle, &mut rx, 2, Duration::from_secs(5));
         assert!(got >= 2);
 
         let _ = seek.begin(Duration::from_secs(10));
@@ -332,7 +382,7 @@ mod tests {
 
         thread_sleep(Duration::from_millis(100));
 
-        let after_seek = wait_for_chunks(&mut rx, 1, Duration::from_secs(5));
+        let after_seek = wait_for_chunks(&handle, &mut rx, 1, Duration::from_secs(5));
         assert!(after_seek >= 1, "should resume decoding after seek");
 
         handle.shutdown();
@@ -418,16 +468,16 @@ mod tests {
 
         let id = handle.register_track(reg);
 
-        let got = wait_for_chunks(&mut rx, 2, Duration::from_secs(5));
+        let got = wait_for_chunks(&handle, &mut rx, 2, Duration::from_secs(5));
         assert!(got >= 2);
 
         handle.unregister_track(id);
         thread_sleep(Duration::from_millis(50));
 
-        while rx.try_pop().is_some() {}
+        while rx.try_pop(&handle).is_some() {}
 
         thread_sleep(Duration::from_millis(50));
-        assert!(rx.try_pop().is_none(), "no chunks after unregister");
+        assert!(rx.try_pop(&handle).is_none(), "no chunks after unregister");
 
         handle.shutdown();
     }
@@ -445,10 +495,10 @@ mod tests {
     /// audio to stutter.
     ///
     /// The mock simulates a track whose `step_track()` blocks the thread
-    /// for 50ms (like a real `wait_range()` call waiting for network data).
+    /// for 10ms (like a real `wait_range()` call waiting for network data).
     /// The worker must still deliver chunks to the ready track at a
     /// rate sufficient for glitch-free playback.
-    #[kithara::test]
+    #[kithara::test(flash(false))]
     fn shared_worker_blocking_track_does_not_starve_producing_track() {
         struct BlockingSource {
             seek_obs: Arc<dyn SeekObserve>,
@@ -485,17 +535,12 @@ mod tests {
         let (reg_b, _rx_b, _) = make_registration(blocking_source, 32, 0);
         let _id_b = handle.register_track(reg_b);
 
-        thread_sleep(Duration::from_millis(500));
-
-        let mut got_a = 0;
-        while rx_a.try_pop().is_some() {
-            got_a += 1;
-        }
+        let got_a = wait_for_chunks(&handle, &mut rx_a, 11, Duration::from_millis(500));
 
         assert!(
             got_a >= 11,
             "Producing track must not be starved by blocking track: \
-             got only {got_a} chunks in 1s (expected ≥11 for glitch-free)"
+             got only {got_a} chunks in 500ms (expected at least 11 for glitch-free)"
         );
 
         blocking.store(false, Ordering::Relaxed);
@@ -505,8 +550,8 @@ mod tests {
     /// A track whose `step_track()` blocks must not set the delivery rate of
     /// every other track on the shared worker.
     ///
-    /// The worker runs one pass over all slots and calls `tick()` — hence
-    /// `step_track()` — exactly once per slot per pass, so a slot that blocks
+    /// The worker runs one pass over all slots and calls `tick()`, hence
+    /// `step_track()`, exactly once per slot per pass, so a slot that blocks
     /// for `BLOCK_MS` caps the pass rate at `1000 / BLOCK_MS` per second. With
     /// one chunk produced per tick, every other track is capped at that same
     /// rate no matter how fast its own source is. In production the blocking
@@ -515,7 +560,7 @@ mod tests {
     ///
     /// The oracle counts chunks, not wall-clock gaps: a ready track must be
     /// able to drain its whole source within a bounded number of polls. A gap
-    /// oracle cannot see this defect — at `BLOCK_MS` the gap stays near
+    /// oracle cannot see this defect; at `BLOCK_MS` the gap stays near
     /// `BLOCK_MS`, well inside any limit chosen for glitch-free playback,
     /// while the track still delivers an order of magnitude too few chunks.
     #[kithara::test]
@@ -523,7 +568,8 @@ mod tests {
         /// Chunks the fast track's source can produce before EOF.
         const SOURCE_CHUNKS: u32 = 1000;
         /// Polls the consumer is allowed before the source must be drained.
-        const POLL_BUDGET: u32 = 600;
+        /// This stays below `SOURCE_CHUNKS`, so one output per pass cannot pass.
+        const POLL_BUDGET: u32 = 800;
         /// How long the slow track holds the worker inside one step.
         const BLOCK_MS: u64 = 10;
         struct SlowDecodeSource {
@@ -564,16 +610,16 @@ mod tests {
 
         while delivered < SOURCE_CHUNKS && polls < POLL_BUDGET {
             let mut this_poll = 0u32;
-            while rx_a.try_pop().is_some() {
+            while rx_a.try_pop(&handle).is_some() {
                 delivered += 1;
                 this_poll += 1;
             }
             deepest_poll = deepest_poll.max(this_poll);
-            while rx_b.try_pop().is_some() {}
+            while rx_b.try_pop(&handle).is_some() {}
             polls += 1;
             // The budget has to bound the pipeline, not the host. A real pause
             // makes these polls a window of real seconds, and how many chunks
-            // arrive inside it is a property of the machine — which is how this
+            // arrive inside it is a property of the machine, which is how this
             // same budget passed on an idle host and failed on a loaded one.
             // `park_timeout` is on the macro's rewrite list, so the window is
             // virtual and advances only once the worker has parked.
@@ -588,7 +634,7 @@ mod tests {
             delivered >= SOURCE_CHUNKS,
             "fast track drained {delivered} of {SOURCE_CHUNKS} chunks in {polls} polls \
              (deepest single poll {deepest_poll}) while a co-scheduled track blocked \
-             {BLOCK_MS}ms per step — the blocking step sets the worker's pass rate and \
+             {BLOCK_MS}ms per step; the blocking step sets the worker's pass rate and \
              every other track is capped at one chunk per pass"
         );
     }

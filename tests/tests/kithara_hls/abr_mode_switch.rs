@@ -1250,7 +1250,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     let bus = EventBus::new(8192);
     // EventCollector's segment URL parser is HlsTestServer-specific; for
     // real-asset URLs we capture VariantApplied targets directly.
-    let collector = EventCollector::new(&bus);
+    let collector = Arc::new(EventCollector::new(&bus));
 
     let hls_config = HlsConfig::for_url(url)
         .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
@@ -1280,36 +1280,57 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
+    let applied_before = collector.applied_transitions().len();
     handle
         .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC variant) target must be valid");
 
-    // Read for several seconds after the flip — if the decoder hangs on
-    // `Pending(VariantChange)` without recovery, the hang_watchdog or
-    // the test timeout will fail. Otherwise we should see post-switch
-    // samples coming from the FLAC variant.
-    let post_total = spawn_blocking(move || read_to_eof(&mut audio))
+    let switch_seen = Arc::clone(&collector);
+    let (mut audio, transition) = spawn_blocking(move || {
+        let stats = read_phase_until(&mut audio, 0, "cross-codec manual transition", || {
+            switch_seen.applied_transitions()[applied_before..]
+                .contains(&(3, AbrReason::ManualOverride))
+        });
+        (audio, stats)
+    })
+    .await
+    .expect("transition read");
+    let (mut audio, post_promotion) = spawn_blocking(move || {
+        let stats = read_phase_until_samples(&mut audio, 8_192, "cross-codec promoted FLAC audio");
+        (audio, stats)
+    })
+    .await
+    .expect("post-promotion read");
+    let tail_total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
-        .expect("read");
+        .expect("tail drain");
 
-    let targets = collector.applied_targets();
-    let saw_flac = targets.contains(&3);
+    let transitions = collector.applied_transitions();
+    let manual_flac = transitions[applied_before..].contains(&(3, AbrReason::ManualOverride));
 
     info!(
-        ?targets,
-        pre_total, post_total, "L2: cross-codec Manual switch result"
+        ?transitions,
+        pre_total,
+        ?transition,
+        ?post_promotion,
+        tail_total,
+        "L2: cross-codec Manual switch result"
     );
 
     assert!(
-        !targets.is_empty(),
-        "cross-codec Manual(3) must fire at least one VariantApplied"
+        !transition.saw_eof,
+        "Manual(3) must promote before outgoing EOF: {transition:?}"
     );
     assert!(
-        saw_flac,
-        "Manual(3) must publish a VariantApplied with to=3, saw: {targets:?}"
+        manual_flac,
+        "Manual(3) must publish a manual VariantApplied to FLAC, saw: {transitions:?}"
     );
     assert!(
-        post_total > 0,
+        !post_promotion.saw_eof && post_promotion.samples >= 8_192,
+        "promoted FLAC variant must produce a fresh audio budget: {post_promotion:?}"
+    );
+    assert!(
+        tail_total > 0,
         "playback must continue after the cross-codec flip — \
          pre-K bug: hang_watchdog panic at 10s"
     );

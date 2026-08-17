@@ -4952,7 +4952,6 @@ dependencies = [
  "signalsmith-stretch",
  "smallvec",
  "thiserror 2.0.18",
- "tracing",
 ]
 
 [[package]]

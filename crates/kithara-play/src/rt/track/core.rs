@@ -1,13 +1,21 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::Range};
 
 use bon::bon;
 use firewheel::dsp::fade::FadeCurve;
-use kithara_audio::ServiceClass;
+use kithara_audio::{
+    PresentationAdvance, PresentationCursor, PresentationPoint, ServiceClass, SessionFrame,
+};
 use kithara_platform::sync::Arc;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
 use crate::bridge::TrackState;
+
+#[derive(Clone, Copy)]
+pub(super) struct MediaPresentationAnchor {
+    pub(super) frames: f64,
+    pub(super) point: PresentationPoint,
+}
 
 /// Per-track state in the processor arena.
 ///
@@ -31,10 +39,8 @@ pub struct PlayerTrack {
     pub(super) ended_at_eof: bool,
     pub(super) state_dirty: bool,
     /// Media seconds consumed per output second, mirroring the speed the
-    /// time-stretch slot runs the source at. The mix output is on the output
-    /// clock; `duration`, the near-end triggers and every position consumer
-    /// are on the media clock, so served output frames only become a position
-    /// once scaled by this.
+    /// time-stretch slot runs the source at. This advances the media clock only
+    /// when a read carries no exact consumed presentation boundary.
     pub(super) playback_rate: f32,
     /// Lead time before EOF at which the prefetch trigger fires.
     ///
@@ -48,15 +54,19 @@ pub struct PlayerTrack {
     /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
     /// duration) captured under the resource lock.
     pub(super) observed_duration: f64,
-    /// Cumulative *media* frames this track has served into the mix output:
-    /// output frames scaled by [`Self::playback_rate`].
+    /// Canonical media clock expressed on the host sample-rate axis.
     ///
-    /// Used as the source of truth for near-end trigger position so the
-    /// trigger reflects what has been rendered to the audio output, not the
-    /// decoder's pre-buffered position (which can be ~200 ms ahead of the
-    /// mixer thanks to `PlayerResource`'s scratch buffer).
+    /// Exact consumed presentation boundaries advance this from source-frame
+    /// deltas after the first boundary anchors the decoder's codec-specific
+    /// origin to the audible clock. Reads without such proof advance it from
+    /// output frames scaled by [`Self::playback_rate`]. Near-end triggers and
+    /// position consumers therefore follow audible source progress without
+    /// importing decoder pre-roll into the public position.
     pub(super) served_media_frames: f64,
+    pub(super) media_presentation: Option<MediaPresentationAnchor>,
     pub(super) sample_rate: u32,
+    /// Last final-output boundary proven consumed, anchored to its host frame.
+    pub(super) consumed_presentation: Option<PresentationCursor>,
 }
 
 #[bon]
@@ -89,7 +99,9 @@ impl PlayerTrack {
             prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
             served_media_frames: 0.0,
+            media_presentation: None,
             ended_at_eof: false,
+            consumed_presentation: None,
         };
         track.update_service_class(TrackState::Preloading);
         track
@@ -141,14 +153,61 @@ impl PlayerTrack {
 
     /// Current media position in seconds.
     ///
-    /// Tracks `served_media_frames / sample_rate` — i.e. what has actually
-    /// been mixed into the output, on the media clock — so the value matches
-    /// the trigger evaluator and `duration` instead of the decoder's
-    /// pre-buffered position.
+    /// Tracks `served_media_frames / sample_rate`: exact presentation proof
+    /// rebases it to the consumed source endpoint, while unproven reads use the
+    /// scalar playback-rate advance. The trigger evaluator reads this same
+    /// clock.
     #[must_use]
     pub fn position(&self) -> f64 {
         let sample_rate = self.sample_rate.max(1);
         self.served_media_frames / f64::from(sample_rate)
+    }
+
+    pub(super) fn update_presentation(
+        &mut self,
+        point: Option<PresentationPoint>,
+        advance: Option<PresentationAdvance>,
+        block_frame: Option<SessionFrame>,
+        range: &Range<usize>,
+        real_frames: usize,
+    ) -> Option<PresentationCursor> {
+        let Some(block_frame) = block_frame else {
+            self.invalidate_presentation();
+            return None;
+        };
+
+        if let Some(advance) = advance {
+            let read_offset = advance.read_offset_frames();
+            if read_offset > real_frames {
+                self.invalidate_presentation();
+                return None;
+            }
+            let boundary_offset = range.start.checked_add(read_offset);
+            self.consumed_presentation = boundary_offset
+                .and_then(|offset| u64::try_from(offset).ok())
+                .and_then(|offset| block_frame.offset(offset))
+                .map(|frame| PresentationCursor::new(advance.point(), frame));
+            self.consumed_presentation?;
+        }
+
+        let point = point?;
+        let consumed = self.consumed_presentation?;
+        if point.seek_epoch() != consumed.seek_epoch()
+            || point.generation() != consumed.generation()
+            || point.sample_rate() != consumed.source_rate()
+        {
+            self.invalidate_presentation();
+            return None;
+        }
+        let Some(delta_output) = point.output_end().checked_sub(consumed.output_end()) else {
+            self.invalidate_presentation();
+            return None;
+        };
+        let Some(session_frame) = consumed.session_frame().offset(delta_output) else {
+            self.invalidate_presentation();
+            return None;
+        };
+        Some(PresentationCursor::new(point, session_frame))
     }
 
     /// Re-base the track on a seek the control thread already begun.
@@ -158,6 +217,8 @@ impl PlayerTrack {
     /// happened on the control thread through [`PlayerResource::seek_handle`].
     pub fn seek(&mut self, seconds: f64) {
         self.resource.reset_for_seek();
+        self.invalidate_presentation();
+        self.media_presentation = None;
         let frames = seek_frame_index(seconds, self.sample_rate, self.observed_duration);
         self.served_media_frames = AsPrimitive::as_(frames);
         self.triggers.reset();
@@ -174,6 +235,10 @@ impl PlayerTrack {
     /// Update the prefetch lead time used for the preload trigger.
     pub const fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
         self.prefetch_duration = prefetch_duration.max(0.0);
+    }
+
+    pub(crate) fn invalidate_presentation(&mut self) {
+        self.consumed_presentation = None;
     }
 
     /// Set the track state and mark as dirty.

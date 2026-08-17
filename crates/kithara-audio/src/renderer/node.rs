@@ -1,4 +1,5 @@
-use kithara_decode::PcmChunk;
+use kithara_bufpool::PcmPool;
+use kithara_decode::{DecodeError, PcmChunk};
 use kithara_events::{AudioEvent, DeferredBus, Event};
 use kithara_platform::{
     sync::Arc,
@@ -6,13 +7,17 @@ use kithara_platform::{
 };
 use kithara_stream::{PlayheadRead, SeekObserve};
 
-use super::{AudioWorkerSource, EngineLoad, PreloadGate, ServiceClass};
+use super::{
+    AudioWorkerSource, EngineLoad, OutputDisposition, PreloadGate, PresentResult, Presentation,
+    PresentationPublisher, PresentedBlock, PresentedPcm, ServiceClass,
+};
 use crate::{
     pipeline::{
+        config::PresentationChain,
         fetch::Fetch,
         track::{TrackStep, WaitingReason},
     },
-    runtime::{AtomicServiceClass, Inlet, Node, Outlet, TickResult},
+    runtime::{AtomicServiceClass, Inlet, Node, StrictOutlet, TickResult},
 };
 
 /// Everything needed to register a track with the shared worker.
@@ -24,14 +29,18 @@ pub(crate) struct TrackRegistration {
     /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
     pub(crate) service_class: Arc<AtomicServiceClass>,
     pub(crate) source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-    /// Spent-chunk return ring: the real-time consumer ([`crate::Audio`])
-    /// hands every consumed `PcmChunk` here instead of dropping it, so the
-    /// pooled buffer is freed/recycled on the worker thread rather than on
-    /// the audio thread. See `crates/kithara-audio/CONTEXT.md`.
-    pub(crate) trash_inlet: Inlet<PcmChunk>,
+    /// Final-output return ring: the real-time consumer ([`crate::Audio`])
+    /// reports whether each output was returned or detached, so replacement
+    /// allocation and pooled-buffer recycling stay on the worker thread.
+    pub(crate) trash_inlet: Inlet<OutputDisposition>,
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
-    pub(crate) outlet: Outlet<Fetch<PcmChunk>>,
+    pub(crate) chain: PresentationChain,
+    pub(crate) initial_spec: kithara_decode::PcmSpec,
+    pub(crate) outlet: StrictOutlet<Fetch<PresentedPcm>>,
+    pub(crate) pcm_pool: PcmPool,
     pub(crate) preload_chunks: usize,
+    pub(crate) presentation: PresentationPublisher,
+    pub(crate) raw_buffer_chunks: usize,
 }
 
 /// Per-tick state of a [`DecoderNode`] — preload progress, EOF flag, and
@@ -49,13 +58,7 @@ pub(crate) struct DecoderRuntime {
     pub(crate) chunks_sent: usize,
 }
 
-/// A node that decodes audio chunks.
-///
-/// The source's FSM must be ticked every pass to make progress on
-/// non-producing transitions (e.g. completing a seek). Backpressure is
-/// absorbed by [`Outlet`]'s built-in overflow slot: each tick first tries
-/// to drain that slot before producing more, so the decoder itself is
-/// stateless with respect to parked chunks.
+/// A node that fills a deep raw queue and presents through one effect chain.
 pub(crate) struct DecoderNode {
     emit: Arc<DeferredBus<Event>>,
     playhead: Arc<dyn PlayheadRead>,
@@ -68,16 +71,15 @@ pub(crate) struct DecoderNode {
     service_class: Arc<AtomicServiceClass>,
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
     runtime: DecoderRuntime,
-    /// Spent chunks returned by the real-time consumer. Drained by
-    /// [`recycle`](DecoderNode::recycle) in the scheduler's unchecked shell
-    /// before and after the produce pass, and between burst ticks, so pooled
-    /// buffers are freed or recycled on this worker thread, never on the audio
-    /// thread.
-    trash_inlet: Inlet<PcmChunk>,
+    /// Final-output dispositions from the real-time consumer. Drained once per
+    /// pass by [`recycle`](DecoderNode::recycle), in the scheduler's unchecked
+    /// shell before the produce core.
+    trash_inlet: Inlet<OutputDisposition>,
     /// Live engine cost meter. When present, each produced chunk records the
     /// tick's decode+effects wall time against the audio it yielded.
     engine_load: Option<Arc<EngineLoad>>,
-    outlet: Outlet<Fetch<PcmChunk>>,
+    pending_failure: Option<DecodeError>,
+    presentation: Presentation,
     preload_chunks: usize,
 }
 
@@ -85,21 +87,16 @@ impl DecoderNode {
     const BUFFER_HEALTH_EMIT_MIN: Duration = Duration::from_millis(250);
     const ENGINE_LOAD_EMIT_MIN: Duration = Duration::from_millis(500);
 
+    fn defer_failure(&mut self, error: DecodeError) {
+        if self.pending_failure.is_none() {
+            self.pending_failure = Some(error);
+        }
+    }
+
     fn complete_preload(&mut self) {
         if !self.runtime.preloaded {
             self.preload_gate.signal_epoch(self.runtime.seek_epoch);
             self.runtime.preloaded = true;
-        }
-    }
-
-    fn mark_preload_progress(&mut self) {
-        if self.runtime.preloaded {
-            return;
-        }
-
-        self.runtime.chunks_sent += 1;
-        if self.runtime.chunks_sent >= self.preload_chunks && !self.outlet.has_pending() {
-            self.complete_preload();
         }
     }
 
@@ -158,28 +155,13 @@ impl DecoderNode {
         self.maybe_emit_engine_load(now);
     }
 
-    /// Record one produced chunk's decode+effects cost into the shared engine
-    /// meter.
-    fn record_load(&self, busy: Duration, fetch: &Fetch<PcmChunk>) {
-        if let (Some(load), Fetch::Data { data, .. }) = (self.engine_load.as_ref(), fetch) {
-            load.record(busy, data.frames(), data.spec().sample_rate.get());
+    fn record_load(&self, busy: Duration, block: PresentedBlock) {
+        if let Some(load) = self.engine_load.as_ref() {
+            load.record(busy, block.frames, block.sample_rate);
         }
     }
 
-    /// Reset preload state when a new seek epoch arrives.
-    ///
-    /// Fast path: `SeekObserve::take_decoder_seek` is a one-shot
-    /// `AtomicBool` armed by `begin`. The typical no-seek tick
-    /// reads a single bool and falls through; only the rare epoch-bump
-    /// tick goes through the `Arc<AtomicU64>` deref to refresh the
-    /// cached value. The slow path still re-reads the canonical
-    /// `seek_epoch` so a spurious latch consume costs at most one
-    /// no-op compare.
-    ///
-    /// On an actual epoch bump the preload gate is re-armed (re-closed)
-    /// so a fresh `Resource::preload().await` blocks again until the
-    /// post-seek refill re-opens it.
-    fn sync_seek_epoch(&mut self) {
+    fn service_seek_epoch(&mut self) {
         if !self.seek_obs.take_decoder_seek() {
             return;
         }
@@ -188,8 +170,13 @@ impl DecoderNode {
             return;
         }
 
-        if let Some(Fetch::Data { data, .. }) = self.outlet.take_pending() {
-            self.source.retire_chunk(data);
+        let source = &self.source;
+        if let Err(error) = self
+            .presentation
+            .reset_epoch(current, |chunk| source.retire_chunk(chunk))
+        {
+            self.source.presentation_failed(error);
+            self.presentation.finish_failed(current);
         }
         self.preload_gate.rearm();
         self.runtime = DecoderRuntime {
@@ -197,16 +184,119 @@ impl DecoderNode {
             ..Default::default()
         };
     }
+
+    fn present_once(&mut self, started: Instant) -> PresentResult {
+        let result = {
+            let source = &self.source;
+            self.presentation.step(|chunk| source.retire_chunk(chunk))
+        };
+        match result {
+            Ok(PresentResult::Produced(block)) => {
+                self.record_load(started.elapsed(), block);
+                PresentResult::Produced(block)
+            }
+            Ok(result) => result,
+            Err(error) => {
+                let epoch = self.source.decode_epoch();
+                self.defer_failure(error);
+                let source = &self.source;
+                if let Err(error) = self
+                    .presentation
+                    .abort_failed(epoch, |chunk| source.retire_chunk(chunk))
+                {
+                    self.defer_failure(error);
+                    self.presentation.finish_failed(epoch);
+                }
+                PresentResult::Advanced
+            }
+        }
+    }
+
+    fn fail_presentation(&mut self, detail: &'static str) {
+        let epoch = self.source.decode_epoch();
+        self.defer_failure(DecodeError::InvalidData { detail });
+        self.presentation.finish_failed(epoch);
+    }
+
+    fn should_present(&self) -> bool {
+        self.runtime.preloaded
+            || self.presentation.raw_ready_for_preload(self.preload_chunks)
+            || self.presentation.is_raw_full()
+    }
+
+    fn pump_source(&mut self) -> TickResult {
+        if let Some((epoch, spec)) = self.source.take_presentation_barrier() {
+            let barrier = super::PresentationBarrier::DecoderReplaced { epoch, spec };
+            if barrier.epoch() != self.presentation.epoch() {
+                return TickResult::Progress;
+            }
+            if self.presentation.admit_barrier(barrier).is_err() {
+                self.fail_presentation("presentation barrier rejected after capacity preflight");
+            }
+            return TickResult::Progress;
+        }
+        match self.source.step_track() {
+            TrackStep::Produced(fetch) => {
+                self.runtime.eof_sent = false;
+                if fetch.epoch() != self.presentation.epoch() {
+                    if let Fetch::Data { data, .. } = fetch {
+                        self.source.retire_chunk(data);
+                    }
+                    return TickResult::Progress;
+                }
+                if let Some(rejected) = self.presentation.admit(fetch) {
+                    if let Fetch::Data { data, .. } = rejected {
+                        self.source.retire_chunk(data);
+                    }
+                    self.fail_presentation("raw PCM rejected after capacity preflight");
+                } else {
+                    self.runtime.chunks_sent = self.runtime.chunks_sent.saturating_add(1);
+                }
+                TickResult::Progress
+            }
+            TrackStep::StateChanged => {
+                self.runtime.eof_sent = false;
+                TickResult::Progress
+            }
+            TrackStep::Blocked(reason) => match reason {
+                WaitingReason::WaitingDemand => TickResult::UpstreamPending,
+                WaitingReason::Waiting | WaitingReason::WaitingMetadata => TickResult::Waiting,
+            },
+            TrackStep::Eof => {
+                let epoch = self.source.decode_epoch();
+                if epoch == self.presentation.epoch() {
+                    self.presentation.finish_eof(epoch);
+                }
+                TickResult::Progress
+            }
+            TrackStep::Failed => {
+                let epoch = self.source.decode_epoch();
+                if epoch == self.presentation.epoch() {
+                    self.presentation.finish_failed(epoch);
+                }
+                TickResult::Progress
+            }
+        }
+    }
 }
 
 impl From<TrackRegistration> for DecoderNode {
     fn from(reg: TrackRegistration) -> Self {
         let seek_obs = reg.source.seek_observe();
         let seek_epoch = seek_obs.epoch();
+        let presentation = Presentation::new(
+            reg.raw_buffer_chunks,
+            reg.chain,
+            reg.pcm_pool,
+            reg.initial_spec,
+            reg.outlet,
+            reg.presentation,
+            seek_epoch,
+        );
         Self {
             seek_obs,
             source: reg.source,
-            outlet: reg.outlet,
+            presentation,
             trash_inlet: reg.trash_inlet,
             playhead: reg.playhead,
             emit: reg.emit,
@@ -214,6 +304,7 @@ impl From<TrackRegistration> for DecoderNode {
             preload_gate: reg.preload_gate,
             preload_chunks: reg.preload_chunks,
             engine_load: reg.engine_load,
+            pending_failure: None,
             runtime: DecoderRuntime {
                 seek_epoch,
                 ..Default::default()
@@ -228,9 +319,19 @@ impl Node for DecoderNode {
     }
 
     fn recycle(&mut self) {
-        while self.trash_inlet.try_pop().is_some() {}
+        self.presentation.release_rejected_off_rt();
+        while let Some(disposition) = self.trash_inlet.try_pop() {
+            self.presentation.restore_output(disposition);
+            self.presentation.release_rejected_off_rt();
+        }
+        self.presentation.release_retired_off_rt();
+        if let Some(error) = self.pending_failure.take() {
+            self.source.presentation_failed(error);
+        }
+        self.service_seek_epoch();
+        self.presentation.service_off_rt();
         self.source.flush_deferred();
-        self.outlet.flush_wake_signals();
+        self.presentation.flush_wake_signals();
     }
 
     fn service_class(&self) -> ServiceClass {
@@ -238,69 +339,63 @@ impl Node for DecoderNode {
     }
 
     fn tick(&mut self) -> TickResult {
-        self.sync_seek_epoch();
+        if self.seek_obs.epoch() != self.runtime.seek_epoch {
+            return TickResult::Progress;
+        }
+        let start = Instant::now();
+        let mut made_progress = false;
+        let mut source_wait = None;
+        let mut present_result = PresentResult::Idle;
+        let mut presented = false;
 
-        if !self.outlet.flush() {
-            return TickResult::Backpressured;
+        if self.should_present() {
+            present_result = self.present_once(start);
+            presented = true;
+            made_progress |= matches!(
+                present_result,
+                PresentResult::Advanced | PresentResult::Produced(_) | PresentResult::Terminal
+            );
         }
 
-        if self.runtime.chunks_sent >= self.preload_chunks && !self.runtime.preloaded {
+        if !self.presentation.is_raw_full() && !self.presentation.is_terminal() {
+            let source_result = self.pump_source();
+            match source_result {
+                TickResult::Progress => made_progress = true,
+                TickResult::Waiting | TickResult::UpstreamPending => {
+                    source_wait = Some(source_result);
+                }
+                TickResult::Backpressured | TickResult::Done => {}
+            }
+        }
+
+        if !presented && self.should_present() {
+            present_result = self.present_once(start);
+            made_progress |= matches!(
+                present_result,
+                PresentResult::Advanced | PresentResult::Produced(_) | PresentResult::Terminal
+            );
+        }
+
+        if matches!(present_result, PresentResult::Terminal) {
+            self.runtime.eof_sent = true;
+        }
+        if self.presentation.preload_ready(self.preload_chunks) {
             self.complete_preload();
         }
 
-        let start = Instant::now();
-        let result = match self.source.step_track() {
-            TrackStep::Produced(fetch) => {
-                self.record_load(start.elapsed(), &fetch);
-                self.runtime.eof_sent = false;
-                let _ = self.outlet.try_push(fetch);
-                self.mark_preload_progress();
-                TickResult::Progress
-            }
-
-            TrackStep::StateChanged => {
-                self.runtime.eof_sent = false;
-                TickResult::Progress
-            }
-
-            TrackStep::Blocked(reason) => match reason {
-                WaitingReason::WaitingDemand => TickResult::UpstreamPending,
-                WaitingReason::Waiting | WaitingReason::WaitingMetadata => TickResult::Waiting,
-            },
-
-            TrackStep::Eof if self.runtime.eof_sent => TickResult::Backpressured,
-
-            TrackStep::Eof => {
-                let epoch = self.source.decode_epoch();
-                let marker = Fetch::eof(epoch);
-                if let Ok(()) = self.outlet.try_push(marker) {
-                    self.complete_preload();
-                    self.runtime.eof_sent = true;
-                    TickResult::Progress
-                } else {
-                    debug_assert!(false, "EOF marker rejected — overflow invariant violated");
-                    TickResult::Waiting
-                }
-            }
-
-            TrackStep::Failed => {
-                let epoch = self.source.decode_epoch();
-                let marker = Fetch::failure(epoch);
-                if let Ok(()) = self.outlet.try_push(marker) {
-                    self.complete_preload();
-                    if self.outlet.has_pending() {
-                        TickResult::Progress
-                    } else {
-                        TickResult::Done
-                    }
-                } else {
-                    debug_assert!(
-                        false,
-                        "Failed marker rejected — overflow invariant violated"
-                    );
-                    TickResult::Waiting
-                }
-            }
+        let result = if self.presentation.terminal_failed() && self.presentation.terminal_sent() {
+            TickResult::Done
+        } else if made_progress {
+            TickResult::Progress
+        } else if let Some(wait) = source_wait {
+            wait
+        } else if matches!(present_result, PresentResult::Backpressured)
+            || self.presentation.is_raw_full()
+            || self.presentation.terminal_sent()
+        {
+            TickResult::Backpressured
+        } else {
+            TickResult::Waiting
         };
         self.maybe_emit_worker_telemetry(Instant::now());
         result
@@ -313,8 +408,14 @@ impl Node for DecoderNode {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        num::NonZeroU32,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use assert_no_alloc::assert_no_alloc;
     use kithara_bufpool::PcmPool;
-    use kithara_decode::PcmMeta;
+    use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_events::{AudioEvent, Event, EventBus};
     use kithara_platform::time::Duration;
     use kithara_stream::{PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState};
@@ -323,12 +424,86 @@ mod tests {
 
     use super::*;
     use crate::{
-        renderer::MockAudioWorkerSource,
-        runtime::{Inlet, Outlet, connect},
+        renderer::{MockAudioWorkerSource, presentation::PRESENTATION_FRAMES, presentation_cell},
+        runtime::{StrictOutlet, connect, connect_strict},
+        traits::PresentationPoint,
     };
 
-    fn empty_chunk() -> PcmChunk {
-        PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+    fn test_spec(channels: u16, sample_rate: u32) -> PcmSpec {
+        PcmSpec::new(
+            channels,
+            NonZeroU32::new(sample_rate).expect("test sample rate is non-zero"),
+        )
+    }
+
+    fn default_test_spec() -> PcmSpec {
+        test_spec(1, 48_000)
+    }
+
+    fn chunk_with_spec(spec: PcmSpec, frames: usize) -> PcmChunk {
+        let mut meta = PcmMeta::default();
+        meta.spec = spec;
+        meta.frames = u32::try_from(frames).expect("test frame count fits u32");
+        PcmChunk::new(
+            meta,
+            PcmPool::default().attach(vec![0.0; frames * usize::from(spec.channels)]),
+        )
+    }
+
+    fn single_frame_chunk() -> PcmChunk {
+        chunk_with_spec(default_test_spec(), 1)
+    }
+
+    fn presented_chunk() -> PresentedPcm {
+        let chunk = single_frame_chunk();
+        let point = PresentationPoint::new(0, 1, 0, 1, chunk.spec().sample_rate);
+        PresentedPcm::new(chunk, point)
+    }
+
+    fn presentation_block_chunk() -> PcmChunk {
+        chunk_with_spec(default_test_spec(), PRESENTATION_FRAMES)
+    }
+
+    struct ConcurrentSeekEofSource {
+        seek_state: Arc<SeekState>,
+    }
+
+    struct FailureProbeSource {
+        failures: Arc<AtomicUsize>,
+        seek_state: Arc<SeekState>,
+    }
+
+    impl AudioWorkerSource for FailureProbeSource {
+        type Chunk = PcmChunk;
+
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek_state) as Arc<dyn SeekObserve>
+        }
+
+        fn step_track(&mut self) -> TrackStep<Self::Chunk> {
+            TrackStep::Blocked(WaitingReason::Waiting)
+        }
+
+        fn presentation_failed(&mut self, _error: DecodeError) {
+            self.failures.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    impl AudioWorkerSource for ConcurrentSeekEofSource {
+        type Chunk = PcmChunk;
+
+        fn decode_epoch(&self) -> u64 {
+            0
+        }
+
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek_state) as Arc<dyn SeekObserve>
+        }
+
+        fn step_track(&mut self) -> TrackStep<Self::Chunk> {
+            self.seek_state.begin(Duration::from_secs(1));
+            TrackStep::Eof
+        }
     }
 
     /// Build a `DecoderNode` for tests: same defaults across the whole
@@ -336,34 +511,115 @@ mod tests {
     /// runtime), so call sites only spell out what they vary.
     fn test_node(
         source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-        outlet: Outlet<Fetch<PcmChunk>>,
+        outlet: StrictOutlet<Fetch<PresentedPcm>>,
         preload_gate: Arc<PreloadGate>,
         seek_obs: Arc<dyn SeekObserve>,
     ) -> DecoderNode {
-        let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(4, None);
+        test_node_with_spec(source, outlet, preload_gate, seek_obs, default_test_spec())
+    }
+
+    fn test_node_with_spec(
+        source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+        outlet: StrictOutlet<Fetch<PresentedPcm>>,
+        preload_gate: Arc<PreloadGate>,
+        seek_obs: Arc<dyn SeekObserve>,
+        initial_spec: PcmSpec,
+    ) -> DecoderNode {
+        test_node_with_limits(source, outlet, preload_gate, seek_obs, initial_spec, 4, 1)
+    }
+
+    fn test_node_with_limits(
+        source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+        outlet: StrictOutlet<Fetch<PresentedPcm>>,
+        preload_gate: Arc<PreloadGate>,
+        seek_obs: Arc<dyn SeekObserve>,
+        initial_spec: PcmSpec,
+        raw_buffer_chunks: usize,
+        preload_chunks: usize,
+    ) -> DecoderNode {
+        let (_trash_outlet, trash_inlet) = connect::<OutputDisposition>(4, None);
+        let seek_epoch = seek_obs.epoch();
+        let presentation = Presentation::new(
+            raw_buffer_chunks,
+            PresentationChain::identity(Vec::new()),
+            PcmPool::default(),
+            initial_spec,
+            outlet,
+            presentation_cell(seek_epoch).0,
+            seek_epoch,
+        );
         DecoderNode {
             seek_obs,
             source,
-            outlet,
+            presentation,
             trash_inlet,
             preload_gate,
             playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadRead>,
             emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
-            preload_chunks: 1,
+            preload_chunks,
             engine_load: None,
-            runtime: DecoderRuntime::default(),
+            pending_failure: None,
+            runtime: DecoderRuntime {
+                seek_epoch,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[kithara::test]
+    fn decoder_node_preload_progresses_when_raw_capacity_is_below_target() {
+        let gate = Arc::new(PreloadGate::default());
+        let (outlet, mut inlet) = connect_strict::<Fetch<PresentedPcm>>(3, None);
+        let source = Box::new(Unimock::new((
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Produced(Fetch::data(
+                    presentation_block_chunk(),
+                    0,
+                ))),
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Produced(Fetch::data(
+                    presentation_block_chunk(),
+                    0,
+                ))),
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Produced(Fetch::data(
+                    presentation_block_chunk(),
+                    0,
+                ))),
+        )));
+        let mut node = test_node_with_limits(
+            source,
+            outlet,
+            Arc::clone(&gate),
+            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            default_test_spec(),
+            1,
+            3,
+        );
+
+        for admitted in 1..=3 {
+            assert_eq!(node.tick(), TickResult::Progress);
+            assert_eq!(node.runtime.chunks_sent, admitted);
+            assert!(matches!(
+                inlet.try_pop(),
+                Some(Fetch::Data { data, epoch: 0 })
+                    if data.chunk().frames() == PRESENTATION_FRAMES
+            ));
+            assert_eq!(node.runtime.preloaded, admitted == 3);
+            assert_eq!(gate.is_ready(), admitted == 3);
         }
     }
 
     #[kithara::test]
     fn decoder_node_eof_under_backpressure() {
         let gate = Arc::new(PreloadGate::default());
-        let (mut outlet, _inlet) = connect::<Fetch<PcmChunk>>(1, None);
+        let (mut outlet, mut inlet) = connect_strict::<Fetch<PresentedPcm>>(1, None);
 
-        outlet.try_push(Fetch::data(empty_chunk(), 0)).unwrap();
-        outlet.try_push(Fetch::data(empty_chunk(), 0)).unwrap();
-        assert!(outlet.has_pending());
+        outlet.try_push(Fetch::data(presented_chunk(), 0)).unwrap();
 
         let source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
@@ -381,32 +637,27 @@ mod tests {
             Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         );
 
+        assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(!node.runtime.eof_sent);
 
-        let _ = node.outlet.take_pending();
+        let _ = inlet.try_pop();
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(node.runtime.eof_sent);
-        assert!(node.outlet.has_pending());
+        assert!(matches!(inlet.try_pop(), Some(Fetch::NaturalEof { .. })));
     }
 
     #[kithara::test]
     fn decoder_node_records_engine_load_on_produced() {
-        use std::num::NonZero;
-
-        use kithara_decode::PcmSpec;
-
         let meter = Arc::new(EngineLoad::default());
         assert!(!meter.snapshot().is_active(), "idle before any tick");
 
-        let (outlet, _inlet) = connect::<Fetch<PcmChunk>>(4, None);
+        let (outlet, mut inlet) = connect_strict::<Fetch<PresentedPcm>>(1, None);
+        let spec = test_spec(2, 44_100);
         let chunk = PcmChunk::new(
             PcmMeta {
-                spec: PcmSpec {
-                    channels: 2,
-                    sample_rate: NonZero::new(44_100).unwrap(),
-                },
+                spec,
                 frames: 4_410,
                 ..Default::default()
             },
@@ -418,32 +669,89 @@ mod tests {
                 .returns(TrackStep::Produced(Fetch::data(chunk, 0))),
         ));
 
-        let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(4, None);
-        let mut node = DecoderNode {
+        let mut node = test_node_with_spec(
             source,
             outlet,
-            trash_inlet,
-            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-            preload_gate: Arc::new(PreloadGate::default()),
-            playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadRead>,
-            emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
-            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
-            preload_chunks: 1,
-            engine_load: Some(Arc::clone(&meter)),
-            runtime: DecoderRuntime::default(),
-        };
+            Arc::new(PreloadGate::default()),
+            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            spec,
+        );
+        node.engine_load = Some(Arc::clone(&meter));
 
         assert_eq!(node.tick(), TickResult::Progress);
+        let produced = inlet
+            .try_pop()
+            .expect("presentation commits one output block");
+        let Fetch::Data { data, epoch } = produced else {
+            panic!("presentation must emit PCM data");
+        };
+        assert_eq!(epoch, 0);
+        assert_eq!(data.chunk().spec(), spec);
+        assert_eq!(data.chunk().frames(), PRESENTATION_FRAMES);
         assert!(
             meter.snapshot().is_active(),
-            "engine meter records on a Produced tick: {:?}",
+            "engine meter records the committed presentation block: {:?}",
             meter.snapshot()
         );
     }
 
     #[kithara::test]
+    fn presentation_failure_is_reported_only_from_the_unchecked_recycle_shell() {
+        let failures = Arc::new(AtomicUsize::new(0));
+        let seek_state = Arc::new(SeekState::new());
+        let source = Box::new(FailureProbeSource {
+            failures: Arc::clone(&failures),
+            seek_state: Arc::clone(&seek_state),
+        });
+        let (outlet, _inlet) = connect_strict::<Fetch<PresentedPcm>>(1, None);
+        let mut node = test_node(
+            source,
+            outlet,
+            Arc::new(PreloadGate::default()),
+            seek_state as Arc<dyn SeekObserve>,
+        );
+
+        node.fail_presentation("fixture presentation failure");
+        assert_eq!(failures.load(Ordering::Relaxed), 0);
+        assert!(node.pending_failure.is_some());
+
+        node.recycle();
+        assert_eq!(failures.load(Ordering::Relaxed), 1);
+        assert!(node.pending_failure.is_none());
+    }
+
+    #[kithara::test]
+    fn rejected_output_is_released_only_from_the_unchecked_recycle_shell() {
+        let (outlet, _inlet) = connect_strict::<Fetch<PresentedPcm>>(1, None);
+        let mut node = test_node(
+            Box::new(Unimock::new(())),
+            outlet,
+            Arc::new(PreloadGate::default()),
+            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        );
+        let reject_pool = PcmPool::new(1, 0);
+        reject_pool.pre_warm(1, |buffer| buffer.resize(PRESENTATION_FRAMES, 0.0));
+        let rejected = PcmChunk::new(
+            PcmMeta {
+                spec: default_test_spec(),
+                frames: u32::try_from(PRESENTATION_FRAMES)
+                    .expect("presentation frame count fits u32"),
+                ..Default::default()
+            },
+            reject_pool.attach(vec![0.0; PRESENTATION_FRAMES]),
+        );
+
+        assert_no_alloc(|| node.presentation.recycle_output(rejected));
+        assert_eq!(reject_pool.stats().put_drops, 0);
+
+        node.recycle();
+
+        assert_eq!(reject_pool.stats().put_drops, 1);
+    }
+
+    #[kithara::test]
     fn worker_telemetry_throttles_immediate_repeats() {
-        let (outlet, _inlet) = connect::<Fetch<PcmChunk>>(4, None);
+        let (outlet, _inlet) = connect_strict::<Fetch<PresentedPcm>>(1, None);
         let source = Box::new(Unimock::new(()));
         let gate = Arc::new(PreloadGate::default());
         let seek = Arc::new(SeekState::new());
@@ -456,19 +764,15 @@ mod tests {
         let meter = Arc::new(EngineLoad::default());
         meter.record(Duration::from_millis(5), 4_410, 44_100);
 
-        let mut node = DecoderNode {
+        let mut node = test_node(
             source,
             outlet,
-            seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
-            trash_inlet: connect::<PcmChunk>(4, None).1,
-            preload_gate: gate,
-            playhead: Arc::clone(&playhead) as Arc<dyn PlayheadRead>,
-            emit: Arc::clone(&emit),
-            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
-            preload_chunks: 1,
-            engine_load: Some(meter),
-            runtime: DecoderRuntime::default(),
-        };
+            gate,
+            Arc::clone(&seek) as Arc<dyn SeekObserve>,
+        );
+        node.playhead = Arc::clone(&playhead) as Arc<dyn PlayheadRead>;
+        node.emit = Arc::clone(&emit);
+        node.engine_load = Some(meter);
 
         let now = Instant::now();
         node.maybe_emit_worker_telemetry(now);
@@ -500,14 +804,13 @@ mod tests {
         /// `TrackStep::Failed`) must materialise as distinct variants on
         /// the wire so the consumer can finalise the track only on
         /// natural EOF.
-        fn drain_marker<T>(outlet: &mut Outlet<Fetch<T>>, inlet: &mut Inlet<Fetch<T>>) -> Fetch<T> {
-            outlet.flush();
+        fn drain_marker<T>(inlet: &mut Inlet<Fetch<T>>) -> Fetch<T> {
             inlet.try_pop().expect("producer pushed a terminal marker")
         }
 
         let gate = Arc::new(PreloadGate::default());
 
-        let (eof_outlet, mut eof_inlet) = connect::<Fetch<PcmChunk>>(1, None);
+        let (eof_outlet, mut eof_inlet) = connect_strict::<Fetch<PresentedPcm>>(1, None);
         let eof_source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
@@ -523,9 +826,9 @@ mod tests {
             Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         );
         assert_eq!(eof_node.tick(), TickResult::Progress);
-        let eof_marker = drain_marker(&mut eof_node.outlet, &mut eof_inlet);
+        let eof_marker = drain_marker(&mut eof_inlet);
 
-        let (failed_outlet, mut failed_inlet) = connect::<Fetch<PcmChunk>>(1, None);
+        let (failed_outlet, mut failed_inlet) = connect_strict::<Fetch<PresentedPcm>>(1, None);
         let failed_source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
@@ -541,7 +844,7 @@ mod tests {
             Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         );
         let _ = failed_node.tick();
-        let failed_marker = drain_marker(&mut failed_node.outlet, &mut failed_inlet);
+        let failed_marker = drain_marker(&mut failed_inlet);
 
         assert!(matches!(eof_marker, Fetch::NaturalEof { .. }));
         assert!(matches!(failed_marker, Fetch::Failure { .. }));
@@ -559,28 +862,21 @@ mod tests {
         // consumer's epoch validator as the *new* seek's terminal, surfacing a
         // false `ReadOutcome::Eof` for an in-range seek.
         let gate = Arc::new(PreloadGate::default());
-        let (outlet, mut inlet) = connect::<Fetch<PcmChunk>>(1, None);
+        let (outlet, mut inlet) = connect_strict::<Fetch<PresentedPcm>>(1, None);
 
-        // Consumer already requested the next seek: the seek epoch is now 1,
-        // ahead of the decode epoch (0) the pending EOF belongs to.
-        let seek_state = SeekState::new();
-        let live_epoch = seek_state.begin(Duration::from_secs(1));
-        assert_eq!(live_epoch, 1, "begin bumps the seek epoch to 1");
-        let seek_obs = Arc::new(seek_state) as Arc<dyn SeekObserve>;
-
-        let source = Box::new(Unimock::new((
-            MockAudioWorkerSource::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Eof),
-            MockAudioWorkerSource::decode_epoch
-                .next_call(matching!())
-                .returns(0u64),
-        )));
+        // The worker has already sampled the current seek epoch when the
+        // consumer requests the next seek concurrently with the source step.
+        // The pending EOF still belongs to decode epoch 0.
+        let seek_state = Arc::new(SeekState::new());
+        let seek_obs = Arc::clone(&seek_state) as Arc<dyn SeekObserve>;
+        let source = Box::new(ConcurrentSeekEofSource {
+            seek_state: Arc::clone(&seek_state),
+        });
 
         let mut node = test_node(source, outlet, gate, seek_obs);
         assert_eq!(node.tick(), TickResult::Progress);
+        assert_eq!(seek_state.epoch(), 1, "source step raced with a new seek");
 
-        node.outlet.flush();
         let marker = inlet.try_pop().expect("producer pushed an EOF marker");
         assert!(matches!(&marker, Fetch::NaturalEof { .. }));
         assert_eq!(
@@ -594,14 +890,21 @@ mod tests {
     #[kithara::test]
     fn decoder_node_preload_gate_waits_for_ring() {
         let gate = Arc::new(PreloadGate::default());
-        let (mut outlet, mut inlet) = connect::<Fetch<PcmChunk>>(1, None);
+        let (mut outlet, mut inlet) = connect_strict::<Fetch<PresentedPcm>>(2, None);
 
-        outlet.try_push(Fetch::data(empty_chunk(), 0)).unwrap();
+        outlet.try_push(Fetch::data(presented_chunk(), 0)).unwrap();
+        outlet.try_push(Fetch::data(presented_chunk(), 0)).unwrap();
 
         let source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
+                .returns(TrackStep::Produced(Fetch::data(
+                    presentation_block_chunk(),
+                    0,
+                ))),
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Blocked(WaitingReason::Waiting)),
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Blocked(WaitingReason::Waiting)),
@@ -619,21 +922,31 @@ mod tests {
         assert!(!node.runtime.preloaded);
         assert!(!gate.is_ready());
 
-        assert_eq!(node.tick(), TickResult::Backpressured);
+        assert_eq!(node.tick(), TickResult::Waiting);
         assert!(!node.runtime.preloaded);
         assert!(!gate.is_ready());
 
         let _ = inlet.try_pop();
 
-        assert_eq!(node.tick(), TickResult::Waiting);
+        assert_eq!(node.tick(), TickResult::Progress);
         assert!(node.runtime.preloaded);
         assert!(gate.is_ready());
+        assert!(matches!(
+            inlet.try_pop(),
+            Some(Fetch::Data { data, epoch: 0 }) if data.chunk().frames() == 1
+        ));
+        assert!(matches!(
+            inlet.try_pop(),
+            Some(Fetch::Data { data, epoch: 0 })
+                if data.chunk().frames() == PRESENTATION_FRAMES
+                    && data.chunk().spec() == default_test_spec()
+        ));
     }
 
     #[kithara::test]
     fn decoder_node_live_upstream_demand_does_not_tick_hang_wait() {
         let gate = Arc::new(PreloadGate::default());
-        let (outlet, _inlet) = connect::<Fetch<PcmChunk>>(2, None);
+        let (outlet, _inlet) = connect_strict::<Fetch<PresentedPcm>>(1, None);
 
         let source = Box::new(Unimock::new(
             MockAudioWorkerSource::step_track
@@ -654,19 +967,25 @@ mod tests {
     #[kithara::test]
     fn decoder_node_seek_rearms_preload_gate() {
         let gate = Arc::new(PreloadGate::default());
-        let (outlet, mut inlet) = connect::<Fetch<PcmChunk>>(2, None);
+        let (outlet, mut inlet) = connect_strict::<Fetch<PresentedPcm>>(1, None);
 
         let seek_state = Arc::new(SeekState::new());
         let source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
+                .returns(TrackStep::Produced(Fetch::data(
+                    presentation_block_chunk(),
+                    0,
+                ))),
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
                 .returns(TrackStep::StateChanged),
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
+                .returns(TrackStep::Produced(Fetch::data(
+                    presentation_block_chunk(),
+                    1,
+                ))),
         )));
 
         // Pass a seek_obs handle derived from `seek_state` so begin()
@@ -684,11 +1003,16 @@ mod tests {
 
         let epoch = SeekControl::begin(&*seek_state, Duration::from_secs(1));
 
+        node.recycle();
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(!node.runtime.preloaded, "seek resets the preload runtime");
         assert!(!gate.is_ready(), "sync_seek_epoch re-closes the gate");
 
-        let _ = inlet.try_pop();
+        assert!(matches!(
+            inlet.try_pop(),
+            Some(Fetch::Data { data, epoch: 0 })
+                if data.chunk().frames() == PRESENTATION_FRAMES
+        ));
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(node.runtime.preloaded);
@@ -697,5 +1021,10 @@ mod tests {
             gate.is_ready_for_epoch(epoch),
             "post-seek refill must open the new seek epoch",
         );
+        assert!(matches!(
+            inlet.try_pop(),
+            Some(Fetch::Data { data, epoch: 1 })
+                if data.chunk().frames() == PRESENTATION_FRAMES
+        ));
     }
 }

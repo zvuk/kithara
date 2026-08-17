@@ -11,6 +11,6 @@ pub(crate) use handle::{SchedulerCmd, SchedulerHandle, Slot, SlotId};
 pub use node::ServiceClass;
 pub(crate) use node::{AtomicServiceClass, Node, RtPolicy, TickResult};
 pub(crate) use observer::{PassOutcome, PassReport, SchedulerEvent, SchedulerObserver};
-pub(crate) use ports::{Inlet, Outlet, WakeSignal, connect};
+pub(crate) use ports::{Inlet, Outlet, StrictOutlet, WakeSignal, connect, connect_strict};
 pub(crate) use scheduler::Scheduler;
 pub(crate) use wake::SchedulerWake;

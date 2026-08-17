@@ -1,7 +1,7 @@
-use kithara_decode::PcmChunk;
+use kithara_decode::DecodeResult;
 
 use super::{EqBandConfig, IsolatorEq};
-use crate::AudioEffect;
+use crate::{AudioBlockMut, AudioEffect};
 
 pub struct EqEffect {
     eq_l: IsolatorEq,
@@ -57,26 +57,20 @@ impl EqEffect {
 }
 
 impl AudioEffect for EqEffect {
-    fn flush(&mut self) -> Option<PcmChunk> {
-        None
-    }
-
-    fn process(&mut self, mut chunk: PcmChunk) -> Option<PcmChunk> {
+    fn process(&mut self, mut block: AudioBlockMut<'_>) -> DecodeResult<()> {
         let channels = self.channels as usize;
         if channels == 0 {
-            return Some(chunk);
+            return Ok(());
         }
 
-        let samples = &mut chunk.samples;
-
-        for frame in samples.chunks_exact_mut(channels) {
+        for frame in block.samples_mut().chunks_exact_mut(channels) {
             frame[0] = self.eq_l.process_sample(frame[0]);
             if channels >= 2 {
                 frame[1] = self.eq_r.process_sample(frame[1]);
             }
         }
 
-        Some(chunk)
+        Ok(())
     }
 
     fn reset(&mut self) {
@@ -90,7 +84,7 @@ mod tests {
     use std::{f32::consts::PI, num::NonZeroU32};
 
     use kithara_bufpool::PcmPool;
-    use kithara_decode::{PcmMeta, PcmSpec};
+    use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
     use kithara_test_utils::kithara;
 
     use super::{super::*, *};
@@ -113,6 +107,10 @@ mod tests {
         )
     }
 
+    fn process_chunk(effect: &mut EqEffect, chunk: &mut PcmChunk) -> DecodeResult<()> {
+        effect.process(AudioBlockMut::new(&chunk.meta, &mut chunk.samples))
+    }
+
     #[kithara::test]
     fn eq_flat_gain_preserves_magnitude() {
         let bands = generate_log_spaced_bands(10);
@@ -120,7 +118,8 @@ mod tests {
         let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
 
         let warmup = vec![0.0f32; 4096];
-        let _ = eq.process(test_chunk(spec, warmup));
+        let mut warmup = test_chunk(spec, warmup);
+        process_chunk(&mut eq, &mut warmup).expect("EQ warmup succeeds");
 
         let num_frames: u16 = 44100;
         let pcm: Vec<f32> = (0..num_frames)
@@ -130,8 +129,8 @@ mod tests {
         let input_rms: f32 =
             (pcm.iter().map(|s| s * s).sum::<f32>() / f32::from(num_frames)).sqrt();
 
-        let chunk = test_chunk(spec, pcm);
-        let output = eq.process(chunk).unwrap();
+        let mut output = test_chunk(spec, pcm);
+        process_chunk(&mut eq, &mut output).expect("EQ processing must succeed");
         let out = &output.samples[..];
 
         let steady = &out[4096..];
@@ -179,8 +178,8 @@ mod tests {
         eq.set_gain(0, 6.0);
         let spec = EqFixture::spec(2, 44100);
         let pcm = vec![0.5f32; 256];
-        let chunk = test_chunk(spec, pcm);
-        let _ = eq.process(chunk);
+        let mut chunk = test_chunk(spec, pcm);
+        process_chunk(&mut eq, &mut chunk).expect("EQ setup succeeds");
 
         eq.reset();
 
@@ -327,16 +326,16 @@ mod tests {
         let warmup: Vec<f32> = (0u16..4096)
             .map(|i| (2.0 * PI * 1000.0 * f32::from(i) / 44100.0).sin())
             .collect();
-        let chunk = test_chunk(spec, warmup);
-        let _ = eq.process(chunk);
+        let mut chunk = test_chunk(spec, warmup);
+        process_chunk(&mut eq, &mut chunk).expect("EQ warmup succeeds");
 
         eq.set_gain(0, MAX_GAIN_DB);
 
         let signal: Vec<f32> = (0u16..4096)
             .map(|i| (2.0 * PI * 1000.0 * f32::from(i + 4096) / 44100.0).sin())
             .collect();
-        let chunk = test_chunk(spec, signal);
-        let output = eq.process(chunk).unwrap();
+        let mut output = test_chunk(spec, signal);
+        process_chunk(&mut eq, &mut output).expect("EQ processing must succeed");
         let out = &output.samples[..];
 
         let max_diff = out
@@ -366,17 +365,9 @@ mod tests {
         }
 
         let pcm = vec![0.5f32; sample_len];
-        let chunk = test_chunk(spec, pcm);
-        let result = eq.process(chunk);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().samples.len(), sample_len);
-    }
-
-    #[kithara::test]
-    fn eq_flush_returns_none() {
-        let bands = generate_log_spaced_bands(3);
-        let mut eq = EqEffect::new(bands, 44100, 2);
-        assert!(eq.flush().is_none());
+        let mut chunk = test_chunk(spec, pcm);
+        process_chunk(&mut eq, &mut chunk).expect("EQ processing must succeed");
+        assert_eq!(chunk.samples.len(), sample_len);
     }
 
     #[kithara::test]
@@ -396,8 +387,8 @@ mod tests {
             }
 
             let pcm: Vec<f32> = (0u16..1024).map(|i| (f32::from(i) * 0.1).sin()).collect();
-            let chunk = test_chunk(spec, pcm);
-            let output = eq.process(chunk).unwrap();
+            let mut output = test_chunk(spec, pcm);
+            process_chunk(&mut eq, &mut output).expect("EQ processing must succeed");
             for (i, &s) in output.samples.iter().enumerate() {
                 assert!(s.is_finite(), "round {round} sample {i}: got {s}");
             }
@@ -416,8 +407,8 @@ mod tests {
         pcm[10] = f32::NAN;
         pcm[20] = f32::INFINITY;
         pcm[30] = f32::NEG_INFINITY;
-        let chunk = test_chunk(spec, pcm);
-        let output = eq.process(chunk).unwrap();
+        let mut output = test_chunk(spec, pcm);
+        process_chunk(&mut eq, &mut output).expect("EQ processing must succeed");
 
         for (i, &s) in output.samples.iter().enumerate() {
             assert!(s.is_finite(), "sample {i}: got {s}");
@@ -441,9 +432,10 @@ mod tests {
             eq.set_gain(2, gain);
 
             let pcm: Vec<f32> = (0u16..512).map(|i| (f32::from(i) * 0.3).sin()).collect();
-            let chunk = test_chunk(spec, pcm);
-            let output = eq.process(chunk).unwrap();
-            for &s in &output.samples[..] {
+            let mut chunk = test_chunk(spec, pcm);
+            eq.process(AudioBlockMut::new(&chunk.meta, &mut chunk.samples))
+                .expect("EQ processing must succeed");
+            for &s in &chunk.samples[..] {
                 assert!(s.is_finite());
             }
         }
@@ -573,8 +565,8 @@ mod tests {
     fn converge_smoother(eq: &mut EqEffect, spec: PcmSpec) {
         let frames = (spec.sample_rate.get() as usize) / 5;
         let pcm = vec![0.0f32; frames * spec.channels as usize];
-        let chunk = test_chunk(spec, pcm);
-        let _ = eq.process(chunk);
+        let mut chunk = test_chunk(spec, pcm);
+        process_chunk(eq, &mut chunk).expect("EQ convergence processing succeeds");
     }
 
     #[expect(
@@ -591,8 +583,8 @@ mod tests {
 
         let input_rms: f32 = (pcm.iter().map(|s| s * s).sum::<f32>() / num_frames as f32).sqrt();
 
-        let chunk = test_chunk(spec, pcm);
-        let output = eq.process(chunk).unwrap();
+        let mut output = test_chunk(spec, pcm);
+        process_chunk(eq, &mut output).expect("EQ processing must succeed");
         let out = &output.samples[..];
 
         let steady = &out[4096..];

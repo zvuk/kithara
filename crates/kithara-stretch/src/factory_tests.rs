@@ -1,3 +1,5 @@
+#[cfg(feature = "stretch-bungee")]
+use kithara_bufpool::ByteBudget;
 use kithara_bufpool::PcmPool;
 
 use super::build_backend;
@@ -27,7 +29,7 @@ fn interleaved_stereo() -> Vec<f32> {
 
 fn smoke(kind: StretchKind) {
     let options = options();
-    let mut backend = build_backend(kind, &options);
+    let mut backend = build_backend(kind, &options).expect("backend construction must succeed");
     if let Err(error) = backend.set_ratio(1.0) {
         panic!("{kind}: set_ratio(1.0) failed: {error}");
     }
@@ -63,4 +65,20 @@ fn builds_and_processes_signalsmith_backend() {
 #[test]
 fn builds_and_processes_bungee_backend() {
     smoke(StretchKind::Bungee);
+}
+
+#[cfg(feature = "stretch-bungee")]
+#[test]
+fn bungee_construction_fails_closed_when_scratch_budget_is_exhausted() {
+    let options = StretchOptions::builder()
+        .sample_rate(44_100)
+        .channels(CHANNELS)
+        .max_input_frames(INPUT_FRAMES)
+        .pool(PcmPool::with_byte_budget(0, 0, ByteBudget(0)))
+        .build();
+
+    let Err(error) = build_backend(StretchKind::Bungee, &options) else {
+        panic!("Bungee cannot install a backend without its fixed scratch");
+    };
+    assert!(matches!(error, crate::StretchBackendError::Construction(_)));
 }

@@ -6,7 +6,7 @@ use portable_atomic::AtomicF32;
 
 use crate::region::RegionPlan;
 
-/// Live playback-speed control shared by the caller and the effect chain.
+/// Live controls published by callers and snapshotted off RT for the resident tempo stage.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct StretchControls {

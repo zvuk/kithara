@@ -5,7 +5,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
 use smallvec::SmallVec;
 
-use super::PlaybackShared;
+use super::{PlaybackPresentationPublisher, PlaybackShared};
 use crate::{
     bridge::{PlayerCmd, PlayerNotification, SharedEq},
     rt::{PlayerNodeProcessor, track::PlayerTrack},
@@ -15,6 +15,7 @@ use crate::{
 #[non_exhaustive]
 pub struct NodeInputs {
     pub(crate) playback: Arc<PlaybackShared>,
+    pub(crate) presentation: PlaybackPresentationPublisher,
     pub(crate) cmd_rx: HeapCons<PlayerCmd>,
     pub(crate) notif_tx: HeapProd<PlayerNotification>,
     pub(crate) trash_tx: HeapProd<PlayerTrack>,
@@ -82,12 +83,14 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
     let (notif_tx, notif_rx) = HeapRb::<PlayerNotification>::new(NOTIFICATION_CAPACITY).split();
     let (trash_tx, trash_rx) = HeapRb::<PlayerTrack>::new(TRASH_CAPACITY).split();
     let playback = Arc::new(PlaybackShared::default());
+    let presentation = PlaybackPresentationPublisher::new(Arc::clone(&playback));
 
     let inputs = NodeInputs {
         cmd_rx,
         notif_tx,
         trash_tx,
         playback: Arc::clone(&playback),
+        presentation,
     };
     let control = SlotControl {
         playback,

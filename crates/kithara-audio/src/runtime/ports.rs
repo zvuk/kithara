@@ -41,6 +41,36 @@ pub(crate) struct Outlet<T> {
     wake: Option<Arc<dyn WakeSignal>>,
 }
 
+/// Bounded output port without a hidden overflow slot.
+pub(crate) struct StrictOutlet<T> {
+    producer: HeapProd<T>,
+    wake: Option<Arc<dyn WakeSignal>>,
+}
+
+impl<T> StrictOutlet<T> {
+    pub(crate) fn flush_wake_signals(&self) {
+        if let Some(wake) = &self.wake {
+            wake.flush_deferred();
+        }
+    }
+
+    pub(crate) fn has_capacity(&self) -> bool {
+        !self.producer.is_full()
+    }
+
+    pub(crate) fn try_push(&mut self, item: T) -> Result<(), T> {
+        let was_empty = self.producer.is_empty();
+        self.producer.try_push(item)?;
+        if let Some(wake) = &self.wake {
+            wake.wake();
+            if was_empty {
+                wake.on_data_available();
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<T> Outlet<T> {
     /// Try to drain the parked overflow item into the ring buffer.
     ///
@@ -53,13 +83,6 @@ impl<T> Outlet<T> {
             return true;
         };
         self.push_or_park(item)
-    }
-
-    /// Flush any deferred work owned by the wake signal.
-    pub(crate) fn flush_wake_signals(&self) {
-        if let Some(wake) = &self.wake {
-            wake.flush_deferred();
-        }
     }
 
     /// Whether both the ring buffer and the overflow slot are full.
@@ -131,6 +154,7 @@ impl<T> Outlet<T> {
     delegate::delegate! {
         to self.overflow {
             /// Whether an item is currently parked in the overflow slot.
+            #[cfg(test)]
             #[call(is_some)]
             pub(crate) const fn has_pending(&self) -> bool;
             /// Discard the parked overflow item, returning it to the caller.
@@ -138,6 +162,7 @@ impl<T> Outlet<T> {
             /// Useful when a producer needs to invalidate previously enqueued data
             /// (e.g. on a seek epoch change) without waiting for the consumer to
             /// drain the ring.
+            #[cfg(test)]
             #[call(take)]
             pub(crate) const fn take_pending(&mut self) -> Option<T>;
         }
@@ -177,6 +202,17 @@ pub(crate) fn connect<T>(
         },
         Inlet { consumer },
     )
+}
+
+/// Connect a producer directly to a consumer without an overflow slot.
+#[must_use]
+pub(crate) fn connect_strict<T>(
+    capacity: usize,
+    wake: Option<Arc<dyn WakeSignal>>,
+) -> (StrictOutlet<T>, Inlet<T>) {
+    let rb = HeapRb::<T>::new(capacity.max(1));
+    let (producer, consumer) = rb.split();
+    (StrictOutlet { producer, wake }, Inlet { consumer })
 }
 
 #[cfg(test)]
@@ -234,6 +270,17 @@ mod tests {
         assert_eq!(inl.try_pop(), Some(3));
         assert_eq!(inl.try_pop(), None);
         assert!(inl.is_empty());
+    }
+
+    #[kithara::test]
+    fn strict_outlet_never_parks_an_extra_item() {
+        let (mut out, mut inlet) = connect_strict::<i32>(1, None);
+
+        assert_eq!(out.try_push(1), Ok(()));
+        assert!(!out.has_capacity());
+        assert_eq!(out.try_push(2), Err(2));
+        assert_eq!(inlet.try_pop(), Some(1));
+        assert!(out.has_capacity());
     }
 
     #[kithara::test]

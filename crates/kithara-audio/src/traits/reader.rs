@@ -4,7 +4,7 @@ use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
 
-use super::{ChunkOutcome, ReadOutcome, SeekOutcome};
+use super::{ChunkOutcome, PresentationAdvance, PresentationPoint, ReadOutcome, SeekOutcome};
 use crate::{ServiceClass, renderer::PreloadGate};
 
 mod kithara {
@@ -27,6 +27,23 @@ pub trait PcmRead {
     /// or chunk-less readers may report `0`.
     fn decoded_frontier(&self) -> Duration {
         Duration::from_secs(0)
+    }
+
+    /// Latest coherent producer-side presentation endpoint.
+    ///
+    /// This may describe PCM still ahead of the consumer. Use
+    /// [`Self::take_presentation_advance`] for proof of consumption.
+    fn presentation_point(&self) -> Option<PresentationPoint> {
+        None
+    }
+
+    /// Takes the latest exact final-block boundary crossed by PCM reads.
+    ///
+    /// Partial block consumption does not produce an advance. If one read
+    /// crosses multiple boundaries, this returns the latest one and its exact
+    /// frame offset within that read.
+    fn take_presentation_advance(&mut self) -> Option<PresentationAdvance> {
+        None
     }
 
     /// Read the next decoded chunk with full metadata.

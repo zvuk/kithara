@@ -1,15 +1,31 @@
-/// Error from a [`StretchBackend`]. Carried so the outer
-/// `AudioEffect::process` (fixed at `-> Option<PcmChunk>`) maps a backend
-/// failure to "drop this chunk + warn", never a panic.
+/// Error from a [`StretchBackend`], carried through the resident tempo stage
+/// without panicking or silently dropping source PCM.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum StretchBackendError {
+    /// Backend state or its fixed-capacity scratch could not be constructed.
+    #[error("stretch backend construction failed: {0}")]
+    Construction(String),
     /// A `process` / `flush` call failed inside the library.
     #[error("stretch backend processing failed: {0}")]
-    Process(String),
+    Process(&'static str),
     /// An invalid ratio / pitch value was rejected by the library.
     #[error("invalid stretch parameter: {0}")]
-    Param(String),
+    Param(&'static str),
+}
+
+/// How a backend resolves source latency when a typed drain begins.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DrainDisposition {
+    /// Buffered source is represented by the samples appended by
+    /// [`StretchBackend::flush`]. A missing tail while source is held violates
+    /// the backend contract.
+    RenderedTail,
+    /// The backend cannot expose its buffered tail and intentionally retires
+    /// that source at the boundary. [`StretchBackend::flush`] must append no
+    /// samples.
+    DiscardHeld,
 }
 
 /// DSP-only time-stretch backend living behind an audio graph processor.
@@ -20,19 +36,31 @@ pub enum StretchBackendError {
 /// ([`set_pitch`](Self::set_pitch)) are independent — that decoupling is
 /// what makes keylock real. See this crate's `CONTEXT.md`.
 pub trait StretchBackend: Send + 'static {
-    /// Drain the buffered tail at end of stream. One-shot: once the tail is
-    /// drained, further calls (until the next `process` or `reset`) must
-    /// append nothing — EOF drain pulls `flush` in a loop until it yields
-    /// an empty append.
+    /// Declare how a typed EOF or decoder barrier resolves held source.
+    fn drain_disposition(&self) -> DrainDisposition {
+        DrainDisposition::RenderedTail
+    }
+
+    /// Drain the buffered tail once at a typed EOF or decoder discontinuity.
+    /// Further calls append nothing until the next `process` or `reset`.
     ///
     /// # Errors
     /// Returns [`StretchBackendError::Process`] if the library fails to drain.
     fn flush(&mut self, out: &mut Vec<f32>) -> Result<(), StretchBackendError>;
 
-    /// Upper bound on interleaved output samples a single `process` / `flush`
-    /// can emit for `input_frames`, so the processor pre-reserves its output
-    /// scratch once and stays alloc-free on the produce-core.
+    /// Upper bound on interleaved output samples a single `process` can emit
+    /// for `input_frames`, so the processor can fit source to output credit.
     fn max_output_samples(&self, input_frames: usize) -> usize;
+
+    /// Upper bound on interleaved samples emitted by one true-EOF flush.
+    ///
+    /// The duration-changing stage reserves this storage before playback. A
+    /// backend must not append more than this bound when [`flush`](Self::flush)
+    /// is called.
+    fn max_tail_samples(&self) -> usize;
+
+    /// Source-frame input latency currently held by the backend.
+    fn source_latency_frames(&self) -> usize;
 
     /// Push interleaved `input`; append whatever interleaved output is ready.
     ///

@@ -15,8 +15,8 @@ use crate::session::SessionDispatcher;
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct PlayerConfig {
-    /// Per-deck time-stretch control handle, shared with the UI and the
-    /// worker effect chain (see `kithara_audio::StretchControls`).
+    /// Per-deck time-stretch controls shared with the UI and snapshotted off
+    /// RT for the resident presentation stage.
     #[builder(default = StretchControls::new(1.0))]
     pub(crate) timestretch: Arc<StretchControls>,
     /// Byte buffer pool shared by resources created for this player.

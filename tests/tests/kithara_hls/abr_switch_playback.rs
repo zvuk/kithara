@@ -1,6 +1,6 @@
 use kithara::{
     assets::AssetStore,
-    audio::{Audio, AudioConfig, ChunkOutcome, ReadOutcome},
+    audio::{Audio, AudioConfig, ChunkOutcome, ConsumerWakeMode, ReadOutcome},
     decode::DecoderBackend,
     events::{AbrEvent, AbrReason, Event, EventBus, EventReceiver},
     file::{File, FileConfig},
@@ -796,6 +796,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         AudioConfig::<Hls>::for_stream(hls_config)
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
+            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
             .build(),
     )
     .await

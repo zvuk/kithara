@@ -500,7 +500,7 @@ mod default_priming_tests {
 /// seek landing a fraction of a sample below the exact target frame, a floored
 /// label reads one frame short of the contiguous decode head (a −1 seam at a
 /// mid-playback recreate), while the trimmed audio itself stays continuous.
-fn frame_offset_for(at: Duration, sample_rate: u32) -> u64 {
+pub(crate) fn frame_offset_for(at: Duration, sample_rate: u32) -> u64 {
     let secs = at.as_secs();
     let subsec_frames = (u64::from(at.subsec_nanos()) * u64::from(sample_rate))
         .saturating_add(500_000_000)

@@ -1,5 +1,7 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmMeta};
+use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
 use kithara_platform::sync::Arc;
 use kithara_stream::{SeekControl, SeekObserve, SeekState};
 
@@ -9,8 +11,22 @@ use crate::pipeline::{
     track::{TrackStep, WaitingReason},
 };
 
-fn empty_chunk() -> PcmChunk {
-    PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+const MOCK_FRAMES: usize = 512;
+
+fn mock_chunk(frame_offset: u64) -> PcmChunk {
+    let spec = PcmSpec::new(
+        2,
+        NonZeroU32::new(48_000).expect("fixture rate is non-zero"),
+    );
+    PcmChunk::new(
+        PcmMeta {
+            spec,
+            frames: u32::try_from(MOCK_FRAMES).expect("fixture frame count fits u32"),
+            frame_offset,
+            ..Default::default()
+        },
+        PcmPool::default().attach(vec![0.0; MOCK_FRAMES * usize::from(spec.channels)]),
+    )
 }
 
 pub(crate) struct MockSource {
@@ -75,7 +91,9 @@ impl AudioWorkerSource for MockSource {
         if self.cursor >= self.chunks_to_produce {
             return TrackStep::Eof;
         }
+        let frame_offset =
+            u64::try_from(self.cursor.saturating_mul(MOCK_FRAMES)).unwrap_or(u64::MAX);
         self.cursor += 1;
-        TrackStep::Produced(Fetch::data(empty_chunk(), 0))
+        TrackStep::Produced(Fetch::data(mock_chunk(frame_offset), self.seek_obs.epoch()))
     }
 }

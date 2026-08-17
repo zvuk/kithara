@@ -2,10 +2,9 @@
 
 use kithara::{
     audio::{
-        Audio, AudioConfig, AudioEffect, AudioWorkerHandle, PcmSession, StretchControls,
-        StretchKind,
+        Audio, AudioBlockMut, AudioConfig, AudioEffect, AudioWorkerHandle, DecodeResult,
+        PcmSession, StretchControls, StretchKind,
     },
-    decode::PcmChunk,
     platform::{
         CancelToken,
         sync::{
@@ -82,11 +81,7 @@ impl BurstLoadEffect {
 }
 
 impl AudioEffect for BurstLoadEffect {
-    fn flush(&mut self) -> Option<PcmChunk> {
-        None
-    }
-
-    fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+    fn process(&mut self, _block: AudioBlockMut<'_>) -> DecodeResult<()> {
         self.blocks = self.blocks.saturating_add(1);
         if self.blocks.is_multiple_of(LOAD_INTERVAL_BLOCKS) {
             self.probe.observe_burst();
@@ -95,7 +90,7 @@ impl AudioEffect for BurstLoadEffect {
                 std::hint::spin_loop();
             }
         }
-        Some(chunk)
+        Ok(())
     }
 
     fn reset(&mut self) {

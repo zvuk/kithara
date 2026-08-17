@@ -4,9 +4,8 @@ use bungee_rs::Stream;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{BudgetExhausted, PcmPool};
 use num_traits::cast::AsPrimitive;
-use tracing::warn;
 
-use crate::{StretchBackend, StretchBackendError, StretchOptions};
+use crate::{DrainDisposition, StretchBackend, StretchBackendError, StretchOptions};
 
 struct PooledPlanar {
     pool: PcmPool,
@@ -29,19 +28,18 @@ impl PooledPlanar {
         })
     }
 
-    fn empty(pool: &PcmPool) -> Self {
-        Self {
-            pool: pool.clone(),
-            channels: Vec::default(),
+    fn resize_prepared(&mut self, frames: usize) -> Result<(), StretchBackendError> {
+        if self
+            .channels
+            .iter()
+            .any(|samples| samples.capacity() < frames)
+        {
+            return Err(StretchBackendError::Process(
+                "bungee planar request exceeds prepared capacity",
+            ));
         }
-    }
-
-    fn ensure_len(&mut self, frames: usize) -> Result<(), BudgetExhausted> {
         for samples in &mut self.channels {
-            let mut pooled = self.pool.attach(std::mem::take(samples));
-            let result = pooled.ensure_len(frames);
-            *samples = pooled.into_inner();
-            result?;
+            samples.resize(frames, 0.0);
         }
         Ok(())
     }
@@ -52,8 +50,8 @@ impl PooledPlanar {
         start: usize,
         frames: usize,
         channels: NonZeroUsize,
-    ) -> Result<(), BudgetExhausted> {
-        self.ensure_len(frames)?;
+    ) -> Result<(), StretchBackendError> {
+        self.resize_prepared(frames)?;
         let ch = channels.get();
         let start = start * ch;
         deinterleave_variable(
@@ -94,62 +92,51 @@ pub(crate) struct BungeeBackend {
     ratio: f64,
     channels: usize,
     max_input_frames: usize,
+    max_output_frames: usize,
+    source_latency_frames: usize,
 }
 
 impl BungeeBackend {
-    pub(crate) fn new(options: &StretchOptions) -> Self {
+    pub(crate) fn new(options: &StretchOptions) -> Result<Self, StretchBackendError> {
         let channels = options.channels.max(1);
         let max_input_frames = options.max_input_frames.max(1);
+        let max_output_frames = options.max_output_frames;
+        if max_output_frames < max_input_frames {
+            return Err(StretchBackendError::Construction(format!(
+                "bungee output bound {max_output_frames} is smaller than input bound {max_input_frames}"
+            )));
+        }
         let sample_rate: usize = options.sample_rate.as_();
-        let scratch =
-            PooledPlanar::new(&options.pool, channels, max_input_frames).and_then(|in_planar| {
-                PooledPlanar::new(&options.pool, channels, max_input_frames)
-                    .map(|out_planar| (in_planar, out_planar))
-            });
-        let (in_planar, out_planar, scratch_ready) = match scratch {
-            Ok((in_planar, out_planar)) => (in_planar, out_planar, true),
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    sample_rate,
-                    channels,
-                    max_input_frames,
-                    "bungee scratch checkout failed; backend disabled"
-                );
-                (
-                    PooledPlanar::empty(&options.pool),
-                    PooledPlanar::empty(&options.pool),
-                    false,
-                )
-            }
-        };
-        let inner = if scratch_ready {
-            match Stream::new(sample_rate, channels, max_input_frames) {
-                Ok(stream) => Some(stream),
-                Err(e) => {
-                    warn!(
-                        error = e,
-                        sample_rate, channels, "bungee Stream::new failed; backend disabled"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        Self {
-            inner,
+        let in_planar = PooledPlanar::new(&options.pool, channels, max_input_frames)
+            .map_err(|error| StretchBackendError::Construction(error.to_string()))?;
+        let out_planar = PooledPlanar::new(&options.pool, channels, max_output_frames)
+            .map_err(|error| StretchBackendError::Construction(error.to_string()))?;
+        let inner = Stream::new(sample_rate, channels, max_input_frames)
+            .map_err(|error| StretchBackendError::Construction(error.to_string()))?;
+        Ok(Self {
+            inner: Some(inner),
             channels,
             max_input_frames,
+            max_output_frames,
             in_planar,
             out_planar,
             ratio: 1.0,
             pitch: 1.0,
-        }
+            source_latency_frames: 0,
+        })
+    }
+
+    fn output_capacity_frames(&self, ratio: f64) -> Option<usize> {
+        let full: f64 = self.max_input_frames.as_();
+        num_traits::cast((full * ratio).ceil())
     }
 }
 
 impl StretchBackend for BungeeBackend {
+    fn drain_disposition(&self) -> DrainDisposition {
+        DrainDisposition::DiscardHeld
+    }
+
     fn flush(&mut self, _out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
         // No-op: bungee's high-level `Stream` exposes no tail drain, and
         // feeding muted input would emit stretched *silence*, not the real
@@ -160,19 +147,27 @@ impl StretchBackend for BungeeBackend {
     }
 
     fn max_output_samples(&self, input_frames: usize) -> usize {
-        let frames_f64: f64 = input_frames.as_();
-        let out_frames: usize =
-            num_traits::cast((frames_f64 * self.ratio).ceil()).unwrap_or(usize::MAX);
-        out_frames.saturating_mul(self.channels)
+        if input_frames == 0 {
+            return 0;
+        }
+        let block_frames = self
+            .output_capacity_frames(self.ratio)
+            .unwrap_or(usize::MAX);
+        let blocks = input_frames.div_ceil(self.max_input_frames);
+        block_frames
+            .saturating_mul(blocks)
+            .saturating_mul(self.channels)
+    }
+
+    fn max_tail_samples(&self) -> usize {
+        0
+    }
+
+    fn source_latency_frames(&self) -> usize {
+        self.source_latency_frames
     }
 
     fn process(&mut self, input: &[f32], out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
-        let Some(stream) = self.inner.as_mut() else {
-            // Stream::new failed at construction (already warned once); emit
-            // nothing rather than erroring per chunk. Unreachable for a valid
-            // spec — see the bungee note in the crate CONTEXT.md.
-            return Ok(());
-        };
         let ch = self.channels;
         let Some(num_ch) = NonZeroUsize::new(ch) else {
             return Ok(());
@@ -184,21 +179,39 @@ impl StretchBackend for BungeeBackend {
         // Size the output buffer for a FULL input block so the stream can
         // always drain its pending grain even on a short final sub-block;
         // a too-small output backs up the input ring and trips a C++ assert.
-        let full_f: f64 = self.max_input_frames.as_();
-        let cap: usize = num_traits::cast::<f64, usize>((full_f * self.ratio).ceil())
-            .ok_or_else(|| StretchBackendError::Process("bungee output frame cap overflow".into()))?
+        let cap = self
+            .output_capacity_frames(self.ratio)
+            .ok_or(StretchBackendError::Process(
+                "bungee output frame cap overflow",
+            ))?
             .max(1);
+        if cap > self.max_output_frames {
+            return Err(StretchBackendError::Process(
+                "bungee output frame cap exceeds prepared bound",
+            ));
+        }
+        let reserved_samples = self.max_output_samples(total);
+        let required_capacity = out
+            .len()
+            .checked_add(reserved_samples)
+            .ok_or(StretchBackendError::Process("bungee output size overflow"))?;
+        if required_capacity > out.capacity() {
+            return Err(StretchBackendError::Process(
+                "bungee output request exceeds caller capacity",
+            ));
+        }
+        let Some(stream) = self.inner.as_mut() else {
+            return Err(StretchBackendError::Process(
+                "bungee stream is unavailable after reset",
+            ));
+        };
         let mut done = 0;
         while done < total {
             let n = (total - done).min(self.max_input_frames);
-            self.in_planar
-                .fill_interleaved(input, done, n, num_ch)
-                .map_err(|e| StretchBackendError::Process(e.to_string()))?;
+            self.in_planar.fill_interleaved(input, done, n, num_ch)?;
             let n_f: f64 = n.as_();
             let out_frames = (n_f * self.ratio).max(1.0);
-            self.out_planar
-                .ensure_len(cap)
-                .map_err(|e| StretchBackendError::Process(e.to_string()))?;
+            self.out_planar.resize_prepared(cap)?;
             let rendered = stream.process(
                 Some(self.in_planar.as_ref()),
                 self.out_planar.as_mut(),
@@ -206,6 +219,15 @@ impl StretchBackend for BungeeBackend {
                 out_frames,
                 self.pitch,
             );
+            let source_latency = stream.latency();
+            if !source_latency.is_finite() || source_latency < 0.0 {
+                return Err(StretchBackendError::Process(
+                    "bungee reported invalid input latency",
+                ));
+            }
+            self.source_latency_frames = num_traits::cast(source_latency.ceil()).ok_or(
+                StretchBackendError::Process("bungee input latency is out of range"),
+            )?;
             let rendered = rendered.min(cap);
             let output = self.out_planar.as_ref();
             let base = out.len();
@@ -222,11 +244,14 @@ impl StretchBackend for BungeeBackend {
             let sample_rate = self.inner.as_ref().map_or(1, Stream::sample_rate);
             self.inner = Stream::new(sample_rate, spec_channels, self.max_input_frames).ok();
         }
+        self.source_latency_frames = 0;
     }
 
     fn set_pitch(&mut self, scale: f64) -> Result<(), StretchBackendError> {
         if !scale.is_finite() || scale <= 0.0 {
-            return Err(StretchBackendError::Param(format!("pitch scale {scale}")));
+            return Err(StretchBackendError::Param(
+                "bungee pitch scale must be finite and positive",
+            ));
         }
         self.pitch = scale;
         Ok(())
@@ -234,11 +259,106 @@ impl StretchBackend for BungeeBackend {
 
     fn set_ratio(&mut self, stretch: f64) -> Result<(), StretchBackendError> {
         if !stretch.is_finite() || stretch <= 0.0 {
-            return Err(StretchBackendError::Param(format!(
-                "stretch ratio {stretch}"
-            )));
+            return Err(StretchBackendError::Param(
+                "bungee stretch ratio must be finite and positive",
+            ));
+        }
+        let Some(output_frames) = self.output_capacity_frames(stretch) else {
+            return Err(StretchBackendError::Param(
+                "bungee stretch ratio exceeds the output frame range",
+            ));
+        };
+        if output_frames > self.max_output_frames {
+            return Err(StretchBackendError::Param(
+                "bungee stretch ratio exceeds the prepared output bound",
+            ));
         }
         self.ratio = stretch;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_bufpool::PcmPool;
+
+    use super::*;
+
+    #[test]
+    fn source_latency_matches_bungee_and_clears_on_reset() {
+        let options = StretchOptions::builder()
+            .sample_rate(48_000)
+            .channels(2)
+            .max_input_frames(4_096)
+            .pool(PcmPool::default())
+            .build();
+        let mut backend = BungeeBackend::new(&options).expect("Bungee construction must succeed");
+        backend.set_ratio(1.5).expect("valid stretch ratio");
+        let input = vec![0.25; 8_192];
+        let mut out = Vec::with_capacity(backend.max_output_samples(input.len() / 2));
+        backend
+            .process(&input, &mut out)
+            .expect("Bungee process must succeed");
+        let measured = backend
+            .inner
+            .as_ref()
+            .expect("Bungee stream must be available")
+            .latency();
+        let expected: usize = num_traits::cast(measured.ceil()).expect("latency must fit usize");
+        assert_eq!(backend.source_latency_frames(), expected);
+
+        backend.reset();
+
+        assert_eq!(backend.source_latency_frames(), 0);
+    }
+
+    #[test]
+    fn drain_disposition_explicitly_discards_held_source() {
+        let options = StretchOptions::builder()
+            .sample_rate(48_000)
+            .channels(2)
+            .max_input_frames(4_096)
+            .pool(PcmPool::default())
+            .build();
+        let backend = BungeeBackend::new(&options).expect("Bungee construction must succeed");
+
+        assert_eq!(backend.drain_disposition(), DrainDisposition::DiscardHeld);
+        assert_eq!(backend.max_tail_samples(), 0);
+    }
+
+    #[test]
+    fn output_planar_capacity_covers_the_configured_ratio_window() {
+        const MAX_INPUT_FRAMES: usize = 25;
+        const MAX_OUTPUT_FRAMES: usize = 512;
+        let options = StretchOptions::builder()
+            .sample_rate(48_000)
+            .channels(2)
+            .max_input_frames(MAX_INPUT_FRAMES)
+            .max_output_frames(MAX_OUTPUT_FRAMES)
+            .pool(PcmPool::default())
+            .build();
+        let mut backend = BungeeBackend::new(&options).expect("Bungee construction must succeed");
+        let prepared_capacity = backend.out_planar.channels[0].capacity();
+        let input = vec![0.25; MAX_INPUT_FRAMES * 2];
+
+        for ratio in [2.0, 20.0] {
+            backend
+                .set_ratio(ratio)
+                .expect("ratio fits prepared output");
+            let mut output = Vec::with_capacity(backend.max_output_samples(MAX_INPUT_FRAMES));
+            backend
+                .process(&input, &mut output)
+                .expect("prepared Bungee process must succeed");
+            assert_eq!(backend.out_planar.channels[0].capacity(), prepared_capacity);
+            assert_eq!(backend.out_planar.channels[1].capacity(), prepared_capacity);
+        }
+
+        assert!(prepared_capacity >= MAX_OUTPUT_FRAMES);
+        assert!(matches!(
+            backend.set_ratio(21.0),
+            Err(StretchBackendError::Param(
+                "bungee stretch ratio exceeds the prepared output bound"
+            ))
+        ));
     }
 }

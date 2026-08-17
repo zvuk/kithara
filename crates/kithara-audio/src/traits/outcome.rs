@@ -1,7 +1,158 @@
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_decode::PcmChunk;
 use kithara_platform::time::Duration;
+
+use crate::musical::SessionFrame;
+
+/// Immutable producer endpoint attached to one final PCM block.
+///
+/// The point describes committed presentation state. It does not prove that
+/// the consumer has played the block; [`PresentationAdvance`] carries that
+/// proof after the block boundary is crossed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct PresentationPoint {
+    epoch: u64,
+    source_frame: u64,
+    generation: u64,
+    output_end: u64,
+    sample_rate: NonZeroU32,
+}
+
+impl PresentationPoint {
+    /// Creates one final-output presentation endpoint.
+    #[must_use]
+    pub const fn new(
+        seek_epoch: u64,
+        source_frame: u64,
+        generation: u64,
+        output_end: u64,
+        sample_rate: NonZeroU32,
+    ) -> Self {
+        Self {
+            epoch: seek_epoch,
+            source_frame,
+            generation,
+            output_end,
+            sample_rate,
+        }
+    }
+
+    /// Seek epoch that owns this point.
+    #[must_use]
+    pub const fn seek_epoch(self) -> u64 {
+        self.epoch
+    }
+
+    /// Source frame presented through this block boundary.
+    #[must_use]
+    pub const fn source_frame(self) -> u64 {
+        self.source_frame
+    }
+
+    /// Presentation generation within the seek epoch.
+    #[must_use]
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Cumulative output frame ordinal within the presentation generation.
+    #[must_use]
+    pub const fn output_end(self) -> u64 {
+        self.output_end
+    }
+
+    /// Sample rate of the source-frame axis.
+    #[must_use]
+    pub const fn sample_rate(self) -> NonZeroU32 {
+        self.sample_rate
+    }
+}
+
+/// One producer endpoint mapped to the absolute session clock.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct PresentationCursor {
+    point: PresentationPoint,
+    session_frame: SessionFrame,
+}
+
+impl PresentationCursor {
+    /// Maps an available producer endpoint to an absolute session frame.
+    ///
+    #[must_use]
+    pub const fn new(point: PresentationPoint, session_frame: SessionFrame) -> Self {
+        Self {
+            point,
+            session_frame,
+        }
+    }
+
+    /// Producer point mapped by this cursor.
+    #[must_use]
+    pub const fn point(self) -> PresentationPoint {
+        self.point
+    }
+
+    delegate::delegate! {
+        to self.point {
+            /// Seek epoch owning the producer point.
+            #[must_use]
+            pub const fn seek_epoch(self) -> u64;
+            /// Source frame presented through the producer point.
+            #[must_use]
+            pub const fn source_frame(self) -> u64;
+            /// Presentation generation within the seek epoch.
+            #[must_use]
+            pub const fn generation(self) -> u64;
+            /// Cumulative output-frame ordinal within the presentation generation.
+            #[must_use]
+            pub const fn output_end(self) -> u64;
+            /// Sample rate of the source-frame axis.
+            #[must_use]
+            #[call(sample_rate)]
+            pub const fn source_rate(self) -> NonZeroU32;
+        }
+    }
+
+    /// Absolute host-session frame corresponding to [`Self::point`].
+    #[must_use]
+    pub const fn session_frame(self) -> SessionFrame {
+        self.session_frame
+    }
+}
+
+/// Exact presentation boundary crossed by the most recent PCM read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct PresentationAdvance {
+    point: PresentationPoint,
+    read_offset_frames: usize,
+}
+
+impl PresentationAdvance {
+    /// Creates proof that `point` was crossed at a frame offset in one read.
+    #[must_use]
+    pub const fn new(point: PresentationPoint, read_offset_frames: usize) -> Self {
+        Self {
+            point,
+            read_offset_frames,
+        }
+    }
+
+    /// Producer point whose final PCM block was consumed.
+    #[must_use]
+    pub const fn point(self) -> PresentationPoint {
+        self.point
+    }
+
+    /// Frame offset of that boundary within the PCM read that crossed it.
+    #[must_use]
+    pub const fn read_offset_frames(self) -> usize {
+        self.read_offset_frames
+    }
+}
 
 /// Reason a [`ReadOutcome::Pending`] / [`ChunkOutcome::Pending`] was
 /// returned — i.e. why the reader did not advance this call. Each

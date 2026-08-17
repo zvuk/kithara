@@ -67,6 +67,7 @@ impl ChunkCursor {
         let consumed = self.current_chunk_consumed_frames;
         if consumed >= total_frames {
             return Ok(CopyOutcome {
+                frames: 0,
                 samples: 0,
                 finished: true,
             });
@@ -77,6 +78,7 @@ impl ChunkCursor {
         let take_frames = remaining_frames.min(output_frames);
         if take_frames == 0 {
             return Ok(CopyOutcome {
+                frames: 0,
                 samples: 0,
                 finished: false,
             });
@@ -84,6 +86,11 @@ impl ChunkCursor {
 
         let start_sample = frames_to_samples(consumed, channels)?;
         let samples = frames_to_samples(take_frames, channels)?;
+        let frames =
+            usize::try_from(take_frames).map_err(|_| DecodeError::SampleCountOverflow {
+                frames: take_frames,
+                channels,
+            })?;
         output[..samples].copy_from_slice(&chunk.samples[start_sample..start_sample + samples]);
         let consumed_total = consumed + take_frames;
         self.current_chunk_consumed_frames = consumed_total;
@@ -93,7 +100,11 @@ impl ChunkCursor {
         } else {
             playhead.advance_partial(interpolated_position(chunk.meta, consumed_total));
         }
-        Ok(CopyOutcome { finished, samples })
+        Ok(CopyOutcome {
+            finished,
+            frames,
+            samples,
+        })
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -120,19 +131,28 @@ impl ChunkCursor {
         }
 
         let mut written = 0;
+        let mut written_frames = 0_usize;
         let mut last_output_meta = None;
         while written < buf.len() {
             hang_tick!();
 
-            if let Some(chunk) = ring.current_chunk.as_ref() {
+            if let Some(presented) = ring.current_chunk.as_ref() {
+                let point = presented.point();
+                let chunk = presented.chunk();
                 let copied = self.copy_into(chunk, &mut buf[written..], playhead)?;
                 if copied.samples > 0 {
                     hang_reset!();
                     last_output_meta = Some(chunk.meta);
                     written += copied.samples;
+                    written_frames = written_frames.checked_add(copied.frames).ok_or(
+                        DecodeError::InvalidData {
+                            detail: "presentation read-frame offset overflow",
+                        },
+                    )?;
                 }
                 if copied.finished {
-                    ring.recycle_current();
+                    ring.record_presentation_advance(point, written_frames);
+                    let _ = ring.recycle_current();
                 } else if copied.samples == 0 {
                     break;
                 }
@@ -225,6 +245,7 @@ impl ChunkCursor {
 
 struct CopyOutcome {
     finished: bool,
+    frames: usize,
     samples: usize,
 }
 
@@ -276,6 +297,8 @@ mod tests {
     use crate::{
         ConsumerWakeMode,
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
+        renderer::{OutputDisposition, PresentedPcm},
+        traits::PresentationPoint,
     };
 
     #[kithara::test]
@@ -288,8 +311,8 @@ mod tests {
             duration.saturating_sub(Duration::from_millis(2)),
             duration.saturating_add(Duration::from_millis(2)),
         );
-        let (mut data_tx, data_rx) = connect::<Fetch<PcmChunk>>(4, None);
-        let (trash_tx, _trash_rx) = connect::<PcmChunk>(8, None);
+        let (mut data_tx, data_rx) = connect::<Fetch<PresentedPcm>>(4, None);
+        let (trash_tx, _trash_rx) = connect::<OutputDisposition>(8, None);
         let mut ring = RingConsumer::new(RingParts {
             trash_tx,
             pcm_rx: data_rx,
@@ -300,7 +323,7 @@ mod tests {
         });
         ring.preloaded = true;
         data_tx
-            .try_push(Fetch::data(chunk, 0))
+            .try_push(Fetch::data(presented(chunk, 0), 0))
             .expect("chunk reaches test ring");
 
         let playhead = PlayheadState::new();
@@ -333,8 +356,8 @@ mod tests {
     #[kithara::test]
     fn read_buffer_shorter_than_frame_preserves_current_chunk() {
         let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
-        let (mut data_tx, data_rx) = connect::<Fetch<PcmChunk>>(1, None);
-        let (trash_tx, mut trash_rx) = connect::<PcmChunk>(3, None);
+        let (mut data_tx, data_rx) = connect::<Fetch<PresentedPcm>>(1, None);
+        let (trash_tx, mut trash_rx) = connect::<OutputDisposition>(3, None);
         let mut ring = RingConsumer::new(RingParts {
             trash_tx,
             pcm_rx: data_rx,
@@ -346,7 +369,10 @@ mod tests {
         ring.preloaded = true;
         data_tx
             .try_push(Fetch::data(
-                timed_chunk(spec, 1, Duration::ZERO, Duration::from_millis(1)),
+                presented(
+                    timed_chunk(spec, 1, Duration::ZERO, Duration::from_millis(1)),
+                    0,
+                ),
                 0,
             ))
             .expect("chunk reaches test ring");
@@ -374,6 +400,60 @@ mod tests {
         assert!(trash_rx.try_pop().is_none());
     }
 
+    #[kithara::test]
+    fn exact_boundary_old_spec_return_arms_worker_progress() {
+        let old_spec = PcmSpec::new(1, NonZeroU32::new(44_100).expect("test old rate"));
+        let new_spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test new rate"));
+        let (mut data_tx, data_rx) = connect::<Fetch<PresentedPcm>>(1, None);
+        let (trash_tx, mut trash_rx) = connect::<OutputDisposition>(3, None);
+        let mut ring = RingConsumer::new(RingParts {
+            trash_tx,
+            pcm_rx: data_rx,
+            reader_wake: Arc::new(ThreadWake::default()),
+            epoch: Arc::new(AtomicU64::new(0)),
+            block_on_underrun: false,
+            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
+        });
+        ring.preloaded = true;
+        data_tx
+            .try_push(Fetch::data(
+                presented(
+                    timed_chunk(old_spec, 4, Duration::ZERO, Duration::from_millis(1)),
+                    0,
+                ),
+                0,
+            ))
+            .expect("old-spec chunk reaches test ring");
+
+        let mut cursor = ChunkCursor::new(&PcmPool::default(), new_spec);
+        let mut events = AudioEvents::test();
+        let mut output = [0.0; 4];
+        let read = cursor
+            .read(
+                &mut ring,
+                &mut events,
+                &PlayheadState::new(),
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut output,
+            )
+            .expect("exact-boundary read succeeds");
+
+        assert!(matches!(
+            read.outcome,
+            ReadOutcome::Frames { count, .. } if count.get() == output.len()
+        ));
+        assert!(ring.take_worker_progress());
+        assert!(!ring.take_worker_progress());
+        let Some(OutputDisposition::Returned(returned)) = trash_rx.try_pop() else {
+            panic!("old-spec output must be returned to the worker");
+        };
+        assert_eq!(returned.spec(), old_spec);
+    }
+
     fn timed_chunk(spec: PcmSpec, frames: u32, start: Duration, end: Duration) -> PcmChunk {
         let channels = usize::from(spec.channels.max(1));
         let frame_count = usize::try_from(frames).expect("test frame count fits usize");
@@ -388,5 +468,17 @@ mod tests {
             },
             PcmPool::default().attach(samples),
         )
+    }
+
+    fn presented(chunk: PcmChunk, epoch: u64) -> PresentedPcm {
+        let source_end = chunk.meta.frame_offset + u64::from(chunk.meta.frames);
+        let point = PresentationPoint::new(
+            epoch,
+            source_end,
+            0,
+            u64::from(chunk.meta.frames),
+            chunk.spec().sample_rate,
+        );
+        PresentedPcm::new(chunk, point)
     }
 }

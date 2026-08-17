@@ -8,7 +8,10 @@ use kithara::{
     audio::{Audio, AudioConfig},
     events::{Event, EventBus},
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{sync::Arc, time::Duration},
+    platform::{
+        sync::Arc,
+        time::{Duration, Instant as PlatformInstant},
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
@@ -174,16 +177,24 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     // quiescent. Under flash the window collapses to ~0 wall while the
     // virtual clock advances to the deadline whenever nothing is runnable.
     const SETTLE_WINDOW: Duration = Duration::from_secs(3);
+    let mut last_download = PlatformInstant::now();
     loop {
-        match time::timeout(SETTLE_WINDOW, rx.recv())
+        let remaining = SETTLE_WINDOW.saturating_sub(last_download.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        match time::timeout(remaining, rx.recv())
             .await
             .map(|r| r.map(|env| env.event))
         {
             // A downloader event arrived inside the window: still active,
             // keep waiting. Lagged is also "events are flowing".
             Ok(Ok(Event::Downloader(_)))
-            | Ok(Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
-            // Non-downloader event: ignore, keep waiting for quiescence.
+            | Ok(Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                last_download = PlatformInstant::now();
+            }
+            // Non-downloader event: ignore without extending the downloader
+            // quiescence window.
             Ok(Ok(_)) => {}
             // Bus closed or the settle window elapsed with no event:
             // prefetch has gone quiescent.

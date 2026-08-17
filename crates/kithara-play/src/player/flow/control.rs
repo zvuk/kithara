@@ -122,8 +122,8 @@ impl PlayerImpl {
 
     /// Set playback rate.
     ///
-    /// Stores the speed in the shared time-stretch controls (the single source
-    /// of truth, read each chunk by the effect chain) and propagates it via
+    /// Publishes speed to the shared time-stretch controls, which the worker
+    /// snapshots off RT for the resident tempo stage, and propagates it via
     /// `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
     pub fn set_rate(&self, rate: f32) {
         self.core.params.set_rate(

@@ -5,7 +5,7 @@
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ConsumerWakeMode},
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
@@ -53,6 +53,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
         let config = AudioConfig::<Hls>::for_stream(hls_config)
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
+            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
             .build();
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await
@@ -142,6 +143,7 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
+        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await

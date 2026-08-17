@@ -1,8 +1,8 @@
-use kithara_decode::PcmChunk;
+use kithara_decode::{DecodeError, PcmSpec};
 use kithara_platform::sync::Arc;
 use kithara_stream::SeekObserve;
 
-use crate::{pipeline::track, traits::AudioEffect};
+use crate::pipeline::track;
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -13,7 +13,7 @@ mod kithara {
 /// The worker calls `step_track()` once per scheduling round. Each call
 /// performs at most one FSM transition and returns a [`TrackStep`] that
 /// tells the worker what happened.
-#[kithara::mock(api = MockAudioWorkerSource, type Chunk = PcmChunk;)]
+#[kithara::mock(api = MockAudioWorkerSource, type Chunk = kithara_decode::PcmChunk;)]
 pub trait AudioWorkerSource: Send + 'static {
     type Chunk: Send + 'static;
 
@@ -56,27 +56,24 @@ pub trait AudioWorkerSource: Send + 'static {
     /// - `Failed` — terminal failure.
     fn step_track(&mut self) -> track::TrackStep<Self::Chunk>;
 
+    /// Take one ordered same-epoch decoder replacement boundary.
+    ///
+    /// Sources without decoder replacement retain the default empty result.
+    fn take_presentation_barrier(&mut self) -> Option<(u64, PcmSpec)> {
+        None
+    }
+
+    /// Transition the source FSM after presentation can no longer continue.
+    ///
+    /// Sources with a typed failure state override this so activity and UI
+    /// observe the same terminal failure as the final PCM marker.
+    fn presentation_failed(&mut self, error: DecodeError) {
+        let _ = error;
+    }
+
     /// One-time worker-thread warmup, called from the scheduler shell when the
     /// node registers. Pre-touches the produce-core read path so lazy global
     /// thread-locals (the `arc_swap` committed-read debt node) allocate here,
     /// off the forbid-blocking decode core. Default no-op.
     fn warm_up(&mut self) {}
-}
-
-/// Apply the effect chain to the chunk.
-pub(crate) fn apply_effects(
-    effects: &mut [Box<dyn AudioEffect>],
-    mut chunk: PcmChunk,
-) -> Option<PcmChunk> {
-    for effect in &mut *effects {
-        chunk = effect.process(chunk)?;
-    }
-    Some(chunk)
-}
-
-/// Reset effects chain (e.g. after seek).
-pub(crate) fn reset_effects(effects: &mut [Box<dyn AudioEffect>]) {
-    for effect in &mut *effects {
-        effect.reset();
-    }
 }

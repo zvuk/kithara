@@ -182,8 +182,14 @@ pub(super) fn finish_rebuild<T: StreamType>(
         Err(outcome) => return finish_recreate_outcome(src, recreate, outcome),
     };
     let duration = generation.decoder().duration();
+    let spec = generation.decoder().spec();
     let old = src.decode.replace_active(generation);
     src.retired.retire_generation(old);
+    if recreate.cause == RecreateCause::RouteChange
+        || matches!(&recreate.next, RecreateNext::Decode)
+    {
+        src.queue_presentation_barrier(src.seek_engine.epoch(), spec);
+    }
     debug!(
         ?duration,
         offset = recreate.offset,

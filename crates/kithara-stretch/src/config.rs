@@ -9,4 +9,7 @@ pub struct StretchOptions {
     pub channels: usize,
     #[builder(default = 8192)]
     pub max_input_frames: usize,
+    /// Maximum output frames one backend processing block may address.
+    #[builder(default = 8192)]
+    pub max_output_frames: usize,
 }

@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ConsumerWakeMode},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration},
@@ -174,8 +174,7 @@ async fn run_case_paced(
         .cancel(cancel)
         .initial_abr_mode(initial_mode)
         .build();
-    // Keep HLS scan nonblocking: readiness is observed through Frames/Pending,
-    // not through the blocking read watchdog's wall-clock budget.
+    // Keep the off-RT HLS scan nonblocking while waking its producer after each pop.
     let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
@@ -184,6 +183,7 @@ async fn run_case_paced(
                 .backend(backend)
                 .build(),
         )
+        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(audio_config)
         .await

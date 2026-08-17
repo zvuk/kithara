@@ -47,21 +47,23 @@ Backends process interleaved `f32` PCM. `set_ratio` and `set_pitch` are independ
 decoupling is what makes keylock real. `set_ratio(stretch)` is the time factor
 `output_frames / input_frames` (above `1.0` lengthens the output); `set_pitch(scale)` is the pitch
 factor (`1.0` keeps pitch locked). Both reject non-finite or non-positive values with
-`StretchBackendError::Param`. `Process` errors exist so the outer `AudioEffect::process` (fixed at
-`-> Option<PcmChunk>`) maps a backend failure to "drop this chunk + warn", never a panic.
+`StretchBackendError::Param`. `Process` errors propagate through the resident tempo stage as typed
+decode failures; source PCM is never silently dropped and the backend never panics across the
+adapter boundary.
 
-The produce path must stay allocation-free in steady state: callers ask
-`max_output_samples(input_frames)` before `process` or `flush`, reserve that much scratch capacity,
-then reuse the same output buffer across chunks. Backends that need planar scratch use the `PcmPool`
-supplied in `StretchOptions`; no backend owns a global pool.
+The produce path must stay allocation-free in steady state. Before playback the resident tempo
+stage reserves both `max_output_samples(input_frames)` and `max_tail_samples()` and then reuses the
+same scratch across source quanta and drains. A backend must never append beyond either declared
+bound. Backends that need planar scratch use the `PcmPool` supplied in `StretchOptions`; no backend
+owns a global pool.
 
 `flush(out)` drains the buffered tail at end of stream or at a real region ratio boundary. It is a
 one-shot tail drain: repeated flushes without new input or `reset` append nothing, so an EOF drain
-can loop until it yields an empty append. A backend that cannot expose a true tail drain must
-document that in its adapter. `reset()` clears buffered state after seek, source-spec change, or
-backend swap; a spec change is handled by the caller rebuilding the backend with the new scalar
-sample rate and channel count, so the trait intentionally does not depend on
-`kithara-decode::PcmSpec`.
+can advance under bounded fixed-size output credits until it yields an empty append. A backend that
+cannot expose a true tail drain must document that in its adapter. `reset()` clears buffered state
+after seek, source-spec change, backend swap, or return to unity passthrough; a spec change is
+handled by the caller rebuilding the backend with the new scalar sample rate and channel count, so
+the trait intentionally does not depend on `kithara-decode::PcmSpec`.
 
 ## Backend limitations
 
@@ -69,8 +71,8 @@ sample rate and channel count, so the trait intentionally does not depend on
   stretched silence instead of the buffered tail, inflating duration): `flush` is a no-op and roughly
   one latency of audio is dropped at end of stream. A real drain needs the low-level granular
   `Stretcher` API.
-- Bungee constructs disabled (warning once) when the pool budget cannot cover its planar scratch or
-  `Stream::new` fails; `process` then emits nothing rather than erroring per chunk.
+- Bungee construction fails with a typed error when the pool budget cannot cover its planar scratch
+  or `Stream::new` fails; an unusable backend is never installed as a silent disabled instance.
 - `BungeeElastic` does not implement `ElasticPriming`, for the same root cause as the missing tail
   drain. Its `Stream` emits with a fixed lag: the input-frame coordinate of the next output frame is
   always `emitted_output_frames - latency`, so absorbing history costs exactly as much emitted

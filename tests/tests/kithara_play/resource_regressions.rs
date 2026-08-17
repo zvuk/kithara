@@ -5,7 +5,7 @@ use std::{io::Read, num::NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
+    audio::{Audio, AudioConfig, AudioWorkerHandle, ConsumerWakeMode, ReadOutcome},
     decode::DecoderBackend,
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
@@ -326,6 +326,7 @@ async fn open_packaged_hls_audio(
         AudioConfig::<Hls>::for_stream(HlsConfig::for_url(url.clone()).store(store).build())
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
+            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
                     .backend(backend)

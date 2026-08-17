@@ -44,23 +44,25 @@ also need playlist/segment headers keep the same immutable `Arc<DomainKeyPolicy>
 ## Tempo & Key-Lock
 
 `kithara_audio::StretchControls` (one `Arc` per deck, in `PlayerConfig.timestretch`) is the single
-source of truth for playback speed, shared between the UI and the worker effect chain, which reads
-it each chunk. It always carries `speed` + `region_plan`; with a stretch backend compiled in
+source of truth for playback speed, shared between the UI and the worker's resident presentation
+tempo stage, which reads it for each admitted source quantum. It always carries `speed` +
+`region_plan`; with a stretch backend compiled in
 (`kithara-audio`'s `stretch-signalsmith` / `stretch-bungee`, native targets only) it also carries
 `keylock` and `backend`. Rate setters (`PlayerImpl::set_rate`, `play`) write this one handle - no
 second rate atomic, no manual mirror. `Queue` delegates `set_rate` to the player; key-lock and
 backend are set by the consumer directly on the shared handle. `prepare_config` always passes the
-shared controls into every track (`stretch = Some(..)`). With a backend compiled in the effect
-chain runs a source-domain `TimeStretchProcessor` at `ratio = 1/speed`, and:
+shared controls into every track (`stretch = Some(..)`). With a backend compiled in the late
+presentation stage runs one persistent `TimeStretchProcessor` at `ratio = 1/speed`, and:
 
 - **key-lock off** (the constructed default): `pitch = speed` - speed shifts pitch, vinyl-style.
 - **key-lock on**: `pitch = 1.0` - speed preserves pitch.
 
 At speed 1.0 with no region plan the slot bypasses. Without a backend - including every wasm build,
 where it is cfg'd out regardless of features - no speed DSP is inserted and PCM output stays pinned
-to 1.0. Because the controls are read each chunk, **speed, key-lock, and backend all apply live,
-mid-track - no reload.** Switching backend rebuilds the DSP backend; returning to unity passthrough
-resets buffered stretch state.
+to 1.0. Because controls are read at every admitted source quantum, **speed, key-lock, and backend
+all apply live, mid-track - no reload.** Switching backend rebuilds the DSP backend; returning to
+unity retires buffered stretch state before byte-identical passthrough resumes. The stage emits
+under a fixed 512-frame output credit and never retains more than one admitted source quantum.
 
 Fixed-ratio sample-rate conversion is a separate stage: Apple fused builds use the codec-embedded
 placement, other builds the standalone decode-adapter resampler.
@@ -190,11 +192,20 @@ The audio thread never logs. Discrete facts leave through `PlayerNotification`, 
 through `PlaybackShared::metrics()` (`bridge::RtMetrics`); `RtSink` carries both into the per-track
 read path.
 
+Final decoded PCM carries an immutable producer `PresentationPoint`. `PlayerResource` preserves the
+point's boundary while it copies through its preallocated scratch buffer and releases a
+`PresentationAdvance` only when the callback actually crosses that boundary. The leading
+`PlayerTrack` maps the consumed boundary to an absolute `SessionFrame`; partial/empty reads, seek,
+generation or rate mismatches invalidate the mapping instead of projecting stale state.
+
 **Memory ordering.** `playing` and `seek_epoch` decide whether the audio thread acts and carry
 `SeqCst`; touched once per command or block, never per sample. The `fetch_add` in
 `next_seek_epoch` **is** the publication - storing its result back would let two concurrent seeks
 reinstate the older epoch. Everything else is `Relaxed`: `RtMetrics` counters are monotonic deltas,
-and `PlaybackSnapshot`'s scalars are independent readouts that need not agree across a block.
+and `PlaybackSnapshot`'s scalar readouts need not agree across a block. Its optional presentation
+cursor is the exception: one non-cloneable RT publisher writes its atomic words under a revision,
+and a reader performs one bounded validation attempt. An in-flight or changed value reads as
+`None`; neither side spins or locks.
 
 ## Seek Ownership
 

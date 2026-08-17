@@ -2,8 +2,8 @@ use std::num::NonZeroU32;
 
 use delegate::delegate;
 use kithara_audio::{
-    Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome,
-    ServiceClass,
+    Audio, AudioConfig, ChunkOutcome, PcmReader, PresentationAdvance, PresentationPoint,
+    ReadOutcome, ResamplerBackend, SeekOutcome, ServiceClass,
 };
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
@@ -201,6 +201,9 @@ impl Resource {
             /// Decoded-ahead frontier of the underlying reader (always `>=` position).
             #[must_use]
             pub fn decoded_frontier(&self) -> Duration;
+            /// Latest coherent producer-side presentation endpoint.
+            #[must_use]
+            pub fn presentation_point(&self) -> Option<PresentationPoint>;
             /// Get total duration (if known).
             #[must_use]
             pub fn duration(&self) -> Option<Duration>;
@@ -219,6 +222,8 @@ impl Resource {
                 &mut self,
                 output: &'a mut [&'a mut [f32]],
             ) -> Result<ReadOutcome, DecodeError>;
+            /// Take the latest exact presentation boundary crossed by PCM reads.
+            pub fn take_presentation_advance(&mut self) -> Option<PresentationAdvance>;
             /// Seek to position. Begins and applies in one call, so it takes locks — off the audio
             /// thread only. Audio-thread callers begin through [`seek_handle`](Self::seek_handle)
             /// instead.

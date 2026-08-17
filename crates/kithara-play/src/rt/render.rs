@@ -9,6 +9,7 @@ use firewheel::{
     node::ProcBuffers,
     param::smoother::SmootherConfig,
 };
+use kithara_audio::{PresentationCursor, SessionFrame};
 use kithara_bufpool::{PcmBuf, PcmPool};
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
@@ -35,6 +36,13 @@ pub(crate) struct RenderTargets<'a> {
     pub(crate) tracks: &'a mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
     pub(crate) notification_tx: &'a mut HeapProd<PlayerNotification>,
     pub(crate) metrics: &'a RtMetrics,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct RenderOutcome {
+    pub(crate) playback_started: bool,
+    pub(crate) leading_position_duration: Option<(f64, f64)>,
+    pub(crate) presentation: Option<PresentationCursor>,
 }
 
 pub(crate) struct RenderPass {
@@ -79,39 +87,17 @@ impl RenderPass {
         buffers: &mut ProcBuffers,
         frames: usize,
         is_playing: bool,
-    ) -> (bool, Option<(f64, f64)>) {
+        block_frame: Option<SessionFrame>,
+    ) -> RenderOutcome {
         let mut playback_started = false;
         let mut leading_outcome_pos_dur: Option<(f64, f64)> = None;
-
-        if buffers.outputs.len() < Self::MIN_STEREO {
-            return (false, None);
-        }
-
-        for ch_buffer in buffers.outputs.iter_mut() {
-            ch_buffer[..frames].fill(0.0);
-        }
-
-        // Growing a pooled buffer here would allocate on the audio thread. The fill above already
-        // covered the frames past the clamp with silence.
-        let frames = frames.min(self.capacity);
-
-        self.gate.set_mix(
-            if is_playing {
-                Mix::FULLY_DRY
-            } else {
-                Mix::FULLY_WET
-            },
-            Self::GATE_CURVE,
-        );
-        if self.priming {
-            self.priming = false;
-            self.gate.reset_to_target();
-        }
-        // A closed gate outputs silence whatever the tracks hold, so readers stop only once its
-        // ramp has run out.
-        if !is_playing && self.gate.has_settled() {
-            return (false, None);
-        }
+        let mut leading_presentation = None;
+        let tracks = targets.tracks;
+        let Some((frames, block_frame)) =
+            self.prepare_block(tracks, buffers, frames, is_playing, block_frame)
+        else {
+            return RenderOutcome::default();
+        };
 
         let (read, rest) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
         let (mix, bus) = rest.split_at_mut(Self::MIN_STEREO);
@@ -124,7 +110,6 @@ impl RenderPass {
         for ch_buffer in &mut bus_bufs {
             ch_buffer.fill(0.0);
         }
-        let tracks = targets.tracks;
         let mut sink = RtSink::new(targets.notification_tx, targets.metrics);
         let loaded_tracks: SmallVec<[(TrackSlot, TrackState); PlayerNodeProcessor::MAX_TRACKS]> =
             tracks
@@ -156,10 +141,15 @@ impl RenderPass {
             }
 
             let mut read_outcome = {
-                let Some(outcome) = tracks
-                    .at_mut(*track_handle)
-                    .map(|track| track.read(&mut read_bufs, &mut mix_bufs, 0..frames, &mut sink))
-                else {
+                let Some(outcome) = tracks.at_mut(*track_handle).map(|track| {
+                    track.read(
+                        &mut read_bufs,
+                        &mut mix_bufs,
+                        0..frames,
+                        block_frame,
+                        &mut sink,
+                    )
+                }) else {
                     continue;
                 };
                 playback_started = true;
@@ -170,6 +160,7 @@ impl RenderPass {
                 if let Some(snapshot) = outcome_position_duration(&read_outcome) {
                     leading_outcome_pos_dur = Some(snapshot);
                 }
+                leading_presentation = outcome_presentation(&read_outcome);
 
                 let mut handover = initial_handover(&read_outcome);
 
@@ -188,7 +179,13 @@ impl RenderPass {
                     }
 
                     let Some(outcome) = tracks.at_mut(*next_handle).map(|track| {
-                        track.read(&mut read_bufs, &mut mix_bufs, offset..frames, &mut sink)
+                        track.read(
+                            &mut read_bufs,
+                            &mut mix_bufs,
+                            offset..frames,
+                            block_frame,
+                            &mut sink,
+                        )
                     }) else {
                         continue;
                     };
@@ -198,6 +195,7 @@ impl RenderPass {
                     if let Some(snapshot) = outcome_position_duration(&read_outcome) {
                         leading_outcome_pos_dur = Some(snapshot);
                     }
+                    leading_presentation = outcome_presentation(&read_outcome);
 
                     handover = next_handover(&read_outcome, offset);
                 }
@@ -217,7 +215,15 @@ impl RenderPass {
                             continue;
                         };
                         next_track.play();
-                        next_track.read(&mut read_bufs, &mut mix_bufs, offset..frames, &mut sink);
+                        let outcome = next_track.read(
+                            &mut read_bufs,
+                            &mut mix_bufs,
+                            offset..frames,
+                            block_frame,
+                            &mut sink,
+                        );
+                        leading_outcome_pos_dur = outcome_position_duration(&outcome);
+                        leading_presentation = outcome_presentation(&outcome);
                         break;
                     }
                 }
@@ -240,7 +246,57 @@ impl RenderPass {
             frames,
         );
 
-        (playback_started, leading_outcome_pos_dur)
+        RenderOutcome {
+            playback_started,
+            leading_position_duration: leading_outcome_pos_dur,
+            presentation: leading_presentation,
+        }
+    }
+
+    fn prepare_block(
+        &mut self,
+        tracks: &mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
+        buffers: &mut ProcBuffers,
+        frames: usize,
+        is_playing: bool,
+        block_frame: Option<SessionFrame>,
+    ) -> Option<(usize, Option<SessionFrame>)> {
+        if buffers.outputs.len() < Self::MIN_STEREO {
+            tracks
+                .iter_mut()
+                .for_each(|(_, track)| track.invalidate_presentation());
+            return None;
+        }
+        for ch_buffer in buffers.outputs.iter_mut() {
+            ch_buffer[..frames].fill(0.0);
+        }
+        let clamped = frames > self.capacity;
+        if clamped {
+            tracks
+                .iter_mut()
+                .for_each(|(_, track)| track.invalidate_presentation());
+        }
+        let frames = frames.min(self.capacity);
+        let block_frame = block_frame.filter(|_| !clamped);
+        self.gate.set_mix(
+            if is_playing {
+                Mix::FULLY_DRY
+            } else {
+                Mix::FULLY_WET
+            },
+            Self::GATE_CURVE,
+        );
+        if self.priming {
+            self.priming = false;
+            self.gate.reset_to_target();
+        }
+        if !is_playing && self.gate.has_settled() {
+            tracks
+                .iter_mut()
+                .for_each(|(_, track)| track.invalidate_presentation());
+            return None;
+        }
+        Some((frames, block_frame))
     }
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
@@ -288,6 +344,14 @@ const fn outcome_position_duration(outcome: &TrackReadOutcome) -> Option<(f64, f
             position, duration, ..
         } => Some((position, duration)),
         TrackReadOutcome::Partial { duration, .. } => Some((duration, duration)),
+        TrackReadOutcome::Eof | TrackReadOutcome::Failed => None,
+    }
+}
+
+const fn outcome_presentation(outcome: &TrackReadOutcome) -> Option<PresentationCursor> {
+    match *outcome {
+        TrackReadOutcome::Full { presentation, .. }
+        | TrackReadOutcome::Partial { presentation, .. } => presentation,
         TrackReadOutcome::Eof | TrackReadOutcome::Failed => None,
     }
 }

@@ -41,6 +41,13 @@ impl SessionFrame {
     pub const fn new(value: i64) -> Self {
         Self(value)
     }
+
+    /// Returns this session coordinate advanced by `frames`.
+    #[must_use]
+    pub fn offset(self, frames: u64) -> Option<Self> {
+        let frames = i64::try_from(frames).ok()?;
+        i64::from(self).checked_add(frames).map(Self::new)
+    }
 }
 
 /// The canonical session-beat <-> session-frame relation, valid from one
@@ -186,5 +193,12 @@ mod tests {
                 "tempo {refused} is not an invertible slope",
             );
         }
+    }
+
+    #[kithara::test]
+    fn session_frame_offset_is_checked() {
+        assert_eq!(SessionFrame::new(41).offset(1), Some(SessionFrame::new(42)));
+        assert_eq!(SessionFrame::new(i64::MAX).offset(1), None);
+        assert_eq!(SessionFrame::new(0).offset(u64::MAX), None);
     }
 }

@@ -22,7 +22,10 @@ use super::{
     ring::{RecvCtx, RingConsumer},
     seek::{SeekHandle, SeekHandleParts},
 };
-use crate::traits::SeekBegin;
+use crate::{
+    renderer::PresentationFrontier,
+    traits::{PresentationAdvance, PresentationPoint, SeekBegin},
+};
 
 /// Pull-based PCM facade backed by a shared renderer worker.
 pub struct Audio<S> {
@@ -55,6 +58,7 @@ pub(super) struct Session {
     pub(super) peer_wake: Option<Arc<DeferredWake>>,
     pub(super) seek_prepare: Option<Arc<dyn SeekPrepare>>,
     pub(super) metadata: TrackMetadata,
+    pub(super) presentation_frontier: PresentationFrontier,
 }
 
 pub(super) struct Controls {
@@ -127,6 +131,7 @@ impl<S> Audio<S> {
         let recv = recv_ctx(&self.session, &self.lease);
         let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
         let filled = self.ring.fill(&mut self.cursor, recv);
+        self.wake_worker_after_progress();
         self.events.fill_result(
             filled,
             was_playing,
@@ -182,7 +187,9 @@ impl<S> Audio<S> {
             self.session.playhead.as_ref(),
             recv,
             buf,
-        )?;
+        );
+        self.wake_worker_after_progress();
+        let read = read?;
         Ok(self
             .events
             .commit_read(&self.session, self.ring.validator.epoch, read))
@@ -228,8 +235,14 @@ impl<S> Audio<S> {
             return;
         }
         self.events.reset_underrun();
-        let popped = self.ring.begin_seek_epoch(begun, &mut self.cursor);
-        if popped {
+        let worker_progress = self.ring.begin_seek_epoch(begun, &mut self.cursor);
+        if worker_progress {
+            self.ring.wake_worker(self.lease.worker.as_ref());
+        }
+    }
+
+    fn wake_worker_after_progress(&mut self) {
+        if self.ring.take_worker_progress() {
             self.ring.wake_worker(self.lease.worker.as_ref());
         }
     }
@@ -248,6 +261,17 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
             fn cached_span(&self) -> Duration;
             fn decoded_frontier(&self) -> Duration;
         }
+    }
+
+    fn presentation_point(&self) -> Option<PresentationPoint> {
+        self.session
+            .presentation_frontier
+            .point(self.session.seek_obs.epoch())
+    }
+
+    fn take_presentation_advance(&mut self) -> Option<PresentationAdvance> {
+        self.sync_seek();
+        self.ring.take_presentation_advance()
     }
 
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
@@ -269,14 +293,20 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
             );
             chunk
         };
-        let Some(chunk) = chunk else {
+        let Some(presented) = chunk else {
+            self.wake_worker_after_progress();
             return chunk_outcome(self.ring.phase, self.position());
         };
+        let point = presented.point();
+        let chunk = self.ring.detach(presented);
+        self.wake_worker_after_progress();
+        let chunk = chunk?;
         self.cursor.begin_chunk(&chunk);
         self.ring.promote_playing();
         self.session
             .playhead
             .advance(&ChunkPosition::from(&chunk.meta));
+        self.ring.record_presentation_advance(point, chunk.frames());
         Ok(ChunkOutcome::Chunk(chunk))
     }
 
@@ -300,7 +330,9 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
             self.session.playhead.as_ref(),
             recv_ctx(&self.session, &self.lease),
             output,
-        )?;
+        );
+        self.wake_worker_after_progress();
+        let read = read?;
         Ok(self
             .events
             .commit_read(&self.session, self.ring.validator.epoch, read))
@@ -363,6 +395,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
     fn set_playback_rate(&self, rate: f32) {
         if let Some(controls) = &self.controls.stretch {
             controls.set_speed(rate);
+            defer_worker_wake(self.lease.worker.as_ref());
         } else {
             self.controls.playback_rate.store(rate, Ordering::Relaxed);
         }
@@ -410,28 +443,63 @@ fn chunk_outcome(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::{
+        collections::VecDeque,
+        num::NonZeroU32,
+        sync::atomic::{AtomicU32, AtomicU64},
+    };
 
     use kithara_bufpool::PcmPool;
-    use kithara_decode::{PcmChunk, PcmMeta};
-    use kithara_platform::sync::Arc;
-    use kithara_stream::{PlayheadState, SeekState};
+    use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+    use kithara_platform::{CancelToken, sync::Arc};
+    use kithara_stream::{PlayheadRead, PlayheadState, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
         ConsumerWakeMode,
-        audio::{Fetch, ThreadWake, connect, ring::RingParts},
+        audio::{
+            Fetch, ThreadWake, connect,
+            ring::{RingParts, create_channels, create_trash_channel},
+        },
+        pipeline::{config::PresentationChain, track::TrackStep},
+        renderer::{
+            AudioWorkerSource, OutputDisposition, PresentedPcm, TrackRegistration,
+            presentation_cell,
+        },
+        runtime::Outlet,
+        traits::PresentationPoint,
     };
+
+    struct FinitePcmSource {
+        chunks: VecDeque<PcmChunk>,
+        seek: Arc<SeekState>,
+    }
+
+    impl AudioWorkerSource for FinitePcmSource {
+        type Chunk = PcmChunk;
+
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+        }
+
+        fn step_track(&mut self) -> TrackStep<Self::Chunk> {
+            self.chunks.pop_front().map_or(TrackStep::Eof, |chunk| {
+                TrackStep::Produced(Fetch::data(chunk, 0))
+            })
+        }
+    }
 
     struct AudioFixture {
         audio: Audio<()>,
+        data_tx: Outlet<Fetch<PresentedPcm>>,
+        _trash_rx: crate::runtime::Inlet<OutputDisposition>,
     }
 
     impl Default for AudioFixture {
         fn default() -> Self {
-            let (_data_tx, data_rx) = connect::<Fetch<PcmChunk>>(1, None);
-            let (trash_tx, _trash_rx) = connect::<PcmChunk>(8, None);
+            let (data_tx, data_rx) = connect::<Fetch<PresentedPcm>>(4, None);
+            let (trash_tx, trash_rx) = connect::<OutputDisposition>(8, None);
             let epoch = Arc::new(AtomicU64::new(0));
             let ring = RingConsumer::new(RingParts {
                 trash_tx,
@@ -448,6 +516,7 @@ mod tests {
             let pcm_pool = PcmPool::default();
             let bus = EventBus::default();
             let emit = AudioEvents::deferred(&bus);
+            let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
             Self {
                 audio: Audio::from(AudioParts {
                     ring,
@@ -468,6 +537,7 @@ mod tests {
                         abr_handle: None,
                         peer_wake: None,
                         seek_prepare: None,
+                        presentation_frontier: presentation_cell(0).1,
                     },
                     controls: Controls {
                         host_sample_rate: Arc::new(AtomicU32::new(0)),
@@ -475,11 +545,137 @@ mod tests {
                         stretch: None,
                         service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
                     },
-                    spec: PcmMeta::default().spec,
+                    spec,
                     marker: PhantomData,
                 }),
+                data_tx,
+                _trash_rx: trash_rx,
             }
         }
+    }
+
+    impl AudioFixture {
+        fn push(&mut self, frames: u32, point: PresentationPoint) {
+            let spec = self.audio.spec();
+            self.push_with_spec(frames, spec, point);
+        }
+
+        fn push_with_spec(&mut self, frames: u32, spec: PcmSpec, point: PresentationPoint) {
+            let channels = usize::from(spec.channels);
+            let frame_count = usize::try_from(frames).expect("test frame count fits usize");
+            let chunk = PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    frames,
+                    ..Default::default()
+                },
+                PcmPool::default().attach(vec![0.5; frame_count * channels]),
+            );
+            self.data_tx
+                .try_push(Fetch::data(
+                    PresentedPcm::new(chunk, point),
+                    point.seek_epoch(),
+                ))
+                .expect("presented PCM reaches the final ring");
+        }
+    }
+
+    fn blocking_audio(chunk_count: usize) -> Audio<()> {
+        let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
+        let pcm_pool = PcmPool::default();
+        let chunks = (0..chunk_count)
+            .map(|_| {
+                PcmChunk::new(
+                    PcmMeta {
+                        spec,
+                        frames: 512,
+                        ..Default::default()
+                    },
+                    pcm_pool.attach(vec![0.5; 512 * usize::from(spec.channels)]),
+                )
+            })
+            .collect();
+        let seek_state = Arc::new(SeekState::new());
+        let source = FinitePcmSource {
+            chunks,
+            seek: Arc::clone(&seek_state),
+        };
+        let playhead = Arc::new(PlayheadState::new());
+        let bus = EventBus::default();
+        let emit = AudioEvents::deferred(&bus);
+        let reader_wake = Arc::new(ThreadWake::default());
+        let (data_tx, data_rx) = create_channels(2, Arc::clone(&emit), &reader_wake);
+        let (trash_tx, trash_inlet) = create_trash_channel(4);
+        let preload_gate = Arc::new(PreloadGate::default());
+        let (presentation, presentation_frontier) = presentation_cell(0);
+        let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let track_id = worker.register_track(TrackRegistration {
+            emit: Arc::clone(&emit),
+            playhead: Arc::clone(&playhead) as Arc<dyn PlayheadRead>,
+            preload_gate: Arc::clone(&preload_gate),
+            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
+            source: Box::new(source),
+            trash_inlet,
+            engine_load: None,
+            chain: PresentationChain::identity(Vec::new()),
+            initial_spec: spec,
+            outlet: data_tx,
+            pcm_pool: pcm_pool.clone(),
+            preload_chunks: 1,
+            presentation,
+            raw_buffer_chunks: 4,
+        });
+        let ring = RingConsumer::new(RingParts {
+            trash_tx,
+            epoch: Arc::new(AtomicU64::new(0)),
+            pcm_rx: data_rx,
+            reader_wake,
+            block_on_underrun: true,
+            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
+        });
+        let seek: Arc<dyn SeekControl> = seek_state.clone();
+        let seek_obs: Arc<dyn SeekObserve> = seek_state;
+        let playhead: Arc<dyn PlayheadWrite> = playhead;
+        Audio::from(AudioParts {
+            ring,
+            pcm_pool,
+            emit,
+            lease: WorkerLease {
+                cancel: None,
+                track_id: Some(track_id),
+                worker: Some(worker),
+                is_standalone: true,
+            },
+            session: Session {
+                playhead,
+                seek,
+                seek_obs,
+                preload_gate,
+                metadata: TrackMetadata::default(),
+                abr_handle: None,
+                peer_wake: None,
+                seek_prepare: None,
+                presentation_frontier,
+            },
+            controls: Controls {
+                host_sample_rate: Arc::new(AtomicU32::new(0)),
+                playback_rate: Arc::new(AtomicF32::new(1.0)),
+                stretch: None,
+                service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
+            },
+            spec,
+            marker: PhantomData,
+        })
+    }
+
+    fn point(source_frame: u64, generation: u64, output_end: u64) -> PresentationPoint {
+        PresentationPoint::new(
+            0,
+            source_frame,
+            generation,
+            output_end,
+            NonZeroU32::new(48_000).expect("test sample rate"),
+        )
     }
 
     #[kithara::test]
@@ -492,5 +688,94 @@ mod tests {
             .seek(Duration::from_millis(250))
             .expect("seek should arm epoch");
         assert!(!fixture.audio.session.preload_gate.is_ready());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(flash(false), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+    fn next_chunk_replenishes_detached_presentation_buffers() {
+        let mut audio = blocking_audio(8);
+        let mut retained = Vec::with_capacity(8);
+
+        for _ in 0..8 {
+            let ChunkOutcome::Chunk(chunk) = audio.next_chunk().expect("chunk read succeeds")
+            else {
+                panic!("finite source must yield eight PCM chunks");
+            };
+            retained.push(chunk);
+        }
+
+        assert_eq!(retained.len(), 8);
+    }
+
+    #[kithara::test]
+    fn presentation_advance_is_hidden_until_chunk_boundary_is_consumed() {
+        let mut fixture = AudioFixture::default();
+        let expected = point(4, 2, 4);
+        fixture.push(4, expected);
+        fixture.audio.preload().expect("test PCM preloads");
+
+        assert!(fixture.audio.take_presentation_advance().is_none());
+        let mut first_half = [0.0; 4];
+        let _ = fixture
+            .audio
+            .read(&mut first_half)
+            .expect("partial PCM read succeeds");
+        assert!(fixture.audio.take_presentation_advance().is_none());
+
+        let mut second_half = [0.0; 4];
+        let _ = fixture
+            .audio
+            .read(&mut second_half)
+            .expect("boundary PCM read succeeds");
+        let advance = fixture
+            .audio
+            .take_presentation_advance()
+            .expect("completed boundary becomes observable");
+        assert_eq!(advance.point(), expected);
+        assert_eq!(advance.read_offset_frames(), 2);
+    }
+
+    #[kithara::test]
+    fn exact_boundary_old_spec_return_is_woken_after_read() {
+        let mut fixture = AudioFixture::default();
+        let old_spec = PcmSpec::new(1, NonZeroU32::new(44_100).expect("test old rate"));
+        let point =
+            PresentationPoint::new(0, 4, 0, 4, NonZeroU32::new(44_100).expect("test old rate"));
+        fixture.push_with_spec(4, old_spec, point);
+        fixture.audio.preload().expect("old-spec PCM preloads");
+
+        let mut output = [0.0; 4];
+        let read = fixture
+            .audio
+            .read(&mut output)
+            .expect("exact-boundary old-spec read succeeds");
+
+        assert!(matches!(
+            read,
+            ReadOutcome::Frames { count, .. } if count.get() == output.len()
+        ));
+        assert!(
+            !fixture.audio.ring.take_worker_progress(),
+            "Audio owner must consume the coalesced progress flag after cursor.read"
+        );
+        let Some(OutputDisposition::Returned(returned)) = fixture._trash_rx.try_pop() else {
+            panic!("old-spec output must be returned before the owner wake");
+        };
+        assert_eq!(returned.spec(), old_spec);
+    }
+
+    #[kithara::test]
+    fn seek_clears_unclaimed_presentation_advance() {
+        let mut fixture = AudioFixture::default();
+        fixture.push(2, point(2, 4, 2));
+        fixture.audio.preload().expect("test PCM preloads");
+        let mut output = [0.0; 4];
+        let _ = fixture
+            .audio
+            .read(&mut output)
+            .expect("boundary PCM read succeeds");
+
+        let _ = fixture.audio.seek_handle().begin(Duration::from_millis(10));
+        assert!(fixture.audio.take_presentation_advance().is_none());
     }
 }

@@ -7,6 +7,7 @@ use firewheel::{
     event::ProcEvents,
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
+use kithara_audio::SessionFrame;
 use kithara_bufpool::PcmPool;
 use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
@@ -17,9 +18,10 @@ use smallvec::SmallVec;
 use super::track::PlayerTrack;
 use crate::{
     bridge::{
-        NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
+        NodeInputs, PlaybackPresentationPublisher, PlaybackShared, PlayerCmd, PlayerNotification,
+        TrackState, TrackTransition,
     },
-    rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots},
+    rt::{RenderOutcome, RenderPass, RenderTargets, TrackSlot, TrackSlots},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -75,6 +77,7 @@ pub struct PlayerNodeProcessor {
     pub(super) playback_rate: f32,
     pub(super) prefetch_duration: f32,
     trash_tx: HeapProd<PlayerTrack>,
+    presentation: PlaybackPresentationPublisher,
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
@@ -106,6 +109,7 @@ impl PlayerNodeProcessor {
             playback_rate: 1.0,
             tracks: TrackSlots::default(),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
+            presentation: inputs.presentation,
         }
     }
 
@@ -185,6 +189,18 @@ impl PlayerNodeProcessor {
         frames: usize,
         is_playing: bool,
     ) -> (bool, Option<(f64, f64)>) {
+        let outcome = self.render_block(buffers, frames, is_playing, None);
+        self.presentation.publish(None);
+        (outcome.playback_started, outcome.leading_position_duration)
+    }
+
+    fn render_block(
+        &mut self,
+        buffers: &mut ProcBuffers,
+        frames: usize,
+        is_playing: bool,
+        block_frame: Option<SessionFrame>,
+    ) -> RenderOutcome {
         self.render.render_audio(
             RenderTargets {
                 tracks: &mut self.tracks,
@@ -194,7 +210,14 @@ impl PlayerNodeProcessor {
             buffers,
             frames,
             is_playing,
+            block_frame,
         )
+    }
+
+    fn invalidate_tracks_presentation(&mut self) {
+        self.tracks
+            .iter_mut()
+            .for_each(|(_, track)| track.invalidate_presentation());
     }
 
     fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
@@ -299,6 +322,8 @@ impl PlayerNodeProcessor {
 
 impl AudioNodeProcessor for PlayerNodeProcessor {
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
+        self.invalidate_tracks_presentation();
+        self.presentation.publish(None);
         self.update_host_sample_rate(stream_info.sample_rate);
         self.render.resize(stream_info.max_block_frames.get().as_());
     }
@@ -319,15 +344,329 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         let is_playing = self.playback.playing.load(Ordering::SeqCst);
 
-        let (playback_started, leading_outcome_pos_dur) =
-            self.render_audio(&mut buffers, info.frames, is_playing);
+        let block_frame = Some(SessionFrame::new(info.clock_samples.0));
+        let outcome = self.render_block(&mut buffers, info.frames, is_playing, block_frame);
 
-        self.update_position_duration(leading_outcome_pos_dur);
+        self.update_position_duration(outcome.leading_position_duration);
+        self.presentation.publish(outcome.presentation);
 
-        if playback_started {
+        if outcome.playback_started {
             ProcessStatus::OutputsModified
         } else {
             ProcessStatus::ClearAllOutputs
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::VecDeque,
+        num::{NonZeroU32, NonZeroUsize},
+    };
+
+    use firewheel::{
+        clock::InstantSamples,
+        dsp::{buffer::ChannelBuffer, declick::DeclickValues},
+        event::{NodeEvent, ProcEvents, ProcEventsIndex, ScheduledEventEntry},
+        log::{RealtimeLoggerConfig, realtime_logger},
+        mask::{ConnectedMask, ConstantMask, SilenceMask},
+        node::{
+            AudioNodeProcessor, NUM_SCRATCH_BUFFERS, ProcBuffers, ProcExtra, ProcInfo, ProcStore,
+            StreamStatus,
+        },
+    };
+    use kithara_audio::{
+        PcmControl, PcmRead, PcmSession, PendingReason, PresentationAdvance, PresentationPoint,
+        ReadOutcome, SeekOutcome, SessionFrame,
+    };
+    use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
+    use kithara_events::EventBus;
+    use kithara_platform::{sync::Arc, time::Duration};
+
+    use super::*;
+    use crate::{
+        bridge::{SharedEq, slot_channels},
+        resource::Resource,
+        rt::track::PlayerResource,
+    };
+
+    struct Consts;
+
+    impl Consts {
+        const BLOCK_FRAMES: usize = 512;
+        const SAMPLE_RATE: u32 = 48_000;
+    }
+
+    #[derive(Clone, Copy)]
+    struct ReadStep {
+        frames: Option<NonZeroUsize>,
+        point: PresentationPoint,
+        advance: Option<PresentationAdvance>,
+        expected_request: usize,
+    }
+
+    impl ReadStep {
+        fn frames(
+            frames: usize,
+            point: PresentationPoint,
+            advance: Option<PresentationAdvance>,
+            expected_request: usize,
+        ) -> Self {
+            Self {
+                frames: NonZeroUsize::new(frames),
+                point,
+                advance,
+                expected_request,
+            }
+        }
+
+        const fn pending(point: PresentationPoint, expected_request: usize) -> Self {
+            Self {
+                frames: None,
+                point,
+                advance: None,
+                expected_request,
+            }
+        }
+    }
+
+    struct PresentationReader {
+        steps: VecDeque<ReadStep>,
+        point: Option<PresentationPoint>,
+        advance: Option<PresentationAdvance>,
+        bus: EventBus,
+        metadata: TrackMetadata,
+        spec: PcmSpec,
+    }
+
+    impl PresentationReader {
+        fn new(steps: impl IntoIterator<Item = ReadStep>) -> Self {
+            Self {
+                steps: steps.into_iter().collect(),
+                point: None,
+                advance: None,
+                bus: EventBus::default(),
+                metadata: TrackMetadata::default(),
+                spec: PcmSpec::new(2, sample_rate()),
+            }
+        }
+    }
+
+    impl PcmRead for PresentationReader {
+        fn presentation_point(&self) -> Option<PresentationPoint> {
+            self.point
+        }
+
+        fn take_presentation_advance(&mut self) -> Option<PresentationAdvance> {
+            self.advance.take()
+        }
+
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+            Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position: Duration::ZERO,
+            })
+        }
+
+        fn read_planar<'a>(
+            &mut self,
+            output: &'a mut [&'a mut [f32]],
+        ) -> Result<ReadOutcome, DecodeError> {
+            let Some(step) = self.steps.pop_front() else {
+                return Ok(ReadOutcome::Pending {
+                    reason: PendingReason::Buffering,
+                    position: Duration::ZERO,
+                });
+            };
+            assert_eq!(output[0].len(), step.expected_request);
+            self.point = Some(step.point);
+            self.advance = step.advance;
+            let Some(count) = step.frames else {
+                return Ok(ReadOutcome::Pending {
+                    reason: PendingReason::Buffering,
+                    position: Duration::ZERO,
+                });
+            };
+            let frames = count.get();
+            for channel in output.iter_mut() {
+                channel[..frames].fill(1.0);
+            }
+            Ok(ReadOutcome::Frames {
+                count,
+                position: Duration::ZERO,
+            })
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    impl PcmSession for PresentationReader {
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(60))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.metadata
+        }
+    }
+
+    impl PcmControl for PresentationReader {
+        fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
+        }
+    }
+
+    fn sample_rate() -> NonZeroU32 {
+        NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate is non-zero")
+    }
+
+    fn point(source_frame: u64, generation: u64, output_end: u64) -> PresentationPoint {
+        PresentationPoint::new(7, source_frame, generation, output_end, sample_rate())
+    }
+
+    fn processor_with_track(
+        reader: PresentationReader,
+    ) -> (PlayerNodeProcessor, Arc<PlaybackShared>) {
+        let pool = PcmPool::default();
+        let (inputs, control) = slot_channels(SharedEq::new(0));
+        let playback = Arc::clone(&control.playback);
+        let src: Arc<str> = Arc::from("presentation-fixture");
+        let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
+        let resource = Box::new(PlayerResource::new(resource, src, &pool));
+        let mut track = PlayerTrack::builder()
+            .sample_rate(sample_rate())
+            .build(resource);
+        track.play();
+
+        let mut processor = PlayerNodeProcessor::new(
+            inputs,
+            StreamShape {
+                max_block_frames: NonZeroU32::new(
+                    u32::try_from(Consts::BLOCK_FRAMES).expect("block size fits u32"),
+                )
+                .expect("block size is non-zero"),
+                sample_rate: sample_rate(),
+            },
+            &pool,
+        );
+        assert!(processor.tracks.insert(track).is_none());
+        playback.playing.store(true, Ordering::SeqCst);
+        (processor, playback)
+    }
+
+    fn process_block(processor: &mut PlayerNodeProcessor, clock_samples: i64) {
+        let info = ProcInfo {
+            sample_rate: sample_rate(),
+            frames: Consts::BLOCK_FRAMES,
+            in_silence_mask: SilenceMask::default(),
+            out_silence_mask: SilenceMask::default(),
+            in_constant_mask: ConstantMask::default(),
+            out_constant_mask: ConstantMask::default(),
+            in_connected_mask: ConnectedMask::default(),
+            out_connected_mask: ConnectedMask::default(),
+            prev_output_was_silent: true,
+            sample_rate_recip: f64::from(Consts::SAMPLE_RATE).recip(),
+            clock_samples: InstantSamples(clock_samples),
+            duration_since_stream_start: Duration::ZERO,
+            stream_status: StreamStatus::empty(),
+            dropped_frames: 0,
+        };
+        let inputs: [&[f32]; 0] = [];
+        let mut output_storage = [
+            vec![0.0; Consts::BLOCK_FRAMES],
+            vec![0.0; Consts::BLOCK_FRAMES],
+        ];
+        let mut outputs: Vec<&mut [f32]> =
+            output_storage.iter_mut().map(Vec::as_mut_slice).collect();
+        let buffers = ProcBuffers {
+            inputs: &inputs,
+            outputs: &mut outputs,
+        };
+        let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
+        let mut extra = ProcExtra {
+            logger,
+            store: ProcStore::with_capacity(0),
+            scratch_buffers: ChannelBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(Consts::BLOCK_FRAMES),
+            declick_values: DeclickValues::new(
+                NonZeroU32::new(16).expect("declick duration is non-zero"),
+            ),
+        };
+        let mut immediate: [Option<NodeEvent>; 0] = [];
+        let mut scheduled: [Option<ScheduledEventEntry>; 0] = [];
+        let mut indices: Vec<ProcEventsIndex> = Vec::new();
+        let mut events = ProcEvents::new(&mut immediate, &mut scheduled, &mut indices);
+
+        let _ = processor.process(&info, buffers, &mut events, &mut extra);
+    }
+
+    #[kithara::test]
+    fn presentation_boundary_uses_consumed_offset_not_requested_range_end() {
+        let expected = point(9_600, 3, 192);
+        let reader = PresentationReader::new([
+            ReadStep::frames(128, expected, None, 512),
+            ReadStep::frames(
+                384,
+                expected,
+                Some(PresentationAdvance::new(expected, 64)),
+                384,
+            ),
+        ]);
+        let (mut processor, playback) = processor_with_track(reader);
+
+        process_block(&mut processor, 10_000);
+
+        let cursor = playback
+            .snapshot()
+            .presentation()
+            .expect("consumed producer boundary must be published");
+        assert_eq!(cursor.point(), expected);
+        assert_eq!(cursor.session_frame(), SessionFrame::new(10_192));
+        assert_ne!(cursor.session_frame(), SessionFrame::new(10_512));
+    }
+
+    #[kithara::test]
+    fn no_advance_before_the_final_boundary_is_consumed() {
+        let ahead = point(9_600, 3, 512);
+        let reader = PresentationReader::new([ReadStep::frames(512, ahead, None, 512)]);
+        let (mut processor, playback) = processor_with_track(reader);
+
+        process_block(&mut processor, 10_000);
+
+        assert_eq!(playback.snapshot().presentation(), None);
+    }
+
+    #[kithara::test]
+    fn underrun_invalidates_the_previous_presentation_mapping() {
+        let anchored = point(9_600, 3, 192);
+        let reader = PresentationReader::new([
+            ReadStep::frames(
+                512,
+                anchored,
+                Some(PresentationAdvance::new(anchored, 192)),
+                512,
+            ),
+            ReadStep::pending(anchored, 512),
+        ]);
+        let (mut processor, playback) = processor_with_track(reader);
+
+        process_block(&mut processor, 10_000);
+        assert!(playback.snapshot().presentation().is_some());
+
+        process_block(&mut processor, 10_512);
+        assert_eq!(playback.snapshot().presentation(), None);
     }
 }

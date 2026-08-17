@@ -2,41 +2,19 @@ use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, AudioFormat, DeferredBus, Event};
 use kithara_stream::PlayheadWrite;
 
-use crate::traits::AudioEffect;
-
 pub(crate) struct EofDrain {
     spec: Option<PcmSpec>,
-    exhausted: Vec<bool>,
-    active: bool,
     chunks: u64,
     samples: u64,
 }
 
 impl EofDrain {
-    pub(crate) fn new(effect_count: usize) -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
-            exhausted: vec![false; effect_count],
-            active: false,
             chunks: 0,
             samples: 0,
             spec: None,
         }
-    }
-
-    pub(crate) fn next(&mut self, effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmChunk> {
-        if effects.is_empty() {
-            return None;
-        }
-        if !self.active {
-            self.exhausted.fill(false);
-            self.active = true;
-        }
-        let last = effects.len() - 1;
-        pull(effects, &mut self.exhausted, last)
-    }
-
-    pub(crate) const fn reset(&mut self) {
-        self.active = false;
     }
 
     pub(crate) const fn stats(&self) -> (u64, u64) {
@@ -83,27 +61,5 @@ impl EofDrain {
             }
             self.spec = Some(chunk.spec());
         }
-    }
-}
-
-fn pull(
-    effects: &mut [Box<dyn AudioEffect>],
-    exhausted: &mut [bool],
-    stage: usize,
-) -> Option<PcmChunk> {
-    if stage == 0 {
-        return effects[0].flush();
-    }
-    loop {
-        if !exhausted[stage] {
-            if let Some(chunk) = pull(effects, exhausted, stage - 1) {
-                if let Some(output) = effects[stage].process(chunk) {
-                    return Some(output);
-                }
-                continue;
-            }
-            exhausted[stage] = true;
-        }
-        return effects[stage].flush();
     }
 }

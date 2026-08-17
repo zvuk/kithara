@@ -1,21 +1,22 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_decode::{DecodeResult, PcmSpec};
 use kithara_test_utils::kithara;
 
-use super::create_effects;
-use crate::{effects::timestretch::StretchControls, traits::AudioEffect};
+use super::create_presentation_chain;
+use crate::{
+    effects::timestretch::StretchControls,
+    traits::{AudioBlockMut, AudioEffect},
+};
 
 struct PassthroughEffect;
 
 impl AudioEffect for PassthroughEffect {
-    fn flush(&mut self) -> Option<PcmChunk> {
-        None
+    fn process(&mut self, _block: AudioBlockMut<'_>) -> DecodeResult<()> {
+        Ok(())
     }
-    fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
-        Some(chunk)
-    }
+
     fn reset(&mut self) {}
 }
 
@@ -28,10 +29,11 @@ fn pool() -> PcmPool {
 }
 
 #[kithara::test]
-fn create_effects_includes_custom_effects() {
+fn create_presentation_chain_includes_custom_effects() {
     let pool = pool();
-    let effects = create_effects(spec(), None, &pool, vec![Box::new(PassthroughEffect)]);
-    assert_eq!(effects.len(), 1);
+    let chain = create_presentation_chain(spec(), None, &pool, vec![Box::new(PassthroughEffect)]);
+    assert_eq!(chain.effects.len(), 1);
+    assert!(chain.tempo.is_none());
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -93,11 +95,12 @@ mod no_stretch {
     /// Without a compiled-in stretch backend, `stretch` does not add a speed
     /// slot: playback remains at unity.
     #[kithara::test]
-    fn create_effects_stretch_without_backends_keeps_chain_empty() {
+    fn create_presentation_chain_stretch_without_backends_keeps_chain_empty() {
         let controls = StretchControls::new(1.5);
         let pool = pool();
-        let effects = create_effects(spec(), Some(&controls), &pool, Vec::new());
-        assert!(effects.is_empty());
+        let chain = create_presentation_chain(spec(), Some(&controls), &pool, Vec::new());
+        assert!(chain.effects.is_empty());
+        assert!(chain.tempo.is_none());
     }
 }
 
@@ -106,43 +109,31 @@ mod no_stretch {
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 mod stretch {
-    use kithara_decode::PcmMeta;
-
     use super::*;
 
     #[kithara::test]
-    fn create_effects_tempo_mode_prepends_stretch_slot() {
+    fn create_presentation_chain_tempo_mode_owns_stretch_stage() {
         let controls = StretchControls::new(1.0);
         let pool = pool();
-        let effects = create_effects(
+        let chain = create_presentation_chain(
             spec(),
             Some(&controls),
             &pool,
             vec![Box::new(PassthroughEffect)],
         );
-        assert_eq!(effects.len(), 2);
+        assert!(chain.tempo.is_some());
+        assert_eq!(chain.effects.len(), 1);
     }
 
     /// Key-lock off in tempo mode is still handled by the stretch slot.
     #[kithara::test]
-    fn create_effects_tempo_vinyl_uses_stretch_slot() {
+    fn create_presentation_chain_tempo_vinyl_builds_tempo_stage() {
         let controls = StretchControls::new(1.5);
         controls.set_keylock(false);
         let pool = pool();
-        let mut effects = create_effects(spec(), Some(&controls), &pool, Vec::new());
-        // Drive one chunk through the stretch slot (index 0).
-        let frames = 1024usize;
-        let samples = vec![0.0_f32; frames * 2];
-        let meta = PcmMeta {
-            spec: spec(),
-            frames: u32::try_from(frames).unwrap(),
-            ..Default::default()
-        };
-        let chunk = PcmChunk::new(meta, PcmPool::default().attach(samples));
-        let out = effects[0]
-            .process(chunk)
-            .expect("vinyl stretch emits a chunk");
-        assert_eq!(out.spec(), spec());
-        assert!(!out.samples.is_empty());
+        let chain = create_presentation_chain(spec(), Some(&controls), &pool, Vec::new());
+        let tempo = chain.tempo.expect("tempo mode owns one duration stage");
+        assert_eq!(tempo.output_spec(), spec());
+        assert!(chain.effects.is_empty());
     }
 }

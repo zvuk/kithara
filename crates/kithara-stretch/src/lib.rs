@@ -6,7 +6,7 @@ compile_error!(
 );
 
 mod backend;
-pub use backend::{StretchBackend, StretchBackendError};
+pub use backend::{DrainDisposition, StretchBackend, StretchBackendError};
 
 mod config;
 pub use config::StretchOptions;

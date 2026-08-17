@@ -22,7 +22,6 @@ fieldwork = { workspace = true }
 num-traits = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 
 # `bungee-sys` builds its C++ through `cmake`, which fails under MSVC (see
 # `windows_build_env` in xtask's Windows lane for the toolchain fight this

@@ -1,20 +1,30 @@
-#[cfg(test)]
-use std::collections::HashSet;
-
 use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_decode::{DecodeError, DecodeResult, PcmChunk, PcmMeta, PcmSpec, duration_for_frames};
 use kithara_platform::sync::Arc;
-use kithara_stretch::{StretchBackend, StretchKind, StretchOptions, build_backend};
-use tracing::warn;
+use kithara_stretch::{StretchOptions, build_backend};
 
-use super::StretchControls;
-use crate::{
-    region::{ActiveRegion, RegionPlan},
-    traits::AudioEffect,
+use super::{StretchControls, backend::StretchSnapshot};
+#[path = "render.rs"]
+mod render;
+#[path = "state.rs"]
+mod state;
+
+use state::{
+    AdmittedSource, DrainFrontier, PrepareCause, PreparedCore, RegionBoundary, RetiredCores,
+    TempoCore,
 };
 
-/// Pre-resampler time-stretch slot. Reads live key-lock, backend, and speed
-/// from the shared [`StretchControls`] each chunk:
+use crate::{
+    region::RegionPlan,
+    traits::{
+        OutputCredit, PresentationPoint, TempoBoundaryId, TempoDiscontinuityDebt,
+        TempoDiscontinuityStep, TempoEofDebt, TempoEofStep, TempoPrepareRequest, TempoStage,
+        TempoStep,
+    },
+};
+
+/// Resident late-presentation time-stretch stage driven by shared
+/// [`StretchControls`]:
 ///
 /// - key-lock **on**: drives the backend with the inverse stretch factor
 ///   (`1 / speed`) and pitch held at `1.0`;
@@ -24,36 +34,26 @@ use crate::{
 /// At unity speed with no region plan the slot is a byte-identical
 /// passthrough, so default playback keeps the old no-DSP behavior.
 ///
-/// An optional [`RegionPlan`] (also on the controls) maps
-/// `frame_offset` to per-region ratio corrections: chunks split at segment
-/// boundaries and the effective stretch is `1/speed × ratio_correction`.
-/// The backend is flushed + reset only when a boundary actually moves the
-/// ratio beyond `RATIO_EPS`; equal-ratio boundaries cost nothing.
-///
+/// An optional [`RegionPlan`] maps source positions to live ratio corrections.
+/// A real correction boundary retains future source, prepares a fresh core
+/// off-RT, and drains the old core before an allocation-free commit. Adjacent
+/// equal-ratio regions stay on the resident core without a boundary cost.
 pub struct TimeStretchProcessor {
     controls: Arc<StretchControls>,
-    backend: Box<dyn StretchBackend>,
-    /// Most recent input meta, carried onto each output chunk.
+    active: Option<TempoCore>,
+    prepared: Option<PreparedCore>,
+    retired: Option<RetiredCores>,
+    next_boundary: u64,
+    admitted: Option<AdmittedSource>,
     last_input_meta: Option<PcmMeta>,
-    /// Region plan cached from the controls; `Arc::ptr_eq` detects a live swap.
-    plan: Option<Arc<RegionPlan>>,
-    /// Region covering the playhead — the lookup cursor. `None` forces a
-    /// fresh binary search (first chunk, plan swap, region exit, seek).
-    region: Option<ActiveRegion>,
     pool: PcmPool,
-    spec: PcmSpec,
-    /// Backend kind currently built; compared against `controls.backend()` to
-    /// detect a live backend swap.
-    current_kind: StretchKind,
-    /// Interleaved output scratch, reused across calls (alloc-free steady state).
-    scratch: Vec<f32>,
-    /// Whether previous input ran through the backend. Drives a clean backend
-    /// reset when the processor returns to unity passthrough.
-    active: bool,
-    /// Last pitch factor pushed to the backend; avoids redundant updates.
-    applied_pitch: f64,
-    /// Last stretch factor pushed to the backend; avoids redundant updates.
-    applied_stretch: f64,
+    requested_spec: PcmSpec,
+    eof_offset: usize,
+    eof_pending: bool,
+    discontinuity_pending: bool,
+    drain_frontier: Option<DrainFrontier>,
+    region_boundary: Option<RegionBoundary>,
+    failed: bool,
 }
 
 impl TimeStretchProcessor {
@@ -61,616 +61,510 @@ impl TimeStretchProcessor {
     /// factor. At `speed = 0.05` the stretch is already 20x, beyond which
     /// time-stretch quality collapses, so there is no point clamping lower.
     const MIN_SPEED: f32 = 0.05;
+    const PRESENTATION_FRAMES: usize = 512;
+    const MAX_STRETCH: usize = 20;
+    const BACKEND_INPUT_FRAMES: usize = Self::PRESENTATION_FRAMES / Self::MAX_STRETCH;
     /// Re-apply the stretch ratio to the backend only when it moves this much.
     const RATIO_EPS: f64 = 1e-4;
 
     /// Build the slot at the source `spec`, driven by the shared `controls`.
     pub fn new(controls: Arc<StretchControls>, spec: PcmSpec, pool: PcmPool) -> Self {
-        let current_kind = controls.backend();
-        let options = Self::options_for(spec, &pool);
-        let backend = build_backend(current_kind, &options);
         Self {
-            backend,
-            current_kind,
+            active: None,
+            prepared: None,
+            retired: None,
+            next_boundary: 0,
+            admitted: None,
             controls,
             pool,
-            spec,
-            applied_stretch: f64::NAN,
-            applied_pitch: f64::NAN,
-            active: false,
+            requested_spec: spec,
             last_input_meta: None,
-            scratch: Vec::new(),
-            plan: None,
+            eof_offset: 0,
+            eof_pending: false,
+            discontinuity_pending: false,
+            drain_frontier: None,
+            region_boundary: None,
+            failed: false,
+        }
+    }
+
+    fn build_core(&self, snapshot: StretchSnapshot, spec: PcmSpec) -> DecodeResult<TempoCore> {
+        if spec.channels == 0 {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo stage cannot adopt a zero-channel PCM spec",
+            });
+        }
+        if !snapshot.speed.is_finite() || snapshot.speed <= 0.0 {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo stage cannot adopt an invalid playback speed",
+            });
+        }
+        let bypass = snapshot.plan.is_none()
+            && (snapshot.speed.max(Self::MIN_SPEED) - 1.0).abs() <= f32::EPSILON;
+        if bypass {
+            return Ok(TempoCore {
+                backend: None,
+                scratch: Vec::new(),
+                snapshot,
+                spec,
+                region: None,
+                applied_pitch: f64::NAN,
+                applied_stretch: f64::NAN,
+                source_frames_pushed: 0,
+                processing: false,
+            });
+        }
+        let options = Self::options_for(spec, &self.pool);
+        let backend = build_backend(snapshot.backend, &options)
+            .map_err(|error| DecodeError::pcm_stream("time-stretch backend construction", error))?;
+        let channels = usize::from(spec.channels);
+        let scratch_samples =
+            (Self::PRESENTATION_FRAMES * channels).max(backend.max_tail_samples());
+        Ok(TempoCore {
+            backend: Some(backend),
+            scratch: Vec::with_capacity(scratch_samples),
+            snapshot,
+            spec,
             region: None,
-        }
-    }
-
-    /// Push `pitch` to the backend when it moved beyond `RATIO_EPS`.
-    fn apply_pitch(&mut self, pitch: f64) {
-        if !self.applied_pitch.is_nan() && (pitch - self.applied_pitch).abs() <= Self::RATIO_EPS {
-            return;
-        }
-        match self.backend.set_pitch(pitch) {
-            Ok(()) => self.applied_pitch = pitch,
-            Err(e) => warn!(error = %e, "time-stretch set_pitch failed"),
-        }
-    }
-
-    /// Push `stretch` to the backend when it moved beyond `RATIO_EPS`. At a
-    /// region `boundary` the old region's tail is drained (`flush`, into
-    /// `scratch`) and the backend restarted so the new ratio starts clean;
-    /// live speed moves glide via `set_ratio` alone. Boundaries whose ratio
-    /// did not move cost nothing. `NaN` is the "never applied" sentinel; the
-    /// diff test alone would skip it (every comparison with `NaN` is false).
-    fn apply_stretch(&mut self, stretch: f64, boundary: bool) {
-        let first = self.applied_stretch.is_nan();
-        if !first && (stretch - self.applied_stretch).abs() <= Self::RATIO_EPS {
-            return;
-        }
-        if boundary && !first {
-            if let Err(e) = self.backend.flush(&mut self.scratch) {
-                warn!(error = %e, "time-stretch flush at region boundary failed");
-            }
-            self.backend.reset();
-        }
-        match self.backend.set_ratio(stretch) {
-            Ok(()) => self.applied_stretch = stretch,
-            Err(e) => warn!(error = %e, "time-stretch set_ratio failed"),
-        }
-    }
-
-    /// Assemble an output chunk from `scratch`, preserving decoder timing.
-    fn emit(&mut self) -> Option<PcmChunk> {
-        let total = self.scratch.len();
-        if total == 0 {
-            return None;
-        }
-        let channels = usize::from(self.spec.channels.max(1));
-        let mut meta = self.last_input_meta.unwrap_or_default();
-        // The output carries real audio, so its spec must be the live source
-        // spec — never the `PcmMeta::default()` sentinel (channels 0, placeholder
-        // rate) that `unwrap_or_default()` yields on a flush with no prior input
-        // meta. A stretch only retimes; it preserves channels and sample rate.
-        // Leaving the sentinel spec on a non-empty chunk breaks the downstream
-        // `spec.channels > 0` chunk invariant (the resampler divides by it).
-        meta.spec = self.spec;
-        meta.frames = u32::try_from(total / channels).unwrap_or(u32::MAX);
-        let mut pcm = self.pool.get();
-        if pcm.ensure_len(total).is_err() {
-            warn!("PCM pool budget exhausted during time-stretch");
-            return None;
-        }
-        pcm[..].copy_from_slice(&self.scratch);
-        Some(PcmChunk::new(meta, pcm))
+            applied_pitch: f64::NAN,
+            applied_stretch: f64::NAN,
+            source_frames_pushed: 0,
+            processing: false,
+        })
     }
 
     fn options_for(spec: PcmSpec, pool: &PcmPool) -> StretchOptions {
         StretchOptions::builder()
             .sample_rate(spec.sample_rate.get())
             .channels(usize::from(spec.channels.max(1)))
+            .max_input_frames(Self::BACKEND_INPUT_FRAMES)
+            .max_output_frames(Self::PRESENTATION_FRAMES)
             .pool(pool.clone())
             .build()
     }
 
-    /// Rebuild the backend for `kind` at the current `spec`, discarding any
-    /// buffered state. Used on a live backend swap and on a source-spec change.
-    fn rebuild_backend(&mut self, kind: StretchKind) {
-        let options = Self::options_for(self.spec, &self.pool);
-        self.backend = build_backend(kind, &options);
-        self.current_kind = kind;
-        self.applied_stretch = f64::NAN;
-        self.applied_pitch = f64::NAN;
-        self.active = false;
+    fn active(&self) -> DecodeResult<&TempoCore> {
+        self.active.as_ref().ok_or(DecodeError::InvalidData {
+            detail: "tempo stage has no prepared active core",
+        })
     }
 
-    /// Region covering `frame`, plus whether the playhead just crossed out
-    /// of a previously resolved region (a plan boundary or a seek).
-    fn region_for(&mut self, frame: u64) -> (ActiveRegion, bool) {
-        if let Some(r) = self.region
-            && r.contains(frame)
-        {
-            return (r, false);
-        }
-        let next = self
-            .plan
-            .as_ref()
-            .map_or(ActiveRegion::UNBOUNDED, |p| p.region_at(frame));
-        let crossed = self.region.is_some();
-        self.region = Some(next);
-        (next, crossed)
+    fn active_mut(&mut self) -> DecodeResult<&mut TempoCore> {
+        self.active.as_mut().ok_or(DecodeError::InvalidData {
+            detail: "tempo stage has no prepared active core",
+        })
     }
 
-    fn reset_for_passthrough(&mut self) {
-        if !self.active {
-            return;
-        }
-        self.backend.reset();
-        self.applied_stretch = f64::NAN;
-        self.applied_pitch = f64::NAN;
-        self.active = false;
+    fn bypass_for(snapshot: &StretchSnapshot) -> bool {
+        snapshot.plan.is_none() && (snapshot.speed.max(Self::MIN_SPEED) - 1.0).abs() <= f32::EPSILON
     }
 
-    /// Pull the live region plan handle; on a swap drop the region cursor.
-    fn sync_plan(&mut self) {
-        let want = self.controls.region_plan();
-        let same = match (&self.plan, &want) {
+    fn same_plan(left: &Option<Arc<RegionPlan>>, right: &Option<Arc<RegionPlan>>) -> bool {
+        match (left, right) {
             (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
             _ => false,
-        };
-        if !same {
-            self.plan = want;
-            self.region = None;
         }
     }
 
-    fn unity_passthrough(&self, speed: f32) -> bool {
-        self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON
+    fn same_snapshot(left: &StretchSnapshot, right: &StretchSnapshot) -> bool {
+        left.revision == right.revision
+            && left.backend == right.backend
+            && left.keylock == right.keylock
+            && left.speed.to_bits() == right.speed.to_bits()
+            && Self::same_plan(&left.plan, &right.plan)
+    }
+
+    fn channels(&self) -> usize {
+        self.active.as_ref().map_or_else(
+            || usize::from(self.requested_spec.channels.max(1)),
+            TempoCore::channels,
+        )
+    }
+
+    fn validate_credit(&self, credit: &mut OutputCredit<'_>) -> DecodeResult<()> {
+        if credit.channels() != self.channels()
+            || credit.max_frames() == 0
+            || credit.max_frames() > Self::PRESENTATION_FRAMES
+        {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo output credit has an invalid PCM shape",
+            });
+        }
+        let samples =
+            credit
+                .max_frames()
+                .checked_mul(credit.channels())
+                .ok_or(DecodeError::InvalidData {
+                    detail: "tempo output credit sample count overflow",
+                })?;
+        if credit.samples_mut().len() < samples {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo output credit buffer is shorter than its frame count",
+            });
+        }
+        Ok(())
+    }
+
+    fn output_meta(
+        &self,
+        source: &PcmMeta,
+        source_offset: usize,
+        output_frames: usize,
+    ) -> DecodeResult<PcmMeta> {
+        let offset = u64::try_from(source_offset).map_err(|_| DecodeError::InvalidData {
+            detail: "tempo source offset exceeds u64",
+        })?;
+        let mut meta = *source;
+        let spec = self.active()?.spec;
+        meta.spec = spec;
+        meta.frame_offset =
+            meta.frame_offset
+                .checked_add(offset)
+                .ok_or(DecodeError::InvalidData {
+                    detail: "tempo source frame offset overflow",
+                })?;
+        meta.timestamp = meta
+            .timestamp
+            .checked_add(duration_for_frames(spec.sample_rate.get(), offset))
+            .ok_or(DecodeError::InvalidData {
+                detail: "tempo source timestamp overflow",
+            })?;
+        meta.frames = u32::try_from(output_frames).map_err(|_| DecodeError::InvalidData {
+            detail: "tempo output frame count exceeds u32",
+        })?;
+        Ok(meta)
+    }
+
+    fn admitted_source_frames(&self) -> u64 {
+        self.admitted.as_ref().map_or(0, |source| {
+            let remaining = source.chunk.frames() - source.consumed_frames;
+            u64::try_from(remaining).unwrap_or(u64::MAX)
+        })
+    }
+
+    fn active_held_source_frames(&self) -> u64 {
+        self.active.as_ref().map_or(0, |core| {
+            if !core.processing {
+                return 0;
+            }
+            core.backend.as_ref().map_or(0, |backend| {
+                u64::try_from(backend.source_latency_frames())
+                    .unwrap_or(u64::MAX)
+                    .min(core.source_frames_pushed)
+            })
+        })
+    }
+
+    fn admitted_source_frame(&self) -> DecodeResult<Option<u64>> {
+        self.admitted
+            .as_ref()
+            .map(|source| {
+                let consumed = u64::try_from(source.consumed_frames).map_err(|_| {
+                    DecodeError::InvalidData {
+                        detail: "tempo admitted source cursor exceeds u64",
+                    }
+                })?;
+                source.chunk.meta.frame_offset.checked_add(consumed).ok_or(
+                    DecodeError::InvalidData {
+                        detail: "tempo admitted source position overflow",
+                    },
+                )
+            })
+            .transpose()
+    }
+
+    fn region_boundary_ready(&self) -> DecodeResult<bool> {
+        if !self
+            .prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.cause == PrepareCause::RegionBoundary)
+        {
+            return Ok(false);
+        }
+        let boundary = self.region_boundary.ok_or(DecodeError::InvalidData {
+            detail: "tempo prepared region boundary lost its source cursor",
+        })?;
+        if self.admitted_source_frame()? != Some(boundary.source_frame) {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo region boundary moved away from its retained source",
+            });
+        }
+        Ok(true)
     }
 }
 
-impl AudioEffect for TimeStretchProcessor {
-    fn flush(&mut self) -> Option<PcmChunk> {
-        // Only drain the backend when it actually processed input. In unity
-        // passthrough `process` forwards chunks untouched and never feeds the
-        // backend, so flushing it would emit its algorithmic-latency buffer as
-        // spurious trailing zeros. Nothing was buffered: skip.
-        if !self.active {
-            return None;
+impl TempoStage for TimeStretchProcessor {
+    fn release_retired_off_rt(&mut self) {
+        if let Some(retired) = self.retired.take() {
+            retired.release();
         }
-        self.scratch.clear();
-        if let Err(e) = self.backend.flush(&mut self.scratch) {
-            warn!(error = %e, "time-stretch backend flush failed");
-            return None;
-        }
-        self.emit()
     }
 
-    fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
-        let spec_changed = chunk.spec() != self.spec;
-        if spec_changed {
-            self.spec = chunk.spec();
-        }
-        let want_kind = self.controls.backend();
-        if want_kind != self.current_kind || spec_changed {
-            self.rebuild_backend(want_kind);
-        }
-
-        self.sync_plan();
-        let speed = self.controls.speed().max(Self::MIN_SPEED);
-        if self.unity_passthrough(speed) {
-            self.reset_for_passthrough();
-            return Some(chunk);
-        }
-
-        self.active = true;
-        self.last_input_meta = Some(chunk.meta);
-        self.scratch.clear();
-
-        let base = 1.0 / f64::from(speed);
-        let pitch = if self.controls.keylock() {
-            1.0
-        } else {
-            f64::from(speed)
+    fn service_off_rt(&mut self, request: TempoPrepareRequest) -> DecodeResult<()> {
+        self.release_retired_off_rt();
+        let Some(snapshot) = self.controls.try_snapshot() else {
+            return Ok(());
         };
-        self.apply_pitch(pitch);
-        let channels = usize::from(self.spec.channels.max(1));
-        let frames = chunk.frames();
-        let samples = &chunk.samples;
-        let mut consumed = 0_usize;
-        let mut frame = chunk.meta.frame_offset;
-        // Walk the chunk region by region: a plan boundary mid-chunk splits
-        // it at the boundary sample, each sub-chunk at its own ratio.
-        while consumed < frames {
-            let (region, crossed) = self.region_for(frame);
-            let left = u64::try_from(frames - consumed).unwrap_or(u64::MAX);
-            let span = region.end().saturating_sub(frame).min(left).max(1);
-            let sub = usize::try_from(span).unwrap_or(frames - consumed);
-            self.apply_stretch(base * region.correction(), crossed);
-            let needed = self.scratch.len() + self.backend.max_output_samples(sub);
-            if self.scratch.capacity() < needed {
-                self.scratch.reserve(needed - self.scratch.len());
-            }
-            let part = &samples[consumed * channels..(consumed + sub) * channels];
-            if let Err(e) = self.backend.process(part, &mut self.scratch) {
-                warn!(error = %e, "time-stretch backend process failed; dropping chunk");
-                return None;
-            }
-            consumed += sub;
-            frame = frame.saturating_add(span);
+        let (requested_spec, requested_cause) = match request {
+            TempoPrepareRequest::Current { spec } => (spec, PrepareCause::Current),
+            TempoPrepareRequest::DecoderBoundary { spec } => (spec, PrepareCause::DecoderBoundary),
+        };
+        let (spec, cause) = if self.region_boundary.is_some() {
+            (self.active()?.spec, PrepareCause::RegionBoundary)
+        } else {
+            (requested_spec, requested_cause)
+        };
+        if self.prepared.as_ref().is_some_and(|prepared| {
+            prepared.cause == cause
+                && prepared.core.spec == spec
+                && Self::same_snapshot(&prepared.core.snapshot, &snapshot)
+        }) {
+            return Ok(());
         }
-        self.emit()
+
+        if cause == PrepareCause::Current
+            && let Some(active) = &self.active
+            && active.spec == spec
+            && active.snapshot.backend == snapshot.backend
+            && active.bypass() == Self::bypass_for(&snapshot)
+        {
+            drop(self.prepared.take());
+            self.update_active_snapshot(snapshot)?;
+            self.requested_spec = spec;
+            return Ok(());
+        }
+
+        let core = self.build_core(snapshot, spec)?;
+        if self.active.is_none() {
+            drop(self.prepared.take());
+            self.requested_spec = spec;
+            self.active = Some(core);
+            return Ok(());
+        }
+
+        drop(self.prepared.take());
+        self.next_boundary = self
+            .next_boundary
+            .checked_add(1)
+            .ok_or(DecodeError::InvalidData {
+                detail: "tempo prepared-boundary identity overflow",
+            })?;
+        self.prepared = Some(PreparedCore {
+            cause,
+            id: TempoBoundaryId::new(self.next_boundary),
+            core,
+        });
+        Ok(())
     }
 
-    fn reset(&mut self) {
-        self.backend.reset();
-        self.scratch.clear();
+    fn prepared_boundary(&self) -> Option<TempoBoundaryId> {
+        self.prepared.as_ref().and_then(|prepared| {
+            let admission_ready =
+                self.admitted.is_none() || prepared.cause == PrepareCause::RegionBoundary;
+            (admission_ready && prepared.core.snapshot.revision == self.controls.revision())
+                .then_some(prepared.id)
+        })
+    }
+
+    fn commit_prepared(&mut self, id: TempoBoundaryId) -> DecodeResult<()> {
+        if self.prepared.as_ref().map(|prepared| prepared.id) != Some(id) {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo prepared-boundary identity is stale",
+            });
+        }
+        let retains_region_source = self.region_boundary_ready()?;
+        if (self.admitted.is_some() && !retains_region_source)
+            || self.eof_pending
+            || self.discontinuity_pending
+            || self.active_held_source_frames() != 0
+        {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo core committed before the ordered drain completed",
+            });
+        }
+        if self.retired.is_some() {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo core committed before prior state was retired off-RT",
+            });
+        }
+        let prepared = self.prepared.take().ok_or(DecodeError::InvalidData {
+            detail: "tempo stage lost its prepared core",
+        })?;
+        let active = self.active.take();
+        self.requested_spec = prepared.core.spec;
+        self.active = Some(prepared.core);
+        self.retired = Some(RetiredCores {
+            active,
+            prepared: None,
+        });
         self.last_input_meta = None;
-        self.applied_stretch = f64::NAN;
-        self.applied_pitch = f64::NAN;
-        self.active = false;
-        self.region = None;
+        self.eof_offset = 0;
+        self.drain_frontier = None;
+        self.region_boundary = None;
+        Ok(())
+    }
+
+    fn buffered_source_quanta(&self) -> usize {
+        usize::from(self.admitted.is_some())
+    }
+
+    fn output_spec(&self) -> PcmSpec {
+        self.active
+            .as_ref()
+            .map_or(self.requested_spec, |core| core.spec)
+    }
+
+    fn push_source(&mut self, chunk: PcmChunk) -> DecodeResult<()> {
+        if self.failed || self.eof_pending || self.discontinuity_pending {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo stage is not accepting source in its current state",
+            });
+        }
+        if self.admitted.is_some() {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo stage already owns one source chunk",
+            });
+        }
+        if chunk.spec() != self.output_spec() || chunk.frames() == 0 {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo source chunk has an invalid PCM shape",
+            });
+        }
+        self.admitted = Some(AdmittedSource {
+            chunk,
+            consumed_frames: 0,
+        });
+        Ok(())
+    }
+
+    fn render(
+        &mut self,
+        _point: Option<PresentationPoint>,
+        credit: OutputCredit<'_>,
+        retire: &mut dyn FnMut(PcmChunk),
+    ) -> DecodeResult<TempoStep> {
+        if self.failed {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo stage is terminal after a render failure",
+            });
+        }
+        if self.eof_pending || self.discontinuity_pending {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo stage cannot render source while a drain debt is active",
+            });
+        }
+        if self.active.is_none()
+            || (self.admitted.is_none()
+                && self
+                    .active
+                    .as_ref()
+                    .is_none_or(|core| core.snapshot.revision != self.controls.revision()))
+        {
+            return Ok(TempoStep::Preparing);
+        }
+        self.render_admitted(credit, retire)
+    }
+
+    fn held_source_frames(&self) -> u64 {
+        let backend = self.drain_frontier.as_ref().map_or_else(
+            || self.active_held_source_frames(),
+            |frontier| frontier.remaining_source_frames,
+        );
+        self.admitted_source_frames().saturating_add(backend)
+    }
+
+    fn finish_eof(&mut self) -> DecodeResult<TempoEofDebt> {
+        if self.failed {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo stage is terminal after a render failure",
+            });
+        }
+        if self.admitted.is_some() {
+            return Err(DecodeError::InvalidData {
+                detail: "true EOF was declared before admitted tempo source was rendered",
+            });
+        }
+        self.begin_tempo_drain("time-stretch EOF")?;
+        self.eof_pending = true;
+        Ok(TempoEofDebt::new())
+    }
+
+    fn render_eof(
+        &mut self,
+        _debt: &mut TempoEofDebt,
+        credit: OutputCredit<'_>,
+        _retire: &mut dyn FnMut(PcmChunk),
+    ) -> DecodeResult<TempoEofStep> {
+        if !self.eof_pending {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo EOF renderer has no active debt",
+            });
+        }
+        Ok(match self.render_tempo_drain(credit)? {
+            Some((frames, meta)) => TempoEofStep::Rendered { frames, meta },
+            None => TempoEofStep::Drained,
+        })
+    }
+
+    fn begin_discontinuity(&mut self) -> DecodeResult<TempoDiscontinuityDebt> {
+        if self.failed {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo stage is terminal after a render failure",
+            });
+        }
+        let retains_region_source = self.region_boundary_ready()?;
+        if self.admitted.is_some() && !retains_region_source {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo discontinuity began before admitted source was rendered",
+            });
+        }
+        self.begin_tempo_drain("time-stretch discontinuity")?;
+        self.discontinuity_pending = true;
+        Ok(TempoDiscontinuityDebt::new())
+    }
+
+    fn render_discontinuity(
+        &mut self,
+        _debt: &mut TempoDiscontinuityDebt,
+        credit: OutputCredit<'_>,
+        _retire: &mut dyn FnMut(PcmChunk),
+    ) -> DecodeResult<TempoDiscontinuityStep> {
+        if !self.discontinuity_pending {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo discontinuity renderer has no active debt",
+            });
+        }
+        Ok(match self.render_tempo_drain(credit)? {
+            Some((frames, meta)) => TempoDiscontinuityStep::Rendered { frames, meta },
+            None => TempoDiscontinuityStep::Drained,
+        })
+    }
+
+    fn deactivate(&mut self, retire: &mut dyn FnMut(PcmChunk)) -> DecodeResult<()> {
+        if self.retired.is_some() {
+            return Err(DecodeError::InvalidData {
+                detail: "tempo stage deactivated before prior state was retired off-RT",
+            });
+        }
+        if let Some(source) = self.admitted.take() {
+            retire(source.chunk);
+        }
+        let active = self.active.take();
+        let prepared = self.prepared.take();
+        if active.is_some() || prepared.is_some() {
+            self.retired = Some(RetiredCores { active, prepared });
+        }
+        self.last_input_meta = None;
+        self.eof_offset = 0;
+        self.eof_pending = false;
+        self.discontinuity_pending = false;
+        self.drain_frontier = None;
+        self.region_boundary = None;
+        self.failed = false;
+        Ok(())
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::num::NonZero;
-
-    use kithara_bufpool::PcmPool;
-    use kithara_decode::{PcmMeta, PcmSpec};
-    use kithara_platform::time::Duration;
-    use kithara_test_utils::kithara;
-    use realfft::RealFftPlanner;
-
-    use super::*;
-
-    struct Consts;
-
-    impl Consts {
-        const CH: u16 = 2;
-        const F0: f64 = 440.0;
-        /// FFT length for the pitch (dominant-frequency) check.
-        const N: usize = 1 << 14;
-        const SR: u32 = 44_100;
-    }
-
-    fn f32_of(x: f64) -> f32 {
-        num_traits::cast(x).unwrap_or_default()
-    }
-
-    fn f64_of(x: usize) -> f64 {
-        num_traits::cast(x).unwrap_or_default()
-    }
-
-    /// Interleaved stereo sine at `F0`, phase-accumulated to avoid drift.
-    fn sine(frames: usize) -> Vec<f32> {
-        let inc = std::f64::consts::TAU * Consts::F0 / f64::from(Consts::SR);
-        let mut phase = 0.0_f64;
-        let mut out = Vec::with_capacity(frames * usize::from(Consts::CH));
-        for _ in 0..frames {
-            let s = f32_of(0.5 * phase.sin());
-            out.push(s);
-            out.push(s);
-            phase += inc;
-        }
-        out
-    }
-
-    fn chunk(samples: &[f32]) -> PcmChunk {
-        let frames = samples.len() / usize::from(Consts::CH);
-        PcmChunk::new(
-            PcmMeta {
-                spec: PcmSpec {
-                    channels: Consts::CH,
-                    sample_rate: NonZero::new(Consts::SR).unwrap(),
-                },
-                frames: u32::try_from(frames).unwrap_or(0),
-                timestamp: Duration::ZERO,
-                ..Default::default()
-            },
-            PcmPool::default().attach(samples.to_vec()),
-        )
-    }
-
-    /// Index of the strongest spectral bin (skipping DC) of a mono window
-    /// taken from the middle of `mono`.
-    fn dominant_bin(mono: &[f32]) -> usize {
-        let start = (mono.len().saturating_sub(Consts::N)) / 2;
-        let seg = &mono[start..start + Consts::N];
-        let mut planner = RealFftPlanner::<f32>::new();
-        let fft = planner.plan_fft_forward(Consts::N);
-        let mut input = fft.make_input_vec();
-        input.copy_from_slice(seg);
-        let mut spectrum = fft.make_output_vec();
-        fft.process(&mut input, &mut spectrum).unwrap();
-        spectrum
-            .iter()
-            .enumerate()
-            .skip(1)
-            .max_by(|a, b| a.1.norm().total_cmp(&b.1.norm()))
-            .map_or(0, |(i, _)| i)
-    }
-
-    fn expected_bin(freq: f64) -> usize {
-        num_traits::cast((freq * f64_of(Consts::N) / f64::from(Consts::SR)).round()).unwrap_or(0)
-    }
-
-    fn spec() -> PcmSpec {
-        PcmSpec {
-            channels: Consts::CH,
-            sample_rate: NonZero::new(Consts::SR).unwrap(),
-        }
-    }
-
-    fn processor(controls: Arc<StretchControls>) -> TimeStretchProcessor {
-        TimeStretchProcessor::new(controls, spec(), PcmPool::default())
-    }
-
-    fn keylocked(kind: StretchKind, speed: f32) -> TimeStretchProcessor {
-        let controls = StretchControls::new(speed);
-        controls.set_keylock(true);
-        controls.set_backend(kind);
-        processor(controls)
-    }
-
-    fn vinyl(kind: StretchKind, speed: f32) -> TimeStretchProcessor {
-        let controls = StretchControls::new(speed);
-        controls.set_keylock(false);
-        controls.set_backend(kind);
-        processor(controls)
-    }
-
-    fn render(fx: &mut TimeStretchProcessor, input: &[f32]) -> Vec<f32> {
-        let mut out: Vec<f32> = Vec::new();
-        let block = 4096 * usize::from(Consts::CH);
-        for data in input.chunks(block) {
-            if let Some(c) = fx.process(chunk(data)) {
-                assert_eq!(
-                    c.spec().sample_rate.get(),
-                    Consts::SR,
-                    "stretch preserves sample rate"
-                );
-                assert_eq!(c.spec().channels, Consts::CH);
-                out.extend_from_slice(&c.samples);
-            }
-        }
-        while let Some(c) = fx.flush() {
-            // A non-empty flush chunk carries real audio, so its spec must stay
-            // the source spec — never the `PcmMeta::default()` sentinel (0
-            // channels) that a `None` `last_input_meta` would otherwise yield.
-            assert_eq!(c.spec().channels, Consts::CH, "flush preserves channels");
-            assert_eq!(
-                c.spec().sample_rate.get(),
-                Consts::SR,
-                "flush preserves sample rate"
-            );
-            out.extend_from_slice(&c.samples);
-        }
-        out
-    }
-
-    fn run_keylocked(kind: StretchKind, speed: f32, in_frames: usize) -> Vec<f32> {
-        let input = sine(in_frames);
-        render(&mut keylocked(kind, speed), &input)
-    }
-
-    fn run_vinyl(kind: StretchKind, speed: f32, in_frames: usize) -> Vec<f32> {
-        let input = sine(in_frames);
-        render(&mut vinyl(kind, speed), &input)
-    }
-
-    /// Half playback speed -> stretch 2.0 -> ~double duration, pitch held.
-    /// Shared across every compiled-in backend.
-    fn assert_half_speed_contract(kind: StretchKind) {
-        let channels = usize::from(Consts::CH);
-        let in_frames = usize::try_from(Consts::SR).unwrap() * 2; // 2 s
-        let out = run_keylocked(kind, 0.5, in_frames);
-        let out_frames = out.len() / channels;
-
-        // Both C++ backends emit fixed-length output with leading latency-fill
-        // (and bungee drops its tail), nudging the measured duration off an
-        // exact 2x on a short clip — hence the ±10% band. Pitch is still
-        assert!(
-            out_frames * 10 >= in_frames * 18 && out_frames * 10 <= in_frames * 22,
-            "{kind:?}: expected ~2x duration, got {out_frames} from {in_frames}"
-        );
-
-        // Pitch preserved: dominant bin still at F0 (the load-bearing check —
-        // a resampler-in-disguise would shift it).
-        let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
-        assert!(
-            mono.len() >= Consts::N,
-            "{kind:?}: not enough output for the FFT window"
-        );
-        let peak = dominant_bin(&mono);
-        let want = expected_bin(Consts::F0);
-        assert!(
-            peak.abs_diff(want) <= 3,
-            "{kind:?}: pitch moved under time-stretch: peak bin {peak}, expected {want}"
-        );
-    }
-
-    fn assert_unity_contract(kind: StretchKind) {
-        let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
-        let input = sine(in_frames);
-        let out = render(&mut keylocked(kind, 1.0), &input);
-        assert_eq!(out, input, "{kind:?}: unity speed must bypass byte-exact");
-    }
-
-    #[cfg(feature = "stretch-signalsmith")]
-    #[kithara::test]
-    fn signalsmith_half_speed_and_unity_contracts() {
-        assert_half_speed_contract(StretchKind::Signalsmith);
-        assert_unity_contract(StretchKind::Signalsmith);
-    }
-
-    #[cfg(feature = "stretch-bungee")]
-    #[kithara::test]
-    fn bungee_half_speed_and_unity_contracts() {
-        assert_half_speed_contract(StretchKind::Bungee);
-        assert_unity_contract(StretchKind::Bungee);
-    }
-
-    #[kithara::test]
-    fn output_meta_preserves_decoder_timeline() {
-        let channels = usize::from(Consts::CH);
-        let mut fx = keylocked(StretchKind::default(), 0.5);
-        let cf = 1024usize;
-        let block = sine(cf);
-        let mut fed_ends = HashSet::new();
-        let mut emitted = Vec::new();
-        for i in 0..40u64 {
-            let mut c = chunk(&block);
-            let end = Duration::from_millis(i * 100 + 100);
-            c.meta.timestamp = Duration::from_millis(i * 100);
-            c.meta.end_timestamp = end;
-            c.meta.frame_offset = i * u64::try_from(cf).unwrap();
-            fed_ends.insert(end);
-            if let Some(o) = fx.process(c) {
-                emitted.push(o);
-            }
-        }
-        while let Some(o) = fx.flush() {
-            emitted.push(o);
-        }
-        assert!(!emitted.is_empty(), "stretch produced no output");
-        for o in &emitted {
-            assert_eq!(
-                o.spec(),
-                PcmSpec {
-                    channels: Consts::CH,
-                    sample_rate: NonZero::new(Consts::SR).unwrap()
-                },
-                "spec (incl. sample rate) preserved verbatim"
-            );
-            assert_eq!(
-                usize::try_from(o.meta.frames).unwrap(),
-                o.samples.len() / channels,
-                "frames recomputed to the actual output count"
-            );
-            assert!(
-                fed_ends.contains(&o.meta.end_timestamp),
-                "end_timestamp carried verbatim from an input chunk (source-track time)"
-            );
-        }
-    }
-
-    /// Key-lock off is vinyl mode: speed changes duration and pitch in the
-    /// stretch slot, with no resampler-rate handoff.
-    #[kithara::test]
-    fn vinyl_speed_scales_duration_and_pitch() {
-        let channels = usize::from(Consts::CH);
-        let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
-        let out = run_vinyl(StretchKind::default(), 2.0, in_frames);
-        let out_frames = out.len() / channels;
-        assert!(
-            out_frames * 10 >= in_frames * 4 && out_frames * 10 <= in_frames * 6,
-            "vinyl 2x should roughly halve duration, got {out_frames} from {in_frames}"
-        );
-        let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
-        assert!(
-            mono.len() >= Consts::N,
-            "not enough vinyl output for the FFT window"
-        );
-        let peak = dominant_bin(&mono);
-        let want = expected_bin(Consts::F0 * 2.0);
-        assert!(
-            peak.abs_diff(want) <= 4,
-            "vinyl pitch did not follow speed: peak bin {peak}, expected {want}"
-        );
-    }
-
-    #[kithara::test]
-    fn live_speed_change_updates_stretch_duration() {
-        let controls = StretchControls::new(1.0);
-        controls.set_keylock(true);
-        controls.set_backend(StretchKind::default());
-        let mut fx = processor(Arc::clone(&controls));
-        let block = sine(4096);
-        let unity = fx.process(chunk(&block)).expect("unity bypass emits");
-        assert_eq!(&unity.samples[..], &block[..], "unity phase bypasses");
-
-        controls.set_speed(0.5);
-        let mut stretched: Vec<f32> = Vec::new();
-        for _ in 0..24 {
-            if let Some(c) = fx.process(chunk(&block)) {
-                stretched.extend_from_slice(&c.samples);
-            }
-        }
-        while let Some(c) = fx.flush() {
-            stretched.extend_from_slice(&c.samples);
-        }
-        assert!(
-            stretched.len() > block.len() * 24,
-            "half-speed key-lock should lengthen output after a live speed change"
-        );
-    }
-
-    /// Flipping key-lock mid-stream switches from vinyl pitch shift to
-    /// pitch-preserving stretch — no reload.
-    #[kithara::test]
-    fn live_keylock_toggle_switches_pitch_mode() {
-        let controls = StretchControls::new(0.5);
-        controls.set_keylock(false);
-        controls.set_backend(StretchKind::default());
-        let mut fx = processor(Arc::clone(&controls));
-        let block = sine(4096);
-
-        let mut vinyl_out: Vec<f32> = Vec::new();
-        for _ in 0..24 {
-            if let Some(c) = fx.process(chunk(&block)) {
-                vinyl_out.extend_from_slice(&c.samples);
-            }
-        }
-        let vinyl_mono: Vec<f32> = vinyl_out
-            .iter()
-            .step_by(usize::from(Consts::CH))
-            .copied()
-            .collect();
-        assert!(
-            dominant_bin(&vinyl_mono).abs_diff(expected_bin(Consts::F0 * 0.5)) <= 4,
-            "off: vinyl pitch follows speed"
-        );
-
-        controls.set_keylock(true);
-        let mut stretched: Vec<f32> = Vec::new();
-        for _ in 0..24 {
-            if let Some(c) = fx.process(chunk(&block)) {
-                stretched.extend_from_slice(&c.samples);
-            }
-        }
-        while let Some(c) = fx.flush() {
-            stretched.extend_from_slice(&c.samples);
-        }
-        let mono: Vec<f32> = stretched
-            .iter()
-            .step_by(usize::from(Consts::CH))
-            .copied()
-            .collect();
-        assert!(
-            mono.len() >= Consts::N,
-            "on: not enough output for the FFT window"
-        );
-        assert!(
-            dominant_bin(&mono).abs_diff(expected_bin(Consts::F0)) <= 3,
-            "on: pitch preserved after live toggle"
-        );
-    }
-
-    /// Swapping the backend mid-stream keeps the stream flowing and pitch-locked.
-    #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-    #[kithara::test]
-    fn live_backend_swap_continues_and_keeps_pitch() {
-        let controls = StretchControls::new(0.5);
-        controls.set_keylock(true);
-        controls.set_backend(StretchKind::Bungee);
-        let mut fx = processor(Arc::clone(&controls));
-        let block = sine(4096);
-        let mut out: Vec<f32> = Vec::new();
-        for i in 0..24 {
-            if i == 6 {
-                controls.set_backend(StretchKind::Signalsmith);
-            }
-            if let Some(c) = fx.process(chunk(&block)) {
-                out.extend_from_slice(&c.samples);
-            }
-        }
-        while let Some(c) = fx.flush() {
-            out.extend_from_slice(&c.samples);
-        }
-        let mono: Vec<f32> = out
-            .iter()
-            .step_by(usize::from(Consts::CH))
-            .copied()
-            .collect();
-        assert!(
-            mono.len() >= Consts::N,
-            "not enough output after swap for the FFT window"
-        );
-        assert!(
-            dominant_bin(&mono).abs_diff(expected_bin(Consts::F0)) <= 3,
-            "pitch preserved after live backend swap"
-        );
-    }
-}
+pub(in crate::effects::timestretch) mod tests;

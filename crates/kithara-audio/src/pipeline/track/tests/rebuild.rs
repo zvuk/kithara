@@ -55,7 +55,6 @@ use crate::{
         },
     },
     renderer::AudioWorkerSource,
-    traits::AudioEffect,
 };
 
 pub(super) fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
@@ -773,7 +772,7 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
         playback_resampler_backend: "none",
         recreate_on_host_rate_change: true,
     }
-    .into_parts(Vec::new(), shared_stream.seek_observe().epoch());
+    .into_parts(shared_stream.seek_observe().epoch());
     let parts = SourceParts::new(
         &shared_stream,
         decode,
@@ -807,25 +806,15 @@ struct RouteParams {
 }
 
 pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
-    route_signal_source_with_effects(initial_host_rate, Vec::new()).await
-}
-
-pub(super) async fn route_signal_source_with_effects(
-    initial_host_rate: u32,
-    effects: Vec<Box<dyn AudioEffect>>,
-) -> RouteFixture {
-    route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: None,
-            active_timeline_gap: 0,
-            incoming_timeline_gap: 0,
-            initial_host_rate,
-            segmented: false,
-        },
-        effects,
-    )
+    route_source(RouteParams {
+        chunks_before_eof: None,
+        gapless: None,
+        incoming_chunks_before_eof: None,
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate,
+        segmented: false,
+    })
     .await
 }
 
@@ -833,18 +822,15 @@ pub(super) async fn route_signal_source_with_gapless(
     initial_host_rate: u32,
     gapless: GaplessInfo,
 ) -> RouteFixture {
-    route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: Some(gapless),
-            incoming_chunks_before_eof: None,
-            active_timeline_gap: 0,
-            incoming_timeline_gap: 0,
-            initial_host_rate,
-            segmented: false,
-        },
-        Vec::new(),
-    )
+    route_source(RouteParams {
+        chunks_before_eof: None,
+        gapless: Some(gapless),
+        incoming_chunks_before_eof: None,
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate,
+        segmented: false,
+    })
     .await
 }
 
@@ -853,18 +839,15 @@ pub(super) async fn route_signal_source_with_gapless_eof(
     gapless: GaplessInfo,
     chunks_before_eof: usize,
 ) -> RouteFixture {
-    route_source(
-        RouteParams {
-            chunks_before_eof: Some(chunks_before_eof),
-            gapless: Some(gapless),
-            incoming_chunks_before_eof: None,
-            active_timeline_gap: 0,
-            incoming_timeline_gap: 0,
-            initial_host_rate,
-            segmented: false,
-        },
-        Vec::new(),
-    )
+    route_source(RouteParams {
+        chunks_before_eof: Some(chunks_before_eof),
+        gapless: Some(gapless),
+        incoming_chunks_before_eof: None,
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate,
+        segmented: false,
+    })
     .await
 }
 
@@ -872,22 +855,19 @@ pub(super) async fn route_signal_source_with_finite_incoming(
     initial_host_rate: u32,
     incoming_chunks_before_eof: usize,
 ) -> RouteFixture {
-    route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: Some(incoming_chunks_before_eof),
-            active_timeline_gap: 0,
-            incoming_timeline_gap: 0,
-            initial_host_rate,
-            segmented: false,
-        },
-        Vec::new(),
-    )
+    route_source(RouteParams {
+        chunks_before_eof: None,
+        gapless: None,
+        incoming_chunks_before_eof: Some(incoming_chunks_before_eof),
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate,
+        segmented: false,
+    })
     .await
 }
 
-async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -> RouteFixture {
+async fn route_source(params: RouteParams) -> RouteFixture {
     let control = Arc::new(TestControl::new(media_info(0)));
     let drops = Arc::new(Mutex::new(Vec::new()));
     let host_sample_rate = Arc::new(AtomicU32::new(params.initial_host_rate));
@@ -961,7 +941,7 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
         playback_resampler_backend: "none",
         recreate_on_host_rate_change: true,
     }
-    .into_parts(effects, shared_stream.seek_observe().epoch());
+    .into_parts(shared_stream.seek_observe().epoch());
     let parts = SourceParts::new(
         &shared_stream,
         decode,
@@ -984,18 +964,15 @@ pub(super) async fn route_signal_source_with_gaps(
     active_timeline_gap: u64,
     incoming_timeline_gap: u64,
 ) -> RouteFixture {
-    route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: None,
-            active_timeline_gap,
-            incoming_timeline_gap,
-            initial_host_rate: Consts::SAMPLE_RATE,
-            segmented: false,
-        },
-        Vec::new(),
-    )
+    route_source(RouteParams {
+        chunks_before_eof: None,
+        gapless: None,
+        incoming_chunks_before_eof: None,
+        active_timeline_gap,
+        incoming_timeline_gap,
+        initial_host_rate: Consts::SAMPLE_RATE,
+        segmented: false,
+    })
     .await
 }
 
@@ -1537,18 +1514,15 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin() {
         host_sample_rate,
         mut source,
         ..
-    } = route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: None,
-            active_timeline_gap: 0,
-            incoming_timeline_gap: 0,
-            initial_host_rate: Consts::SAMPLE_RATE,
-            segmented: true,
-        },
-        Vec::new(),
-    )
+    } = route_source(RouteParams {
+        chunks_before_eof: None,
+        gapless: None,
+        incoming_chunks_before_eof: None,
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate: Consts::SAMPLE_RATE,
+        segmented: true,
+    })
     .await;
 
     let mut route_recreated = false;

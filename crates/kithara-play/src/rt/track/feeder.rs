@@ -1,6 +1,6 @@
 use std::{num::NonZeroU32, ops::Range};
 
-use kithara_audio::ServiceClass;
+use kithara_audio::{PresentationAdvance, PresentationPoint, ServiceClass};
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::Frames;
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
@@ -26,6 +26,8 @@ pub struct PlayerResource {
     failed: bool,
     write_len: usize,
     write_pos: usize,
+    buffered_presentation_advance: Option<PresentationAdvance>,
+    read_presentation_advance: Option<PresentationAdvance>,
 }
 
 /// Result of a bounded audio-thread read from [`PlayerResource`].
@@ -90,6 +92,8 @@ impl PlayerResource {
             write_pos: 0,
             eof_seen: false,
             failed: false,
+            buffered_presentation_advance: None,
+            read_presentation_advance: None,
         }
     }
 
@@ -111,18 +115,23 @@ impl PlayerResource {
         let mut eof_reached = self.eof_seen;
 
         while target_frames > self.write_len && !eof_reached {
-            let avail = self.channel_buffers[0].len() - self.write_pos;
+            let deficit = target_frames - self.write_len;
+            let avail = (self.channel_buffers[0].len() - self.write_pos).min(deficit);
             if avail == 0 {
                 break;
             }
 
-            let channel_buffers = &mut self.channel_buffers;
-            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
-            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
-            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
-            let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
-
-            let n = match self.resource.get_mut().read_planar(&mut planar) {
+            let write_len_before = self.write_len;
+            let read_outcome = {
+                let channel_buffers = &mut self.channel_buffers;
+                let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
+                let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
+                let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
+                let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
+                self.resource.get_mut().read_planar(&mut planar)
+            };
+            let advance = self.resource.get_mut().take_presentation_advance();
+            let n = match read_outcome {
                 Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
                 Ok(kithara_audio::ReadOutcome::Pending { .. }) => 0,
                 Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
@@ -137,13 +146,48 @@ impl PlayerResource {
                 }
             };
             if n == 0 {
+                if advance.is_some() {
+                    self.buffered_presentation_advance = None;
+                }
                 break;
             }
+            self.record_presentation_advance(write_len_before, n, advance);
             self.write_len += n;
             self.write_pos += n;
         }
 
         eof_reached
+    }
+
+    fn record_presentation_advance(
+        &mut self,
+        write_len_before: usize,
+        frames_read: usize,
+        advance: Option<PresentationAdvance>,
+    ) {
+        let Some(advance) = advance else {
+            return;
+        };
+        let read_offset = advance.read_offset_frames();
+        if read_offset > frames_read {
+            self.buffered_presentation_advance = None;
+            return;
+        }
+        self.buffered_presentation_advance = write_len_before
+            .checked_add(read_offset)
+            .map(|offset| PresentationAdvance::new(advance.point(), offset));
+    }
+
+    fn take_consumed_presentation_advance(&mut self, frames: usize) -> Option<PresentationAdvance> {
+        let advance = self.buffered_presentation_advance?;
+        let offset = advance.read_offset_frames();
+        if offset <= frames {
+            self.buffered_presentation_advance = None;
+            return Some(advance);
+        }
+        self.buffered_presentation_advance =
+            Some(PresentationAdvance::new(advance.point(), offset - frames));
+        None
     }
 
     /// Remaining buffered frames when the wrapped reader has reached EOF.
@@ -172,6 +216,7 @@ impl PlayerResource {
         range: Range<usize>,
         metrics: &RtMetrics,
     ) -> ReadOutcome {
+        self.read_presentation_advance = None;
         let frames_to_read = range.end - range.start;
         let mut eof_reached = self.fill_scratch(frames_to_read, metrics);
 
@@ -203,6 +248,8 @@ impl PlayerResource {
 
             self.write_len -= frames_to_write;
             self.write_pos = tail_size;
+            self.read_presentation_advance =
+                self.take_consumed_presentation_advance(frames_to_write);
 
             if frames_to_write == frames_to_read {
                 eof_reached |= self.fill_scratch(frames_to_read, metrics);
@@ -245,6 +292,8 @@ impl PlayerResource {
         self.write_pos = 0;
         self.eof_seen = false;
         self.failed = false;
+        self.buffered_presentation_advance = None;
+        self.read_presentation_advance = None;
     }
 
     /// Control-plane handle used to begin a seek off the audio thread.
@@ -253,12 +302,19 @@ impl PlayerResource {
         self.resource.get().seek_handle()
     }
 
+    pub(super) fn take_presentation_advance(&mut self) -> Option<PresentationAdvance> {
+        self.read_presentation_advance.take()
+    }
+
     delegate::delegate! {
         to self.resource.get() {
             /// Total duration in seconds. Returns 0.0 if unknown.
             #[must_use]
             #[expr($.map_or(0.0, |d| d.as_secs_f64()))]
             pub fn duration(&self) -> f64;
+            /// Latest coherent producer-side presentation endpoint.
+            #[must_use]
+            pub(crate) fn presentation_point(&self) -> Option<PresentationPoint>;
             /// Set the target sample rate of the audio host.
             pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
             /// Set the playback rate for the active stretch controls.

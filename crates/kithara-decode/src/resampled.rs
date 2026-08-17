@@ -1,6 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_platform::time::Duration;
 use kithara_resampler::{
     Resampler, ResamplerBackend, ResamplerConfig, ResamplerMode, ResamplerProcess,
     ResamplerSettings, create_resampler,
@@ -11,8 +12,8 @@ use smallvec::SmallVec;
 use crate::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, Frames, GaplessInfo,
-    GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec, TrackMetadata, duration_for_frames,
-    frames_for_duration, sanitize_sample,
+    GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec, TrackMetadata, composed::frame_offset_for,
+    duration_for_frames, sanitize_sample,
 };
 
 pub(crate) fn wrap<B>(
@@ -53,6 +54,7 @@ where
     eof_flushed: bool,
     emitted_frames: u64,
     output_frame_offset: u64,
+    reanchor_output_on_next_chunk: bool,
     source_frames_seen: u64,
     output_skip_frames: usize,
 }
@@ -91,6 +93,7 @@ where
             pending_meta: None,
             pool: pool.clone(),
             quality: config.quality,
+            reanchor_output_on_next_chunk: false,
             resampler,
             scratch: channel_buffers(pool, source_spec.channels),
             source_frames_seen: 0,
@@ -102,13 +105,14 @@ where
 
     fn append_chunk(&mut self, chunk: &PcmChunk) -> DecodeResult<()> {
         let spec = chunk.spec();
-        if spec != self.source_spec {
+        let source_spec_changed = spec != self.source_spec;
+        if source_spec_changed {
             self.rebuild_for_source_spec(spec)?;
-            self.output_frame_offset = u64::try_from(frames_for_duration(
-                self.target_sample_rate.get(),
-                chunk.meta.timestamp,
-            ))
-            .unwrap_or(u64::MAX);
+        }
+        if source_spec_changed || self.reanchor_output_on_next_chunk {
+            self.output_frame_offset =
+                frame_offset_for(chunk.meta.timestamp, self.target_sample_rate.get());
+            self.reanchor_output_on_next_chunk = false;
         }
         if self.pending_meta.is_none() {
             self.pending_meta = Some(chunk.meta);
@@ -326,6 +330,7 @@ where
         Self::clear_planar(&mut self.input, channels);
         Self::clear_planar(&mut self.output, channels);
         self.pending_meta = None;
+        self.reanchor_output_on_next_chunk = false;
         self.last_input_meta = None;
         self.emitted_frames = 0;
         self.eof_flushed = false;
@@ -386,7 +391,7 @@ where
         }
     }
 
-    fn seek(&mut self, pos: kithara_platform::time::Duration) -> DecodeResult<DecoderSeekOutcome> {
+    fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         let outcome = self.decoder.seek(pos)?;
         self.reset_resampler_state();
         match outcome {
@@ -396,11 +401,9 @@ where
                 preroll,
                 ..
             } => {
-                self.output_frame_offset = u64::try_from(frames_for_duration(
-                    self.target_sample_rate.get(),
-                    landed_at,
-                ))
-                .unwrap_or(u64::MAX);
+                self.output_frame_offset =
+                    frame_offset_for(landed_at, self.target_sample_rate.get());
+                self.reanchor_output_on_next_chunk = true;
                 Ok(DecoderSeekOutcome::Landed {
                     landed_at,
                     landed_byte,
@@ -446,7 +449,7 @@ where
 
     delegate::delegate! {
         to self.decoder {
-            fn duration(&self) -> Option<kithara_platform::time::Duration>;
+            fn duration(&self) -> Option<Duration>;
             fn flush_reader_signals(&mut self);
             fn metadata(&self) -> TrackMetadata;
             fn update_byte_len(&self, len: u64);

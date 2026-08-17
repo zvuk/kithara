@@ -73,8 +73,9 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// non-tempo (no-`stretch`) chain.
     pub(crate) playback_rate: Option<Arc<AtomicF32>>,
     /// Live time-stretch controls (speed + key-lock + backend). `Some` selects
-    /// tempo mode; the same `Arc` must flow to every track so live changes
-    /// reach the running effect chain. `None` keeps the resampler-first chain.
+    /// the resident tempo stage; the same `Arc` must flow to every track so
+    /// the worker can prepare live changes off RT. `None` keeps identity
+    /// presentation.
     pub(crate) stretch: Option<Arc<StretchControls>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     pub(crate) worker: Option<AudioWorkerHandle>,

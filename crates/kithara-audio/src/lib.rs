@@ -49,7 +49,8 @@ pub use renderer::{
     AudioWorkerHandle, AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass,
 };
 pub use traits::{
-    AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead, PcmReader,
-    PcmSession, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
+    AudioBlockMut, AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead,
+    PcmReader, PcmSession, PendingReason, PresentationAdvance, PresentationCursor,
+    PresentationPoint, ReadOutcome, SeekBegin, SeekOutcome,
 };
 pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, bucket::Waveform};

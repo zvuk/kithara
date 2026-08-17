@@ -13,6 +13,7 @@ use kithara_integration_tests::{
     PackagedTestServer,
     offline::{NotificationKind, OfflinePlayer},
     temp_dir,
+    waits::render_until_position,
 };
 
 use crate::common::test_defaults::Consts as Shared;
@@ -21,7 +22,9 @@ struct Consts;
 impl Consts {
     const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
     const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const PRE_SEEK_POSITION_SECS: f64 = 0.2;
     const PRE_SEEK_RENDER_SECS: f64 = 1.5;
+    const PRE_SEEK_WALL_MS: u64 = 1_500;
     const POST_SEEK_RENDER_SECS: f64 = 6.0;
     /// Far past the 12 s fixture duration. The decoder must reject this
     /// (Symphonia returns "seek past EOF"), forcing the
@@ -82,14 +85,17 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
     player.load_and_fadein(resource, "t0");
 
-    render_burst(
+    render_until_position(
         &mut player,
         blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS),
+        Consts::PRE_SEEK_POSITION_SECS,
+        Consts::BLOCK_FRAMES,
+        Consts::PRE_SEEK_WALL_MS,
     )
     .await;
     let pos_before = player.position();
     assert!(
-        pos_before > 0.2,
+        pos_before > Consts::PRE_SEEK_POSITION_SECS,
         "decoder never produced PCM before the seek (pos={pos_before:.3}s)"
     );
     let _ = player.take_notification_kinds();

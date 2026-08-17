@@ -5,7 +5,7 @@ use std::{
 
 use kithara::{
     audio::{
-        AudioEffect, EqEffect, PeakLimiter,
+        AudioBlockMut, AudioEffect, EqEffect, PeakLimiter,
         effects::eq::{MAX_GAIN_DB, MIN_GAIN_DB, generate_log_spaced_bands},
     },
     bufpool::PcmPool,
@@ -78,14 +78,15 @@ fn eq_with_gain(gain_db: f32, band_count: usize, channels: u16) -> EqEffect {
 
 fn settle(eq: &mut EqEffect, pool: &PcmPool, spec: PcmSpec) {
     let samples = vec![0.0f32; SETTLE_FRAMES * usize::from(spec.channels)];
-    let _ = eq.process(pcm_chunk(pool, spec, samples));
+    let mut chunk = pcm_chunk(pool, spec, samples);
+    let _ = eq.process(AudioBlockMut::new(&chunk.meta, &mut chunk.samples));
 }
 
 fn process_eq(eq: &mut EqEffect, pool: &PcmPool, spec: PcmSpec, samples: Vec<f32>) -> Vec<f32> {
-    eq.process(pcm_chunk(pool, spec, samples))
-        .expect("EqEffect must emit the chunk it was handed")
-        .samples
-        .to_vec()
+    let mut chunk = pcm_chunk(pool, spec, samples);
+    eq.process(AudioBlockMut::new(&chunk.meta, &mut chunk.samples))
+        .expect("EqEffect processing must succeed");
+    chunk.samples.to_vec()
 }
 
 fn limiter_with_ceiling(ceiling: f32) -> PeakLimiter {

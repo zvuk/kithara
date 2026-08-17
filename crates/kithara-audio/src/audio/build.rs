@@ -7,7 +7,7 @@ use std::{
 
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{
-    Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig, GaplessMode, PcmChunk, PcmSpec,
+    Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig, GaplessMode, PcmSpec,
 };
 use kithara_events::{DecoderChangeCause, Event, EventBus, FrameDomain};
 use kithara_platform::{
@@ -23,17 +23,23 @@ use portable_atomic::AtomicF32;
 use tracing::{debug, info, warn};
 
 use super::{
-    AtomicServiceClass, AudioConfig, AudioDecoderConfig, AudioEffect, AudioWorkerHandle,
-    DecodeError, DecodeInit, EngineLoad, Fetch, PcmSession, RebuildRuntime, ServiceClass,
-    SharedStream, SourceParts, StreamAudioSource, StreamDecoderFactory, ThreadWake,
-    TrackRegistration, WorkerWakeBridge,
+    AtomicServiceClass, AudioConfig, AudioDecoderConfig, AudioWorkerHandle, DecodeError,
+    DecodeInit, EngineLoad, Fetch, PcmSession, RebuildRuntime, ServiceClass, SharedStream,
+    SourceParts, StreamAudioSource, StreamDecoderFactory, ThreadWake, TrackRegistration,
+    WorkerWakeBridge,
     core::{Audio, AudioParts, Controls, Session, WorkerLease},
-    create_effects,
     event::{
         AudioEvents, DecoderChangedEventData, decoder_changed_event, decoder_gapless_event,
         decoder_resampler_event, playback_resampler_event,
     },
     ring::{RingConsumer, RingParts, create_channels, create_trash_channel},
+};
+use crate::{
+    pipeline::config::{PresentationChain, create_presentation_chain},
+    renderer::{
+        OutputDisposition, PRESENTATION_RING_BLOCKS, PresentationFrontier, PresentedPcm,
+        presentation_cell,
+    },
 };
 
 const WARM_DECODE_FRAMES: usize = 4608;
@@ -119,12 +125,14 @@ struct StreamSourceRegistration<'a, T: StreamType> {
     preload_chunks: NonZeroUsize,
     engine_load: Option<Arc<EngineLoad>>,
     initial_media_info: Option<MediaInfo>,
+    initial_spec: PcmSpec,
     variant_control: Option<Arc<dyn VariantControl>>,
     worker: Option<AudioWorkerHandle>,
     runtime_handle: RuntimeHandle,
     shared_stream: SharedStream<T>,
     decoder_factory: StreamDecoderFactory,
-    effects: Vec<Box<dyn AudioEffect>>,
+    chain: PresentationChain,
+    pcm_pool: PcmPool,
     recreate_on_host_rate_change: bool,
     pcm_buffer_chunks: usize,
 }
@@ -136,10 +144,11 @@ struct RegisteredStreamSource {
     reader_wake: Arc<ThreadWake>,
     service_class: Arc<AtomicServiceClass>,
     worker: AudioWorkerHandle,
-    data_rx: super::Inlet<Fetch<PcmChunk>>,
-    trash_tx: super::Outlet<PcmChunk>,
+    data_rx: super::Inlet<Fetch<PresentedPcm>>,
+    trash_tx: super::Outlet<OutputDisposition>,
     track_id: super::TrackId,
     is_standalone_worker: bool,
+    presentation_frontier: PresentationFrontier,
 }
 
 impl<T> Audio<Stream<T>>
@@ -194,12 +203,6 @@ where
         let variant_control = stream.variant_control();
         let shared_stream = SharedStream::new(stream);
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
-        warm_pcm_pool(
-            &pcm_pool,
-            warm_channels(initial_media_info.as_ref()),
-            pcm_buffer_chunks,
-        );
-
         let gapless_mode = decoder.gapless_mode();
         let deps = DecoderDeps::new(
             decoder,
@@ -219,7 +222,13 @@ where
         let metadata = decoder.metadata();
         let epoch = Arc::new(AtomicU64::new(0));
         let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
-        let effects = create_effects(initial_spec, stretch.as_ref(), &pcm_pool, custom_effects);
+        let chain =
+            create_presentation_chain(initial_spec, stretch.as_ref(), &pcm_pool, custom_effects);
+        warm_pcm_pool(
+            &pcm_pool,
+            usize::from(initial_spec.channels),
+            pcm_buffer_chunks,
+        );
         log_pipeline_ready(initial_spec, &host_sample_rate);
 
         let abr_handle = shared_stream.abr_handle();
@@ -228,7 +237,8 @@ where
         let emit = AudioEvents::deferred(&bus);
         let registered = register_stream_audio_source(StreamSourceRegistration {
             decoder,
-            effects,
+            chain,
+            pcm_pool: pcm_pool.clone(),
             engine_load,
             gapless_mode,
             pcm_buffer_chunks,
@@ -243,6 +253,7 @@ where
             epoch: Arc::clone(&epoch),
             host_sample_rate: Arc::clone(&host_sample_rate),
             initial_media_info: initial_media_info.clone(),
+            initial_spec,
             playback_resampler_backend: deps.playback_resampler_backend(),
             // A requested host rate always resolves to a resampler plan, so a
             // route change is decided by `ResumeCursor`'s rate guards alone.
@@ -286,6 +297,7 @@ where
                 peer_wake,
                 seek_prepare,
                 preload_gate: registered.preload_gate,
+                presentation_frontier: registered.presentation_frontier,
             },
             controls: Controls {
                 playback_rate,
@@ -371,7 +383,7 @@ where
     let preload_gate = Arc::new(super::PreloadGate::default());
     let reader_wake = Arc::new(ThreadWake::default());
     let (data_tx, data_rx) = create_channels(
-        registration.pcm_buffer_chunks,
+        PRESENTATION_RING_BLOCKS,
         Arc::clone(&registration.emit),
         &reader_wake,
     );
@@ -396,10 +408,9 @@ where
         playback_resampler_backend: registration.playback_resampler_backend,
         recreate_on_host_rate_change: registration.recreate_on_host_rate_change,
     }
-    .into_parts(
-        registration.effects,
-        registration.shared_stream.seek_observe().epoch(),
-    );
+    .into_parts(registration.shared_stream.seek_observe().epoch());
+    let presentation_epoch = registration.shared_stream.seek_observe().epoch();
+    let (presentation, presentation_frontier) = presentation_cell(presentation_epoch);
     let parts = SourceParts::new(
         &registration.shared_stream,
         decode,
@@ -424,6 +435,11 @@ where
         emit: registration.emit,
         service_class: service_class.clone(),
         engine_load: registration.engine_load,
+        chain: registration.chain,
+        initial_spec: registration.initial_spec,
+        pcm_pool: registration.pcm_pool,
+        presentation,
+        raw_buffer_chunks: registration.pcm_buffer_chunks,
     });
     wake_stream.set_worker_wake(worker_wake);
 
@@ -438,6 +454,7 @@ where
         worker,
         epoch: registration.epoch,
         host_sample_rate: registration.host_sample_rate,
+        presentation_frontier,
     }
 }
 
@@ -580,16 +597,10 @@ where
         .unwrap_or_default()
 }
 
-fn warm_channels(info: Option<&MediaInfo>) -> usize {
-    info.and_then(|info| info.channels).map_or(2, usize::from)
-}
-
 fn warm_pcm_pool(pool: &PcmPool, channels: usize, chunks: usize) {
-    if pool.allocated_bytes() != 0 {
-        return;
-    }
     let capacity = WARM_DECODE_FRAMES * channels.max(1);
-    pool.pre_warm(chunks.saturating_mul(2).max(1), |buffer| {
+    let buffers = chunks.max(1).saturating_add(PRESENTATION_RING_BLOCKS + 1);
+    pool.pre_warm(buffers, |buffer| {
         buffer.clear();
         buffer.resize(capacity, 0.0);
     });

@@ -81,9 +81,6 @@ pub(crate) fn tick<T: StreamType>(
                 {
                     return DecodeAction::StartRecreate(recreate);
                 }
-                if let Some(chunk) = core.next_drain() {
-                    return produced(chunk, epoch, &mut ctx);
-                }
                 if let Some(emit) = ctx.emit {
                     emit.enqueue(AudioEvent::EndOfStream.into());
                 }

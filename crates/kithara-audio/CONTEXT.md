@@ -8,8 +8,10 @@ Four contexts touch one track. **Consumer thread** — `Audio<S>` (`PcmRead` +
 `PcmSession` + `PcmControl`, umbrella `PcmReader`), normally the host audio
 callback: never allocates, frees, or locks. **Renderer worker** — one shared OS
 thread per `AudioWorkerHandle` running `runtime::Scheduler` over `Box<dyn Node>`
-slots; a track is exactly one node (`DecoderNode`), and effects are `AudioEffect`
-calls inside the node's step, never separate nodes with rings between them.
+slots; a track is exactly one node (`DecoderNode`). The node owns the decode
+FSM and one late `Presentation` stage: decoded PCM enters its bounded raw queue,
+then one resident tempo stage and the frame-preserving `AudioEffect`s produce
+the final PCM. Effects are never separate nodes with rings between them.
 **Off-RT rebuild** — `RebuildPort::submit` → `spawn_blocking_on` on the tokio
 handle captured in `Audio::new`. **Downloader** — owned by `kithara-stream`; this
 crate never spawns it and never reconstructs HLS/file protocol policy.
@@ -21,14 +23,16 @@ and an absolute `SessionFrame`. It carries the committed beat-rate slope and
 sample rate, and owns both `beat_at` and its inverse `frame_at`; consumers do
 not rebuild that arithmetic from a tempo scalar.
 
-Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
-(`Outlet`/`Inlet`).
+Transport (`runtime/ports.rs`) uses two SPSC shapes. Final PCM crosses a
+`StrictOutlet<Fetch<PresentedPcm>>` with capacity two and no overflow slot.
+Retired PCM crosses an `Outlet<PcmChunk>` with a one-slot overflow so its
+buffers can be reclaimed off the consumer thread.
 
-- **Backpressure.** `Outlet::try_push` parks one item in the overflow slot when
-  the ring is full, so a producer emitting ≤1 chunk per tick treats it as
-  infallible. Each tick starts with `Outlet::flush()`; if still full the node
-  returns `TickResult::Backpressured` *without* ticking the FSM — every internal
-  transition, seeks included, pauses until the consumer drains.
+- **Backpressure.** `Presentation::step` checks final-ring capacity before it
+  mutates tempo, effect, or coordinate state. A full ring returns
+  `TickResult::Backpressured`; the consumer can only release capacity, so the
+  subsequent single strict push cannot be displaced by another producer.
+  Decoder admission is bounded independently by `pcm_buffer_chunks`.
 - **Wake.** A producer→reader ring push arms a coalesced atomic wake;
   empty-to-non-empty also enqueues `on_data_available`. The produce core never
   calls `ThreadWake::wake` or enters the kernel. The scheduler shell delivers
@@ -113,9 +117,16 @@ mutator of track state through `update_state`. Sub-owners never take
 - `SharedStream<T>` — byte-space ground truth (position, len, phase, byte map,
   anchors, init range). No other owner clones byte-range policy.
 - `ActiveDecode` — the authoritative active `DecoderGeneration`, the optional
-  `IncomingDecode`, the always-on `PcmBlender`, the effect chain, the EOF drain.
+  `IncomingDecode`, the always-on `PcmBlender`, decoder staging, and gapless
+  transition. It does not own tempo, frame-preserving effects, or their EOF
+  drain.
   Each `DecoderGeneration` owns its decoder facts, base offset, install epoch,
   per-generation `GaplessStage`, and staged chunks.
+- `Presentation` - the sole owner of duration-changing tempo, the ordered
+  frame-preserving effect chain, fixed 512-frame final quanta, exact source
+  admission, decoder-replacement barriers, and final EOF drain. It attaches one
+  immutable `PresentationPoint` to each committed final block before making the
+  block visible to the consumer.
 - `ReadinessGate` — the only owner of byte-range readiness calculations; gate and
   wait paths must resolve the same range for the same phase.
 - `SeekEngine` — `resume_target`, and the only writer of the producer decode
@@ -376,19 +387,27 @@ a concurrent play-then-seek is applied by the post-construction seek path — a
 `VariantChange` surfacing here is a stream-layer state bug. Pinned by
 `tests/tests/kithara_hls/probe_not_ready_at_creation.rs`.
 
-## Effect chain and coordinate space
+## Presentation chain and coordinate space
 
-`create_effects` builds `[TimeStretchProcessor?, ..custom]`. There is no
-resampler stage in the chain — fixed-ratio conversion is decoder-owned — and the
-stretch slot exists only when a stretch backend is compiled in and
-`AudioConfig::stretch` is set; without one, including wasm, no speed DSP is
-inserted and PCM output is pinned to 1.0.
+`create_presentation_chain` builds `{ tempo: TimeStretchProcessor?, effects:
+custom }`. The optional resident tempo stage is the only duration-changing
+owner; every `AudioEffect` receives `AudioBlockMut` and must preserve the block
+shape. Fixed-ratio sample-rate conversion remains decoder-owned. Without a
+compiled/configured stretch backend, including wasm, there is no tempo stage
+and PCM stays at unity.
 
-**Coordinate space.** The whole pipeline runs in decoder/song time
-(`PcmMeta.timestamp` / `end_timestamp` / `frame_offset`, the seek target, the UI
-playhead). A duration-changing `AudioEffect` is the sole timeline authority: it
-restamps only `spec` + `frames` and carries the consumed input's song-time meta
-forward, so there is no translation layer and no parallel frame counter.
+Decoder/song coordinates remain in `PcmMeta` and the seek contract. The late
+stage separately tracks admitted source endpoints and final output ordinals.
+Every committed final block carries one `PresentationPoint`; the consumer emits
+a `PresentationAdvance` only after the complete block boundary is crossed, with
+the exact offset in per-channel frames. Seek clears pending proof, and a
+same-epoch decoder replacement starts a new presentation generation only after
+the ordered barrier reaches the late stage.
+
+Within one seek epoch and sample rate, the source endpoint advances by admitted
+PCM frames after its first decoder anchor. Decoder timestamp or head-strip gaps
+and same-rate replacement cannot jump it; seek/reset or a sample-rate change
+establishes a new decoder anchor.
 
 **Sample guard.** `sanitize_sample` (`kithara-decode`, which owns it) runs on the
 *input* of every stage taking untrusted samples: `IsolatorEq::process_sample`
@@ -402,11 +421,10 @@ biquad section flushes state and returns exact zero once **both** its input and
 output fall below `f32::MIN_POSITIVE`; the input half keeps a live signal through
 a deep cut from losing its history.
 
-**EOF drain.** At true EOF `EofDrain` drains the chain incrementally, one emitted
-chunk per FSM step: each stage is flushed to exhaustion only after the upstream
-stage's outputs pass through it, so a buffering effect's multi-pull tail survives
-and the produce core allocates no drain queue. `AudioEvent::EndOfStream` fires
-once, when the drain completes — not at source exhaustion.
+**EOF drain.** At true EOF `Presentation` drains the resident tempo stage under
+the same fixed output credit before publishing the terminal marker. Fixed-shape
+effects have no independent buffered tail. `AudioEvent::EndOfStream` fires once
+when the final presentation drain completes, not at decoder exhaustion.
 
 ## Sample-rate conversion
 
@@ -431,22 +449,25 @@ in the ceil frame domain and the decoder adapter sizes buffers from that.
 
 ## Time-stretch (speed and key-lock)
 
-Playback speed lives in the source-domain `TimeStretchProcessor`; the resampler
-plan is strictly fixed-ratio (source rate → host rate) and never carries speed.
-`StretchControls` is the single source of truth, shared (`Arc`) between the
-consumer/UI and the slot, and read **every chunk** — speed, key-lock, backend,
-and region plan all apply live, mid-track, with no reload:
+Playback speed lives in the resident late-presentation
+`TimeStretchProcessor`; the resampler plan is strictly fixed-ratio (source rate
+-> host rate) and never carries speed. `StretchControls` is the single source of
+truth, shared (`Arc`) between the consumer/UI and the stage. The unchecked
+worker shell snapshots controls and prepares replacement DSP cores; the RT
+stage only moves prepared state at an ordered presentation boundary. Speed,
+key-lock, backend, and region plan all apply live, mid-track, with no reload:
 
 | key-lock | slot behaviour |
 |---|---|
 | on | `set_ratio(1/speed)`, `set_pitch(1.0)` — tempo moves, pitch held |
 | off | `set_ratio(1/speed)`, `set_pitch(speed)` — vinyl-style speed and pitch |
 
-Speed is floored at `MIN_SPEED` = 0.05. At speed 1.0 with no region plan the slot
-is a byte-identical passthrough and the backend is reset; `flush` is skipped in
-that state so its latency buffer is not emitted as trailing zeros. A live backend
-change, or a source `PcmSpec` change, rebuilds the backend in place. Key-lock
-defaults to **off** (`StretchControls::new`).
+Speed is floored at `MIN_SPEED` = 0.05. At speed 1.0 with no region plan the
+stage is a byte-identical passthrough; crossing back to unity retires buffered
+backend state before the new source quantum is presented. A live backend change
+or source `PcmSpec` change prepares a replacement core off the RT path, drains
+the old boundary, and swaps ownership without allocating or dropping on RT.
+Key-lock defaults to **off** (`StretchControls::new`).
 
 **Backend seam.** `kithara-stretch` is the optional DSP backend crate, behind
 `stretch-signalsmith` / `stretch-bungee` (native only); it owns `StretchBackend`
@@ -467,20 +488,20 @@ non-overlapping `[start_frame, end_frame)` segments in **source frames**
 `ratio_correction`, validated in `RegionPlan::new`. The processor maps each
 chunk's `frame_offset` to its region (cached cursor, binary search on a miss
 after seek/swap), splits chunks at boundaries, and drives the backend at
-`1/speed * ratio_correction`. It `flush`es (tail drained at the old ratio) and
-`reset`s **only** when a boundary moves the effective ratio beyond `RATIO_EPS`
-(1e-4); equal-ratio boundaries and gaps between segments (correction 1.0) cost
-nothing, and live speed moves inside one region glide via `set_ratio` alone. An
-empty or absent plan is exactly the planless path. Prefer `signalsmith` for
-region work — `bungee`'s `flush` is a no-op and drops the tail at every real
-ratio boundary.
+`1/speed * ratio_correction`. A boundary that changes the effective ratio
+beyond `RATIO_EPS` (1e-4) drains the old core and swaps in a same-spec core
+prepared off RT. Equal-ratio boundaries and gaps between segments (correction
+1.0) cost nothing, and live speed moves inside one region glide via
+`set_ratio` alone. An empty or absent plan is exactly the planless path. Prefer
+`signalsmith` for region work; `bungee` has no true tail drain and explicitly
+retires its held debt at a real ratio boundary.
 
-**Timeline.** A stretch changes the output frame *count*, not the rate: each
-emitted chunk recomputes `meta.frames` and forces `meta.spec` to the live source
-spec, but preserves `timestamp`/`end_timestamp` verbatim, so the playhead stays
-in source-track time. A non-empty flush chunk must never carry the
-`PcmMeta::default()` sentinel spec (0 channels): downstream stages divide by
-`spec.channels`.
+**Timeline.** A stretch changes how admitted source frames fill fixed 512-frame
+presentation credits, not the declared PCM rate. The tempo stage can retain at
+most one admitted source quantum and reports its exact held-source count; the
+presentation owner subtracts only that count when publishing the source
+endpoint. A non-empty drain block must never carry the `PcmMeta::default()`
+sentinel spec (0 channels): downstream stages divide by `spec.channels`.
 
 ## Engine load
 

@@ -38,7 +38,6 @@ const TOP_VARIANT: usize = VARIANT_COUNT - 1;
 
 const OUT_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
-const BLOCKS_PER_WINDOW: usize = 8;
 const PLAY_SECS: f64 = 18.0;
 const MIN_DELAYED_PLAYHEAD_SECS: f64 = 14.0;
 /// The committed playhead advances ~one decoded chunk (~0.1 s) per
@@ -87,16 +86,14 @@ fn build_fixture() -> HlsFixtureBuilder {
         })
 }
 
-async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f64) {
+async fn play_realtime(player: &mut OfflinePlayer, blocks: u64, block_secs: f64) {
     let _real_io = real_io();
-    for _ in 0..windows {
+    for _ in 0..blocks {
         let started = Instant::now();
-        for _ in 0..BLOCKS_PER_WINDOW {
-            let _ = player.render(BLOCK_FRAMES);
-        }
+        let _ = player.render(BLOCK_FRAMES);
         let elapsed = started.elapsed().as_secs_f64();
-        if window_secs > elapsed {
-            time::sleep(Duration::from_secs_f64(window_secs - elapsed)).await;
+        if block_secs > elapsed {
+            time::sleep(Duration::from_secs_f64(block_secs - elapsed)).await;
         }
     }
 }
@@ -158,9 +155,8 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
     let mut player = OfflinePlayer::new(OUT_RATE);
     player.load_and_fadein(resource, "t0");
 
-    let window_secs = (BLOCKS_PER_WINDOW * BLOCK_FRAMES) as f64 / f64::from(OUT_RATE);
-    let windows =
-        num_traits::cast::<f64, u64>((PLAY_SECS / window_secs).ceil()).unwrap_or(u64::MAX);
+    let block_secs = BLOCK_FRAMES as f64 / f64::from(OUT_RATE);
+    let blocks = num_traits::cast::<f64, u64>((PLAY_SECS / block_secs).ceil()).unwrap_or(u64::MAX);
     // This reproduces a REAL-TIME-DEADLINE bug: the swallow only occurs when a
     // delayed FLAC segment (700 ms real) is not ready by the player's real-time
     // render deadline. Hold a `RealIoScope` across the playout so the virtual
@@ -169,7 +165,7 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
     // instead of the virtual clock racing past the producer (which starves the
     // worker so the track never plays). Off the `flash` feature this is a ZST
     // no-op and the clock is already real.
-    play_realtime(&mut player, windows, window_secs).await;
+    play_realtime(&mut player, blocks, block_secs).await;
 
     assert_committed_reached(&recorder, MIN_DELAYED_PLAYHEAD_SECS);
     assert_no_committed_swallow(&recorder, MAX_COMMITTED_STEP_SECS);

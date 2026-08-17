@@ -1,5 +1,5 @@
 use arc_swap::ArcSwap;
-use kithara_decode::{ChunkRetire, PcmChunk};
+use kithara_decode::{ChunkRetire, DecodeError, PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, DecoderChangeCause, DeferredBus, Event, TrackFailureKind};
 use kithara_platform::sync::Arc;
 use kithara_stream::{
@@ -25,7 +25,7 @@ use crate::{
         parts::SourceParts,
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, port::RebuildPort, retire::Retired},
         seek::SeekEngine,
-        track::{self, CurrentFsm, Decoding, Track, TrackFailure, TrackStep, WaitContext},
+        track::{self, CurrentFsm, Decoding, Failed, Track, TrackFailure, TrackStep, WaitContext},
     },
     renderer::AudioWorkerSource,
 };
@@ -75,6 +75,9 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// frame, so the rebuilt decoder relabels its first chunk at this point. See
     /// `execute_recreation`.
     pub(crate) resume: ResumeCursor,
+    /// Ordered reset boundary emitted between PCM from two decoder generations
+    /// that share a seek epoch.
+    pub(crate) presentation_barrier: Option<(u64, PcmSpec)>,
     /// `(seek_epoch, target)` of the most recent applied seek.
     /// `committed_position` lags `target` until the seek's first
     /// (trim-aligned) chunk is consumed: the decoder lands at the
@@ -147,6 +150,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             activity,
             readiness,
             resume,
+            presentation_barrier: None,
             variant_control,
             state: Track::<Decoding>::new(()).erase(),
             emit: None,
@@ -183,6 +187,14 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
         self.activity.set_playing(playing_for_state(&new));
         self.state = new;
+    }
+
+    pub(crate) fn queue_presentation_barrier(&mut self, epoch: u64, spec: PcmSpec) {
+        debug_assert!(
+            self.presentation_barrier.is_none(),
+            "decoder replacement barriers must be consumed in order"
+        );
+        self.presentation_barrier = Some((epoch, spec));
     }
 }
 
@@ -581,6 +593,15 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 
     fn step_track(&mut self) -> TrackStep<PcmChunk> {
         track::dispatch(self)
+    }
+
+    fn take_presentation_barrier(&mut self) -> Option<(u64, PcmSpec)> {
+        self.presentation_barrier.take()
+    }
+
+    fn presentation_failed(&mut self, error: DecodeError) {
+        warn!(?error, "presentation failed");
+        self.update_state(Track::<Failed>::new(TrackFailure::Decode(error)).erase());
     }
 
     fn warm_up(&mut self) {

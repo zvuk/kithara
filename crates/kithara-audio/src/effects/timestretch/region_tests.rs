@@ -6,11 +6,11 @@ use kithara_platform::sync::Arc;
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
-use super::{StretchControls, TimeStretchProcessor};
-use crate::{
-    region::{GridSegment, RegionPlan, RegionPlanError},
-    traits::AudioEffect,
+use super::{
+    StretchControls, TimeStretchProcessor,
+    processor::tests::{drain_eof, render_chunk, source_endpoint},
 };
+use crate::region::{GridSegment, RegionPlan, RegionPlanError};
 
 const SR: u32 = 44_100;
 const CH: usize = 2;
@@ -97,6 +97,10 @@ fn add_click(buf: &mut [f32], frame: usize) {
 /// Render `source` through a key-locked Signalsmith processor with `plan`,
 /// feeding 4096-frame chunks with advancing `frame_offset` (source frames).
 fn render(speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
+    render_with_endpoint(speed, plan, source).0
+}
+
+fn render_with_endpoint(speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> (Vec<f32>, u64) {
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
     controls.set_backend(StretchKind::Signalsmith);
@@ -106,15 +110,18 @@ fn render(speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {
         let frames = data.len() / CH;
-        if let Some(o) = fx.process(chunk(data, offset)) {
+        if let Some(o) = render_chunk(&mut fx, chunk(data, offset))
+            .expect("fixture stretch processing must succeed")
+        {
             out.extend_from_slice(&o.samples);
         }
         offset += u64_of(frames);
     }
-    while let Some(o) = fx.flush() {
+    while let Some(o) = drain_eof(&mut fx) {
         out.extend_from_slice(&o.samples);
     }
-    out
+    let endpoint = source_endpoint(&fx).expect("rendered source has an exact endpoint");
+    (out, endpoint)
 }
 
 fn mono(samples: &[f32]) -> Vec<f32> {
@@ -228,7 +235,7 @@ fn corrections_align_drifting_clicks_to_nominal_grid() {
     ])
     .expect("valid plan");
 
-    let out = render(1.0, Some(plan), &src);
+    let (out, endpoint) = render_with_endpoint(1.0, Some(plan), &src);
     let clicks = click_positions(&mono(&out));
     assert_eq!(
         clicks.len(),
@@ -239,15 +246,13 @@ fn corrections_align_drifting_clicks_to_nominal_grid() {
     // ±5% of a bar; the drifted spacings (P1, P2) are off by 10% and must fail.
     let tol = NOMINAL / 20;
     for (i, pair) in clicks.windows(2).enumerate() {
-        if i == BARS - 1 {
-            continue; // spans the boundary reset transient
-        }
         let gap = pair[1] - pair[0];
         assert!(
             gap.abs_diff(NOMINAL) <= tol,
             "click interval {i} = {gap} frames, want ~{NOMINAL} (plan correction not applied?)"
         );
     }
+    assert_eq!(endpoint, u64_of(TOTAL), "source endpoint must stay exact");
 }
 
 /// A ratio change at a segment boundary must not click: the max sample step
