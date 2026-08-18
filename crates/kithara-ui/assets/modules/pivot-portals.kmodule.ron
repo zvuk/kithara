@@ -17,22 +17,22 @@
                 children: [
                     Row(id: "title", size: (w: Fixed(148.0), h: Fill), gap: 7.0, pad_x: 11.0, frame: (top: false, right: true, bottom: false, left: false), frame_color: LineInner, children: [
                         Glyph(id: "icon", icon: Orbit, style: MenuCell, color: Accent, size: (w: Fixed(11.0), h: Fill)),
-                        Text(id: "label", style: PivotTitle, label: "ПИВОТ-ПОРТАЛ", size: (w: Fill, h: Fill)),
+                        Text(id: "label", style: PivotTitle, label: "@pivot.title", size: (w: Fill, h: Fill)),
                     ]),
                     Row(id: "master", size: (w: Fixed(125.0), h: Fill), gap: 6.0, pad_x: 11.0, frame: (top: false, right: true, bottom: false, left: false), frame_color: LineInner, children: [
-                        Text(id: "master-label", style: PivotLabel, label: "МАСТЕР", size: (w: Shrink, h: Fill)),
+                        Text(id: "master-label", style: PivotLabel, label: "@pivot.master_label", size: (w: Shrink, h: Fill)),
                         Text(id: "master-value", style: Mono, color: Accent, read: Model(id: "pivot.master.label"), size: (w: Shrink, h: Fill)),
                     ]),
                     Slot(id: "header-space", size: (w: Fill, h: Fill)),
                     Row(id: "family", size: (w: Fixed(154.0), h: Fill), gap: 8.0, pad_x: 11.0, frame: (top: false, right: false, bottom: false, left: true), frame_color: LineInner, children: [
-                        Text(id: "family-label", style: PivotLabel, label: "РАТИО", size: (w: Shrink, h: Fill)),
+                        Text(id: "family-label", style: PivotLabel, label: "@pivot.family.ratio_label", size: (w: Shrink, h: Fill)),
                         Row(id: "family-chips", size: (w: Fixed(94.0), h: Fill), gap: 4.0, children: [
-                            Chip(id: "step", style: PivotFamily, label: "STEP", read: Model(id: "pivot.family.step"), write: Command(id: "pivot.family.step"), size: (w: Fixed(45.0), h: Fixed(16.5))),
-                            Chip(id: "leap", style: PivotFamily, label: "LEAP", read: Model(id: "pivot.family.leap"), write: Command(id: "pivot.family.leap"), size: (w: Fixed(45.0), h: Fixed(16.5))),
+                            Chip(id: "step", style: PivotFamily, label: "@pivot.family.step_label", read: Model(id: "pivot.family.step"), write: Command(id: "pivot.family.step"), size: (w: Fixed(45.0), h: Fixed(16.5))),
+                            Chip(id: "leap", style: PivotFamily, label: "@pivot.family.leap_label", read: Model(id: "pivot.family.leap"), write: Command(id: "pivot.family.leap"), size: (w: Fixed(45.0), h: Fixed(16.5))),
                         ]),
                     ]),
                     Row(id: "range-cell", size: (w: Fixed(280.0), h: Fill), gap: 9.0, pad_x: 12.0, frame: (top: false, right: false, bottom: false, left: true), frame_color: LineInner, children: [
-                        Text(id: "range-label", style: PivotLabel, label: "ДИАПАЗОН", size: (w: Fill, h: Fill)),
+                        Text(id: "range-label", style: PivotLabel, label: "@pivot.range_label", size: (w: Fill, h: Fill)),
                         Text(id: "range-min", style: PivotSmall, color: TextDim, align: End, read: Model(id: "pivot.range.min_label"), size: (w: Shrink, h: Fill)),
                         Range(id: "range", read: Model(id: "pivot.range"), write: Parameter(id: "pivot.range"), size: (w: Fill, h: Fixed(16.0))),
                         Text(id: "range-max", style: PivotSmall, color: TextDim, read: Model(id: "pivot.range.max_label"), size: (w: Shrink, h: Fill)),
@@ -52,11 +52,11 @@
                         frame_color: Line,
                         children: [
                             Row(id: "columns", size: (w: Fill, h: Fixed(22.0)), gap: 8.0, pad_x: 12.0, background: BgFooter, frame: (top: false, right: false, bottom: true, left: false), frame_color: LineInner, children: [
-                                Text(id: "ratio", style: PivotLabel, label: "РАТИО", size: (w: Fixed(44.0), h: Fill)),
-                                Text(id: "bpm", style: PivotLabel, label: "ТЕМП", size: (w: Fixed(58.0), h: Fill)),
-                                Text(id: "pulse", style: PivotLabel, label: "ПИВОТ", size: (w: Fixed(56.0), h: Fill)),
-                                Text(id: "loop", style: PivotLabel, label: "ЦИКЛ", size: (w: Fixed(52.0), h: Fill)),
-                                Text(id: "stretch", style: PivotLabel, label: "ВМЕСТО СТРЕТЧА", align: End, size: (w: Fill, h: Fill)),
+                                Text(id: "ratio", style: PivotLabel, label: "@pivot.column.ratio", size: (w: Fixed(44.0), h: Fill)),
+                                Text(id: "bpm", style: PivotLabel, label: "@pivot.column.bpm", size: (w: Fixed(58.0), h: Fill)),
+                                Text(id: "pulse", style: PivotLabel, label: "@pivot.column.pulse", size: (w: Fixed(56.0), h: Fill)),
+                                Text(id: "loop", style: PivotLabel, label: "@pivot.column.loop", size: (w: Fixed(52.0), h: Fill)),
+                                Text(id: "stretch", style: PivotLabel, label: "@pivot.column.stretch", align: End, size: (w: Fill, h: Fill)),
                             ]),
                             Scroll(id: "portal-scroll", size: (w: Fill, h: Fixed(238.0)), child: Column(id: "portal-list", gap: 0.0, children: [
                                 Optional(id: "row-0-block", hidden: Model(id: "pivot.portal.hidden", with: { "portal": "0" }), child: Include(id: "row-0", source: "pivot-portals/row.kmodule.ron", with: { "portal": "0" })),
@@ -103,7 +103,7 @@
                             PortalMap(id: "map", read: Model(id: "pivot.map"), size: (w: Fill, h: Fill)),
                         ]),
                         Row(id: "loops", size: (w: Fill, h: Fixed(34.0)), gap: 10.0, pad_x: 12.0, frame: (top: false, right: false, bottom: true, left: false), children: [
-                            Text(id: "loops-label", style: PivotLabel, label: "ЦИКЛ ДЕКИ", size: (w: Fill, h: Fill)),
+                            Text(id: "loops-label", style: PivotLabel, label: "@pivot.loops_label", size: (w: Fill, h: Fill)),
                             Row(id: "loop-values", size: (w: Fixed(155.0), h: Fill), gap: 5.0, children: [
                                 Text(id: "loop-a-label", style: PivotSmall, color: Accent, label: "A", size: (w: Fixed(6.0), h: Fill)),
                                 Row(id: "loop-a-box", size: (w: Fixed(26.0), h: Fixed(18.0)), pad_x: 6.0, frame: (top: true, right: true, bottom: true, left: true), frame_color: Accent, children: [Text(id: "loop-a", style: Mono, color: Accent, align: Center, read: Model(id: "pivot.selected.loop_a"), size: (w: Fill, h: Fill))]),
@@ -119,7 +119,7 @@
                             ]),
                         ]),
                         Row(id: "tracks-header", size: (w: Fill, h: Fixed(22.0)), pad_x: 12.0, background: BgFooter, frame: (top: false, right: false, bottom: true, left: false), frame_color: LineInner, children: [
-                            Text(id: "tracks-label", style: PivotLabel, label: "ТРЕКИ В КОЛЛЕКЦИИ НА ЭТОМ ТЕМПЕ", size: (w: Fill, h: Fill)),
+                            Text(id: "tracks-label", style: PivotLabel, label: "@pivot.tracks_label", size: (w: Fill, h: Fill)),
                         ]),
                         Optional(id: "track-0-block", hidden: Model(id: "pivot.track.hidden", with: { "track": "0" }), child: Include(id: "track-0", source: "pivot-portals/track-row.kmodule.ron", with: { "track": "0" })),
                         Optional(id: "track-1-block", hidden: Model(id: "pivot.track.hidden", with: { "track": "1" }), child: Include(id: "track-1", source: "pivot-portals/track-row.kmodule.ron", with: { "track": "1" })),

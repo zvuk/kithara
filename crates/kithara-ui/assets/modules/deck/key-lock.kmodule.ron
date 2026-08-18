@@ -17,7 +17,7 @@
             ),
             Button(
                 id: "toggle",
-                label: "KEY LOCK",
+                label: "@deck.key_lock.label",
                 icon: Some(Lock),
                 style: Transport,
                 read: Model(id: "deck.key.locked", with: { "deck": "$deck" }),
