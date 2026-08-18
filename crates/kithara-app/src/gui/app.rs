@@ -1,14 +1,12 @@
 use iced::{
-    Event as IcedEvent, Subscription, Task, Theme, event,
-    event::Status,
-    keyboard::{Event as KeyboardEvent, Key, key::Named},
-    time as iced_time, window,
+    Event as IcedEvent, Subscription, Task, Theme, event, event::Status,
+    keyboard::Event as KeyboardEvent, time as iced_time, window,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
-    deck::DeckUi, frontend::window_settings, message::Message, studio_ui::StudioUi,
-    subscription::subscription_config, theme,
+    deck::DeckUi, frontend::window_settings, message::Message, subscription,
+    subscription::subscription_config, theme, ui::AppUi,
 };
 use crate::{
     catalog::Catalog,
@@ -22,7 +20,7 @@ use crate::{
 ///
 /// Each deck owns its shared model ([`crate::state::StateController`]) and its
 /// own snapshot; the session mix is owned by [`DeckSet`]. This struct adds only
-/// what belongs to no single deck: the highlighted catalog row and the studio
+/// what belongs to no single deck: the highlighted catalog row and the app
 /// window.
 pub(crate) struct Kithara {
     pub(crate) broadcast: crate::broadcast::Broadcaster,
@@ -32,16 +30,16 @@ pub(crate) struct Kithara {
     pub(crate) catalog: Catalog,
     pub(crate) session: DeckSet,
     pub(crate) decks: Decks,
-    /// One EQ topology shared by every deck in the studio.
+    /// One EQ topology shared by every deck.
     pub(crate) eq_mode: EqMode,
     pub(crate) palette: gui::GuiPalette,
 
-    /// The studio window; window-chrome commands execute against it.
+    /// The app window; window-chrome commands execute against it.
     pub(crate) window_id: window::Id,
     /// Highlighted catalog row, shared by every deck's load buttons.
     pub(crate) selected_track: Option<usize>,
-    /// The compiled studio UI and its host-owned view state.
-    pub(crate) studio: StudioUi,
+    /// The compiled UI and its host-owned view state.
+    pub(crate) ui: AppUi,
 }
 
 /// A non-empty set of deck view-models, addressed by id.
@@ -78,13 +76,13 @@ impl Decks {
 }
 
 impl Kithara {
-    /// Boot function for `iced::daemon()`. Opens the studio window.
+    /// Boot function for `iced::daemon()`. Opens the app window.
     pub(crate) fn new(
         session: DeckSet,
         decks: Decks,
         catalog: Catalog,
         config: AppConfig,
-        studio: StudioUi,
+        ui: AppUi,
         palette: gui::GuiPalette,
         broadcast: crate::broadcast::Broadcaster,
     ) -> (Self, Task<Message>) {
@@ -96,7 +94,7 @@ impl Kithara {
             decks,
             catalog,
             config,
-            studio,
+            ui,
             eq_mode: EqMode::default(),
             palette,
             window_id,
@@ -109,7 +107,7 @@ impl Kithara {
     /// Time-tick subscription for player state sync plus keyboard. Tick
     /// interval scales with playback state to save CPU while idle.
     pub(crate) fn subscription(&self) -> Subscription<Message> {
-        const SUBSCRIPTION_CAPACITY: usize = 3;
+        const SUBSCRIPTION_CAPACITY: usize = 4;
         let playing = self.decks.iter().any(|deck| deck.ui.playing);
         let cfg = subscription_config(playing);
         let mut subs = Vec::with_capacity(SUBSCRIPTION_CAPACITY);
@@ -117,13 +115,13 @@ impl Kithara {
             iced_time::every(Duration::from_millis(cfg.tick_interval_ms)).map(|_| Message::Tick),
         );
         subs.push(window::close_requests().map(|_| Message::WindowCloseRequested));
+        subs.push(window::resize_events().map(|(_, size)| Message::WindowResized(size)));
         if cfg.is_keyboard_enabled {
             subs.push(event::listen_with(|e, status, _window| match e {
-                // Only act on Delete/Backspace the focused widget left
+                // Only act on what the focused widget left
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
-                    key: Key::Named(Named::Delete | Named::Backspace),
-                    ..
-                }) if status == Status::Ignored => Some(Message::DeleteFocusedTrack),
+                    ref key, modifiers, ..
+                }) if status == Status::Ignored => subscription::shortcut(key, modifiers),
                 _ => None,
             }));
         }
@@ -137,6 +135,6 @@ impl Kithara {
 
     /// Window title.
     pub(crate) fn title(_state: &Self, _window: window::Id) -> String {
-        "Kithara - DJ Studio".to_string()
+        "Kithara".to_string()
     }
 }

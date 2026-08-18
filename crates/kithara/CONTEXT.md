@@ -76,7 +76,7 @@ Pull-driven: each layer pulls from the one below; backpressure and wakeups propa
   and the current-item announce contract (`PlayerImpl` / `EngineImpl`). `kithara-queue` stacks multiple tracks with
   auto-advance and a pause gate, handing decks to `kithara-play`.
 1. **Surfaces.** `kithara-ffi` exposes the `AudioPlayer` facade across the FFI / wasm boundary (worker-vs-main-thread
-  ownership protocol); `kithara-app` is the desktop studio (iced + `kithara-ui`) and adds the track-analysis cache.
+  ownership protocol); `kithara-app` is the desktop app (iced + `kithara-ui`) and adds the track-analysis cache.
 
 ### How HLS and file differ
 

@@ -21,6 +21,8 @@ pub(crate) struct Stream {
 impl Packager for Backend {
     type Live = Stream;
 
+    const IS_AVAILABLE: bool = true;
+
     fn is_live(live: &Stream) -> bool {
         live.handle.status().is_live
     }

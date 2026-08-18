@@ -12,6 +12,8 @@ pub(crate) enum Stream {}
 impl Packager for Backend {
     type Live = Stream;
 
+    const IS_AVAILABLE: bool = false;
+
     fn is_live(live: &Stream) -> bool {
         match *live {}
     }

@@ -1,0 +1,21 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "app-mixer-single",
+    root: Column(
+        size: (w: Fill, h: Fill),
+        children: [
+            Row(
+                id: "strips",
+                size: (w: Fill, h: Fill),
+                children: [
+                    Include(
+                        id: "a",
+                        source: "app-strip.kmodule.ron",
+                        with: { "deck": "a", "letter": "A" },
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

@@ -9,7 +9,7 @@ use kithara_ui::render::fonts;
 
 use super::{
     app::{Decks, Kithara},
-    studio_ui::StudioUi,
+    ui::AppUi,
     update, view,
 };
 use crate::{
@@ -24,22 +24,22 @@ use crate::{
 pub type FrontendError = Box<dyn Error + Send + Sync>;
 
 mod consts {
-    /// DJ Studio window size in logical pixels. The minimum keeps both deck
-    /// panes wide enough for their fixed transport and timestretch controls.
-    pub(super) const STUDIO_WIDTH: f32 = 1280.0;
-    pub(super) const STUDIO_HEIGHT: f32 = 760.0;
-    pub(super) const STUDIO_MIN_WIDTH: f32 = 1080.0;
-    pub(super) const STUDIO_MIN_HEIGHT: f32 = STUDIO_HEIGHT;
+    /// The minimum keeps both deck panes wide enough for their fixed
+    /// transport and timestretch controls.
+    pub(super) const WINDOW_MIN_WIDTH: f32 = 1080.0;
+    pub(super) const WINDOW_MIN_HEIGHT: f32 = super::WINDOW_SIZE.height;
 }
 use consts::*;
 
-/// Settings for the studio window. The bar draws the window chrome itself, so
+use super::ui::window::WINDOW_SIZE;
+
+/// Settings for the app window. The bar draws the window chrome itself, so
 /// the system decorations stay off; close goes through `close_requests()`,
 /// whose handler exits the app.
 pub(crate) fn window_settings() -> Settings {
     Settings {
-        size: Size::new(STUDIO_WIDTH, STUDIO_HEIGHT),
-        min_size: Some(Size::new(STUDIO_MIN_WIDTH, STUDIO_MIN_HEIGHT)),
+        size: WINDOW_SIZE,
+        min_size: Some(Size::new(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)),
         decorations: false,
         exit_on_close_request: false,
         ..Settings::default()
@@ -52,7 +52,7 @@ struct Boot {
     catalog: Catalog,
     session: DeckSet,
     decks: Decks,
-    studio: StudioUi,
+    ui: AppUi,
 }
 
 /// GUI frontend using iced.
@@ -95,7 +95,7 @@ impl GuiFrontend {
     pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
         let palette = self.palette;
         let config = self.config.clone();
-        let studio = StudioUi::new()?;
+        let ui = AppUi::new()?;
 
         let rt = tokio::runtime::Runtime::new().map_err(FrontendError::from)?;
         let _guard = rt.enter();
@@ -127,7 +127,7 @@ impl GuiFrontend {
                 .take()
                 .ok_or("broadcast service was not configured")?,
             session,
-            studio,
+            ui,
             decks: Decks::new(controllers).ok_or("no decks to render")?,
             catalog: Catalog::new(config.tracks.clone()),
             config: config.clone(),
@@ -144,7 +144,7 @@ impl GuiFrontend {
                     boot.decks,
                     boot.catalog,
                     boot.config,
-                    boot.studio,
+                    boot.ui,
                     palette,
                     boot.broadcast,
                 )

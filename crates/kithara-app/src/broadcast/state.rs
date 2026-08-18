@@ -14,6 +14,10 @@ pub(crate) type BroadcastResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 pub(crate) trait Packager: 'static {
     type Live: Send + 'static;
 
+    /// Whether this build carries a packager at all. The UI reads it instead
+    /// of gating its own call sites on the feature.
+    const IS_AVAILABLE: bool;
+
     fn is_live(live: &Self::Live) -> bool;
 
     /// `Ok(None)`: no device rate measured yet, so the request stands.
@@ -57,6 +61,10 @@ impl<P: Packager> Broadcaster<P> {
         if matches!(self.phase, Phase::Stopping) {
             self.phase = Phase::Off;
         }
+    }
+
+    pub(crate) const fn is_available() -> bool {
+        P::IS_AVAILABLE
     }
 
     /// Serving. A pending request and a draining stop are both off air.
@@ -171,6 +179,8 @@ mod tests {
     impl Packager for Ready {
         type Live = Stream;
 
+        const IS_AVAILABLE: bool = true;
+
         fn is_live(_live: &Stream) -> bool {
             LIVE.load(Ordering::Relaxed)
         }
@@ -195,6 +205,8 @@ mod tests {
     impl Packager for Unmeasured {
         type Live = Stream;
 
+        const IS_AVAILABLE: bool = true;
+
         fn is_live(_live: &Stream) -> bool {
             true
         }
@@ -217,6 +229,8 @@ mod tests {
 
     impl Packager for Absent {
         type Live = Stream;
+
+        const IS_AVAILABLE: bool = false;
 
         fn is_live(_live: &Stream) -> bool {
             true
@@ -245,6 +259,15 @@ mod tests {
         bar.poll();
 
         assert!(matches!(bar.phase, Phase::Requested));
+    }
+
+    #[kithara::test]
+    fn the_bar_asks_its_packager_whether_this_build_can_go_on_air() {
+        assert!(Broadcaster::<Ready>::is_available());
+        assert!(
+            !Broadcaster::<Absent>::is_available(),
+            "a build with no packager offers no air controls",
+        );
     }
 
     #[kithara::test]

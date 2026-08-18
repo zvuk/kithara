@@ -1,0 +1,43 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "app-strip-eq-4-band",
+    parameters: ["deck"],
+    root: Column(
+        id: "eq-4-knobs",
+        gap: 4.0,
+        align: Center,
+        pad: 8.0,
+        size: (w: Fill, h: Shrink),
+        children: [
+            Knob(
+                id: "high-4",
+                size: (w: Fixed(30.0), h: Fixed(41.0)),
+                label: Some("@strip.eq.high"),
+                read: Parameter(id: "deck.eq.high", with: { "deck": "$deck" }),
+                write: Parameter(id: "deck.eq.high", with: { "deck": "$deck" }),
+            ),
+            Knob(
+                id: "high-mid-4",
+                size: (w: Fixed(30.0), h: Fixed(41.0)),
+                label: Some("@strip.eq.hi_mid"),
+                read: Parameter(id: "deck.eq.high_mid", with: { "deck": "$deck" }),
+                write: Parameter(id: "deck.eq.high_mid", with: { "deck": "$deck" }),
+            ),
+            Knob(
+                id: "low-mid-4",
+                size: (w: Fixed(30.0), h: Fixed(41.0)),
+                label: Some("@strip.eq.lo_mid"),
+                read: Parameter(id: "deck.eq.low_mid", with: { "deck": "$deck" }),
+                write: Parameter(id: "deck.eq.low_mid", with: { "deck": "$deck" }),
+            ),
+            Knob(
+                id: "low-4",
+                size: (w: Fixed(30.0), h: Fixed(41.0)),
+                label: Some("@strip.eq.low"),
+                read: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
+                write: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
+            ),
+        ],
+    ),
+)

@@ -12,7 +12,7 @@ use crate::{config::AppConfig, mix::MixState};
 /// Band count used by the non-interactive player graph.
 const DEFAULT_EQ_BANDS: usize = 3;
 
-/// EQ topology shared by every studio deck and its player graph.
+/// EQ topology shared by every deck and its player graph.
 #[cfg(feature = "gui")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum EqMode {

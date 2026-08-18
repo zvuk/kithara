@@ -7,7 +7,7 @@ use super::{app::Kithara, message::Message};
 use crate::state::UiState;
 
 pub(crate) fn view(state: &Kithara, _window: iced::window::Id) -> Element<'_, Message> {
-    super::studio_ui::view(state)
+    super::ui::view(state)
 }
 
 /// The playhead the UI shows: while the user drags, that is the seek target.

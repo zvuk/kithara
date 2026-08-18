@@ -16,7 +16,7 @@ Workspace application crate (`publish = false`) that wires demo binaries around 
 
 ## Binary
 
-Single binary `kithara` — the desktop DJ studio.
+Single binary `kithara` — the desktop DJ app.
 
 ## Run
 
@@ -48,7 +48,7 @@ flowchart LR
 
 ## Track Analysis Cache
 
-DJ Studio memoizes whole-track waveform and beat/BPM analysis in memory and on
+The app memoizes whole-track waveform and beat/BPM analysis in memory and on
 disk. Runtime freshness is guarded by `TrackId`; cross-session cache identity is
 owned by `AnalysisKey`. See CONTEXT.md for the key spaces, disk-tier lifecycle,
 and `ANALYSIS_BYTES_VERSION` invalidation contract.

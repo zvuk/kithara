@@ -1,0 +1,78 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "app-bar",
+    root: Row(
+        gap: 0.0,
+        pad: 0.0,
+        children: [
+            Include(id: "menu", source: "app-menu.kmodule.ron"),
+            Brand(id: "brand"),
+            Divider(id: "after-brand"),
+            WindowDrag(id: "drag"),
+            Optional(
+                id: "cpu-block",
+                hidden: Model(id: "ui.module.hidden", with: { "module": "cpu" }),
+                child: Row(
+                    id: "cpu-group",
+                    gap: 0.0,
+                    size: (w: Shrink, h: Fill),
+                    children: [
+                        Divider(id: "before-cpu"),
+                        Row(
+                            id: "cpu",
+                            gap: 6.0,
+                            pad: 11.0,
+                            size: (w: Shrink, h: Fill),
+                            children: [
+                                Text(id: "cpu-label", style: MicroLabel, label: "@bar.cpu"),
+                                Meter(id: "cpu-bar", read: Telemetry(id: "engine.load")),
+                                Scalar(
+                                    id: "cpu-value",
+                                    size: (w: Shrink, h: Fill),
+                                    format: Percent,
+                                    framed: false,
+                                    read: Telemetry(id: "engine.load"),
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ),
+            Optional(
+                id: "broadcast-block",
+                hidden: Telemetry(id: "broadcast.hidden"),
+                child: Row(
+                    id: "broadcast-group",
+                    gap: 0.0,
+                    size: (w: Shrink, h: Fill),
+                    children: [
+                        Divider(id: "before-broadcast"),
+                        Pressable(
+                            id: "broadcast",
+                            press: Command(id: "broadcast.toggle"),
+                            child: Row(
+                                id: "broadcast-cell",
+                                gap: 6.0,
+                                pad: 11.0,
+                                size: (w: Shrink, h: Fill),
+                                children: [
+                                    StatusDot(
+                                        id: "broadcast-dot",
+                                        label: "@bar.rec",
+                                        tone: Neutral,
+                                        size: (w: Shrink, h: Fill),
+                                        active: Telemetry(id: "broadcast.on_air"),
+                                        active_tone: Danger,
+                                    ),
+                                ],
+                            ),
+                        ),
+                    ],
+                ),
+            ),
+            Divider(id: "before-window"),
+            WindowControls(id: "window", style: Standard),
+        ],
+    ),
+)

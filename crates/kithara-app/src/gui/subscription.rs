@@ -1,3 +1,8 @@
+use iced::keyboard::{Key, Modifiers, key::Named};
+use kithara_ui::render::WindowCommand;
+
+use super::message::Message;
+
 /// Which iced subscriptions should be active, and at what rate.
 ///
 /// Playback drives the tick at display rate for smooth waveform motion;
@@ -40,11 +45,59 @@ pub(crate) const fn subscription_config(playing: bool) -> SubscriptionConfig {
     }
 }
 
+/// The keyboard reaches the app only through these; the menu draws the same
+/// accelerators next to the rows they fire.
+pub(crate) fn shortcut(key: &Key, modifiers: Modifiers) -> Option<Message> {
+    match key {
+        Key::Named(Named::Delete | Named::Backspace) => Some(Message::DeleteFocusedTrack),
+        Key::Character(pressed)
+            if pressed.as_str() == "f" && modifiers.control() && modifiers.command() =>
+        {
+            Some(Message::Window(WindowCommand::ToggleFullScreen))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use iced::keyboard::{Modifiers, key::Named};
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::gui::message::Message;
+
+    fn press(key: Key, modifiers: Modifiers) -> Option<Message> {
+        shortcut(&key, modifiers)
+    }
+
+    #[kithara::test]
+    fn the_full_screen_accelerator_matches_the_hint_the_menu_draws() {
+        assert!(matches!(
+            press(
+                Key::Character("f".into()),
+                Modifiers::CTRL | Modifiers::LOGO
+            ),
+            Some(Message::Window(WindowCommand::ToggleFullScreen))
+        ));
+        assert!(
+            press(Key::Character("f".into()), Modifiers::LOGO).is_none(),
+            "the menu draws two modifiers, so one must not fire it"
+        );
+        assert!(press(Key::Character("f".into()), Modifiers::empty()).is_none());
+    }
+
+    #[kithara::test]
+    fn a_bare_delete_removes_the_focused_track() {
+        assert!(matches!(
+            press(Key::Named(Named::Delete), Modifiers::empty()),
+            Some(Message::DeleteFocusedTrack)
+        ));
+        assert!(matches!(
+            press(Key::Named(Named::Backspace), Modifiers::empty()),
+            Some(Message::DeleteFocusedTrack)
+        ));
+    }
 
     #[kithara::test]
     #[case::paused(false, TICK_INTERVAL_IDLE_MS)]

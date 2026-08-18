@@ -470,7 +470,7 @@ Everything else stays in `widgets/anchored.rs`:
 `assets/modules/app-menu.kmodule.ron` and the row templates it includes from
 `assets/modules/app-menu/` are shipped assets that `builtin::resolver()` deliberately does not
 answer for: their window-manager endpoints - window list, per-window module flags, saved layouts -
-are host state no crate owns, so the documents must not become canonical preset surface the studio
+are host state no crate owns, so the documents must not become canonical preset surface the app
 can resolve. Exactly one copy of each exists and every consumer reaches it with `include_str!`.
 The window row, module-grid cell, saved-layout row, preference toggle and hint-reporting toggle are
 one template each (`window-row`, `module-cell`, `layout-row`, `toggle-row`, `hint-row`), taken as
@@ -481,7 +481,7 @@ often as the menu needs through `Include`. Each instance's control paths are
 
 `assets/modules/master-clock.kmodule.ron`, the deck key-lock and overview row, and
 `assets/modules/pivot-portals.kmodule.ron` are shipped component documents over host-owned timing
-state. They are not builtin studio presets: the Gallery embeds them explicitly and supplies mock
+state. They are not builtin app presets: the Gallery embeds them explicitly and supplies mock
 endpoints, while a production host must supply its measured clock sources, transport state and
 portal policy. The documents retain no tempo, source, range, Link or MIDI state.
 
@@ -517,7 +517,7 @@ system border would have given it. They lie over the content, not beside it, so 
 the layout no space; `SkinDoc.window.resize_edge` owns their thickness, and the host maps each
 `WindowEdge` to its toolkit's resize direction.
 `WindowDrag`, `TitleBar` and `WindowControls` paint no surface of their own and take their size from
-the row that holds them, so the same controls sit in a 26 px gallery header and in the studio's
+the row that holds them, so the same controls sit in a 26 px gallery header and in the app's
 42 px bar; the document declares the background. `WindowDrag` is the bare drag surface a bar without
 a title needs, `TitleBar` the same surface with a label. Both emit on press, not on release - a
 window drag only takes effect while the button is still held. Their glyphs are canvas strokes drawn
@@ -560,8 +560,8 @@ together or not at all.
 
 ## Application Consumer
 
-The `kithara-app` GUI studio is the production consumer: it embeds its own layout and module
-documents, implements `EndpointRegistry` (`gui/studio_ui/endpoints.rs`) and `Reads` over an address
-tree (`gui/studio_reads/`), and maps `UiEvent` to app messages (`gui/studio_ui/events.rs`). Builtin
+The `kithara-app` GUI is the production consumer: it embeds its own layout and module
+documents, implements `EndpointRegistry` (`gui/ui/endpoints.rs`) and `Reads` over an address
+tree (`gui/reads/`), and maps `UiEvent` to app messages (`gui/ui/events.rs`). Builtin
 module docs under `assets/modules/` remain the canonical presets consumed by the gallery modules
 page.

@@ -14,15 +14,21 @@ the handle into an iced task and marks the service `Stopping`; only that task's 
 makes it `Off`. The GUI tick polls `BroadcastHandle::status`, so a producer released by a
 device-rate change reaches `Off` through the same path.
 
-The design canon puts this control in the app menu and a recorder module, and the studio has
+The design canon puts this control in the app menu and a recorder module, and the app has
 neither, so the owner placed the canon's REC cell in the bar beside the CPU cell.
 
-## Studio UI host
+## UI host
 
-The studio is a compiled `kithara-ui` document set; `gui::studio_ui` is the host side of it. `StudioRegistry` declares
-every endpoint the documents may bind. `StudioUi::new` compiles both layout documents against it and returns `UiDocError`,
+The UI is a compiled `kithara-ui` document set; `gui::ui` is the host side of it. `Registry` declares
+every endpoint the documents may bind. `AppUi::new` compiles both layout documents against it and returns `UiDocError`,
 which `GuiFrontend::run_loop` propagates; a unit test compiles both, so a compile failure is a build defect, not a runtime
 condition.
+
+`compile_ui` merges `builtin::text_doc()` with `assets/ui/app-en.ktext.ron`, the app's own catalog,
+before every compile - the app document set uses canon text keys (`kithara-ui/CONTEXT.md`, "Text
+Catalog Ownership") directly, and mints its own keys only for the four window-manager menu words
+canon has no concept of (`menu.modules`, `menu.broadcast`, `menu.layout.single`,
+`menu.layout.dual`).
 
 ### Deck addressing
 
@@ -35,40 +41,40 @@ lowercase ASCII maps to a position; the session bounds the letter, so one past t
 than a neighbour, and a position past the alphabet has no letter rather than a stand-in.
 
 One position indexes every list a deck appears in: `Decks` is built from `DeckSet::decks()` in session order and
-`StudioCache::refresh` resizes against `Decks`, so the address tree joins them by position alone. Changing the session's
+`ViewCache::refresh` resizes against `Decks`, so the address tree joins them by position alone. Changing the session's
 deck list means rebuilding the view model with it; no key survives them drifting apart.
 
 ### Drag, drop, focus
 
 The library reports the drag it started on `library/tracks`, each deck module reports the pointer crossing it on
-`deck-<letter>/drop`, and `StudioCache` joins them at the release; neither side addresses the other. The dragged row and
+`deck-<letter>/drop`, and `ViewCache` joins them at the release; neither side addresses the other. The dragged row and
 the hovered deck stay separate facts: hover only changes on a crossing, so clearing it with the drop would strand a second
 drag onto the deck the pointer never left. While the drag is in flight `ui.drag.track` names the row and the layout draws
 it at the pointer. The library's Deck column is a marker, not a control.
 
 A drop focuses the deck it landed on: `deck.focused` marks it in the overview row and the keyboard's Delete reaches it.
-`StudioCache` owns focus next to hover; both name a deck by position and the layout bounds both.
+`ViewCache` owns focus next to hover; both name a deck by position and the layout bounds both.
 
 ### Deck controls
 
-- Tempo travel is `±TEMPO_RANGE` (50) percent, clamped where the deck applies it. The TEMPO block is the studio's whole
+- Tempo travel is `±TEMPO_RANGE` (50) percent, clamped where the deck applies it. The TEMPO block is the app's whole
   reach to the timestretch: one wheel surface, a detent anywhere on it moves tempo by `TEMPO_STEP` (1.5) percent, a held
   press drags the same way, a double click returns to zero. The step is bounded against `TEMPO_RANGE` so the travel stays
   reachable by scrolling, not chosen for precision.
 - The block prints the playing BPM beside the tempo percent: the analysed BPM scaled by the tempo, an em dash while no
   analysis carries one. The deck's own bar prints the track BPM, which the tempo does not move.
-- `deck.view.zoom_in` / `zoom_out` apply `kithara_ui::render::zoom_in` / `zoom_out` to the per-deck zoom the studio owns,
+- `deck.view.zoom_in` / `zoom_out` apply `kithara_ui::render::zoom_in` / `zoom_out` to the per-deck zoom the app owns,
   held to the bounds the wave draws within — the same bounds a wheel over the wave answers to. A deck no press has reached
   yet starts from `DEFAULT_ZOOM`.
 - The stream-quality cell appears only where there is a choice: a deck with an empty `abr_variants` ladder answers
-  `deck.stream.quality_hidden` and the cell leaves the row. The studio supplies the rungs and owns the open flag per deck;
+  `deck.stream.quality_hidden` and the cell leaves the row. The app supplies the rungs and owns the open flag per deck;
   a rung is addressed by its slot, `auto` hands the choice back to the ladder, and a pick becomes `DeckMsg::SetQuality`,
   which sets the ABR mode on the deck's own `current_abr_handle` and mirrors it in the deck state.
 - The mixer channel keeps the EQ; `EQ_MIN_DB` / `EQ_MAX_DB` are the knob's dB travel.
 
-`Kithara` owns one EQ mode for the whole studio; every deck keeps only its own
+`Kithara` owns one EQ mode for the whole app; every deck keeps only its own
 desired gains in `UiState`. Right-clicking either knob bank opens its host-owned
-pointer popover in `StudioCache`; the popover itself owns no product state.
+pointer popover in `ViewCache`; the popover itself owns no product state.
 Selecting a mode replaces every deck's player layout before the shared mode is
 committed. Three-band mode lays out HIGH / MID / LOW vertically, four-band mode
 HIGH / HI-MID / LO-MID / LOW. Switching modes remaps each deck's middle gains
@@ -86,12 +92,12 @@ comes off the same per-frame deck snapshots as every other deck read, never off 
 
 ### Reads and host-owned view state
 
-`StudioRoot::new` is the one place the app state is cut into domains; each node below it holds one slice and answers only
+`ReadRoot::new` is the one place the app state is cut into domains; each node below it holds one slice and answers only
 its own addresses, so no type carries the whole vocabulary; `Walk` turns the renderer's flat endpoint key into a walk over
 it. A binding scope (`@deck=a`) selects an instance rather than naming a path segment: the node owning the instances
 spends it.
 
-`StudioCache` owns what the renderer borrows but the model does not hold: converted waveform columns, formatted strings
+`ViewCache` owns what the renderer borrows but the model does not hold: converted waveform columns, formatted strings
 (tempo, playing BPM, remaining time, source subtitle, quality label), per-deck zoom and quality-menu flag, collapsed
 modules, the hovered and focused deck, and the deck layout.
 
@@ -101,7 +107,7 @@ Both deck layouts are compiled once at startup and the top bar picks between the
 out a deck whole or not at all — body, overview row and channel strip appear together — and `DeckLayout::decks` is the
 single owner of how many that is. Narrowing returns `Message::PauseHiddenDecks`, pausing every deck the layout stops
 laying out (a deck the user cannot see must not keep playing) while the session keeps the deck and its queue, so widening
-brings it back where it was, paused. `StudioCache::set_layout` bounds the cache's two pointers into the deck list: a hover
+brings it back where it was, paused. `ViewCache::set_layout` bounds the cache's two pointers into the deck list: a hover
 on a dropped deck clears and a focus on one moves to the first laid-out deck — a deck that no longer renders reports no
 pointer crossing, so nothing later would correct them.
 

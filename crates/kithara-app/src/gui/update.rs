@@ -1,4 +1,7 @@
-use iced::{Task, window, window::Direction};
+use iced::{
+    Task, window,
+    window::{Direction, Mode},
+};
 use kithara::audio::EqBandConfig;
 use kithara_ui::render::{WindowCommand, WindowEdge};
 use tracing::{error, warn};
@@ -7,7 +10,7 @@ use super::{
     app::Kithara,
     deck::{self, DeckMsg},
     message::Message,
-    mix, studio_ui,
+    mix, ui,
 };
 use crate::{
     catalog,
@@ -40,7 +43,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Ui(event) => {
-            if let Some(translated) = studio_ui::translate(state, event) {
+            if let Some(translated) = ui::translate(state, event) {
                 return update(state, translated);
             }
             Task::none()
@@ -77,6 +80,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             handle_tick(state);
             Task::none()
         }
+        Message::WindowResized(size) => {
+            state.ui.cache.window.set_size(size);
+            Task::none()
+        }
         Message::Window(command) => window_task(state, command),
         Message::WindowCloseRequested => iced::exit(),
     };
@@ -89,7 +96,7 @@ fn stop_broadcast(stop: crate::broadcast::BroadcastStop) -> Task<Message> {
     Task::perform(stop.run(), Message::BroadcastStopped)
 }
 
-/// The studio draws its own window chrome, so the app executes what the bar
+/// The app draws its own window chrome, so the app executes what the bar
 /// asks against the window it opened.
 fn window_task(state: &Kithara, command: WindowCommand) -> Task<Message> {
     match command {
@@ -99,12 +106,26 @@ fn window_task(state: &Kithara, command: WindowCommand) -> Task<Message> {
         }),
         WindowCommand::Minimize => window::minimize(state.window_id, true),
         WindowCommand::ToggleMaximize => window::toggle_maximize(state.window_id),
+        WindowCommand::ToggleFullScreen => toggle_full_screen(state.window_id),
         WindowCommand::Close => iced::exit(),
         other => {
             warn!(?other, "unhandled window command");
             Task::none()
         }
     }
+}
+
+/// Only the window manager knows the mode the window is in, so the toggle
+/// reads it back before asking for the other one.
+fn toggle_full_screen(id: window::Id) -> Task<Message> {
+    window::mode(id).then(move |mode| {
+        let next = if mode == Mode::Fullscreen {
+            Mode::Windowed
+        } else {
+            Mode::Fullscreen
+        };
+        window::set_mode(id, next)
+    })
 }
 
 const fn direction(edge: WindowEdge) -> Option<Direction> {
@@ -121,13 +142,13 @@ const fn direction(edge: WindowEdge) -> Option<Direction> {
     })
 }
 
-/// A deck the studio no longer lays out keeps its queue but stops playing.
+/// A deck the app no longer lays out keeps its queue but stops playing.
 fn pause_hidden_decks(state: &mut Kithara) {
     let hidden: Vec<DeckId> = state
         .session
         .decks()
         .iter()
-        .skip(state.studio.cache.laid_out_decks())
+        .skip(state.ui.cache.laid_out_decks())
         .map(|deck| deck.id)
         .collect();
     for id in hidden {
@@ -136,7 +157,7 @@ fn pause_hidden_decks(state: &mut Kithara) {
 }
 
 fn delete_focused_track(state: &mut Kithara) {
-    let focus = state.studio.cache.focus_deck();
+    let focus = state.ui.cache.focus_deck();
     let Some(id) = state.session.decks().get(focus).map(|deck| deck.id) else {
         return;
     };
@@ -245,10 +266,10 @@ fn handle_tick(state: &mut Kithara) {
 }
 
 /// One consistent snapshot per deck per frame, taken after the update. The
-/// studio cache re-derives its renderer-borrowed state from the snapshots.
+/// view cache re-derives its renderer-borrowed state from the snapshots.
 fn refresh_snapshots(state: &mut Kithara) {
     for deck in state.decks.iter_mut() {
         deck.ui = deck.controller.snapshot();
     }
-    state.studio.cache.refresh(&state.decks, &state.catalog);
+    state.ui.cache.refresh(&state.decks, &state.catalog);
 }

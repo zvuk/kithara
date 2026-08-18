@@ -1,0 +1,354 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "app-menu",
+    chrome: Plain,
+    root: Popover(
+        id: "pop",
+        open: Model(id: "ui.menu.open"),
+        anchor: Pressable(
+            id: "burger",
+            press: Command(id: "ui.menu.toggle"),
+            child: Row(
+                size: (w: Fixed(36.0), h: Fill),
+                gap: 0.0,
+                frame: (top: false, right: true, bottom: false, left: false),
+                frame_color: LineInner,
+                active: Model(id: "ui.menu.open"),
+                active_background: BgSelect,
+                children: [
+                    Row(size: (w: Fill, h: Fill), gap: 0.0, children: []),
+                    Glyph(id: "burger-icon", icon: Menu, style: MenuBurger, color: TextDim),
+                    Row(size: (w: Fill, h: Fill), gap: 0.0, children: []),
+                ],
+            ),
+        ),
+        content: Column(
+            id: "surface",
+            size: (w: Fixed(298.0), h: Shrink),
+            gap: 0.0,
+            children: [
+                Row(
+                    id: "header",
+                    size: (w: Fill, h: Fixed(26.0)),
+                    pad_x: 10.0,
+                    gap: 8.0,
+                    frame: (top: false, right: false, bottom: true, left: false),
+                    frame_color: LinePop,
+                    children: [
+                        Text(
+                            id: "brand",
+                            size: (w: Fill, h: Fill),
+                            style: BrandSmall,
+                            label: "@menu.brand",
+                        ),
+                        Text(id: "version", style: MicroLabel, read: Model(id: "ui.app.version")),
+                        Pressable(
+                            id: "header-close",
+                            press: Command(id: "ui.menu.close"),
+                            child: Glyph(
+                                id: "header-close-icon",
+                                icon: X,
+                                style: MenuSmall,
+                                color: Muted,
+                            ),
+                        ),
+                    ],
+                ),
+                Row(
+                    id: "windows-head",
+                    size: (w: Fill, h: Fixed(22.0)),
+                    pad_x: 10.0,
+                    gap: 0.0,
+                    frame: (top: false, right: false, bottom: true, left: false),
+                    frame_color: LinePop,
+                    children: [
+                        Text(
+                            id: "windows-head-label",
+                            size: (w: Fill, h: Fill),
+                            style: MicroLabel,
+                            label: "@menu.section.windows",
+                        ),
+                        Text(
+                            id: "windows-head-count",
+                            style: MicroLabel,
+                            read: Model(id: "ui.window.count"),
+                        ),
+                    ],
+                ),
+                Include(id: "window-1", source: "app-menu/window-row.kmodule.ron", with: { "window": "1" }),
+                Pressable(
+                    id: "modules-head",
+                    press: Command(id: "ui.menu.toggle_group", with: { "group": "mod" }),
+                    child: Row(
+                        size: (w: Fill, h: Fixed(26.0)),
+                        pad_x: 10.0,
+                        gap: 8.0,
+                        children: [
+                            Glyph(
+                                id: "modules-caret",
+                                icon: ChevronRight,
+                                active_icon: ChevronDown,
+                                style: Menu,
+                                color: Muted,
+                                active: Model(id: "ui.menu.group_open", with: { "group": "mod" }),
+                            ),
+                            Text(
+                                id: "modules-title",
+                                size: (w: Fill, h: Fill),
+                                style: Mono,
+                                color: Text,
+                                label: "@menu.modules",
+                            ),
+                            Text(
+                                id: "modules-count",
+                                style: MicroLabel,
+                                read: Model(id: "ui.modules.count"),
+                            ),
+                        ],
+                    ),
+                ),
+                Optional(
+                    id: "modules-block",
+                    hidden: Model(id: "ui.menu.group_hidden", with: { "group": "mod" }),
+                    child: Row(
+                        id: "modules-grid",
+                        size: (w: Fill, h: Shrink),
+                        pad_x: 10.0,
+                        gap: 0.0,
+                        children: [
+                            Row(id: "modules-indent", size: (w: Fixed(17.0), h: Fill), gap: 0.0, children: []),
+                            Column(
+                                id: "modules-column",
+                                size: (w: Fill, h: Shrink),
+                                gap: 4.0,
+                                children: [
+                                    Row(
+                                        id: "modules-row-1",
+                                        size: (w: Fill, h: Fixed(20.0)),
+                                        gap: 4.0,
+                                        children: [
+                                            Include(id: "module-ov", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.overview", "module": "ov" }),
+                                            Include(id: "module-mix", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.mixer", "module": "mix" }),
+                                            Include(id: "module-lib", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.library", "module": "lib" }),
+                                        ],
+                                    ),
+                                    Row(
+                                        id: "modules-row-2",
+                                        size: (w: Fill, h: Fixed(20.0)),
+                                        gap: 4.0,
+                                        children: [
+                                            Include(id: "module-cpu", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.cpu", "module": "cpu" }),
+                                            Row(id: "modules-filler", size: (w: Fill, h: Fixed(20.0)), gap: 0.0, children: []),
+                                            Row(id: "modules-filler-2", size: (w: Fill, h: Fixed(20.0)), gap: 0.0, children: []),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                ),
+                Optional(
+                    id: "modules-space-block",
+                    hidden: Model(id: "ui.menu.group_hidden", with: { "group": "mod" }),
+                    child: Row(
+                        id: "modules-space",
+                        size: (w: Fill, h: Fixed(8.0)),
+                        gap: 0.0,
+                        children: [],
+                    ),
+                ),
+                Pressable(
+                    id: "layouts-head",
+                    press: Command(id: "ui.menu.toggle_group", with: { "group": "lay" }),
+                    child: Row(
+                        size: (w: Fill, h: Fixed(26.0)),
+                        pad_x: 10.0,
+                        gap: 8.0,
+                        frame: (top: true, right: false, bottom: false, left: false),
+                        frame_color: LinePop,
+                        children: [
+                            Glyph(
+                                id: "layouts-caret",
+                                icon: ChevronRight,
+                                active_icon: ChevronDown,
+                                style: Menu,
+                                color: Muted,
+                                active: Model(id: "ui.menu.group_open", with: { "group": "lay" }),
+                            ),
+                            Text(
+                                id: "layouts-title",
+                                size: (w: Fill, h: Fill),
+                                style: Mono,
+                                color: Text,
+                                label: "@menu.layouts",
+                            ),
+                            Text(
+                                id: "layouts-active",
+                                style: MicroLabel,
+                                color: Accent,
+                                read: Model(id: "ui.layouts.active"),
+                            ),
+                        ],
+                    ),
+                ),
+                Optional(
+                    id: "layouts-block",
+                    hidden: Model(id: "ui.menu.group_hidden", with: { "group": "lay" }),
+                    child: Column(
+                        id: "layouts-list",
+                        size: (w: Fill, h: Shrink),
+                        gap: 0.0,
+                        children: [
+                            Pressable(
+                                id: "layout-1",
+                                press: Command(id: "ui.layout.apply", with: { "layout": "1" }),
+                                child: Row(
+                                    size: (w: Fill, h: Fixed(24.0)),
+                                    pad_x: 10.0,
+                                    gap: 8.0,
+                                    children: [
+                                        Row(id: "layout-1-indent", size: (w: Fixed(9.0), h: Fill), gap: 0.0, children: []),
+                                        Row(
+                                            id: "layout-1-led",
+                                            size: (w: Fixed(4.0), h: Fixed(4.0)),
+                                            gap: 0.0,
+                                            background: Line,
+                                            active_background: Accent,
+                                            active: Model(id: "ui.layout.selected", with: { "layout": "1" }),
+                                            children: [],
+                                        ),
+                                        Text(
+                                            id: "layout-1-label",
+                                            size: (w: Fill, h: Fill),
+                                            style: Section,
+                                            color: TextDim,
+                                            active_color: Text,
+                                            label: "@menu.layout.single",
+                                            active: Model(id: "ui.layout.selected", with: { "layout": "1" }),
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            Pressable(
+                                id: "layout-2",
+                                press: Command(id: "ui.layout.apply", with: { "layout": "2" }),
+                                child: Row(
+                                    size: (w: Fill, h: Fixed(24.0)),
+                                    pad_x: 10.0,
+                                    gap: 8.0,
+                                    children: [
+                                        Row(id: "layout-2-indent", size: (w: Fixed(9.0), h: Fill), gap: 0.0, children: []),
+                                        Row(
+                                            id: "layout-2-led",
+                                            size: (w: Fixed(4.0), h: Fixed(4.0)),
+                                            gap: 0.0,
+                                            background: Line,
+                                            active_background: Accent,
+                                            active: Model(id: "ui.layout.selected", with: { "layout": "2" }),
+                                            children: [],
+                                        ),
+                                        Text(
+                                            id: "layout-2-label",
+                                            size: (w: Fill, h: Fill),
+                                            style: Section,
+                                            color: TextDim,
+                                            active_color: Text,
+                                            label: "@menu.layout.dual",
+                                            active: Model(id: "ui.layout.selected", with: { "layout": "2" }),
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            Row(
+                                id: "layouts-space",
+                                size: (w: Fill, h: Fixed(6.0)),
+                                gap: 0.0,
+                                children: [],
+                            ),
+                        ],
+                    ),
+                ),
+                Pressable(
+                    id: "full-screen",
+                    press: Command(id: "ui.window.toggle_full_screen"),
+                    child: Row(
+                        size: (w: Fill, h: Fixed(26.0)),
+                        pad_x: 10.0,
+                        gap: 8.0,
+                        frame: (top: true, right: false, bottom: false, left: false),
+                        frame_color: LinePop,
+                        children: [
+                            Glyph(id: "full-screen-icon", icon: Maximize, style: Menu, color: Muted),
+                            Text(
+                                id: "full-screen-label",
+                                size: (w: Fill, h: Fill),
+                                style: Mono,
+                                label: "@menu.full_screen",
+                            ),
+                            Text(id: "full-screen-hint", style: MicroLabel, label: "⌃⌘F"),
+                        ],
+                    ),
+                ),
+                Optional(
+                    id: "set-block",
+                    hidden: Telemetry(id: "broadcast.hidden"),
+                    child: Column(
+                        id: "set",
+                        size: (w: Fill, h: Shrink),
+                        gap: 0.0,
+                        children: [
+                            Row(
+                                id: "set-label",
+                                size: (w: Fill, h: Fixed(22.0)),
+                                pad_x: 10.0,
+                                gap: 0.0,
+                                background: BgFooter,
+                                frame: (top: true, right: false, bottom: true, left: false),
+                                frame_color: LineInner,
+                                children: [
+                                    Text(
+                                        id: "set-label-text",
+                                        size: (w: Fill, h: Fill),
+                                        style: MicroLabel,
+                                        label: "@menu.section.set",
+                                    ),
+                                ],
+                            ),
+                            Pressable(
+                                id: "cast",
+                                press: Command(id: "broadcast.toggle"),
+                                child: Row(
+                                    size: (w: Fill, h: Fixed(26.0)),
+                                    pad_x: 10.0,
+                                    gap: 8.0,
+                                    children: [
+                                        Glyph(
+                                            id: "cast-icon",
+                                            icon: Radio,
+                                            style: Menu,
+                                            color: Line,
+                                            active_color: Accent,
+                                            active: Telemetry(id: "broadcast.on_air"),
+                                        ),
+                                        Text(
+                                            id: "cast-label",
+                                            size: (w: Fill, h: Fill),
+                                            style: Mono,
+                                            label: "@menu.broadcast",
+                                        ),
+                                        Text(
+                                            id: "cast-hint",
+                                            style: MicroLabel,
+                                            read: Telemetry(id: "broadcast.hint"),
+                                        ),
+                                    ],
+                                ),
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        ),
+    ),
+)

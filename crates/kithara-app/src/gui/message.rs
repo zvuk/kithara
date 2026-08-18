@@ -11,8 +11,8 @@ use crate::deck::{DeckId, EqMode};
 pub(crate) enum Message {
     BroadcastToggle,
     BroadcastStopped(Option<Duration>),
-    /// Raw event from the compiled studio UI; translated by
-    /// [`super::studio_ui::translate`].
+    /// Raw event from the compiled UI; translated by
+    /// [`super::ui::translate`].
     Ui(UiEvent),
     /// Event addressed to one deck.
     Deck(DeckId, super::deck::DeckMsg),
@@ -27,13 +27,15 @@ pub(crate) enum Message {
     SelectCatalogTrack(usize),
     /// Load catalog row `.0` onto deck `.1`.
     LoadOntoDeck(usize, DeckId),
-    /// Pause every deck the current studio layout does not lay out.
+    /// Pause every deck the current layout does not lay out.
     PauseHiddenDecks,
     /// Periodic tick from the subscription.
     Tick,
-    /// Window chrome the studio bar draws itself; executed against the
-    /// studio window this app owns.
+    /// Window chrome the bar draws itself; executed against the
+    /// window this app owns.
     Window(WindowCommand),
-    /// The window manager asked the studio window to close; exits the app.
+    /// The window settled at a new size; the menu draws it.
+    WindowResized(iced::Size),
+    /// The window manager asked the window to close; exits the app.
     WindowCloseRequested,
 }
