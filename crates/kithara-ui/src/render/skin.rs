@@ -12,7 +12,31 @@ use crate::{
         TabLargeSkin, TelemetrySkin, TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin,
         VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
     },
+    text::TextDoc,
 };
+
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TrackListLabels {
+    pub artist: String,
+    pub bpm: String,
+    pub deck: String,
+    pub energy: String,
+    pub footer_tracks: String,
+    pub index: String,
+    pub key: String,
+    pub time: String,
+    pub title: String,
+    pub transition: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct CrossfaderLabels {
+    pub left: String,
+    pub center: String,
+    pub right: String,
+}
 
 /// Resolved skin consumed by iced renderers.
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -25,6 +49,7 @@ pub struct Skin {
     pub chip: ChipSkin,
     pub chrome: ChromeSkin,
     pub crossfader: CrossfaderSkin,
+    pub crossfader_labels: CrossfaderLabels,
     pub deck: DeckSkin,
     pub divider: DividerSkin,
     pub drag: DragSkin,
@@ -51,7 +76,9 @@ pub struct Skin {
     pub text: TextSkin,
     pub toggle: ToggleSkin,
     pub track_list: TrackListSkin,
+    pub track_list_labels: TrackListLabels,
     pub tree: TreeSkin,
+    pub tree_search_placeholder: String,
     pub vis: VisSkin,
     pub vu_stereo: VuStereoSkin,
     pub vu_vertical: VuVerticalSkin,
@@ -101,11 +128,17 @@ impl Skin {
         }
     }
 
-    /// Resolves a parsed document into iced colors and render metrics.
+    /// Resolves a parsed document into iced colors and render metrics, pulling
+    /// the crossfader, tree search and track list captions from `text`.
     ///
     /// # Errors
-    /// Returns [`UiDocError::BadColor`] when any palette value is malformed.
-    pub fn resolve(document: SkinDoc, origin: &SourceUri) -> Result<Self, UiDocError> {
+    /// Returns [`UiDocError::BadColor`] when any palette value is malformed, or
+    /// [`UiDocError::UnknownTextKey`] when `text` is missing one of those captions.
+    pub fn resolve(
+        document: SkinDoc,
+        text: &TextDoc,
+        origin: &SourceUri,
+    ) -> Result<Self, UiDocError> {
         Ok(Self {
             palette: RenderPalette {
                 bg: color(&document.palette.bg, origin)?,
@@ -140,7 +173,12 @@ impl Skin {
             window: document.window,
             text_input: document.text_input,
             knob: document.knob,
-            crossfader: document.crossfader.clone(),
+            crossfader: document.crossfader,
+            crossfader_labels: CrossfaderLabels {
+                left: text_field(text, "crossfader.left_label", origin)?,
+                center: text_field(text, "crossfader.center_label", origin)?,
+                right: text_field(text, "crossfader.right_label", origin)?,
+            },
             vu_stereo: document.vu_stereo,
             vu_vertical: document.vu_vertical,
             vis: document.vis,
@@ -169,12 +207,36 @@ impl Skin {
             drag: document.drag,
             meter: document.meter,
             telemetry: document.telemetry,
-            tree: document.tree.clone(),
-            track_list: document.track_list.clone(),
+            tree: document.tree,
+            tree_search_placeholder: text_field(text, "tree.search_placeholder", origin)?,
+            track_list: document.track_list,
+            track_list_labels: TrackListLabels {
+                index: text_field(text, "track_list.column.index", origin)?,
+                deck: text_field(text, "track_list.column.deck", origin)?,
+                title: text_field(text, "track_list.column.title", origin)?,
+                artist: text_field(text, "track_list.column.artist", origin)?,
+                bpm: text_field(text, "track_list.column.bpm", origin)?,
+                key: text_field(text, "track_list.column.key", origin)?,
+                time: text_field(text, "track_list.column.time", origin)?,
+                energy: text_field(text, "track_list.column.energy", origin)?,
+                transition: text_field(text, "track_list.column.transition", origin)?,
+                footer_tracks: text_field(text, "track_list.footer_tracks", origin)?,
+            },
             layout_preview: document.layout_preview,
             document,
         })
     }
+}
+
+fn text_field(catalog: &TextDoc, key: &str, origin: &SourceUri) -> Result<String, UiDocError> {
+    catalog
+        .get(key)
+        .map(str::to_owned)
+        .ok_or_else(|| UiDocError::UnknownTextKey {
+            origin: origin.clone(),
+            key: key.to_owned(),
+            path: format!("skin.{key}"),
+        })
 }
 
 fn color(value: &str, origin: &SourceUri) -> Result<Color, UiDocError> {

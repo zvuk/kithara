@@ -201,7 +201,8 @@ mod tests {
     #[kithara::test]
     fn content_size_follows_both_declared_axes() {
         let origin = SourceUri("tree-test.ron".to_owned());
-        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
+        let skin =
+            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
         let mut interner = Interner::new(1024);
         let id = interner.intern("cell", &origin).unwrap();
         let node = |size| ExpandedNode::Control {
@@ -264,7 +265,8 @@ mod tests {
     #[kithara::test]
     fn a_popover_measures_its_anchor_and_a_pressable_its_child() {
         let origin = SourceUri("tree-test.ron".to_owned());
-        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
+        let skin =
+            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
         let mut interner = Interner::new(1024);
         let anchor = SizeSpec::new(Dim::Fixed(36.0), Dim::Fixed(36.0));
         let content = SizeSpec::new(Dim::Fixed(298.0), Dim::Fixed(400.0));

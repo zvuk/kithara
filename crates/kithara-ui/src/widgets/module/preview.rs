@@ -292,6 +292,7 @@ mod tests {
                 &builtin::resolver(),
                 &registry,
                 builtin::skin_doc(),
+                builtin::text_doc(),
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| panic!("{preset} must compile: {error}"));

@@ -20,7 +20,7 @@
                 active: Model(id: "deck.stream.quality_menu", with: { "deck": "$deck" }),
                 active_background: BgSelect,
                 children: [
-                    Text(id: "label", style: MicroLabel, label: "HLS"),
+                    Text(id: "label", style: MicroLabel, label: "@deck.stream.hls_label"),
                     Text(
                         id: "value",
                         style: Mono,
@@ -48,7 +48,7 @@
                             id: "head-label",
                             size: (w: Fill, h: Fill),
                             style: MicroLabel,
-                            label: "HLS QUALITY",
+                            label: "@deck.stream.quality_title",
                         ),
                     ],
                 ),

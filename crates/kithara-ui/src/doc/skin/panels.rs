@@ -191,7 +191,7 @@ pub struct TelemetrySkin {
     pub scalar_precision: usize,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct TreeSkin {
@@ -217,7 +217,6 @@ pub struct TreeSkin {
     pub scope_frame: FrameSkin,
     pub scope_menu_frame: FrameSkin,
     pub size: SizeSpec,
-    pub search_placeholder: String,
     pub chevron_size: f32,
     pub chevron_width: f32,
     pub content_gap: f32,
@@ -246,7 +245,7 @@ pub struct TreeSkin {
     pub search_padding_x: f32,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct TrackListSkin {
@@ -270,7 +269,6 @@ pub struct TrackListSkin {
     pub deck_chip_frame: FrameSkin,
     pub row_frame: FrameSkin,
     pub size: SizeSpec,
-    pub labels: TrackListLabels,
     pub artist_width: f32,
     pub bpm_badge_height: f32,
     pub bpm_badge_padding_x: f32,

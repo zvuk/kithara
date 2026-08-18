@@ -111,6 +111,7 @@ pub(super) fn compile_studio(layout: DeckLayout) -> Result<CompiledUi, UiDocErro
         &resolver,
         &StudioRegistry::default(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
 }

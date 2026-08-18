@@ -34,6 +34,7 @@ fn swatch_compiles_without_bindings() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();

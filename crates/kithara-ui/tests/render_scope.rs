@@ -37,6 +37,7 @@ fn rendering_two_decks_reads_scoped_endpoints_for_both() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -115,6 +116,7 @@ fn block_ui() -> Result<CompiledUi, UiDocError> {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
 }
@@ -186,6 +188,7 @@ fn menu_ui(module: &'static str) -> Result<CompiledUi, UiDocError> {
         &resolver,
         &menu_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
 }

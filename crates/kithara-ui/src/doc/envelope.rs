@@ -9,15 +9,18 @@ use crate::{
 pub(crate) const LAYOUT_SCHEMA: &str = "kithara.layout";
 pub(crate) const MODULE_SCHEMA: &str = "kithara.module";
 pub(crate) const SKIN_SCHEMA: &str = "kithara.skin";
+pub(crate) const TEXT_SCHEMA: &str = "kithara.text";
 pub const LAYOUT_VERSION: u32 = 1;
 pub const MODULE_VERSION: u32 = 1;
 pub const SKIN_VERSION: u32 = 1;
+pub const TEXT_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DocKind {
     Layout,
     Module,
     Skin,
+    Text,
 }
 
 impl DocKind {
@@ -26,6 +29,7 @@ impl DocKind {
             Self::Layout => "layout",
             Self::Module => "module",
             Self::Skin => "skin",
+            Self::Text => "text",
         }
     }
 }
@@ -63,6 +67,8 @@ pub fn probe(text: &str, origin: &SourceUri) -> Result<Envelope, UiDocError> {
         (DocKind::Module, MODULE_VERSION)
     } else if raw.schema == SKIN_SCHEMA {
         (DocKind::Skin, SKIN_VERSION)
+    } else if raw.schema == TEXT_SCHEMA {
+        (DocKind::Text, TEXT_VERSION)
     } else {
         return Err(UiDocError::UnknownSchema {
             origin: origin.clone(),

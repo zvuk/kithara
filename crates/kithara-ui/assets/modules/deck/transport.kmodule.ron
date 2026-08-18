@@ -12,14 +12,14 @@
             Button(
                 id: "cue",
                 size: (w: Fixed(58.0), h: Fixed(30.0)),
-                label: "CUE",
+                label: "@deck.transport.cue",
                 style: Transport,
                 write: Command(id: "deck.transport.set_cue", with: { "deck": "$deck" }),
             ),
             Button(
                 id: "play",
                 size: (w: Fixed(72.0), h: Fixed(30.0)),
-                label: "PLAY",
+                label: "@deck.transport.play",
                 icon: Some(Play),
                 style: Transport,
                 read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
@@ -29,7 +29,7 @@
             Button(
                 id: "sync",
                 size: (w: Fixed(58.0), h: Fixed(30.0)),
-                label: "SYNC",
+                label: "@deck.transport.sync",
                 style: Transport,
                 read: Telemetry(id: "deck.playback.synced", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.toggle_sync", with: { "deck": "$deck" }),
@@ -46,7 +46,7 @@
             Button(
                 id: "loop",
                 size: (w: Fixed(74.0), h: Fixed(30.0)),
-                label: "LOOP 4",
+                label: "@deck.transport.loop",
                 style: Transport,
                 read: Telemetry(id: "deck.playback.looping", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.toggle_loop", with: { "deck": "$deck" }),
@@ -102,7 +102,7 @@
                 frame: (top: false, right: false, bottom: false, left: true),
                 size: (w: Shrink, h: Fixed(30.0)),
                 children: [
-                    Text(id: "tempo-label", style: MicroLabel, label: "TEMPO"),
+                    Text(id: "tempo-label", style: MicroLabel, label: "@deck.tempo.caption"),
                     Text(
                         id: "tempo-value",
                         style: Telemetry,

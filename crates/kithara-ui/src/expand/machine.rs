@@ -6,8 +6,9 @@ use super::{
     Binding, BlockSpec, Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec, ExpandedModule,
     ExpandedNode, SurfaceSpec,
     binding_subst::{
-        intern_binding, intern_optional_binding, intern_optional_text, intern_text, intern_texts,
-        resolve_optional_param, resolve_param, substitute_binding, substitute_map,
+        intern_binding, intern_module_text, intern_module_text_opt, intern_optional_binding,
+        intern_optional_text, intern_text, intern_texts, resolve_optional_param, resolve_param,
+        substitute_binding, substitute_map,
     },
     site::{ControlFields, ExtraBindingRefs, ExtraBindings},
 };
@@ -18,11 +19,13 @@ use crate::{
     param::Param,
     resolve::ModuleSet,
     size::SizeSpec,
+    text::TextDoc,
     validate,
 };
 
 pub(super) struct Context<'a> {
     pub(super) set: &'a ModuleSet,
+    pub(super) text: &'a TextDoc,
     pub(super) args: BTreeMap<String, String>,
     pub(super) origin: SourceUri,
     pub(super) prefix: String,
@@ -60,6 +63,7 @@ pub(crate) struct Expander<'m, 'v> {
     budget: &'m mut Budget,
     visitor: &'m mut ControlVisitor<'v>,
     interner: &'m mut Interner,
+    text: &'m TextDoc,
     in_popover: bool,
     max_depth: usize,
 }
@@ -69,12 +73,14 @@ impl<'m, 'v> Expander<'m, 'v> {
         max_depth: usize,
         budget: &'m mut Budget,
         interner: &'m mut Interner,
+        text: &'m TextDoc,
         visitor: &'m mut ControlVisitor<'v>,
     ) -> Self {
         Self {
             max_depth,
             budget,
             interner,
+            text,
             visitor,
             in_popover: false,
         }
@@ -94,6 +100,7 @@ impl<'m, 'v> Expander<'m, 'v> {
         let root = expand_at(set, entry, args.clone(), prefix.to_owned(), 0, self)?;
         let context = Context {
             set,
+            text: self.text,
             origin: entry.clone(),
             args: args.clone(),
             prefix: prefix.to_owned(),
@@ -127,20 +134,18 @@ impl<'m, 'v> Expander<'m, 'v> {
             })
             .transpose()?;
         let module = self.interner.intern(&doc.id.0, entry)?;
-        let title = doc
-            .title
-            .as_deref()
-            .map(|title| self.interner.intern(title, entry))
-            .transpose()?;
-        let chip = doc
-            .chip
-            .as_deref()
-            .map(|chip| self.interner.intern(chip, entry))
-            .transpose()?;
+        let (interner, text) = (&mut *self.interner, self.text);
+        let title =
+            intern_module_text_opt(interner, text, doc.title.as_deref(), prefix, "title", entry)?;
+        let chip =
+            intern_module_text_opt(interner, text, doc.chip.as_deref(), prefix, "chip", entry)?;
         let assign = doc
             .assign
             .iter()
-            .map(|label| self.interner.intern(label, entry))
+            .enumerate()
+            .map(|(i, label)| {
+                intern_module_text(interner, text, label, prefix, &format!("assign/{i}"), entry)
+            })
             .collect::<Result<Vec<_>, UiDocError>>()?;
         let collapsed = self
             .interner
@@ -189,6 +194,7 @@ fn expand_at(
     }
     let context = Context {
         set,
+        text: machine.text,
         args,
         prefix,
         origin: uri.clone(),
@@ -997,8 +1003,9 @@ mod tests {
 
     use super::*;
     use crate::{
+        builtin,
         expand::{Binding, BindingKind},
-        ids::StrArena,
+        ids::{DocId, StrArena},
         resolve::load_module_graph,
         source::{Limits, MemResolver},
     };
@@ -1008,6 +1015,18 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    fn catalog(pairs: &[(&str, &str)]) -> TextDoc {
+        TextDoc {
+            id: DocId("test".to_owned()),
+            schema: "kithara.text".to_owned(),
+            version: 1,
+            entries: pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        }
     }
 
     fn deck_fixture() -> MemResolver {
@@ -1035,6 +1054,15 @@ mod tests {
         uri: &SourceUri,
         args: &BTreeMap<String, String>,
     ) -> Result<(ExpandedNode, StrArena), UiDocError> {
+        expand_with_text(set, uri, args, builtin::text_doc())
+    }
+
+    fn expand_with_text(
+        set: &ModuleSet,
+        uri: &SourceUri,
+        args: &BTreeMap<String, String>,
+        text: &TextDoc,
+    ) -> Result<(ExpandedNode, StrArena), UiDocError> {
         let mut budget = Budget::new(Limits::default().max_nodes);
         let mut interner = Interner::new(64 * 1024);
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
@@ -1042,6 +1070,7 @@ mod tests {
             Limits::default().max_depth,
             &mut budget,
             &mut interner,
+            text,
             &mut visitor,
         )
         .expand_module(set, uri, args, "")?;
@@ -1056,8 +1085,14 @@ mod tests {
         let mut budget = Budget::new(Limits::default().max_nodes);
         let mut interner = Interner::new(64 * 1024);
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
-        let module = Expander::new(max_depth, &mut budget, &mut interner, &mut visitor)
-            .expand_module(set, uri, &BTreeMap::new(), "")?;
+        let module = Expander::new(
+            max_depth,
+            &mut budget,
+            &mut interner,
+            builtin::text_doc(),
+            &mut visitor,
+        )
+        .expand_module(set, uri, &BTreeMap::new(), "")?;
         Ok((module.root, interner.finish()))
     }
 
@@ -1174,9 +1209,15 @@ mod tests {
         let mut interner = Interner::new(64 * 1024);
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
 
-        let error = Expander::new(limits.max_depth, &mut budget, &mut interner, &mut visitor)
-            .expand_module(&set, &uri, &args(&[("deck", "a")]), "deck-a")
-            .unwrap_err();
+        let error = Expander::new(
+            limits.max_depth,
+            &mut budget,
+            &mut interner,
+            builtin::text_doc(),
+            &mut visitor,
+        )
+        .expand_module(&set, &uri, &args(&[("deck", "a")]), "deck-a")
+        .unwrap_err();
         let message = error.to_string();
         assert!(matches!(
             error,
@@ -1205,6 +1246,176 @@ mod tests {
             panic!("expected control");
         };
         assert_eq!(arena.resolve(label), "$5.99");
+    }
+
+    #[kithara::test]
+    fn doubled_at_expands_to_literal_at() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "handle.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "handle",
+                root: Chip(id: "handle", label: "@@user"))"#,
+        );
+        let (uri, set) =
+            load_module_graph(&resolver, None, "handle.kmodule.ron", &Limits::default()).unwrap();
+
+        let (root, arena) = expand(&set, &uri, &BTreeMap::new()).unwrap();
+        let ExpandedNode::Control {
+            spec: ControlSpec::Chip { label, .. },
+            ..
+        } = root
+        else {
+            panic!("expected control");
+        };
+        assert_eq!(arena.resolve(label), "@user");
+    }
+
+    #[kithara::test]
+    fn at_key_resolves_directly_to_its_catalog_value() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "greeting.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "greeting",
+                root: Chip(id: "chip", label: "@menu.modules"))"#,
+        );
+        let (uri, set) =
+            load_module_graph(&resolver, None, "greeting.kmodule.ron", &Limits::default()).unwrap();
+        let text = catalog(&[("menu.modules", "Modules")]);
+
+        let (root, arena) = expand_with_text(&set, &uri, &BTreeMap::new(), &text).unwrap();
+        let ExpandedNode::Control {
+            spec: ControlSpec::Chip { label, .. },
+            ..
+        } = root
+        else {
+            panic!("expected control");
+        };
+        assert_eq!(arena.resolve(label), "Modules");
+    }
+
+    #[kithara::test]
+    fn bare_at_sign_mid_string_is_not_a_marker() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "contact.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "contact",
+                root: Chip(id: "chip", label: "user@example.com"))"#,
+        );
+        let (uri, set) =
+            load_module_graph(&resolver, None, "contact.kmodule.ron", &Limits::default()).unwrap();
+
+        let (root, arena) = expand(&set, &uri, &BTreeMap::new()).unwrap();
+        let ExpandedNode::Control {
+            spec: ControlSpec::Chip { label, .. },
+            ..
+        } = root
+        else {
+            panic!("expected control");
+        };
+        assert_eq!(arena.resolve(label), "user@example.com");
+    }
+
+    #[kithara::test]
+    fn unknown_at_key_is_a_compile_error() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "greeting.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "greeting",
+                root: Chip(id: "chip", label: "@missing.key"))"#,
+        );
+        let (uri, set) =
+            load_module_graph(&resolver, None, "greeting.kmodule.ron", &Limits::default()).unwrap();
+        let text = catalog(&[]);
+
+        let error = expand_with_text(&set, &uri, &BTreeMap::new(), &text).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::UnknownTextKey { key, .. } if key == "missing.key"
+        ));
+    }
+
+    #[kithara::test]
+    fn escaped_at_argument_survives_substitution_before_key_resolution() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "wrapper.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "wrapper",
+                root: Include(id: "inner", source: "inner.kmodule.ron", with: { "label": "@@handle" }))"#,
+        );
+        resolver.insert(
+            "inner.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "inner", parameters: ["label"],
+                root: Chip(id: "chip", label: "$label"))"#,
+        );
+        let (uri, set) =
+            load_module_graph(&resolver, None, "wrapper.kmodule.ron", &Limits::default()).unwrap();
+
+        let (root, arena) = expand(&set, &uri, &BTreeMap::new()).unwrap();
+        let ExpandedNode::Control {
+            spec: ControlSpec::Chip { label, .. },
+            ..
+        } = root
+        else {
+            panic!("expected control");
+        };
+        assert_eq!(arena.resolve(label), "@handle");
+    }
+
+    #[kithara::test]
+    fn substituted_at_key_resolves_through_the_catalog() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "wrapper.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "wrapper",
+                root: Include(id: "inner", source: "inner.kmodule.ron", with: { "label": "@menu.modules" }))"#,
+        );
+        resolver.insert(
+            "inner.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "inner", parameters: ["label"],
+                root: Chip(id: "chip", label: "$label"))"#,
+        );
+        let (uri, set) =
+            load_module_graph(&resolver, None, "wrapper.kmodule.ron", &Limits::default()).unwrap();
+        let text = catalog(&[("menu.modules", "Modules")]);
+
+        let (root, arena) = expand_with_text(&set, &uri, &BTreeMap::new(), &text).unwrap();
+        let ExpandedNode::Control {
+            spec: ControlSpec::Chip { label, .. },
+            ..
+        } = root
+        else {
+            panic!("expected control");
+        };
+        assert_eq!(arena.resolve(label), "Modules");
+    }
+
+    #[kithara::test]
+    fn module_title_resolves_an_at_key_without_dollar_substitution() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "titled.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "titled", title: "@menu.modules",
+                root: Chip(id: "chip", label: "PLAY"))"#,
+        );
+        let (uri, set) =
+            load_module_graph(&resolver, None, "titled.kmodule.ron", &Limits::default()).unwrap();
+        let text = catalog(&[("menu.modules", "Modules")]);
+        let mut budget = Budget::new(Limits::default().max_nodes);
+        let mut interner = Interner::new(64 * 1024);
+        let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
+
+        let module = Expander::new(
+            Limits::default().max_depth,
+            &mut budget,
+            &mut interner,
+            &text,
+            &mut visitor,
+        )
+        .expand_module(&set, &uri, &BTreeMap::new(), "")
+        .unwrap();
+        let arena = interner.finish();
+
+        assert_eq!(arena.resolve(module.title.unwrap()), "Modules");
     }
 
     #[kithara::test]

@@ -19,6 +19,7 @@ fn micro_preset_compiles_against_player_registry() {
         &builtin::resolver(),
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -50,6 +51,7 @@ fn player_preset_compiles_against_player_registry() {
         &builtin::resolver(),
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -62,6 +64,7 @@ fn player_deck_starts_with_one_hero_wave() {
         &builtin::resolver(),
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -103,6 +106,7 @@ fn player_deck_compiles_canonical_transport_row() {
         &builtin::resolver(),
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -195,6 +199,7 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
         &builtin::resolver(),
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();

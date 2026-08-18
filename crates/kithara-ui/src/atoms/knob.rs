@@ -203,7 +203,8 @@ mod tests {
     #[kithara::test]
     fn the_knob_reserves_its_caption_row_with_and_without_a_label() {
         let origin = SourceUri("knob.kskin.ron".to_owned());
-        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
+        let skin =
+            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
         let value = ReadValue::Scalar(0.5);
         let rows = |label| {
             Knob::builder()

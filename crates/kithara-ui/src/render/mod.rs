@@ -15,7 +15,7 @@ pub use model::{
     PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TrackRow, TreeIcon,
     TreeRow, WaveBucket, WaveformView,
 };
-pub use skin::Skin;
+pub use skin::{CrossfaderLabels, Skin, TrackListLabels};
 pub use typography::shaped_text;
 
 pub use crate::widgets::wave::zoom_math::{DEFAULT_ZOOM, zoom_in, zoom_out};

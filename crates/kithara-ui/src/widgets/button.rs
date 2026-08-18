@@ -247,7 +247,7 @@ mod tests {
 
     fn dark_skin() -> Skin {
         let origin = SourceUri("button.kskin.ron".to_owned());
-        Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap()
+        Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap()
     }
 
     #[kithara::test]

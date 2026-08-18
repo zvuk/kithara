@@ -154,4 +154,12 @@ pub enum UiDocError {
         count: usize,
         max: usize,
     },
+    #[error("{origin}: unknown text key {key:?} at {path}")]
+    UnknownTextKey {
+        origin: SourceUri,
+        key: String,
+        path: String,
+    },
+    #[error("{origin}: text key {key:?} is defined in more than one catalog")]
+    DuplicateTextKey { origin: SourceUri, key: String },
 }

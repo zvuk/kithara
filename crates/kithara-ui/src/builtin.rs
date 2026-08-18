@@ -6,11 +6,13 @@ use crate::{
     ids::SourceUri,
     skin::{SkinDoc, parse_skin},
     source::MemResolver,
+    text::{TextDoc, parse_text},
 };
 
 pub const MICRO_PRESET: &str = "micro.klayout.ron";
 pub const PLAYER_PRESET: &str = "player.klayout.ron";
 pub const DARK_SKIN: &str = include_str!("../assets/kithara-dark.kskin.ron");
+pub const TEXT_EN: &str = include_str!("../assets/kithara-en.ktext.ron");
 
 #[must_use]
 pub fn resolver() -> MemResolver {
@@ -66,11 +68,20 @@ pub fn skin_doc() -> &'static SkinDoc {
     &SKIN_DOC
 }
 
+#[must_use]
+pub fn text_doc() -> &'static TextDoc {
+    static TEXT_DOC: LazyLock<TextDoc> = LazyLock::new(|| {
+        parse_text(TEXT_EN, &text_origin())
+            .unwrap_or_else(|error| panic!("embedded kithara text catalog must be valid: {error}"))
+    });
+    &TEXT_DOC
+}
+
 #[cfg(feature = "render")]
 #[must_use]
 pub fn skin() -> &'static Skin {
     static SKIN: LazyLock<Skin> = LazyLock::new(|| {
-        Skin::resolve(skin_doc().clone(), &skin_origin())
+        Skin::resolve(skin_doc().clone(), text_doc(), &skin_origin())
             .unwrap_or_else(|error| panic!("embedded kithara dark skin must resolve: {error}"))
     });
     &SKIN
@@ -78,4 +89,8 @@ pub fn skin() -> &'static Skin {
 
 fn skin_origin() -> SourceUri {
     SourceUri("builtin:kithara-dark.kskin.ron".to_owned())
+}
+
+fn text_origin() -> SourceUri {
+    SourceUri("builtin:kithara-en.ktext.ron".to_owned())
 }

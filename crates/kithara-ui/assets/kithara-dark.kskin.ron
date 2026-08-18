@@ -172,9 +172,6 @@
         arrow_size: 10.0,
         arrow_color: Muted,
         arrow_gap: 2.0,
-        left_label: "A",
-        center_label: "XFADE",
-        right_label: "B",
     ),
     vu_stereo: (
         size: (w: Fixed(64.0), h: Fixed(22.0)),
@@ -567,7 +564,6 @@
     ),
     tree: (
         size: (w: Fixed(232.0), h: Range(min: 432.0, max: None)),
-        search_placeholder: "Search Zvuk: track, artist, release...",
         search_height: 36.0,
         search_icon_width: 32.0,
         search_icon_size: 11.0,
@@ -618,18 +614,6 @@
     ),
     track_list: (
         size: (w: Range(min: 600.0, max: None), h: Range(min: 210.0, max: None)),
-        labels: (
-            index: "#",
-            deck: "DECK",
-            title: "TITLE",
-            artist: "ARTIST",
-            bpm: "BPM",
-            key: "KEY",
-            time: "TIME",
-            energy: "ENERGY",
-            transition: "TRANSITION",
-            footer_tracks: "TRACKS",
-        ),
         row_frame: (radius: 0.0, border_width: 0.0, border: Line),
         deck_chip_frame: (radius: 0.0, border_width: 1.0, border: Line),
         bpm_badge_frame: (radius: 0.0, border_width: 0.0, border: Line),

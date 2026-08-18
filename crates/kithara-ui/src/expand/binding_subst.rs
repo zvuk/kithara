@@ -8,6 +8,7 @@ use crate::{
     ids::{EndpointId, InternId, Interner, SourceUri},
     module::BindingRef,
     param::Param,
+    text::TextDoc,
 };
 
 pub(crate) fn substitute(
@@ -29,6 +30,51 @@ pub(crate) fn substitute(
             name: name.to_owned(),
             path: path.to_owned(),
         })
+}
+
+pub(crate) fn resolve_text_key<'a>(
+    text: &'a TextDoc,
+    value: &'a str,
+    origin: &SourceUri,
+    path: &str,
+) -> Result<&'a str, UiDocError> {
+    if value.starts_with("@@") {
+        return Ok(&value[1..]);
+    }
+    let Some(key) = value.strip_prefix('@') else {
+        return Ok(value);
+    };
+    text.get(key).ok_or_else(|| UiDocError::UnknownTextKey {
+        origin: origin.clone(),
+        key: key.to_owned(),
+        path: path.to_owned(),
+    })
+}
+
+pub(super) fn intern_module_text(
+    interner: &mut Interner,
+    text: &TextDoc,
+    value: &str,
+    prefix: &str,
+    field: &str,
+    origin: &SourceUri,
+) -> Result<InternId, UiDocError> {
+    let path = format!("{prefix}/{field}");
+    let resolved = resolve_text_key(text, value, origin, &path)?;
+    interner.intern(resolved, origin)
+}
+
+pub(super) fn intern_module_text_opt(
+    interner: &mut Interner,
+    text: &TextDoc,
+    value: Option<&str>,
+    prefix: &str,
+    field: &str,
+    origin: &SourceUri,
+) -> Result<Option<InternId>, UiDocError> {
+    value
+        .map(|value| intern_module_text(interner, text, value, prefix, field, origin))
+        .transpose()
 }
 
 pub(crate) fn resolve_param<T: Clone + DeserializeOwned>(
@@ -200,10 +246,9 @@ pub(super) fn intern_text(
     path: &str,
     origin: &SourceUri,
 ) -> Result<InternId, UiDocError> {
-    interner.intern(
-        &substitute(&context.args, &context.origin, value, path)?,
-        origin,
-    )
+    let substituted = substitute(&context.args, &context.origin, value, path)?;
+    let resolved = resolve_text_key(context.text, &substituted, origin, path)?;
+    interner.intern(resolved, origin)
 }
 
 pub(super) fn intern_optional_text(
@@ -236,12 +281,76 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::ids::DocId;
 
     fn with(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    fn catalog(pairs: &[(&str, &str)]) -> TextDoc {
+        TextDoc {
+            id: DocId("test".to_owned()),
+            schema: "kithara.text".to_owned(),
+            version: 1,
+            entries: pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        }
+    }
+
+    fn origin() -> SourceUri {
+        SourceUri("test.ron".into())
+    }
+
+    #[kithara::test]
+    fn a_leading_at_resolves_a_catalog_key() {
+        let text = catalog(&[("menu.modules", "Modules")]);
+        assert_eq!(
+            resolve_text_key(&text, "@menu.modules", &origin(), "node").unwrap(),
+            "Modules"
+        );
+    }
+
+    #[kithara::test]
+    fn doubled_at_escapes_to_a_literal_at() {
+        let text = catalog(&[]);
+        assert_eq!(
+            resolve_text_key(&text, "@@handle", &origin(), "node").unwrap(),
+            "@handle"
+        );
+    }
+
+    #[kithara::test]
+    fn a_mid_string_at_is_not_a_marker() {
+        let text = catalog(&[]);
+        assert_eq!(
+            resolve_text_key(&text, "user@example.com", &origin(), "node").unwrap(),
+            "user@example.com"
+        );
+    }
+
+    #[kithara::test]
+    fn a_value_without_at_passes_through_unchanged() {
+        let text = catalog(&[]);
+        assert_eq!(
+            resolve_text_key(&text, "PLAY", &origin(), "node").unwrap(),
+            "PLAY"
+        );
+    }
+
+    #[kithara::test]
+    fn an_unknown_key_is_an_error_carrying_origin_and_path() {
+        let text = catalog(&[]);
+        let error = resolve_text_key(&text, "@missing", &origin(), "node/path").unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::UnknownTextKey { key, path, .. }
+                if key == "missing" && path == "node/path"
+        ));
     }
 
     #[kithara::test]

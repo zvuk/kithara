@@ -8,8 +8,8 @@
             Button(
                 id: "play",
                 size: (w: Fixed(34.0), h: Fixed(34.0)),
-                label: "PLAY",
-                active_label: Some("PAUSE"),
+                label: "@deck.transport.play",
+                active_label: Some("@deck.transport.pause"),
                 style: MicroPrimary,
                 read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),

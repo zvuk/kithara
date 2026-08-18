@@ -163,9 +163,6 @@ fn builtin_skin_pins_the_design_canon() {
     assert_eq!(document.crossfader.padding_x, 14.0);
     assert_eq!(document.crossfader.thumb_width, 10.0);
     assert_eq!(document.crossfader.thumb_height, 16.0);
-    assert_eq!(document.crossfader.left_label, "A");
-    assert_eq!(document.crossfader.center_label, "XFADE");
-    assert_eq!(document.crossfader.right_label, "B");
     let horizontal_ticks = document.crossfader.ticks;
     assert_eq!(horizontal_ticks.count, 11);
     assert_eq!(horizontal_ticks.thickness, 1.0);

@@ -249,7 +249,7 @@ fn search_bar(query: &str, skin: &Skin) -> Element<'static, UiEvent> {
             move |_| ContainerStyle::default().background(Background::Color(background))
         });
     let padding_y = ((skin.tree.search_height - skin.tree.search_text.size) / 2.0).max(0.0);
-    let input = text_input(&skin.tree.search_placeholder, query)
+    let input = text_input(&skin.tree_search_placeholder, query)
         .on_input(UiEvent::LibraryQuery)
         .padding(Padding {
             top: padding_y,

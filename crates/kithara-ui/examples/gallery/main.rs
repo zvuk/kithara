@@ -395,6 +395,7 @@ impl Gallery {
                 &resolver,
                 &endpoints,
                 builtin::skin_doc(),
+                builtin::text_doc(),
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| {
@@ -410,6 +411,7 @@ impl Gallery {
                 &resolver,
                 &endpoints,
                 builtin::skin_doc(),
+                builtin::text_doc(),
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| {
@@ -567,6 +569,7 @@ mod tests {
                 &resolver,
                 &endpoints,
                 builtin::skin_doc(),
+                builtin::text_doc(),
                 &UiConfig::default(),
             )
             .unwrap();
@@ -616,6 +619,7 @@ mod tests {
                 &resolver,
                 &endpoints,
                 builtin::skin_doc(),
+                builtin::text_doc(),
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| panic!("{} must compile: {error}", tab.entry()));
@@ -629,6 +633,7 @@ mod tests {
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();
@@ -683,6 +688,7 @@ mod tests {
             &resolver,
             &endpoints,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();
@@ -706,6 +712,7 @@ mod tests {
             &resolver,
             &endpoints,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();
@@ -750,6 +757,7 @@ mod tests {
             &resolver,
             &endpoints,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();
@@ -777,6 +785,7 @@ mod tests {
             &resolver,
             &endpoints,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();
@@ -795,6 +804,7 @@ mod tests {
             &resolver,
             &endpoints,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();

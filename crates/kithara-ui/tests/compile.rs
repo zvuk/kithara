@@ -34,6 +34,7 @@ fn compiles_micro_layout_end_to_end() {
         &resolver(),
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -72,6 +73,7 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -122,6 +124,7 @@ fn meter_reads_a_scalar_and_refuses_any_other_kind() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -146,6 +149,7 @@ fn meter_reads_a_scalar_and_refuses_any_other_kind() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -187,6 +191,7 @@ fn vis_compiles_with_scalar_read_and_select_index_write() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -244,6 +249,7 @@ fn vis_rejects_non_scalar_read_and_write_bindings() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -263,6 +269,7 @@ fn vis_rejects_non_scalar_read_and_write_bindings() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -289,6 +296,7 @@ fn track_list_requires_title_column_at_compile_time() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -322,6 +330,7 @@ fn track_list_compiles_typed_columns_and_optional_state_prefix() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -379,6 +388,7 @@ fn present_track_list_column_state_endpoint_must_be_bool() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -413,6 +423,7 @@ fn layout_module_size_override_wins_over_computed_size() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -452,6 +463,7 @@ fn module_shell_metadata_compiles_into_the_module_node() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -525,6 +537,7 @@ fn module_footer_requires_a_text_read_endpoint() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -553,6 +566,7 @@ fn unknown_endpoint_fails_with_module_origin_and_path() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -577,6 +591,7 @@ fn node_limit_is_enforced() {
         &resolver(),
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();
@@ -604,6 +619,7 @@ fn layout_parameter_reference_is_unresolved() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -635,6 +651,7 @@ fn layout_doubled_dollar_passes_literal_dollar() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -667,6 +684,7 @@ fn oversized_layout_source_is_rejected() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();
@@ -702,6 +720,7 @@ fn fifty_empty_columns_exceed_node_limit() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();
@@ -740,6 +759,7 @@ fn knob_caption_is_document_text_and_optional() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -808,6 +828,7 @@ fn compile_blocks(resolver: &MemResolver, entry: &str) -> Result<CompiledUi, UiD
         resolver,
         &block_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
 }
@@ -1463,6 +1484,7 @@ fn compile_glyphs(resolver: &MemResolver) -> Result<CompiledUi, UiDocError> {
         resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
 }
@@ -1561,6 +1583,7 @@ fn one_template_reads_a_different_endpoint_per_include() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();

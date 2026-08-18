@@ -46,7 +46,7 @@ pub struct KnobSkin {
     pub wheel_step: f32,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct CrossfaderSkin {
@@ -60,9 +60,6 @@ pub struct CrossfaderSkin {
     pub letter_text: FontSkin,
     pub rail_frame: FrameSkin,
     pub size: SizeSpec,
-    pub center_label: String,
-    pub left_label: String,
-    pub right_label: String,
     pub ticks: TickSkin,
     pub arrow_gap: f32,
     pub arrow_size: f32,

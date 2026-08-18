@@ -90,6 +90,7 @@ fn four_deck_layout_instantiates_one_module_file_four_times() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -126,6 +127,7 @@ fn two_deck_layout_compiles() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -159,6 +161,7 @@ fn scoped_read_keys_address_each_deck() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();

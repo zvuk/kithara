@@ -54,16 +54,14 @@ where
             .align_x(alignment)
             .into()
         };
+        let captions = &self.skin.crossfader_labels;
         let labels = Row::with_children([
             side(
-                [
-                    letter(&metrics.left_label).into(),
-                    arrow(Icon::ChevronsLeft),
-                ],
+                [letter(&captions.left).into(), arrow(Icon::ChevronsLeft)],
                 Horizontal::Left,
             ),
             container(
-                shaped_text(&metrics.center_label)
+                shaped_text(&captions.center)
                     .font(fonts::mono(metrics.label_text.weight))
                     .size(metrics.label_text.size)
                     .color(self.skin.color(metrics.label_color)),
@@ -72,10 +70,7 @@ where
             .align_x(Horizontal::Center)
             .into(),
             side(
-                [
-                    arrow(Icon::ChevronsRight),
-                    letter(&metrics.right_label).into(),
-                ],
+                [arrow(Icon::ChevronsRight), letter(&captions.right).into()],
                 Horizontal::Right,
             ),
         ])

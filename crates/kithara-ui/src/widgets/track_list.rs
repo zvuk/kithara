@@ -26,8 +26,8 @@ use super::{
 use crate::{
     module::TrackColumn,
     render::{
-        ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, fonts, shaped_text,
-        theme::RenderPalette,
+        ControlAction, ReadValue, Reads, Skin, TrackListLabels, TrackRow, UiEvent, fonts,
+        shaped_text, theme::RenderPalette,
     },
     skin::TrackListSkin,
 };
@@ -81,6 +81,7 @@ struct TrackListStyle {
     scroller_color: Color,
     palette: RenderPalette,
     metrics: TrackListSkin,
+    labels: TrackListLabels,
 }
 
 impl TrackListStyle {
@@ -91,7 +92,8 @@ impl TrackListStyle {
             deck_chip_frame: skin.border(skin.track_list.deck_chip_frame),
             divider_color: skin.color(skin.track_list.divider_color),
             energy_bar_background: skin.color(skin.track_list.energy_bar_background),
-            metrics: skin.track_list.clone(),
+            metrics: skin.track_list,
+            labels: skin.track_list_labels.clone(),
             palette: skin.palette,
             row_frame: skin.border(skin.track_list.row_frame),
             scrollbar_background: skin.color(skin.track_list.scrollbar_background),
@@ -350,7 +352,7 @@ fn header_cell(
     resizable: bool,
     style: &TrackListStyle,
 ) -> Element<'static, UiEvent> {
-    let label = column_label(column.column, &style.metrics).to_owned();
+    let label = column_label(column.column, &style.labels).to_owned();
     let horizontal = if column.column == TrackColumn::Index {
         Horizontal::Right
     } else {
@@ -672,7 +674,7 @@ fn cell_with_divider(
 }
 
 fn footer(count: usize, style: &TrackListStyle) -> Element<'static, UiEvent> {
-    let left = format!("{count} {}", style.metrics.labels.footer_tracks);
+    let left = format!("{count} {}", style.labels.footer_tracks);
     let font = style.metrics.footer_text;
     let content = row![
         shaped_text(left)
@@ -760,8 +762,7 @@ fn minimum_table_width(columns: &[ColumnLayout]) -> f32 {
     columns.iter().map(|column| column.width).sum()
 }
 
-fn column_label(column: TrackColumn, metrics: &TrackListSkin) -> &str {
-    let labels = &metrics.labels;
+fn column_label(column: TrackColumn, labels: &TrackListLabels) -> &str {
     match column {
         TrackColumn::Index => &labels.index,
         TrackColumn::Deck => &labels.deck,

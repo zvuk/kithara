@@ -17,6 +17,7 @@ use crate::{
     },
     skin::SkinDoc,
     source::{SourceResolver, UiConfig},
+    text::TextDoc,
     validate,
 };
 
@@ -100,6 +101,7 @@ pub fn compile(
     resolver: &dyn SourceResolver,
     endpoints: &dyn EndpointRegistry,
     skin: &SkinDoc,
+    text: &TextDoc,
     config: &UiConfig,
 ) -> Result<CompiledUi, UiDocError> {
     let loaded = resolver.load(None, entry)?;
@@ -120,6 +122,7 @@ pub fn compile(
         resolver,
         endpoints,
         skin,
+        text,
         config,
         budget: &mut budget,
         interner: &mut interner,
@@ -145,6 +148,7 @@ struct Compiler<'a> {
     budget: &'a mut Budget,
     interner: &'a mut Interner,
     skin: &'a SkinDoc,
+    text: &'a TextDoc,
     config: &'a UiConfig,
     endpoints: &'a dyn EndpointRegistry,
     resolver: &'a dyn SourceResolver,
@@ -219,6 +223,7 @@ impl Compiler<'_> {
                     self.config.limits.max_depth,
                     self.budget,
                     self.interner,
+                    self.text,
                     &mut visitor,
                 )
                 .expand_module(&set, &module_uri, &args, &instance.0)?;

@@ -77,6 +77,7 @@ impl Fixture {
             &self.resolver,
             &self.registry,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &self.config,
         )
         .unwrap_or_else(|error| panic!("benchmark fixture must compile: {error}"))
