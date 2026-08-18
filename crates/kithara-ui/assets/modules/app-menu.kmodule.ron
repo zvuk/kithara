@@ -175,9 +175,9 @@
                                                 size: (w: Fill, h: Fixed(20.0)),
                                                 gap: 4.0,
                                                 children: [
-                                                    Include(id: "module-ov", source: "app-menu/module-cell.kmodule.ron", with: { "label": "OVERVIEW", "module": "ov" }),
-                                                    Include(id: "module-mix", source: "app-menu/module-cell.kmodule.ron", with: { "label": "MIXER", "module": "mix" }),
-                                                    Include(id: "module-fx1", source: "app-menu/module-cell.kmodule.ron", with: { "label": "FX 1", "module": "fx1" }),
+                                                    Include(id: "module-ov", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.overview", "module": "ov" }),
+                                                    Include(id: "module-mix", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.mixer", "module": "mix" }),
+                                                    Include(id: "module-fx1", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.fx1", "module": "fx1" }),
                                                 ],
                                             ),
                                             Row(
@@ -185,9 +185,9 @@
                                                 size: (w: Fill, h: Fixed(20.0)),
                                                 gap: 4.0,
                                                 children: [
-                                                    Include(id: "module-fx2", source: "app-menu/module-cell.kmodule.ron", with: { "label": "FX 2", "module": "fx2" }),
-                                                    Include(id: "module-vcf", source: "app-menu/module-cell.kmodule.ron", with: { "label": "VCF", "module": "vcf" }),
-                                                    Include(id: "module-rec", source: "app-menu/module-cell.kmodule.ron", with: { "label": "REC", "module": "rec" }),
+                                                    Include(id: "module-fx2", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.fx2", "module": "fx2" }),
+                                                    Include(id: "module-vcf", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.vcf", "module": "vcf" }),
+                                                    Include(id: "module-rec", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.rec", "module": "rec" }),
                                                 ],
                                             ),
                                             Row(
@@ -195,9 +195,9 @@
                                                 size: (w: Fill, h: Fixed(20.0)),
                                                 gap: 4.0,
                                                 children: [
-                                                    Include(id: "module-vis", source: "app-menu/module-cell.kmodule.ron", with: { "label": "VISUAL", "module": "vis" }),
-                                                    Include(id: "module-tl", source: "app-menu/module-cell.kmodule.ron", with: { "label": "TIMELINE", "module": "tl" }),
-                                                    Include(id: "module-cpu", source: "app-menu/module-cell.kmodule.ron", with: { "label": "CPU", "module": "cpu" }),
+                                                    Include(id: "module-vis", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.visual", "module": "vis" }),
+                                                    Include(id: "module-tl", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.timeline", "module": "tl" }),
+                                                    Include(id: "module-cpu", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.cpu", "module": "cpu" }),
                                                 ],
                                             ),
                                             Row(
@@ -205,8 +205,8 @@
                                                 size: (w: Fill, h: Fixed(20.0)),
                                                 gap: 4.0,
                                                 children: [
-                                                    Include(id: "module-net", source: "app-menu/module-cell.kmodule.ron", with: { "label": "NET", "module": "net" }),
-                                                    Include(id: "module-buf", source: "app-menu/module-cell.kmodule.ron", with: { "label": "BUF", "module": "buf" }),
+                                                    Include(id: "module-net", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.net", "module": "net" }),
+                                                    Include(id: "module-buf", source: "app-menu/module-cell.kmodule.ron", with: { "label": "@menu.module.buf", "module": "buf" }),
                                                     Row(
                                                         id: "modules-filler",
                                                         size: (w: Fill, h: Fixed(20.0)),
@@ -272,10 +272,10 @@
                                 size: (w: Fill, h: Shrink),
                                 gap: 0.0,
                                 children: [
-                                    Include(id: "layout-1", source: "app-menu/layout-row.kmodule.ron", with: { "label": "CLUB · 2 DECKS", "layout": "1" }),
-                                    Include(id: "layout-2", source: "app-menu/layout-row.kmodule.ron", with: { "label": "STUDIO · 4 DECKS + VST", "layout": "2" }),
-                                    Include(id: "layout-3", source: "app-menu/layout-row.kmodule.ron", with: { "label": "VISUALS + TIMELINE", "layout": "3" }),
-                                    Include(id: "layout-4", source: "app-menu/layout-row.kmodule.ron", with: { "label": "NARROW WINDOW · TABS", "layout": "4" }),
+                                    Include(id: "layout-1", source: "app-menu/layout-row.kmodule.ron", with: { "label": "@menu.layout.club", "layout": "1" }),
+                                    Include(id: "layout-2", source: "app-menu/layout-row.kmodule.ron", with: { "label": "@menu.layout.studio", "layout": "2" }),
+                                    Include(id: "layout-3", source: "app-menu/layout-row.kmodule.ron", with: { "label": "@menu.layout.visuals", "layout": "3" }),
+                                    Include(id: "layout-4", source: "app-menu/layout-row.kmodule.ron", with: { "label": "@menu.layout.narrow", "layout": "4" }),
                                     Row(
                                         id: "save",
                                         size: (w: Fill, h: Fixed(24.0)),
@@ -323,7 +323,7 @@
                                 ],
                             ),
                         ),
-                        Include(id: "wave-follow", source: "app-menu/toggle-row.kmodule.ron", with: { "command": "ui.prefs.toggle_wave_follow", "icon": "Activity", "label": "Waveform follows playhead", "state": "ui.prefs.wave_follow" }),
+                        Include(id: "wave-follow", source: "app-menu/toggle-row.kmodule.ron", with: { "command": "ui.prefs.toggle_wave_follow", "icon": "Activity", "label": "@menu.toggle.wave_follow", "state": "ui.prefs.wave_follow" }),
                         Row(
                             id: "mixing-label",
                             size: (w: Fill, h: Fixed(22.0)),
@@ -341,8 +341,8 @@
                                 ),
                             ],
                         ),
-                        Include(id: "autogain", source: "app-menu/toggle-row.kmodule.ron", with: { "command": "ui.prefs.toggle_autogain", "icon": "SlidersHorizontal", "label": "Per-track autogain", "state": "ui.prefs.autogain" }),
-                        Include(id: "mono", source: "app-menu/toggle-row.kmodule.ron", with: { "command": "ui.prefs.toggle_mono", "icon": "Circle", "label": "Mono output", "state": "ui.prefs.mono" }),
+                        Include(id: "autogain", source: "app-menu/toggle-row.kmodule.ron", with: { "command": "ui.prefs.toggle_autogain", "icon": "SlidersHorizontal", "label": "@menu.toggle.autogain", "state": "ui.prefs.autogain" }),
+                        Include(id: "mono", source: "app-menu/toggle-row.kmodule.ron", with: { "command": "ui.prefs.toggle_mono", "icon": "Circle", "label": "@menu.toggle.mono", "state": "ui.prefs.mono" }),
                         Row(
                             id: "set-label",
                             size: (w: Fill, h: Fixed(22.0)),
@@ -360,8 +360,8 @@
                                 ),
                             ],
                         ),
-                        Include(id: "record", source: "app-menu/hint-row.kmodule.ron", with: { "command": "ui.set.toggle_record", "hint": "ui.set.record_hint", "icon": "Disc", "label": "Record set", "state": "ui.set.recording", "tone": "Danger" }),
-                        Include(id: "cast", source: "app-menu/hint-row.kmodule.ron", with: { "command": "ui.set.toggle_cast", "hint": "ui.set.cast_hint", "icon": "Radio", "label": "Broadcast", "state": "ui.set.casting", "tone": "Accent" }),
+                        Include(id: "record", source: "app-menu/hint-row.kmodule.ron", with: { "command": "ui.set.toggle_record", "hint": "ui.set.record_hint", "icon": "Disc", "label": "@menu.toggle.record_set", "state": "ui.set.recording", "tone": "Danger" }),
+                        Include(id: "cast", source: "app-menu/hint-row.kmodule.ron", with: { "command": "ui.set.toggle_cast", "hint": "ui.set.cast_hint", "icon": "Radio", "label": "@menu.broadcast", "state": "ui.set.casting", "tone": "Accent" }),
                         Pressable(
                             id: "add-folder",
                             press: Command(id: "ui.library.add_folder"),
