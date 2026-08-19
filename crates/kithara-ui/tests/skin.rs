@@ -132,7 +132,7 @@ fn builtin_skin_pins_the_design_canon() {
 
     assert_eq!(document.palette.bg, "#12121f");
     assert_eq!(document.layout.grid_gap, 1.0);
-    assert_eq!(document.layout.size_gap, 0.0);
+    assert_eq!(document.layout.grid_pad, 0.0);
     assert_eq!(document.chrome.frame.border, ColorRole::Line);
     assert_eq!(document.palette.line_inner, "#2a2a4c");
     assert_eq!(document.palette.bg_footer, "#1b1b32");
@@ -269,23 +269,16 @@ fn builtin_skin_pins_the_design_canon() {
     assert_eq!(document.tree.size.w, Dim::Fixed(232.0));
     assert_eq!(document.tree.row_height, 24.0);
     assert_eq!(document.tree.context_height, 26.0);
-    let track_list = &document.track_list;
-    assert_eq!(track_list.header_height, 22.0);
-    assert_eq!(track_list.row_height, 30.0);
-    assert_eq!(track_list.footer_height, 22.0);
-    assert_eq!(track_list.index_width, 28.0);
-    assert_eq!(track_list.deck_width, 64.0);
-    assert_eq!(track_list.artist_width, 200.0);
-    assert_eq!(track_list.bpm_width, 70.0);
-    assert_eq!(track_list.key_width, 56.0);
-    assert_eq!(track_list.time_width, 70.0);
-    assert_eq!(track_list.energy_width, 110.0);
-    assert_eq!(track_list.transition_width, 130.0);
-    assert_eq!(track_list.deck_text.size, 9.0);
-    assert_eq!(track_list.bpm_badge_background, ColorRole::BgPanel2);
-    assert_eq!(track_list.energy_bar_width, 66.0);
-    assert_eq!(track_list.energy_bar_height, 4.0);
-    assert_eq!(track_list.footer_text.size, 9.0);
+    let table = &document.table;
+    assert_eq!(table.header_height, 22.0);
+    assert_eq!(table.row_height, 30.0);
+    assert_eq!(table.footer_height, 22.0);
+    assert_eq!(table.min_column_width, 28.0);
+    assert_eq!(table.badge_text.size, 9.0);
+    assert_eq!(table.metric_badge_background, ColorRole::BgPanel2);
+    assert_eq!(table.meter_bar_width, 66.0);
+    assert_eq!(table.meter_bar_height, 4.0);
+    assert_eq!(table.footer_text.size, 9.0);
     assert_eq!(document.layout_preview.height, 92.0);
 }
 

@@ -54,6 +54,8 @@ routine work:
   explainable candidates, and `report.json` for exhaustive evidence.
 - `just test`; parameterized harness: `just test run <args>`; tests plus
   doc-tests: `just test all`.
+- Complete isolated UI suite: `just test ui` (unit and integration tests,
+  GPU renderer tests, and host-parity captures).
 - `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:
   `just ci health`; one run's archived quality artifacts consolidated into a
   single markdown report: `just ci report --artifacts <dir>`.
@@ -87,6 +89,9 @@ routine work:
   `docs/skills/quality-assessment/SKILL.md`; do not rediscover these routes.
 - Platform entrypoints are `just platform apple ...`,
   `just platform android ...`, and `just platform wasm ...`.
+- Both UI hosts drawing the same pages, compared against a per-page budget:
+  `just test ui`. The same pages through a real window, which is the only
+  capture that needs a display: `just test ui-window`.
 - Direct cached xtask access is exceptional and uses
   `just tooling xtask <subcommand>`. Agent hooks use the hidden
   `just _agent-hook` transport configured in adapter JSON.

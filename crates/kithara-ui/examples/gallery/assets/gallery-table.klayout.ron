@@ -1,0 +1,34 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "gallery-table",
+    root: Split(
+        axis: Vertical,
+        children: [
+            (weight: 1.0, node: Module(
+                instance: "titlebar",
+                source: "modules/titlebar.kmodule.ron",
+                size: (w: Fill, h: Fixed(26.0)),
+            )),
+            (weight: 1.0, node: Split(
+                axis: Horizontal,
+                children: [
+                    (weight: 1.0, node: Module(
+                        instance: "gallery",
+                        source: "modules/nav.kmodule.ron",
+                        corners: true,
+                        frame: (right: false),
+                        size: (w: Fixed(198.0), h: Fill),
+                    )),
+                    (weight: 1.0, node: Module(
+                        instance: "table",
+                        source: "modules/tabs/table.kmodule.ron",
+                        corners: true,
+                        frame: (left: false),
+                        size: (w: Fill, h: Fill),
+                    )),
+                ],
+            )),
+        ],
+    ),
+)

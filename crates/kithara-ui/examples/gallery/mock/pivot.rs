@@ -1,6 +1,9 @@
-use kithara_ui::render::{PortalMapView, PortalTarget, ReadValue, ScalarRange, TrackRow};
+use kithara_ui::render::{
+    PortalMapView, PortalTarget, ReadValue, ScalarRange, TableRow, TableValue,
+};
+use num_traits::cast::AsPrimitive;
 
-use crate::mock_data::CATALOG;
+use super::data::CATALOG;
 
 struct PivotConsts;
 
@@ -136,8 +139,9 @@ impl PivotState {
         if !path.contains("pivot") || !value.is_finite() {
             return false;
         }
-        let bpm = PivotConsts::RANGE_LOW
-            + value.clamp(0.0, 1.0) as f32 * (PivotConsts::RANGE_HIGH - PivotConsts::RANGE_LOW);
+        let norm: f32 = value.clamp(0.0, 1.0).as_();
+        let bpm =
+            PivotConsts::RANGE_LOW + norm * (PivotConsts::RANGE_HIGH - PivotConsts::RANGE_LOW);
         let bpm = (bpm / 2.0).round() * 2.0;
         match path.rsplit('/').next() {
             Some("min") => self.min = bpm.min(self.max - PivotConsts::RANGE_GAP),
@@ -195,10 +199,10 @@ impl PivotState {
             "pivot.portal.loop" => ReadValue::Text(&portal?.loop_label),
             "pivot.portal.stretch" => ReadValue::Text(&portal?.stretch_label),
             "pivot.track.hidden" => ReadValue::Bool(track.is_none()),
-            "pivot.track.title" => ReadValue::Text(track?.title),
-            "pivot.track.artist" => ReadValue::Text(track?.artist.unwrap_or("—")),
-            "pivot.track.bpm" => ReadValue::Text(track?.bpm.unwrap_or("—")),
-            "pivot.track.key" => ReadValue::Text(track?.key.unwrap_or("—")),
+            "pivot.track.title" => ReadValue::Text(cell(track?, "title")),
+            "pivot.track.artist" => ReadValue::Text(cell(track?, "artist")),
+            "pivot.track.bpm" => ReadValue::Text(cell(track?, "bpm")),
+            "pivot.track.key" => ReadValue::Text(cell(track?, "key")),
             _ => return None,
         };
         Some(value)
@@ -331,7 +335,7 @@ impl PivotState {
         };
     }
 
-    fn track(&self, index: usize) -> Option<&'static TrackRow<'static>> {
+    fn track(&self, index: usize) -> Option<&'static TableRow<'static>> {
         let bpm = self
             .selected
             .and_then(|selected| self.portals.get(selected))?
@@ -340,13 +344,29 @@ impl PivotState {
             .rows
             .iter()
             .filter(|track| {
-                track
-                    .bpm
-                    .and_then(|value| value.parse::<f32>().ok())
-                    .is_some_and(|track_bpm| distance(track_bpm / bpm, 1.0) < 0.02)
+                cell(track, "bpm")
+                    .parse::<f32>()
+                    .is_ok_and(|track_bpm| distance(track_bpm / bpm, 1.0) < 0.02)
             })
             .nth(index)
     }
+}
+
+/// One column of a catalogue row, addressed the way the document addresses it.
+///
+/// A row carries its cells by column id rather than by field, so a reader that
+/// wants four of nine columns names those four and nothing else. A column the
+/// row does not carry reads as the em dash the pivot panel shows for absent
+/// data.
+fn cell<'a>(row: &'a TableRow<'a>, id: &str) -> &'a str {
+    row.cells()
+        .iter()
+        .find(|cell| cell.id() == id)
+        .and_then(|cell| match cell.value() {
+            TableValue::Text(text) if !text.is_empty() => Some(text),
+            _ => None,
+        })
+        .unwrap_or("—")
 }
 
 #[derive(Clone, Copy)]

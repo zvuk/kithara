@@ -83,12 +83,29 @@ impl Kithara {
         catalog: Catalog,
         config: AppConfig,
         ui: AppUi,
-        palette: gui::GuiPalette,
         broadcast: crate::broadcast::Broadcaster,
     ) -> (Self, Task<Message>) {
         let (window_id, open) = window::open(window_settings());
 
-        let state = Self {
+        (
+            Self::mounted(session, decks, catalog, config, ui, broadcast, window_id),
+            open.discard(),
+        )
+    }
+
+    /// The same state without a window of iced's: a host that owns its own
+    /// window mounts the application through here.
+    pub(crate) fn mounted(
+        session: DeckSet,
+        decks: Decks,
+        catalog: Catalog,
+        config: AppConfig,
+        ui: AppUi,
+        broadcast: crate::broadcast::Broadcaster,
+        window_id: window::Id,
+    ) -> Self {
+        let palette = config.palette.into();
+        let mut state = Self {
             broadcast,
             session,
             decks,
@@ -100,8 +117,8 @@ impl Kithara {
             window_id,
             selected_track: None,
         };
-
-        (state, open.discard())
+        state.ui.cache.refresh(&state.decks, &state.catalog);
+        state
     }
 
     /// Time-tick subscription for player state sync plus keyboard. Tick

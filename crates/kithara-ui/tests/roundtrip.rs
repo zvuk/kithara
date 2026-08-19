@@ -49,7 +49,7 @@ const DECK_MODULE: &str = r#"(
     ),
 )"#;
 
-const ROUNDTRIP_MODULE: &str = r#"(
+const ROUNDTRIP_MODULE: &str = r##"(
     schema: "kithara.module",
     version: 1,
     id: "roundtrip",
@@ -84,11 +84,21 @@ const ROUNDTRIP_MODULE: &str = r#"(
                         size: Some((w: Fixed(120.0), h: Fill)),
                         adaptive: (priority: High),
                     ),
-                    TrackList(
+                    Table(
                         id: "tracks",
                         read: Model(id: "library.visible_tracks"),
-                        columns: [Index, Deck, Title, Artist, Bpm, Key, Time, Energy, Transition],
-                        columns_state: Some(Model(id: "ui.tracklist.columns")),
+                        columns: [
+                            (id: "index", label: "#", style: Index, width: 28.0),
+                            (id: "deck", label: "DECK", style: Badge, width: 64.0),
+                            (id: "title", label: "TITLE", style: Primary, width: 180.0, flexible: true),
+                            (id: "artist", label: "ARTIST", style: Secondary, width: 200.0),
+                            (id: "bpm", label: "BPM", style: Metric, width: 70.0),
+                            (id: "key", label: "KEY", style: Mono, width: 56.0),
+                            (id: "time", label: "TIME", style: Time, width: 70.0),
+                            (id: "energy", label: "ENERGY", style: Meter, width: 110.0),
+                            (id: "transition", label: "TRANSITION", style: Transition, width: 130.0),
+                        ],
+                        columns_state: Some(Model(id: "ui.table.columns")),
                         size: Some((w: Fill, h: Fixed(160.0))),
                         adaptive: (priority: Low),
                     ),
@@ -112,7 +122,7 @@ const ROUNDTRIP_MODULE: &str = r#"(
             ),
         ],
     ),
-)"#;
+)"##;
 
 fn to_ron_pretty<T: serde::Serialize>(value: &T) -> String {
     ron::Options::default()

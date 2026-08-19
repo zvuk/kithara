@@ -1,16 +1,19 @@
 use std::collections::BTreeMap;
 
+#[cfg(feature = "render")]
+use crate::draw::{DrawPools, PoolStats};
 use crate::{
     error::UiDocError,
     expand::{
-        Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedNode, Expander, intern_binding,
-        substitute_binding, substitute_map,
+        Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedInclude, ExpandedNode, Expander,
+        Unprompted, intern_binding, motion_of, substitute_binding, substitute_map,
     },
     ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, FrameSides, LayoutNode, parse_layout},
     module::ChromeStyle,
-    registry::EndpointRegistry,
+    registry::{BuiltinEndpoints, EndpointRegistry},
     resolve::load_module_graph,
+    shader::ShaderCache,
     size::{
         BlockNode, Hidden, SizeSpec, VISIBLE, combine_horizontal, combine_vertical, compute_size,
         has_blocks, with_module_chrome,
@@ -30,10 +33,45 @@ pub struct CompiledUi {
     pub size: SizeSpec,
     /// The layout asked to be framed by its own resize edges.
     pub resize_edges: bool,
+    /// Somewhere in this document an object is placed by an endpoint, so
+    /// re-reading the endpoints can move something a host already mounted.
+    pub driven: bool,
+    /// This document draws a different picture at a later moment with nothing
+    /// else changing: an object is placed by an endpoint, or a binding reads the
+    /// host's own clock.
+    ///
+    /// A host that stops drawing such a document animates it only while some
+    /// unrelated event keeps waking it — a mouse crossing the window, and
+    /// nothing once the mouse stops.
+    pub animates: bool,
     arena: StrArena,
+    includes: Vec<IncludedModule>,
+    #[cfg(feature = "render")]
+    draw_pools: DrawPools,
 }
 
 impl CompiledUi {
+    #[cfg(feature = "render")]
+    #[must_use]
+    pub(crate) const fn draw_pools(&self) -> &DrawPools {
+        &self.draw_pools
+    }
+
+    /// Current allocation-reuse counters for this compiled document.
+    #[cfg(feature = "render")]
+    #[must_use]
+    pub fn draw_pool_stats(&self) -> PoolStats {
+        self.draw_pools.stats()
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn includes_module(&self, owner: InternId, address: &[usize], module: &str) -> bool {
+        self.includes
+            .iter()
+            .filter(|include| include.owner == owner && include.address.as_ref() == address)
+            .any(|include| self.resolve(include.module) == module)
+    }
+
     delegate::delegate! {
         to self.arena {
             /// Resolves a string interned by this compiled UI.
@@ -41,6 +79,13 @@ impl CompiledUi {
             pub fn resolve(&self, id: InternId) -> &str;
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct IncludedModule {
+    address: Box<[usize]>,
+    module: InternId,
+    owner: InternId,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -104,6 +149,9 @@ pub fn compile(
     text: &TextDoc,
     config: &UiConfig,
 ) -> Result<CompiledUi, UiDocError> {
+    // Over the application's own declarations, so a document may bind to what
+    // the host answers for itself without every application registering it.
+    let endpoints = &BuiltinEndpoints::new(endpoints);
     let loaded = resolver.load(None, entry)?;
     let bytes = loaded.text.len();
     if bytes > config.limits.max_bytes {
@@ -118,6 +166,8 @@ pub fn compile(
     validate::check_layout_dragged(&document, &loaded.uri, endpoints)?;
     let mut budget = Budget::new(config.limits.max_nodes);
     let mut interner = Interner::new(config.max_arena_bytes);
+    let mut includes = Vec::new();
+    let mut shaders = ShaderCache::default();
     let root = Compiler {
         resolver,
         endpoints,
@@ -126,6 +176,8 @@ pub fn compile(
         config,
         budget: &mut budget,
         interner: &mut interner,
+        includes: &mut includes,
+        shaders: &mut shaders,
     }
     .build(&document.root, &loaded.uri)?;
     let size = compiled_node_size(&root);
@@ -134,13 +186,21 @@ pub fn compile(
         .as_ref()
         .map(|binding| intern_binding(&mut interner, binding, &loaded.uri))
         .transpose()?;
+    let unprompted = motion_of_layout(&root);
+    let driven = unprompted.driven;
+    let animates = driven || unprompted.continuous || interner.reads_clock();
     let arena = interner.finish();
     Ok(CompiledUi {
         root,
         size,
         dragged,
+        animates,
+        driven,
+        includes,
         arena,
         resize_edges: document.resize_edges,
+        #[cfg(feature = "render")]
+        draw_pools: DrawPools::new(config.draw_pools),
     })
 }
 
@@ -150,6 +210,8 @@ struct Compiler<'a> {
     skin: &'a SkinDoc,
     text: &'a TextDoc,
     config: &'a UiConfig,
+    includes: &'a mut Vec<IncludedModule>,
+    shaders: &'a mut ShaderCache,
     endpoints: &'a dyn EndpointRegistry,
     resolver: &'a dyn SourceResolver,
 }
@@ -219,10 +281,12 @@ impl Compiler<'_> {
                     })?;
                 validate::check_module_footer(document, &module_uri, self.endpoints)?;
                 validate::check_module_drop(document, &module_uri, self.endpoints)?;
-                let expanded = Expander::new(
+                let mut expanded = Expander::new(
                     self.config.limits.max_depth,
                     self.budget,
                     self.interner,
+                    self.endpoints,
+                    self.shaders,
                     self.text,
                     &mut visitor,
                 )
@@ -233,6 +297,11 @@ impl Compiler<'_> {
                 });
                 let blocks = declared.is_none() && has_blocks(&expanded.root);
                 let instance = self.interner.intern(&instance.0, layout_uri)?;
+                self.includes.extend(
+                    std::mem::take(&mut expanded.includes)
+                        .into_iter()
+                        .map(|include| included_module(instance, include)),
+                );
                 Ok(CompiledNode::Module {
                     instance,
                     size,
@@ -251,6 +320,26 @@ impl Compiler<'_> {
                 })
             }
         }
+    }
+}
+
+/// What every module of this layout does with nothing touching it.
+fn motion_of_layout(node: &CompiledNode) -> Unprompted {
+    match node {
+        CompiledNode::Split { children, .. } => children
+            .iter()
+            .map(|(_, child)| motion_of_layout(child))
+            .fold(Unprompted::default(), Unprompted::or),
+        CompiledNode::Optional { child, .. } => motion_of_layout(child),
+        CompiledNode::Module { root, .. } => motion_of(root),
+    }
+}
+
+fn included_module(owner: InternId, include: ExpandedInclude) -> IncludedModule {
+    IncludedModule {
+        owner,
+        address: include.address,
+        module: include.module,
     }
 }
 

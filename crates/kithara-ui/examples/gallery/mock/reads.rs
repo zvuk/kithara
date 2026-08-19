@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kithara_ui::{
     builtin,
-    module::TrackColumn,
     render::{ControlAction, ReadValue, Reads, StereoLevels, TreeRow, WaveBucket, WaveformView},
 };
 use num_traits::cast::AsPrimitive;
@@ -10,22 +9,20 @@ use num_traits::cast::AsPrimitive;
 use super::{
     clock::ClockState,
     consts::Consts,
+    data::CATALOG,
     menu::{ContextState, MenuState},
+    mixer::MixerState,
     pivot::PivotState,
     quality::QualityState,
+    stress::StressState,
+    transport::DeckTransport,
 };
-use crate::{
-    mock_data::CATALOG,
-    mock_mixer::MixerState,
-    mock_stress::StressState,
-    mock_transport::DeckTransport,
-    sections::{ModuleDemo, Tab},
-};
+use crate::sections::{ModuleDemo, Tab};
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct MockReads {
-    tracklist_widths: BTreeMap<TrackColumn, f64>,
+    table_widths: BTreeMap<String, f64>,
     collapsed: BTreeSet<String>,
     context: ContextState,
     clock: ClockState,
@@ -47,7 +44,7 @@ pub(crate) struct MockReads {
     wave_beats: Vec<f32>,
     wave_downbeats: Vec<f32>,
     waveform: Vec<WaveBucket>,
-    tracklist_columns: [bool; 9],
+    table_columns: [bool; 9],
     vis_levels: [f32; 2],
     knobs: [f64; 4],
     button_cue: bool,
@@ -59,6 +56,10 @@ pub(crate) struct MockReads {
     chip_inactive: bool,
     toggle_off: bool,
     toggle_on: bool,
+    motion_phase: f32,
+    motion_clock: f32,
+    sprite_scrub: f32,
+    lottie_scrub: f32,
     vis_phase: f32,
     levels_volume: f64,
     segmented_index: f64,
@@ -66,7 +67,7 @@ pub(crate) struct MockReads {
     volume: f64,
     vis_rng: u32,
     library_scope: usize,
-    tracklist_preset: usize,
+    table_preset: usize,
     tree_selected: usize,
     vis_preset: usize,
 }
@@ -123,11 +124,15 @@ impl Default for MockReads {
                 Consts::POSITION_SECS,
                 Consts::ZOOM,
             ),
-            tracklist_columns: Consts::TRACKLIST_QUEUE,
-            tracklist_preset: Consts::TRACKLIST_QUEUE_PRESET,
-            tracklist_widths: BTreeMap::new(),
+            table_columns: Consts::TABLE_QUEUE,
+            table_preset: Consts::TABLE_QUEUE_PRESET,
+            table_widths: BTreeMap::new(),
             tree_rows: Vec::with_capacity(CATALOG.tree.len()),
             tree_visible_indices: Vec::with_capacity(CATALOG.tree.len()),
+            motion_phase: Consts::MOTION_START,
+            motion_clock: Consts::MOTION_CLOCK_START,
+            sprite_scrub: Consts::SPRITE_SCRUB_START,
+            lottie_scrub: Consts::LOTTIE_SCRUB_START,
             vis_levels: [0.66, 0.52],
             vis_phase: 0.0,
             vis_preset: 0,
@@ -181,14 +186,14 @@ impl MockReads {
             "buttons/play" => self.button_play = !self.button_play,
             "buttons/cue" => self.button_cue = !self.button_cue,
             "buttons/sync" => self.button_sync = !self.button_sync,
-            "tracklist/reset-columns" => self.reset_tracklist_columns(),
+            "table/reset-columns" => self.reset_table_columns(),
             "vis/next" => self.vis_preset = (self.vis_preset + 1) % CATALOG.vis_presets.len(),
             "vis/previous" => {
                 self.vis_preset =
                     (self.vis_preset + CATALOG.vis_presets.len() - 1) % CATALOG.vis_presets.len();
             }
-            path if path.starts_with("tracklist/column-") => {
-                self.toggle_tracklist_column(&path["tracklist/column-".len()..]);
+            path if path.starts_with("table/column-") => {
+                self.toggle_table_column(&path["table/column-".len()..]);
             }
             path if path.ends_with("/transport/sync") => {
                 self.button_sync = !self.button_sync;
@@ -233,15 +238,15 @@ impl MockReads {
         }
     }
 
-    fn reset_tracklist_columns(&mut self) {
-        self.set_tracklist_preset(self.tracklist_preset);
+    fn reset_table_columns(&mut self) {
+        self.set_table_preset(self.table_preset);
     }
 
     fn select_index(&mut self, path: &str, index: usize) {
         if path == "cells/beat" {
             self.segmented_index = index.as_();
-        } else if path == "tracklist/column-preset" {
-            self.set_tracklist_preset(index);
+        } else if path == "table/column-preset" {
+            self.set_table_preset(index);
         } else if path == "library2/context" {
             self.library_scope = index;
         } else if matches!(path, "tree/browser" | "library2/browser") {
@@ -256,6 +261,18 @@ impl MockReads {
             self.stress.reset_clock();
         }
         self.active_tab = tab;
+    }
+
+    pub(crate) const fn select_module(&mut self, module: ModuleDemo) {
+        self.active_module = module;
+    }
+
+    /// Rebuilds the stress page's waveforms at a different bucket count, which
+    /// is the one weight of that page a measurement can vary. The gallery shows
+    /// the page at its own count; only a harness sweeps it.
+    #[cfg(test)]
+    pub(crate) fn set_wave_buckets(&mut self, buckets: u16) {
+        self.stress = StressState::new(buckets);
     }
 
     fn select_tree_row(&mut self, index: usize) {
@@ -285,11 +302,15 @@ impl MockReads {
             return;
         }
         if let Some((_, name)) = path.rsplit_once("/width/") {
-            self.set_tracklist_width(name, value);
+            self.set_table_width(name, value);
             return;
         }
         let value = value.clamp(0.0, 1.0);
-        if path.ends_with("/loop_start") {
+        if path == "sprites/scrub" {
+            self.sprite_scrub = value.as_();
+        } else if path == "lottie/scrub" {
+            self.lottie_scrub = value.as_();
+        } else if path.ends_with("/loop_start") {
             self.transport.set_loop_start(value);
         } else if path.ends_with("/loop_end") {
             self.transport.set_loop_end(value);
@@ -312,31 +333,31 @@ impl MockReads {
         }
     }
 
-    fn set_tracklist_preset(&mut self, index: usize) {
+    fn set_table_preset(&mut self, index: usize) {
         let Some(columns) = [
-            Consts::TRACKLIST_LIBRARY,
-            Consts::TRACKLIST_QUEUE,
-            Consts::TRACKLIST_MICRO,
+            Consts::TABLE_LIBRARY,
+            Consts::TABLE_QUEUE,
+            Consts::TABLE_MICRO,
         ]
         .get(index)
         .copied() else {
             return;
         };
-        self.tracklist_preset = index;
-        self.tracklist_columns = columns;
+        self.table_preset = index;
+        self.table_columns = columns;
     }
 
-    fn set_tracklist_width(&mut self, name: &str, value: f64) {
-        let Some(column) = Consts::TRACK_COLUMNS
+    fn set_table_width(&mut self, name: &str, value: f64) {
+        if !Consts::table_columns()
             .iter()
-            .find(|column| column.endpoint_name() == name)
-            .copied()
-        else {
+            .any(|column| column.id() == name)
+        {
             return;
-        };
+        }
         if value.is_finite() {
-            let minimum = f64::from(builtin::skin().track_list.min_column_width);
-            self.tracklist_widths.insert(column, value.max(minimum));
+            let minimum = f64::from(builtin::skin().table.min_column_width);
+            self.table_widths
+                .insert(name.to_owned(), value.max(minimum));
         }
     }
 
@@ -355,13 +376,18 @@ impl MockReads {
             "gallery.tab.vis" => self.active_tab == Tab::Vis,
             "gallery.tab.chrome" => self.active_tab == Tab::Chrome,
             "gallery.tab.titlebars" => self.active_tab == Tab::Titlebars,
-            "gallery.tab.tracklist" => self.active_tab == Tab::Tracklist,
+            "gallery.tab.table" => self.active_tab == Tab::Table,
             "gallery.tab.tree" => self.active_tab == Tab::Tree,
             "gallery.tab.library2" => self.active_tab == Tab::Library2,
             "gallery.tab.stress" => self.active_tab == Tab::Stress,
             "gallery.tab.menu" => self.active_tab == Tab::Menu,
             "gallery.tab.clock" => self.active_tab == Tab::Clock,
             "gallery.tab.pivot" => self.active_tab == Tab::Pivot,
+            "gallery.tab.shader" => self.active_tab == Tab::Shader,
+            "gallery.tab.objects" => self.active_tab == Tab::Objects,
+            "gallery.tab.motion" => self.active_tab == Tab::Motion,
+            "gallery.tab.sprites" => self.active_tab == Tab::Sprites,
+            "gallery.tab.lottie" => self.active_tab == Tab::Lottie,
             "gallery.module.deck" => self.active_module == ModuleDemo::Deck,
             "gallery.module.deck_micro" => self.active_module == ModuleDemo::DeckMicro,
             "gallery.module.global_bar" => self.active_module == ModuleDemo::GlobalBar,
@@ -376,8 +402,24 @@ impl MockReads {
         match self.active_tab {
             Tab::Stress => self.stress.tick(),
             Tab::Vis => self.tick_vis(),
+            Tab::Objects => self.tick_phase(),
+            Tab::Motion | Tab::Sprites | Tab::Lottie => self.tick_clock(),
             _ => {}
         }
+    }
+
+    /// One sawtooth from 0 to 1, which is every track on the objects page: an
+    /// application that already knows how far along each object is hands the
+    /// number over and the document spends it.
+    fn tick_phase(&mut self) {
+        self.motion_phase = (self.motion_phase + Consts::MOTION_STEP).fract();
+    }
+
+    /// Plain seconds, which is all the motion page's application knows: how far
+    /// along that puts each object is the document's business, not its own.
+    fn tick_clock(&mut self) {
+        self.motion_clock =
+            (self.motion_clock + Consts::MOTION_TICK_SECS) % Consts::MOTION_CLOCK_PERIOD;
     }
 
     fn tick_vis(&mut self) {
@@ -409,14 +451,14 @@ impl MockReads {
         }
     }
 
-    fn toggle_tracklist_column(&mut self, name: &str) {
-        let Some(index) = Consts::TRACK_COLUMNS
+    fn toggle_table_column(&mut self, name: &str) {
+        let Some(index) = Consts::table_columns()
             .iter()
-            .position(|column| column.endpoint_name() == name)
+            .position(|column| column.id() == name)
         else {
             return;
         };
-        self.tracklist_columns[index] = !self.tracklist_columns[index];
+        self.table_columns[index] = !self.table_columns[index];
     }
 }
 
@@ -457,21 +499,25 @@ impl Reads for MockReads {
         {
             return Some(ReadValue::Bool(self.collapsed.contains(module)));
         }
-        if let Some(name) = endpoint.strip_prefix("gallery.tracklist.columns.width.") {
-            let column = Consts::TRACK_COLUMNS
-                .iter()
-                .find(|column| column.endpoint_name() == name)?;
-            return self
-                .tracklist_widths
-                .get(column)
-                .copied()
-                .map(ReadValue::Scalar);
+        // One second apart over an eight second pass, so the row shows the
+        // sheet frame by frame in the order it was cut.
+        if let Some(index) = endpoint
+            .strip_prefix("gallery.sprite.frame.")
+            .and_then(|index| index.parse::<u8>().ok())
+        {
+            return Some(ReadValue::Scalar(f64::from(index)));
         }
-        if let Some(name) = endpoint.strip_prefix("gallery.tracklist.columns.") {
-            let index = Consts::TRACK_COLUMNS
+        if let Some(name) = endpoint.strip_prefix("gallery.table.columns.width.") {
+            Consts::table_columns()
                 .iter()
-                .position(|column| column.endpoint_name() == name)?;
-            return Some(ReadValue::Bool(self.tracklist_columns[index]));
+                .find(|column| column.id() == name)?;
+            return self.table_widths.get(name).copied().map(ReadValue::Scalar);
+        }
+        if let Some(name) = endpoint.strip_prefix("gallery.table.columns.") {
+            let index = Consts::table_columns()
+                .iter()
+                .position(|column| column.id() == name)?;
+            return Some(ReadValue::Bool(self.table_columns[index]));
         }
         let value = match endpoint {
             "gallery.label.knobs" => ReadValue::Text("KNOB · 26 / 28 / 34 / 38"),
@@ -484,7 +530,16 @@ impl Reads for MockReads {
             "gallery.label.text" => ReadValue::Text("TEXT STYLES"),
             "gallery.label.faders" => ReadValue::Text("HORIZONTAL FADERS"),
             "gallery.label.scalar" => ReadValue::Text("SCALAR TELEMETRY"),
-            "vis.badge" => ReadValue::Bool(true),
+            // Held still: a value that moved between the two captures would make
+            // the comparison measure the clock instead of the two hosts. That
+            // the uniforms reach the shader at all is proved by the frame tests.
+            "shader.energy" => ReadValue::Scalar(0.62),
+            "shader.level" => ReadValue::Scalar(0.28),
+            "gallery.motion.phase" => ReadValue::Scalar(f64::from(self.motion_phase)),
+            "gallery.motion.clock" => ReadValue::Scalar(f64::from(self.motion_clock)),
+            "gallery.sprite.scrub" => ReadValue::Scalar(f64::from(self.sprite_scrub)),
+            "gallery.lottie.scrub" => ReadValue::Scalar(f64::from(self.lottie_scrub)),
+            "vis.badge" | "deck.focused" => ReadValue::Bool(true),
             "vis.preset" => ReadValue::Scalar(self.vis_preset.as_()),
             "vis.time" => ReadValue::Scalar(self.vis_time_secs),
             "vis.preset_index" => ReadValue::Text(CATALOG.vis_indices[self.vis_preset]),
@@ -506,11 +561,11 @@ impl Reads for MockReads {
             "deck.playback.duration_secs" => ReadValue::Scalar(Consts::DURATION_SECS),
             "deck.playback.looping" => ReadValue::Bool(self.transport.loop_region().is_some()),
             "deck.playback.reverse" => ReadValue::Bool(self.transport.reverse()),
-            "deck.focused" => ReadValue::Bool(true),
             "deck.playback.synced" | "mock.button.sync" => ReadValue::Bool(self.button_sync),
             "deck.playback.tempo" => ReadValue::Text(Consts::TEMPO),
             "deck.playback.waveform" => ReadValue::Waveform(WaveformView {
                 buckets: &self.waveform,
+                revision: 0,
                 beats: &self.wave_beats,
                 downbeats: &self.wave_downbeats,
                 bpm: Some(Consts::BPM_VALUE),
@@ -535,7 +590,7 @@ impl Reads for MockReads {
                 volume: self.volume.as_(),
             }),
             "player.output.volume" | "mock.volume" => ReadValue::Scalar(self.volume),
-            "library.visible_tracks" => ReadValue::TrackList(CATALOG.rows),
+            "library.visible_tracks" => ReadValue::Table(CATALOG.rows),
             "library.tree" => ReadValue::Tree(&self.tree_rows),
             "library.breadcrumb" => ReadValue::Text(CATALOG.breadcrumb),
             "library.query" => ReadValue::Text(&self.library_query),
@@ -561,7 +616,7 @@ impl Reads for MockReads {
             "mock.button.play" => ReadValue::Bool(self.button_play),
             "mock.button.cue" => ReadValue::Bool(self.button_cue),
             "mock.cells.segmented" => ReadValue::Scalar(self.segmented_index),
-            "gallery.tracklist.preset" => ReadValue::Scalar(self.tracklist_preset.as_()),
+            "gallery.table.preset" => ReadValue::Scalar(self.table_preset.as_()),
             _ => return None,
         };
         Some(value)

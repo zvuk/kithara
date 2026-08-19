@@ -6,7 +6,7 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 pub use web_time::Instant;
 
-pub use crate::common::time::{Duration, SystemTime, TimeoutError};
+pub use crate::common::time::{Duration, SystemTime, TimeoutError, WallInstant};
 
 pub async fn sleep(duration: Duration) {
     let ms = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX);

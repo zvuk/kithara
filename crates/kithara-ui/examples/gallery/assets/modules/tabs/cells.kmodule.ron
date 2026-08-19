@@ -85,6 +85,7 @@
                             Select(id: "device", label: "Scarlett 4i4 USB", size: (w: Fixed(220.0), h: Fixed(26.0))),
                             StatusDot(id: "ok", label: "OK", tone: Success),
                             StatusDot(id: "rec", label: "REC", tone: Danger),
+                            StatusDot(id: "shrunk", label: "LIVE", tone: Accent, size: (w: Shrink, h: Fill)),
                         ],
                     ),
                     Text(id: "status-spec", style: MicroLabel, label: "SELECT: #15152A + 1PX / STATUS: 6PX", size: (w: Fill, h: Fill)),

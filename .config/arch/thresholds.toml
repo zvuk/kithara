@@ -392,14 +392,14 @@ expose_methods = [
 ]
 
 [field_passthrough]
-# `render/skin.rs::Skin` deliberately holds a flat copy of every resolved
+# `render/skin/neutral.rs::Skin` deliberately holds a flat copy of every resolved
 # sub-skin (`button`, `cell`, ...) alongside the raw `document: SkinDoc` it
 # was resolved from. The duplication is intentional: `Skin` is the hot-path
 # render type (direct field/getter access, no `self.document.button`
 # indirection on every draw call); `document` is retained only so the doc
 # can be round-tripped (edited and saved back) without re-deriving it from
 # the resolved values. See `crates/kithara-ui/CONTEXT.md`.
-exempt_files = ["crates/kithara-ui/src/render/skin.rs"]
+exempt_files = ["crates/kithara-ui/src/render/skin/neutral.rs"]
 
 [single_impl_size]
 # LOC of a single `impl X` or `impl Trait for X` block. Catches god-impl

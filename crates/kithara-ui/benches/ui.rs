@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, hint::black_box};
+use std::{collections::BTreeMap, hint::black_box, sync::LazyLock};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use kithara_ui::{
@@ -7,12 +7,13 @@ use kithara_ui::{
     ids::{DocId, EndpointId, NodeId, SourceUri},
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, FaderStyle, ModuleDoc, ScalarFormat,
-        TextAlign, TrackColumn, WaveStyle, parse_module,
+        TableColumn, TableColumnStyle, TextAlign, WaveStyle, parse_module,
     },
+    param::Param,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        ControlAction, ReadValue, Reads, StereoLevels, TrackRow, UiEvent, WaveBucket, WaveformView,
-        tree,
+        Clock, ControlAction, ReadValue, Reads, StereoLevels, TableCell, TableRow, UiEvent,
+        WaveBucket, WaveformView, tree,
     },
     source::{Limits, MemResolver, UiConfig},
 };
@@ -25,44 +26,13 @@ const MODULE_SKELETON: &str = r#"(
     id: "bench",
     root: Column(children: []),
 )"#;
-const TRACKS: [TrackRow<'static>; 3] = [
-    TrackRow {
-        title: "Signal Path",
-        artist: Some("Kithara"),
-        time: Some("04:12"),
-        search: Some("signal path kithara"),
-        deck: Some("A"),
-        bpm: Some("128.00"),
-        key: Some("7m"),
-        energy: Some(76),
-        transition: Some("FILTER FADE"),
-        selected: true,
-    },
-    TrackRow {
-        title: "Four Decks",
-        artist: Some("Benchmark"),
-        time: Some("05:31"),
-        search: Some("four decks benchmark"),
-        deck: Some("B"),
-        bpm: Some("126.00"),
-        key: Some("10m"),
-        energy: Some(68),
-        transition: Some("EQ SWAP"),
-        selected: false,
-    },
-    TrackRow {
-        title: "Continuous Drag",
-        artist: Some("Criterion"),
-        time: Some("03:47"),
-        search: Some("continuous drag criterion"),
-        deck: Some("C"),
-        bpm: Some("124.00"),
-        key: Some("4m"),
-        energy: Some(54),
-        transition: Some("LOOP EXIT"),
-        selected: false,
-    },
-];
+static ROWS: LazyLock<Vec<TableRow<'static>>> = LazyLock::new(|| {
+    vec![
+        TableRow::new(vec![TableCell::text("name", "Signal Path")], true),
+        TableRow::new(vec![TableCell::text("name", "Four Decks")], false),
+        TableRow::new(vec![TableCell::text("name", "Continuous Drag")], false),
+    ]
+});
 
 struct Fixture {
     registry: BenchRegistry,
@@ -159,7 +129,7 @@ impl Reads for BenchReads {
             "bench.bool" => ReadValue::Bool(true),
             "bench.scalar" => ReadValue::Scalar(self.scalar),
             "bench.text" => ReadValue::Text("Kithara benchmark"),
-            "bench.tracks" => ReadValue::TrackList(&TRACKS),
+            "bench.tracks" => ReadValue::Table(&ROWS),
             "bench.wave.0" => waveform_value(&self.waveforms[0]),
             "bench.wave.1" => waveform_value(&self.waveforms[1]),
             "bench.wave.2" => waveform_value(&self.waveforms[2]),
@@ -200,7 +170,13 @@ fn bench_view_build(c: &mut Criterion) {
     let reads = BenchReads::new();
     c.bench_function("ui/view_build/250-controls", |b| {
         b.iter(|| {
-            black_box(tree::render(&ui.root, &ui, &reads, builtin::skin()));
+            black_box(tree::render(
+                &ui.root,
+                &ui,
+                &reads,
+                builtin::skin(),
+                Clock::default(),
+            ));
         });
     });
 }
@@ -211,7 +187,13 @@ fn bench_data_push(c: &mut Criterion) {
     c.bench_function("ui/data_push/8192-wave-8-stereo-view", |b| {
         b.iter(|| {
             reads.push();
-            black_box(tree::render(&ui.root, &ui, &reads, builtin::skin()));
+            black_box(tree::render(
+                &ui.root,
+                &ui,
+                &reads,
+                builtin::skin(),
+                Clock::default(),
+            ));
         });
     });
 }
@@ -228,7 +210,13 @@ fn bench_event_apply(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, _| {
             b.iter(|| {
                 reads.apply(black_box(&event));
-                black_box(tree::render(&ui.root, &ui, &reads, builtin::skin()));
+                black_box(tree::render(
+                    &ui.root,
+                    &ui,
+                    &reads,
+                    builtin::skin(),
+                    Clock::default(),
+                ));
             });
         });
     }
@@ -301,7 +289,7 @@ fn realistic_root() -> ControlNode {
     modules.push(module_controls(
         "library",
         41,
-        vec![track_list("tracks", "bench.tracks")],
+        vec![table("tracks", "bench.tracks")],
     ));
     row(Some("dj".to_owned()), modules)
 }
@@ -367,7 +355,7 @@ fn registry() -> BenchRegistry {
         ("bench.bool", ValueKind::Bool),
         ("bench.scalar", ValueKind::Scalar),
         ("bench.text", ValueKind::Text),
-        ("bench.tracks", ValueKind::TrackList),
+        ("bench.tracks", ValueKind::Table),
     ] {
         registry.insert(id, kind);
     }
@@ -393,6 +381,7 @@ fn row(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         id: id.map(NodeId),
         size: None,
         gap: None,
+        align: TextAlign::Center,
         pad: None,
         pad_x: None,
         pad_y: None,
@@ -508,14 +497,20 @@ fn vu(id: &str, endpoint: &str) -> ControlNode {
     }
 }
 
-fn track_list(id: &str, endpoint: &str) -> ControlNode {
-    ControlNode::TrackList {
+fn table(id: &str, endpoint: &str) -> ControlNode {
+    ControlNode::Table {
         id: NodeId(id.to_owned()),
         size: None,
         read: Some(model(endpoint)),
         write: None,
         adaptive: AdaptivePolicy::default(),
-        columns: vec![TrackColumn::Title],
+        columns: Some(Param::Fixed(vec![TableColumn::new(
+            "name",
+            "NAME",
+            TableColumnStyle::Primary,
+            180.0,
+            true,
+        )])),
         columns_state: None,
     }
 }
@@ -538,6 +533,7 @@ fn wave_bucket(phase: f32) -> WaveBucket {
 const fn waveform_value(waveform: &[WaveBucket]) -> ReadValue<'_> {
     ReadValue::Waveform(WaveformView {
         buckets: waveform,
+        revision: 0,
         beats: &[],
         downbeats: &[],
         bpm: None,

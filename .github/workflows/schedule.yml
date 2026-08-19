@@ -83,11 +83,11 @@ jobs:
       && github.event.schedule == '0 2 * * *'
     uses: ./.github/workflows/android.yml
 
-  gpu:
+  ui:
     if: >-
       vars.KITHARA_GPU_RUNNER_LABELS != ''
       && github.event.schedule == '30 4 * * *'
-    uses: ./.github/workflows/gpu.yml
+    uses: ./.github/workflows/ui.yml
 
   quality:
     if: vars.KITHARA_RUNNER_LABELS != '' && github.event.schedule == '0 20 * * *'

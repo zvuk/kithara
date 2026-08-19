@@ -15,7 +15,7 @@ use kithara_app::{
     baked,
     config::AppConfig,
     deck::{Deck, DeckId, DeckSet},
-    gui::GuiFrontend,
+    gui::{GuiFrontend, Host},
     tracing_init::init_tracing,
 };
 use kithara_platform::CancelToken;
@@ -31,6 +31,11 @@ struct Args {
     /// Enabled by default during testing phase.
     #[arg(long, default_value_t = true)]
     insecure: bool,
+
+    /// Which host draws the studio. A build without the `masonry` feature has
+    /// only the immediate one.
+    #[arg(long, value_enum, default_value_t)]
+    host: Host,
 }
 
 type AppError = Box<dyn std::error::Error + Send + Sync>;
@@ -99,7 +104,7 @@ fn main() -> AppResult {
         Deck::build(DeckId(1), &config, &session),
     ]);
     deck_set.commit(deck_set.mix().clone())?;
-    let mut frontend = GuiFrontend::new(&config)?;
+    let mut frontend = GuiFrontend::new(&config, args.host)?;
     frontend.attach_broadcast(session, shutdown.clone());
     frontend.start(&deck_set)?;
     frontend.run_loop(deck_set)?;

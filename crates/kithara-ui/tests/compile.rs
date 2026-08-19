@@ -6,7 +6,7 @@ use kithara_ui::{
     compile::{CompiledNode, CompiledUi, compile},
     error::UiDocError,
     expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
-    module::{ChromeStyle, IconName, PopoverAt, TrackColumn},
+    module::{ChromeStyle, IconName, PopoverAt},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     size::{Dim, SizeSpec},
     source::{Limits, MemResolver, UiConfig},
@@ -16,14 +16,40 @@ fn resolver() -> MemResolver {
     builtin::resolver()
 }
 
-fn track_list_resolver(module: &str) -> MemResolver {
+fn table_resolver(module: &str) -> MemResolver {
     let mut resolver = MemResolver::default();
     resolver.insert(
-        "track-list.klayout.ron",
-        r#"(schema: "kithara.layout", version: 1, id: "track-list",
-            root: Module(instance: "track-list", source: "track-list.kmodule.ron"))"#,
+        "table.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "table",
+            root: Module(instance: "table", source: "table.kmodule.ron"))"#,
     );
-    resolver.insert("track-list.kmodule.ron", module);
+    resolver.insert("table.kmodule.ron", module);
+    resolver
+}
+
+/// Same shape, but the layout hands the module a column list, so the module
+/// body reads `columns: "$columns"`.
+fn parameterised_table_resolver(columns: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    let columns = columns.replace('"', "\\\"");
+    resolver.insert(
+        "table.klayout.ron",
+        &format!(
+            r#"(schema: "kithara.layout", version: 1, id: "table",
+            root: Module(instance: "table", source: "table.kmodule.ron",
+                with: {{ "columns": "{columns}" }}))"#
+        ),
+    );
+    resolver.insert(
+        "table.kmodule.ron",
+        r##"(schema: "kithara.module", version: 1, id: "table",
+            parameters: ["columns"],
+            root: Table(
+                id: "tracks",
+                columns: "$columns",
+                read: Model(id: "library.visible_tracks"),
+            ))"##,
+    );
     resolver
 }
 
@@ -95,6 +121,116 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
     else {
         panic!("expected compiled crossfader");
     };
+}
+
+fn shader_resolver(source: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "shader.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "shader",
+            root: Module(instance: "meter", source: "panels/meter.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "panels/meter.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "meter",
+            root: Shader(
+                id: "meter",
+                source: "../shaders/meter.wgsl",
+                uniforms: { "level": Telemetry(id: "player.output.levels") },
+            ))"#,
+    );
+    resolver.insert("shaders/meter.wgsl", source);
+    resolver
+}
+
+#[kithara::test]
+fn shader_source_and_uniforms_compile_through_the_document_pipeline() {
+    let resolver = shader_resolver(
+        r#"
+@fragment
+fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return vec4<f32>(position.xy / kithara.viewport.xy, kithara.level.x, 1.0);
+}
+"#,
+    );
+
+    let ui = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    assert!(matches!(
+        &**root,
+        ExpandedNode::Control {
+            spec: ControlSpec::Shader(_),
+            read: None,
+            write: None,
+            ..
+        }
+    ));
+}
+
+#[kithara::test]
+fn malformed_shader_reports_the_resolved_source() {
+    let resolver = shader_resolver("@fragment fn fs_main(");
+
+    let error = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        UiDocError::Shader { origin, path, .. }
+            if origin.0 == "shaders/meter.wgsl" && path == "meter/meter"
+    ));
+}
+
+#[kithara::test]
+fn shader_uniforms_reject_non_numeric_endpoint_values() {
+    let resolver = shader_resolver(
+        r#"
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+    return vec4<f32>(kithara.level.x);
+}
+"#,
+    );
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "player.output.levels",
+        EndpointDesc::new(ValueKind::Text),
+    );
+
+    let error = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, UiDocError::Shader { .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("expected Bool, Scalar, or Stereo")
+    );
 }
 
 #[kithara::test]
@@ -281,52 +417,84 @@ fn vis_rejects_non_scalar_read_and_write_bindings() {
 }
 
 #[kithara::test]
-fn track_list_requires_title_column_at_compile_time() {
-    let resolver = track_list_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "track-list",
-            root: TrackList(
-                id: "tracks",
-                columns: [Index, Artist],
+fn table_accepts_arbitrary_text_columns() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "people",
+                columns: [
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                    (id: "note", label: "NOTE", style: Secondary, width: 240.0),
+                ],
                 read: Model(id: "library.visible_tracks"),
             ))"#,
     );
 
-    let error = compile(
-        "track-list.klayout.ron",
+    compile(
+        "table.klayout.ron",
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
     )
-    .unwrap_err();
-
-    assert!(matches!(
-        error,
-        UiDocError::MissingTrackTitleColumn { path, .. } if path == "track-list/tracks"
-    ));
+    .expect("a table must not require track-specific columns");
 }
 
 #[kithara::test]
-fn track_list_compiles_typed_columns_and_optional_state_prefix() {
-    let resolver = track_list_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "track-list",
-            root: TrackList(
-                id: "tracks",
-                columns: [Index, Title, Bpm],
-                columns_state: Some(Model(id: "ui.tracklist.columns")),
+fn a_column_list_may_arrive_as_an_include_parameter() {
+    compile(
+        "table.klayout.ron",
+        &parameterised_table_resolver(
+            r#"[(id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true), (id: "note", label: "NOTE", style: Secondary, width: 200.0)]"#,
+        ),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .expect("a substituted column list must compile like a literal one");
+}
+
+#[kithara::test]
+fn a_parameterised_column_list_can_use_non_music_ids() {
+    compile(
+        "table.klayout.ron",
+        &parameterised_table_resolver(
+            r#"[(id: "status", label: "STATUS", style: Badge, width: 80.0)]"#,
+        ),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .expect("parameterized tables must accept arbitrary column identifiers");
+}
+
+#[kithara::test]
+fn table_compiles_typed_columns_and_optional_state_prefix() {
+    let resolver = table_resolver(
+        r##"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "rank", label: "#", style: Index, width: 28.0),
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                    (id: "score", label: "SCORE", style: Metric, width: 70.0),
+                ],
+                columns_state: Some(Model(id: "ui.table.columns")),
                 read: Model(id: "library.visible_tracks"),
-            ))"#,
+            ))"##,
     );
     let mut registry = common::player_registry();
     registry.insert(
         EndpointCategory::Model,
-        "ui.tracklist.columns.title",
+        "ui.table.columns.name",
         EndpointDesc::new(ValueKind::Bool),
     );
 
     let ui = compile(
-        "track-list.klayout.ron",
+        "table.klayout.ron",
         &resolver,
         &registry,
         builtin::skin_doc(),
@@ -339,7 +507,7 @@ fn track_list_compiles_typed_columns_and_optional_state_prefix() {
     };
     let ExpandedNode::Control {
         spec:
-            ControlSpec::TrackList {
+            ControlSpec::Table {
                 columns,
                 columns_state,
                 ..
@@ -347,13 +515,12 @@ fn track_list_compiles_typed_columns_and_optional_state_prefix() {
         ..
     } = &**root
     else {
-        panic!("expected track list control");
+        panic!("expected table control");
     };
 
-    assert_eq!(
-        columns,
-        &[TrackColumn::Index, TrackColumn::Title, TrackColumn::Bpm]
-    );
+    assert_eq!(columns[0].id(), "rank");
+    assert_eq!(columns[1].id(), "name");
+    assert_eq!(columns[2].id(), "score");
     let Some(Binding {
         kind: BindingKind::Model,
         id,
@@ -362,29 +529,136 @@ fn track_list_compiles_typed_columns_and_optional_state_prefix() {
     else {
         panic!("expected model state prefix");
     };
-    assert_eq!(ui.resolve(*id), "ui.tracklist.columns");
+    assert_eq!(ui.resolve(*id), "ui.table.columns");
 }
 
 #[kithara::test]
-fn present_track_list_column_state_endpoint_must_be_bool() {
-    let resolver = track_list_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "track-list",
-            root: TrackList(
-                id: "tracks",
-                columns: [Title],
-                columns_state: Some(Model(id: "ui.tracklist.columns")),
+fn a_table_column_label_resolves_through_the_catalog() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@track_list.column.deck", style: Badge, width: 44.0),
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let ui = compile(
+        "table.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Table { columns, .. },
+        ..
+    } = &**root
+    else {
+        panic!("expected table control");
+    };
+
+    assert_eq!(columns[0].label(), "DECK");
+}
+
+#[kithara::test]
+fn a_table_column_label_written_as_plain_text_stays_that_text() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@track_list.column.deck", style: Badge, width: 44.0),
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let ui = compile(
+        "table.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Table { columns, .. },
+        ..
+    } = &**root
+    else {
+        panic!("expected table control");
+    };
+
+    assert_eq!(columns[1].label(), "NAME");
+}
+
+#[kithara::test]
+fn a_table_column_naming_a_missing_key_is_a_compile_error() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@missing.key", style: Badge, width: 44.0),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let error = compile(
+        "table.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .expect_err("a column caption naming no catalog entry must not compile");
+
+    let UiDocError::UnknownTextKey { key, path, .. } = error else {
+        panic!("expected an unknown-key error, got {error:?}");
+    };
+    assert_eq!(key, "missing.key");
+    assert!(
+        path.ends_with("/columns/0/label"),
+        "the error must name the column that carried the key, got {path}"
+    );
+}
+
+#[kithara::test]
+fn present_table_column_state_endpoint_must_be_bool() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [(id: "name", label: "NAME", style: Primary, width: 180.0)],
+                columns_state: Some(Model(id: "ui.table.columns")),
                 read: Model(id: "library.visible_tracks"),
             ))"#,
     );
     let mut registry = common::player_registry();
     registry.insert(
         EndpointCategory::Model,
-        "ui.tracklist.columns.title",
+        "ui.table.columns.name",
         EndpointDesc::new(ValueKind::Text),
     );
 
     let error = compile(
-        "track-list.klayout.ron",
+        "table.klayout.ron",
         &resolver,
         &registry,
         builtin::skin_doc(),
@@ -396,7 +670,7 @@ fn present_track_list_column_state_endpoint_must_be_bool() {
     assert!(matches!(
         error,
         UiDocError::BindingType { id, expected, got, .. }
-            if id == "ui.tracklist.columns.title" && expected == "Bool" && got == "Text"
+            if id == "ui.table.columns.name" && expected == "Bool" && got == "Text"
     ));
 }
 

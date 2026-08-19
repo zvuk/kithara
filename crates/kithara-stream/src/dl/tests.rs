@@ -294,7 +294,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
         let result = h2
             .execute(FetchCmd::get(Url::parse("http://192.0.2.1:1/").expect("valid url")).build())
             .await;
-        (start.elapsed(), result)
+        (Instant::now().saturating_duration_since(start), result)
     });
 
     time::sleep(Duration::from_millis(POLL_MS)).await;

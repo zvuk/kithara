@@ -1,0 +1,39 @@
+name: UI
+
+# UI tests are isolated from the general workspace suite: unit and integration
+# targets, real GPU rendering, and host screenshots all run here. A fork push
+# is safe because only the repository owner may reach the self-hosted graphics
+# runner.
+on:
+  push:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: ui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: UI tests and host parity
+    if: vars.KITHARA_GPU_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_GPU_RUNNER_LABELS) }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run every UI test and photograph both hosts
+        run: just test ui
+
+      - name: Upload both hosts, shipped studios, and difference masks
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-parity
+          path: target/parity

@@ -39,6 +39,25 @@ Under `flash(true)` the macro lexically retargets the body's direct time-primiti
 the body is a compile error rather than a silent real-clock call: import the module and call `time::sleep(...)`, or use
 `flash(false)`.
 
+### Time rewriting only reaches path calls
+
+`rewrite.rs` retargets **path** calls in a test body — `Instant::now()` becomes
+`flash::virtual_now()`, which reads the engine clock unconditionally. It does not
+touch **method** calls, so `started.elapsed()` stays `Instant::elapsed`, which
+re-reads `now()` through the ordinary arm and gets REAL time: a test body never
+sets the `active` flag, which only production `#[kithara::flash]` regions push.
+
+Subtracting the two therefore mixes a virtual start from a real end. The error is
+systematic, not jitter — the real arm is measured from the engine's real anchor,
+so it grows with process age and a wall-clock assertion fails more often the
+longer the process has lived.
+
+In a test body, sample **both** endpoints with `Instant::now()` and subtract them:
+`Instant::now().saturating_duration_since(started)`. Never `.elapsed()`, and never
+any other method that internally re-reads `now()`. The rewrite reaches nested
+closures and spawned blocks too, so a timing probe inside `tokio_spawn(async move
+{ … })` carries the same rule.
+
 Every emitted body is made flash-eligible by exactly ONE ambient holder. **async-native** emissions (manual tokio runtime,
 with or without `timeout`) wrap the body in `kithara_platform::flash::with_ambient`, which re-asserts the ambient around
 every poll; they must NOT also hold a body scope, because a body-held `ambient_scope` lives in the future's state inside

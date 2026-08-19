@@ -6,9 +6,10 @@ use crate::{
     layout::FrameSides,
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign, PopoverAt, ScalarFormat,
-        TextAlign, TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
+        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, Motion, PopoverAlign, PopoverAt, Pose,
+        ScalarFormat, TableColumn, TextAlign, TextStyle, Tone, WaveStyle, WindowControlsStyle,
     },
+    shader::ShaderSpec,
     size::{BlockNode, SizeSpec},
     skin::ColorRole,
 };
@@ -20,6 +21,7 @@ pub enum ExpandedNode {
         id: Option<InternId>,
         size: Option<SizeSpec>,
         gap: Option<f32>,
+        align: TextAlign,
         pad: Option<f32>,
         pad_x: Option<f32>,
         pad_y: Option<f32>,
@@ -53,6 +55,18 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         child: Box<Self>,
     },
+    /// Offsets what its subtree draws, and nothing else.
+    ///
+    /// The pose is resolved per frame rather than at compile time, because the
+    /// endpoint behind it may move it between one frame and the next. Layout,
+    /// addresses, and pointer regions are the child's alone.
+    Object {
+        pose: Pose,
+        to: Option<Pose>,
+        phase: Option<Binding>,
+        motion: Option<Motion<Binding>>,
+        child: Box<Self>,
+    },
     Optional {
         block: BlockSpec,
         child: Box<Self>,
@@ -71,6 +85,12 @@ pub enum ExpandedNode {
         path: InternId,
         press: Binding,
         child: Box<Self>,
+    },
+    /// Offers every child the same box, in document order.
+    Stage {
+        id: InternId,
+        size: Option<SizeSpec>,
+        children: Vec<Self>,
     },
     Slot {
         id: InternId,
@@ -157,10 +177,23 @@ pub enum ControlSpec {
         zoom: Option<Binding>,
     },
     Vis,
+    /// One frame of a named artwork, chosen by how far its reading has run and
+    /// how long `seconds` says one pass through the artwork takes.
+    Lottie {
+        artwork: InternId,
+        seconds: f32,
+    },
+    /// One frame of a named sheet, chosen by how far its reading has run and
+    /// how long `seconds` says one pass through the sheet takes.
+    Sprite {
+        sheet: InternId,
+        seconds: f32,
+    },
+    Shader(ShaderSpec),
     PortalMap,
     Range,
-    TrackList {
-        columns: Vec<TrackColumn>,
+    Table {
+        columns: Vec<TableColumn>,
         columns_state: Option<Binding>,
     },
     Tree {
@@ -245,6 +278,13 @@ pub(crate) struct ExpandedModule {
     pub(crate) footer: Option<Binding>,
     pub(crate) title: Option<InternId>,
     pub(crate) assign: Vec<InternId>,
+    pub(crate) includes: Vec<ExpandedInclude>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExpandedInclude {
+    pub(crate) address: Box<[usize]>,
+    pub(crate) module: InternId,
 }
 
 /// A block the host may hide: the path that addresses it, and the Bool it
@@ -262,6 +302,143 @@ impl BlockNode for ExpandedNode {
             Self::Optional { block, .. } => Some(block),
             _ => None,
         }
+    }
+}
+
+impl ControlSpec {
+    /// Whether this control draws a new picture every frame of its own accord,
+    /// with no endpoint and no input involved.
+    ///
+    /// A visualisation is a picture of a moment rather than of a value: it keeps
+    /// its own decay between frames, so a host that stops drawing it stops it.
+    /// Everything else changes only when what it reads changes, and is drawn
+    /// again then.
+    ///
+    /// A shader belongs with everything else, not with the visualisation beside
+    /// it. It draws exactly what its uniforms say, and every uniform is an
+    /// endpoint — so a shader bound to the host's own clock moves by itself and
+    /// is caught as a clock reader, and one bound to endpoints that hold still
+    /// draws the same picture however often it is asked.
+    ///
+    /// Spelled out rather than defaulted, so a control added tomorrow stops
+    /// compiling here instead of quietly joining the majority.
+    pub(crate) const fn paints_every_frame(&self) -> bool {
+        match self {
+            Self::Vis => true,
+            Self::Shader(_)
+            | Self::Bpm { .. }
+            | Self::Brand
+            | Self::Button { .. }
+            | Self::Cell { .. }
+            | Self::Checkbox
+            | Self::Chip { .. }
+            | Self::ContextBar { .. }
+            | Self::Crossfader { .. }
+            | Self::DeckSummary { .. }
+            | Self::Divider
+            | Self::Fader { .. }
+            | Self::Glyph { .. }
+            | Self::Knob { .. }
+            | Self::Lottie { .. }
+            | Self::Meter
+            | Self::NavItem { .. }
+            | Self::PortalMap
+            | Self::PresetSelector
+            | Self::Range
+            | Self::Readout { .. }
+            | Self::Scalar { .. }
+            | Self::Segmented { .. }
+            | Self::Select { .. }
+            | Self::SettingsButton
+            | Self::Spacer
+            | Self::Sprite { .. }
+            | Self::StatusDot { .. }
+            | Self::Swatch { .. }
+            | Self::TabLarge { .. }
+            | Self::Table { .. }
+            | Self::Text { .. }
+            | Self::Time
+            | Self::TitleBar { .. }
+            | Self::Toggle
+            | Self::Tree { .. }
+            | Self::VuStereo
+            | Self::VuVertical { .. }
+            | Self::Wave { .. }
+            | Self::WindowControls { .. }
+            | Self::WindowDrag => false,
+        }
+    }
+}
+
+/// What a subtree does with nothing touching it.
+///
+/// Both halves are asked for together because they are answered by one walk of
+/// the same tree, and because a host that separates them ends up with two
+/// accounts of when a document moves.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Unprompted {
+    /// Something here is placed by an endpoint rather than by the document
+    /// alone, so re-reading the endpoints can move a tree already mounted.
+    ///
+    /// An object needs both ends of a track and something driving it to move at
+    /// all: a far pose nobody travels towards, or a phase with nowhere to carry
+    /// the object, both leave it exactly where the document wrote it. A host
+    /// asks this to do no pose work on a page that cannot move.
+    pub(crate) driven: bool,
+    /// Something here draws a new picture every frame of its own accord, with
+    /// no endpoint and no input involved.
+    pub(crate) continuous: bool,
+}
+
+impl Unprompted {
+    const DRIVEN: Self = Self {
+        driven: true,
+        continuous: false,
+    };
+
+    pub(crate) fn or(self, other: Self) -> Self {
+        Self {
+            driven: self.driven || other.driven,
+            continuous: self.continuous || other.continuous,
+        }
+    }
+
+    fn of(nodes: &[ExpandedNode]) -> Self {
+        nodes.iter().map(motion_of).fold(Self::default(), Self::or)
+    }
+}
+
+/// What one subtree does with nothing touching it.
+pub(crate) fn motion_of(node: &ExpandedNode) -> Unprompted {
+    match node {
+        ExpandedNode::Object {
+            to,
+            phase,
+            motion,
+            child,
+            ..
+        } => {
+            let own = if to.is_some() && (phase.is_some() || motion.is_some()) {
+                Unprompted::DRIVEN
+            } else {
+                Unprompted::default()
+            };
+            own.or(motion_of(child))
+        }
+        ExpandedNode::Row { children, .. }
+        | ExpandedNode::Column { children, .. }
+        | ExpandedNode::Stage { children, .. }
+        | ExpandedNode::Slot { children, .. } => Unprompted::of(children),
+        ExpandedNode::Popover {
+            anchor, content, ..
+        } => motion_of(anchor).or(motion_of(content)),
+        ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Scroll { child, .. } => motion_of(child),
+        ExpandedNode::Control { spec, .. } => Unprompted {
+            driven: false,
+            continuous: spec.paints_every_frame(),
+        },
     }
 }
 
@@ -285,6 +462,8 @@ pub struct DropSpec {
 #[derive(Clone, Copy)]
 pub(crate) struct ControlSite<'a> {
     pub(crate) control: &'a ControlNode,
+    /// Already resolved, so a parameterised list is validated like a literal one.
+    pub(crate) columns: &'a [TableColumn],
     pub(crate) path: &'a str,
     pub(crate) active: Option<&'a BindingRef>,
     pub(crate) columns_state: Option<&'a BindingRef>,

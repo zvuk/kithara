@@ -28,6 +28,9 @@ pub enum UiDocError {
     },
     #[error("{origin}: invalid skin color {value:?}; expected #RRGGBB or #RRGGBBAA")]
     BadColor { origin: SourceUri, value: String },
+    #[cfg(feature = "render")]
+    #[error(transparent)]
+    Text(#[from] crate::shaping::TextError),
     #[error("{origin}: duplicate id {id:?} at {path}")]
     DuplicateId {
         origin: SourceUri,
@@ -64,6 +67,12 @@ pub enum UiDocError {
     NotFound { origin: SourceUri, rel: String },
     #[error("{origin}: source {rel:?} escapes configured root")]
     RootEscape { origin: SourceUri, rel: String },
+    #[error("{origin}: shader at {path}: {detail}")]
+    Shader {
+        origin: SourceUri,
+        path: String,
+        detail: String,
+    },
     #[error(
         "include cycle: {}",
         chain
@@ -142,12 +151,30 @@ pub enum UiDocError {
         path: String,
         detail: String,
     },
-    #[error("{origin}: track list at {path} must contain the Title column")]
-    MissingTrackTitleColumn { origin: SourceUri, path: String },
     #[error("{origin}: ContextBar at {path} requires scope_items, scope, and write together")]
     InvalidContextScope { origin: SourceUri, path: String },
     #[error("{origin}: container at {path} declares write but has no id to address it by")]
     UnaddressedSurface { origin: SourceUri, path: String },
+    #[error(
+        "{origin}: Object at {path} turns or scales a {child}, which is laid out as several boxes and has no single one to turn about"
+    )]
+    ObjectGroup {
+        origin: SourceUri,
+        path: String,
+        child: &'static str,
+    },
+    #[error(
+        "{origin}: Object at {path} poses a {child}, which paints its own pass rather than a draw list"
+    )]
+    ObjectNative {
+        origin: SourceUri,
+        path: String,
+        child: &'static str,
+    },
+    #[error(
+        "{origin}: Object at {path} declares both phase and motion; a motion computes the phase, so one pose cannot carry both"
+    )]
+    ObjectDrivenTwice { origin: SourceUri, path: String },
     #[error("{origin}: compiled node count {count} exceeds limit {max}")]
     NodesExceeded {
         origin: SourceUri,

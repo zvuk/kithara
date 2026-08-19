@@ -50,6 +50,11 @@ crates = ["kithara", "kithara-queue"]
 
 [[layer]]
 index = 9
+name = "ui"
+crates = ["kithara-ui"]
+
+[[layer]]
+index = 10
 name = "apps"
 crates = ["kithara-app", "kithara-ffi"]
 

@@ -13,17 +13,22 @@ pub(super) enum Tab {
     Vis,
     Chrome,
     Titlebars,
-    Tracklist,
+    Table,
     Tree,
     Library2,
     Stress,
     Menu,
     Clock,
     Pivot,
+    Shader,
+    Objects,
+    Motion,
+    Sprites,
+    Lottie,
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 20] = [
+    pub(super) const ALL: [Self; 25] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -37,13 +42,18 @@ impl Tab {
         Self::Vis,
         Self::Chrome,
         Self::Titlebars,
-        Self::Tracklist,
+        Self::Table,
         Self::Tree,
         Self::Library2,
         Self::Stress,
         Self::Menu,
         Self::Clock,
         Self::Pivot,
+        Self::Shader,
+        Self::Objects,
+        Self::Motion,
+        Self::Sprites,
+        Self::Lottie,
     ];
 
     pub(super) const fn entry(self) -> &'static str {
@@ -61,13 +71,18 @@ impl Tab {
             Self::Vis => "gallery-vis.klayout.ron",
             Self::Chrome => "gallery-chrome.klayout.ron",
             Self::Titlebars => "gallery-titlebars.klayout.ron",
-            Self::Tracklist => "gallery-tracklist.klayout.ron",
+            Self::Table => "gallery-table.klayout.ron",
             Self::Tree => "gallery-tree.klayout.ron",
             Self::Library2 => "gallery-library2.klayout.ron",
             Self::Stress => "gallery-stress.klayout.ron",
             Self::Menu => "gallery-menu.klayout.ron",
             Self::Clock => "gallery-clock.klayout.ron",
             Self::Pivot => "gallery-pivot.klayout.ron",
+            Self::Shader => "gallery-shader.klayout.ron",
+            Self::Objects => "gallery-objects.klayout.ron",
+            Self::Motion => "gallery-motion.klayout.ron",
+            Self::Sprites => "gallery-sprites.klayout.ron",
+            Self::Lottie => "gallery-lottie.klayout.ron",
         }
     }
 
@@ -86,13 +101,18 @@ impl Tab {
             Self::Vis => 10,
             Self::Chrome => 11,
             Self::Titlebars => 12,
-            Self::Tracklist => 13,
+            Self::Table => 13,
             Self::Tree => 14,
             Self::Library2 => 15,
             Self::Stress => 16,
             Self::Menu => 17,
             Self::Clock => 18,
             Self::Pivot => 19,
+            Self::Shader => 20,
+            Self::Objects => 21,
+            Self::Motion => 22,
+            Self::Sprites => 23,
+            Self::Lottie => 24,
         }
     }
 }
@@ -119,13 +139,18 @@ impl TryFrom<&str> for Tab {
             "vis" => Ok(Self::Vis),
             "chrome" => Ok(Self::Chrome),
             "titlebars" => Ok(Self::Titlebars),
-            "tracklist" => Ok(Self::Tracklist),
+            "table" => Ok(Self::Table),
             "tree" => Ok(Self::Tree),
             "library2" => Ok(Self::Library2),
             "stress" => Ok(Self::Stress),
             "menu" => Ok(Self::Menu),
             "clock" => Ok(Self::Clock),
             "pivot" => Ok(Self::Pivot),
+            "shader" => Ok(Self::Shader),
+            "objects" => Ok(Self::Objects),
+            "motion" => Ok(Self::Motion),
+            "sprites" => Ok(Self::Sprites),
+            "lottie" => Ok(Self::Lottie),
             _ => Err(()),
         }
     }

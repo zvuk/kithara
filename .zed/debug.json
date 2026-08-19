@@ -1,6 +1,9 @@
+// Every surface appears once per host. The app carries both hosts in one
+// binary when built with `masonry` and picks between them with `--host`; the
+// gallery is one example binary and picks with `KITHARA_GALLERY_MASONRY`.
 [
   {
-    "label": "kithara-app",
+    "label": "kithara-app · immediate (iced + wgpu)",
     "adapter": "CodeLLDB",
     "request": "launch",
     "build": {
@@ -16,12 +19,79 @@
       ],
     },
     "program": "$ZED_WORKTREE_ROOT/target/debug/kithara",
-    "args": [],
+    "args": ["--host", "immediate"],
     "cwd": "$ZED_WORKTREE_ROOT",
     "env": {
       "RUST_LOG": "kithara_audio=debug,kithara_decode=info,kithara_hls=debug,kithara_assets=debug,kithara_stream=debug,kithara_queue=debug,kithara_play=info",
       "RUST_BACKTRACE": "1",
       "KITHARA_LOG_FILE": "$ZED_WORKTREE_ROOT/app.log",
+    },
+    "sourceLanguages": ["rust"],
+  },
+  {
+    "label": "kithara-app · retained (masonry + vello)",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "build": {
+      "command": "cargo",
+      "args": [
+        "build",
+        "-p",
+        "kithara-app",
+        "--features",
+        "stretch-all,masonry",
+        "--bin",
+        "kithara",
+      ],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/kithara",
+    "args": ["--host", "retained"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": {
+      "RUST_LOG": "kithara_audio=debug,kithara_decode=info,kithara_hls=debug,kithara_assets=debug,kithara_stream=debug,kithara_queue=debug,kithara_play=info",
+      "RUST_BACKTRACE": "1",
+      "KITHARA_LOG_FILE": "$ZED_WORKTREE_ROOT/app.log",
+    },
+    "sourceLanguages": ["rust"],
+  },
+  {
+    "label": "gallery · immediate (iced + wgpu)",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "build": {
+      "command": "cargo",
+      "args": ["build", "-p", "kithara-ui", "--example", "gallery"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/examples/gallery",
+    "args": [],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": {
+      "RUST_BACKTRACE": "1",
+    },
+    "sourceLanguages": ["rust"],
+  },
+  {
+    "label": "gallery · retained (masonry + vello)",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "build": {
+      "command": "cargo",
+      "args": [
+        "build",
+        "-p",
+        "kithara-ui",
+        "--features",
+        "masonry",
+        "--example",
+        "gallery",
+      ],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/examples/gallery",
+    "args": [],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": {
+      "KITHARA_GALLERY_MASONRY": "1",
+      "RUST_BACKTRACE": "1",
     },
     "sourceLanguages": ["rust"],
   },

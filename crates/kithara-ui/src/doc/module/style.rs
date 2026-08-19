@@ -172,35 +172,72 @@ pub enum WaveStyle {
     Micro,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 #[non_exhaustive]
-pub enum TrackColumn {
-    Index,
-    Deck,
-    Title,
-    Artist,
-    Bpm,
-    Key,
-    Time,
-    Energy,
-    Transition,
+pub struct TableColumn {
+    id: String,
+    label: String,
+    style: TableColumnStyle,
+    width: f32,
+    #[serde(default)]
+    flexible: bool,
 }
 
-impl TrackColumn {
-    #[must_use]
-    pub const fn endpoint_name(self) -> &'static str {
-        match self {
-            Self::Index => "index",
-            Self::Deck => "deck",
-            Self::Title => "title",
-            Self::Artist => "artist",
-            Self::Bpm => "bpm",
-            Self::Key => "key",
-            Self::Time => "time",
-            Self::Energy => "energy",
-            Self::Transition => "transition",
+impl TableColumn {
+    pub fn new<I, L>(id: I, label: L, style: TableColumnStyle, width: f32, flexible: bool) -> Self
+    where
+        I: Into<String>,
+        L: Into<String>,
+    {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            style,
+            width,
+            flexible,
         }
     }
+
+    #[must_use]
+    pub fn flexible(&self) -> bool {
+        self.flexible
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    #[must_use]
+    pub fn style(&self) -> TableColumnStyle {
+        self.style
+    }
+
+    #[must_use]
+    pub fn width(&self) -> f32 {
+        self.width
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum TableColumnStyle {
+    Index,
+    Badge,
+    Primary,
+    #[default]
+    Secondary,
+    Metric,
+    Mono,
+    Time,
+    Meter,
+    Transition,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

@@ -3,6 +3,7 @@ mod deck;
 mod library;
 mod mix;
 mod root;
+mod stage;
 mod ui;
 mod value;
 

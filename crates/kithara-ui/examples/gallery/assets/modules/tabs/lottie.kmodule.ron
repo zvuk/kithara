@@ -1,0 +1,90 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-lottie-tab",
+    root: Column(
+        gap: Some(16.0),
+        pad: Some(22.0),
+        children: [
+            Text(id: "title", style: Section, label: "LOTTIE", size: (w: Fill, h: Fixed(22.0))),
+            Text(
+                id: "note",
+                style: Body,
+                color: TextDim,
+                label: "AN ARTWORK IS READ ONCE AND DRAWN PER FRAME. THE SHEET CONTRACT WITH A DRAWING IN PLACE OF A PICTURE: THE READING IS SECONDS, AND ONE PASS PLAYS THE WHOLE ARTWORK.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Text(id: "played-title", style: Section, label: "PLAYED AND SCRUBBED", size: (w: Fill, h: Fixed(22.0))),
+            Text(
+                id: "played-note",
+                style: Body,
+                color: TextDim,
+                label: "ONE CONTROL, TWO BINDINGS. THE LEFT ONE READS THE HOST'S OWN CLOCK, WHICH NO APPLICATION DECLARES; THE RIGHT ONE READS THE FADER BESIDE IT.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Row(
+                id: "played",
+                gap: Some(24.0),
+                size: (w: Fill, h: Fixed(128.0)),
+                children: [
+                    Lottie(id: "clockwork", artwork: "pulse", seconds: 2.0, read: Model(id: "ui.clock.seconds"), size: (w: Fixed(128.0), h: Fixed(128.0))),
+                    Lottie(id: "scrubbed", artwork: "pulse", seconds: 1.0, read: Model(id: "gallery.lottie.scrub"), size: (w: Fixed(128.0), h: Fixed(128.0))),
+                    Column(
+                        id: "scrub-column",
+                        gap: Some(8.0),
+                        size: (w: Fixed(240.0), h: Fill),
+                        children: [
+                            Slot(id: "scrub-top", size: (w: Fill, h: Fill)),
+                            Fader(
+                                id: "scrub",
+                                style: Default,
+                                label: "SCRUB",
+                                read: Model(id: "gallery.lottie.scrub"),
+                                write: Parameter(id: "gallery.lottie.scrub"),
+                                size: (w: Fill, h: Fixed(34.0)),
+                            ),
+                            Slot(id: "scrub-bottom", size: (w: Fill, h: Fill)),
+                        ],
+                    ),
+                    Slot(id: "played-space", size: (w: Fill, h: Fill)),
+                ],
+            ),
+            Text(id: "posed-title", style: Section, label: "POSED", size: (w: Fill, h: Fixed(22.0))),
+            Text(
+                id: "posed-note",
+                style: Body,
+                color: TextDim,
+                label: "AN ARTWORK IS A CONTROL LIKE ANY OTHER, SO AN OBJECT TURNS AND CARRIES ONE WITHOUT THE DRAWING KNOWING. THE ARTWORK AND THE POSE RUN OFF THEIR OWN CLOCKS.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Stage(
+                id: "posed",
+                size: (w: Fill, h: Fixed(128.0)),
+                children: [
+                    Object(
+                        id: "turning",
+                        transform: (anchor: (56.0, 56.0)),
+                        to: (anchor: (56.0, 56.0), rotation: 360.0),
+                        motion: (clock: Model(id: "gallery.motion.clock"), duration: 6.0, repeat: Loop),
+                        child: Lottie(id: "carried", artwork: "pulse", seconds: 2.0, read: Model(id: "ui.clock.seconds"), size: (w: Fixed(112.0), h: Fixed(112.0))),
+                    ),
+                    Object(
+                        id: "travelling",
+                        transform: (position: (168.0, 8.0)),
+                        to: (position: (408.0, 8.0)),
+                        motion: (clock: Model(id: "gallery.motion.clock"), duration: 5.0, repeat: PingPong, easing: InOut),
+                        child: Lottie(id: "flying", artwork: "pulse", seconds: 1.0, read: Model(id: "ui.clock.seconds"), size: (w: Fixed(96.0), h: Fixed(96.0))),
+                    ),
+                ],
+            ),
+            Text(
+                id: "limit",
+                style: Body,
+                color: TextDim,
+                label: "AN ARTWORK THE TOOLKIT DOES NOT SHIP DRAWS NOTHING, WHICH IS WHAT AN UNBOUND CONTROL DOES EVERYWHERE ELSE.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Slot(id: "space", size: (w: Fill, h: Fill)),
+        ],
+    ),
+)

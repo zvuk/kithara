@@ -67,6 +67,7 @@ dhat-heap.json
 # Performance monitoring outputs
 target/hotpath-*.json
 hotpath-*.json
+ui-*-perf.txt
 .worktrees/
 log*.txt
 crates/kithara-wasm/dist

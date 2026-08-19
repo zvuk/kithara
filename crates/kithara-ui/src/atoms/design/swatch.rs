@@ -1,62 +1,162 @@
-use iced::{
-    Background, Color, Element, Length,
-    widget::{Column, Space, container, container::Style as ContainerStyle},
-};
+use num_traits::cast::AsPrimitive;
 
 use crate::{
-    render::{Skin, UiEvent, typography::styled_text},
-    skin::ColorRole,
-    widgets::Widget,
+    atoms::design::quad::quad,
+    draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    render::Skin,
+    shaping::TextContext,
+    skin::{ColorRole, SwatchSkin},
 };
 
-#[derive(bon::Builder)]
-pub(crate) struct Swatch<'a, 'skin> {
-    skin: &'skin Skin,
-    label: &'a str,
-    role: ColorRole,
+/// A block of one palette colour, captioned with its name and its hex.
+pub(crate) struct Swatch {
+    border: Rgba,
+    fill: Rgba,
+    hex: String,
+    hex_color: Rgba,
+    label_color: Rgba,
+    metrics: SwatchSkin,
 }
 
-impl<'a> Widget<'a> for Swatch<'a, '_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        let metrics = self.skin.swatch;
-        let color = self.skin.color(self.role);
-        let border = self.skin.border(metrics.frame);
-        let box_view = container(Space::new())
-            .width(Length::Fill)
-            .height(Length::Fixed(metrics.box_height))
-            .style(move |_| {
-                ContainerStyle::default()
-                    .background(Background::Color(color))
-                    .border(border)
-            });
-        let captions = Column::with_children([
-            styled_text(self.label.to_uppercase(), metrics.label, self.skin),
-            styled_text(format_hex(color), metrics.hex, self.skin),
-        ])
-        .spacing(metrics.label_hex_gap)
-        .width(Length::Fill);
-        Column::with_children([box_view.into(), captions.into()])
-            .spacing(metrics.box_label_gap)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+impl Swatch {
+    pub(crate) fn new(role: ColorRole, skin: &Skin) -> Self {
+        let fill = skin.rgba(role);
+        Self {
+            border: skin.rgba(skin.swatch.frame.border),
+            fill,
+            hex: hex(fill),
+            hex_color: skin.rgba(skin.swatch.hex.color),
+            label_color: skin.rgba(skin.swatch.label.color),
+            metrics: skin.swatch,
+        }
+    }
+
+    pub(crate) fn paint(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        label: &str,
+        bounds: Rect,
+    ) {
+        quad(
+            list,
+            Rect {
+                h: self.metrics.box_height,
+                ..bounds
+            },
+            self.metrics.frame,
+            self.fill,
+            self.border,
+        );
+
+        let content = label.to_uppercase();
+        let run = text.shape(&content, self.metrics.label, None);
+        let label_y = bounds.y + self.metrics.box_height + self.metrics.box_label_gap;
+        list.text(
+            &run,
+            &content,
+            Transform::translate(Pt {
+                x: bounds.x,
+                y: label_y,
+            }),
+            self.label_color,
+        );
+
+        let hex_run = text.shape(&self.hex, self.metrics.hex, None);
+        list.text(
+            &hex_run,
+            &self.hex,
+            Transform::translate(Pt {
+                x: bounds.x,
+                y: label_y + run.height() + self.metrics.label_hex_gap,
+            }),
+            self.hex_color,
+        );
     }
 }
 
-fn format_hex(color: Color) -> String {
-    let [red, green, blue, _] = color.into_rgba8();
-    format!("#{red:02X}{green:02X}{blue:02X}")
+/// The colour a swatch shows, written out the way the design tokens page
+/// prints it.
+fn hex(color: Rgba) -> String {
+    let byte = |channel: f32| AsPrimitive::<u8>::as_((channel * 255.0).round());
+    format!(
+        "#{:02X}{:02X}{:02X}",
+        byte(color.r),
+        byte(color.g),
+        byte(color.b)
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use iced::Color;
     use kithara_test_utils::kithara;
 
-    use super::format_hex;
+    use super::{DrawListBuilder, Rect, Swatch, TextContext, hex};
+    use crate::{
+        builtin,
+        draw::{DrawCmd, Geom, Paint, Rgba},
+        skin::ColorRole,
+    };
 
     #[kithara::test]
-    fn formats_color_as_uppercase_rgb_hex() {
-        assert_eq!(format_hex(Color::from_rgb8(0x2e, 0xc7, 0xeb)), "#2EC7EB");
+    fn the_hex_caption_is_the_colour_written_out() {
+        assert_eq!(
+            hex(Rgba {
+                a: 1.0,
+                b: 235.0 / 255.0,
+                g: 199.0 / 255.0,
+                r: 46.0 / 255.0,
+            }),
+            "#2EC7EB"
+        );
+    }
+
+    /// The block takes a fixed height off the top and the two captions stack
+    /// under it, so nothing lands on top of the colour.
+    #[kithara::test]
+    fn the_block_keeps_its_height_and_the_captions_stack_below_it() {
+        let skin = builtin::skin();
+        let bounds = Rect {
+            h: 78.0,
+            w: 120.0,
+            x: 2.0,
+            y: 3.0,
+        };
+        let mut text = TextContext::from(skin.text_resources());
+        let mut list = DrawListBuilder::default();
+        Swatch::new(ColorRole::Accent, skin).paint(&mut list, &mut text, "accent", bounds);
+        let list = list.finish();
+
+        let [
+            DrawCmd::Fill {
+                geom: Geom::Rect(block),
+                paint: Paint::Solid(color),
+            },
+            _,
+            DrawCmd::Text {
+                content: label,
+                transform: label_at,
+                ..
+            },
+            DrawCmd::Text {
+                content: value,
+                transform: value_at,
+                ..
+            },
+        ] = list.commands()
+        else {
+            panic!("a swatch must draw its block, its frame, its name, then its hex");
+        };
+        assert_eq!(*color, skin.palette.accent);
+        assert_eq!(block.h, skin.swatch.box_height);
+        assert_eq!(label, "ACCENT");
+        assert_eq!(
+            label_at.dy,
+            bounds.y + skin.swatch.box_height + skin.swatch.box_label_gap
+        );
+        assert_eq!(value, &hex(skin.palette.accent));
+        assert!(value_at.dy > label_at.dy, "the hex sits under the name");
+        assert_eq!(label_at.dx, bounds.x, "both captions are flush left");
+        assert_eq!(value_at.dx, bounds.x);
     }
 }

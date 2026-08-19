@@ -1,12 +1,60 @@
+// Both hosts read the same documents and the same state; only the window and
+// the paint pass differ. Each surface is therefore offered twice, once per
+// host, so a picture can be checked against the other without editing anything.
+//
+// The app picks its host at runtime through `--host`; the retained variant only
+// exists in a build carrying the `masonry` feature. The gallery picks through
+// `KITHARA_GALLERY_MASONRY`, which its `host` module reads.
 [
   {
-    "label": "run: kithara (debug)",
-    "command": "cargo run -p kithara-app --bin kithara",
+    "label": "run: kithara · immediate (iced + wgpu)",
+    "command": "cargo run -p kithara-app --bin kithara -- --host immediate",
     "use_new_terminal": true,
   },
   {
-    "label": "run: kithara (release)",
-    "command": "cargo run -p kithara-app --bin kithara --release",
+    "label": "run: kithara · retained (masonry + vello)",
+    "command": "cargo run -p kithara-app --features masonry --bin kithara -- --host retained",
+    "use_new_terminal": true,
+  },
+  {
+    "label": "run: kithara · immediate (release)",
+    "command": "cargo run -p kithara-app --release --bin kithara -- --host immediate",
+    "use_new_terminal": true,
+  },
+  {
+    "label": "run: kithara · retained (release)",
+    "command": "cargo run -p kithara-app --release --features masonry --bin kithara -- --host retained",
+    "use_new_terminal": true,
+  },
+  {
+    "label": "gallery: immediate (iced + wgpu)",
+    "command": "cargo run -p kithara-ui --example gallery",
+    "use_new_terminal": true,
+  },
+  {
+    "label": "gallery: retained (masonry + vello)",
+    "command": "cargo run -p kithara-ui --example gallery --features masonry",
+    "env": {
+      "KITHARA_GALLERY_MASONRY": "1",
+    },
+    "use_new_terminal": true,
+  },
+  {
+    "label": "gallery: immediate (release)",
+    "command": "cargo run -p kithara-ui --release --example gallery",
+    "use_new_terminal": true,
+  },
+  {
+    "label": "gallery: retained (release)",
+    "command": "cargo run -p kithara-ui --release --example gallery --features masonry",
+    "env": {
+      "KITHARA_GALLERY_MASONRY": "1",
+    },
+    "use_new_terminal": true,
+  },
+  {
+    "label": "ui: capture both hosts and compare",
+    "command": "just test ui",
     "use_new_terminal": true,
   },
   {

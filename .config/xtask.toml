@@ -429,12 +429,13 @@ default_lane = "workspace"
 default_backend = "wreq"
 feature_arg = "--features"
 loom_lane = "loom"
-# Base features applied to every test lane, including `--flash=off`.
+# Features shared by every lane. UI renderer features belong to the dedicated
+# `ui` lane so the general workspace run does not build those test targets.
 features = []
 
 [test.flash]
 default = true
-features = ["flash"]
+features = ["kithara/flash"]
 
 [test.no_block]
 default = false
@@ -453,6 +454,10 @@ features = ["kithara-integration-tests/apple-net"]
 # pay for building and linking them. Neither depends on a product crate, so
 # nothing product-side leaves with them.
 #
+# `kithara-ui` is the one exclusion that is product: it needs a GPU adapter and
+# two toolkit features this lane does not turn on, so `test.lanes.ui` below runs
+# it against both hosts instead.
+#
 # The remaining support targets live inside product crates and cannot be dropped
 # here without taking product tests along; `default-filter` in
 # `.config/nextest.toml` removes those. The lanes below run all of it.
@@ -460,13 +465,15 @@ features = ["kithara-integration-tests/apple-net"]
 # Returning a crate to this suite is one edit: drop its `--exclude` pair.
 [test.lanes.workspace]
 program = "cargo"
-default_features = ["kithara-ui/render"]
+default_features = []
 prefix_args = [
   "nextest",
   "run",
   "--workspace",
   "--exclude",
   "kithara-fuzz",
+  "--exclude",
+  "kithara-ui",
   "--exclude",
   "kithara-devtools",
   "--exclude",
@@ -508,8 +515,14 @@ default_flash = false
 # Flash stays ON here, unlike the `tooling` lane. Both flash targets are
 # `#![cfg(feature = "flash")]`, so a lane that dropped the feature would compile
 # them empty and report a green suite that ran none of its seven tests.
+#
+# It is spelled per package rather than taken from `[test.flash]`, whose
+# `kithara/flash` reaches the two crates below through the facade. This lane does
+# not build the facade, so the shared spelling fails the lane outright on `none
+# of the selected packages contains this feature`.
 [test.lanes.harness]
 program = "cargo"
+default_flash = false
 # `kithara-net` refuses to compile without an HTTP backend, and the backend in
 # turn refuses to compile without a TLS one; nothing in this package selection
 # turns either on, because in the product suite both arrive from `kithara`,
@@ -518,6 +531,8 @@ program = "cargo"
 default_features = [
   "kithara-test-utils/client-reqwest",
   "kithara-test-utils/tls-rustls",
+  "kithara-platform/flash",
+  "kithara-test-utils/flash",
 ]
 prefix_args = [
   "nextest",
@@ -557,6 +572,36 @@ prefix_args = [
   "test-release",
 ]
 
+[test.lanes.ui]
+program = "cargo"
+default_features = [
+  "kithara-ui/gpu",
+  "kithara-ui/masonry",
+  "kithara-app/masonry",
+]
+default_flash = false
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-ui",
+  "-p",
+  "kithara-app",
+  "--cargo-profile",
+  "test-release",
+  "--ignore-default-filter",
+]
+suffix_args = [
+  "-E",
+  "package(kithara-ui) | (package(kithara-app) & test(/^gui::/))",
+]
+
+[test.lanes.ui-doc]
+program = "cargo"
+default_features = ["kithara-ui/gpu", "kithara-ui/masonry"]
+default_flash = false
+prefix_args = ["test", "--doc", "-p", "kithara-ui"]
+
 [test.lanes.cold]
 program = "cargo"
 default_features = ["kithara-ui/render"]
@@ -589,7 +634,15 @@ suffix_args = ["-E", "test(/(^|::)loom_model_/)"]
 
 [test.lanes.doc]
 program = "cargo"
-prefix_args = ["test", "--doc", "--workspace", "--exclude", "kithara-fuzz"]
+prefix_args = [
+  "test",
+  "--doc",
+  "--workspace",
+  "--exclude",
+  "kithara-fuzz",
+  "--exclude",
+  "kithara-ui",
+]
 default_flash = false
 
 # Resampler-backend axis: each e2e lane pins one SRC shape. `e2e` is the

@@ -23,8 +23,13 @@ pub(crate) struct ViewCache {
     pub(in crate::gui) deck_marks: CatalogRowMarks,
     pub(in crate::gui) collapsed: CollapsedModules,
     pub(in crate::gui) drag: Option<usize>,
+    /// Which source group the library lists and what its browser search box
+    /// narrows the tree to. The tree and the context bar both select the group;
+    /// it has one owner here and no second copy.
+    pub(in crate::gui) library: LibraryView,
     pub(in crate::gui) menu: MenuState,
     pub(in crate::gui) modules: Modules,
+    pub(in crate::gui) stage: StageView,
     pub(in crate::gui) window: WindowState,
     #[field(get, vis = "pub(in crate::gui)", copy)]
     layout: DeckLayout,
@@ -35,6 +40,114 @@ pub(crate) struct ViewCache {
 
     #[field(get, vis = "pub(crate)")]
     focus_deck: usize,
+}
+
+/// The visualiser preset in force, and the BPM window the tempo map is drawn
+/// against. Both are the host's alone: no engine value moves them.
+#[derive(Debug, PartialEq)]
+pub(in crate::gui) struct StageView {
+    pub(in crate::gui) preset: u32,
+    pub(in crate::gui) window: (f32, f32),
+}
+
+impl Default for StageView {
+    fn default() -> Self {
+        Self {
+            preset: 0,
+            window: (0.0, 1.0),
+        }
+    }
+}
+
+impl StageView {
+    /// The BPM span the window is a fraction of.
+    pub(in crate::gui) const BPM_FLOOR: f32 = 60.0;
+    pub(in crate::gui) const BPM_CEILING: f32 = 200.0;
+
+    /// The window's lower and upper edge in BPM.
+    pub(in crate::gui) fn bpm_window(&self) -> (f32, f32) {
+        let span = Self::BPM_CEILING - Self::BPM_FLOOR;
+        (
+            Self::BPM_FLOOR + self.window.0 * span,
+            Self::BPM_FLOOR + self.window.1 * span,
+        )
+    }
+
+    /// Move one edge, keeping the pair ordered so the map is never asked to
+    /// draw an axis that runs backwards.
+    pub(in crate::gui) fn set_edge(&mut self, edge: WindowEdge, at: f32) {
+        let at = at.clamp(0.0, 1.0);
+        match edge {
+            WindowEdge::Min => self.window.0 = at.min(self.window.1),
+            WindowEdge::Max => self.window.1 = at.max(self.window.0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::gui) enum WindowEdge {
+    Min,
+    Max,
+}
+
+/// What the library browser is showing.
+#[derive(Default)]
+pub(in crate::gui) struct LibraryView {
+    pub(in crate::gui) query: String,
+    pub(in crate::gui) scope: LibraryScope,
+}
+
+impl LibraryView {
+    /// The groups the browser is listing, in the order it lists them. The tree
+    /// draws these and the host resolves a row the user picked back through the
+    /// same order, so a search can never make the two disagree.
+    pub(in crate::gui) fn groups(&self) -> impl Iterator<Item = LibraryScope> + '_ {
+        let query = self.query.trim().to_lowercase();
+        LibraryScope::ALL
+            .into_iter()
+            .filter(move |group| query.is_empty() || group.label().to_lowercase().contains(&query))
+    }
+}
+
+/// The source groups the catalog can be listed by. `Local` is anything the
+/// catalog resolved to a path rather than to a network source, which is the
+/// only division the entries themselves carry.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::gui) enum LibraryScope {
+    #[default]
+    All,
+    Local,
+    Stream,
+}
+
+impl LibraryScope {
+    pub(in crate::gui) const ALL: [Self; 3] = [Self::All, Self::Local, Self::Stream];
+
+    pub(in crate::gui) const fn label(self) -> &'static str {
+        match self {
+            Self::All => "ALL",
+            Self::Local => "LOCAL",
+            Self::Stream => "STREAM",
+        }
+    }
+
+    pub(in crate::gui) const fn index(self) -> usize {
+        match self {
+            Self::All => 0,
+            Self::Local => 1,
+            Self::Stream => 2,
+        }
+    }
+
+    /// A catalog entry belongs to this group.
+    pub(in crate::gui) fn holds(self, entry: &CatalogEntry) -> bool {
+        let streamed = entry.source.contains("://") && !entry.source.starts_with("file://");
+        match self {
+            Self::All => true,
+            Self::Local => !streamed,
+            Self::Stream => streamed,
+        }
+    }
 }
 
 /// Deck bodies the app lays out; the session keeps every deck either way.
@@ -79,6 +192,11 @@ pub(in crate::gui) struct DeckCache {
     pub(in crate::gui) subtitle: String,
     pub(in crate::gui) tempo: String,
     pub(in crate::gui) wave: Vec<WaveBucket>,
+    /// What the toolkit calls the run of buckets currently in `wave`.
+    ///
+    /// Moved by whoever writes `wave`, so a viewer holding a copy can tell
+    /// the two apart without walking six figures of buckets every frame.
+    pub(in crate::gui) wave_revision: u64,
     wave_src: Option<usize>,
 }
 
@@ -187,6 +305,7 @@ impl DeckCache {
             return;
         }
         self.wave_src = src;
+        self.wave_revision = self.wave_revision.wrapping_add(1);
         self.wave.clear();
         if let Some(wave) = wave {
             self.wave.extend(waveform_buckets(wave));
@@ -281,7 +400,46 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::state::AbrVariant;
+    use crate::{state::AbrVariant, waveform::TrackAnalysis};
+
+    /// Version 1 plus one bucket of three band heights (0.5 = 0x3F000000).
+    fn wave_of(height: u8) -> TrackAnalysis {
+        let blob = [
+            1, 0, 0, 0, 0, 0, 0, height, 0, 0, 0, height, 0, 0, 0, height,
+        ];
+        let wave = Waveform::try_from(blob.as_slice()).expect("hand-built blob is valid");
+        TrackAnalysis::new(None, Some(wave), 0)
+    }
+
+    #[kithara::test]
+    fn the_deck_names_the_run_of_buckets_it_just_wrote() {
+        let mut cache = DeckCache::default();
+        let quiet = wave_of(62);
+
+        cache.refresh_wave(Some(&quiet));
+        let named = cache.wave_revision;
+
+        cache.refresh_wave(Some(&quiet));
+        assert_eq!(cache.wave_revision, named, "nothing was written");
+
+        cache.refresh_wave(Some(&wave_of(63)));
+        assert_ne!(
+            cache.wave_revision, named,
+            "a new run of buckets was written"
+        );
+    }
+
+    #[kithara::test]
+    fn dropping_the_track_names_the_empty_run() {
+        let mut cache = DeckCache::default();
+        cache.refresh_wave(Some(&wave_of(63)));
+        let named = cache.wave_revision;
+
+        cache.refresh_wave(None);
+
+        assert!(cache.wave.is_empty());
+        assert_ne!(cache.wave_revision, named, "the empty run is a run too");
+    }
 
     fn ladder() -> Vec<AbrVariant> {
         vec![

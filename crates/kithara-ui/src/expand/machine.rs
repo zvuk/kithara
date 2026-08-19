@@ -3,21 +3,24 @@ use std::collections::BTreeMap;
 use serde::de::DeserializeOwned;
 
 use super::{
-    Binding, BlockSpec, Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec, ExpandedModule,
-    ExpandedNode, SurfaceSpec,
+    Binding, BlockSpec, Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec,
+    ExpandedInclude, ExpandedModule, ExpandedNode, SurfaceSpec,
     binding_subst::{
         intern_binding, intern_module_text, intern_module_text_opt, intern_optional_binding,
-        intern_optional_text, intern_text, intern_texts, resolve_optional_param, resolve_param,
-        substitute_binding, substitute_map,
+        resolve_optional_param, resolve_param, substitute_binding,
     },
     site::{ControlFields, ExtraBindingRefs, ExtraBindings},
+    spec::control_spec,
+    structural::{expand_include, walk_child, walk_children},
 };
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
-    module::{BindingRef, ControlNode, PopoverAlign, PopoverAt, Tone, TrackColumn, WaveStyle},
+    module::{BindingRef, ControlNode, Motion, PopoverAlign, PopoverAt, Pose, TableColumn},
     param::Param,
+    registry::EndpointRegistry,
     resolve::ModuleSet,
+    shader::ShaderCache,
     size::SizeSpec,
     text::TextDoc,
     validate,
@@ -32,7 +35,7 @@ pub(super) struct Context<'a> {
 }
 
 impl Context<'_> {
-    fn optional_param<T: Clone + DeserializeOwned>(
+    pub(super) fn optional_param<T: Clone + DeserializeOwned>(
         &self,
         param: Option<&Param<T>>,
         path: &str,
@@ -40,7 +43,7 @@ impl Context<'_> {
         resolve_optional_param(&self.args, &self.origin, param, path)
     }
 
-    fn param<T: Clone + DeserializeOwned>(
+    pub(super) fn param<T: Clone + DeserializeOwned>(
         &self,
         param: &Param<T>,
         path: &str,
@@ -57,12 +60,16 @@ impl Context<'_> {
     }
 }
 
-/// Cross-cutting expansion state threaded through the recursion: the include
-/// depth cap, the shared node budget, and the per-control validation visitor.
+/// Cross-cutting expansion state threaded through recursion, including the
+/// structural address used to preserve expanded include roots.
 pub(crate) struct Expander<'m, 'v> {
+    pub(super) interner: &'m mut Interner,
+    pub(super) address: Vec<usize>,
+    pub(super) includes: Vec<ExpandedInclude>,
     budget: &'m mut Budget,
+    pub(super) endpoints: &'m dyn EndpointRegistry,
+    pub(super) shaders: &'m mut ShaderCache,
     visitor: &'m mut ControlVisitor<'v>,
-    interner: &'m mut Interner,
     text: &'m TextDoc,
     in_popover: bool,
     max_depth: usize,
@@ -73,16 +80,22 @@ impl<'m, 'v> Expander<'m, 'v> {
         max_depth: usize,
         budget: &'m mut Budget,
         interner: &'m mut Interner,
+        endpoints: &'m dyn EndpointRegistry,
+        shaders: &'m mut ShaderCache,
         text: &'m TextDoc,
         visitor: &'m mut ControlVisitor<'v>,
     ) -> Self {
         Self {
             max_depth,
             budget,
+            endpoints,
+            shaders,
             interner,
             text,
             visitor,
             in_popover: false,
+            address: Vec::new(),
+            includes: Vec::new(),
         }
     }
 
@@ -97,6 +110,8 @@ impl<'m, 'v> Expander<'m, 'v> {
             origin: entry.clone(),
             rel: entry.0.clone(),
         })?;
+        self.address.clear();
+        self.includes.clear();
         let root = expand_at(set, entry, args.clone(), prefix.to_owned(), 0, self)?;
         let context = Context {
             set,
@@ -160,11 +175,12 @@ impl<'m, 'v> Expander<'m, 'v> {
             collapsed,
             root,
             chrome: doc.chrome,
+            includes: std::mem::take(&mut self.includes),
         })
     }
 }
 
-fn expand_at(
+pub(super) fn expand_at(
     set: &ModuleSet,
     uri: &SourceUri,
     args: BTreeMap<String, String>,
@@ -202,59 +218,6 @@ fn expand_at(
     walk(&context, &doc.root, depth, machine)
 }
 
-fn context_bar_spec(
-    context: &Context<'_>,
-    interner: &mut Interner,
-    scope_items: &[String],
-    scope: Option<&BindingRef>,
-    path: &str,
-) -> Result<ControlSpec, UiDocError> {
-    Ok(ControlSpec::ContextBar {
-        scope_items: intern_texts(context, interner, scope_items, path, &context.origin)?,
-        scope: intern_optional_binding(interner, scope, &context.origin)?,
-    })
-}
-
-struct StatusDotFields<'a> {
-    label: &'a str,
-    dot_size: Option<f32>,
-    tone: Tone,
-    active_tone: Option<Tone>,
-}
-
-fn status_dot_spec(
-    context: &Context<'_>,
-    machine: &mut Expander<'_, '_>,
-    fields: &StatusDotFields<'_>,
-    extra: &ExtraBindings,
-    path: &str,
-) -> Result<ControlSpec, UiDocError> {
-    Ok(ControlSpec::StatusDot {
-        label: intern_text(
-            context,
-            machine.interner,
-            fields.label,
-            path,
-            &context.origin,
-        )?,
-        dot_size: fields.dot_size,
-        tone: fields.tone,
-        active_tone: fields.active_tone,
-        active: optional_binding(context, machine, extra.active.as_ref())?,
-    })
-}
-
-fn title_bar_spec(
-    context: &Context<'_>,
-    machine: &mut Expander<'_, '_>,
-    label: &str,
-    path: &str,
-) -> Result<ControlSpec, UiDocError> {
-    Ok(ControlSpec::TitleBar {
-        label: intern_text(context, machine.interner, label, path, &context.origin)?,
-    })
-}
-
 fn child_path(prefix: &str, id: &NodeId) -> String {
     if prefix.is_empty() {
         id.0.clone()
@@ -289,10 +252,15 @@ fn finish_control(
         .write
         .map(|binding| context.substitute(binding, path))
         .transpose()?;
+    let columns: &[TableColumn] = match &spec {
+        ControlSpec::Table { columns, .. } => columns,
+        _ => &[],
+    };
     (machine.visitor)(
         ControlSite {
             path,
             control,
+            columns,
             read: read.as_ref(),
             write: write.as_ref(),
             columns_state: extra.columns_state,
@@ -343,258 +311,6 @@ fn expand_control(
     )
 }
 
-/// A container node has no spec of its own; the caller keeps walking it.
-fn control_spec(
-    context: &Context<'_>,
-    control: &ControlNode,
-    extra: &ExtraBindings,
-    path: &str,
-    machine: &mut Expander<'_, '_>,
-) -> Result<Option<ControlSpec>, UiDocError> {
-    let spec = match control {
-        ControlNode::Glyph {
-            icon,
-            active_icon,
-            style,
-            color,
-            active_color,
-            ..
-        } => ControlSpec::Glyph {
-            icon: context.param(icon, path)?,
-            active_icon: context.optional_param(active_icon.as_ref(), path)?,
-            style: *style,
-            color: context.optional_param(color.as_ref(), path)?,
-            active_color: context.optional_param(active_color.as_ref(), path)?,
-            active: optional_binding(context, machine, extra.active.as_ref())?,
-        },
-        ControlNode::TitleBar { label, .. } => title_bar_spec(context, machine, label, path)?,
-        ControlNode::Text {
-            style,
-            label,
-            align,
-            color,
-            active_color,
-            ..
-        } => ControlSpec::Text {
-            style: *style,
-            label: optional_text(context, machine, label.as_deref(), path)?,
-            color: *color,
-            active_color: *active_color,
-            active: optional_binding(context, machine, extra.active.as_ref())?,
-            align: *align,
-        },
-        ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-            icon: context.param(icon, path)?,
-        },
-        ControlNode::TabLarge { label, .. } => ControlSpec::TabLarge {
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-        },
-        ControlNode::Button {
-            label,
-            icon,
-            active_label,
-            style,
-            frame,
-            ..
-        } => ControlSpec::Button {
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-            icon: context.optional_param(icon.as_ref(), path)?,
-            active_label: optional_text(context, machine, active_label.as_deref(), path)?,
-            style: *style,
-            frame: *frame,
-        },
-        ControlNode::Bpm { placeholder, .. } => ControlSpec::Bpm {
-            placeholder: optional_text(context, machine, placeholder.as_deref(), path)?,
-        },
-        ControlNode::Fader { style, label, .. } => ControlSpec::Fader {
-            style: *style,
-            label: optional_text(context, machine, label.as_deref(), path)?,
-        },
-        ControlNode::Wave { style, badge, .. } => wave_spec(
-            context,
-            machine,
-            *style,
-            badge.as_deref(),
-            extra.zoom.as_ref(),
-            path,
-        )?,
-        ControlNode::TrackList { columns, .. } => {
-            track_list_spec(context, machine, columns, extra)?
-        }
-        ControlNode::Tree { .. } => ControlSpec::Tree {
-            query: optional_binding(context, machine, extra.query.as_ref())?,
-        },
-        ControlNode::ContextBar { scope_items, .. } => context_bar_spec(
-            context,
-            machine.interner,
-            scope_items,
-            extra.scope.as_ref(),
-            path,
-        )?,
-        ControlNode::Segmented { items, .. } => ControlSpec::Segmented {
-            items: intern_texts(context, machine.interner, items, path, &context.origin)?,
-        },
-        ControlNode::Select { label, .. } => ControlSpec::Select {
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-        },
-        ControlNode::StatusDot {
-            label,
-            dot_size,
-            tone,
-            active_tone,
-            ..
-        } => status_dot_spec(
-            context,
-            machine,
-            &StatusDotFields {
-                label,
-                dot_size: *dot_size,
-                tone: *tone,
-                active_tone: *active_tone,
-            },
-            extra,
-            path,
-        )?,
-        ControlNode::Swatch { role, label, .. } => ControlSpec::Swatch {
-            role: *role,
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-        },
-        ControlNode::Cell {
-            label, highlighted, ..
-        } => ControlSpec::Cell {
-            label: optional_text(context, machine, label.as_deref(), path)?,
-            highlighted: *highlighted,
-        },
-        ControlNode::Readout {
-            label,
-            tone,
-            framed,
-            ..
-        } => ControlSpec::Readout {
-            label: optional_text(context, machine, label.as_deref(), path)?,
-            tone: *tone,
-            framed: *framed,
-        },
-        ControlNode::Chip { label, style, .. } => ControlSpec::Chip {
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-            style: *style,
-        },
-        ControlNode::Knob { label, .. } => ControlSpec::Knob {
-            label: optional_text(context, machine, label.as_deref(), path)?,
-        },
-        _ => return Ok(fixed_control_spec(control)),
-    };
-    Ok(Some(spec))
-}
-
-/// Specs for controls that need no context; the match stays exhaustive so a new
-/// `ControlNode` has to be classified here rather than falling through silently.
-fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
-    match control {
-        ControlNode::DeckSummary { style, .. } => Some(ControlSpec::DeckSummary { style: *style }),
-        ControlNode::Brand { .. } => Some(ControlSpec::Brand),
-        ControlNode::Spacer { .. } => Some(ControlSpec::Spacer),
-        ControlNode::Divider { .. } => Some(ControlSpec::Divider),
-        ControlNode::PresetSelector { .. } => Some(ControlSpec::PresetSelector),
-        ControlNode::SettingsButton { .. } => Some(ControlSpec::SettingsButton),
-        ControlNode::WindowDrag { .. } => Some(ControlSpec::WindowDrag),
-        ControlNode::WindowControls { style, .. } => {
-            Some(ControlSpec::WindowControls { style: *style })
-        }
-        ControlNode::Time { .. } => Some(ControlSpec::Time),
-        ControlNode::Scalar { format, framed, .. } => Some(ControlSpec::Scalar {
-            format: *format,
-            framed: *framed,
-        }),
-        ControlNode::Crossfader { ticks, .. } => Some(ControlSpec::Crossfader { ticks: *ticks }),
-        ControlNode::Vis { .. } => Some(ControlSpec::Vis),
-        ControlNode::PortalMap { .. } => Some(ControlSpec::PortalMap),
-        ControlNode::Range { .. } => Some(ControlSpec::Range),
-        ControlNode::Toggle { .. } => Some(ControlSpec::Toggle),
-        ControlNode::Checkbox { .. } => Some(ControlSpec::Checkbox),
-        ControlNode::Meter { .. } => Some(ControlSpec::Meter),
-        ControlNode::VuStereo { .. } => Some(ControlSpec::VuStereo),
-        ControlNode::VuVertical { ticks, .. } => Some(ControlSpec::VuVertical { ticks: *ticks }),
-        ControlNode::Row { .. }
-        | ControlNode::Column { .. }
-        | ControlNode::Scroll { .. }
-        | ControlNode::Include { .. }
-        | ControlNode::Optional { .. }
-        | ControlNode::Popover { .. }
-        | ControlNode::Pressable { .. }
-        | ControlNode::Slot { .. }
-        | ControlNode::Glyph { .. }
-        | ControlNode::TitleBar { .. }
-        | ControlNode::Text { .. }
-        | ControlNode::NavItem { .. }
-        | ControlNode::TabLarge { .. }
-        | ControlNode::Button { .. }
-        | ControlNode::Bpm { .. }
-        | ControlNode::Fader { .. }
-        | ControlNode::Wave { .. }
-        | ControlNode::TrackList { .. }
-        | ControlNode::Tree { .. }
-        | ControlNode::ContextBar { .. }
-        | ControlNode::Segmented { .. }
-        | ControlNode::Select { .. }
-        | ControlNode::StatusDot { .. }
-        | ControlNode::Swatch { .. }
-        | ControlNode::Cell { .. }
-        | ControlNode::Readout { .. }
-        | ControlNode::Chip { .. }
-        | ControlNode::Knob { .. } => None,
-    }
-}
-
-fn optional_text(
-    context: &Context<'_>,
-    machine: &mut Expander<'_, '_>,
-    label: Option<&str>,
-    path: &str,
-) -> Result<Option<InternId>, UiDocError> {
-    intern_optional_text(context, machine.interner, label, path, &context.origin)
-}
-
-fn optional_binding(
-    context: &Context<'_>,
-    machine: &mut Expander<'_, '_>,
-    binding: Option<&BindingRef>,
-) -> Result<Option<Binding>, UiDocError> {
-    intern_optional_binding(machine.interner, binding, &context.origin)
-}
-
-fn wave_spec(
-    context: &Context<'_>,
-    machine: &mut Expander<'_, '_>,
-    style: WaveStyle,
-    badge: Option<&str>,
-    zoom: Option<&BindingRef>,
-    path: &str,
-) -> Result<ControlSpec, UiDocError> {
-    Ok(ControlSpec::Wave {
-        style,
-        badge: intern_optional_text(context, machine.interner, badge, path, &context.origin)?,
-        zoom: intern_optional_binding(machine.interner, zoom, &context.origin)?,
-    })
-}
-
-fn track_list_spec(
-    context: &Context<'_>,
-    machine: &mut Expander<'_, '_>,
-    columns: &[TrackColumn],
-    extra: &ExtraBindings,
-) -> Result<ControlSpec, UiDocError> {
-    Ok(ControlSpec::TrackList {
-        columns: columns.to_vec(),
-        columns_state: intern_optional_binding(
-            machine.interner,
-            extra.columns_state.as_ref(),
-            &context.origin,
-        )?,
-    })
-}
-
 fn expand_optional(
     context: &Context<'_>,
     node: &ControlNode,
@@ -614,6 +330,7 @@ fn expand_optional(
             control: node,
             read: Some(&hidden),
             write: None,
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,
@@ -627,7 +344,7 @@ fn expand_optional(
             path: machine.interner.intern(&path, &context.origin)?,
             hidden: intern_binding(machine.interner, &hidden, &context.origin)?,
         },
-        child: Box::new(walk(context, child, depth, machine)?),
+        child: Box::new(walk_child(context, child, 0, depth, machine)?),
     })
 }
 
@@ -657,6 +374,7 @@ fn expand_popover(
             control: node,
             read: Some(&open),
             write: None,
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,
@@ -665,9 +383,9 @@ fn expand_popover(
         },
         &context.origin,
     )?;
-    let anchor = walk(context, anchor, depth, machine)?;
+    let anchor = walk_child(context, anchor, 0, depth, machine)?;
     machine.in_popover = true;
-    let content = walk(context, content, depth, machine);
+    let content = walk_child(context, content, 1, depth, machine);
     machine.in_popover = false;
     Ok(ExpandedNode::Popover {
         at,
@@ -697,6 +415,7 @@ fn expand_pressable(
             control: node,
             read: None,
             write: Some(&press),
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,
@@ -708,20 +427,89 @@ fn expand_pressable(
     Ok(ExpandedNode::Pressable {
         path: machine.interner.intern(&path, &context.origin)?,
         press: intern_binding(machine.interner, &press, &context.origin)?,
-        child: Box::new(walk(context, child, depth, machine)?),
+        child: Box::new(walk_child(context, child, 0, depth, machine)?),
     })
 }
 
-fn walk_children(
+/// Where an object starts, where it ends, and what carries it between them.
+#[derive(Clone, Copy)]
+struct Track<'a> {
+    pose: &'a Pose,
+    to: Option<&'a Pose>,
+    phase: Option<&'a BindingRef>,
+    motion: Option<&'a Motion<BindingRef>>,
+}
+
+/// The pose survives expansion rather than being folded into the control, so
+/// the render pass can move it between frames from whatever drives it.
+fn expand_object(
     context: &Context<'_>,
+    node: &ControlNode,
+    id: &NodeId,
+    track: Track<'_>,
+    child: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    let path = child_path(&context.prefix, id);
+    // One endpoint drives an object however it was written: a phase hands the
+    // scalar over, a motion hands over the seconds one is computed from. An
+    // object declaring both is refused before it reaches here.
+    let driver = match (track.phase, track.motion) {
+        (Some(phase), None) => Some(phase),
+        (None, Some(motion)) => Some(&motion.clock),
+        (None, None) | (Some(_), Some(_)) => None,
+    };
+    let driver = driver
+        .map(|binding| context.substitute(binding, &path))
+        .transpose()?;
+    (machine.visitor)(
+        ControlSite {
+            path: &path,
+            control: node,
+            read: driver.as_ref(),
+            write: None,
+            columns: &[],
+            columns_state: None,
+            query: None,
+            scope: None,
+            zoom: None,
+            active: None,
+        },
+        &context.origin,
+    )?;
+    let driver = driver
+        .as_ref()
+        .map(|binding| intern_binding(machine.interner, binding, &context.origin))
+        .transpose()?;
+    let (phase, motion) = match track.motion {
+        Some(motion) => (None, driver.map(|clock| motion.with_clock(clock))),
+        None => (driver, None),
+    };
+    Ok(ExpandedNode::Object {
+        pose: *track.pose,
+        to: track.to.copied(),
+        phase,
+        motion,
+        child: Box::new(walk_child(context, child, 0, depth, machine)?),
+    })
+}
+
+fn expand_stage(
+    context: &Context<'_>,
+    id: &NodeId,
+    size: Option<SizeSpec>,
     children: &[ControlNode],
     depth: usize,
     machine: &mut Expander<'_, '_>,
-) -> Result<Vec<ExpandedNode>, UiDocError> {
-    children
-        .iter()
-        .map(|child| walk(context, child, depth, machine))
-        .collect()
+) -> Result<ExpandedNode, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    Ok(ExpandedNode::Stage {
+        size,
+        id: machine.interner.intern(&id.0, &context.origin)?,
+        children: walk_children(context, children, depth, machine)?,
+    })
 }
 
 fn expand_slot(
@@ -738,25 +526,6 @@ fn expand_slot(
         id: machine.interner.intern(&id.0, &context.origin)?,
         children: walk_children(context, default, depth, machine)?,
     })
-}
-
-fn expand_include(
-    context: &Context<'_>,
-    id: &NodeId,
-    source: &str,
-    with: &BTreeMap<String, String>,
-    depth: usize,
-    machine: &mut Expander<'_, '_>,
-) -> Result<ExpandedNode, UiDocError> {
-    let path = child_path(&context.prefix, id);
-    let args = substitute_map(&context.args, &context.origin, with, &path)?;
-    let target = crate::source::join_rel(crate::source::base_dir(Some(&context.origin)), source)
-        .map(SourceUri)
-        .ok_or_else(|| UiDocError::RootEscape {
-            origin: context.origin.clone(),
-            rel: source.to_owned(),
-        })?;
-    expand_at(context.set, &target, args, path, depth + 1, machine)
 }
 
 fn container_bindings(
@@ -785,6 +554,7 @@ fn container_bindings(
             control: node,
             read: None,
             write: write.as_ref(),
+            columns: &[],
             columns_state: None,
             query: None,
             scope: None,
@@ -815,51 +585,14 @@ fn intern_node_id(
         .transpose()
 }
 
-fn walk(
+pub(super) fn walk(
     context: &Context<'_>,
     node: &ControlNode,
     depth: usize,
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     match node {
-        ControlNode::Row {
-            id,
-            size,
-            gap,
-            pad,
-            pad_x,
-            pad_y,
-            frame,
-            background,
-            background_alpha,
-            active,
-            active_background,
-            frame_color,
-            active_frame_color,
-            write,
-            children,
-        } => {
-            machine.budget.charge(&context.origin)?;
-            let declared = (id.as_ref(), write.as_ref(), active.as_ref());
-            let (surface, active) = container_bindings(context, node, declared, machine)?;
-            Ok(ExpandedNode::Row {
-                active,
-                surface,
-                id: intern_node_id(id.as_ref(), context, machine)?,
-                size: *size,
-                gap: *gap,
-                pad: *pad,
-                pad_x: *pad_x,
-                pad_y: *pad_y,
-                frame: *frame,
-                background: *background,
-                background_alpha: *background_alpha,
-                active_background: *active_background,
-                frame_color: *frame_color,
-                active_frame_color: *active_frame_color,
-                children: walk_children(context, children, depth, machine)?,
-            })
-        }
+        row @ ControlNode::Row { .. } => expand_row(context, row, depth, machine),
         column @ ControlNode::Column { .. } => expand_column(context, column, depth, machine),
         ControlNode::Scroll { id, size, child } => {
             machine.budget.charge(&context.origin)?;
@@ -868,6 +601,9 @@ fn walk(
                 size: *size,
                 child: Box::new(walk(context, child, depth, machine)?),
             })
+        }
+        ControlNode::Stage { id, size, children } => {
+            expand_stage(context, id, *size, children, depth, machine)
         }
         ControlNode::Slot { id, size, default } => {
             expand_slot(context, id, *size, default, depth, machine)
@@ -897,6 +633,27 @@ fn walk(
         ControlNode::Pressable { id, press, child } => {
             expand_pressable(context, node, id, press, child, depth, machine)
         }
+        ControlNode::Object {
+            id,
+            transform,
+            to,
+            phase,
+            motion,
+            child,
+        } => expand_object(
+            context,
+            node,
+            id,
+            Track {
+                pose: transform,
+                to: to.as_ref(),
+                phase: phase.as_ref(),
+                motion: motion.as_ref(),
+            },
+            child,
+            depth,
+            machine,
+        ),
         ControlNode::Include { id, source, with } => {
             expand_include(context, id, source, with, depth, machine)
         }
@@ -922,9 +679,12 @@ fn walk(
         | ControlNode::Fader { id, adaptive, .. }
         | ControlNode::Wave { id, adaptive, .. }
         | ControlNode::Vis { id, adaptive, .. }
+        | ControlNode::Lottie { id, adaptive, .. }
+        | ControlNode::Sprite { id, adaptive, .. }
+        | ControlNode::Shader { id, adaptive, .. }
         | ControlNode::PortalMap { id, adaptive, .. }
         | ControlNode::Range { id, adaptive, .. }
-        | ControlNode::TrackList { id, adaptive, .. }
+        | ControlNode::Table { id, adaptive, .. }
         | ControlNode::Tree { id, adaptive, .. }
         | ControlNode::ContextBar { id, adaptive, .. }
         | ControlNode::Toggle { id, adaptive, .. }
@@ -949,6 +709,56 @@ fn walk(
             )
         }
     }
+}
+
+fn expand_row(
+    context: &Context<'_>,
+    node: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    let ControlNode::Row {
+        id,
+        size,
+        gap,
+        align,
+        pad,
+        pad_x,
+        pad_y,
+        frame,
+        background,
+        background_alpha,
+        active,
+        active_background,
+        frame_color,
+        active_frame_color,
+        write,
+        children,
+    } = node
+    else {
+        unreachable!("expand_row is called only for a row")
+    };
+    machine.budget.charge(&context.origin)?;
+    let declared = (id.as_ref(), write.as_ref(), active.as_ref());
+    let (surface, active) = container_bindings(context, node, declared, machine)?;
+    Ok(ExpandedNode::Row {
+        active,
+        surface,
+        id: intern_node_id(id.as_ref(), context, machine)?,
+        size: *size,
+        gap: *gap,
+        align: *align,
+        pad: *pad,
+        pad_x: *pad_x,
+        pad_y: *pad_y,
+        frame: *frame,
+        background: *background,
+        background_alpha: *background_alpha,
+        active_background: *active_background,
+        frame_color: *frame_color,
+        active_frame_color: *active_frame_color,
+        children: walk_children(context, children, depth, machine)?,
+    })
 }
 
 fn expand_column(
@@ -1005,10 +815,20 @@ mod tests {
     use crate::{
         builtin,
         expand::{Binding, BindingKind},
-        ids::{DocId, StrArena},
+        ids::{DocId, EndpointId, StrArena},
+        registry::{EndpointCategory, EndpointDesc},
         resolve::load_module_graph,
+        shader::ShaderCache,
         source::{Limits, MemResolver},
     };
+
+    struct EmptyRegistry;
+
+    impl EndpointRegistry for EmptyRegistry {
+        fn endpoint(&self, _category: EndpointCategory, _id: &EndpointId) -> Option<&EndpointDesc> {
+            None
+        }
+    }
 
     fn args(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -1065,11 +885,14 @@ mod tests {
     ) -> Result<(ExpandedNode, StrArena), UiDocError> {
         let mut budget = Budget::new(Limits::default().max_nodes);
         let mut interner = Interner::new(64 * 1024);
+        let mut shaders = ShaderCache::default();
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
         let module = Expander::new(
             Limits::default().max_depth,
             &mut budget,
             &mut interner,
+            &EmptyRegistry,
+            &mut shaders,
             text,
             &mut visitor,
         )
@@ -1084,11 +907,14 @@ mod tests {
     ) -> Result<(ExpandedNode, StrArena), UiDocError> {
         let mut budget = Budget::new(Limits::default().max_nodes);
         let mut interner = Interner::new(64 * 1024);
+        let mut shaders = ShaderCache::default();
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
         let module = Expander::new(
             max_depth,
             &mut budget,
             &mut interner,
+            &EmptyRegistry,
+            &mut shaders,
             builtin::text_doc(),
             &mut visitor,
         )
@@ -1128,6 +954,80 @@ mod tests {
                 root: Text(id: "leaf"))"#,
         );
         resolver
+    }
+
+    fn posed_fixture(inner: &str) -> MemResolver {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "posed.kmodule.ron",
+            &format!(
+                r#"(schema: "kithara.module", version: 1, id: "posed",
+                    root: Object(id: "outer", transform: (position: (10.0, 0.0)),
+                        child: {inner}))"#
+            ),
+        );
+        resolver
+    }
+
+    fn expand_posed(inner: &str) -> ExpandedNode {
+        let resolver = posed_fixture(inner);
+        let (uri, set) =
+            load_module_graph(&resolver, None, "posed.kmodule.ron", &Limits::default()).unwrap();
+        expand(&set, &uri, &BTreeMap::new()).unwrap().0
+    }
+
+    /// The pose survives expansion instead of being folded away, because a
+    /// `phase` endpoint can move it between one frame and the next and
+    /// expansion runs once.
+    #[kithara::test]
+    fn an_object_keeps_its_pose_through_expansion() {
+        let ExpandedNode::Object { pose, .. } = expand_posed(r#"Text(id: "leaf")"#) else {
+            panic!("the fixture root is one object");
+        };
+
+        assert_eq!(pose.position, (10.0, 0.0));
+    }
+
+    #[kithara::test]
+    fn an_object_with_no_track_carries_none() {
+        let ExpandedNode::Object { to, phase, .. } = expand_posed(r#"Text(id: "leaf")"#) else {
+            panic!("the fixture root is one object");
+        };
+
+        assert_eq!((to, phase), (None, None));
+    }
+
+    #[kithara::test]
+    fn objects_nest_the_way_the_document_wrote_them() {
+        let root = expand_posed(
+            r#"Object(id: "inner", transform: (position: (0.0, 4.0)), child: Text(id: "leaf"))"#,
+        );
+
+        let ExpandedNode::Object { child, .. } = root else {
+            panic!("the fixture root is one object");
+        };
+        assert!(matches!(*child, ExpandedNode::Object { .. }));
+    }
+
+    #[kithara::test]
+    fn an_object_that_travels_keeps_both_ends_of_its_track() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "track.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "track",
+                root: Object(id: "spin", to: (rotation: 360.0),
+                    phase: Model(id: "gallery.spin"), child: Text(id: "leaf")))"#,
+        );
+        let (uri, set) =
+            load_module_graph(&resolver, None, "track.kmodule.ron", &Limits::default()).unwrap();
+
+        let (root, _) = expand(&set, &uri, &BTreeMap::new()).unwrap();
+
+        let ExpandedNode::Object { to, phase, .. } = root else {
+            panic!("the fixture root is one object");
+        };
+        assert_eq!(to.map(|to| to.rotation), Some(360.0));
+        assert!(phase.is_some());
     }
 
     #[kithara::test]
@@ -1207,12 +1107,15 @@ mod tests {
         let limits = Limits::default();
         let mut budget = Budget::new(limits.max_nodes);
         let mut interner = Interner::new(64 * 1024);
+        let mut shaders = ShaderCache::default();
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
 
         let error = Expander::new(
             limits.max_depth,
             &mut budget,
             &mut interner,
+            &EmptyRegistry,
+            &mut shaders,
             builtin::text_doc(),
             &mut visitor,
         )
@@ -1402,12 +1305,15 @@ mod tests {
         let text = catalog(&[("menu.modules", "Modules")]);
         let mut budget = Budget::new(Limits::default().max_nodes);
         let mut interner = Interner::new(64 * 1024);
+        let mut shaders = ShaderCache::default();
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
 
         let module = Expander::new(
             Limits::default().max_depth,
             &mut budget,
             &mut interner,
+            &EmptyRegistry,
+            &mut shaders,
             &text,
             &mut visitor,
         )

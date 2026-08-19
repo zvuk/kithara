@@ -13,26 +13,72 @@ categories = ["gui", "config"]
 ignored = ["kithara-workspace-hack"]
 
 [features]
-default = []
-render = ["dep:iced", "dep:lucide-icons", "dep:num-traits", "iced/advanced"]
+default = ["iced"]
 # Tests that need a graphics device. Off by default: a machine without one
 # would fail them for having no hardware rather than for a defect.
-gpu = ["render", "dep:pollster"]
+gpu = ["iced", "dep:pollster"]
+masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "vello"]
+perf = ["dep:hotpath", "hotpath/hotpath"]
+# Everything that draws. Artwork reading is part of it rather than an opt-in:
+# which controls a document may name is a contract of the toolkit, not of the
+# host's feature set, so a build that draws at all draws every control.
+render = [
+    "dep:kithara-bufpool",
+    "dep:kithara-platform",
+    "dep:lucide-icons",
+    "dep:naga",
+    "dep:num-traits",
+    "dep:parley",
+    "dep:png",
+    "dep:skrifa",
+    "dep:tracing",
+    "dep:unicode-segmentation",
+    "dep:velato",
+]
+iced = ["render", "dep:iced", "iced/advanced"]
+vello = [
+    "render",
+    "dep:kithara-platform",
+    "dep:lucide-icons",
+    "dep:num-traits",
+    "dep:parley",
+    "dep:tracing",
+    "dep:vello",
+]
 
 [dependencies]
+kithara-bufpool = { workspace = true, optional = true }
+kithara-platform = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
+futures-lite = { workspace = true, optional = true }
 iced = { workspace = true, optional = true }
+kurbo = { workspace = true }
 lucide-icons = { workspace = true, optional = true }
+masonry = { workspace = true, optional = true }
+naga = { workspace = true, optional = true }
 num-traits = { workspace = true, optional = true }
+parley = { workspace = true, optional = true }
+png = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 ron = { workspace = true }
+roxmltree = { workspace = true }
 serde = { workspace = true }
+skrifa = { workspace = true, optional = true }
 thiserror = { workspace = true }
+tracing = { workspace = true, optional = true }
+unicode-segmentation = { workspace = true, optional = true }
+velato = { workspace = true, optional = true }
+vello = { workspace = true, optional = true }
+winit = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
+hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-platform = { path = "../kithara-platform" }
@@ -43,6 +89,12 @@ kithara-test-utils = { path = "../kithara-test-utils", features = [
 ] }
 
 criterion = { workspace = true }
+futures-lite = { workspace = true }
+iced_renderer = { workspace = true }
+iced_runtime = { workspace = true }
+iced_tiny_skia = { workspace = true }
+iced_wgpu = { workspace = true }
+png = { workspace = true }
 ron = { workspace = true }
 
 [lints]
@@ -50,9 +102,25 @@ workspace = true
 
 [[example]]
 name = "gallery"
-required-features = ["render"]
+required-features = ["iced"]
+test = true
+
+[[example]]
+name = "masonry_host"
+required-features = ["masonry"]
+test = true
+
+[[test]]
+name = "frame_perf"
+path = "tests/frame_perf.rs"
+required-features = ["perf", "iced", "masonry"]
+
+[[test]]
+name = "page_perf"
+path = "tests/page_perf.rs"
+required-features = ["perf", "iced", "masonry"]
 
 [[bench]]
 name = "ui"
 harness = false
-required-features = ["render"]
+required-features = ["iced"]

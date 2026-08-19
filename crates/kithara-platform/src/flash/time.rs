@@ -7,6 +7,7 @@ use pin_project_lite::pin_project;
 
 pub use crate::{
     backend::time::{Duration, SystemTime, TimeoutError},
+    common::time::WallInstant,
     flash::Instant,
 };
 

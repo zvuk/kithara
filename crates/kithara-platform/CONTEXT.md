@@ -99,6 +99,10 @@ feature.
 `flash` replaces the wall clock with a process-global virtual timeline so warm-cache offline
 playback tests run at CPU speed. Off the feature every flash macro is an identity no-op.
 
+`time::Instant` follows that virtual timeline. `time::WallInstant` is the explicit real monotonic
+clock for external host APIs such as a window event loop whose deadline type cannot be virtual;
+application timers must continue to use `Instant`.
+
 ### Annotation model (REAL by default)
 
 Flash is opt-in per region, not a global mode flip. Two flags of the per-thread `Mode` (the

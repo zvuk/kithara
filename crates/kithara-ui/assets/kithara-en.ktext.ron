@@ -36,6 +36,7 @@
         "track_list.column.energy": "ENERGY",
         "track_list.column.transition": "TRANSITION",
         "track_list.footer_tracks": "TRACKS",
+        "table.footer_rows": "ROWS",
         "tree.search_placeholder": "Search Zvuk: track, artist, release...",
         "crossfader.left_label": "A",
         "crossfader.center_label": "XFADE",

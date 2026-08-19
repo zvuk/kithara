@@ -13,6 +13,7 @@
                 label: "KITHARA UI GALLERY",
                 size: (w: Fill, h: Fixed(26.0)),
             ),
+            WindowDrag(id: "drag-strip"),
             WindowControls(
                 id: "controls",
                 style: Standard,

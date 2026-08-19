@@ -508,13 +508,15 @@ fn classify(pkg: &Package, cfg: &DeadExportsThreshold) -> Role {
     Role::Prod
 }
 
+/// Examples are deliberately absent: an example is shipped code that
+/// demonstrates a public API, it is built by `cargo --all-targets`, and
+/// `platform_layer_hygiene` already treats the same files as production.
+/// Counting an example's references as test-only makes an export that only an
+/// example drives look dead, which is the opposite of what this check is for.
 fn target_is_testish(t: &Target) -> bool {
-    t.kind.iter().any(|k| {
-        matches!(
-            k,
-            TargetKind::Test | TargetKind::Bench | TargetKind::Example
-        )
-    })
+    t.kind
+        .iter()
+        .any(|k| matches!(k, TargetKind::Test | TargetKind::Bench))
 }
 
 /// Lib/bin targets before test/bench so a file shared by both is classified as

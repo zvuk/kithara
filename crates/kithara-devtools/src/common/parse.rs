@@ -7,7 +7,11 @@ use syn::{
     visit::{self, Visit},
 };
 
-/// Counts of items in a parsed `.rs` file.
+use crate::common::exclude::{attrs_have_cfg_test, item_attrs};
+
+/// Counts of items in a parsed `.rs` file, excluding anything predicated on
+/// `#[cfg(test)]`. Test code is not production surface, and the lint namespaces
+/// that consume these counts measure production debt only.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ItemStats {
     pub fns: usize,
@@ -519,12 +523,17 @@ pub fn pub_methods(im: &ItemImpl) -> impl Iterator<Item = &ImplItemFn> {
 
 fn walk_items(items: &[Item], s: &mut ItemStats) {
     for item in items {
+        if attrs_have_cfg_test(item_attrs(item)) {
+            continue;
+        }
         match item {
             Item::Struct(_) | Item::Enum(_) | Item::Trait(_) | Item::Type(_) => s.types += 1,
             Item::Fn(_) => s.fns += 1,
             Item::Impl(im) => {
                 for it in &im.items {
-                    if let ImplItem::Fn(_) = it {
+                    if let ImplItem::Fn(f) = it
+                        && !attrs_have_cfg_test(&f.attrs)
+                    {
                         s.fns += 1;
                     }
                 }
@@ -536,5 +545,46 @@ fn walk_items(items: &[Item], s: &mut ItemStats) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::count_items;
+
+    fn stats(source: &str) -> (usize, usize) {
+        let file = syn::parse_file(source).expect("fixture parses");
+        let s = count_items(&file);
+        (s.fns, s.types)
+    }
+
+    #[test]
+    fn test_items_do_not_count_towards_production_density() {
+        let source = "\
+struct Real;
+impl Real {
+    fn one(&self) {}
+    #[cfg(test)]
+    fn only_under_test(&self) {}
+}
+#[cfg(test)]
+mod tests {
+    struct Fixture;
+    fn helper() {}
+    #[test]
+    fn a_case() {}
+}
+";
+        assert_eq!(stats(source), (1, 1));
+    }
+
+    #[test]
+    fn cfg_test_nested_in_any_is_still_test_code() {
+        let source = "\
+#[cfg(any(test, feature = \"probe\"))]
+fn under_either(&self) {}
+fn always(&self) {}
+";
+        assert_eq!(stats(source), (1, 0));
     }
 }

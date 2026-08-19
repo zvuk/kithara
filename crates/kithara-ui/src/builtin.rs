@@ -12,6 +12,9 @@ use crate::{
 pub const MICRO_PRESET: &str = "micro.klayout.ron";
 pub const PLAYER_PRESET: &str = "player.klayout.ron";
 pub const DARK_SKIN: &str = include_str!("../assets/kithara-dark.kskin.ron");
+/// Eight frames of a growing arc, in one row, for the sprite page and its
+/// cross-host proof.
+pub const SPINNER_SHEET: &[u8] = include_bytes!("../assets/sprites/spinner.png");
 pub const TEXT_EN: &str = include_str!("../assets/kithara-en.ktext.ron");
 
 #[must_use]

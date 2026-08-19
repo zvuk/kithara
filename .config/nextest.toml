@@ -32,12 +32,18 @@ command = 'cargo run -q -p kithara-integration-tests --bin cold-fixture-cache'
 # Returning a target to the product suite is one edit: drop its term.
 # `.config/xtask.toml` `[test.lanes.fixtures]` and `[test.lanes.harness]` run
 # these under `profile.support`, which opts back in.
+#
+# The last two terms are the UI, which owns a graphics-backed pipeline of its
+# own: `[test.lanes.ui]` opts out of this filter with `--ignore-default-filter`
+# and runs exactly that set on the GPU runner.
 [profile.default]
 default-filter = """
 not (
     binary_id(=kithara-platform::flash_attr)
     + binary_id(=kithara-platform::flash_spawn)
     + binary_id(=kithara-integration-tests)
+    + package(kithara-ui)
+    + (package(kithara-app) & test(/^gui::/))
 )
 """
 fail-fast = false

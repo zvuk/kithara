@@ -1,0 +1,10 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "retained-host",
+    root: Module(
+        instance: "mixer",
+        source: "mixer.kmodule.ron",
+        size: (w: Fixed(224.0), h: Fixed(420.0)),
+    ),
+)

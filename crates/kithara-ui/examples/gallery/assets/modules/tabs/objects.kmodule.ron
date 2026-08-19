@@ -1,0 +1,129 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-objects-tab",
+    root: Column(
+        gap: Some(16.0),
+        pad: Some(22.0),
+        children: [
+            Text(id: "title", style: Section, label: "OBJECTS", size: (w: Fill, h: Fixed(22.0))),
+            Text(
+                id: "still-note",
+                style: Body,
+                color: TextDim,
+                label: "AN OBJECT OFFSETS WHAT ITS CHILD DRAWS. THE BOX AND THE POINTER STAY PUT.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Row(
+                id: "still",
+                gap: Some(24.0),
+                size: (w: Fill, h: Fixed(72.0)),
+                children: [
+                    Glyph(id: "plain", icon: Gear, size: (w: Fixed(72.0), h: Fixed(72.0))),
+                    Object(
+                        id: "turned",
+                        transform: (anchor: (36.0, 36.0), rotation: 30.0),
+                        child: Glyph(id: "gear", icon: Gear, size: (w: Fixed(72.0), h: Fixed(72.0))),
+                    ),
+                    Object(
+                        id: "shrunk",
+                        transform: (anchor: (36.0, 36.0), scale: (0.6, 0.6)),
+                        child: Glyph(id: "small", icon: Gear, size: (w: Fixed(72.0), h: Fixed(72.0))),
+                    ),
+                    Object(
+                        id: "nudged",
+                        transform: (position: (0.0, 12.0)),
+                        child: Glyph(id: "low", icon: Gear, size: (w: Fixed(72.0), h: Fixed(72.0))),
+                    ),
+                    Object(
+                        id: "nested",
+                        transform: (anchor: (36.0, 36.0), rotation: 45.0),
+                        child: Object(
+                            id: "inner",
+                            transform: (anchor: (36.0, 36.0), scale: (0.75, 0.75)),
+                            child: Glyph(id: "both", icon: Gear, size: (w: Fixed(72.0), h: Fixed(72.0))),
+                        ),
+                    ),
+                    Slot(id: "still-space", size: (w: Fill, h: Fill)),
+                ],
+            ),
+            Text(id: "track-title", style: Section, label: "TRACKS", size: (w: Fill, h: Fixed(22.0))),
+            Text(
+                id: "track-note",
+                style: Body,
+                color: TextDim,
+                label: "ONE SCALAR ENDPOINT CARRIES EACH OBJECT FROM ITS POSE TO THE ONE IT TRAVELS TO.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Row(
+                id: "tracks",
+                gap: Some(24.0),
+                size: (w: Fill, h: Fixed(96.0)),
+                children: [
+                    Object(
+                        id: "spin",
+                        transform: (anchor: (48.0, 48.0)),
+                        to: (anchor: (48.0, 48.0), rotation: 360.0),
+                        phase: Model(id: "gallery.motion.phase"),
+                        child: Glyph(id: "spinner", icon: Gear, size: (w: Fixed(96.0), h: Fixed(96.0))),
+                    ),
+                    Object(
+                        id: "pulse",
+                        transform: (anchor: (48.0, 48.0), scale: (0.5, 0.5)),
+                        to: (anchor: (48.0, 48.0), scale: (1.0, 1.0)),
+                        phase: Model(id: "gallery.motion.phase"),
+                        child: Glyph(id: "pulser", icon: Disc, size: (w: Fixed(96.0), h: Fixed(96.0))),
+                    ),
+                    Object(
+                        id: "travel",
+                        to: (position: (168.0, 0.0)),
+                        phase: Model(id: "gallery.motion.phase"),
+                        child: Glyph(id: "traveller", icon: Play, size: (w: Fixed(96.0), h: Fixed(96.0))),
+                    ),
+                    Slot(id: "travel-space", size: (w: Fixed(168.0), h: Fill)),
+                    Object(
+                        id: "carried",
+                        to: (position: (0.0, 24.0), rotation: 180.0, anchor: (60.0, 24.0)),
+                        transform: (anchor: (60.0, 24.0)),
+                        phase: Model(id: "gallery.motion.phase"),
+                        child: Chip(id: "badge", label: "PHASE", size: (w: Fixed(120.0), h: Fixed(48.0))),
+                    ),
+                    Slot(id: "track-space", size: (w: Fill, h: Fill)),
+                ],
+            ),
+            Text(id: "stage-title", style: Section, label: "STAGE", size: (w: Fill, h: Fixed(22.0))),
+            Text(
+                id: "stage-note",
+                style: Body,
+                color: TextDim,
+                label: "A STAGE HANDS EVERY CHILD THE SAME BOX, IN DOCUMENT ORDER. AN OBJECT SAYS WHERE INSIDE IT EACH ONE LANDS.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Stage(
+                id: "scene",
+                size: (w: Fill, h: Fixed(108.0)),
+                children: [
+                    Glyph(id: "ground", icon: Disc, size: (w: Fixed(108.0), h: Fixed(108.0))),
+                    Object(
+                        id: "over",
+                        transform: (position: (72.0, 18.0)),
+                        child: Glyph(id: "mid", icon: Gear, size: (w: Fixed(72.0), h: Fixed(72.0))),
+                    ),
+                    Object(
+                        id: "above",
+                        transform: (position: (168.0, 30.0)),
+                        child: Chip(id: "top", label: "STAGE", size: (w: Fixed(120.0), h: Fixed(48.0))),
+                    ),
+                ],
+            ),
+            Text(
+                id: "limit",
+                style: Body,
+                color: TextDim,
+                label: "A TURN NEEDS ONE BOX, SO AN OBJECT THAT TURNS HOLDS ONE CONTROL. A MOVE APPLIES TO A WHOLE SUBTREE.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Slot(id: "space", size: (w: Fill, h: Fill)),
+        ],
+    ),
+)

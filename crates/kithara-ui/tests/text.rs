@@ -47,6 +47,7 @@ const BUILTIN_ENTRIES: &[(&str, &str)] = &[
     ("track_list.column.energy", "ENERGY"),
     ("track_list.column.transition", "TRANSITION"),
     ("track_list.footer_tracks", "TRACKS"),
+    ("table.footer_rows", "ROWS"),
     (
         "tree.search_placeholder",
         "Search Zvuk: track, artist, release...",

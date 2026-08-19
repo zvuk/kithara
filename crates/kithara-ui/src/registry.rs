@@ -13,7 +13,7 @@ pub enum ValueKind {
     Waveform,
     PortalMap,
     Range,
-    TrackList,
+    Table,
     Tree,
 }
 
@@ -51,4 +51,35 @@ impl EndpointDesc {
 
 pub trait EndpointRegistry {
     fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc>;
+}
+
+/// The endpoint a document binds to when it wants the host's own time.
+///
+/// The name and the declaration live beside the rest of the endpoint vocabulary
+/// rather than beside the host that answers them: a document is compiled, and
+/// its bindings validated, by builds that never draw anything.
+pub const SECONDS: &str = "ui.clock.seconds";
+
+/// What that endpoint answers with, declared once so a document may bind to it
+/// without every application having to register it.
+static SECONDS_DESC: EndpointDesc = EndpointDesc::new(ValueKind::Scalar);
+
+/// Declares the endpoints a host answers for itself, over whatever the
+/// application declares.
+pub struct BuiltinEndpoints<'a>(&'a dyn EndpointRegistry);
+
+impl<'a> BuiltinEndpoints<'a> {
+    #[must_use]
+    pub const fn new(app: &'a dyn EndpointRegistry) -> Self {
+        Self(app)
+    }
+}
+
+impl EndpointRegistry for BuiltinEndpoints<'_> {
+    fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
+        if category == EndpointCategory::Model && id.0 == SECONDS {
+            return Some(&SECONDS_DESC);
+        }
+        self.0.endpoint(category, id)
+    }
 }

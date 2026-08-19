@@ -2,11 +2,63 @@ use kithara_test_utils::kithara;
 use kithara_ui::{
     compile::{CompiledNode, CompiledUi},
     expand::{ControlSpec, ExpandedNode},
-    module::{TextAlign, TextStyle},
+    module::{ButtonStyle, IconName, TextAlign, TextStyle, WaveStyle},
 };
 
 use super::{cache::DeckLayout, compile::compile_ui};
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
+
+const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
+    ("deck-a/next", "activation"),
+    ("deck-a/play", "activation"),
+    ("deck-a/prev", "activation"),
+    ("deck-a/wave", "hero-wave"),
+    ("deck-a/zoom-in", "activation"),
+    ("deck-a/zoom-out", "activation"),
+    ("mixer/a/four-band/high-4", "knob"),
+    ("mixer/a/four-band/high-mid-4", "knob"),
+    ("mixer/a/four-band/low-4", "knob"),
+    ("mixer/a/four-band/low-mid-4", "knob"),
+    ("mixer/a/three-band/high-3", "knob"),
+    ("mixer/a/three-band/low-3", "knob"),
+    ("mixer/a/three-band/mid-3", "knob"),
+    ("mixer/a/volume", "vertical-vu"),
+    ("overview/a/wave", "wave"),
+];
+
+const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
+    ("deck-a/next", "activation"),
+    ("deck-a/play", "activation"),
+    ("deck-a/prev", "activation"),
+    ("deck-a/wave", "hero-wave"),
+    ("deck-a/zoom-in", "activation"),
+    ("deck-a/zoom-out", "activation"),
+    ("deck-b/next", "activation"),
+    ("deck-b/play", "activation"),
+    ("deck-b/prev", "activation"),
+    ("deck-b/wave", "hero-wave"),
+    ("deck-b/zoom-in", "activation"),
+    ("deck-b/zoom-out", "activation"),
+    ("mixer/a/four-band/high-4", "knob"),
+    ("mixer/a/four-band/high-mid-4", "knob"),
+    ("mixer/a/four-band/low-4", "knob"),
+    ("mixer/a/four-band/low-mid-4", "knob"),
+    ("mixer/a/three-band/high-3", "knob"),
+    ("mixer/a/three-band/low-3", "knob"),
+    ("mixer/a/three-band/mid-3", "knob"),
+    ("mixer/a/volume", "vertical-vu"),
+    ("mixer/b/four-band/high-4", "knob"),
+    ("mixer/b/four-band/high-mid-4", "knob"),
+    ("mixer/b/four-band/low-4", "knob"),
+    ("mixer/b/four-band/low-mid-4", "knob"),
+    ("mixer/b/three-band/high-3", "knob"),
+    ("mixer/b/three-band/low-3", "knob"),
+    ("mixer/b/three-band/mid-3", "knob"),
+    ("mixer/b/volume", "vertical-vu"),
+    ("mixer/xfade", "crossfader"),
+    ("overview/a/wave", "wave"),
+    ("overview/b/wave", "wave"),
+];
 
 fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
     fn walk(node: &ExpandedNode, visit: &mut impl FnMut(&ExpandedNode)) {
@@ -19,7 +71,9 @@ fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
                     walk(child, visit);
                 }
             }
-            ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+            ExpandedNode::Optional { child, .. }
+            | ExpandedNode::Pressable { child, .. }
+            | ExpandedNode::Scroll { child, .. } => {
                 walk(child, visit);
             }
             ExpandedNode::Popover {
@@ -105,23 +159,6 @@ fn surfaces(ui: &CompiledUi) -> Vec<(&str, &str)> {
     out
 }
 
-/// Labels the segmented control at `want` declares, in document order.
-fn segments<'a>(ui: &'a CompiledUi, want: &str) -> Vec<&'a str> {
-    let mut found = Vec::new();
-    each_node(ui, &mut |node| {
-        if let ExpandedNode::Control {
-            path,
-            spec: ControlSpec::Segmented { items },
-            ..
-        } = node
-            && ui.resolve(*path) == want
-        {
-            found = items.iter().map(|item| ui.resolve(*item)).collect();
-        }
-    });
-    found
-}
-
 /// Every module that takes drops, as `(instance, scoped binding keys)`.
 fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
     let mut out = Vec::new();
@@ -144,6 +181,48 @@ fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
         }
     }
     out
+}
+
+fn engine_descriptor_kind(spec: &ControlSpec) -> Option<&'static str> {
+    match spec {
+        ControlSpec::Button {
+            icon: Some(IconName::PlayReverse),
+            style,
+            ..
+        } if *style != ButtonStyle::MicroPrimary => None,
+        ControlSpec::Button { .. } | ControlSpec::Toggle | ControlSpec::Checkbox => {
+            Some("activation")
+        }
+        ControlSpec::Crossfader { .. } => Some("crossfader"),
+        ControlSpec::Knob { .. } => Some("knob"),
+        ControlSpec::VuStereo => Some("stereo-meter"),
+        ControlSpec::VuVertical { .. } => Some("vertical-vu"),
+        ControlSpec::Wave {
+            style: WaveStyle::Hero,
+            ..
+        } => Some("hero-wave"),
+        ControlSpec::Wave { .. } => Some("wave"),
+        _ => None,
+    }
+}
+
+fn hosted_engine_claims(ui: &CompiledUi) -> Vec<(&str, &'static str)> {
+    let mut claims = Vec::new();
+    each_node(ui, &mut |node| {
+        let ExpandedNode::Control { path, spec, .. } = node else {
+            return;
+        };
+        let path = ui.resolve(*path);
+        if (path.starts_with("deck-")
+            || path.starts_with("mixer/")
+            || path.starts_with("overview/"))
+            && let Some(kind) = engine_descriptor_kind(spec)
+        {
+            claims.push((path, kind));
+        }
+    });
+    claims.sort_unstable();
+    claims
 }
 
 #[kithara::test]
@@ -311,6 +390,23 @@ fn every_eq_bank_carries_its_pointer_menu() {
 }
 
 #[kithara::test]
+fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let expected = match layout {
+            DeckLayout::Single => SINGLE_HOSTED_CLAIMS.as_slice(),
+            DeckLayout::Dual => DUAL_HOSTED_CLAIMS.as_slice(),
+        };
+        assert_eq!(
+            hosted_engine_claims(&ui),
+            expected,
+            "{layout:?}: the engine-claimed descriptor inventory changed; unported controls, \
+             passive controls, and containers are intentionally absent"
+        );
+    }
+}
+
+#[kithara::test]
 fn eq_banks_stack_their_knobs_from_high_to_low() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let paths = control_paths(&ui);
@@ -387,7 +483,7 @@ fn tempo_and_volume_controls_bind_to_the_deck_they_address() {
 }
 
 #[kithara::test]
-fn the_deck_tempo_block_is_the_only_writer_of_the_deck_tempo() {
+fn the_hosted_deck_tempo_surface_remains_on_iced() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let mut writers: Vec<&str> = controls(&ui)
         .into_iter()
@@ -404,7 +500,7 @@ fn the_deck_tempo_block_is_the_only_writer_of_the_deck_tempo() {
         let key = format!("deck.tempo.rate@deck={letter}");
         assert!(
             surfaces.contains(&(path.as_str(), key.as_str())),
-            "the tempo block must catch the wheel for deck {letter}, got {surfaces:?}"
+            "hosted deck {letter} must keep its still-iced tempo wheel surface, got {surfaces:?}"
         );
     }
 }

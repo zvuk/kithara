@@ -8,9 +8,10 @@ Every string retained by the compiled tree is interned in one bounded `String` a
 `CompiledUi`. `UiConfig.max_arena_bytes` caps it; growth uses `try_reserve`, and either the cap or
 an allocation failure returns `UiDocError::ArenaFull`.
 
-- No kithara-bufpool here: budget-charging `ensure_len` needs `Default + Clone`, which `ExpandedNode`
-  cannot provide, and a pooled string buffer would make `CompiledUi` non-`Clone` while holding a
-  churn-pool slot for the preset lifetime.
+- The compiled string arena is not pooled: budget-charging `ensure_len` needs `Default + Clone`,
+  which `ExpandedNode` cannot provide. `CompiledUi` does carry the separately owned `DrawPools`
+  family configured by `UiConfig`; its short-lived command, path, and paint-text buffers are not
+  compiled document strings.
 - `InternId` is valid only within the `CompiledUi` that produced it; a recompile rebuilds the arena.
   Never persist one in application messages or state - host-facing paths stay owned `String`s.
 - `StrArena::resolve` is total: spans cover whole appended strings, so valid spans land on UTF-8
@@ -30,13 +31,16 @@ site for an invalid embedded document or colour.
 
 `SkinDoc` owns every configurable rendering metric, including the intrinsic control sizes the
 toolkit-independent compiler reads. With `render`, `Skin::resolve` converts the document to iced
-colours and keeps it behind `Skin::document()` for layout sizing. The platform-specific monospace
-family stays code-owned in `render/fonts.rs` - font availability, not skin design.
+colours and keeps it behind `Skin::document()` for layout sizing. Frequently read document sections,
+including `menu` and `pop`, also remain resolved fields on `Skin`. `Knob` painting is toolkit-neutral,
+but `atoms` remains render-gated because the knob consumes `render::Skin` and its interactive adapter
+is an iced canvas program. The platform-specific monospace family stays code-owned in
+`render/fonts.rs` - font availability, not skin design.
 
 `Skin::resolve` also copies every sub-skin (`button`, `cell`, ... one per widget family) onto `Skin`
 itself, so each field's value lives twice: once flat on `Skin` for zero-indirection hot-path render
 access (`skin.button()`), once nested inside the retained `document: SkinDoc` for round-trip (the
-raw doc a "reload"/"save skin" flow reads back). That is why `render/skin.rs` is listed in
+raw doc a "reload"/"save skin" flow reads back). That is why `render/skin/neutral.rs` is listed in
 `field_passthrough.exempt_files` in `.config/arch/thresholds.toml` - the check's "duplicates a field
 already reachable through `self.document`" is structurally correct but the duplication is the design,
 not an oversight; collapsing it back to `self.document().button` would put the doc's indirection back
@@ -75,8 +79,764 @@ hairline on chosen sides in a colour of its own; neither carries a shadow, so a 
 cast one. The pop-over needs both: `Anchored` draws its own background, frame, gold cap and shadow,
 and `SkinDoc.pop.frame` has radius `0.0`, so all three share one square outline.
 
-`SkinDoc` carries no words. The crossfader captions and the track list column and footer captions
-are catalog entries resolved onto `Skin` alone; see "Text Catalog Ownership" for where they come
+## Draw Ownership
+
+`SkinDoc` owns document-level draw roles and metrics. `draw` owns the toolkit-neutral native
+geometry primitives, retained commands, ordered `DrawList` value, builder, backend trait, and
+replay. A widget owns command order and local geometry. A backend owns conversion from `Geom` into
+its toolkit vocabulary, text submission, and encoding into its target. Geometry crosses the seam
+as arcs, circles, lines, rectangles, and uniform-radius rounded rectangles rather than
+pre-flattened paths, so every backend rasterises curves at its own device scale. A zero-radius
+rounded rectangle is canonicalised by the builder to the existing rectangle command; its retained
+list is therefore exactly the list callers produced before the rounded shape existed.
+
+The retained list is a cloneable, comparable value. Cross-backend identity is therefore asserted
+against the same list rather than promised by two call-through implementations. `UiConfig` is the
+only owner of draw-pool limits, and each `CompiledUi` carries the resulting shared `DrawPools` family
+for both hosts. `max_buffers` bounds the number retained by each command, path, and paint-text pool;
+zero means the smallest useful pool of one buffer. A returned buffer above its kind's capacity limit
+is dropped instead of retained. These are reusable-memory limits, not hostile-document ceilings: a
+live builder may grow past them, but the pool never truncates a command or changes a picture. A
+kithara-bufpool byte budget would not enforce that contract because `Pool::track_byte_delta` runs
+only inside `Pool::acquire`, never when a caller grows a vector with `push`.
+The shared control adapters in both hosts start their lists from that compiled owner, and every
+nested clip and authored outline inherits it through the parent builder. `PoolStats::alloc_misses`
+is the standing measure of reuse. The Studio parity capture draws the shipped single- and dual-deck
+documents twice, rejects a second-frame miss or rejected return, and writes each host's counters
+beside its screenshots as `draw-pools.txt`; those observed pages, rather than `Limits::max_nodes`,
+size the defaults.
+An iced geometry cache keeps an owned snapshot of its last list for equality instead of cloning
+the pool guards. The transient list therefore returns its buffers after the frame, while the
+snapshot remains a plain immutable value and cannot consume the next frame's reusable storage.
+
+An externally produced image crosses the draw seam as `ImageId` plus its logical destination
+rectangle. The producer owns its pixels or GPU texture, and each backend resolves that identity in
+its own resource registry; no wgpu, toolkit image handle, or CPU readback enters `DrawCmd`. Image
+support is a backend capability, so a list containing an image is refused whole until the backend
+has a registry that can resolve it. Nested `Clip` retains the image and its rectangle together,
+preserving list order and clipping without a separate native-effect overlay.
+
+A viewport is retained as `DrawCmd::Clip { region, list }`: the region and the nested `DrawList`
+travel as one scoped command. The nesting is required by iced, not a convenience chosen by the
+builder. `Frame::with_clip` is iced's only public clipping route and receives a closure that draws
+into a drafted frame; the lower-level draft and paste operations are private, so a neutral
+push/pop pair could not be replayed against that backend. `Backend::clip` therefore receives the
+region and borrowed nested list. The iced backend enters `Frame::with_clip` and recursively
+replays into the drafted frame, while Vello pushes a clip layer, recursively replays into the same
+scene, and pops the layer. The command tree is the clipping acceptance surface; tests assert the
+nested commands rather than backend pixels.
+
+`TickRail` paints through the builder, so the shared atom names no toolkit and `atoms::vu` draws
+entirely through one seam. The button is the production consumer that asked for the rounded
+rectangle: its fill and uniform-radius border stay one native shape in the retained list, iced
+replays it with `Path::rounded_rectangle`, and Vello replays it as `kurbo::RoundedRect`. The
+default fader also paints through the builder: two independently framed solid rail rectangles are
+followed by the rectangular handle, preserving iced slider command order and geometry. The Volume
+fader remains on its existing canvas painter; its engine-owned variant reuses that painter without
+the interactive program. The crossfader remains on its existing iced path in this slice; the new
+vocabulary does not by itself authorize that separate port.
+
+### What a backend must be able to draw
+
+Every backend states `const CAPS: Caps` once. `Needs::from(&DrawList)` reads what a list actually
+asks for, recursing into clips, and a backend that lacks any of it is given **none of the list**:
+`draw::replay` refuses and logs, and `backends::iced_canvas::replay_ordered` — the iced host's own
+door, which walks the list itself rather than going through `replay` — repeats that check. Refusing
+whole is the contract because painting the rest puts a picture on the screen that no list described:
+a clip-less backend would spill a clip's contents, and a gradient-less one would flatten a ramp to a
+colour appearing nowhere in the document. A backend that overstates `CAPS` therefore paints the
+wrong thing silently; the conformance tests in `backends::conformance` rasterise through the real
+renderers precisely because recorded commands cannot catch that.
+
+Today only one capability differs between hosts: iced 0.14 has no radial gradient at any layer, so
+`IcedBackend::CAPS` sets `radial_gradient: false` and a list holding `Paint::Radial` reaches the
+Vello host only. `style()` answers `None` for such a paint rather than substituting a colour.
+
+Stroke shape travels as `Pen { cap, join, width }`; `impl From<f32> for Pen` means a caller with a
+bare width keeps working, the way `impl From<Rgba> for Paint` does for fills.
+
+`backends::iced_canvas` owns iced translation, glyph-outline filling, and canvas calls.
+`backends::vello` owns Vello translation and scene encoding; the draw list needs no GPU dependency.
+Vello is held at 0.6 because masonry 0.4 hands a widget a `Scene` from that release, and `Scene`
+from a different Vello version is an unrelated type. The direct Vello dependency keeps its `wgpu`
+feature off because the backend only encodes commands. Enabling `masonry` still brings Vello's
+wgpu 26 renderer through Masonry while iced brings wgpu 27. Cargo keeps the two majors distinct;
+`deny.toml` reports multiple versions as a warning, so this coexistence is intentional.
+
+`lottie` reads an artwork once with velato and emits one of its frames into the same neutral
+`DrawList` every other control paints into, so an artwork reaches both hosts through the seam and
+needs no backend of its own. velato sits in `render` rather than behind a feature of its own,
+which costs the iced-only build Vello's encoder: which controls a document may name is a contract
+of the toolkit, not of the host's feature set, and a feature-gated variant would fork
+`ControlSpec`, `ControlNode`, both gesture censuses and the gallery's page list along a build
+flag. A document may name `Lottie` wherever it draws at all.
+
+`text::TextContext` is the canonical shaping owner. It owns Parley's font and layout contexts and
+registers the embedded Inter, JetBrains Mono, Space Grotesk, and Lucide faces. A context is a
+caller-owned value injected where shaping occurs; there is no process-global font context.
+
+### Host layers
+
+A `HostLayer<A>` is a host-owned output above the document: one window-space bound, one retained
+local `DrawList`, and an ordered set of window-space `LayerHit<A>` regions that pair a rectangle
+and cursor with a typed action. It is not a document node. It has no document path, never enters
+`CompiledNode`, and is neither described nor reconciled by the document engine. The host rebuilds
+it from current window state and replays its retained painting after the document. Window resize
+edges and the drag ghost use the root route. Title bars, window controls, and window-drag surfaces
+remain layout-bearing document leaves only so the solver can place them; their base leaves neither
+paint nor handle input. After layout, each exposes a pathless `HostLayer<WindowCommand>` from its
+solved window-space bounds through the same overlay adapter. Window-control gesture state belongs
+to that leaf host rather than the layer: a press arms and captures, release over the same button
+emits, and release elsewhere cancels.
+
+This is the M6a popup route generalised, not a second overlay mechanism. A picker still owns its
+document path and reconciled open/highlighted state, but its popup output is a `HostLayer<usize>`.
+Popup, document-leaf chrome, and the root window host replay layers through the same adapter, and
+picker targets are derived from the same `LayerHit` values that describe the popup. The path
+belongs to the picker that consumes the typed action; it is not smuggled into the layer.
+
+The outer host flattens and draws the document's complete nested overlay chain first, including an
+open picker, then paints the root resize and drag layers. Input takes the reverse priority: the root
+resize layer answers first, and only an ignored input reaches the popup or document underneath. A
+picker portal exposes its popup in the next nested overlay tier, so the popup paints above
+document-leaf chrome and gets the first opportunity to capture an overlapping input. A hosted
+picker routes that opportunity through the canonical `Host` engine; a leaf-owned picker consumes
+it locally. Neither route mirrors picker state. Within one host, layer ordering is paint order and
+arbitration walks layers and hit regions in reverse. The resize layer partitions the outer strip
+into four square corners and four non-overlapping sides. `Rect::contains` is half-open, so for a 4
+px west edge `x < 4` resizes while a press one logical pixel inside that boundary reaches the
+document control beneath it. The drag ghost owns no hit region, cursor, or event; pointer motion
+only requests the repaint that moves its retained drawing.
+
+`TextContext::shape` takes a whole `TextRoleSkin` rather than a face, a weight and a size, and that
+signature is the contract. `TextRoleSkin::spacing` is letter tracking, and a signature that took
+the pieces loose let a caller shape text and drop it: `render::typography::styled_text` did exactly
+that, because iced's `Text` has no letter spacing to hand it to, so every string rendered through
+iced ignored the tracking its skin declared — `brand` and `brand_small` at 0.3, `micro_label` and
+`titlebar_text` at 0.12, `vis.meta` at 0.1, `caption` and the swatch label at 0.08. Passing the
+role whole means the omission is not expressible. `color` rides along unread by shaping; that is
+the price of making the role the unit.
+
+Embedded coverage is narrower than the face count suggests: Inter and JetBrains Mono carry Latin,
+Cyrillic and Greek, while Space Grotesk is Latin-only. `kithara-dark.kskin.ron` spends the Display
+family on `track_title`, `title`, `deck_letter` and `brand`; a Cyrillic track title in a deck header
+therefore shaped to `.notdef` under the base while the iced host's own stack still fell back
+through cosmic-text, so the hole became user-visible exactly when the base took over all text.
+
+`TextResources::new` closes it for Cyrillic and Greek by naming Inter as the collection's fallback
+for those two scripts. Under AGENTS.md this is a legitimate fallback rather than a workaround: it
+is the Unicode fallback mechanism itself, a user-facing capability, not a branch papering over a
+broken state contract. A fallback key carries a script and a locale rather than a family, so the
+registration is collection-wide — Inter and JetBrains Mono carry both scripts themselves and never
+reach it, and only the Display family does. Greek is registered because Inter was measured to cover
+it rather than assumed to, and a test holds that measurement; a fallback that resolved to `.notdef`
+would be worse than none.
+
+`TextResources` takes an explicit font policy. Production `Skin::resolve` enables Fontique's system
+collection, while deterministic harnesses resolve a skin with the embedded-only policy. Both
+policies register the Cyrillic and Greek fallbacks above. The system feature is unconditional;
+targets without a Fontique platform backend receive its empty dummy collection and retain the
+embedded-only behaviour.
+
+What the production policy actually reaches is the machine's business, not this crate's, and it is
+not uniform. Measured on an Apple/CoreText host against 519 scanned families: Hebrew resolves to
+Lucida Grande, Arabic to Geeza Pro, Korean to Apple SD Gothic Neo, Thai to Thonburi, Devanagari to
+Kohinoor Devanagari — while **Han and Japanese resolve to nothing**. That last one is an upstream
+gap rather than a policy decision: `fontique-0.6.0/src/backend/coretext.rs` asks CoreText for a
+fallback font, gets `PingFang SC`, and then looks that family up in its own scanned name map, which
+does not contain PingFang; the lookup misses and `fallback()` returns `None`. So a CJK track title
+still shapes to `.notdef` on macOS.
+
+Selecting a face ourselves when Fontique declines would be exactly the fallback chain AGENTS.md
+forbids — the mechanism is Unicode's and upstream's, and a second private path over the top of it
+would hide the real defect. The tests therefore pin the contract rather than a script list: the
+harness policy reaches nothing outside the catalog, the production policy paints real glyphs for
+every script the machine can answer and leaves `.notdef` for the rest, and **at least one** script
+outside the catalog must resolve, so the system arm cannot quietly become dead code.
+
+Where that owner sits is transitional and is stated here so it does not become permanent by
+default. Each text-drawing widget still owns one `TextContext`, so a document holds as many Parley
+shaping scratch buffers and font collections as it has shaped widgets. Consolidating those
+contexts needs a document-scoped owner that does not exist yet. Font-derived draw resources no
+longer follow that per-widget lifetime: `TextResources` builds the ten skrifa outline collections
+and scans the system collection once, then lends those resources to contexts and the iced backend.
+`TextContext::from` clones Fontique's collection; its system backend and name maps are `Arc`-shared,
+so a widget clone does not enumerate the machine again.
+
+For an embedded segment, the Vello backend still builds a `FontData` per text call. A system segment
+already owns the exact `FontData` Parley shaped, so Vello borrows it directly. The Masonry host now
+encodes these lists into its scene, but it still supplies no measured reuse case for an exported
+font cache. `TextMeasurer` therefore borrows the leaf's canonical `TextContext` and owns no second
+cache or font collection.
+
+Vello 0.6 has a known scoped-clip defect tracked as vello#1198: blend layers opened beneath
+`Scene::push_clip_layer`, including those used by COLR/CPAL or bitmap color-glyph drawing, may
+compose incorrectly before the outer clip is popped. Vello 0.9 does not resolve it, and the 0.6 pin
+is independently required by the prospective masonry host. The backend contract remains
+unrestricted: it does not replace the clip with a composition layer, narrow text to outline-only
+faces, or route color text around the clip, because each would introduce a different local
+rendering contract or a forbidden fallback path. Instead every Vello clip whose nested command
+tree contains text with a `GlyphFace::System` segment emits one `tracing::warn!` naming
+`vello#1198` and the affected region. The paint path checks only the face discriminant and never
+parses font tables. All ten embedded faces are plain outlines; the Masonry host can now encode a
+Vello scene, but its built-in and example text uses those embedded faces, so the affected
+system-colour-font-under-clip case remains outside its shipped path. The warning is the contract
+until the upstream fix lands.
+
+`text::FontId` owns family/weight-to-face selection and the face-to-byte mapping. Its tenth value is
+the embedded Lucide face, and `render::fonts` re-exports the same catalog bytes for iced host
+registration. A system fallback has no `FontId`; it carries Parley's `FontData`, including the
+collection index required for TTC faces. Invalid compile-time embedded font data is a fail-fast
+construction error.
+
+Text crosses the draw seam as the source string, a neutral `GlyphRun`, a transform, and a
+colour. `GlyphRun` carries font size, measured width and height, and its glyphs as a sequence of
+single-face `GlyphSegment`s in visual order, each naming a `GlyphFace`. It cannot name one face for
+the whole run, because script fallback means one string crosses faces mid-run: a Cyrillic word
+followed by a Latin one shapes
+as three Parley runs over two faces, and a run that reported a single face would hand Inter's glyph
+ids to Space Grotesk's outline table — wrong glyphs rather than `.notdef`. Registration records each
+embedded blob's stable `Blob::id()`; shaping maps a table hit to `GlyphFace::Embedded(FontId)` and a
+miss to `GlyphFace::System(FontData)`. Byte addresses are not identity because two evaluations of
+an `include_bytes!` promoted constant need not share an address. Each segment also retains the
+normalized variation coordinates used during shaping, so variable system faces are outlined at the
+same instance whose advances Parley measured. The grouping sits on the segment rather than on each
+glyph because backends bind one outline collection per face.
+
+Backends do not shape: Vello submits each segment's positions to `draw_glyphs` under that segment's
+font data. Iced canvas uses the cached static outline collection for an embedded face; for a system
+face it builds a call-local `FontRef` at the carried collection index and borrows its outlines only
+while constructing the canvas path. It never leaks system bytes or calls `Frame::fill_text`.
+
+Parley 0.6, Vello 0.6, and the iced outline path use the same skrifa 0.37 crate instance. Full
+positioned glyph data may cross between shaping and rendering; there is no bare-glyph-id-only
+boundary. Direct skrifa use belongs only to the iced outline adapter because Parley does not expose
+glyph outlines.
+
+A render-tree adapter owns toolkit lifecycle, interaction state, and the translation from measured
+bounds to widget rectangles. `DrawList`, `Backend`, `replay`, and `VelloBackend` are public so an
+external shell can produce or consume the toolkit-neutral contract. The iced backend remains
+crate-owned.
+`Rgba`, `Pt`, `Rect`, and `Transform` are directly constructible stable value contracts.
+
+## Layout Ownership And The Parity Harness
+
+`render::document` owns the recursive compiled-document walk, conditional visibility, retained-host
+selection, and root composition. Its public `Host` contract names no toolkit; `render::tree::render`
+is the iced adapter and delegates the whole walk to that facade. `solve` owns the neutral `Length`,
+`Limits`, `Padding`, `Alignment`, `Point`, and `Size` vocabulary along with main-axis distribution,
+cross extent, and child offsets for expanded `Row`, `Column`, and `Slot` nodes and compiled `Split`
+nodes. `render::tree::flex` translates iced constraints into that vocabulary, measures each mounted
+child through iced, and translates the returned placement back into iced layout nodes. Module chrome,
+native `Vis`, exact intrinsic control measurement, and the complete widget lifecycle remain
+host-local through `solve::Measure`.
+
+This boundary is shared because masonry needs the same recursive `Range` minimum distribution but
+cannot express per-child minimums through its native flex protocol. Each host therefore supplies
+only measurement and placement while `solve::resolve` and `solve::fluid::allocate` keep one layout
+answer. Neutral draw lists remain the shared paint contract for portable controls.
+
+### Document hosts
+
+A document host is the fold target of `render::document::render`. The facade owns traversal,
+conditional visibility, module expansion, document paths, ownership selection, popover selection,
+and window composition. A host receives the already-folded neutral descriptions and owns only its
+toolkit tree, measurement, placement, paint replay, and event delivery. `IcedHost` returns rebuilt
+`Element<UiEvent>` values; `MasonryHost` returns a retained `MasonryNode` containing real
+`WidgetPod`s. Neither host is allowed to re-walk the compiled document or retain a parallel virtual
+layout tree.
+
+The two hosts share the compiled facade, `solve` distribution, `DrawList` vocabulary,
+`TextContext`, skin metrics, and the single `render::event::control_event` constructor. They differ
+where their toolkits genuinely differ. iced carries compression in its `layout::Limits` and moves
+the returned layout nodes directly. Masonry's `BoxConstraints` has no compression bit, so the
+parent writes the complete neutral `Limits` into its private child through `AllowRawMut`, requests
+layout when that side channel changes, and calls `LayoutCtx::run_layout`. Masonry rejects negative
+box maxima that iced's permissive intermediate limits can represent; the adapter clamps that child
+measurement constraint to a valid non-negative box before entering Masonry. Group padding remains
+host-local because iced's outer `Container` fits padding to the available extent before placing its
+inner flex. After `solve::resolve`, Masonry reruns every child under the exact allocated size and
+calls `place_child` at the neutral offset.
+
+`place_child` then applies Masonry's documented pixel snapping: it rounds the origin and the far
+endpoint independently, and derives the stored size from those endpoints. The Masonry parity test
+therefore queries the real retained `WidgetId`s and requires each stored rectangle to equal the
+iced fixture rectangle under exactly that formula. It permits no epsilon and asserts the linear
+part of every window transform is identity, so affine compensation cannot make a wrong layout
+pass. The two builtin presets contribute 114 node comparisons across 1280x720, 960x600, and
+320x240.
+
+Masonry event delivery also stays toolkit-native. Every custom component declares one concrete
+`Action`; the host maps it to the application action and erases it only inside the private
+`HostAction` crossing required by Masonry's heterogeneous tree. `MasonryRoot<Action>` owns the
+render root's signal callback, synchronises native layer signals, recovers the declared type, and
+returns concrete values from `take_actions`. A `UiEvent` queue is not an action channel, and no
+custom action is encoded into one. Built-in control events still pass through the sole
+`render::event::control_event` constructor before the same private mapping. Full iced-only control
+painters remain toolkit-local. `Vis` is the one native effect: the retained leaf paints no Vello
+commands and registers its widget id, while the root projects only those registered leaves into the
+complete frame's unclipped logical rectangles and current uniforms.
+
+Pointer input crosses the seam as one `PointerInput`: stable identity, optional changed button,
+host-logical point, click count, and the raw or recognised phase. `Outcome<Action>` keeps three
+independent facts: an optional typed value, whether this event propagates, and whether retained
+pointer ownership is unchanged, claimed, or released. Claim is accepted on `Down`; while claimed,
+Masonry capture and the iced retained router keep delivering moves outside the original hit area.
+`Up`, `Cancel`, terminal `DoubleClick`, or an explicit `Release` returns routing to hit testing.
+`DoubleClick`, `LongPress`, and `MoveLongPress` are neutral recognised phases; a custom component
+resets its gesture on terminal `DoubleClick`, may otherwise retain its own recogniser state, and may
+poll an injected signal during `frame`, which is also the typed egress for an action recognised
+during paint.
+
+Open popovers are native host layers in both toolkits. Content receives input first, the full
+viewport layer captures every remaining inside press, and an outside press or Escape emits the
+same typed dismiss event. Placement shares the anchor/pointer origin, one-pixel frame overhang,
+below-then-above flip, alignment, and viewport clamp. `MasonryState` carries the opening press
+across the closed-to-open document rebuild; `MasonryRoot` updates solved anchor rectangles after
+layout. Hosted Masonry subtrees reconcile one retained `Engine` over the geometry of controls whose
+`InputOwner` is `Engine`; leaf-owned controls keep their local gesture and cannot duplicate that
+route. Window drag, title, controls, resize edges, and the drag ghost use native layers above the
+layout tree in both hosts. The outer resize layer is topmost; the ghost is paint-only and pointer
+motion dirties its Masonry layer before requesting redraw.
+
+`CustomWidget` is public because the next consumer lives outside this crate. Its associated
+`Action` and `input`/`frame` methods use only the neutral interaction vocabulary above. Its `measure` method
+receives public `SizeLimits` plus a borrowed public `TextMeasurer`, so an implementor uses the same
+Parley faces, metrics, and tracking as the built-in text path rather than importing another shaper.
+The returned `Size2` is authoritative only for a `Shrink` axis. `paint` receives the document's
+resolved `Rect` and appends to the public `DrawListBuilder`; a `Fill` widget that preserves authored
+aspect ratio computes its own contained rectangle and letterboxes there. The host never stretches
+or transform-compensates it. `Repaint::{None, NextFrame, Continuous}` is a public declaration
+because frame scheduling belongs to the embedder: Masonry paints the result of every delivered
+frame, then requests another only for `Continuous`, rather than running an unconditional repaint
+loop. The headless
+`masonry_host` example exercises text measurement, internal letterboxing, Vello replay, continuous
+frame declaration, and typed root egress without depending on lsq.
+
+The root adapter sends a compiled `Split` weight to `Flex` as the document's original `f32`. A fluid
+cell uses `Length::Fill` only to declare that it participates in distribution; the solver reads the
+separate `f32` main weight, so no iced `FillPortion` conversion sits in the path. A fixed cell keeps
+its declared extent and ignores the weight. Expanded `Row`, `Column`, and `Slot` children do not
+supply an explicit weight and retain their existing iced `Length` semantics. The sized-child path
+measures the child under the same loose limits as the removed iced container and resolves the cell
+extent separately, without emitting a layout wrapper. `Split` and `Slot` pass no `Range` minimum
+because their previous paths carried none. `LayoutSkin` no longer carries the scale and minimum that
+drove the integer conversion; the minimum was already unreachable, because a split weight that is
+not finite and strictly positive is rejected at validation.
+
+`Range` keeps its `length_for` mapping to `Fill` or `FillPortion`, so the existing weight reaches
+the solver unchanged; the render tree passes the main-axis minimum alongside it for expanded rows
+and columns. Until the solver existed there was nowhere to enforce that minimum, so it was simply
+discarded - a control declared `Range(min: 90)` could be laid out 33 px wide. That was a defect,
+not a design, and `solve` now honours it while dividing fluid space. `Range` maximums stay
+unimplemented: every `Range` in the repo declares `max: None`, so a clamp would be untested code.
+Omitted `Row` and `Column` gap and padding defaults have one owner:
+`SkinDoc.layout.grid_gap` and `SkinDoc.layout.grid_pad`, used by intrinsic measurement and rendering.
+
+When the minimums cannot all be met the solver scales every one of them by a single factor. This
+is a deliberate degraded mode, and AGENTS.md wants such a branch justified rather than assumed.
+It is total (no panic, no negative extent, no division by a zero minimum sum), it is continuous in
+the container width, and it never overflows the parent - which is what makes it preferable to
+honouring minimums absolutely and letting a row spill. It is also unreachable in the shipped app:
+`gui::frontend` declares a minimum window of 1080x640, and at 1080 the micro row's two
+`Range(min: 90)` children have 893 px to share. The parity harness exercises the branch at 320x240
+on purpose, because a library consumer carries no such window floor. If a document ever does
+exhaust its minimums inside the declared floor, the document is what gets fixed.
+
+`tests/layout_parity.rs` holds this owner to iced's prior answers. It compiles the two builtin
+presets, renders them through the root adapter, resolves the tree against a headless
+`iced_tiny_skia` renderer at three viewports, and pins the absolute rect tree in
+`tests/fixtures/layout/*.rects` - one line per document node, keyed by its path and indented by
+document depth. The walk descends the document tree and iced's layout tree together, deriving each
+wrapper step from the node itself, and proves the correspondence twice: it attributes every iced
+node to a document rect, a named wrapper, an opaque control's interior or named furniture and
+asserts the count balances, and a second counter walks the document without consulting iced so a
+subtree cannot be mistaken for furniture and vanish while the totals still add up.
+
+Three expanded nodes carry no layout node of their own, and the walk treats them exactly as the
+hosted-descriptor walker in `render/tree/host.rs` does. `Optional` is transparent - it renders as
+its child and the walk passes straight through, so the child keeps the parent's path and position.
+`Popover` and `Pressable` are opaque: `Anchored` returns its anchor's layout node and `mouse_area`
+delegates to its content, so each is one document rect whose interior belongs to it, named by its
+own control path. Both mirror `HostedControl::new`, where `Optional` recurses into the child and
+`Popover`/`Pressable` are `Passive`. Diverging here would let the fixture disagree with the
+descriptor inventory about the same document.
+
+The reads fixture answers
+with constant values rather than `None` so text intrinsic sizing participates; a corpus of empty
+strings would measure nothing and pin nothing. Byte-identical builtin fixtures through the root flip
+prove parity for the shipped weights, including final edge rounding, spacing distribution, and
+cross-axis sizing. A synthetic `0.335:1.0` split at 1335 pixels separately proves the document's
+fractional weights reach the solver without integer rounding. Fixtures are re-recorded only when a
+document deliberately changes, in the same commit, via `KITHARA_UI_UPDATE_LAYOUT_FIXTURES`.
+
+Reproducibility rests on one non-obvious fact. iced measures text during layout through a
+process-global cosmic-text font system, not through anything this crate owns, so the harness loads
+the embedded faces into `iced::advanced::graphics::text::font_system` before it lays anything out.
+Without that load the skin's family names resolve to whatever the host machine happens to have
+installed and the committed rects stop being reproducible.
+
+Two residues of that global remain. Its font database still holds the machine's system faces, so a
+host carrying its own face under one of the skin's family names can win the query ahead of the
+embedded one, and unported iced text could still reach a system fallback face. The base shaping
+path receives an embedded-policy `Skin`, and a corpus test holds every committed fixture string to
+real glyphs across the embedded Display, Sans and Mono families. The remaining global behaviour is
+inherent to the iced path being pinned until those text sites are ported.
+
+### The picture parity lane
+
+The layout fixtures above pin geometry, which is what the two hosts agree about by construction. What
+they can still disagree about is the picture, and that is measured rather than reasoned about. The
+gallery example photographs every page three ways: through an iced window (`KITHARA_GALLERY_CAPTURE`),
+through iced with no window at all (`KITHARA_GALLERY_CAPTURE_OFFSCREEN`), and through the retained
+host into a Vello scene (`KITHARA_GALLERY_CAPTURE_MASONRY`). All three rasterise on a graphics device.
+Each set writes the geometry it was taken at beside its pages, and `KITHARA_GALLERY_COMPARE=<a>:<b>:<out>`
+refuses to compare two sets taken at different geometry, because two hosts scaled differently can be
+made to agree or disagree at will. A set inherits the geometry of a set already in its directory, so a
+window set taken at the screen's scale can be answered on its own terms.
+
+Two things the offscreen set gets from the runtime rather than from a hand-rolled layout-then-draw
+pass, because a capture that skips either draws a page of container backgrounds and nothing else: the
+overlay every window layer paints from is built by `UserInterface::update`, and the renderer is reset
+between pages by `UserInterface::draw`. It rasterises through wgpu and not through the software
+backend, because the window draws through wgpu and this set exists to stand in for it — measured, that
+substitution costs 0.3-0.9% of pixels on 21 of 22 pages.
+
+`just test ui` is the lane: one binary takes the offscreen set and the masonry set, then compares
+them against `examples/gallery/parity-budget.txt`. The budget prices each page in whole percent of
+differing pixels past the noise floor, a page with no line is allowed nothing, and a page over its
+price or missing from a set ends the run non-zero. The floor is under one percent, where the two
+engines disagree on antialiased edges and text gamma; everything above it is a control that draws
+differently, or does not draw at all, under one of the hosts. A control that is thin ink on a wide
+panel barely moves that share even when it is entirely missing, so the comparison also derives each
+set's background as its most common colour and measures the share of pixels that are ink - drawn over
+that background - in exactly one set. The gate judges a page by whichever of the two numbers is
+larger, and the report prints both. The numbers are a debt: a control that lands must lower the pages
+it appears on, and a number may not rise without a reason written next to it. The window capture, `just test ui-window`, stays for a different question - whether the offscreen path
+draws what a window draws - and is the only one of the three that needs a display. It is not one side
+of the parity: both its sides are the same host.
+
+### The page behind a document
+
+A document paints its panels and leaves the rest of its rectangle bare. That bare part is the page,
+and it belongs to the skin: `Ui::background` reports `skin.palette.bg`, and every host clears to it
+before the scene lands. The retained window, the headless masonry capture and the iced hosts all read
+it from there. Clearing to anything else - black was the retained host's first answer - shows through
+wherever a document does not reach, and reads as a difference between the hosts when the difference is
+really one line of host setup.
+
+## Interaction Ownership
+
+`interact` owns the portable pointer, wheel, key-press, key-release, and modifier vocabulary, the
+gesture state machines, their pixel and time constants, and the cursor vocabulary. It imports
+`draw::{Pt, Rect}` and nothing else from this crate - it does not know what a `UiEvent` is. A scalar
+recognizer answers with an `Outcome<f32>` and a click answers with an `Outcome<()>`, each carrying
+its capture flag. A component widens a recognizer scalar exactly once at its boundary, and
+`EngineEvent::Scalar` carries `f64` from there through `ControlAction::SetScalar`; render event
+publication performs no later widening or narrow round trip. The engine maps the other values into
+`EngineEvent::{Activate, Crossing, Index}` without losing capture. `EngineEvent::Index` carries
+the selected `usize`; the stateless segmented component derives it from the click's hit rectangle
+and item count. An engine `Emission` may address one fixed child endpoint. `render::event` binds the
+result to the document publisher one layer up and in the same file as the `UiEvent` it names,
+including binding an index to `ControlAction::SelectIndex`. The fourth emission kind,
+`Crossing(bool)`, is retained hover state:
+it observes exactly one entry and one exit for a target boundary, emits nothing for motion within
+the target, and never captures. Its render binding reuses `ControlAction::Drag(DragPhase::Over)`.
+Routing the document event through the recognizer or engine instead would point the base at the
+crate's orchestration layer, and every base peer points strictly downward: `draw` to `text`, `text`
+to `skin`, `solve` to `layout::Axis`.
+
+The retained interaction boundary explicitly names nineteen documents: `app-deck`,
+`app-strip`, `app-mixer`, `app-mixer-single`, `app-overview`,
+`app-overview-row`, `app-overview-single`, `gallery-knobs`, `gallery-meters`,
+`gallery-toggles`, `gallery-chips`, `gallery-buttons-tab`, `gallery-cells-tab`,
+`gallery-faders-tab`, `gallery-library2-tab`, `gallery-table-tab`, `gallery-tree-tab`,
+`gallery-module-tabs`, and `gallery-nav`. A direct layout module is selected by its compiled module
+ID. Expansion records each nested include root by structural address and module ID without adding a
+node wrapper, so the existing render-tree shape and layout stay unchanged. The iced host at each
+selected root keeps one `Engine` in widget-tree state while its descriptor snapshot is rebuilt from
+the current reads on every view.
+Reconciliation matches an owned resolved control path plus component kind; it refreshes
+configuration and preserves recognizer state, and never retains an `InternId` across compiled UI
+lifetimes. The ordinary click wave and Hero Wave have distinct descriptor identities. The Hero
+descriptor refreshes its scalar drag, visible window, and wheel answers from current progress and
+zoom on every view. The nineteen module IDs form a named set in the render tree; subtree contents
+never silently opt another document into the engine.
+
+Keyboard focus is a second engine slot beside pointer capture, not another interpretation of the
+capture owner. It retains one resolved control path. A pointer press inside a focusable target moves
+focus to that path; a press that lands on no focusable target clears it. Acquiring, transferring, or
+releasing pointer capture never moves focus. `KeyPressed` and `KeyReleased` bypass the pointer holder
+and route only to the focusable component at the focused path. Reconciliation retains that path while
+the component still exists and remains focusable, and clears it when the path disappears instead of
+retargeting by document order or component kind.
+
+The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
+propagates `InputOwner::Engine`, while only `InputOwner::Leaf` may open a host, so the nested
+`app-strip` markers cannot open second hosts. The descriptor and target walks recurse through the
+already-expanded rows and columns into both strips. One mixer therefore owns one engine and one
+pointer-capture slot for its crossfader, knobs, and VUs; a captured drag in one strip remains
+exclusive while the pointer crosses the other strip.
+
+The engine carries nine component shapes in one `RetainedComponent` enum. `ScalarComponent` owns
+its resolved path, `Kind`, `Scalar`, and `ScalarState`; `ActivationComponent` owns a path, the
+pointer hover, and the stateless `click::on_input` gesture shared by Button, Toggle, and Checkbox;
+`CrossingComponent` owns the previous boundary state and preserves it across reconciliation so a
+view rebuild while still inside cannot publish a second entry;
+`SegmentedComponent` owns a path, item count, pointer hover, and the same stateless click gesture;
+the `ContextBar` picker shape owns the focusable index selection and its open/highlighted projection;
+`TextInputComponent` owns the focusable caret, selection, pointer drag, and current preedit, while
+retaining only a reconciled working mirror of the document query for applying sequential edits;
+`ScrollComponent` owns a path and the one mutable scroll offset, retains it across reconciliation,
+and refreshes row count, row height, and viewport extent without notifying the document;
+`ItemComponent` owns one list target, its document publisher, and the pressed row index;
+`HeroWaveComponent` owns modifier and loop state while reusing `Scalar` for the plain drag. A narrow
+`Component` trait gives the router only path, kind, event handling, cursor, capture-slot state, and
+whether the component accepts keyboard focus.
+For a retained Table, `Reads` owns rows, selection, column visibility, and declared widths. The
+engine is the only writer of scroll offsets, the pressed row, and divider drag state; paint receives
+a read-only projection of that state. The retained leaf owns one derived picture snapshot containing
+the resolved rows and columns, and refresh replaces that snapshot whole so sibling column reads
+cannot disagree with the row read.
+For a hosted tree, `Reads` owns both the rows and query. The engine is the only writer of the
+vertical offset and the search field's caret, selection, focus, drag and preedit state; the retained
+painter receives only a read-only projection. The retained leaf owns one derived picture containing
+the resolved skin, rows and query, and refresh replaces that picture whole so rows and query cannot
+come from different model snapshots.
+The dispatch exists because activation, segmented and picker selection, and the Hero Wave have
+emissions or state a scalar alone cannot express, not because controls happened to have different
+names. `Kind` belongs to the retained identity, so reconciling a different component shape at the
+same path rebuilds recognizer state and clears capture. One router owns the subtree's sole
+pointer-capture identity and sole keyboard-focus path. The holder receives pointer input
+exclusively until it releases; otherwise reverse document order chooses the topmost non-ignored
+component. Key input uses only the focused path and never the capture identity. Cursor resolution
+follows the pointer holder first, then the topmost non-default cursor. Hosted leaves the engine claims
+use paint-only canvas programs. Engine events cross through `render::event`, so
+`render::event::control_event`
+remains the only production `UiEvent::Control` constructor. Button was the first activation control
+whose fill, frame, and label or Lucide glyph were all painted by a toolkit-neutral base atom through
+one `DrawListBuilder` instead of by iced; NavItem now owns its background, marker, icon glyph, and
+label through the same seam.
+
+The Leaf adapter owns the transient pressed visual while its click recognizer sees the pointer
+gesture. The Engine adapter is paint-only and derives only idle or hovered paint from the cursor;
+the required existing `Descriptor::Activation` is stateless and carries no held phase. Adding a
+second pressed-state channel merely for paint would create the parallel mutable ownership this
+transition forbids.
+
+`PresetSelector` is a painted leaf on both hosts. `mount::bar::Preset` owns its ordered inventory,
+and the painter data carries those labels and preset names together with the index resolved from
+`Reads::get("ui.preset")`. The shared indexed gesture may map an index through that same data into a
+typed `UiEvent`; without a mapper it retains the path-addressed `ControlAction::SelectIndex`
+contract on pointer down. A mapper-backed index instead arms one painter-resolved cell on down and
+publishes only when pointer up resolves to that same cell. The painter owns indexed hit geometry,
+so Preset padding and gaps are neither cells nor pointer targets. Each adapter owns only the hovered
+and pressed-origin cell indices. The retained leaf refreshes the active index in its mounted painter
+data without remounting, and the Masonry control census therefore marks `PresetSelector` as painted
+rather than `NotYet`.
+
+The interactive `canvas::Program` for a button, nav item, segmented control, fader, crossfader,
+knob, vertical VU, stereo meter, toggle, checkbox, text input, tree, or wave is therefore not gone:
+`InputOwner`
+picks the paint-only variant for `InputOwner::Engine` only when the host has a matching descriptor,
+and the interactive variant answers everywhere else under `InputOwner::Leaf`. An effective SVG
+button or nav item is one deliberate example: it has no descriptor and remains an iced leaf until
+its painting is ported. Two input paths for one control are a transition, not the design - each
+disappears when its last unhosted site flips, and the pair must not grow a third reader or a second
+capture slot in the meantime.
+
+The host observes decoded input before its child. An engine emission is bound once; a captured
+outcome suppresses child delivery, while an observed outcome publishes and still forwards the same
+iced event unchanged. This is the drop-zone crossing contract: `Over(true)` once on entry,
+`Over(false)` once on exit, no message for motion within the zone, and no capture. Cursor resolution
+follows the same order: a non-default engine shape wins, otherwise the child decides. A hosted
+subtree may therefore contain interactive controls and wheel-catching containers the engine does
+not answer. `KeyPressed` and `KeyReleased` enter the portable vocabulary with their modifiers, and
+modifier changes still reach the Hero Wave's shift state; touch does not enter this boundary. A key
+consumed by the focused component is reported to iced as `Captured`. A declined key, or any key with
+no focused component, remains `Ignored` even while an unrelated pointer gesture owns capture. This
+preserves the app's `Delete` and `Backspace` shortcuts unless the focused control actually consumes
+them. Picker arrows may repeat, while held Enter and Space presses are inert until release or focus
+loss so native key repeat cannot alternate open and commit states. When engine focus is acquired,
+the host unfocuses iced descendants without replaying the press; ignored character or IME events
+therefore cannot edit another focused descendant behind the popup. Answered picker pointer
+input is also reported as captured to iced, preventing click-through outside the hosted subtree.
+
+Module chrome remains iced-composed during this transition: its header `Row`, panel column, footer,
+and frame stack keep their existing layout ownership until the root flip removes `render/tree`.
+Within that composition, the header chips, title cell, and separator lines paint through
+`DrawListBuilder`. One header-sized chevron canvas shares a single painter between the interactive
+`InputOwner::Leaf` program and the paint-only `InputOwner::Engine` variant. The engine-owned header
+activation binds directly to `UiEvent::ToggleModule`; it is not a control action. The chrome host
+owns only the header and drop boundary. A separately hosted module root keeps its existing inner
+host, so an observed outer crossing can publish and forward the same event to the content engine;
+the two hosts own disjoint targets and no shared gesture state.
+
+The dual mixer adds one crossfader and an inert divider around two supported strips; the single
+mixer contains one supported strip. Each strip contains knobs, a vertical VU, and a label. Each
+`app-overview-row` contains one supported wave between two inert text labels. `gallery-knobs`
+contains four knobs and a label; `gallery-meters` contains a stereo meter, two vertical VUs, and a
+label; `gallery-toggles` contains two toggles, two checkboxes, and a label.
+`gallery-buttons-tab` contains six activation buttons and two inert text labels; its micro
+play/pause cell reaches the draw seam as a Lucide font glyph. `gallery-cells-tab` is the first hosted
+page with mixed interaction ownership: in document order its exact engine descriptor inventory is
+two activations for cue and play, four base-painted chip activations, one segmented descriptor with
+`item_count: 4`, and four activations for its two toggles and two checkboxes. Its cells, select, and
+status dots remain iced-answered controls, and unanswered input continues unchanged through the
+child.
+`gallery-library2-tab` mounts the engine-owned `ContextBar` scope picker. Its document-level hosted
+inventory starts with the text input at `library2/browser/search` and vertical scroll at
+`library2/browser`, followed by the picker at `library2/context` and the track-list family at
+`library2/table`. The picker is not mounted by `gallery-tree-tab`: `gallery-tree-tab` has the text
+input at `tree/browser/search` and scroll at `tree/browser`. The retained row canvas, offset, and
+search interaction are engine-answered.
+`gallery-faders-tab` has one descriptor kind for both configurations: the default fader has an
+optional drag step, the Volume fader keeps continuous drag plus its own wheel step, and the vertical
+VU keeps its scalar descriptor. The page's telemetry `Scalar` is an inert readout and is not hosted.
+`gallery-module-tabs` contains five activation tabs. `gallery-nav` contains eighteen activation nav
+items plus an inert icon and label in its header. Each hosted `app-deck` contains one Hero Wave
+and five Lucide activation buttons, while its Slot and labels are passive and its tempo row remains
+an iced wheel surface. The Hero component preserves shift-loop child emissions, child-addressed
+wheel zoom, and the plain scalar drag.
+
+A `Scalar` carries a `Track` that says how a position becomes a value, and the split that matters is
+relative against absolute. A relative track counts travel from the press, so the press only arms the
+gesture and publishes nothing - a knob that jumped to the pointer would lose its current value on
+the first touch. An absolute track reads the position itself, so the press seeks straight there,
+which is what a fader thumb and a VU have to do. `HorizontalClick` is the one absolute track that
+seeks without arming: the mini-wave without beats is a seek surface, not a drag surface, and leaving
+the pointer free is why the press does not capture the moves that follow.
+
+The recognizer and iced rectangle remain `f32`, so an absolute track computes the same pointer ratio
+as iced. `ScalarComponent` widens that ratio before any value arithmetic. Its optional `f64` drag
+step applies only to pointer press and move outcomes; wheel values retain the recognizer's separate
+wheel policy. Quantizing after widening is required for pixel-exact iced parity: quantizing the
+ratio in `f32` moved a half-step boundary by one rail pixel before the result ever reached the
+published `f64` field.
+
+Three properties hold across every track. The press decides `active` before computing, so a press
+whose computation yields nothing still arms the gesture that follows. A degenerate extent publishes
+nothing rather than a clamped zero - a control laid out to zero pixels has no position to report,
+and `0.0` would be a value the user never asked for. The move arm never re-tests the bounds, so a
+drag survives the pointer leaving the control and clamps at the end of travel instead of stopping.
+
+Only `HorizontalPixels` leaves the unit interval, because a column width is a width: it floors at a
+minimum and has no ceiling. `RelativeHorizontal` subtracts rather than adds, because the mini-wave
+moves its content under a fixed playhead, so pulling right walks the position back.
+
+`Outcome<T>` carries what the gesture produced and whether it took the pointer, and those are two
+independent facts rather than one. `set` publishes and captures; `observed` publishes without
+capturing, which is what makes `ItemDrag` work at all - the row underneath keeps its own click while
+the drag overlay watches the same gesture, and that non-capture is the pinned regression. An engine
+`Emission` retains the complete `Outcome<EngineEvent>` plus an optional child endpoint: a scalar
+press may capture without emitting a value, activation emits once without holding the router slot,
+segmented selection emits one index without holding it, and the Hero Wave emits loop and zoom values
+under its own children. `Component::captures_pointer` alone decides whether the router retains an
+owner. A scroll wheel that moves is a consumed event and the host reports iced `Captured` even
+though scrolling retains no pointer slot; at a directional boundary its outcome is `Ignored` and
+the unchanged wheel continues to the child and outward. Other consumed-without-retained-capture
+and observed outcomes keep their established host status. Only `render::event` turns an engine
+emission into an `Action`, routing parent scalars, activation,
+and index selection through their existing publishers and child scalars through `scalar_child`.
+
+`ItemDrag` is one value rather than the config-plus-state pair the other recognizers use, because it
+has nothing to configure: the 4 px threshold is its own constant and the item's identity belongs to
+whoever owns the list. It answers `DragEvent::{Started, Dropped}` and `render::event::drag`
+substitutes the index, which is why the base never learns what a row is.
+
+Exactly one file, `interact::iced`, names a toolkit. It translates an `iced::Event` into an `Input`,
+including portable `KeyPressed` and `KeyReleased` values with modifiers, builds a `Hit` from bounds
+and a cursor, and converts a `CursorShape` into `mouse::Interaction`. Key identity therefore enters
+the engine without bringing iced with it.
+`Hit` is constructed separately from event translation on purpose: `mouse_interaction` receives no
+event, so a `Hit` that only fell out of an event would grow a second, unwritten hit-test path.
+`Hit::at` and `Hit::inside` are different questions - a gesture already under way tracks the pointer
+past the edge, while a gesture starting needs it inside - and `Rect::contains` is half-open to match
+`iced::Rectangle::contains`, which makes an `at`-based test bit-equal to `Cursor::is_over`.
+
+`Input::PointerMoved { at }` is a third question and not a substitute for either. It is what the host
+says about the pointer, reported even while a widget is told its cursor is unavailable, but it is
+only comparable against itself. A recognizer measuring travel reads it - `ItemDrag` must, because
+its pinned contract is a drag that starts after the pointer has left the row, with no cursor at all.
+A recognizer normalizing against an area must read `Hit::at` instead, because that is the position
+already expressed in the area's space; feeding it the event position would be an unnoticed
+coordinate-space bug the moment a control is not at the window origin.
+
+`CursorShape` deliberately derives no ordering. `mouse::Interaction` derives `Ord` and the render
+tree `.max()`-merges it in `render::tree::flex` and `render::immediate::anchored`; those merges stay on iced's
+type and convert only at each `mouse_interaction` return.
+
+`interact` is gated on `render` although its core names no toolkit, and that is a cost rather than a
+contract. Its consumers are all `render`-gated, so under a `vello`-only build - which
+`cargo hack --feature-powerset` really compiles - every item would be dead code. A separate `engine`
+feature would buy nothing: the `dead_exports` check treats only `target_os`/`target_arch` as a gate,
+so a feature offers no exemption from the rule that actually governs this code, and `just check clippy` runs without `--all-features`, which would make the module a permanent lint blind spot. The
+gate splits the day a second host routes input, exactly as `backends` already splits.
+
+Two wheel policies coexist and must not be unified: `Scalar` accumulates 20 px of trackpad travel
+per step, while `Stepper` treats any pixel delta as one detent and debounces at 200 ms. One asks how
+many steps have accumulated, the other asks whether one has gone by yet - a flick arrives as a long
+tail of shrinking deltas, and every one of them would be its own detent without the window. They
+share only the delta decoder.
+
+Time enters a recognizer as a parameter rather than being read inside it. That is what makes the
+double-click window testable at all, and the window is `[0 ms, 301 ms)` rather than 300 because
+`as_millis` truncates - a `Duration` constant compared with `<=` would silently narrow it.
+
+The old interaction behavior adapter is gone entirely, and with it the 0.90 similarity pair
+`ScalarDragState` formed with `interact::ScalarState`. Six tracks now share one state machine
+instead of two machines sharing a field bag: press, move while active, release, plus the two
+opt-ins. Every pointer gesture in the crate is a recognizer, including the stepping surface: what is left
+under `render::immediate` is a canvas that draws nothing and forwards, which is the shape every
+ported control now has.
+
+`render::event::control_event` is the only place production builds a `UiEvent::Control`. That is
+grep-provable and meant to stay so: the remaining literals live in tests, where a pin should spell
+out the event it expects rather than call the constructor it is checking. The rule is not tidiness -
+a binding rule, an address scheme or an emission discipline needs one site to attach to, and
+fifteen literals kept in step by review is not one.
+
+A recognizer pin and a wiring pin hold different halves and neither substitutes for the other. The
+recognizer pins own the arithmetic and the capture rule against `Outcome`, where no path exists. The
+wiring pins own the step the port could otherwise drop silently: that a canvas hands the publisher
+its *own* path, and the row overlay its own index. There is one per publisher - `scalar` on the VU,
+`activate` on the toggle, `drag` on the row overlay, `step` on the wheel surface - because that is
+the smallest set that covers every way a gesture becomes a `UiEvent`.
+
+`recognizers::click` is a free function rather than a type, following `recognizers::wheel`. A press
+that lands is the whole gesture, so there is no state, and the only thing that looked like
+configuration - the cursor shape - already belongs to `Hover`. A struct here would have carried
+nothing and its `on_input` would not have read `self`, which is what `clippy::unused_self` says out
+loud.
+
+## Text Control Ownership
+
+The `Text` control is the first control whose measurement and painting both belong to the base.
+`atoms::text` owns the pair: it shapes through `TextContext` and either reports an intrinsic size
+or emits one `DrawCmd::Text`. `render::immediate::text` owns only the iced side - it resolves the style,
+colour and content, then hosts the atom as a leaf `Widget` whose `layout` returns the base's
+intrinsic and whose `draw` replays the command list through `IcedBackend`. It reports
+`Shrink` by `Fill`, which is what the `container` it replaced reported.
+
+The two shaping calls differ on purpose and are not a cache miss to be repaired. `layout` shapes
+unbounded, because an intrinsic is what the control asks its parent for; `draw` shapes against the
+width it was given, so a squeezed box breaks lines instead of overflowing. A single-slot memo keyed
+on the query cannot serve both, and a memo that never hits is worse than none - if shaping ever
+shows up in a frame budget, the fix is a measured one with a `kithara-devtools` number behind it.
+
+Porting it moved rects, and that was the point: `transport/tempo-label` went 24.000 -> 28.800 and
+`transport/stream-label` 96.000 -> 115.200, exactly the `chars x spacing x size` the skin declared
+and iced dropped. The residual against cosmic-text is zero - both engines agree on JetBrains Mono's
+advance - so the whole delta is tracking.
+
+`render::typography::styled_text` still serves `atoms::design::cell`, `atoms::design::swatch` and
+`render::window::title`. Those are unported sites, not a fallback: they take the iced path
+entirely, including losing their tracking, until their own wave moves them. Nothing chooses between
+the two at runtime.
+
+`SkinDoc` carries no words. The crossfader captions, the table footer caption and the tree
+search placeholder are catalog entries resolved onto `Skin` alone, and a table's column captions
+are catalog keys the document itself carries; see "Text Catalog Ownership" for where they come
 from.
 
 ## Text Catalog Ownership
@@ -105,18 +865,26 @@ title beginning with `@` stays a track title.
 Two catalogs combine with `TextDoc::merge`, which unions their entries and fails with
 `UiDocError::DuplicateTextKey` on any key present in both - never a silent override. `kithara-app`
 merges `builtin::text_doc()` with its own small catalog (`assets/ui/app-en.ktext.ron`) once per
-`compile_ui` call; the app catalog holds only the words canon has no key for (its own window-manager
-menu - `Modules`, `Broadcast`, the two layout-count labels), so an app document reaches every other
-key through the canon catalog even though the `.kmodule.ron` file naming it lives under
-`kithara-app/assets`. `every_shipped_catalog_carries_the_same_key_set` in `tests/text.rs` is what
-keeps a second-language catalog from silently dropping a key later.
+`compile_ui` call; the app catalog holds only the six words canon has no key for (its own
+window-manager menu and the two EQ-mode labels), so an app document reaches every other key through
+the canon catalog even though the `.kmodule.ron` file naming it lives under `kithara-app/assets`.
+`every_shipped_catalog_carries_the_same_key_set` in `tests/text.rs` compares `[builtin::text_doc()]`
+against itself: it pins nothing today and is a placeholder for the second catalog that does not
+exist yet. Only `builtin_catalog_holds_exactly_the_declared_entries` actually pins the canon key
+set.
 
 `Skin::resolve` is the one place catalog resolution happens outside `compile`: it takes `text:
-&TextDoc` and resolves the crossfader's three captions and the track list's ten column and footer
-captions once, by fixed key, storing them on `Skin` as `CrossfaderLabels` and `TrackListLabels` (plus
-`tree_search_placeholder`) rather than on `SkinDoc`. No control declares these keys and no document
-names them; a `Crossfader`, `TrackList` or `Tree` control takes its captions from whichever catalog
-`Skin::resolve` was given, unconditionally.
+&TextDoc` and resolves the crossfader's three captions, `table.footer_rows` and
+`tree.search_placeholder` once, by fixed key, storing them on `Skin` as `CrossfaderLabels`,
+`table_footer_rows` and `tree_search_placeholder` rather than on `SkinDoc`. No control declares
+those keys and no document names them; a `Crossfader` or `Tree` control, and a `Table`'s footer,
+take their captions from whichever catalog `Skin::resolve` was given, unconditionally.
+
+A table's column captions are the exception, because a document authors them: `TableColumn.label`
+is a document literal, so `expand::spec::table_spec` resolves each one through `resolve_text_key`
+against `<path>/columns/<index>/label`, the same lookup and the same `UnknownTextKey` every other
+`@key` gets. The generic `Table` therefore carries no per-column catalog knowledge, and a document
+naming a missing column key fails at compile time rather than painting a raw `@track_list...`.
 
 ## Wave View Ownership
 
@@ -125,7 +893,7 @@ the visible track fraction; a wheel detent emits `SetScalar` at `<wave-path>/zoo
 emits `SetScalar` at the wave path for playback position. The renderer keeps neither value, derives
 the centred window from each read snapshot, and falls back to `zoom_math::DEFAULT_ZOOM` when the
 zoom read is absent.
-`widgets/wave/zoom_math.rs` owns the zoom scale for every widget that draws a wave: opening window,
+`atoms/wave/zoom_math.rs` owns the zoom scale for every widget that draws a wave: opening window,
 `MIN_ZOOM`/`MAX_ZOOM` clamp, and what each gesture is worth - a wheel detent (`1.25` / `0.8`) is
 finer than a zoom button (`BUTTON_FACTOR = 0.7`). A host driving zoom from a button takes
 `render::zoom_in` / `render::zoom_out` and gets the same bounds.
@@ -148,12 +916,12 @@ supplies; `active` selects only a tone, never content.
   `Row.background` selects among palette roles; a node naming no colour takes its skin entry's.
   `Glyph` sizing stays skin-owned through `GlyphStyle`, and `active_icon` switches the glyph itself,
   so one caret is one node with one path and one style.
-- `widgets/text.rs::text_role` is the one `TextStyle` to `TextRoleSkin` join, feeding `active_tone`
+- `render/immediate/text.rs::text_role` is the one `TextStyle` to `TextRoleSkin` join, feeding `active_tone`
   the node's pair with the skin entry's active colour behind it (`text.deck_letter_active`, marking
   the focused deck). No wildcard arm, so a new style must be given a skin entry.
 - `Row` alone carries `active`, `active_background`, `frame_color`, `active_frame_color`; `Column`
   carries none. `geometry::frame_tone` resolves the frame pair, defaulting to the skin divider;
-  `widgets/module/chrome.rs::frame_overlay` takes colour and width as arguments and reads no skin
+  `render/immediate/chrome.rs::frame_overlay` takes colour and width as arguments and reads no skin
   section, which lets one surface carry two hairline colours.
 
 An `active` binding needs no `id`, and the shipped App Menu relies on that: `validate` requires an
@@ -162,7 +930,7 @@ id-less container as its own module, its `ControlSite` path being the enclosing 
 every id-less sibling. That sharing holds only while the visitor body stays validation-only -
 `check_controls` keys nothing by the path, and a container without `write` yields no `SurfaceSpec`.
 A visitor keeping state per `ControlSite.path` needs the id rule widened first.
-Joins live one place each: `text_role` in `widgets/text.rs`, `glyph_tone` in `render/tree/atom.rs`,
+Joins live one place each: `text_role` in `render/immediate/text.rs`, the glyph tone in `mount/label/glyph.rs`,
 `frame_tone` beside `active_tone` in `render/tree/geometry.rs`, both called from
 `render/tree/node.rs`. `render/tree/mod.rs` keeps `geometry` private and re-exports only
 `active_tone`, so a join under `widgets` would duplicate the rule. Each is pinned by a
@@ -175,11 +943,49 @@ host-owned. `SkinDoc.meter` owns track size, hairline frame, track colour and fi
 is inset by the frame width on every side, so a full bar stops at the frame's inner edge.
 `Vis` is render-only and emits nothing. It reads the host-owned preset through its own binding as a
 Scalar index, the master `player.output.levels` Stereo snapshot, and the animation clock as a Scalar
-at `vis.time`. Reaction level is `max(l, r) * volume` clamped to `0..=1`; a non-finite level, an
-out-of-range preset or any missing read collapses the widget to `Space`. It keeps no audio state and
-no wall clock, so pacing belongs to the host. The embedded WGSL asset owns the three fixed presets
+at `vis.time`; that Scalar binding is distinct from the `ui.preset` Text contract consumed by
+`PresetSelector`. Reaction level is `max(l, r) * volume` clamped to `0..=1`; non-finite levels, an
+out-of-range or missing preset, or missing levels produce no Vis draw. A missing, wrongly typed,
+or non-finite clock instead produces a valid static frame at time zero. It keeps no audio state and
+no wall clock, so pacing belongs to the host. `VisFrame` owns this one read projection, and one
+32-byte packer plus the embedded WGSL asset serves the iced wgpu 27 adapter and retained wgpu 26
+pass without sharing typed GPU objects across them. The WGSL asset owns the three fixed presets
 (`PRESET_COUNT = 3`), chrome around it is markup plus `SkinDoc.vis`, and the shader stays behind the
 `render` feature so the non-render wasm schema lane needs neither wgpu nor a clock.
+
+The retained pass consumes every logical declaration after Vello and before live blit or headless
+readback. The wgpu 26 pass owns display-scale conversion: uniform origin and resolution preserve the
+unclipped logical rectangle while only its physical-pixel scissor is rounded and clipped. The live
+intermediate target is recreated with
+`STORAGE_BINDING | RENDER_ATTACHMENT | TEXTURE_BINDING` after every resize; the headless target
+uses `STORAGE_BINDING | RENDER_ATTACHMENT | COPY_SRC`. `Ui::render` returns both the scene and the
+declarations as one frame, so production and capture call the same `VisPass`. Vis requests
+continuous Masonry animation frames. After a successful present the window satisfies both redraw
+signals from that completed paint and requests another redraw only when an animation frame was
+present, without draining unrelated platform signals. With no animation pending, the owned window
+parks until input or a 500 ms state-pump deadline. That deadline advances the application and
+re-reads every watched endpoint; unchanged reads still skip render and present. Embedders that own
+their event loop continue to choose when they call `Ui::frame`.
+
+`Shader` is the generic document-owned shader contract, distinct from the fixed `Vis` control. Its
+WGSL source is loaded relative to the declaring module through the same root-confined
+`SourceResolver` and byte limit as module documents. The compiler generates one standard uniform
+block with `viewport` plus the document's sorted named fields, validates the combined WGSL with the
+render stack's Naga generation, and retains the validated source with immutable endpoint metadata.
+Uniform bindings are read-only and initially accept Bool, Scalar and Stereo values; commands,
+collections, text and waveforms fail compilation with a typed `UiDocError::Shader`. A compiled
+document is the sole owner of this metadata, so hosts never build a parallel binding registry.
+Each frame packs the viewport followed by the sorted named `vec4` values. A missing, wrongly typed
+or non-finite live value produces a logged frame error and no image; the previous image is not a
+fallback. A Shader with bindings requests continuous retained frames so telemetry can advance.
+
+Both hosts execute the same validated WGSL into a reusable logical-pixel `Rgba8Unorm` texture.
+The iced wgpu 27 adapter composites that texture in the primitive's existing viewport and scissor.
+The Masonry wgpu 26 pass installs its `COPY_SRC` texture as the `ImageData` already encoded at the
+leaf's exact Vello scene position, so surrounding clips, transforms and draw order remain scene
+semantics instead of becoming a topmost native overlay. Resize replaces only the affected texture;
+uniform buffers and unchanged textures are reused. No CPU readback, fallback shader or
+backend-specific document syntax participates in production drawing.
 
 ## Scoped Read Resolution
 
@@ -190,7 +996,7 @@ built by `expand::scoped_key`, interned once at compile time, and carried by `Bi
 `Reads::get`; hosts key their read maps by the same form. A `Command` binding reads as `None`.
 Widgets reading derived endpoints beyond their binding (`DeckSummary`, `Bpm`, `Time`, `MiniWave`)
 take the read binding's scope suffix (`@deck=a` or empty) from `read::read_scope` and append it to
-each derived endpoint, so `deck.track.title@deck=b` stays addressable per deck. `TrackList` column
+each derived endpoint, so `deck.track.title@deck=b` stays addressable per deck. `Table` column
 state takes the suffix of the `columns_state` binding instead. Host-global endpoints
 (`player.output.levels`, `ui.preset`, `vis.time`) stay unscoped.
 
@@ -237,11 +1043,14 @@ the column pitch for both the deck wave and the overview row.
   its box is the icon size wide and a line box tall (`1.3` times the size, the iced default), so a
   square declaration overflows. `size::icon_cell` fixes the width and leaves the height to the row.
 - A container declaring no `size` renders `Fill` on both axes, mapped in
-  `render/tree/geometry.rs::content_size`; a row that should hug its content says `h: Shrink`.
+  `render/tree/geometry.rs::content_size`; a stack of unsized rows therefore divides its parent
+  among them, and a row that should hug its content says `h: Shrink`.
 - `Dim::Shrink` is the one rule the document layer cannot compose: the toolkit measures the content,
   so `Bounds` treats it as an open axis and `Dim::from(Bounds)` never produces it. A shrunk node
   must carry `Shrink` to its own children - `content_size` passes it to the container, its frame
   overlay and its fill, because the first `Fill` inside a shrunk box claims the whole row.
+  Text measures its glyphs and takes alignment from that wrapper; a readout drawing its own framed
+  cell keeps filling the box the document gave it.
 - A transport cell carries its hairline on the sides `SkinDoc.button.transport_sides` names (only
   transport styles read that declaration); a `Button` declaring `frame` names them itself. One seam
   stands between neighbouring cells and none at the strip's ends, so cells before the flexible gap
@@ -250,7 +1059,7 @@ the column pitch for both the deck wave and the overview row.
 ### Wheel surfaces
 
 A `Row` or `Column` declaring `write` is an interactive surface over its whole box (`SurfaceSpec`,
-drawn by `widgets/wheel.rs::WheelSurface`):
+drawn by `render/immediate/wheel.rs::WheelSurface`):
 
 - A wheel detent emits one signed `ControlAction::StepScalar`, a double click emits
   `ControlAction::Activate`, both on the container's own path.
@@ -266,6 +1075,30 @@ drawn by `widgets/wheel.rs::WheelSurface`):
   levitates the cursor away from everything it covers.
 - Such a container needs an `id`; `validate::check_module_node_ids` otherwise rejects the document
   with `UnaddressedSurface`. A container silent about `write` carries no write path.
+
+### Retained button and navigation painting
+
+`atoms::button::Button` owns button painting. It emits the background, either the uniform rounded
+border or transport seam strips, and the centred label or Lucide glyph into one retained list; both
+the interactive Leaf canvas and paint-only Engine canvas replay that list. An icon reaches the atom
+as `render::Mark`: a Lucide glyph crosses as text because its source is a glyph in the tenth
+embedded face, and authored art crosses as `Geom::Path`, read from its document by `draw::outline`
+into a unit-square `Outline` that `Outline::placed` sizes to the icon box. Both halves stay inside
+the draw list, so neither host reaches a toolkit widget for an icon and no capability predicate
+routes around one. `MicroPrimary` retains its existing forced Play/Pause glyph and therefore
+ignores a declared icon.
+
+`atoms::nav_item::NavItem` likewise owns one retained painting: the selected background, marker
+rectangle, icon mark, and mono label. Its canvas remains `Fill` wide and fixes only
+`skin.nav.item_height`, so shaping the two glyph runs never participates in intrinsic layout.
+`TabLarge` is the first base-painted activation control whose size comes from its own text.
+`atoms::tab::TabLarge` shapes the label through `TextContext`; that shaped width is the measurement,
+and horizontal padding produces the control width while the skin supplies its fixed height. The
+custom iced widget performs that measurement in `layout` and replays the atom's label and
+active-only underline in `draw`, so leaf and hosted tabs keep the same rectangle. Its shaping
+scratch remains per-widget; moving it to a document-scoped owner is still separate debt. With no
+sizing wrapper, the retained host maps the tab target from the widget's own layout bounds; wrapped
+controls continue to map the child bounds inside their declared-size container.
 
 `validate::value_kinds` is the single owner of control read/write endpoint kinds. Intrinsic sizes are
 selected exhaustively from `ControlSpec` and the supplied `SkinDoc` by `size::control_size`,
@@ -371,8 +1204,8 @@ Sizing with blocks:
 
 ## Icon Identity
 
-A document names an `IconName`; `render/tree/icon.rs::render_icon` joins it to `render::Icon`
-(`render_tree_icon` joins the host-facing `TreeIcon` the same way), and `render/icons.rs::source`
+A document names an `IconName`; `render/icons.rs::document_icon` joins it to `render::Icon`
+(`tree_icon` joins the host-facing `TreeIcon` the same way), and `render/icons.rs::source`
 joins `Icon` to a lucide glyph or an embedded SVG. The legs are guarded differently: coverage by an
 exhaustive match with no wildcard, so a new `IconName` does not build until given an arm; which
 glyph an arm names by a runtime table in that file's test module, compared by codepoint because
@@ -401,10 +1234,12 @@ and returns as soon as the shell reports it captured. That capture is pass-globa
 suppressed by anything that captured earlier in the same traversal, not only by its own descendants.
 Harmless beside presses gated on the cursor being over their bounds; not harmless beside a widget
 that captures away from the cursor, such as a `WheelSurface` or a track-list row mid-drag.
-A `Button` inside a `Pressable` resolves by phase, not by nesting: `button` captures the press and
-publishes on the release, `mouse_area` publishes and captures on the press. The press is the
-button's and the `Pressable` stays silent; the release is the button's and the `Pressable` has no
-release to fire.
+
+A portable `Button` inside a `Pressable` resolves by traversal rather than by nesting. Its shared
+click recognizer publishes and captures the left press before `mouse_area` sees it, so the
+`Pressable` stays silent and the release publishes nothing. The explicit-SVG legacy iced button
+still captures the press and publishes on release; that earlier capture likewise keeps the wrapper
+silent.
 
 ## Popover Ownership
 
@@ -430,33 +1265,36 @@ the widget owns how. `at: PopoverAt` chooses anchor rectangle or pointer, defaul
 up with the anchor's. A menu on a full-width row needs `Pointer` (an anchor rectangle spanning the
 list cannot say where the user clicked); a burger under a fixed cell needs `Anchor`.
 
-Everything else stays in `widgets/anchored.rs`:
+Everything else stays in `render/immediate/anchored.rs`:
 
 - `place` puts the surface below whichever geometry it opens from, overhangs it `FRAME_OVERHANG`
   (1 px) past the aligned edge so the content column lands flush, flips above when the room below
   runs out, and clamps both axes into the viewport; a surface taller than the viewport starts at the
   top and overflows downward.
 - A `Pointer` popover opens at the press that opened it: `Anchored` records `Cursor::position` on
-  every `ButtonPressed`, `latch` consumes that record on the false-to-true edge of the open flag (no
-  banked press places at the anchor), and `Widget::overlay` carries the latched point through the
-  same translation as the anchor rectangle. The flip frame cannot read the live cursor -
-  `iced_runtime` hands the base tree `Cursor::Unavailable` while the overlay claims any interaction.
+  every `ButtonPressed`, and `latch` consumes that record on the false-to-true edge of the open flag,
+  so moving over an open surface never drags it and every open takes its own press. With no banked
+  press it consumes `None` and places at the anchor, the shape a keyboard-driven open would take.
+  `Widget::overlay` carries the latched point through the same translation as the anchor rectangle.
+  The flip frame cannot read the live cursor: `iced_runtime` builds the overlay before updating the
+  base tree and hands that tree `Cursor::Unavailable` while the overlay claims any interaction.
 - The surface claims the cursor over itself and nowhere else: claiming wider would cost the whole
   base tree its cursor for that pass, the signal deciding whether the pointer belongs to the overlay.
 - `SkinDoc.pop` solely owns the pop chrome - background, frame, gold cap, shadow - and `Anchored`
-  paints all four; markup declares only content. Frame and cap draw outward of the content column,
-  so a 298 px column yields a 300 px surface exceeding the content height by twice the frame plus
-  the cap.
+  paints all four; markup declares only content, because redeclaring the chrome in a document would
+  create a second owner. Frame and cap draw outward of the content column, so a 298 px column yields
+  a 300 px surface exceeding the content height by twice the frame plus the cap.
 - `Anchored` holds exactly two children: `render/tree/node.rs` hands it `iced::widget::Space` for a
   closed popover's content rather than dropping the child, so the two-entry split in
   `Widget::overlay` and the single layout child in the overlay's `draw` and `update` are total
   patterns, not fallback branches. `Tree::diff_children` rebuilds the content state on each open.
   The overlay's layout node is the whole surface with the content column as its single child, so
   `layout.bounds()` means "the popover" everywhere and a press on the frame belongs to the menu.
-- `Widget::overlay` always wraps in `overlay::Group`, including a group of one: without it the layer
-  is bounded by the bare `Anchored` element, which is exactly the surface, and the shadow drawn
-  below and blurred outward falls outside it. `Anchored` declares no overlay index and is the
-  crate's only overlay-producing widget.
+- `Widget::overlay` always wraps in `overlay::Group`, including a group of one:
+  `overlay::Nested::draw` bounds the layer by the top-level element, `Group::layout` expands that
+  element to the viewport, and a bare `Anchored` element is exactly the surface, so the shadow drawn
+  below and blurred outward otherwise falls outside it. `Anchored` declares no overlay index and
+  takes iced's default.
 - Dismissal fires only on a mouse press with the cursor outside the surface, or on Escape - never on
   a release, a move or a scroll, since the opening press is captured while the popover is still
   closed and its release lands on the fresh overlay over the anchor. The widget publishes
@@ -464,6 +1302,20 @@ Everything else stays in `widgets/anchored.rs`:
   so the anchor's press cannot also fire; the host's popover handler is therefore set-false and
   never a toggle, the anchor's press stays the only toggle, and outside press and Escape are
   idempotent.
+
+### Engine-owned context-bar picker
+
+The engine-owned `ContextBar` scope picker is the crate's second overlay-producing widget, but it
+does not introduce a neutral layer contract. Its base `DrawList` replays in the ordinary canvas and
+therefore remains under the subtree's clip. When the picker is open, its popup `DrawList` replays in
+a fresh iced overlay frame after that subtree draw and clip have completed. The two retained lists
+are separate adapter outputs; no `DrawCmd` escapes a `DrawCmd::Clip`, and the code does not assemble
+a synthetic combined command tree. The Leaf widget state contains its local engine; the Engine
+variant contains only the host-projected picker snapshot, so there is no dormant second mutable
+engine. An answered base-tree key invalidates layout while the popup is open, including when its
+retained snapshot is unchanged, because iced clears its cached overlay on base capture and rebuilds
+it only during revalidation. General retained layering and cross-backend base/popup ordering belong
+to the M7 root flip.
 
 ## Shipped App Menu
 
@@ -485,12 +1337,37 @@ state. They are not builtin app presets: the Gallery embeds them explicitly and 
 endpoints, while a production host must supply its measured clock sources, transport state and
 portal policy. The documents retain no tempo, source, range, Link or MIDI state.
 
-`PortalMap` and `Range` are the dedicated renderer primitives in this group. `PortalMap` copies one
-`PortalMapView` snapshot for the iced canvas lifetime and draws the declared master, range and
-target arcs with `SkinDoc.portal_map` geometry. `Range` reads normalized bounds and emits a scalar
-at `<control-path>/min` or `<control-path>/max`; the host owns snapping and the minimum gap. The
-generic `Scroll` document container provides the bounded portal table. Selection, portal
-enumeration and timing decisions remain host-owned.
+`PortalMap` and `Range` are the dedicated renderer primitives in this group, and both are neutral
+painters mounted once through the registry, so the two hosts draw one picture. `PortalMapData` owns
+the `PortalMapView` snapshot rather than borrowing it, because a retained leaf outlives the frame
+that built the slice; a target list is replaced whole on refresh, since a portal leaving the set and
+another arriving is one read rather than a field that moved. The map draws the declared master,
+range and target arcs with `SkinDoc.portal_map` geometry, and its arcs reach the seam as
+`DrawListBuilder::stroke_path` over `Verb::QuadTo` — a curve open at both ends, which a fill would
+close behind the pen.
+
+`Range` reads normalized bounds and emits a scalar at `<control-path>/min` or `<control-path>/max`;
+the host owns snapping and the minimum gap. Its gesture is `Grip::Span`, one shared
+`recognizers::Span` used by both adapters rather than two host-specific widgets or mutable state in
+the painter. The press picks the nearer handle and the gesture keeps it until release: re-deciding
+on every move would hand the drag to the other handle the moment the pointer crossed it, and the
+interval would fold through itself instead of being pushed. A tie goes to the lower handle. The
+control draws the end it just authored so the hand sees the rail move, and the host's snapped answer
+lands a frame later; neither end is ordered against the other locally, because a control that closed
+the gap itself would fight that answer. Selection, portal enumeration and timing decisions remain
+host-owned.
+
+The generic `Scroll` document container provides the bounded portal table, and is the one document
+node whose travel neither the document nor the base can settle: the document declares the window,
+and how far the content may move is only known once a host has laid the child out. `Host::scroll`
+therefore hands each host the folded child and the declared box and nothing else. iced mounts it as
+a `scrollable`, which keeps a layout node of its own — the retained descriptor walk descends one
+extra level for that, which is why `HostedLayout::Scroll` exists beside `Wrapper` rather than
+reusing it. The retained host owns `masonry::viewport::Viewport`: it measures the child against the
+window's width and the child's own height, clips to the window, places the child at the negated
+offset, and answers the wheel. The offset lives with the geometry that bounds it rather than in
+`Node`, and a wheel at either end of the travel is left unconsumed so it continues outward instead
+of being swallowed by a window with nowhere to go.
 
 ## Stream Quality Ownership
 
@@ -530,22 +1407,54 @@ presentation, never native window state.
 
 ## Track List Column Ownership
 
-`TrackList` owns an ordered typed `Vec<TrackColumn>` and requires `Title` during compilation. The
-renderer owns table geometry and cell presentation but not column visibility: with a `columns_state`
-binding present the host may expose Bool reads at `<binding-id>.<column endpoint_name>`, and a
-missing derived endpoint means that column is visible. This keeps one declarative column inventory
-while letting library, playlist and set-queue hosts apply presets without renderer-owned state.
+`Table` owns an ordered typed column list and requires `Title` during compilation. Its optional
+document field is a `Param<Vec<TableColumn>>`, so an including document may pass it as an argument
+(`columns: "$columns"` against `with: { "columns": "[Deck, Title, Artist]" }`); `Param` is untagged,
+so a literal `columns: [Title, Artist, Time]` parses as before. Validation reads the resolved list:
+`ControlSite` carries it already substituted beside the substituted `read` and `write`, so routing
+columns through a parameter cannot slip past the `Title` requirement. This lets one
+`library.kmodule.ron` serve both the built-in player preset and the app.
+
+The renderer owns table geometry and cell presentation but not column visibility: with a
+`columns_state` binding present the host may expose Bool reads at
+`<binding-id>.<column endpoint_name>`, and a missing derived endpoint means that column is visible.
+This keeps one declarative column inventory while letting library, playlist and set-queue hosts
+apply presets without renderer-owned state.
 
 The `Deck` column marks assignment and does not offer it: it shows the letters the host put on the
-row, and nothing when there are none. A row is a drag source instead - pulling past
-`behavior::ItemDrag::DRAG_THRESHOLD` (4 px) emits `ControlAction::Drag(DragPhase::Start(index))` on
-the control path, and the release emits `DragPhase::Drop`. The gesture captures no event, so the row
-keeps its own click and whatever the drag is released over sees the same release.
-Column widths are host-owned through Scalar reads at `<binding-id>.width.<column endpoint_name>` and
-`SetScalar` controls emitted at `<track-list-path>/width/<column endpoint_name>`; a missing width
-read uses the skin default. The renderer retains only canvas drag state, clamps resizable fixed
-columns to the skin minimum, and keeps the required Title column flexible with its skin-owned
-minimum.
+row, and nothing when there are none. One row-item owner arms selection on press and gives the same
+index to `ItemDrag`. A plain release over that row emits `SelectIndex`; pulling past the 4 px drag
+threshold suppresses selection, emits `ControlAction::Drag(DragPhase::Start(index))` on the control
+path, and makes the release emit `DragPhase::Drop`. The recognizer captures no event, so whatever
+the drag is released over sees the same release. Reconciliation cancels a held index if its row has
+disappeared.
+
+Column widths are host-owned through Scalar reads at
+`<binding-id>.width.<column endpoint_name>` and `SetScalar` controls emitted at
+`<track-list-path>/width/<column endpoint_name>`; a missing width read uses the skin default. The
+renderer retains only canvas drag state, clamps resizable fixed columns to the skin minimum, and
+keeps the required Title column flexible with its skin-owned minimum.
+
+The retained painter draws the header, rows, cells, dividers, footer, and both scrollbar indicators
+from that resolved column layout. Input geometry remains independent of paint geometry: each
+resizable edge exposes the skin's wider `divider_hit_width` rectangle to the engine while the
+painter emits only the centered `divider_width` rectangle. The distinction is intentional: a
+usable resize band must not make the rule look thick, and the thin rule must not shrink the band
+that can start `SetScalar` drag input. Completely clipped bands expose no new hit target; a divider
+already captured before a relayout retains a zero-area watcher only until release, so its scalar
+gesture cannot strand engine capture after the painted edge moves offscreen.
+
+For a hosted list, the engine retains one row-item owner, column dividers, and vertical scroll under
+the document's canonical track-list path. It also retains a sibling horizontal scroll at
+`<track-list-path>/scroll-x` only when the resolved columns overflow the laid-out viewport. Target
+order is outer horizontal, inner vertical, one row watcher, then the visible divider bands; reverse
+routing therefore tries the most specific input first. The watcher derives its index and clipped
+row hit from the current cursor, but remains as a zero-area target away from a row so an offscreen
+release can still publish `DragPhase::Drop` for the index held at press. A visible vertical
+scrollbar reserves its painted rail and trailing margin as one non-row interaction lane. Both
+canonical engine offsets are synchronized into the canvas's two `ScrollState` owners, along with
+the pressed row; there are no parallel offset fields. A leaf-owned list uses the same recognizers
+and scroll state locally, never a second hosted owner.
 
 ## Browser Tree Ownership
 
@@ -558,6 +1467,47 @@ binding and emit `SelectIndex` on the control path so scope state stays host-own
 `validate::check_context_scope` requires `scope_items`, the scope read and the write to appear
 together or not at all.
 
+The search combines two ownership domains without merging them. The query is document-owned: each
+ordinary text edit and each native IME commit emits exactly one `UiEvent::LibraryQuery` containing
+the complete resulting query, and the next view reconciles that document value back into the
+component. The engine owns only per-control interaction state: caret, selection, pointer drag, and
+preedit. Moving the caret, extending the selection, or replacing or closing a preedit changes the
+paint projection and requests a redraw without emitting a `UiEvent`. Preedit is composition, not
+query text; only `InputMethod::Commit` applies it to the query and publishes. The component's query
+copy is a reconciled edit mirror for consecutive input packets, not a second canonical read.
+
+Text shaping and caret measurement come from the same Parley layout at UTF-8 grapheme boundaries.
+The painter uses local canvas coordinates, while the engine target carries iced's absolute
+window-client layout rectangle in logical pixels. Adding the local caret offset to that target
+origin produces the absolute logical rectangle passed through `Shell::request_input_method` on
+each redraw. The Leaf wrapper asks its local engine; an Engine-owned tree is answered by its outer
+host. The current preedit and its byte-range selection travel with that request, so `iced_winit`
+paints its over-the-spot text, selection, and underline at the reported caret. Composition is
+therefore answered rather than dropped, and the canvas does not paint a second preedit copy.
+
+Rows paint through `DrawListBuilder` inside one viewport clip. `InputOwner::Leaf` selects the
+interactive canvas program; `InputOwner::Engine` selects the paint-only program and receives a
+derived offset snapshot after host reconciliation and layout. The retained `ScrollComponent` is
+the canonical mutable owner for a hosted path, while the leaf program owns the same `ScrollState`
+only where no engine exists. Neither path sends offset changes through `UiEvent`; only row
+activation crosses the existing index publisher. The painter shapes and retains only rows that
+intersect the viewport, including partially visible boundary rows, while the clip remains the
+overflow contract. The solid scrollbar is an offset indicator in this wheel slice: its lane is
+excluded from row activation, but rail/thumb dragging and touch panning are not input contracts of
+M5a.
+
+Wheel arbitration is axis-aware, directional, and consume-or-observe. Portable wheel packets keep
+both horizontal and vertical deltas and whether the host reported lines or pixels; every retained
+scroll declares the single axis it owns. In reverse document order, the innermost viewport under
+the pointer consumes only a non-zero delta on its own axis that actually changes its clamped
+offset. A wrong-axis delta or travel beyond either boundary returns `Ignored`, so routing continues
+to the next outer engine target and then unchanged to an unported iced ancestor. Consequently a
+movable vertical track-list body passes a horizontal wheel to its conditional horizontal parent;
+at the bottom a further downward wheel is ignored while an upward wheel is still consumed, and the
+same two-direction boundary rule holds for the horizontal axis. Search keyboard and IME input route
+only to the focused text-input component; with focus elsewhere they remain ignored and can continue
+to the host shortcut layer.
+
 ## Application Consumer
 
 The `kithara-app` GUI is the production consumer: it embeds its own layout and module
@@ -565,3 +1515,21 @@ documents, implements `EndpointRegistry` (`gui/ui/endpoints.rs`) and `Reads` ove
 tree (`gui/reads/`), and maps `UiEvent` to app messages (`gui/ui/events.rs`). Builtin
 module docs under `assets/modules/` remain the canonical presets consumed by the gallery modules
 page.
+
+## Masonry Host Exports
+
+`MasonryHost::{with_state, with_custom}` and `MasonryRoot::{take_actions,
+take_platform_signals}` are the public contract a direct Masonry consumer drives: install retained
+state, mount custom content at a document path, then drain typed actions and platform signals each
+frame. `app::Ui::render` is the complete higher-level frame export: its `Frame` carries the Vello
+scene and native logical Vis declarations, and `render::vis::VisPass` converts and consumes those
+declarations on the same wgpu 26 device. `examples/masonry_host.rs` exercises the direct four
+exports end to end; the gallery window and headless capture exercise the complete frame and native
+pass; the M9 lsq migration is the second direct consumer.
+
+Those four are why `dead_exports` stopped classifying `TargetKind::Example` as test-like. An example
+is shipped code demonstrating a public API, `cargo --all-targets` builds it, and
+`platform_layer_hygiene` already scanned the same files as production — so counting an example's
+references as test-only made an export that only an example drives look dead. Removing `Example`
+from that classification cleared exactly these four findings and introduced none anywhere else in
+the workspace.

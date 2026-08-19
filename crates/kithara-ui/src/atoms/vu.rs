@@ -1,202 +1,122 @@
-use iced::{
-    Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
-    mouse::{Cursor, Interaction},
-    widget::{
-        Space,
-        canvas::{self, Action, Canvas, Frame, Geometry},
-    },
-};
 use num_traits::cast::AsPrimitive;
 
 use crate::{
     atoms::design::crossfader::{TickAxis, TickRail},
-    render::{ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
+    draw::{DrawListBuilder, Rect, Rgba},
+    render::{Skin, StereoLevels, theme::RenderPalette},
     skin::VuVerticalSkin,
-    widgets::{
-        Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
-    },
 };
 
-#[derive(bon::Builder)]
-pub(crate) struct VerticalVu<'path, 'value, 'data, 'skin> {
-    skin: &'skin Skin,
-    path: &'path str,
-    value: Option<&'value ReadValue<'data>>,
-    ticks: bool,
-}
-
-impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        let Some(ReadValue::Stereo(levels)) = self.value else {
-            return Space::new().into();
-        };
-        Canvas::new(VerticalVuCanvas {
-            drag: ScalarDrag::builder()
-                .path(self.path)
-                .mode(ScalarDragMode::Vertical)
-                .hover(HoverState::new(Interaction::ResizingVertically))
-                .build(),
-            metrics: self.skin.vu_vertical,
-            ticks: self
-                .ticks
-                .then(|| TickRail::new(TickAxis::Vertical, self.skin.vu_vertical.ticks, self.skin)),
-            levels: *levels,
-            palette: self.skin.palette,
-            thumb_color: self.skin.color(self.skin.vu_vertical.thumb_color),
-            thumb_notch_color: self.skin.color(self.skin.vu_vertical.thumb_notch_color),
-        })
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-    }
-}
-
-struct VerticalVuCanvas {
-    thumb_color: Color,
-    thumb_notch_color: Color,
-    ticks: Option<TickRail>,
-    palette: RenderPalette,
-    drag: ScalarDrag,
-    levels: StereoLevels,
+pub(crate) struct VerticalVu {
     metrics: VuVerticalSkin,
+    palette: RenderPalette,
+    thumb_color: Rgba,
+    thumb_notch_color: Rgba,
+    ticks: Option<TickRail>,
 }
 
-impl canvas::Program<UiEvent> for VerticalVuCanvas {
-    type State = ScalarDragState;
+impl VerticalVu {
+    pub(crate) fn new(ticks: bool, skin: &Skin) -> Self {
+        Self {
+            metrics: skin.vu_vertical,
+            palette: skin.palette,
+            thumb_color: skin.rgba(skin.vu_vertical.thumb_color),
+            thumb_notch_color: skin.rgba(skin.vu_vertical.thumb_notch_color),
+            ticks: ticks.then(|| TickRail::new(TickAxis::Vertical, skin.vu_vertical.ticks, skin)),
+        }
+    }
 
-    fn draw(
-        &self,
-        _state: &ScalarDragState,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let canvas_bounds = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            ..bounds
-        };
+    pub(crate) fn paint(&self, list: &mut DrawListBuilder, levels: StereoLevels, bounds: Rect) {
         let fader = if self.ticks.is_some() {
-            fader_bounds(canvas_bounds, self.metrics.fader_width)
+            fader_bounds(bounds, self.metrics.fader_width)
         } else {
-            canvas_bounds
+            bounds
         };
         if let Some(rail) = &self.ticks {
-            rail.draw(
-                &mut frame,
-                tick_rail_bounds(canvas_bounds, fader.x, self.metrics.ticks.gap),
+            rail.paint(
+                list,
+                tick_rail_bounds(bounds, fader.x, self.metrics.ticks.gap),
             );
         }
-        draw_segments(&mut frame, fader, self.levels, self.metrics, self.palette);
-        draw_thumb(
-            &mut frame,
-            fader,
-            self.levels.volume,
-            self.metrics,
-            self.thumb_color,
-            self.thumb_notch_color,
-        );
-        vec![frame.into_geometry()]
+        self.paint_segments(list, fader, levels);
+        self.paint_thumb(list, fader, levels.volume);
     }
 
-    delegate::delegate! {
-        to self.drag {
-            fn update(
-                &self,
-                state: &mut ScalarDragState,
-                event: &Event,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Option<Action<UiEvent>>;
-            fn mouse_interaction(
-                &self,
-                state: &ScalarDragState,
-                bounds: Rectangle,
-                cursor: Cursor,
-            ) -> Interaction;
+    fn paint_segments(&self, list: &mut DrawListBuilder, bounds: Rect, levels: StereoLevels) {
+        let step = self.metrics.segment_height + self.metrics.segment_gap;
+        let count = ((bounds.h + self.metrics.segment_gap) / step).floor();
+        if count <= 0.0 {
+            return;
+        }
+
+        let count_usize: usize = count.as_();
+        let level = (levels.l.max(levels.r) * levels.volume).clamp(0.0, 1.0);
+        let lit = (level * count).round();
+        let width = (bounds.w - self.metrics.segment_inset_x * 2.0).max(0.0);
+        for index in 0..count_usize {
+            let index: f32 = index.as_();
+            let ratio = index / count;
+            let color = if index >= lit {
+                self.palette.bg_inset
+            } else if ratio > self.metrics.danger_threshold {
+                self.palette.danger
+            } else if ratio > self.metrics.warning_threshold {
+                self.palette.warning
+            } else {
+                self.palette.success
+            };
+            list.fill_rect(
+                Rect {
+                    h: self.metrics.segment_height,
+                    w: width,
+                    x: bounds.x + self.metrics.segment_inset_x,
+                    y: bounds.y + bounds.h - self.metrics.segment_height - index * step,
+                },
+                color,
+            );
+        }
+    }
+
+    fn paint_thumb(&self, list: &mut DrawListBuilder, bounds: Rect, volume: f32) {
+        let travel = (bounds.h - self.metrics.thumb_height).max(0.0);
+        let y = bounds.y + ((1.0 - volume.clamp(0.0, 1.0)) * travel).round();
+        list.fill_rect(
+            Rect {
+                h: self.metrics.thumb_height,
+                w: bounds.w,
+                x: bounds.x,
+                y,
+            },
+            self.thumb_color,
+        );
+        if self.metrics.thumb_notch_offset < self.metrics.thumb_height {
+            list.fill_rect(
+                Rect {
+                    h: self.metrics.thumb_notch_height,
+                    w: bounds.w,
+                    x: bounds.x,
+                    y: y + self.metrics.thumb_notch_offset,
+                },
+                self.thumb_notch_color,
+            );
         }
     }
 }
 
-fn fader_bounds(bounds: Rectangle, width: f32) -> Rectangle {
-    let width = width.clamp(0.0, bounds.width);
-    Rectangle {
-        x: bounds.x + bounds.width - width,
-        width,
+fn fader_bounds(bounds: Rect, width: f32) -> Rect {
+    let width = width.clamp(0.0, bounds.w);
+    Rect {
+        w: width,
+        x: bounds.x + bounds.w - width,
         ..bounds
     }
 }
 
-fn tick_rail_bounds(bounds: Rectangle, fader_x: f32, gap: f32) -> Rectangle {
+fn tick_rail_bounds(bounds: Rect, fader_x: f32, gap: f32) -> Rect {
     let right = (fader_x - gap).max(bounds.x);
-    Rectangle {
-        width: right - bounds.x,
+    Rect {
+        w: right - bounds.x,
         ..bounds
-    }
-}
-
-fn draw_segments(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    levels: StereoLevels,
-    metrics: VuVerticalSkin,
-    palette: RenderPalette,
-) {
-    let step = metrics.segment_height + metrics.segment_gap;
-    let count = ((bounds.height + metrics.segment_gap) / step).floor();
-    if count <= 0.0 {
-        return;
-    }
-
-    let count_usize: usize = count.as_();
-    let level = (levels.l.max(levels.r) * levels.volume).clamp(0.0, 1.0);
-    let lit = (level * count).round();
-    let width = metrics.segment_inset_x.mul_add(-2.0, bounds.width).max(0.0);
-    for index in 0..count_usize {
-        let index: f32 = index.as_();
-        let ratio = index / count;
-        let color = if index >= lit {
-            palette.bg_inset
-        } else if ratio > metrics.danger_threshold {
-            palette.danger
-        } else if ratio > metrics.warning_threshold {
-            palette.warning
-        } else {
-            palette.success
-        };
-        let y = index.mul_add(-step, bounds.y + bounds.height - metrics.segment_height);
-        frame.fill_rectangle(
-            Point::new(bounds.x + metrics.segment_inset_x, y),
-            Size::new(width, metrics.segment_height),
-            color,
-        );
-    }
-}
-
-fn draw_thumb(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    volume: f32,
-    metrics: VuVerticalSkin,
-    color: Color,
-    notch_color: Color,
-) {
-    let travel = (bounds.height - metrics.thumb_height).max(0.0);
-    let y = bounds.y + ((1.0 - volume.clamp(0.0, 1.0)) * travel).round();
-    frame.fill_rectangle(
-        Point::new(bounds.x, y),
-        Size::new(bounds.width, metrics.thumb_height),
-        color,
-    );
-    if metrics.thumb_notch_offset < metrics.thumb_height {
-        frame.fill_rectangle(
-            Point::new(bounds.x, y + metrics.thumb_notch_offset),
-            Size::new(bounds.width, metrics.thumb_notch_height),
-            notch_color,
-        );
     }
 }
 
@@ -209,25 +129,27 @@ mod tests {
     #[kithara::test]
     fn the_fader_keeps_its_width_and_yields_the_rest_to_the_ticks() {
         let bare = fader_bounds(
-            Rectangle {
+            Rect {
+                h: 0.0,
+                w: 18.0,
                 x: 3.0,
-                width: 18.0,
-                ..Rectangle::default()
+                y: 0.0,
             },
             18.0,
         );
         let with_ticks = fader_bounds(
-            Rectangle {
+            Rect {
+                h: 0.0,
+                w: 38.0,
                 x: 3.0,
-                width: 38.0,
-                ..Rectangle::default()
+                y: 0.0,
             },
             18.0,
         );
 
         assert_eq!(bare.x, 3.0);
-        assert_eq!(bare.width, 18.0);
+        assert_eq!(bare.w, 18.0);
         assert_eq!(with_ticks.x, 23.0);
-        assert_eq!(with_ticks.width, 18.0);
+        assert_eq!(with_ticks.w, 18.0);
     }
 }

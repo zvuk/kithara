@@ -135,6 +135,50 @@ e2e-resamplers *ARGS:
     just test run --lane=e2e-fused "$@"
     just test run --lane=e2e-glide "$@"
 
+# Every UI test target, followed by both hosts drawing the same gallery and
+# shipped studio pages, and the gallery built the other way it ships. This is
+# the UI pipeline's single entrypoint; the general workspace lane deliberately
+# excludes the same tests.
+#
+# One binary takes both sets, so a difference between them is a difference
+# between the hosts rather than between two builds of the same documents. Both
+# rasterise on a graphics device, neither opens a window. `parity-budget.txt`
+# prices each page, and a page over its price - or missing from a set - ends
+# this non-zero.
+#
+# The last step builds the example with the toolkit's default features - iced
+# alone, no retained host - and runs its own tests there. Everything above is
+# one feature set, so a page, a walk or a census that only holds when both
+# hosts are compiled in would pass all of it and fail the first consumer who
+# takes the toolkit without masonry.
+ui:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="$PWD/target/parity"
+    rm -rf "$dir/iced" "$dir/masonry" "$dir/masks" "$dir/scenario" "$dir/studio"
+    KITHARA_UI_SCENARIO_CAPTURE="$dir/scenario" just test run --lane=ui
+    just test run --lane=ui-doc
+    gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/masonry)
+    KITHARA_GALLERY_CAPTURE_OFFSCREEN="$dir/iced" "${gallery[@]}"
+    KITHARA_GALLERY_CAPTURE_MASONRY="$dir/masonry" "${gallery[@]}"
+    KITHARA_GALLERY_COMPARE="$dir/iced:$dir/masonry:$dir/masks" \
+      KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-ui/examples/gallery/parity-budget.txt \
+      "${gallery[@]}"
+    KITHARA_STUDIO_CAPTURE="$dir/studio" \
+      cargo test -p kithara-app --lib --no-default-features --features masonry \
+        studio_capture_writes_both_hosts -- --nocapture
+    KITHARA_GALLERY_COMPARE="$dir/studio/iced:$dir/studio/masonry:$dir/studio/masks" \
+      KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-app/assets/ui/parity-budget.txt \
+      "${gallery[@]}"
+    cargo test -p kithara-ui --example gallery --profile test-release
+
+# The same pages through a real window, which is the only one of the three
+# captures that needs a display. Its job is to say whether the headless iced
+# set draws what a window draws, so compare it against a set photographed at
+# the geometry this one recorded in `frame.txt`.
+ui-window DIR="target/parity/window":
+    KITHARA_GALLERY_CAPTURE={{ DIR }} cargo run -p kithara-ui --example gallery --features kithara-ui/render
+
 # Cobertura and LCOV reports from one instrumented test run.
 coverage:
     #!/usr/bin/env bash

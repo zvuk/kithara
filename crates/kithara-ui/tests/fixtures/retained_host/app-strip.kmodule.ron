@@ -1,0 +1,74 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "app-strip",
+    root: Column(
+        gap: 0.0,
+        size: (w: Fill, h: Fill),
+        children: [
+            Popover(
+                id: "eq-menu",
+                open: Model(id: "mock.toggle.off"),
+                at: Pointer,
+                anchor: Pressable(
+                    id: "eq-menu-anchor",
+                    press: Command(id: "eq-menu-toggle"),
+                    child: Column(
+                        id: "eq",
+                        gap: 6.0,
+                        pad: 8.0,
+                        frame: (top: false, right: false, bottom: true, left: false),
+                        size: (w: Fill, h: Shrink),
+                        children: [
+                            Row(
+                                id: "row-1",
+                                gap: 24.0,
+                                size: (w: Shrink, h: Shrink),
+                                children: [
+                                    Knob(id: "high", label: Some("HIGH"), read: Parameter(id: "gain"), write: Parameter(id: "gain")),
+                                    Knob(id: "mid", label: Some("MID"), read: Parameter(id: "gain"), write: Parameter(id: "gain")),
+                                ],
+                            ),
+                            Row(
+                                id: "row-2",
+                                gap: 24.0,
+                                size: (w: Shrink, h: Shrink),
+                                children: [
+                                    Knob(id: "low", label: Some("LOW"), read: Parameter(id: "gain"), write: Parameter(id: "gain")),
+                                ],
+                            ),
+                        ],
+                    ),
+                ),
+                content: Text(id: "eq-menu-content", label: "EQ"),
+            ),
+            Column(
+                id: "volume-section",
+                pad: 8.0,
+                size: (w: Fill, h: Fill),
+                children: [
+                    Row(
+                        id: "volume-row",
+                        gap: 9.0,
+                        size: (w: Shrink, h: Fill),
+                        children: [
+                            VuVertical(
+                                id: "volume",
+                                size: (w: Fixed(38.0), h: Fill),
+                                ticks: true,
+                                read: Telemetry(id: "levels"),
+                                write: Parameter(id: "gain"),
+                            ),
+                            Text(
+                                id: "channel",
+                                size: (w: Fixed(28.0), h: Fill),
+                                style: DeckLetter,
+                                label: "A",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

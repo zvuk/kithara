@@ -22,6 +22,30 @@ pub struct Limits {
     pub max_nodes: usize,
 }
 
+/// Memory retained by the draw pools between frames.
+#[derive(Builder, Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DrawPoolLimits {
+    /// Maximum reusable buffers kept by each pool. Zero is treated as one.
+    #[builder(default = 64)]
+    pub max_buffers: usize,
+    /// Command slots retained by one returned draw-list buffer.
+    #[builder(default = 512)]
+    pub command_capacity: usize,
+    /// Vector verbs retained by one returned path buffer.
+    #[builder(default = 128)]
+    pub path_capacity: usize,
+    /// UTF-8 bytes retained by one returned text buffer.
+    #[builder(default = 128)]
+    pub text_capacity: usize,
+}
+
+impl Default for DrawPoolLimits {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self::builder().build()
@@ -37,6 +61,8 @@ pub struct UiConfig {
     pub limits: Limits,
     #[builder(default = 64 * 1024)]
     pub max_arena_bytes: usize,
+    #[builder(default)]
+    pub draw_pools: DrawPoolLimits,
 }
 
 impl Default for UiConfig {

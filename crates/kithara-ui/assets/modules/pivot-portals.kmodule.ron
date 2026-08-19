@@ -42,6 +42,7 @@
             Row(
                 id: "body",
                 gap: 0.0,
+                align: Start,
                 size: (w: Fill, h: Shrink),
                 children: [
                     Column(

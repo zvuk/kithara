@@ -5,8 +5,7 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
 };
 
-use super::consts::Consts;
-use crate::{mock_mixer, mock_stress};
+use super::{consts::Consts, mixer, stress};
 
 #[derive(Default)]
 pub(crate) struct MockRegistry {
@@ -296,12 +295,27 @@ pub(crate) fn registry() -> impl EndpointRegistry {
     insert_deck_endpoints(&mut registry);
     insert_clock_endpoints(&mut registry);
     insert_pivot_endpoints(&mut registry);
-    mock_mixer::insert_endpoints(&mut registry);
-    mock_stress::insert_endpoints(&mut registry);
+    mixer::insert_endpoints(&mut registry);
+    stress::insert_endpoints(&mut registry);
     insert_output_levels(&mut registry);
-    for id in ["player.output.volume", "mock.cells.segmented", "vis.preset"] {
+    for id in [
+        "player.output.volume",
+        "mock.cells.segmented",
+        "vis.preset",
+        "gallery.sprite.scrub",
+        "gallery.lottie.scrub",
+    ] {
         registry.insert(
             EndpointCategory::Parameter,
+            id,
+            EndpointDesc::new(ValueKind::Scalar),
+        );
+    }
+    // The document shader binds these by name; the page is a capture fixture, so
+    // they hold still rather than animating.
+    for id in ["shader.energy", "shader.level"] {
+        registry.insert(
+            EndpointCategory::Model,
             id,
             EndpointDesc::new(ValueKind::Scalar),
         );
@@ -316,6 +330,36 @@ pub(crate) fn registry() -> impl EndpointRegistry {
     insert_library_endpoints(&mut registry);
     insert_menu_endpoints(&mut registry);
     insert_quality_endpoints(&mut registry);
+    insert_page_endpoints(&mut registry);
+    for id in [
+        "deck.view.zoom",
+        "mock.knob.26",
+        "mock.knob.28",
+        "mock.knob.34",
+        "mock.knob.38",
+        "mock.volume",
+        "mock.cells.segmented",
+        "vis.preset",
+    ] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(ValueKind::Scalar),
+        );
+    }
+    insert_table_endpoints(&mut registry);
+    registry.insert(
+        EndpointCategory::Model,
+        "mock.levels",
+        EndpointDesc::new(ValueKind::Stereo),
+    );
+    registry
+}
+
+/// Everything the gallery pages read for themselves: the words they label
+/// their sections with, the poses their objects hold, and the flag each tab
+/// answers with.
+fn insert_page_endpoints(registry: &mut MockRegistry) {
     for id in [
         "gallery.label.knobs",
         "gallery.label.meters",
@@ -347,6 +391,36 @@ pub(crate) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(ValueKind::Text),
         );
     }
+    registry.insert(
+        EndpointCategory::Model,
+        "gallery.motion.phase",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "gallery.motion.clock",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    // One second per frame of the sheet, held still, and the scrub the fader
+    // beside the played sprite writes.
+    for id in [
+        "gallery.sprite.frame.0",
+        "gallery.sprite.frame.1",
+        "gallery.sprite.frame.2",
+        "gallery.sprite.frame.3",
+        "gallery.sprite.frame.4",
+        "gallery.sprite.frame.5",
+        "gallery.sprite.frame.6",
+        "gallery.sprite.frame.7",
+        "gallery.sprite.scrub",
+        "gallery.lottie.scrub",
+    ] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(ValueKind::Scalar),
+        );
+    }
     for id in [
         "gallery.tab.atoms",
         "gallery.tab.buttons",
@@ -361,13 +435,18 @@ pub(crate) fn registry() -> impl EndpointRegistry {
         "gallery.tab.vis",
         "gallery.tab.chrome",
         "gallery.tab.titlebars",
-        "gallery.tab.tracklist",
+        "gallery.tab.table",
         "gallery.tab.tree",
         "gallery.tab.library2",
         "gallery.tab.stress",
         "gallery.tab.menu",
         "gallery.tab.clock",
         "gallery.tab.pivot",
+        "gallery.tab.shader",
+        "gallery.tab.objects",
+        "gallery.tab.motion",
+        "gallery.tab.sprites",
+        "gallery.tab.lottie",
         "gallery.module.deck",
         "gallery.module.deck_micro",
         "gallery.module.global_bar",
@@ -390,46 +469,23 @@ pub(crate) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(ValueKind::Bool),
         );
     }
-    for id in [
-        "deck.view.zoom",
-        "mock.knob.26",
-        "mock.knob.28",
-        "mock.knob.34",
-        "mock.knob.38",
-        "mock.volume",
-        "mock.cells.segmented",
-        "vis.preset",
-    ] {
-        registry.insert(
-            EndpointCategory::Model,
-            id,
-            EndpointDesc::new(ValueKind::Scalar),
-        );
-    }
-    insert_tracklist_endpoints(&mut registry);
-    registry.insert(
-        EndpointCategory::Model,
-        "mock.levels",
-        EndpointDesc::new(ValueKind::Stereo),
-    );
-    registry
 }
 
-fn insert_tracklist_endpoints(registry: &mut MockRegistry) {
+fn insert_table_endpoints(registry: &mut MockRegistry) {
     registry.insert(
         EndpointCategory::Model,
-        "gallery.tracklist.preset",
+        "gallery.table.preset",
         EndpointDesc::new(ValueKind::Scalar),
     );
-    for column in Consts::TRACK_COLUMNS {
+    for column in Consts::table_columns() {
         registry.insert(
             EndpointCategory::Model,
-            &format!("gallery.tracklist.columns.{}", column.endpoint_name()),
+            &format!("gallery.table.columns.{}", column.id()),
             EndpointDesc::new(ValueKind::Bool),
         );
         registry.insert(
             EndpointCategory::Model,
-            &format!("gallery.tracklist.columns.width.{}", column.endpoint_name()),
+            &format!("gallery.table.columns.width.{}", column.id()),
             EndpointDesc::new(ValueKind::Scalar),
         );
     }
@@ -522,7 +578,7 @@ fn insert_menu_endpoints(registry: &mut MockRegistry) {
 
 fn insert_library_endpoints(registry: &mut MockRegistry) {
     for (id, kind) in [
-        ("library.visible_tracks", ValueKind::TrackList),
+        ("library.visible_tracks", ValueKind::Table),
         ("library.tree", ValueKind::Tree),
         ("library.breadcrumb", ValueKind::Text),
         ("library.query", ValueKind::Text),

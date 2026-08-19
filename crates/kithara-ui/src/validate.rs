@@ -5,7 +5,7 @@ use crate::{
     expand::ControlSite,
     ids::{EndpointId, NodeId, SourceUri},
     layout::{LayoutDoc, LayoutNode},
-    module::{BindingRef, ControlNode, ModuleDoc, TrackColumn},
+    module::{BindingRef, ControlNode, ModuleDoc, Pose, TableColumn},
     registry::{EndpointCategory, EndpointRegistry, ValueKind},
 };
 
@@ -279,6 +279,34 @@ fn walk_module(
             record(&id.0, &here, origin, seen)?;
             walk_module(child, &here, origin, seen, Sibling::Only)
         }
+        ControlNode::Object {
+            id,
+            transform,
+            to,
+            phase,
+            motion,
+            child,
+        } => {
+            let here = path.push(format!("Object({id})"));
+            record(&id.0, &here, origin, seen)?;
+            one_driver(phase.is_some(), motion.is_some(), &here, origin)?;
+            single_box(transform, to.as_ref(), child, &here, origin)?;
+            walk_module(child, &here, origin, seen, Sibling::Only)
+        }
+        ControlNode::Stage { id, children, .. } => {
+            let here = path.push(format!("Stage({id})"));
+            record(&id.0, &here, origin, seen)?;
+            for (index, child) in children.iter().enumerate() {
+                walk_module(
+                    child,
+                    &here.push(format!("[{index}]")),
+                    origin,
+                    seen,
+                    Sibling::Among,
+                )?;
+            }
+            Ok(())
+        }
         ControlNode::Slot { id, default, .. } => {
             let here = path.push(format!("Slot({id})"));
             record(&id.0, &here, origin, seen)?;
@@ -302,15 +330,95 @@ fn walk_module(
     }
 }
 
+/// One pose, one thing driving it.
+///
+/// A motion is not an alternative to a phase, it is a way of computing one, so
+/// an object carrying both would leave two answers for a single scalar with no
+/// honest rule for choosing between them. Refusing here is what keeps the
+/// render pass from having to invent one.
+fn one_driver(
+    phase: bool,
+    motion: bool,
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    if phase && motion {
+        return Err(UiDocError::ObjectDrivenTwice {
+            origin: origin.clone(),
+            path: path.render(),
+        });
+    }
+    Ok(())
+}
+
+/// What a pose can reach.
+///
+/// A move applies to any subtree, because every box in it shifts by the same
+/// vector. A turn or a scale does not: each box would turn about its own
+/// corner, and a group would come apart, so a turning object has to hold
+/// something laid out as one box. And nothing at all reaches a control that
+/// paints a native pass or hands back a list it already finished — the box
+/// would move and the picture would stay.
+fn single_box(
+    transform: &Pose,
+    to: Option<&Pose>,
+    child: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    // A track is judged by both ends: an object that starts still and travels
+    // to a turn still turns.
+    let travels = to.is_some_and(|to| !to.is_still());
+    if transform.is_still() && !travels {
+        return Ok(());
+    }
+    if let Some(child) = native_pass(child) {
+        return Err(UiDocError::ObjectNative {
+            origin: origin.clone(),
+            path: path.render(),
+            child,
+        });
+    }
+    let turns = transform.turns() || to.is_some_and(Pose::turns);
+    let group = match child {
+        _ if !turns => return Ok(()),
+        ControlNode::Row { .. } => "Row",
+        ControlNode::Column { .. } => "Column",
+        ControlNode::Stage { .. } => "Stage",
+        ControlNode::Slot { .. } => "Slot",
+        ControlNode::Scroll { .. } => "Scroll",
+        ControlNode::Popover { .. } => "Popover",
+        ControlNode::Include { .. } => "Include",
+        _ => return Ok(()),
+    };
+    Err(UiDocError::ObjectGroup {
+        origin: origin.clone(),
+        path: path.render(),
+        child: group,
+    })
+}
+
+const fn native_pass(child: &ControlNode) -> Option<&'static str> {
+    match child {
+        ControlNode::Shader { .. } => Some("Shader"),
+        ControlNode::Vis { .. } => Some("Vis"),
+        ControlNode::Table { .. } => Some("Table"),
+        ControlNode::Tree { .. } => Some("Tree"),
+        _ => None,
+    }
+}
+
 const fn control_id(node: &ControlNode) -> Option<&NodeId> {
     match node {
         ControlNode::Row { .. }
         | ControlNode::Column { .. }
         | ControlNode::Include { .. }
+        | ControlNode::Object { .. }
         | ControlNode::Optional { .. }
         | ControlNode::Popover { .. }
         | ControlNode::Pressable { .. }
         | ControlNode::Scroll { .. }
+        | ControlNode::Stage { .. }
         | ControlNode::Slot { .. } => None,
         ControlNode::DeckSummary { id, .. }
         | ControlNode::Brand { id, .. }
@@ -333,9 +441,12 @@ const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Fader { id, .. }
         | ControlNode::Wave { id, .. }
         | ControlNode::Vis { id, .. }
+        | ControlNode::Sprite { id, .. }
+        | ControlNode::Lottie { id, .. }
+        | ControlNode::Shader { id, .. }
         | ControlNode::PortalMap { id, .. }
         | ControlNode::Range { id, .. }
-        | ControlNode::TrackList { id, .. }
+        | ControlNode::Table { id, .. }
         | ControlNode::Tree { id, .. }
         | ControlNode::ContextBar { id, .. }
         | ControlNode::Toggle { id, .. }
@@ -360,8 +471,14 @@ pub(crate) fn check_controls(
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
     check_context_scope(site, origin)?;
-    if let ControlNode::TrackList { columns, .. } = site.control {
-        check_track_list(columns, site.columns_state, site.path, origin, endpoints)?;
+    if matches!(site.control, ControlNode::Table { .. }) {
+        check_table(
+            site.columns,
+            site.columns_state,
+            site.path,
+            origin,
+            endpoints,
+        )?;
     }
     if let Some(query) = site.query {
         check_binding(
@@ -425,6 +542,51 @@ pub(crate) fn check_controls(
     Ok(())
 }
 
+pub(crate) fn shader_uniform_kind(
+    name: &str,
+    binding: &BindingRef,
+    path: &str,
+    origin: &SourceUri,
+    endpoints: &dyn EndpointRegistry,
+) -> Result<ValueKind, UiDocError> {
+    let (category, id, with) = binding_parts(binding);
+    if !matches!(
+        category,
+        EndpointCategory::Parameter | EndpointCategory::Telemetry | EndpointCategory::Model
+    ) {
+        return Err(UiDocError::BindingDirection {
+            origin: origin.clone(),
+            id: id.0.clone(),
+            path: path.to_owned(),
+            detail: format!("{category} endpoint is not allowed on this side"),
+        });
+    }
+    let Some(endpoint) = endpoints.endpoint(category, id) else {
+        return Err(UiDocError::UnknownEndpoint {
+            origin: origin.clone(),
+            category: category.to_string(),
+            id: id.0.clone(),
+            path: path.to_owned(),
+        });
+    };
+    if !matches!(
+        endpoint.value,
+        ValueKind::Bool | ValueKind::Scalar | ValueKind::Stereo
+    ) {
+        return Err(UiDocError::Shader {
+            origin: origin.clone(),
+            path: path.to_owned(),
+            detail: format!(
+                "uniform {name:?} binds {kind} endpoint {id:?}; expected Bool, Scalar, or Stereo",
+                kind = endpoint.value,
+                id = id.0,
+            ),
+        });
+    }
+    check_scopes(id, with, endpoint, path, origin)?;
+    Ok(endpoint.value)
+}
+
 fn check_context_scope(site: ControlSite<'_>, origin: &SourceUri) -> Result<(), UiDocError> {
     let ControlNode::ContextBar { scope_items, .. } = site.control else {
         return Ok(());
@@ -439,19 +601,13 @@ fn check_context_scope(site: ControlSite<'_>, origin: &SourceUri) -> Result<(), 
     })
 }
 
-fn check_track_list(
-    columns: &[TrackColumn],
+fn check_table(
+    columns: &[TableColumn],
     columns_state: Option<&BindingRef>,
     path: &str,
     origin: &SourceUri,
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
-    if !columns.contains(&TrackColumn::Title) {
-        return Err(UiDocError::MissingTrackTitleColumn {
-            origin: origin.clone(),
-            path: path.to_owned(),
-        });
-    }
     let Some(binding) = columns_state else {
         return Ok(());
     };
@@ -468,7 +624,7 @@ fn check_track_list(
         });
     }
     for column in columns {
-        let derived = EndpointId(format!("{}.{}", id.0, column.endpoint_name()));
+        let derived = EndpointId(format!("{}.{}", id.0, column.id()));
         let Some(endpoint) = endpoints.endpoint(category, &derived) else {
             continue;
         };
@@ -619,9 +775,15 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
         | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
-        ControlNode::Time { .. } | ControlNode::Scalar { .. } | ControlNode::Meter { .. } => {
-            (Some(ValueKind::Scalar), None)
-        }
+        // A sprite reads how far its sheet has run, an artwork how far its pass
+        // has, and an object how far its motion has, and nothing writes back
+        // through any of them.
+        ControlNode::Time { .. }
+        | ControlNode::Scalar { .. }
+        | ControlNode::Meter { .. }
+        | ControlNode::Sprite { .. }
+        | ControlNode::Lottie { .. }
+        | ControlNode::Object { .. } => (Some(ValueKind::Scalar), None),
         ControlNode::Crossfader { .. }
         | ControlNode::Fader { .. }
         | ControlNode::Knob { .. }
@@ -630,7 +792,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         ControlNode::Wave { .. } => (Some(ValueKind::Waveform), Some(ValueKind::Scalar)),
         ControlNode::PortalMap { .. } => (Some(ValueKind::PortalMap), None),
         ControlNode::Range { .. } => (Some(ValueKind::Range), Some(ValueKind::Scalar)),
-        ControlNode::TrackList { .. } => (Some(ValueKind::TrackList), None),
+        ControlNode::Table { .. } => (Some(ValueKind::Table), None),
         ControlNode::Tree { .. } => (Some(ValueKind::Tree), None),
         ControlNode::VuStereo { .. } | ControlNode::VuVertical { .. } => {
             (Some(ValueKind::Stereo), Some(ValueKind::Scalar))
@@ -638,6 +800,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
         ControlNode::Include { .. }
         | ControlNode::Scroll { .. }
+        | ControlNode::Stage { .. }
         | ControlNode::Slot { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
@@ -651,7 +814,8 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Select { .. }
         | ControlNode::StatusDot { .. }
         | ControlNode::Swatch { .. }
-        | ControlNode::Cell { .. } => (None, None),
+        | ControlNode::Cell { .. }
+        | ControlNode::Shader { .. } => (None, None),
     }
 }
 
@@ -856,6 +1020,146 @@ mod tests {
     }
 
     #[kithara::test]
+    fn an_object_may_move_a_whole_row() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "shift", transform: (position: (8.0, 0.0)),
+                child: Row(children: [Button(id: "play", label: "PLAY")])))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        assert!(check_module_node_ids(&doc, &origin()).is_ok());
+    }
+
+    #[kithara::test]
+    fn an_object_may_not_turn_a_row() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "spin", transform: (rotation: 30.0),
+                child: Row(children: [Button(id: "play", label: "PLAY")])))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::ObjectGroup { child: "Row", .. }
+        ));
+    }
+
+    #[kithara::test]
+    fn an_object_may_not_scale_a_row_either() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "grow", transform: (scale: (2.0, 2.0)),
+                child: Row(children: [Button(id: "play", label: "PLAY")])))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        assert!(check_module_node_ids(&doc, &origin()).is_err());
+    }
+
+    /// A visualiser paints its own pass, so an object over it would move the
+    /// box and leave the picture. Refusing beats drawing the wrong answer.
+    #[kithara::test]
+    fn an_object_may_not_even_move_a_native_pass() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "shift", transform: (position: (8.0, 0.0)),
+                child: Vis(id: "scope")))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::ObjectNative { child: "Vis", .. }
+        ));
+    }
+
+    /// A still object is the identity, and the identity reaches everything
+    /// because it does nothing.
+    #[kithara::test]
+    fn a_still_object_may_wrap_anything() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "still", child: Vis(id: "scope")))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        assert!(check_module_node_ids(&doc, &origin()).is_ok());
+    }
+
+    /// The walk ends in a catch-all that records an id and stops, so a
+    /// container the walk does not name is validated as a leaf and its children
+    /// are never looked at. This test fails the moment `Stage` falls into it.
+    #[kithara::test]
+    fn a_stage_walks_its_children() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Stage(id: "scene", children: [
+                Button(id: "play", label: "PLAY"),
+                Button(id: "play", label: "AGAIN"),
+            ]))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::DuplicateId { id, .. } if id == "play"
+        ));
+    }
+
+    /// Every child of a stage gets the whole box, so a stage is several boxes,
+    /// and a turn about one origin would take them apart.
+    #[kithara::test]
+    fn an_object_may_not_turn_a_stage() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "spin", transform: (rotation: 30.0),
+                child: Stage(id: "scene", children: [Button(id: "play", label: "PLAY")])))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::ObjectGroup { child: "Stage", .. }
+        ));
+    }
+
+    /// A move carries every box by the same vector, so it reaches a stage the
+    /// way it reaches a row.
+    #[kithara::test]
+    fn an_object_may_move_a_whole_stage() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "shift", transform: (position: (8.0, 0.0)),
+                child: Stage(id: "scene", children: [Button(id: "play", label: "PLAY")])))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        assert!(check_module_node_ids(&doc, &origin()).is_ok());
+    }
+
+    /// A motion computes the phase, so an object carrying both leaves one pose
+    /// with two answers. There is no honest rule for ranking them, and inventing
+    /// one is what refusing here avoids.
+    #[kithara::test]
+    fn an_object_may_not_be_driven_twice() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "spin", to: (rotation: 360.0),
+                phase: Model(id: "app.phase"),
+                motion: (clock: Model(id: "app.time"), duration: 4.0),
+                child: Button(id: "play", label: "PLAY")))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(matches!(error, UiDocError::ObjectDrivenTwice { .. }));
+    }
+
+    #[kithara::test]
+    fn an_object_may_be_driven_by_a_motion_alone() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "spin", to: (rotation: 360.0),
+                motion: (clock: Model(id: "app.time"), duration: 4.0, repeat: Loop),
+                child: Button(id: "play", label: "PLAY")))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        assert!(check_module_node_ids(&doc, &origin()).is_ok());
+    }
+
+    #[kithara::test]
     fn module_id_with_an_address_separator_is_rejected() {
         let text = r#"(schema: "kithara.module", version: 1, id: "studio.strip",
             root: Button(id: "play", label: "PLAY"))"#;
@@ -917,6 +1221,7 @@ mod tests {
                 active,
                 control: &document.root,
                 read: None,
+                columns: &[],
                 columns_state: None,
                 query: None,
             },
@@ -984,6 +1289,7 @@ mod tests {
                 control: &document.root,
                 read: None,
                 write: None,
+                columns: &[],
                 columns_state: None,
                 query: query.as_ref(),
                 scope: None,
@@ -1152,6 +1458,7 @@ mod tests {
                 control: &document.root,
                 read: read.as_ref(),
                 write: write.as_ref(),
+                columns: &[],
                 columns_state: None,
                 query: None,
                 scope: None,

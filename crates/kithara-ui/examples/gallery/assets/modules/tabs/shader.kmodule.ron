@@ -1,0 +1,24 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-shader",
+    chrome: Full,
+    title: "DOCUMENT SHADER",
+    root: Column(id: "shader-page", gap: 12.0, pad: 16.0, children: [
+        Text(id: "caption", style: Section, label: "A DOCUMENT-OWNED FRAGMENT, DRAWN BY BOTH HOSTS", size: (w: Fill, h: Shrink)),
+        Shader(
+            id: "field",
+            source: "field.wgsl",
+            uniforms: {
+                "energy": Model(id: "shader.energy"),
+                "level": Model(id: "shader.level"),
+            },
+            size: (w: Fill, h: Fixed(320.0)),
+        ),
+        Row(id: "readouts", gap: 12.0, size: (w: Fill, h: Fixed(28.0)), children: [
+            Scalar(id: "level-readout", read: Model(id: "shader.level"), format: Percent, size: (w: Fixed(120.0), h: Fill)),
+            Scalar(id: "energy-readout", read: Model(id: "shader.energy"), format: Percent, size: (w: Fixed(120.0), h: Fill)),
+            Spacer(id: "gap"),
+        ]),
+    ]),
+)

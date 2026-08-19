@@ -1123,7 +1123,7 @@ mod tests {
         let pos = stream
             .probe_seek(SeekFrom::Start(42))
             .expect("absolute on-core seek within range");
-        let elapsed = started.elapsed();
+        let elapsed = Instant::now().saturating_duration_since(started);
 
         assert_eq!(pos, 42);
         assert_eq!(stream.source.position(), 42, "cursor moved to the target");

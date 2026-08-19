@@ -198,9 +198,12 @@ fn intern_binding_parts(
 ) -> Result<BindingParts, UiDocError> {
     let id_intern = interner.intern(id, origin)?;
     let key = if with.is_empty() {
+        interner.note_binding_key(id);
         id_intern
     } else {
-        interner.intern(&scoped_key(id, with), origin)?
+        let scoped = scoped_key(id, with);
+        interner.note_binding_key(&scoped);
+        interner.intern(&scoped, origin)?
     };
     Ok(BindingParts {
         key,

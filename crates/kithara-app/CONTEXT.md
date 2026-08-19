@@ -26,9 +26,9 @@ condition.
 
 `compile_ui` merges `builtin::text_doc()` with `assets/ui/app-en.ktext.ron`, the app's own catalog,
 before every compile - the app document set uses canon text keys (`kithara-ui/CONTEXT.md`, "Text
-Catalog Ownership") directly, and mints its own keys only for the four window-manager menu words
-canon has no concept of (`menu.modules`, `menu.broadcast`, `menu.layout.single`,
-`menu.layout.dual`).
+Catalog Ownership") directly, and mints its own keys only for the six words canon has no concept of
+(`menu.modules`, `menu.layout.single`, `menu.layout.dual`, `menu.module.library`,
+`strip.eq.mode.three`, `strip.eq.mode.four`).
 
 ### Deck addressing
 
@@ -72,6 +72,10 @@ A drop focuses the deck it landed on: `deck.focused` marks it in the overview ro
   which sets the ABR mode on the deck's own `current_abr_handle` and mirrors it in the deck state.
 - The mixer channel keeps the EQ; `EQ_MIN_DB` / `EQ_MAX_DB` are the knob's dB travel.
 
+The deck module is retained-hosted, but the tempo surface stays on iced: the engine observes each decoded event first,
+and an unanswered wheel event reaches the same child unchanged. The Hero Wave and five transport buttons have engine
+descriptors; the tempo row deliberately does not.
+
 `Kithara` owns one EQ mode for the whole app; every deck keeps only its own
 desired gains in `UiState`. Right-clicking either knob bank opens its host-owned
 pointer popover in `ViewCache`; the popover itself owns no product state.
@@ -99,11 +103,21 @@ spends it.
 
 `ViewCache` owns what the renderer borrows but the model does not hold: converted waveform columns, formatted strings
 (tempo, playing BPM, remaining time, source subtitle, quality label), per-deck zoom and quality-menu flag, collapsed
-modules, the hovered and focused deck, and the deck layout.
+modules, the hovered and focused deck, and the deck layout. Four smaller views sit beside them, one owner each:
+`MenuState` (which menu group is open), `Modules` (which pane the menu switched off), `WindowState` (what the single
+window reports), `LibraryView` (the library's own query and scope) and `StageView` (the tempo-map window edges and the
+visualisation preset, answered by `TempoNode`/`VisNode`). A view is read through `ReadRoot` and written only by
+`ui::events`; nothing else holds a second copy.
+
+`AppUi` carries the compiled document set and a `Clock`. The clock is what answers `ui.clock.seconds`, so a frame is
+reproducible from the state that produced it: `update` steps it once per tick and both hosts read the same value, rather
+than each sampling a wall clock of its own.
 
 ### Layout switching
 
-Both deck layouts are compiled once at startup and the top bar picks between them through `ui.layout.decks`. A layout lays
+Both deck layouts are compiled once at startup and the app menu picks between them: a row presses
+`ui.layout.apply@layout=<n>` and reads back `ui.layout.selected@layout=<n>`, so the row names the deck count rather than
+an index into a list. A layout lays
 out a deck whole or not at all — body, overview row and channel strip appear together — and `DeckLayout::decks` is the
 single owner of how many that is. Narrowing returns `Message::PauseHiddenDecks`, pausing every deck the layout stops
 laying out (a deck the user cannot see must not keep playing) while the session keeps the deck and its queue, so widening
@@ -112,8 +126,8 @@ on a dropped deck clears and a focus on one moves to the first laid-out deck —
 pointer crossing, so nothing later would correct them.
 
 The two layout documents repeat their frame because the layout schema has no include: only deck bodies, overview rows and
-mixer channels may differ. The top bar and library nodes must stay identical, and the switch must offer one segment per
-layout in the host's own index order — a unit test holds that last part.
+mixer channels may differ. The top bar and library nodes must stay identical, and the menu must offer one row per layout
+addressed by its deck count — a unit test holds that last part.
 
 ## Track analysis cache
 

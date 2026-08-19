@@ -1,0 +1,6 @@
+# Shipped studio pages through iced/wgpu and Masonry/Vello, in whole percent.
+# Both hosts show every studio region, control, waveform, and table row. The
+# remaining masks are rasteriser differences concentrated in waveform bands,
+# thin strokes, and text edges. Measured 2026-08-13 at 1280x760, scale 1.
+studio-single.png 2
+studio-dual.png   2

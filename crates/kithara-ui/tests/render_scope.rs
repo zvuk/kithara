@@ -10,7 +10,7 @@ use kithara_ui::{
     compile::{CompiledUi, compile},
     error::UiDocError,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
-    render::{ReadValue, Reads, tree},
+    render::{Clock, ReadValue, Reads, tree},
     source::UiConfig,
 };
 
@@ -43,7 +43,13 @@ fn rendering_two_decks_reads_scoped_endpoints_for_both() {
     .unwrap();
     let reads = RecordingReads::default();
 
-    drop(tree::render(&ui.root, &ui, &reads, builtin::skin()));
+    drop(tree::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin(),
+        Clock::default(),
+    ));
 
     let seen = reads.0.borrow();
     for deck in ["a", "b"] {
@@ -123,7 +129,13 @@ fn block_ui() -> Result<CompiledUi, UiDocError> {
 
 fn rendered_endpoints(ui: &CompiledUi, truthy: BTreeSet<String>) -> BTreeSet<String> {
     let reads = FlagReads::new(truthy);
-    drop(tree::render(&ui.root, ui, &reads, builtin::skin()));
+    drop(tree::render(
+        &ui.root,
+        ui,
+        &reads,
+        builtin::skin(),
+        Clock::default(),
+    ));
     reads.seen.into_inner()
 }
 

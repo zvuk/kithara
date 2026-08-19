@@ -77,6 +77,24 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
+        id: "deck.playback.duration_secs",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.track.title",
+        value: ValueKind::Text,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.track.source_kind",
+        value: ValueKind::Text,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
         id: "deck.playback.tempo",
         value: ValueKind::Text,
         scopes: Endpoint::DECK,
@@ -227,14 +245,92 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Parameter,
+        id: "mixer.muted",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "mixer.toggle_mute",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Parameter,
         id: "mix.crossfader",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "player.output.levels",
+        value: ValueKind::Stereo,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Parameter,
+        id: "player.output.volume",
         value: ValueKind::Scalar,
         scopes: Endpoint::GLOBAL,
     },
     Endpoint {
         category: EndpointCategory::Model,
         id: "library.tracks",
-        value: ValueKind::TrackList,
+        value: ValueKind::Table,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "library.tree",
+        value: ValueKind::Tree,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "library.query",
+        value: ValueKind::Text,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "library.breadcrumb",
+        value: ValueKind::Text,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "library.scope",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "tempo.map",
+        value: ValueKind::PortalMap,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "tempo.window",
+        value: ValueKind::Range,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "tempo.window_edge",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "vis.preset",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "vis.time",
+        value: ValueKind::Scalar,
         scopes: Endpoint::GLOBAL,
     },
     Endpoint {
@@ -458,13 +554,21 @@ pub(in crate::gui) fn readable_endpoints()
         .map(|endpoint| (endpoint.id, endpoint.scopes))
 }
 
+#[cfg(all(test, feature = "masonry"))]
+pub(in crate::gui) fn readable_kind(id: &str) -> Option<ValueKind> {
+    ENDPOINTS
+        .iter()
+        .find(|endpoint| endpoint.category != EndpointCategory::Command && endpoint.id == id)
+        .map(|endpoint| endpoint.value)
+}
+
 struct Registration {
     endpoint: &'static Endpoint,
     desc: EndpointDesc,
 }
 
 /// Registry over the static endpoint table; built once at compile time.
-pub(super) struct Registry {
+pub(crate) struct Registry {
     endpoints: Vec<Registration>,
 }
 

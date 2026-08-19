@@ -2,7 +2,7 @@ pub use tokio_time::sleep;
 pub use web_time::Instant;
 
 use crate::backend::tokio::backend::time as tokio_time;
-pub use crate::common::time::{Duration, SystemTime, TimeoutError};
+pub use crate::common::time::{Duration, SystemTime, TimeoutError, WallInstant};
 
 /// Await `future` with a real `tokio` timer deadline. This is the deadline a
 /// PROGRAM imposes on its own async work (e.g. a fetch total-timeout); every

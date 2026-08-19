@@ -27,7 +27,7 @@ tracing = { workspace = true }
 # `bungee-sys` builds its C++ through `cmake`, which fails under MSVC (see
 # `windows_build_env` in xtask's Windows lane for the toolchain fight this
 # crate is not worth having on that target). wasm32 already excludes the
-# whole backend set the same way, because none of these optional deps
+# whole backend set above the same way, because none of these optional deps
 # exist for that target either; Windows/MSVC gets the same treatment for
 # bungee specifically, so `stretch-signalsmith` keeps working there.
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]

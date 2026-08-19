@@ -4,10 +4,14 @@ use super::{
     broadcast::BroadcastNode,
     deck::{DeckNode, DecksNode, EngineNode},
     library::LibraryNode,
-    mix::{MixNode, StripsNode},
+    mix::{MixNode, PlayerNode, StripsNode},
+    stage::{DeckTempo, TempoNode, VisNode},
     ui::{DragNode, UiNode},
 };
-use crate::{broadcast::Broadcaster, gui::app::Kithara};
+use crate::{
+    broadcast::Broadcaster,
+    gui::{app::Kithara, ui::cache::analysis_bpm, view::playhead},
+};
 
 pub(in crate::gui) struct ReadRoot<'a> {
     broadcast: BroadcastNode<'a>,
@@ -15,6 +19,9 @@ pub(in crate::gui) struct ReadRoot<'a> {
     library: LibraryNode<'a>,
     mix: MixNode<'a>,
     mixer: StripsNode<'a>,
+    player: PlayerNode<'a>,
+    tempo: TempoNode<'a>,
+    vis: VisNode<'a>,
     ui: UiNode<'a>,
     decks: Vec<DeckNode<'a>>,
 }
@@ -22,7 +29,12 @@ pub(in crate::gui) struct ReadRoot<'a> {
 impl<'a> ReadRoot<'a> {
     pub(in crate::gui) fn new(state: &'a Kithara) -> Self {
         let cache = &state.ui.cache;
-        let library = LibraryNode::new(&state.catalog, &cache.deck_marks, state.selected_track);
+        let library = LibraryNode::new(
+            &state.catalog,
+            &cache.deck_marks,
+            state.selected_track,
+            &cache.library,
+        );
         let focus = cache.focus_deck();
         let decks: Vec<DeckNode<'a>> = state
             .decks
@@ -34,6 +46,16 @@ impl<'a> ReadRoot<'a> {
             })
             .collect();
         let engine = EngineNode::new(&decks);
+        let tempos: Vec<DeckTempo> = state
+            .decks
+            .iter()
+            .enumerate()
+            .map(|(at, deck)| DeckTempo {
+                bpm: analysis_bpm(&deck.ui),
+                focused: at == focus,
+                position: playhead(&deck.ui).max(0.0),
+            })
+            .collect();
         let drag = DragNode::new(
             cache.drag.and_then(|row| library.title(row)),
             cache.drag_target(),
@@ -51,6 +73,9 @@ impl<'a> ReadRoot<'a> {
             engine,
             mix: MixNode::new(state.session.mix()),
             mixer: StripsNode::new(state.session.mix()),
+            player: PlayerNode::new(state.session.mix()),
+            tempo: TempoNode::new(&cache.stage, &tempos),
+            vis: VisNode::new(&cache.stage, &tempos),
             ui: UiNode::new(
                 drag,
                 cache.layout(),
@@ -72,6 +97,9 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
             "engine" => Box::new(self.engine),
             "mix" => Box::new(self.mix),
             "mixer" => Box::new(self.mixer),
+            "player" => Box::new(self.player),
+            "tempo" => Box::new(&self.tempo),
+            "vis" => Box::new(self.vis),
             "ui" => Box::new(self.ui),
             _ => return None,
         };
@@ -92,7 +120,10 @@ mod tests {
         gui::{
             deck::DeckView,
             ui::{
-                cache::{CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout},
+                cache::{
+                    CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout, LibraryView,
+                    StageView,
+                },
                 endpoints::readable_endpoints,
                 menu::MenuState,
                 modules::Modules,
@@ -103,22 +134,18 @@ mod tests {
         state::{AbrVariant, UiState},
     };
 
-    const DERIVED: [&str; 5] = [
-        "deck.track.title",
-        "deck.track.source_kind",
-        "deck.playback.position_secs",
-        "deck.playback.duration_secs",
-        "deck.playback.position_normalized",
-    ];
+    const DERIVED: [&str; 1] = ["deck.playback.position_normalized"];
 
     struct Fixture {
         catalog: Catalog,
         marks: CatalogRowMarks,
         collapsed: CollapsedModules,
+        library: LibraryView,
         menu: MenuState,
         modules: Modules,
         window: WindowState,
         mix: MixState,
+        stage: StageView,
         eq_mode: EqMode,
         broadcast_available: bool,
         decks: Vec<(UiState, DeckCache)>,
@@ -130,18 +157,20 @@ mod tests {
                 catalog: Catalog::new(vec!["dropped.mp3".to_string()]),
                 marks: CatalogRowMarks::default(),
                 collapsed: CollapsedModules::default(),
+                library: LibraryView::default(),
                 menu: MenuState::default(),
                 modules: Modules::default(),
                 window: WindowState::default(),
                 broadcast_available: false,
                 mix: MixState::new(tempos.len()),
+                stage: StageView::default(),
                 eq_mode: EqMode::default(),
                 decks: tempos.into_iter().map(deck).collect(),
             }
         }
 
         fn root(&self) -> ReadRoot<'_> {
-            let library = LibraryNode::new(&self.catalog, &self.marks, Some(0));
+            let library = LibraryNode::new(&self.catalog, &self.marks, Some(0), &self.library);
             let decks: Vec<DeckNode<'_>> = self
                 .decks
                 .iter()
@@ -151,6 +180,16 @@ mod tests {
                 })
                 .collect();
             let engine = EngineNode::new(&decks);
+            let tempos: Vec<DeckTempo> = self
+                .decks
+                .iter()
+                .enumerate()
+                .map(|(at, (ui, _))| DeckTempo {
+                    bpm: analysis_bpm(ui),
+                    focused: at == 0,
+                    position: playhead(ui).max(0.0),
+                })
+                .collect();
             let drag = DragNode::new(library.title(0), Some(1), decks.len());
 
             ReadRoot {
@@ -160,6 +199,9 @@ mod tests {
                 engine,
                 mix: MixNode::new(&self.mix),
                 mixer: StripsNode::new(&self.mix),
+                player: PlayerNode::new(&self.mix),
+                tempo: TempoNode::new(&self.stage, &tempos),
+                vis: VisNode::new(&self.stage, &tempos),
                 ui: UiNode::new(
                     drag,
                     DeckLayout::Dual,

@@ -1,16 +1,28 @@
 use iced::{
-    Background, Color, Element, Length, Padding,
+    Background, Color, Element, Length, Padding, Rectangle,
+    advanced::{layout::Layout, mouse},
     alignment::{Horizontal, Vertical},
     widget::{Container, container, container::Style as ContainerStyle},
 };
 
+use super::{
+    control::{HostedControl, append_control_descriptors, append_control_targets},
+    host::ModuleHost,
+};
+#[cfg(test)]
+use crate::render::skin::active_tone;
 use crate::{
-    expand::{ControlSpec, ExpandedNode},
+    engine::{Descriptor, Engine, PickerSnapshot, Target},
+    expand::ExpandedNode,
+    interact::iced as iced_interact,
     layout::FrameSides,
-    render::{Skin, UiEvent},
-    size::{Dim, SizeSpec, control_size},
+    module::ChromeStyle,
+    render::{
+        HostedControlPlan, IcedSkin, Resolving, Skin, UiEvent, document::Ctx, frame_overlay,
+        picker_hits,
+    },
+    size::{Dim, Hidden, SizeSpec, is_hidden},
     skin::ColorRole,
-    widgets::frame_overlay,
 };
 
 pub(super) struct Rendered<'a> {
@@ -28,18 +40,12 @@ impl<'a> Rendered<'a> {
     }
 }
 
-pub(super) fn padding(
-    pad: Option<f32>,
-    pad_x: Option<f32>,
-    pad_y: Option<f32>,
-    skin: &Skin,
-) -> Padding {
-    let base = pad.unwrap_or(skin.layout.grid_pad);
+pub(super) fn padding(horizontal: f32, vertical: f32) -> Padding {
     Padding::ZERO
-        .top(pad_y.unwrap_or(base))
-        .bottom(pad_y.unwrap_or(base))
-        .left(pad_x.unwrap_or(base))
-        .right(pad_x.unwrap_or(base))
+        .top(vertical)
+        .bottom(vertical)
+        .left(horizontal)
+        .right(horizontal)
 }
 
 pub(super) fn filled<'a>(
@@ -74,14 +80,7 @@ pub(super) fn bordered<'a>(
     }
 }
 
-pub(crate) fn active_tone(
-    base: Option<ColorRole>,
-    active: Option<ColorRole>,
-    on: bool,
-) -> Option<ColorRole> {
-    on.then_some(active).flatten().or(base)
-}
-
+#[cfg(test)]
 pub(super) fn frame_tone(
     frame_color: Option<ColorRole>,
     active_frame_color: Option<ColorRole>,
@@ -94,6 +93,7 @@ pub(super) fn frame_tone(
     )
 }
 
+#[cfg(test)]
 pub(super) fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length) {
     effective_size(node, skin).map_or((Length::Fill, Length::Fill), |size| {
         (
@@ -104,25 +104,7 @@ pub(super) fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length)
 }
 
 pub(super) fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpec> {
-    let declared = match node {
-        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
-            return effective_size(child, skin);
-        }
-        ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin),
-        ExpandedNode::Scroll { size, .. }
-        | ExpandedNode::Row { size, .. }
-        | ExpandedNode::Column { size, .. }
-        | ExpandedNode::Slot { size, .. }
-        | ExpandedNode::Control { size, .. } => *size,
-    };
-    declared.or_else(|| match node {
-        ExpandedNode::Control {
-            spec: ControlSpec::TabLarge { .. },
-            ..
-        } => None,
-        ExpandedNode::Control { spec, .. } => Some(control_size(spec, skin.document())),
-        _ => None,
-    })
+    crate::size::effective_size(node, skin.document())
 }
 
 pub(super) fn apply_size<'a>(
@@ -154,6 +136,447 @@ pub(super) const fn length_for(dim: Dim, intrinsic: Length) -> Length {
     }
 }
 
+pub(super) enum HostedLayout {
+    Chrome {
+        /// What the module's `drop:` mounts, when it declares one.
+        drop: Option<HostedControlPlan>,
+        header: Option<(String, String)>,
+        collapsed: bool,
+    },
+    Group {
+        sized: bool,
+        surfaced: bool,
+        framed: bool,
+        children: Vec<Self>,
+    },
+    Slot {
+        sized: bool,
+        children: Vec<Self>,
+    },
+    /// A stack takes its declared box directly, with no container around it,
+    /// so its children sit exactly one level down whether it was sized or not.
+    Stage {
+        children: Vec<Self>,
+    },
+    Wrapper {
+        sized: bool,
+        child: Box<Self>,
+    },
+    /// A viewport, which like a stack takes its declared box directly: the
+    /// `scrollable` itself is the window, and it keeps a layout node of its own
+    /// for the content it offsets, so that content sits exactly one level down.
+    Scroll {
+        child: Box<Self>,
+    },
+    Control(Option<HostedControl>),
+    SelfMeasuredControl(Option<HostedControl>),
+}
+
+impl HostedLayout {
+    pub(super) fn module(spec: ModuleHost<'_>) -> Self {
+        let ModuleHost {
+            instance,
+            module,
+            chrome,
+            collapsed,
+            drop,
+        } = spec;
+        Self::Chrome {
+            drop: drop.then(|| HostedControlPlan::crossing(instance)),
+            header: (chrome == ChromeStyle::Full)
+                .then(|| (format!("{instance}/header"), module.to_owned())),
+            collapsed,
+        }
+    }
+
+    pub(super) fn new(node: &ExpandedNode, ctx: Ctx<'_, '_>, skin: &Skin) -> Self {
+        let hidden: Hidden<'_> = &|block| ctx.flag(Some(&block.hidden));
+        match node {
+            ExpandedNode::Row {
+                size,
+                surface,
+                frame,
+                children,
+                ..
+            }
+            | ExpandedNode::Column {
+                size,
+                surface,
+                frame,
+                children,
+                ..
+            } => Self::Group {
+                sized: size.is_some(),
+                surfaced: surface.is_some(),
+                framed: frame.is_some(),
+                children: children
+                    .iter()
+                    .filter(|child| !is_hidden(*child, hidden))
+                    .map(|child| Self::new(child, ctx, skin))
+                    .collect(),
+            },
+            ExpandedNode::Object { child, .. } | ExpandedNode::Optional { child, .. } => {
+                Self::new(child, ctx, skin)
+            }
+            ExpandedNode::Slot { size, children, .. } => Self::Slot {
+                sized: size.is_some(),
+                children: children
+                    .iter()
+                    .filter(|child| !is_hidden(*child, hidden))
+                    .map(|child| Self::new(child, ctx, skin))
+                    .collect(),
+            },
+            ExpandedNode::Stage { children, .. } => Self::Stage {
+                children: children
+                    .iter()
+                    .filter(|child| !is_hidden(*child, hidden))
+                    .map(|child| Self::new(child, ctx, skin))
+                    .collect(),
+            },
+            ExpandedNode::Control {
+                path, spec, read, ..
+            } => {
+                let control = HostedControl::new(
+                    ctx.ui.resolve(*path),
+                    spec,
+                    read.as_ref().and_then(|binding| ctx.read(binding)),
+                    read.as_ref(),
+                    ctx.scope(read.as_ref()),
+                    Resolving { ctx, skin },
+                );
+                if effective_size(node, skin).is_none() {
+                    Self::SelfMeasuredControl(control)
+                } else {
+                    Self::Control(control)
+                }
+            }
+            ExpandedNode::Popover { anchor, .. } => Self::Wrapper {
+                sized: effective_size(node, skin).is_some(),
+                child: Box::new(Self::new(anchor, ctx, skin)),
+            },
+            ExpandedNode::Pressable { child, .. } => Self::Wrapper {
+                sized: effective_size(node, skin).is_some(),
+                child: Box::new(Self::new(child, ctx, skin)),
+            },
+            ExpandedNode::Scroll { child, .. } => Self::Scroll {
+                child: Box::new(Self::new(child, ctx, skin)),
+            },
+        }
+    }
+
+    pub(super) fn descriptors(&self) -> Vec<Descriptor> {
+        let mut descriptors = Vec::new();
+        self.append_descriptors(&mut descriptors);
+        descriptors
+    }
+
+    fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
+        match self {
+            Self::Chrome { drop, header, .. } => {
+                if let Some(plan) = drop {
+                    descriptors.append(&mut plan.descriptors());
+                }
+                if let Some((path, _)) = header {
+                    descriptors.push(Descriptor::activation(path.clone()));
+                }
+            }
+            Self::Group { children, .. }
+            | Self::Slot { children, .. }
+            | Self::Stage { children, .. } => {
+                for child in children {
+                    child.append_descriptors(descriptors);
+                }
+            }
+            Self::Scroll { child, .. } | Self::Wrapper { child, .. } => {
+                child.append_descriptors(descriptors);
+            }
+            Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
+                append_control_descriptors(control, descriptors);
+            }
+            Self::Control(None) | Self::SelfMeasuredControl(None) => {}
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn targets<'a>(
+        &'a self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+    ) -> Vec<Target<'a>> {
+        self.targets_with_engine(layout, cursor, None)
+    }
+
+    pub(super) fn targets_with_engine<'a>(
+        &'a self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        engine: Option<&Engine>,
+    ) -> Vec<Target<'a>> {
+        let mut targets = Vec::new();
+        self.append_targets(layout, cursor, engine, &mut targets);
+        if let Some(engine) = engine {
+            self.append_open_picker_targets(engine, cursor, &mut targets);
+        }
+        targets
+    }
+
+    fn append_open_picker_targets<'a>(
+        &'a self,
+        engine: &Engine,
+        cursor: mouse::Cursor,
+        targets: &mut Vec<Target<'a>>,
+    ) {
+        for (path, item_count, item_height) in self.pickers() {
+            if !engine
+                .picker_snapshot(path)
+                .is_some_and(|snapshot| snapshot.open)
+            {
+                continue;
+            }
+            let Some(position) = targets
+                .iter()
+                .position(|target| target.path == path && target.index.is_none())
+            else {
+                continue;
+            };
+            let anchor = targets.remove(position);
+            let area = anchor.hit.area();
+            targets.push(anchor);
+            for region in picker_hits(area, item_height, item_count) {
+                let bounds = region.area();
+                targets.push(Target::item(
+                    path,
+                    iced_interact::hit(
+                        Rectangle {
+                            x: bounds.x,
+                            y: bounds.y,
+                            width: bounds.w,
+                            height: bounds.h,
+                        },
+                        cursor,
+                    ),
+                    *region.action(),
+                ));
+            }
+        }
+    }
+
+    pub(super) fn pickers(&self) -> Vec<(&str, usize, f32)> {
+        let mut pickers = Vec::new();
+        self.append_pickers(&mut pickers);
+        pickers
+    }
+
+    fn append_pickers<'a>(&'a self, pickers: &mut Vec<(&'a str, usize, f32)>) {
+        match self {
+            Self::Group { children, .. }
+            | Self::Slot { children, .. }
+            | Self::Stage { children, .. } => {
+                for child in children {
+                    child.append_pickers(pickers);
+                }
+            }
+            Self::Scroll { child, .. } | Self::Wrapper { child, .. } => {
+                child.append_pickers(pickers);
+            }
+            Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
+                if let Some(picker) = control.picker() {
+                    pickers.push(picker);
+                }
+            }
+            Self::Chrome { .. } | Self::Control(None) | Self::SelfMeasuredControl(None) => {}
+        }
+    }
+
+    pub(super) fn picker_snapshots<'a>(
+        &'a self,
+        engine: &Engine,
+    ) -> Vec<(&'a str, PickerSnapshot)> {
+        self.pickers()
+            .into_iter()
+            .filter_map(|(path, _, _)| {
+                engine
+                    .picker_snapshot(path)
+                    .map(|snapshot| (path, snapshot))
+            })
+            .collect()
+    }
+
+    fn append_targets<'a>(
+        &'a self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        engine: Option<&Engine>,
+        targets: &mut Vec<Target<'a>>,
+    ) {
+        match self {
+            Self::Chrome {
+                drop,
+                header,
+                collapsed,
+            } => {
+                let shell = if let Some(plan) = drop {
+                    targets.push(Target::new(
+                        plan.path(),
+                        iced_interact::hit(layout.bounds(), cursor),
+                    ));
+                    let Some(shell) = first_child(layout) else {
+                        return;
+                    };
+                    shell
+                } else {
+                    layout
+                };
+                let Some((path, _)) = header else {
+                    return;
+                };
+                let Some(body) = first_child(shell) else {
+                    return;
+                };
+                let Some(content) = first_child(body) else {
+                    return;
+                };
+                let header = if *collapsed {
+                    content
+                } else {
+                    let Some(header) = first_child(content) else {
+                        return;
+                    };
+                    header
+                };
+                targets.push(Target::new(
+                    path,
+                    iced_interact::hit(header.bounds(), cursor),
+                ));
+            }
+            Self::Group {
+                sized,
+                surfaced,
+                framed,
+                children,
+            } => {
+                let Some(layout) = group_children(layout, *sized, *surfaced, *framed) else {
+                    return;
+                };
+                for (child, layout) in children.iter().zip(layout.children()) {
+                    child.append_targets(layout, cursor, engine, targets);
+                }
+            }
+            Self::Slot { sized, children } => {
+                let Some(layout) = slot_children(layout, *sized) else {
+                    return;
+                };
+                for (child, layout) in children.iter().zip(layout.children()) {
+                    child.append_targets(layout, cursor, engine, targets);
+                }
+            }
+            Self::Stage { children } => {
+                for (child, layout) in children.iter().zip(layout.children()) {
+                    child.append_targets(layout, cursor, engine, targets);
+                }
+            }
+            Self::Wrapper { sized, child } => {
+                let layout = if *sized {
+                    let Some(layout) = first_child(layout) else {
+                        return;
+                    };
+                    layout
+                } else {
+                    layout
+                };
+                child.append_targets(layout, cursor, engine, targets);
+            }
+            Self::Scroll { child } => {
+                let cursor = if engine.is_some_and(Engine::captures_pointer) {
+                    cursor
+                } else {
+                    clipped(cursor, layout.bounds())
+                };
+                let Some(layout) = first_child(layout) else {
+                    return;
+                };
+                child.append_targets(layout, cursor, engine, targets);
+            }
+            Self::Control(Some(control)) => {
+                let Some(layout) = first_child(layout) else {
+                    return;
+                };
+                append_control_targets(control, layout, cursor, engine, targets);
+            }
+            Self::SelfMeasuredControl(Some(control)) => {
+                append_control_targets(control, layout, cursor, engine, targets);
+            }
+            Self::Control(None) | Self::SelfMeasuredControl(None) => {}
+        }
+    }
+
+    pub(super) fn header_module<'a>(&'a self, path: &str) -> Option<&'a str> {
+        match self {
+            Self::Chrome {
+                header: Some((header, module)),
+                ..
+            } if header == path => Some(module),
+            Self::Chrome { .. }
+            | Self::Group { .. }
+            | Self::Scroll { .. }
+            | Self::Slot { .. }
+            | Self::Stage { .. }
+            | Self::Wrapper { .. }
+            | Self::Control(_)
+            | Self::SelfMeasuredControl(_) => None,
+        }
+    }
+}
+pub(super) fn tree_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
+    let panel = layout.children().nth(1)?;
+    first_child(panel)
+}
+
+pub(super) fn tree_search_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
+    let search = layout.children().next()?;
+    let row = first_child(search)?;
+    row.children().nth(1)
+}
+
+pub(super) fn group_children(
+    mut layout: Layout<'_>,
+    sized: bool,
+    surfaced: bool,
+    framed: bool,
+) -> Option<Layout<'_>> {
+    if sized {
+        layout = first_child(layout)?;
+    }
+    if surfaced {
+        layout = first_child(layout)?;
+    }
+    if framed {
+        layout = first_child(first_child(layout)?)?;
+    }
+    first_child(layout)
+}
+
+pub(super) fn slot_children(mut layout: Layout<'_>, sized: bool) -> Option<Layout<'_>> {
+    if sized {
+        layout = first_child(layout)?;
+    }
+    first_child(layout)
+}
+
+pub(super) fn first_child(layout: Layout<'_>) -> Option<Layout<'_>> {
+    layout.children().next()
+}
+
+/// The pointer as the children of one box see it: itself while it is inside
+/// that box, and nothing at all while it is outside. A child laid out past the
+/// edge of a viewport is not under a pointer that never entered it, whatever
+/// the child's own layout still says its box is.
+pub(super) fn clipped(cursor: mouse::Cursor, bounds: Rectangle) -> mouse::Cursor {
+    match cursor.position() {
+        Some(point) if bounds.contains(point) => cursor,
+        Some(_) | None => mouse::Cursor::Unavailable,
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -164,7 +587,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        expand::{Binding, BindingKind},
+        expand::{Binding, BindingKind, ControlSpec},
         ids::{InternId, Interner, SourceUri},
         module::{AdaptivePolicy, PopoverAlign, PopoverAt},
     };

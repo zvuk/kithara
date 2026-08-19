@@ -26,6 +26,10 @@ tls-native = ["kithara/tls-native", "kithara-queue/tls-native"]
 # bar's phase machine compiles against a packager that has no stream values.
 broadcast = ["kithara/broadcast", "dep:ringbuf"]
 gui = ["dep:iced", "dep:kithara-ui"]
+# Draw the studio through the retained host (masonry + Vello) instead of the
+# immediate one. Both hosts read the same documents and the same state; only
+# the window and the paint pass differ.
+masonry = ["gui", "kithara-ui/masonry"]
 # NN beat/downbeat detection.
 beat-nn = ["kithara/beat-nn"]
 # Waveform analysis for the deck overview.
@@ -50,7 +54,7 @@ kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
 kithara-test-utils = { workspace = true }
-kithara-ui = { workspace = true, features = ["render"], optional = true }
+kithara-ui = { workspace = true, features = ["iced"], optional = true }
 
 delegate = { workspace = true }
 
@@ -103,11 +107,15 @@ serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
 [dev-dependencies]
+kithara = { workspace = true, default-features = false, features = ["probe"] }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 futures = { workspace = true }
+iced_runtime = { workspace = true }
+png = { workspace = true }
 tempfile = { workspace = true }
+vello = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dev-dependencies]
 kithara-net = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }

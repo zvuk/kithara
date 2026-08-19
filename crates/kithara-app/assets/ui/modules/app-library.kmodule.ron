@@ -4,10 +4,14 @@
     id: "app-library",
     root: Column(
         children: [
-            TrackList(
+            Table(
                 id: "tracks",
                 read: Model(id: "library.tracks"),
-                columns: [Deck, Title, Artist],
+                columns: [
+                    (id: "deck", label: "@track_list.column.deck", style: Badge, width: 64.0),
+                    (id: "title", label: "@track_list.column.title", style: Primary, width: 180.0, flexible: true),
+                    (id: "artist", label: "@track_list.column.artist", style: Secondary, width: 200.0),
+                ],
                 adaptive: (priority: Required),
             ),
         ],
