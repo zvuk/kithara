@@ -31,6 +31,7 @@ struct Endpoint {
 
 impl Endpoint {
     const DECK: &[&str] = &["deck"];
+    const EQ_MODE: &[&str] = &["deck", "bands"];
     const GLOBAL: &[&str] = &[];
     const GROUP: &[&str] = &["group"];
     const LAYOUT: &[&str] = &["layout"];
@@ -161,15 +162,15 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Model,
-        id: "deck.eq.three_band",
-        value: ValueKind::Bool,
+        id: "deck.eq.bands",
+        value: ValueKind::Scalar,
         scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Model,
-        id: "deck.eq.four_band",
+        id: "deck.eq.selected",
         value: ValueKind::Bool,
-        scopes: Endpoint::DECK,
+        scopes: Endpoint::EQ_MODE,
     },
     Endpoint {
         category: EndpointCategory::Command,

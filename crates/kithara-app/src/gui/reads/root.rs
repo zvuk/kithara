@@ -435,25 +435,30 @@ mod tests {
 
     #[kithara::test]
     fn every_deck_reads_the_shared_eq_mode() {
-        let fixture = fixture_in(EqMode::FourBand);
-        let root = fixture.root();
-        let walk = Walk::new(&root);
+        for (mode, bands) in [(EqMode::ThreeBand, 3.0), (EqMode::FourBand, 4.0)] {
+            let fixture = fixture_in(mode);
+            let root = fixture.root();
+            let walk = Walk::new(&root);
 
-        for deck in ["a", "b"] {
-            assert_eq!(
-                walk.get(&format!("deck.eq.three_band@deck={deck}")),
-                Some(ReadValue::Bool(false))
-            );
-            assert_eq!(
-                walk.get(&format!("deck.eq.four_band@deck={deck}")),
-                Some(ReadValue::Bool(true))
-            );
-            assert!(walk.get(&format!("deck.eq.low_mid@deck={deck}")).is_some());
+            for deck in ["a", "b"] {
+                assert_eq!(
+                    walk.get(&format!("deck.eq.bands@deck={deck}")),
+                    Some(ReadValue::Scalar(bands)),
+                    "the strip draws as many bands as the mode has",
+                );
+                for rung in [3.0, 4.0] {
+                    assert_eq!(
+                        walk.get(&format!("deck.eq.selected@bands={rung},deck={deck}")),
+                        Some(ReadValue::Bool(rung == bands)),
+                        "the menu marks the mode in force",
+                    );
+                }
+            }
         }
     }
 
     #[kithara::test]
-    fn a_three_band_app_answers_no_four_band_key() {
+    fn a_three_band_app_has_no_mid_band_gains() {
         let fixture = fixture_in(EqMode::ThreeBand);
         let root = fixture.root();
         let walk = Walk::new(&root);

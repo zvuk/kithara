@@ -221,14 +221,21 @@ struct EqNode<'a> {
 }
 
 impl<'a> Node<'a> for EqNode<'a> {
-    fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
+    fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
             "menu_open" => ReadValue::Bool(self.cache.view.eq_menu_open),
-            "three_band" => ReadValue::Bool(self.mode == EqMode::ThreeBand),
-            "four_band" => ReadValue::Bool(self.mode == EqMode::FourBand),
+            "bands" => ReadValue::Scalar(self.mode.bands().len().as_()),
+            "selected" => ReadValue::Bool(self.drawn(scope.get("bands")?)),
             band => eq_value(self.ui.eq_bands.get(self.mode.band(band)?))?,
         };
         Some(Box::new(Value(value)))
+    }
+}
+
+impl EqNode<'_> {
+    /// The menu marks the rung whose band count the deck draws.
+    fn drawn(&self, bands: &str) -> bool {
+        bands.parse::<usize>() == Ok(self.mode.bands().len())
     }
 }
 

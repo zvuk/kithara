@@ -77,9 +77,13 @@ desired gains in `UiState`. Right-clicking either knob bank opens its host-owned
 pointer popover in `ViewCache`; the popover itself owns no product state.
 Selecting a mode replaces every deck's player layout before the shared mode is
 committed. Three-band mode lays out HIGH / MID / LOW vertically, four-band mode
-HIGH / HI-MID / LO-MID / LOW. Switching modes remaps each deck's middle gains
-independently: one MID is copied to both four-band mids, and two mids are
-averaged on the way back.
+HIGH / HI-MID / LO-MID / LOW. Which bank the strip draws follows from one read,
+`deck.eq.bands`, the band count the mode carries; the strip's `Adaptive` node
+takes the four-band step from `4.0` up. The popover marks its rung through
+`deck.eq.selected`, scoped by the `bands` count the row stands for, so one mode
+answers one question per rung and a third topology needs no third endpoint.
+Switching modes remaps each deck's middle gains independently: one MID is copied
+to both four-band mids, and two mids are averaged on the way back.
 
 ### Window chrome and telemetry
 

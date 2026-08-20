@@ -20,23 +20,21 @@
                         frame: (top: false, right: false, bottom: true, left: false),
                         size: (w: Fill, h: Shrink),
                         children: [
-                            Optional(
-                                id: "eq-3-band",
-                                hidden: Model(id: "deck.eq.four_band", with: { "deck": "$deck" }),
-                                child: Include(
+                            Adaptive(
+                                id: "eq-bands",
+                                measure: Model(id: "deck.eq.bands", with: { "deck": "$deck" }),
+                                base: Include(
                                     id: "three-band",
                                     source: "app-strip/eq-3-band.kmodule.ron",
                                     with: { "deck": "$deck" },
                                 ),
-                            ),
-                            Optional(
-                                id: "eq-4-band",
-                                hidden: Model(id: "deck.eq.three_band", with: { "deck": "$deck" }),
-                                child: Include(
-                                    id: "four-band",
-                                    source: "app-strip/eq-4-band.kmodule.ron",
-                                    with: { "deck": "$deck" },
-                                ),
+                                steps: [
+                                    (from: 4.0, node: Include(
+                                        id: "four-band",
+                                        source: "app-strip/eq-4-band.kmodule.ron",
+                                        with: { "deck": "$deck" },
+                                    )),
+                                ],
                             ),
                         ],
                     ),
@@ -61,11 +59,11 @@
                             press: Command(id: "deck.eq.menu", with: { "deck": "$deck" }),
                             child: Include(
                                 id: "eq-3-row",
-                                source: "app-select-row.kmodule.ron",
+                                source: "app-strip/eq-mode-row.kmodule.ron",
                                 with: {
                                     "deck": "$deck",
                                     "label": "@strip.eq.mode.three",
-                                    "state": "deck.eq.three_band",
+                                    "bands": "3",
                                 },
                             ),
                         ),
@@ -74,11 +72,11 @@
                             press: Command(id: "deck.eq.menu", with: { "deck": "$deck" }),
                             child: Include(
                                 id: "eq-4-row",
-                                source: "app-select-row.kmodule.ron",
+                                source: "app-strip/eq-mode-row.kmodule.ron",
                                 with: {
                                     "deck": "$deck",
                                     "label": "@strip.eq.mode.four",
-                                    "state": "deck.eq.four_band",
+                                    "bands": "4",
                                 },
                             ),
                         ),

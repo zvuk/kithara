@@ -65,8 +65,8 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../../assets/ui/modules/app-mixer-single.kmodule.ron"),
     ),
     (
-        "modules/app-select-row.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-select-row.kmodule.ron"),
+        "modules/app-strip/eq-mode-row.kmodule.ron",
+        include_str!("../../../assets/ui/modules/app-strip/eq-mode-row.kmodule.ron"),
     ),
     (
         "modules/app-strip.kmodule.ron",

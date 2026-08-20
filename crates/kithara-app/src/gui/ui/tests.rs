@@ -1,8 +1,12 @@
+use std::{cell::RefCell, collections::BTreeSet};
+
 use kithara_test_utils::kithara;
 use kithara_ui::{
+    builtin,
     compile::{CompiledNode, CompiledUi},
     expand::{ControlSpec, ExpandedNode},
     module::{TextAlign, TextStyle},
+    render::{ReadValue, Reads, tree},
 };
 
 use super::{cache::DeckLayout, compile::compile_ui};
@@ -21,6 +25,12 @@ fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
             }
             ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
                 walk(child, visit);
+            }
+            ExpandedNode::Adaptive { base, steps, .. } => {
+                walk(base, visit);
+                for (_, branch) in steps {
+                    walk(branch, visit);
+                }
             }
             ExpandedNode::Popover {
                 anchor, content, ..
@@ -295,6 +305,80 @@ fn every_channel_strip_carries_the_supported_control_set() {
                 "missing control `mixer/{letter}/{name}`"
             );
         }
+    }
+}
+
+/// Answers one deck's band count and records every endpoint the renderer asks
+/// for on the way.
+struct BandReads {
+    bands: Option<ReadValue<'static>>,
+    seen: RefCell<BTreeSet<String>>,
+}
+
+impl BandReads {
+    /// Renders deck A and reports the EQ endpoints the bank it drew asked for.
+    fn banked(bands: Option<ReadValue<'static>>) -> BTreeSet<String> {
+        let ui = compile_ui(DeckLayout::Dual).unwrap();
+        let reads = Self {
+            bands,
+            seen: RefCell::default(),
+        };
+
+        drop(tree::render(&ui.root, &ui, &reads, builtin::skin()));
+
+        reads.seen.take()
+    }
+}
+
+impl Reads for BandReads {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        self.seen.borrow_mut().insert(endpoint.to_owned());
+        if endpoint == "deck.eq.bands@deck=a" {
+            return self.bands;
+        }
+        None
+    }
+}
+
+#[kithara::test]
+fn one_band_count_decides_which_eq_bank_a_deck_draws() {
+    for (bands, drawn, spare) in [
+        (3.0, "deck.eq.mid", "deck.eq.low_mid"),
+        (4.0, "deck.eq.low_mid", "deck.eq.mid"),
+    ] {
+        let seen = BandReads::banked(Some(ReadValue::Scalar(bands)));
+
+        assert!(
+            seen.contains(&format!("{drawn}@deck=a")),
+            "{bands} bands: `{drawn}` must be drawn, saw {seen:?}",
+        );
+        assert!(
+            !seen.contains(&format!("{spare}@deck=a")),
+            "{bands} bands: `{spare}` belongs to the other bank",
+        );
+    }
+}
+
+/// A count nobody states is no measurement, and the strip falls to the bank the
+/// document declares as its base.
+#[kithara::test]
+fn a_band_count_that_is_no_number_draws_the_three_band_bank() {
+    for unstated in [
+        None,
+        Some(ReadValue::Scalar(f64::NAN)),
+        Some(ReadValue::Scalar(f64::INFINITY)),
+        Some(ReadValue::Bool(true)),
+    ] {
+        let seen = BandReads::banked(unstated);
+
+        assert!(
+            seen.contains("deck.eq.mid@deck=a"),
+            "{unstated:?}: the three-band bank draws, saw {seen:?}",
+        );
+        assert!(
+            !seen.contains("deck.eq.low_mid@deck=a"),
+            "{unstated:?}: the four-band bank needs a count of four",
+        );
     }
 }
 

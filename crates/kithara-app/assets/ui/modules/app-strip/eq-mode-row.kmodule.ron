@@ -1,14 +1,14 @@
 (
     schema: "kithara.module",
     version: 1,
-    id: "app-select-row",
-    parameters: ["deck", "label", "state"],
+    id: "app-strip-eq-mode-row",
+    parameters: ["deck", "label", "bands"],
     root: Row(
         id: "row",
         size: (w: Fill, h: Fixed(28.0)),
         pad_x: 10.0,
         background: BgPanel,
-        active: Model(id: "$state", with: { "deck": "$deck" }),
+        active: Model(id: "deck.eq.selected", with: { "deck": "$deck", "bands": "$bands" }),
         active_background: BgSelect,
         children: [
             Text(
@@ -16,7 +16,7 @@
                 size: (w: Fill, h: Fill),
                 style: Mono,
                 label: "$label",
-                active: Model(id: "$state", with: { "deck": "$deck" }),
+                active: Model(id: "deck.eq.selected", with: { "deck": "$deck", "bands": "$bands" }),
                 active_color: Accent,
             ),
         ],
