@@ -382,6 +382,33 @@ fn a_band_count_that_is_no_number_draws_the_three_band_bank() {
     }
 }
 
+/// The document builds the scoped key and the host answers it; each side is
+/// written by hand, so the two only meet if the compiled key is pinned.
+#[kithara::test]
+fn the_mode_menu_asks_the_key_the_deck_answers() {
+    let ui = compile_ui(DeckLayout::Dual).unwrap();
+    let mut asked = Vec::new();
+    each_node(&ui, &mut |node| {
+        if let ExpandedNode::Row {
+            active: Some(binding),
+            ..
+        } = node
+        {
+            asked.push(ui.resolve(binding.key));
+        }
+    });
+
+    for letter in ["a", "b"] {
+        for bands in [3, 4] {
+            let want = format!("deck.eq.selected@bands={bands},deck={letter}");
+            assert!(
+                asked.contains(&want.as_str()),
+                "no menu row reads `{want}`, saw {asked:?}",
+            );
+        }
+    }
+}
+
 #[kithara::test]
 fn every_eq_bank_carries_its_pointer_menu() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
