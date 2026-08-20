@@ -8,7 +8,6 @@
                 id: "tracks",
                 read: Model(id: "library.visible_tracks"),
                 columns: [Title, Artist, Time],
-                adaptive: (priority: Required),
             ),
         ],
     ),

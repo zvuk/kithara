@@ -316,7 +316,6 @@ fn finish_control(
             .as_ref()
             .map(|binding| intern_binding(machine.interner, binding, &context.origin))
             .transpose()?,
-        adaptive: fields.adaptive.clone(),
     })
 }
 
@@ -900,50 +899,50 @@ fn walk(
         ControlNode::Include { id, source, with } => {
             expand_include(context, id, source, with, depth, machine)
         }
-        control @ (ControlNode::DeckSummary { id, adaptive, .. }
-        | ControlNode::Brand { id, adaptive, .. }
-        | ControlNode::Spacer { id, adaptive, .. }
-        | ControlNode::Meter { id, adaptive, .. }
-        | ControlNode::Divider { id, adaptive, .. }
-        | ControlNode::PresetSelector { id, adaptive, .. }
-        | ControlNode::SettingsButton { id, adaptive, .. }
-        | ControlNode::WindowDrag { id, adaptive, .. }
-        | ControlNode::TitleBar { id, adaptive, .. }
-        | ControlNode::WindowControls { id, adaptive, .. }
-        | ControlNode::Text { id, adaptive, .. }
-        | ControlNode::Glyph { id, adaptive, .. }
-        | ControlNode::NavItem { id, adaptive, .. }
-        | ControlNode::TabLarge { id, adaptive, .. }
-        | ControlNode::Button { id, adaptive, .. }
-        | ControlNode::Bpm { id, adaptive, .. }
-        | ControlNode::Time { id, adaptive, .. }
-        | ControlNode::Scalar { id, adaptive, .. }
-        | ControlNode::Crossfader { id, adaptive, .. }
-        | ControlNode::Fader { id, adaptive, .. }
-        | ControlNode::Wave { id, adaptive, .. }
-        | ControlNode::Vis { id, adaptive, .. }
-        | ControlNode::PortalMap { id, adaptive, .. }
-        | ControlNode::Range { id, adaptive, .. }
-        | ControlNode::TrackList { id, adaptive, .. }
-        | ControlNode::Tree { id, adaptive, .. }
-        | ControlNode::ContextBar { id, adaptive, .. }
-        | ControlNode::Toggle { id, adaptive, .. }
-        | ControlNode::Checkbox { id, adaptive, .. }
-        | ControlNode::Segmented { id, adaptive, .. }
-        | ControlNode::Select { id, adaptive, .. }
-        | ControlNode::StatusDot { id, adaptive, .. }
-        | ControlNode::Swatch { id, adaptive, .. }
-        | ControlNode::Cell { id, adaptive, .. }
-        | ControlNode::Readout { id, adaptive, .. }
-        | ControlNode::Chip { id, adaptive, .. }
-        | ControlNode::Knob { id, adaptive, .. }
-        | ControlNode::VuStereo { id, adaptive, .. }
-        | ControlNode::VuVertical { id, adaptive, .. }) => {
+        control @ (ControlNode::DeckSummary { id, .. }
+        | ControlNode::Brand { id, .. }
+        | ControlNode::Spacer { id, .. }
+        | ControlNode::Meter { id, .. }
+        | ControlNode::Divider { id, .. }
+        | ControlNode::PresetSelector { id, .. }
+        | ControlNode::SettingsButton { id, .. }
+        | ControlNode::WindowDrag { id, .. }
+        | ControlNode::TitleBar { id, .. }
+        | ControlNode::WindowControls { id, .. }
+        | ControlNode::Text { id, .. }
+        | ControlNode::Glyph { id, .. }
+        | ControlNode::NavItem { id, .. }
+        | ControlNode::TabLarge { id, .. }
+        | ControlNode::Button { id, .. }
+        | ControlNode::Bpm { id, .. }
+        | ControlNode::Time { id, .. }
+        | ControlNode::Scalar { id, .. }
+        | ControlNode::Crossfader { id, .. }
+        | ControlNode::Fader { id, .. }
+        | ControlNode::Wave { id, .. }
+        | ControlNode::Vis { id, .. }
+        | ControlNode::PortalMap { id, .. }
+        | ControlNode::Range { id, .. }
+        | ControlNode::TrackList { id, .. }
+        | ControlNode::Tree { id, .. }
+        | ControlNode::ContextBar { id, .. }
+        | ControlNode::Toggle { id, .. }
+        | ControlNode::Checkbox { id, .. }
+        | ControlNode::Segmented { id, .. }
+        | ControlNode::Select { id, .. }
+        | ControlNode::StatusDot { id, .. }
+        | ControlNode::Swatch { id, .. }
+        | ControlNode::Cell { id, .. }
+        | ControlNode::Readout { id, .. }
+        | ControlNode::Chip { id, .. }
+        | ControlNode::Knob { id, .. }
+        | ControlNode::VuStereo { id, .. }
+        | ControlNode::VuVertical { id, .. }) => {
             let (read, write) = control.bindings();
             expand_control(
                 context,
                 control,
-                ControlFields::new(id, control.size().copied(), read, write, adaptive),
+                ControlFields::new(id, control.size().copied(), read, write),
                 depth,
                 machine,
             )

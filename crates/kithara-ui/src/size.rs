@@ -424,7 +424,7 @@ mod tests {
         builtin,
         expand::{Binding, BindingKind},
         ids::{Interner, SourceUri},
-        module::{AdaptivePolicy, GlyphStyle, IconName, PopoverAlign, PopoverAt, TextAlign},
+        module::{GlyphStyle, IconName, PopoverAlign, PopoverAt, TextAlign},
     };
 
     fn control(interner: &mut Interner, id: &str, size: SizeSpec) -> ExpandedNode {
@@ -435,7 +435,6 @@ mod tests {
             spec: ControlSpec::Knob { label: None },
             read: None,
             write: None,
-            adaptive: AdaptivePolicy::default(),
             size: Some(size),
         }
     }

@@ -17,7 +17,6 @@
                 read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
                 zoom: Model(id: "deck.view.zoom", with: { "deck": "$deck" }),
-                adaptive: (priority: Required),
             ),
             Row(
                 id: "transport",
@@ -34,7 +33,6 @@
                         style: TransportPrimary,
                         read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
                         write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
-                        adaptive: (priority: Required),
                     ),
                     Button(
                         id: "prev",

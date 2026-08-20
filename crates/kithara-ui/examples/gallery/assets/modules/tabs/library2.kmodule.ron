@@ -11,7 +11,6 @@
                 size: (w: Fixed(232.0), h: Fill),
                 read: Model(id: "library.tree"),
                 query: Model(id: "library.query"),
-                adaptive: (priority: Required),
             ),
             Column(
                 size: (w: Fill, h: Fill),
@@ -23,14 +22,12 @@
                         write: Model(id: "library.scope"),
                         scope_items: ["ZVUK", "LOCAL"],
                         scope: Model(id: "library.scope"),
-                        adaptive: (priority: Required),
                     ),
                     TrackList(
                         id: "table",
                         size: (w: Fill, h: Fill),
                         read: Model(id: "library.visible_tracks"),
                         columns: [Index, Title, Artist, Bpm, Key, Time],
-                        adaptive: (priority: Required),
                     ),
                 ],
             ),

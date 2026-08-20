@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    binding::{AdaptivePolicy, BindingRef},
+    binding::BindingRef,
     style::{
         ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
         PopoverAt, ScalarFormat, TextAlign, TextStyle, Tone, TrackColumn, WaveStyle,
@@ -191,8 +191,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         #[serde(default)]
-        adaptive: AdaptivePolicy,
-        #[serde(default)]
         style: DeckSummaryStyle,
     },
     Brand {
@@ -203,8 +201,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Spacer {
         id: NodeId,
@@ -214,8 +210,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     /// Horizontal fill bar reporting one scalar.
     Meter {
@@ -226,8 +220,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     /// Hairline between adjacent bar cells.
     Divider {
@@ -238,8 +230,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     PresetSelector {
         id: NodeId,
@@ -249,8 +239,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     SettingsButton {
         id: NodeId,
@@ -260,24 +248,18 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     /// Bare drag surface for a window that draws its own chrome.
     WindowDrag {
         id: NodeId,
         #[serde(default)]
         size: Option<SizeSpec>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     TitleBar {
         id: NodeId,
         label: String,
         #[serde(default)]
         size: Option<SizeSpec>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     WindowControls {
         id: NodeId,
@@ -285,8 +267,6 @@ pub enum ControlNode {
         style: WindowControlsStyle,
         #[serde(default)]
         size: Option<SizeSpec>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Text {
         id: NodeId,
@@ -296,8 +276,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         style: TextStyle,
         #[serde(default)]
@@ -320,8 +298,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         icon: Param<IconName>,
         #[serde(default)]
         active_icon: Option<Param<IconName>>,
@@ -342,8 +318,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
         icon: Param<IconName>,
     },
@@ -355,8 +329,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
     },
     Button {
@@ -367,8 +339,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
         #[serde(default)]
         icon: Option<Param<IconName>>,
@@ -390,8 +360,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         #[serde(default)]
-        adaptive: AdaptivePolicy,
-        #[serde(default)]
         placeholder: Option<String>,
     },
     Time {
@@ -402,8 +370,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Scalar {
         id: NodeId,
@@ -413,8 +379,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         format: ScalarFormat,
         #[serde(default = "default_framed")]
@@ -428,8 +392,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         /// Draw the scale above the rail.
         #[serde(default)]
         ticks: bool,
@@ -443,8 +405,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         #[serde(default)]
-        adaptive: AdaptivePolicy,
-        #[serde(default)]
         style: FaderStyle,
         #[serde(default)]
         label: Option<String>,
@@ -457,8 +417,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         style: WaveStyle,
         #[serde(default)]
@@ -474,8 +432,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     PortalMap {
         id: NodeId,
@@ -483,8 +439,6 @@ pub enum ControlNode {
         size: Option<SizeSpec>,
         #[serde(default)]
         read: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Range {
         id: NodeId,
@@ -494,8 +448,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     TrackList {
         id: NodeId,
@@ -505,8 +457,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         columns: Vec<TrackColumn>,
         #[serde(default)]
@@ -521,8 +471,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         #[serde(default)]
-        adaptive: AdaptivePolicy,
-        #[serde(default)]
         query: Option<BindingRef>,
     },
     ContextBar {
@@ -533,8 +481,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         scope_items: Vec<String>,
         #[serde(default)]
@@ -548,8 +494,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Checkbox {
         id: NodeId,
@@ -559,8 +503,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Segmented {
         id: NodeId,
@@ -570,8 +512,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         items: Vec<String>,
     },
     Select {
@@ -582,8 +522,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
     },
     StatusDot {
@@ -594,8 +532,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
         #[serde(default)]
         dot_size: Option<f32>,
@@ -612,8 +548,6 @@ pub enum ControlNode {
         label: String,
         #[serde(default)]
         size: Option<SizeSpec>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Cell {
         id: NodeId,
@@ -623,8 +557,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         label: Option<String>,
         #[serde(default)]
@@ -638,8 +570,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         label: Option<String>,
         #[serde(default)]
@@ -655,8 +585,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
         #[serde(default)]
         style: ChipStyle,
@@ -670,8 +598,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         #[serde(default)]
-        adaptive: AdaptivePolicy,
-        #[serde(default)]
         label: Option<String>,
     },
     VuStereo {
@@ -682,8 +608,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     VuVertical {
         id: NodeId,
@@ -693,8 +617,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         /// Draw the scale left of the fader.
         #[serde(default)]
         ticks: bool,
@@ -831,7 +753,7 @@ pub fn parse_module(text: &str, origin: &SourceUri) -> Result<ModuleDoc, UiDocEr
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{super::binding::Priority, *};
+    use super::*;
     use crate::size::{Dim, SizeSpec};
 
     fn origin() -> SourceUri {
@@ -879,7 +801,6 @@ mod tests {
                 read: Model(id: "mixer.xfade"),
                 write: Parameter(id: "mixer.xfade"),
                 size: Some((w: Fixed(220.0), h: Fixed(38.0))),
-                adaptive: (priority: Required),
             ))"#;
 
         let document = parse_module(text, &origin()).unwrap();
@@ -887,7 +808,6 @@ mod tests {
             read,
             write,
             size,
-            adaptive,
             ..
         } = document.root
         else {
@@ -900,7 +820,6 @@ mod tests {
             size,
             Some(SizeSpec::new(Dim::Fixed(220.0), Dim::Fixed(38.0)))
         );
-        assert_eq!(adaptive.priority, Priority::Required);
     }
 
     #[kithara::test]
@@ -911,7 +830,6 @@ mod tests {
                 read: Model(id: "library.tree"),
                 query: Model(id: "library.query"),
                 size: Some((w: Fixed(232.0), h: Fill)),
-                adaptive: (priority: Required),
             ))"#;
 
         let document = parse_module(text, &origin()).unwrap();
@@ -919,7 +837,6 @@ mod tests {
             read,
             query,
             size,
-            adaptive,
             ..
         } = document.root
         else {
@@ -929,7 +846,6 @@ mod tests {
         assert!(matches!(read, Some(BindingRef::Model { .. })));
         assert!(matches!(query, Some(BindingRef::Model { .. })));
         assert_eq!(size, Some(SizeSpec::new(Dim::Fixed(232.0), Dim::Fill)));
-        assert_eq!(adaptive.priority, Priority::Required);
     }
 
     #[kithara::test]

@@ -5,7 +5,7 @@ use crate::{
     ids::{InternId, SourceUri},
     layout::FrameSides,
     module::{
-        AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
+        BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
         DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign, PopoverAt, ScalarFormat,
         TextAlign, TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
     },
@@ -84,7 +84,6 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         read: Option<Binding>,
         write: Option<Binding>,
-        adaptive: AdaptivePolicy,
     },
 }
 

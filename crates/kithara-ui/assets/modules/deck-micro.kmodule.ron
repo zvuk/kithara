@@ -13,13 +13,11 @@
                 style: MicroPrimary,
                 read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
-                adaptive: (priority: Required),
             ),
             DeckSummary(
                 id: "summary",
                 style: Micro,
                 read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
-                adaptive: (priority: Required),
             ),
             Bpm(
                 id: "bpm",

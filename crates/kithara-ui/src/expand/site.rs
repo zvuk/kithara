@@ -2,13 +2,12 @@ use super::machine::Context;
 use crate::{
     error::UiDocError,
     ids::NodeId,
-    module::{AdaptivePolicy, BindingRef, ControlNode},
+    module::{BindingRef, ControlNode},
     size::SizeSpec,
 };
 
 #[derive(Clone, Copy)]
 pub(super) struct ControlFields<'a> {
-    pub(super) adaptive: &'a AdaptivePolicy,
     pub(super) id: &'a NodeId,
     pub(super) read: Option<&'a BindingRef>,
     pub(super) size: Option<SizeSpec>,
@@ -88,10 +87,8 @@ impl<'a> ControlFields<'a> {
         size: Option<SizeSpec>,
         read: Option<&'a BindingRef>,
         write: Option<&'a BindingRef>,
-        adaptive: &'a AdaptivePolicy,
     ) -> Self {
         Self {
-            adaptive,
             id,
             read,
             size,

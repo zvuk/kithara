@@ -27,7 +27,6 @@
                 id: "wave",
                 read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
-                adaptive: (priority: Required),
             ),
             Row(
                 id: "remain-cell",

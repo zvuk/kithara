@@ -24,7 +24,6 @@
                 style: Transport,
                 read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
-                adaptive: (priority: Required),
             ),
             Button(
                 id: "sync",

@@ -6,7 +6,7 @@ use kithara_ui::{
     compile::{CompiledUi, compile},
     ids::{DocId, EndpointId, NodeId, SourceUri},
     module::{
-        AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, FaderStyle, ModuleDoc, ScalarFormat,
+        BindingRef, ButtonStyle, ControlNode, FaderStyle, ModuleDoc, ScalarFormat,
         TextAlign, TrackColumn, WaveStyle, parse_module,
     },
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
@@ -431,7 +431,6 @@ fn spacer(id: &str) -> ControlNode {
         size: None,
         read: None,
         write: None,
-        adaptive: AdaptivePolicy::default(),
     }
 }
 
@@ -441,7 +440,6 @@ fn knob(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         label: None,
     }
 }
@@ -452,7 +450,6 @@ fn fader(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         style: FaderStyle::default(),
         label: None,
     }
@@ -464,7 +461,6 @@ fn scalar(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         format: ScalarFormat::default(),
         framed: true,
     }
@@ -476,7 +472,6 @@ fn button(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         label: "PLAY".to_owned(),
         active_label: Some("PAUSE".to_owned()),
         style: ButtonStyle::default(),
@@ -491,7 +486,6 @@ fn wave(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         style: WaveStyle::default(),
         badge: None,
         zoom: None,
@@ -504,7 +498,6 @@ fn vu(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
     }
 }
 
@@ -514,7 +507,6 @@ fn track_list(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         columns: vec![TrackColumn::Title],
         columns_state: None,
     }

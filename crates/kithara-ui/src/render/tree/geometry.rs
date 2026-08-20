@@ -166,7 +166,7 @@ mod tests {
         builtin,
         expand::{Binding, BindingKind},
         ids::{InternId, Interner, SourceUri},
-        module::{AdaptivePolicy, PopoverAlign, PopoverAt},
+        module::{PopoverAlign, PopoverAt},
     };
 
     #[kithara::test]
@@ -212,7 +212,6 @@ mod tests {
             size,
             read: None,
             write: None,
-            adaptive: AdaptivePolicy::default(),
         };
 
         assert_eq!(
@@ -249,7 +248,6 @@ mod tests {
             size: Some(size),
             read: None,
             write: None,
-            adaptive: AdaptivePolicy::default(),
         }
     }
 

@@ -34,7 +34,6 @@
                         read: Model(id: "library.visible_tracks"),
                         columns: [Index, Deck, Title, Artist, Bpm, Key, Time, Energy, Transition],
                         columns_state: Some(Model(id: "gallery.tracklist.columns")),
-                        adaptive: (priority: Required),
                     ),
                     Column(
                         id: "columns-panel",
