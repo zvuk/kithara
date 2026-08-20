@@ -8,6 +8,7 @@ use crate::{
 pub(super) fn node_size(node: &CompiledNode, skin: &SkinDoc, snapshot: &dyn Snapshot) -> SizeSpec {
     match node {
         CompiledNode::Optional { child, .. } => node_size(child, skin, snapshot),
+        CompiledNode::Adaptive { size, .. } => *size,
         node if !node.blocks() => compiled_node_size(node),
         CompiledNode::Split { axis, children, .. } => {
             let sizes = visible_children(children, snapshot)

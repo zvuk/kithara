@@ -889,6 +889,40 @@ fn an_adaptive_node_leaves_no_segment_of_its_own_in_a_control_address() {
     assert_eq!(path_of(&steps[0].1), "mixer/low");
 }
 
+/// A layout picks how many modules stand in the window from the room the window
+/// gives it, and answers that room as its own size whichever form it draws.
+#[kithara::test]
+fn a_self_measured_layout_is_the_box_it_declares() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "deck",
+            root: Row(id: "body", children: [Knob(id: "low")]))"#,
+    );
+    resolver.insert(
+        "wide.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "wide",
+            root: Adaptive(
+                id: "body",
+                measure: Width,
+                size: (w: Fill, h: Fill),
+                base: Module(instance: "deck-a", source: "blocks.kmodule.ron"),
+                steps: [
+                    (from: 1100.0, node: Split(axis: Horizontal, children: [
+                        (node: Module(instance: "deck-a", source: "blocks.kmodule.ron")),
+                        (node: Module(instance: "deck-b", source: "blocks.kmodule.ron")),
+                    ])),
+                ],
+            ))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "wide.klayout.ron").unwrap();
+
+    assert_eq!(ui.size, SizeSpec::new(Dim::Fill, Dim::Fill));
+    let CompiledNode::Adaptive { steps, .. } = &ui.root else {
+        panic!("expected an adaptive root, got {:?}", ui.root);
+    };
+    assert_eq!(steps.len(), 1);
+}
+
 #[kithara::test]
 fn an_adaptive_measure_must_read_a_scalar() {
     let resolver = block_resolver(

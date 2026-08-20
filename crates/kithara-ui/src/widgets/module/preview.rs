@@ -134,6 +134,7 @@ impl UnitRect {
 fn collect_areas(node: &CompiledNode, bounds: UnitRect, areas: &mut Vec<PreviewArea>) {
     match node {
         CompiledNode::Optional { child, .. } => collect_areas(child, bounds, areas),
+        CompiledNode::Adaptive { base, .. } => collect_areas(base, bounds, areas),
         CompiledNode::Split { axis, children, .. } => {
             areas.push(PreviewArea {
                 bounds,

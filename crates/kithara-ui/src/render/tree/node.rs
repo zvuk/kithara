@@ -19,7 +19,7 @@ use crate::{
     layout::Axis,
     module::{ChromeStyle, TextAlign},
     render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent},
-    size::{Dim, SizeSpec, Snapshot, branch, visible},
+    size::{Dim, SizeSpec, branch, visible},
     widgets::{
         DropZone, ModuleChrome, Widget,
         anchored::{Anchored, Placement},
@@ -37,6 +37,24 @@ pub(super) fn render_compiled<'a>(
     let snapshot = Answers { reads, ui };
     match node {
         CompiledNode::Optional { child, .. } => render_compiled(child, ui, reads, skin),
+        CompiledNode::Adaptive {
+            axis,
+            size,
+            base,
+            steps,
+        } => Measured::new(
+            std::iter::once(base.as_ref())
+                .chain(steps.iter().map(|(_, node)| node))
+                .map(|node| render_compiled(node, ui, reads, skin))
+                .collect(),
+            steps.iter().map(|(from, _)| *from).collect(),
+            *axis,
+            Size::new(
+                length_for(size.w, Length::Fill),
+                length_for(size.h, Length::Fill),
+            ),
+        )
+        .into(),
         CompiledNode::Split { axis, children, .. } => match axis {
             Axis::Horizontal => container(
                 Row::with_children(

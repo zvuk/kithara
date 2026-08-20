@@ -7,7 +7,7 @@ use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
     ids::{DocId, InstanceId, NodeId, SourceUri},
-    module::BindingRef,
+    module::{BindingRef, MeasureAxis},
     size::SizeSpec,
 };
 
@@ -43,6 +43,15 @@ pub enum LayoutNode {
         id: NodeId,
         hidden: BindingRef,
         node: Box<Self>,
+    },
+    /// Lays out the form that fits the room it is given: the last step whose
+    /// threshold the measured axis reaches, and `base` below the first.
+    Adaptive {
+        id: NodeId,
+        measure: MeasureAxis,
+        size: SizeSpec,
+        base: Box<Self>,
+        steps: Vec<AdaptiveStep>,
     },
     Module {
         instance: InstanceId,
@@ -90,6 +99,14 @@ impl Default for FrameSides {
 pub enum Axis {
     Horizontal,
     Vertical,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct AdaptiveStep {
+    pub from: f32,
+    pub node: LayoutNode,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

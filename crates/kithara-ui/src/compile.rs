@@ -8,7 +8,7 @@ use crate::{
     },
     ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, FrameSides, LayoutNode, parse_layout},
-    module::ChromeStyle,
+    module::{ChromeStyle, MeasureAxis},
     registry::EndpointRegistry,
     resolve::load_module_graph,
     size::{
@@ -56,6 +56,13 @@ pub enum CompiledNode {
         block: BlockSpec,
         child: Box<Self>,
     },
+    /// Lays out the branch that fits the room it is given.
+    Adaptive {
+        axis: MeasureAxis,
+        size: SizeSpec,
+        base: Box<Self>,
+        steps: Vec<(f32, Self)>,
+    },
     Module {
         instance: InternId,
         module: InternId,
@@ -79,6 +86,7 @@ impl CompiledNode {
         match self {
             Self::Split { blocks, .. } | Self::Module { blocks, .. } => *blocks,
             Self::Optional { .. } => true,
+            Self::Adaptive { .. } => false,
         }
     }
 }
@@ -192,6 +200,24 @@ impl Compiler<'_> {
                     child: Box::new(child),
                 })
             }
+            LayoutNode::Adaptive {
+                id,
+                measure,
+                size,
+                base,
+                steps,
+            } => {
+                validate::check_layout_measure(id, *measure, *size, layout_uri)?;
+                Ok(CompiledNode::Adaptive {
+                    axis: *measure,
+                    size: *size,
+                    base: Box::new(self.build(base, layout_uri)?),
+                    steps: steps
+                        .iter()
+                        .map(|step| Ok((step.from, self.build(&step.node, layout_uri)?)))
+                        .collect::<Result<_, UiDocError>>()?,
+                })
+            }
             LayoutNode::Module {
                 instance,
                 source,
@@ -257,7 +283,9 @@ impl Compiler<'_> {
 pub(crate) fn compiled_node_size(node: &CompiledNode) -> SizeSpec {
     match node {
         CompiledNode::Optional { child, .. } => compiled_node_size(child),
-        CompiledNode::Split { size, .. } | CompiledNode::Module { size, .. } => *size,
+        CompiledNode::Adaptive { size, .. }
+        | CompiledNode::Split { size, .. }
+        | CompiledNode::Module { size, .. } => *size,
     }
 }
 

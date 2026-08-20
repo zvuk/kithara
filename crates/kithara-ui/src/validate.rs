@@ -94,6 +94,31 @@ fn walk_layout(
             record_block(id, &here, origin, seen)?;
             walk_layout(node, &here, origin, seen, Sibling::Only)
         }
+        LayoutNode::Adaptive {
+            id, base, steps, ..
+        } => {
+            let here = path.push(format!("Adaptive({id})"));
+            check_id(&id.0, origin)?;
+            check_layout_steps(id, steps, &here, origin)?;
+            let taken = seen.clone();
+            for (index, branch) in std::iter::once((0, base.as_ref())).chain(
+                steps
+                    .iter()
+                    .enumerate()
+                    .map(|(index, step)| (index + 1, &step.node)),
+            ) {
+                let mut claimed = taken.clone();
+                walk_layout(
+                    branch,
+                    &here.push(format!("[{index}]")),
+                    origin,
+                    &mut claimed,
+                    Sibling::Only,
+                )?;
+                seen.extend(claimed);
+            }
+            Ok(())
+        }
         LayoutNode::Module { instance, .. } => {
             check_id(&instance.0, origin)?;
             claim(
@@ -104,6 +129,42 @@ fn walk_layout(
             )
         }
     }
+}
+
+/// A layout node measuring itself answers the box it declares, so the axis it
+/// reads cannot be the one its content decides.
+pub(crate) fn check_layout_measure(
+    id: &NodeId,
+    measure: MeasureAxis,
+    size: SizeSpec,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    let declared = match measure {
+        MeasureAxis::Width => size.w,
+        MeasureAxis::Height => size.h,
+    };
+    if declared != Dim::Shrink {
+        return Ok(());
+    }
+    Err(UiDocError::UnmeasuredAxis {
+        origin: origin.clone(),
+        id: id.0.clone(),
+        path: format!("Adaptive({id})"),
+        axis: match measure {
+            MeasureAxis::Width => "width",
+            MeasureAxis::Height => "height",
+        },
+    })
+}
+
+fn check_layout_steps(
+    id: &NodeId,
+    steps: &[crate::layout::AdaptiveStep],
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    let thresholds: Vec<f32> = steps.iter().map(|step| step.from).collect();
+    check_thresholds(id, &thresholds, path, origin)
 }
 
 pub(crate) fn check_block_path(path: &str, origin: &SourceUri) -> Result<(), UiDocError> {
@@ -324,6 +385,18 @@ fn check_adaptive_steps(
     path: &NodePath,
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
+    let thresholds: Vec<f32> = steps.iter().map(|step| step.from).collect();
+    check_thresholds(id, &thresholds, path, origin)
+}
+
+/// One form has no threshold and every other climbs from a finite one, which is
+/// what makes the pick total without a tie-break.
+fn check_thresholds(
+    id: &NodeId,
+    steps: &[f32],
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
     if steps.is_empty() {
         return Err(UiDocError::AdaptiveWithoutSteps {
             origin: origin.clone(),
@@ -332,16 +405,16 @@ fn check_adaptive_steps(
         });
     }
     let mut below = f32::NEG_INFINITY;
-    for (index, step) in steps.iter().enumerate() {
-        if step.from <= below || !step.from.is_finite() {
+    for (index, from) in steps.iter().copied().enumerate() {
+        if from <= below || !from.is_finite() {
             return Err(UiDocError::AdaptiveStepOrder {
                 origin: origin.clone(),
                 path: path.render(),
-                from: step.from,
+                from,
                 index,
             });
         }
-        below = step.from;
+        below = from;
     }
     Ok(())
 }
