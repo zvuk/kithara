@@ -454,6 +454,8 @@ widget state is bound to position, and `Tree::diff_children` must find the order
 was built in. A child left out is given a layout node of no size, and `draw`, `update`,
 `mouse_interaction` and `overlay` address the shown children alone - the pass records them in the
 widget state - so a hidden cell holding an open `Popover` floats nothing.
+Neither widget forwards `Widget::operate` to its children, so an operation traversal - focus,
+programmatic scroll-to - stops at the container and reaches nothing inside it.
 
 ## Icon Identity
 

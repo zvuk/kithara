@@ -23,7 +23,10 @@ fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
                     walk(child, visit);
                 }
             }
-            ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+            ExpandedNode::Optional { child, .. }
+            | ExpandedNode::Pressable { child, .. }
+            | ExpandedNode::Reveal { child, .. }
+            | ExpandedNode::Scroll { child, .. } => {
                 walk(child, visit);
             }
             ExpandedNode::Adaptive { base, steps, .. } => {
@@ -49,6 +52,10 @@ fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
                 stack.extend(children.iter().map(|(_, child)| child));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
+            CompiledNode::Adaptive { base, steps, .. } => {
+                stack.push(base);
+                stack.extend(steps.iter().map(|(_, branch)| branch));
+            }
             CompiledNode::Module { root, .. } => walk(root, visit),
             _ => {}
         }
@@ -142,6 +149,10 @@ fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
                 stack.extend(children.iter().map(|(_, child)| child));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
+            CompiledNode::Adaptive { base, steps, .. } => {
+                stack.push(base);
+                stack.extend(steps.iter().map(|(_, branch)| branch));
+            }
             CompiledNode::Module {
                 instance,
                 drop: Some(drop),
@@ -160,6 +171,47 @@ fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
 fn documents_compile_against_the_registry() {
     for layout in LAYOUTS {
         compile_ui(layout).unwrap();
+    }
+}
+
+/// Both node enums are `#[non_exhaustive]`, so every walker here ends at a
+/// `_ => {}`: a shape it does not name empties it in silence, and the tests
+/// that sweep its result stay true over nothing.
+#[kithara::test]
+fn every_walker_reaches_the_nodes_the_documents_declare() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let dual = layout == DeckLayout::Dual;
+        for (walker, found, floor) in [
+            (
+                "controls",
+                controls(&ui).len(),
+                if dual { 168 } else { 110 },
+            ),
+            (
+                "control_paths",
+                control_paths(&ui).len(),
+                if dual { 168 } else { 110 },
+            ),
+            ("surfaces", surfaces(&ui).len(), layout.decks()),
+            (
+                "pressables",
+                pressables(&ui).len(),
+                if dual { 35 } else { 24 },
+            ),
+            ("drop_targets", drop_targets(&ui).len(), layout.decks()),
+            ("guarded_by", guarded_by(&ui, "ui.module.hidden").len(), 4),
+            (
+                "optional_modules",
+                optional_modules(&ui, "ui.module.hidden").len(),
+                3,
+            ),
+        ] {
+            assert!(
+                found >= floor,
+                "{layout:?}: `{walker}` reached {found} nodes, under the {floor} the documents declare",
+            );
+        }
     }
 }
 
@@ -668,6 +720,15 @@ fn guarded_by<'a>(ui: &'a CompiledUi, key: &str) -> Vec<&'a str> {
                     walk(child, ui, key, guarded, out);
                 }
             }
+            ExpandedNode::Reveal { child, .. } | ExpandedNode::Scroll { child, .. } => {
+                walk(child, ui, key, guarded, out);
+            }
+            ExpandedNode::Adaptive { base, steps, .. } => {
+                walk(base, ui, key, guarded, out);
+                for (_, branch) in steps {
+                    walk(branch, ui, key, guarded, out);
+                }
+            }
             ExpandedNode::Popover {
                 anchor, content, ..
             } => {
@@ -686,6 +747,10 @@ fn guarded_by<'a>(ui: &'a CompiledUi, key: &str) -> Vec<&'a str> {
                 stack.extend(children.iter().map(|(_, child)| child));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
+            CompiledNode::Adaptive { base, steps, .. } => {
+                stack.push(base);
+                stack.extend(steps.iter().map(|(_, branch)| branch));
+            }
             CompiledNode::Module { root, .. } => walk(root, ui, key, false, &mut out),
             _ => {}
         }
@@ -706,6 +771,12 @@ fn optional_modules<'a>(ui: &'a CompiledUi, key: &str) -> Vec<(&'a str, &'a str)
             CompiledNode::Split { children, .. } => {
                 for (_, child) in children {
                     walk(child, ui, key, guard, out);
+                }
+            }
+            CompiledNode::Adaptive { base, steps, .. } => {
+                walk(base, ui, key, guard, out);
+                for (_, branch) in steps {
+                    walk(branch, ui, key, guard, out);
                 }
             }
             CompiledNode::Optional { block, child } => {
