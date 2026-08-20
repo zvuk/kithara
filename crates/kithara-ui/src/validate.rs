@@ -43,10 +43,20 @@ pub(crate) fn check_layout_instances(
     )
 }
 
+/// Where a child stands: alone under a wrapper, among the children of a
+/// container that lays them out, or among those of one that also measures
+/// itself and so can answer a threshold.
 #[derive(Clone, Copy, PartialEq)]
 enum Sibling {
     Among,
+    Measured,
     Only,
+}
+
+impl Sibling {
+    const fn laid_out_among_siblings(self) -> bool {
+        matches!(self, Self::Among | Self::Measured)
+    }
 }
 
 fn check_block_position(
@@ -55,7 +65,7 @@ fn check_block_position(
     origin: &SourceUri,
     sibling: Sibling,
 ) -> Result<(), UiDocError> {
-    if sibling == Sibling::Among {
+    if sibling.laid_out_among_siblings() {
         return Ok(());
     }
     Err(UiDocError::RootBlock {
@@ -63,6 +73,30 @@ fn check_block_position(
         id: id.0.clone(),
         path: path.render(),
     })
+}
+
+/// A threshold names a number the enclosing container measures, so only that
+/// container can answer one.
+fn check_reveal(
+    from: f32,
+    path: &NodePath,
+    origin: &SourceUri,
+    sibling: Sibling,
+) -> Result<(), UiDocError> {
+    if sibling != Sibling::Measured {
+        return Err(UiDocError::UnmeasuredReveal {
+            origin: origin.clone(),
+            path: path.render(),
+        });
+    }
+    if !from.is_finite() || from < 0.0 {
+        return Err(UiDocError::RevealThreshold {
+            origin: origin.clone(),
+            path: path.render(),
+            from,
+        });
+    }
+    Ok(())
 }
 
 fn walk_layout(
@@ -139,22 +173,8 @@ pub(crate) fn check_layout_measure(
     size: SizeSpec,
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
-    let declared = match measure {
-        MeasureAxis::Width => size.w,
-        MeasureAxis::Height => size.h,
-    };
-    if declared != Dim::Shrink {
-        return Ok(());
-    }
-    Err(UiDocError::UnmeasuredAxis {
-        origin: origin.clone(),
-        id: id.0.clone(),
-        path: format!("Adaptive({id})"),
-        axis: match measure {
-            MeasureAxis::Width => "width",
-            MeasureAxis::Height => "height",
-        },
-    })
+    let path = NodePath::default().push(format!("Adaptive({id})"));
+    check_measured_box(measure, Some(size), &path, origin)
 }
 
 fn check_layout_steps(
@@ -276,12 +296,16 @@ fn walk_module(
     match node {
         ControlNode::Row {
             id,
+            size,
+            measure,
             write,
             children,
             ..
         }
         | ControlNode::Column {
             id,
+            size,
+            measure,
             write,
             children,
             ..
@@ -300,16 +324,22 @@ fn walk_module(
                 }
                 None => path.clone(),
             };
+            let among = match measure {
+                Some(axis) => {
+                    check_measured_box(*axis, *size, &here, origin)?;
+                    Sibling::Measured
+                }
+                None => Sibling::Among,
+            };
             for (index, child) in children.iter().enumerate() {
-                walk_module(
-                    child,
-                    &here.push(format!("[{index}]")),
-                    origin,
-                    seen,
-                    Sibling::Among,
-                )?;
+                walk_module(child, &here.push(format!("[{index}]")), origin, seen, among)?;
             }
             Ok(())
+        }
+        ControlNode::Reveal { from, child } => {
+            let here = path.push("Reveal");
+            check_reveal(*from, &here, origin, sibling)?;
+            walk_module(child, &here, origin, seen, Sibling::Only)
         }
         ControlNode::Include { id, .. } => {
             record(&id.0, &path.push(format!("Include({id})")), origin, seen)
@@ -323,7 +353,7 @@ fn walk_module(
         } => {
             let here = path.push(format!("Adaptive({id})"));
             record(&id.0, &here, origin, seen)?;
-            check_measured_box(id, measure, *size, &here, origin)?;
+            check_adaptive_measure(id, measure, *size, &here, origin)?;
             check_adaptive_steps(id, steps, &here, origin)?;
             walk_branches(base, steps, &here, origin, seen)
         }
@@ -423,22 +453,11 @@ fn check_thresholds(
 /// its parent, so the axis it reads has to be declared and cannot be the one
 /// the content decides.
 fn check_measured_box(
-    id: &NodeId,
-    measure: &Measure,
+    axis: MeasureAxis,
     size: Option<SizeSpec>,
     path: &NodePath,
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
-    let Some(axis) = measure.axis() else {
-        return match size {
-            Some(_) => Err(UiDocError::MeasuredBoxWithoutAxis {
-                origin: origin.clone(),
-                id: id.0.clone(),
-                path: path.render(),
-            }),
-            None => Ok(()),
-        };
-    };
     let declared = size.map(|size| match axis {
         MeasureAxis::Width => size.w,
         MeasureAxis::Height => size.h,
@@ -448,13 +467,32 @@ fn check_measured_box(
     }
     Err(UiDocError::UnmeasuredAxis {
         origin: origin.clone(),
-        id: id.0.clone(),
         path: path.render(),
         axis: match axis {
             MeasureAxis::Width => "width",
             MeasureAxis::Height => "height",
         },
     })
+}
+
+/// A read measure takes the size of the branch it draws, so it declares no box
+/// of its own.
+fn check_adaptive_measure(
+    id: &NodeId,
+    measure: &Measure,
+    size: Option<SizeSpec>,
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    match (measure.axis(), size) {
+        (Some(axis), size) => check_measured_box(axis, size, path, origin),
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(UiDocError::MeasuredBoxWithoutAxis {
+            origin: origin.clone(),
+            id: id.0.clone(),
+            path: path.render(),
+        }),
+    }
 }
 
 /// Branches describe one place in several forms, so each claims ids from the
@@ -495,6 +533,7 @@ const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Column { .. }
         | ControlNode::Include { .. }
         | ControlNode::Optional { .. }
+        | ControlNode::Reveal { .. }
         | ControlNode::Popover { .. }
         | ControlNode::Pressable { .. }
         | ControlNode::Scroll { .. }
@@ -825,6 +864,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         }
         ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
         ControlNode::Include { .. }
+        | ControlNode::Reveal { .. }
         | ControlNode::Scroll { .. }
         | ControlNode::Slot { .. }
         | ControlNode::Brand { .. }
@@ -1141,7 +1181,8 @@ mod tests {
         ] {
             let error = measured(measure, size).unwrap_err();
             assert!(
-                matches!(&error, UiDocError::UnmeasuredAxis { id, .. } if id == "bank"),
+                matches!(&error, UiDocError::UnmeasuredAxis { path, .. }
+                    if path == "root/Adaptive(bank)"),
                 "{measure} {size}: {error:?}",
             );
         }
@@ -1167,6 +1208,96 @@ mod tests {
             matches!(&error, UiDocError::MeasuredBoxWithoutAxis { id, .. } if id == "bank"),
             "{error:?}",
         );
+    }
+
+    fn module_root(root: &str) -> Result<(), UiDocError> {
+        let text = format!(r#"(schema: "kithara.module", version: 1, id: "m", root: {root})"#);
+        let doc = parse_module(&text, &origin())?;
+        check_module_node_ids(&doc, &origin())
+    }
+
+    const BAR: &str = r#"id: "bar", measure: Width, size: (w: Fill, h: Fixed(42.0)),"#;
+
+    /// The container that measures itself is the one that answers a threshold,
+    /// so a reveal anywhere else would stand for good with nothing deciding
+    /// otherwise.
+    #[kithara::test]
+    fn a_reveal_stands_only_among_the_children_of_a_measuring_container() {
+        for root in [
+            r#"Reveal(from: 1.0, child: Knob(id: "low"))"#.to_owned(),
+            r#"Row(children: [Reveal(from: 1.0, child: Knob(id: "low"))])"#.to_owned(),
+            format!(
+                r#"Row({BAR} children: [Pressable(id: "press", press: Command(id: "ui.press"),
+                    child: Reveal(from: 1.0, child: Knob(id: "low")))])"#
+            ),
+            format!(
+                r#"Row({BAR} children: [Reveal(from: 1.0,
+                    child: Reveal(from: 2.0, child: Knob(id: "low")))])"#
+            ),
+        ] {
+            let error = module_root(&root).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::UnmeasuredReveal { .. }),
+                "{root}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_measuring_container_reveals_its_own_children() {
+        module_root(&format!(
+            r#"Row({BAR} children: [
+                Knob(id: "low"),
+                Reveal(from: 0.0, child: Knob(id: "mid")),
+                Reveal(from: 350.0, child: Knob(id: "high")),
+            ])"#
+        ))
+        .unwrap();
+    }
+
+    #[kithara::test]
+    fn a_measuring_container_must_declare_the_axis_it_measures() {
+        for (measure, size) in [
+            ("Width", ""),
+            ("Height", ""),
+            ("Width", "size: (w: Shrink, h: Fill),"),
+            ("Height", "size: (w: Fill, h: Shrink),"),
+        ] {
+            let root =
+                format!(r#"Row(id: "bar", measure: {measure}, {size} children: [Knob(id: "a")])"#);
+            let error = module_root(&root).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::UnmeasuredAxis { path, .. }
+                    if path == "root/Group(bar)"),
+                "{root}: {error:?}",
+            );
+        }
+    }
+
+    /// Thresholds need no order among themselves, so each one carries the whole
+    /// rule: a number the measured axis can reach.
+    #[kithara::test]
+    fn a_threshold_is_finite_and_not_negative() {
+        for from in ["-1.0", "inf", "-inf", "NaN"] {
+            let root =
+                format!(r#"Row({BAR} children: [Reveal(from: {from}, child: Knob(id: "a"))])"#);
+            let error = module_root(&root).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::RevealThreshold { .. }),
+                "{from}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn thresholds_need_not_climb() {
+        module_root(&format!(
+            r#"Row({BAR} children: [
+                Reveal(from: 520.0, child: Knob(id: "a")),
+                Reveal(from: 350.0, child: Knob(id: "b")),
+            ])"#
+        ))
+        .unwrap();
     }
 
     #[kithara::test]

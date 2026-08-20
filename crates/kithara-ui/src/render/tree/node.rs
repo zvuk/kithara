@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Element, Length, Size, mouse,
+    Alignment, Element, Length, Padding, Size, mouse,
     widget::{Column, Row, Space, Stack, container, mouse_area, scrollable},
 };
 use num_traits::cast::AsPrimitive;
@@ -22,8 +22,8 @@ use crate::{
     size::{Dim, SizeSpec, branch, visible},
     widgets::{
         DropZone, ModuleChrome, Widget,
+        adaptive::{Measured, Revealed, Shape},
         anchored::{Anchored, Placement},
-        measured::Measured,
         wheel::WheelSurface,
     },
 };
@@ -204,7 +204,9 @@ fn render_node<'a>(
         } => {
             return render_node(branch(measure, base, steps, &snapshot), ui, reads, skin);
         }
-        ExpandedNode::Optional { child, .. } => return render_node(child, ui, reads, skin),
+        ExpandedNode::Optional { child, .. } | ExpandedNode::Reveal { child, .. } => {
+            return render_node(child, ui, reads, skin);
+        }
         ExpandedNode::Row { .. } => render_row(node, size, ui, reads, skin),
         ExpandedNode::Column { .. } => render_column(node, size, ui, reads, skin),
         ExpandedNode::Popover {
@@ -274,6 +276,7 @@ fn render_row<'a>(
 ) -> Rendered<'a> {
     let ExpandedNode::Row {
         children,
+        measure,
         gap,
         pad,
         pad_x,
@@ -293,22 +296,38 @@ fn render_row<'a>(
     };
     let snapshot = Answers { reads, ui };
     let active = read_flag(active.as_ref(), reads, ui);
+    let gap = gap.unwrap_or(skin.layout.grid_gap);
+    let inset = padding(*pad, *pad_x, *pad_y, skin);
+    let (content, outer) = measure.map_or_else(
+        || {
+            let flow = Row::with_children(
+                visible(children, &snapshot).map(|child| render_node(child, ui, reads, skin)),
+            )
+            .spacing(gap)
+            .align_y(Alignment::Center)
+            .width(size.0)
+            .height(size.1);
+            (Element::from(flow), inset)
+        },
+        |axis| {
+            let shape = Shape {
+                flow: Axis::Horizontal,
+                measure: axis,
+                size: Size::new(size.0, size.1),
+                padding: inset,
+                gap,
+                align: Alignment::Center,
+            };
+            (revealed(children, shape, (ui, reads, skin)), Padding::ZERO)
+        },
+    );
     Rendered::leading(wheeled(
         bordered(
             filled(
-                container(
-                    Row::with_children(
-                        visible(children, &snapshot)
-                            .map(|child| render_node(child, ui, reads, skin)),
-                    )
-                    .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                    .align_y(Alignment::Center)
+                container(content)
+                    .padding(outer)
                     .width(size.0)
                     .height(size.1),
-                )
-                .padding(padding(*pad, *pad_x, *pad_y, skin))
-                .width(size.0)
-                .height(size.1),
                 active_tone(*background, *active_background, active),
                 *background_alpha,
                 skin,
@@ -333,6 +352,7 @@ fn render_column<'a>(
 ) -> Rendered<'a> {
     let ExpandedNode::Column {
         children,
+        measure,
         gap,
         align,
         pad,
@@ -349,21 +369,37 @@ fn render_column<'a>(
         unreachable!("render_column is called only for a column")
     };
     let snapshot = Answers { reads, ui };
+    let gap = gap.unwrap_or(skin.layout.grid_gap);
+    let inset = padding(*pad, *pad_x, *pad_y, skin);
+    let (content, outer) = measure.map_or_else(
+        || {
+            let flow = Column::with_children(
+                visible(children, &snapshot).map(|child| render_node(child, ui, reads, skin)),
+            )
+            .spacing(gap)
+            .align_x(column_alignment(*align))
+            .width(size.0);
+            (Element::from(flow), inset)
+        },
+        |axis| {
+            let shape = Shape {
+                flow: Axis::Vertical,
+                measure: axis,
+                size: Size::new(size.0, size.1),
+                padding: inset,
+                gap,
+                align: column_alignment(*align),
+            };
+            (revealed(children, shape, (ui, reads, skin)), Padding::ZERO)
+        },
+    );
     Rendered::leading(wheeled(
         bordered(
             filled(
-                container(
-                    Column::with_children(
-                        visible(children, &snapshot)
-                            .map(|child| render_node(child, ui, reads, skin)),
-                    )
-                    .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                    .align_x(column_alignment(*align))
-                    .width(size.0),
-                )
-                .padding(padding(*pad, *pad_x, *pad_y, skin))
-                .width(size.0)
-                .height(size.1),
+                container(content)
+                    .padding(outer)
+                    .width(size.0)
+                    .height(size.1),
                 *background,
                 *background_alpha,
                 skin,
@@ -377,6 +413,25 @@ fn render_column<'a>(
         size,
         ui,
     ))
+}
+
+/// A container that measures itself hands the toolkit every child it lays out
+/// with the threshold each appears at, and lets the box it is given decide
+/// which of them stand. A child the host hides never reaches it.
+fn revealed<'a>(
+    children: &[ExpandedNode],
+    shape: Shape,
+    context: (&'a CompiledUi, &dyn Reads, &'a Skin),
+) -> Element<'a, UiEvent> {
+    let (ui, reads, skin) = context;
+    let snapshot = Answers { reads, ui };
+    let cells = visible(children, &snapshot)
+        .map(|child| match child {
+            ExpandedNode::Reveal { from, child } => (*from, render_node(child, ui, reads, skin)),
+            child => (0.0, render_node(child, ui, reads, skin)),
+        })
+        .collect();
+    Revealed::new(cells, shape).into()
 }
 
 /// A self-measured node hands every branch to the toolkit and lets the box it

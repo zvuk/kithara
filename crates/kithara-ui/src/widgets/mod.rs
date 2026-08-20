@@ -1,3 +1,4 @@
+pub(crate) mod adaptive;
 pub(crate) mod anchored;
 pub(crate) mod behavior;
 pub(crate) mod button;
@@ -5,7 +6,6 @@ pub(crate) mod deck;
 pub(crate) mod drag_ghost;
 pub(crate) mod fader;
 pub(crate) mod global_bar;
-pub(crate) mod measured;
 mod module;
 pub(crate) mod nav;
 pub(crate) mod telemetry;

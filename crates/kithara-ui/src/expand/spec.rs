@@ -233,6 +233,7 @@ fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
         | ControlNode::Include { .. }
         | ControlNode::Optional { .. }
         | ControlNode::Popover { .. }
+        | ControlNode::Reveal { .. }
         | ControlNode::Pressable { .. }
         | ControlNode::Slot { .. }
         | ControlNode::Glyph { .. }

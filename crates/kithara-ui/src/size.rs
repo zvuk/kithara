@@ -277,9 +277,14 @@ pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
     match node {
         ExpandedNode::Adaptive { size, .. } => size.is_none(),
         ExpandedNode::Optional { .. } => true,
-        ExpandedNode::Row { children, .. }
-        | ExpandedNode::Column { children, .. }
-        | ExpandedNode::Slot { children, .. } => children.iter().any(has_blocks),
+        ExpandedNode::Reveal { child, .. } => has_blocks(child),
+        ExpandedNode::Row {
+            measure, children, ..
+        }
+        | ExpandedNode::Column {
+            measure, children, ..
+        } => measure.is_none() && children.iter().any(has_blocks),
+        ExpandedNode::Slot { children, .. } => children.iter().any(has_blocks),
         ExpandedNode::Popover { anchor, .. } => has_blocks(anchor),
         ExpandedNode::Pressable { child, .. } | ExpandedNode::Scroll { child, .. } => {
             has_blocks(child)
@@ -328,11 +333,12 @@ pub(crate) fn compute_size(
     snapshot: &dyn Snapshot,
 ) -> SizeSpec {
     let override_size = match node {
-        ExpandedNode::Adaptive { size, .. } => *size,
         ExpandedNode::Optional { .. }
         | ExpandedNode::Popover { .. }
-        | ExpandedNode::Pressable { .. } => None,
-        ExpandedNode::Scroll { size, .. }
+        | ExpandedNode::Pressable { .. }
+        | ExpandedNode::Reveal { .. } => None,
+        ExpandedNode::Adaptive { size, .. }
+        | ExpandedNode::Scroll { size, .. }
         | ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
         | ExpandedNode::Slot { size, .. }
@@ -349,11 +355,11 @@ pub(crate) fn compute_size(
             steps,
             ..
         } => compute_size(branch(measure, base, steps, snapshot), skin, snapshot),
-        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
-            compute_size(child, skin, snapshot)
-        }
+        ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Reveal { child, .. }
+        | ExpandedNode::Scroll { child, .. } => compute_size(child, skin, snapshot),
         ExpandedNode::Popover { anchor, .. } => compute_size(anchor, skin, snapshot),
-        ExpandedNode::Scroll { child, .. } => compute_size(child, skin, snapshot),
         ExpandedNode::Row {
             children,
             gap,
@@ -474,7 +480,7 @@ mod tests {
         builtin,
         expand::{Binding, BindingKind},
         ids::{Interner, SourceUri},
-        module::{GlyphStyle, IconName, PopoverAlign, PopoverAt, TextAlign},
+        module::{GlyphStyle, IconName, MeasureAxis, PopoverAlign, PopoverAt, TextAlign},
     };
 
     fn control(interner: &mut Interner, id: &str, size: SizeSpec) -> ExpandedNode {
@@ -493,10 +499,16 @@ mod tests {
         SizeSpec::new(Dim::Fixed(w), Dim::Fixed(h))
     }
 
-    fn row(children: Vec<ExpandedNode>, size: Option<SizeSpec>, gap: Option<f32>) -> ExpandedNode {
+    fn row(
+        children: Vec<ExpandedNode>,
+        size: Option<SizeSpec>,
+        gap: Option<f32>,
+        measure: Option<MeasureAxis>,
+    ) -> ExpandedNode {
         ExpandedNode::Row {
             size,
             gap,
+            measure,
             children,
             id: None,
             pad: None,
@@ -519,6 +531,7 @@ mod tests {
             children,
             id: None,
             size: None,
+            measure: None,
             align: TextAlign::Start,
             pad: None,
             pad_x: None,
@@ -574,6 +587,7 @@ mod tests {
             vec![control(&mut interner, "child", fixed(10.0, 10.0))],
             Some(SizeSpec::new(Dim::Shrink, Dim::Fixed(30.0))),
             Some(0.0),
+            None,
         );
 
         assert_eq!(
@@ -589,6 +603,7 @@ mod tests {
             vec![control(&mut interner, "child", fixed(10.0, 4.0))],
             None,
             Some(0.0),
+            None,
         ) else {
             panic!("expected a row");
         };
@@ -596,6 +611,7 @@ mod tests {
             children,
             id: None,
             size: None,
+            measure: None,
             gap: Some(0.0),
             pad: None,
             pad_x: Some(11.0),
@@ -630,6 +646,7 @@ mod tests {
             ],
             None,
             Some(0.0),
+            None,
         );
 
         let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
@@ -740,6 +757,7 @@ mod tests {
             ],
             None,
             Some(0.0),
+            None,
         );
 
         let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
@@ -775,6 +793,7 @@ mod tests {
             ],
             None,
             None,
+            None,
         );
         let mut skin = builtin::skin_doc().clone();
         skin.layout.size_gap = 3.0;
@@ -793,6 +812,7 @@ mod tests {
         let node = row(
             vec![control(&mut interner, "child", fixed(10.0, 10.0))],
             Some(override_size),
+            None,
             None,
         );
 
@@ -816,6 +836,7 @@ mod tests {
             ],
             None,
             Some(0.0),
+            None,
         );
 
         let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
@@ -858,6 +879,70 @@ mod tests {
         assert!(
             !has_blocks(&node),
             "an opaque node keeps a constant size, so the renderer may memoise it",
+        );
+    }
+
+    struct Folded;
+
+    impl Snapshot for Folded {
+        fn hidden(&self, _: &BlockSpec) -> bool {
+            true
+        }
+
+        fn measure(&self, _: &Binding) -> Option<f32> {
+            None
+        }
+    }
+
+    fn reveal(from: f32, child: ExpandedNode) -> ExpandedNode {
+        ExpandedNode::Reveal {
+            from,
+            child: Box::new(child),
+        }
+    }
+
+    fn optional(interner: &mut Interner, id: &str, child: ExpandedNode) -> ExpandedNode {
+        let origin = SourceUri("size-test.ron".to_owned());
+        let path = interner.intern(id, &origin).unwrap();
+        ExpandedNode::Optional {
+            block: BlockSpec {
+                path,
+                hidden: Binding {
+                    kind: BindingKind::Model,
+                    id: path,
+                    key: path,
+                    with: BTreeMap::new(),
+                },
+            },
+            child: Box::new(child),
+        }
+    }
+
+    /// A container that measures itself answers the box it declares, whatever
+    /// it shows inside it - otherwise a cell appearing would move the siblings
+    /// whose room decided that it appears.
+    #[kithara::test]
+    fn a_measuring_container_is_opaque_to_its_parent() {
+        let mut interner = Interner::new(1024);
+        let declared = SizeSpec::new(Dim::Fill, Dim::Fixed(42.0));
+        let mut cell = |id| control(&mut interner, id, fixed(80.0, 20.0));
+        let (wave, volume, quality) = (cell("wave"), cell("volume"), cell("cell"));
+        let node = row(
+            vec![
+                reveal(350.0, wave),
+                reveal(440.0, volume),
+                optional(&mut interner, "quality", quality),
+            ],
+            Some(declared),
+            Some(0.0),
+            Some(MeasureAxis::Width),
+        );
+
+        assert_eq!(compute_size(&node, builtin::skin_doc(), DEFAULTS), declared);
+        assert_eq!(compute_size(&node, builtin::skin_doc(), &Folded), declared);
+        assert!(
+            !has_blocks(&node),
+            "an opaque container keeps a constant size, so the renderer may memoise it",
         );
     }
 }

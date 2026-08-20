@@ -79,6 +79,10 @@ pub enum ControlNode {
         id: Option<NodeId>,
         #[serde(default)]
         size: Option<SizeSpec>,
+        /// Measures the declared box on this axis and reveals the children
+        /// whose threshold it reaches.
+        #[serde(default)]
+        measure: Option<MeasureAxis>,
         #[serde(default)]
         gap: Option<f32>,
         #[serde(default)]
@@ -113,6 +117,10 @@ pub enum ControlNode {
         id: Option<NodeId>,
         #[serde(default)]
         size: Option<SizeSpec>,
+        /// Measures the declared box on this axis and reveals the children
+        /// whose threshold it reaches.
+        #[serde(default)]
+        measure: Option<MeasureAxis>,
         #[serde(default)]
         gap: Option<f32>,
         #[serde(default)]
@@ -162,6 +170,9 @@ pub enum ControlNode {
         base: Box<Self>,
         steps: Vec<AdaptiveStep>,
     },
+    /// Shows its child once the container measures `from` on the axis it
+    /// declares. Only a container declaring `measure` may hold one.
+    Reveal { from: f32, child: Box<Self> },
     /// Marks its child as a block the host may hide. While `hidden` reads
     /// true the child is not laid out.
     Optional {
@@ -684,11 +695,12 @@ impl ControlNode {
                 measure: Measure::Read(measure),
                 ..
             } => (Some(measure), None),
-            Self::Adaptive { .. } => (None, None),
             Self::Optional { hidden, .. } => (Some(hidden), None),
             Self::Popover { open, .. } => (Some(open), None),
             Self::Pressable { press, .. } => (None, Some(press)),
-            Self::Include { .. }
+            Self::Adaptive { .. }
+            | Self::Include { .. }
+            | Self::Reveal { .. }
             | Self::Scroll { .. }
             | Self::Slot { .. }
             | Self::WindowDrag { .. }
@@ -738,9 +750,10 @@ impl ControlNode {
             Self::Include { .. }
             | Self::Optional { .. }
             | Self::Popover { .. }
-            | Self::Pressable { .. } => None,
-            Self::Adaptive { size, .. } => size.as_ref(),
-            Self::Scroll { size, .. }
+            | Self::Pressable { .. }
+            | Self::Reveal { .. } => None,
+            Self::Adaptive { size, .. }
+            | Self::Scroll { size, .. }
             | Self::Row { size, .. }
             | Self::Column { size, .. }
             | Self::Slot { size, .. }

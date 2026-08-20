@@ -889,6 +889,42 @@ fn an_adaptive_node_leaves_no_segment_of_its_own_in_a_control_address() {
     assert_eq!(path_of(&steps[0].1), "mixer/low");
 }
 
+/// A threshold names when a child appears, never where it lives, so the host
+/// addresses it exactly as it addresses the child beside it.
+#[kithara::test]
+fn a_reveal_leaves_no_segment_of_its_own_in_a_control_address() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Row(
+                id: "bar",
+                measure: Width,
+                size: (w: Fill, h: Fixed(42.0)),
+                children: [
+                    Knob(id: "low"),
+                    Reveal(from: 440.0, child: Knob(id: "high")),
+                ],
+            ))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Row { children, .. } = &**root else {
+        panic!("expected a row root");
+    };
+    let ExpandedNode::Reveal { from, child } = &children[1] else {
+        panic!("expected a reveal, got {:?}", children[1]);
+    };
+    let ExpandedNode::Control { path, .. } = &**child else {
+        panic!("expected a control under the reveal");
+    };
+
+    assert_eq!(*from, 440.0);
+    assert_eq!(ui.resolve(*path), "mixer/high");
+}
+
 /// A layout picks how many modules stand in the window from the room the window
 /// gives it, and answers that room as its own size whichever form it draws.
 #[kithara::test]

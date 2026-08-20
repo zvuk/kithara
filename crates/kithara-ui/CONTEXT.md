@@ -394,15 +394,66 @@ thresholds and the value alone.
   context. An author repeating an `id` across branches gets one address and one host handler, and
   that is the point - `validate::walk_branches` gives each branch a clone of the ids its parent
   holds and unions the claims on the way out, so ids collide inside a branch and never across them.
-- The node declares no `size`: it measures as the branch its snapshot selects, in
+- A node reading its measure declares no `size` and measures as the branch its snapshot selects, in
   `size::compute_size` and in `geometry.rs::effective_size` alike. Both take the snapshot for that
   reason, and a wrapper above the node reports the drawn branch's size the way it already reports
   an `Optional` child's - `Pressable` over an adaptive bank keeps the box the bank declares. The
   render arm returns the branch's own element, the way `Optional` returns its child's. It always
   yields one child, so it needs no iterating parent and stands wherever a plain node stands. Every
   branch expands at compile time, so the arena and the node budget carry them all.
+- A node measuring `Width` or `Height` instead reads the box the toolkit gives it, and so must
+  declare that axis: `validate::check_measured_box` rejects an absent `size` and a `Dim::Shrink` on
+  the measured axis with `UiDocError::UnmeasuredAxis`, and a read measure declaring a box at all
+  with `MeasuredBoxWithoutAxis`. Such a node answers its declared box whatever branch it draws,
+  which is what keeps the pick from moving the siblings whose room decided it, and what lets
+  `size::has_blocks` call the subtree constant. `widgets/adaptive/measured.rs` builds every branch
+  once and lays out the one that fits, so a pick costs no rebuild and each branch keeps its state.
 - The measured number belongs to the host endpoint, not to the node: a window width, a band count,
   anything else reads the same. Two axes are two nested adaptive nodes.
+
+## Threshold Reveal Ownership
+
+A `Row` or `Column` declaring `measure` reads the box it is given on that axis, and each child
+wrapped in `Reveal { from }` stands once the axis reaches `from`. Several children stand at once -
+as many as have thresholds the room reaches - which is where this differs from `Adaptive`, drawing
+one branch of several. A child carrying no wrapper always stands.
+
+- The container obeys the same declared-box rule a self-measured `Adaptive` does, through the same
+  `validate::check_measured_box` and the same `UiDocError::UnmeasuredAxis`: `measure` requires
+  `size`, and the measured axis may not be `Dim::Shrink`. So the container answers its declared box
+  however many children it shows, `size::compute_size` and `geometry::effective_size` return that
+  box, and `size::has_blocks` calls it constant - the cells appearing move no sibling, and the
+  renderer memoises the subtree.
+- Only that container answers a threshold, so a `Reveal` stands only among its direct children;
+  anywhere else is `UiDocError::UnmeasuredReveal`, never a child that silently stands for good.
+  `validate::Sibling::Measured` is what a container declaring `measure` passes its children, and
+  `Sibling::Only` is what a `Reveal` passes its own, so an `Optional` directly below one - which no
+  parent would iterate, and so no parent would hide - is rejected with the rest.
+- A threshold is finite and not negative (`UiDocError::RevealThreshold`) and that is the whole rule:
+  thresholds carry no order among themselves, unlike `Adaptive` steps, whose order is what makes one
+  branch total.
+- The node carries no `id` and contributes no segment to the addresses below it: it publishes
+  nothing and its visibility is the room's answer rather than the host's, so a control inside one is
+  addressed exactly as a control beside it.
+- Hiding and revealing compose without meeting: `render/tree/node.rs::revealed` filters the
+  host-hidden children through `size::visible` first, so the widget lays out only children the host
+  keeps, and an `Optional` may stand among `Reveal`s as a plain always-revealed cell.
+- The threshold is read against the box the container declares, padding included:
+  `widgets/adaptive/revealed.rs` owns `pad`/`pad_x`/`pad_y` and charges them inside itself, so the
+  number a document names is the number a parent hands the container.
+- For the same reason a measuring `Column` is handed both axes of its declared box, where a plain
+  one leaves its height to its content: the axis it measures has to be readable from the box, and a
+  `Column` measuring `Height` declares one.
+
+`widgets/adaptive` holds both self-measuring widgets. `Revealed` lays the shown children out
+through `iced`'s own `layout::flex::resolve`, so `gap`, padding, cross-axis alignment and `Fill`
+distribution are the toolkit's rules rather than a second set. That resolver takes one contiguous
+slice, so the pass rotates the shown children to the front of both the element list and the state
+list, resolves, and rotates them back before it returns;
+widget state is bound to position, and `Tree::diff_children` must find the order the element tree
+was built in. A child left out is given a layout node of no size, and `draw`, `update`,
+`mouse_interaction` and `overlay` address the shown children alone - the pass records them in the
+widget state - so a hidden cell holding an open `Popover` floats nothing.
 
 ## Icon Identity
 

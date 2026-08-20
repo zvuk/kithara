@@ -55,14 +55,21 @@ pub enum UiDocError {
         index: usize,
         from: f32,
     },
-    #[error(
-        "{origin}: adaptive node {id:?} at {path} measures its own {axis} and must declare that axis as a box"
-    )]
+    #[error("{origin}: {path} measures its own {axis} and must declare that axis as a box")]
     UnmeasuredAxis {
         origin: SourceUri,
-        id: String,
         path: String,
         axis: &'static str,
+    },
+    #[error("{origin}: reveal at {path} has no container measuring itself to show it")]
+    UnmeasuredReveal { origin: SourceUri, path: String },
+    #[error(
+        "{origin}: reveal at {path} appears from {from}; a threshold is finite and not negative"
+    )]
+    RevealThreshold {
+        origin: SourceUri,
+        path: String,
+        from: f32,
     },
     #[error(
         "{origin}: adaptive node {id:?} at {path} reads its measure and takes the size of the branch it draws"

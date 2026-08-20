@@ -19,6 +19,7 @@ pub enum ExpandedNode {
     Row {
         id: Option<InternId>,
         size: Option<SizeSpec>,
+        measure: Option<MeasureAxis>,
         gap: Option<f32>,
         pad: Option<f32>,
         pad_x: Option<f32>,
@@ -36,6 +37,7 @@ pub enum ExpandedNode {
     Column {
         id: Option<InternId>,
         size: Option<SizeSpec>,
+        measure: Option<MeasureAxis>,
         gap: Option<f32>,
         align: TextAlign,
         pad: Option<f32>,
@@ -60,6 +62,12 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         base: Box<Self>,
         steps: Vec<(f32, Self)>,
+    },
+    /// Laid out once the enclosing container measures `from` on the axis it
+    /// declares.
+    Reveal {
+        from: f32,
+        child: Box<Self>,
     },
     Optional {
         block: BlockSpec,
@@ -386,6 +394,7 @@ mod tests {
             gap: Some(gap),
             id: None,
             size: None,
+            measure: None,
             pad: None,
             pad_x: None,
             pad_y: None,

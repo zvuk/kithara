@@ -142,7 +142,7 @@ impl<Message> Widget<Message, Theme, Renderer> for Measured<'_, Message> {
         layout
             .children()
             .nth(drawn)
-            .map_or(Interaction::default(), |bounds| {
+            .map_or_else(Interaction::default, |bounds| {
                 self.branches[drawn].as_widget().mouse_interaction(
                     &tree.children[drawn],
                     bounds,

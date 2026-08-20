@@ -123,7 +123,9 @@ pub(super) fn effective_size(
                 effective_size(branch(measure, base, steps, snapshot), skin, snapshot)
             });
         }
-        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+        ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Reveal { child, .. } => {
             return effective_size(child, skin, snapshot);
         }
         ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin, snapshot),

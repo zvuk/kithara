@@ -374,6 +374,20 @@ fn expand_optional(
     })
 }
 
+fn expand_reveal(
+    context: &Context<'_>,
+    from: f32,
+    child: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    Ok(ExpandedNode::Reveal {
+        from,
+        child: Box::new(walk(context, child, depth, machine)?),
+    })
+}
+
 fn expand_popover(
     context: &Context<'_>,
     node: &ControlNode,
@@ -568,6 +582,7 @@ fn walk(
         ControlNode::Row {
             id,
             size,
+            measure,
             gap,
             pad,
             pad_x,
@@ -590,6 +605,7 @@ fn walk(
                 surface,
                 id: intern_node_id(id.as_ref(), context, machine)?,
                 size: *size,
+                measure: *measure,
                 gap: *gap,
                 pad: *pad,
                 pad_x: *pad_x,
@@ -633,6 +649,7 @@ fn walk(
         ControlNode::Optional { id, hidden, child } => {
             expand_optional(context, node, id, hidden, child, depth, machine)
         }
+        ControlNode::Reveal { from, child } => expand_reveal(context, *from, child, depth, machine),
         ControlNode::Popover {
             id,
             open,
@@ -718,6 +735,7 @@ fn expand_column(
     let ControlNode::Column {
         id,
         size,
+        measure,
         gap,
         align,
         pad,
@@ -740,6 +758,7 @@ fn expand_column(
         surface,
         id: intern_node_id(id.as_ref(), context, machine)?,
         size: *size,
+        measure: *measure,
         gap: *gap,
         align: *align,
         pad: *pad,
