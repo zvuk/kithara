@@ -12,8 +12,8 @@ use crate::{
     registry::EndpointRegistry,
     resolve::load_module_graph,
     size::{
-        BlockNode, Hidden, SizeSpec, VISIBLE, combine_horizontal, combine_vertical, compute_size,
-        has_blocks, with_module_chrome,
+        BlockNode, DEFAULTS, SizeSpec, Snapshot, combine_horizontal, combine_vertical,
+        compute_size, has_blocks, with_module_chrome,
     },
     skin::SkinDoc,
     source::{SourceResolver, UiConfig},
@@ -229,7 +229,7 @@ impl Compiler<'_> {
                 .expand_module(&set, &module_uri, &args, &instance.0)?;
                 let declared = *size;
                 let size = declared.unwrap_or_else(|| {
-                    module_size(&expanded.root, expanded.chrome, self.skin, VISIBLE)
+                    module_size(&expanded.root, expanded.chrome, self.skin, DEFAULTS)
                 });
                 let blocks = declared.is_none() && has_blocks(&expanded.root);
                 let instance = self.interner.intern(&instance.0, layout_uri)?;
@@ -265,7 +265,7 @@ pub(crate) fn module_size(
     root: &ExpandedNode,
     chrome: ChromeStyle,
     skin: &SkinDoc,
-    hidden: Hidden<'_>,
+    snapshot: &dyn Snapshot,
 ) -> SizeSpec {
-    with_module_chrome(compute_size(root, skin, hidden), chrome, skin)
+    with_module_chrome(compute_size(root, skin, snapshot), chrome, skin)
 }

@@ -808,6 +808,11 @@ fn block_registry() -> common::TestRegistry {
         "ui.menu.toggle",
         EndpointDesc::new(ValueKind::Trigger),
     );
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.measure",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
     registry
 }
 
@@ -831,6 +836,74 @@ fn compile_blocks(resolver: &MemResolver, entry: &str) -> Result<CompiledUi, UiD
         builtin::text_doc(),
         &UiConfig::default(),
     )
+}
+
+const ADAPTIVE_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "mixer",
+    root: Adaptive(
+        id: "bank",
+        measure: Model(id: "ui.measure"),
+        base: Row(id: "narrow", children: [Knob(id: "low")]),
+        steps: [
+            (from: 4.0, node: Row(id: "wide", children: [Knob(id: "low"), Knob(id: "high")])),
+        ],
+    ))"#;
+
+/// Both branches describe one place, so a knob keeps its address whichever
+/// branch draws it.
+#[kithara::test]
+fn an_adaptive_node_leaves_no_segment_of_its_own_in_a_control_address() {
+    let resolver = block_resolver(ADAPTIVE_MODULE);
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Adaptive {
+        measure,
+        base,
+        steps,
+    } = &**root
+    else {
+        panic!("expected an adaptive root");
+    };
+    assert_eq!(ui.resolve(measure.id), "ui.measure");
+
+    let path_of = |node: &ExpandedNode| {
+        let ExpandedNode::Row { children, .. } = node else {
+            panic!("expected a row branch");
+        };
+        let ExpandedNode::Control { path, .. } = &children[0] else {
+            panic!("expected a control");
+        };
+        ui.resolve(*path).to_owned()
+    };
+
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].0, 4.0);
+    assert_eq!(path_of(base), "mixer/low");
+    assert_eq!(path_of(&steps[0].1), "mixer/low");
+}
+
+#[kithara::test]
+fn an_adaptive_measure_must_read_a_scalar() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Adaptive(
+                id: "bank",
+                measure: Model(id: "ui.block.hidden"),
+                base: Knob(id: "low"),
+                steps: [(from: 4.0, node: Knob(id: "high"))],
+            ))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
+            if expected == "Scalar" && got == "Bool" && path == "mixer/bank"),
+        "{error:?}"
+    );
 }
 
 #[kithara::test]

@@ -5,9 +5,9 @@ use crate::{
     ids::{InternId, SourceUri},
     layout::FrameSides,
     module::{
-        BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign, PopoverAt, ScalarFormat,
-        TextAlign, TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
+        BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode, DeckSummaryStyle, FaderStyle,
+        GlyphStyle, IconName, PopoverAlign, PopoverAt, ScalarFormat, TextAlign, TextStyle, Tone,
+        TrackColumn, WaveStyle, WindowControlsStyle,
     },
     size::{BlockNode, SizeSpec},
     skin::ColorRole,
@@ -52,6 +52,13 @@ pub enum ExpandedNode {
         id: InternId,
         size: Option<SizeSpec>,
         child: Box<Self>,
+    },
+    /// Draws one branch: the last step whose threshold the measure reaches,
+    /// and `base` below the first of them.
+    Adaptive {
+        measure: Binding,
+        base: Box<Self>,
+        steps: Vec<(f32, Self)>,
     },
     Optional {
         block: BlockSpec,
@@ -255,6 +262,23 @@ pub struct BlockSpec {
     pub path: InternId,
 }
 
+/// The branch a measure selects: the last step the value reaches, and `base`
+/// below every threshold or when nothing was read.
+pub(crate) fn adaptive_branch<'a>(
+    base: &'a ExpandedNode,
+    steps: &'a [(f32, ExpandedNode)],
+    value: Option<f32>,
+) -> &'a ExpandedNode {
+    let Some(value) = value else {
+        return base;
+    };
+    steps
+        .iter()
+        .rev()
+        .find(|(from, _)| *from <= value)
+        .map_or(base, |(_, node)| node)
+}
+
 impl BlockNode for ExpandedNode {
     fn block(&self) -> Option<&BlockSpec> {
         match self {
@@ -317,5 +341,48 @@ impl Budget {
             });
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    /// Branches that differ only by a number the selector never reads.
+    fn form(gap: f32) -> ExpandedNode {
+        ExpandedNode::Row {
+            gap: Some(gap),
+            id: None,
+            size: None,
+            pad: None,
+            pad_x: None,
+            pad_y: None,
+            frame: None,
+            background: None,
+            background_alpha: None,
+            active: None,
+            active_background: None,
+            frame_color: None,
+            active_frame_color: None,
+            surface: None,
+            children: Vec::new(),
+        }
+    }
+
+    #[kithara::test]
+    fn a_measure_takes_the_last_step_it_reaches() {
+        let base = form(0.0);
+        let steps = vec![(4.0, form(4.0)), (8.0, form(8.0))];
+        let branch = |value| adaptive_branch(&base, &steps, value);
+
+        assert_eq!(branch(None), &base, "nothing read");
+        assert_eq!(branch(Some(3.9)), &base, "below the first step");
+        assert_eq!(branch(Some(4.0)), &steps[0].1, "exactly on a threshold");
+        assert_eq!(branch(Some(7.9)), &steps[0].1);
+        assert_eq!(branch(Some(8.0)), &steps[1].1);
+        assert_eq!(branch(Some(f32::MAX)), &steps[1].1, "above every step");
+        assert_eq!(branch(Some(f32::NAN)), &base, "ordered against nothing");
     }
 }

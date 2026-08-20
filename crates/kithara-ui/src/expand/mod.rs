@@ -2,9 +2,10 @@ mod binding_subst;
 mod machine;
 mod node;
 mod site;
+mod spec;
 
 pub use binding_subst::scoped_key;
 pub(crate) use binding_subst::{intern_binding, substitute_binding, substitute_map};
 pub(crate) use machine::Expander;
 pub use node::{Binding, BindingKind, BlockSpec, ControlSpec, DropSpec, ExpandedNode, SurfaceSpec};
-pub(crate) use node::{Budget, ControlSite, ControlVisitor, ExpandedModule};
+pub(crate) use node::{Budget, ControlSite, ControlVisitor, ExpandedModule, adaptive_branch};

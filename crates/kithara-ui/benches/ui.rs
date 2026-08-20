@@ -6,8 +6,8 @@ use kithara_ui::{
     compile::{CompiledUi, compile},
     ids::{DocId, EndpointId, NodeId, SourceUri},
     module::{
-        BindingRef, ButtonStyle, ControlNode, FaderStyle, ModuleDoc, ScalarFormat,
-        TextAlign, TrackColumn, WaveStyle, parse_module,
+        BindingRef, ButtonStyle, ControlNode, FaderStyle, ModuleDoc, ScalarFormat, TextAlign,
+        TrackColumn, WaveStyle, parse_module,
     },
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{

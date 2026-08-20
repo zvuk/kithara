@@ -4,8 +4,7 @@ use kithara_ui::{
     ids::SourceUri,
     layout::{FrameSides, LayoutNode, parse_layout},
     module::{
-        ChipStyle, ControlNode, GlyphStyle, IconName, PopoverAt, TextStyle, Tone,
-        parse_module,
+        ChipStyle, ControlNode, GlyphStyle, IconName, PopoverAt, TextStyle, Tone, parse_module,
     },
     param::Param,
     size::{Dim, SizeSpec},

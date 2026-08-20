@@ -360,14 +360,49 @@ Sizing with blocks:
 - `size::BlockNode` is the single owner of "which block does this node declare", implemented once
   for `ExpandedNode` and once for `CompiledNode`, so `size::visible` filters both stages through one
   predicate built from `read::read_flag` - which makes a `Command` endpoint resolve to nothing.
-- A subtree's intrinsic size is a function of the node and the visibility snapshot, constant when no
-  optional block sits below it. `CompiledNode` records that at compile time in `blocks`, and
-  `render/tree/size.rs::node_size` returns the precomputed `compile::compiled_node_size` for such
-  subtrees instead of walking them once a frame - memoization, not a fallback path. A layout
-  `Module` declaring its own `size` records `blocks: false` and never re-walks.
-- `CompiledUi.size` is that function evaluated with every block visible (`size::VISIBLE`).
-  `size::compute_size` takes the snapshot as a `size::Hidden` predicate over `BlockSpec`, so
-  visibility-aware sizing stays toolkit-independent and available in non-render and wasm builds.
+- A subtree's intrinsic size is a function of the node and the host snapshot, constant when neither
+  an optional block nor an adaptive node sits below it. `CompiledNode` records that at compile time
+  in `blocks`, which `size::has_blocks` sets, and `render/tree/size.rs::node_size` returns the
+  precomputed `compile::compiled_node_size` for such subtrees instead of walking them once a frame -
+  memoization, not a fallback path. A layout `Module` declaring its own `size` records
+  `blocks: false` and never re-walks.
+- `size::Snapshot` is the single description of what the host answers about a tree, with one method
+  per question the sizer asks: which blocks are hidden, and what each adaptive measure reads.
+  `size::DEFAULTS` is the state before any answer - every block visible, every measure silent - and
+  `CompiledUi.size` is the size function evaluated in it. `render/tree/read.rs::Answers` is the one
+  implementation that reads a host, so snapshot-aware sizing stays toolkit-independent and available
+  in non-render and wasm builds.
+
+## Adaptive Branch Ownership
+
+`Adaptive` declares one place in several forms and draws exactly one of them: `base`, plus `steps`
+ordered by the `from` threshold each takes effect at. The selected branch is the last step whose
+`from` the measured value reaches, and `base` below all of them - a step function over the whole
+real line, not a chain of attempts. `expand::adaptive_branch` is that function, pure in the
+thresholds and the value alone.
+
+- `measure` reads `ValueKind::Scalar` (`validate::value_kinds`), and the whole read is total in one
+  place: `render/tree/read.rs::read_measure` answers `None` for a missing read, a value of another
+  kind, and anything the `f64` to `f32` cast leaves non-finite. `None` is `base` by contract, the
+  same rule that makes an unread `Optional` visible and an unread `Popover` closed.
+- Thresholds are document literals in whatever unit the endpoint measures, and
+  `validate::check_adaptive_steps` requires at least one step, each starting at a finite value above
+  the one below it. Order is what makes the
+  selection total without a tie-break, so a document that breaks it is rejected rather than resolved.
+- The node contributes no segment to the addresses below it: `expand::machine::expand_adaptive`
+  spends its own `id` on the visitor and its binding, then walks every branch with the enclosing
+  context. An author repeating an `id` across branches gets one address and one host handler, and
+  that is the point - `validate::walk_branches` gives each branch a clone of the ids its parent
+  holds and unions the claims on the way out, so ids collide inside a branch and never across them.
+- The node declares no `size`: it measures as the branch its snapshot selects, in
+  `size::compute_size` and in `geometry.rs::effective_size` alike. Both take the snapshot for that
+  reason, and a wrapper above the node reports the drawn branch's size the way it already reports
+  an `Optional` child's - `Pressable` over an adaptive bank keeps the box the bank declares. The
+  render arm returns the branch's own element, the way `Optional` returns its child's. It always
+  yields one child, so it needs no iterating parent and stands wherever a plain node stands. Every
+  branch expands at compile time, so the arena and the node budget carry them all.
+- The measured number belongs to the host endpoint, not to the node: a window width, a band count,
+  anything else reads the same. Two axes are two nested adaptive nodes.
 
 ## Icon Identity
 

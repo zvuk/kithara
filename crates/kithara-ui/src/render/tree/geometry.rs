@@ -5,10 +5,10 @@ use iced::{
 };
 
 use crate::{
-    expand::{ControlSpec, ExpandedNode},
+    expand::{ControlSpec, ExpandedNode, adaptive_branch},
     layout::FrameSides,
     render::{Skin, UiEvent},
-    size::{Dim, SizeSpec, control_size},
+    size::{Dim, SizeSpec, Snapshot, control_size},
     skin::ColorRole,
     widgets::frame_overlay,
 };
@@ -94,8 +94,12 @@ pub(super) fn frame_tone(
     )
 }
 
-pub(super) fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length) {
-    effective_size(node, skin).map_or((Length::Fill, Length::Fill), |size| {
+pub(super) fn content_size(
+    node: &ExpandedNode,
+    skin: &Skin,
+    snapshot: &dyn Snapshot,
+) -> (Length, Length) {
+    effective_size(node, skin, snapshot).map_or((Length::Fill, Length::Fill), |size| {
         (
             length_for(size.w, Length::Fill),
             length_for(size.h, Length::Fill),
@@ -103,12 +107,24 @@ pub(super) fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length)
     })
 }
 
-pub(super) fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpec> {
+pub(super) fn effective_size(
+    node: &ExpandedNode,
+    skin: &Skin,
+    snapshot: &dyn Snapshot,
+) -> Option<SizeSpec> {
     let declared = match node {
-        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
-            return effective_size(child, skin);
+        ExpandedNode::Adaptive {
+            measure,
+            base,
+            steps,
+        } => {
+            let branch = adaptive_branch(base, steps, snapshot.measure(measure));
+            return effective_size(branch, skin, snapshot);
         }
-        ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin),
+        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+            return effective_size(child, skin, snapshot);
+        }
+        ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin, snapshot),
         ExpandedNode::Scroll { size, .. }
         | ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
@@ -164,9 +180,10 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        expand::{Binding, BindingKind},
+        expand::{Binding, BindingKind, BlockSpec},
         ids::{InternId, Interner, SourceUri},
         module::{PopoverAlign, PopoverAt},
+        size::{DEFAULTS, Snapshot},
     };
 
     #[kithara::test]
@@ -215,18 +232,23 @@ mod tests {
         };
 
         assert_eq!(
-            content_size(&node(Some(SizeSpec::new(Dim::Shrink, Dim::Shrink))), &skin),
+            content_size(
+                &node(Some(SizeSpec::new(Dim::Shrink, Dim::Shrink))),
+                &skin,
+                DEFAULTS,
+            ),
             (Length::Shrink, Length::Shrink)
         );
         assert_eq!(
             content_size(
                 &node(Some(SizeSpec::new(Dim::Fixed(40.0), Dim::Shrink))),
-                &skin
+                &skin,
+                DEFAULTS,
             ),
             (Length::Fixed(40.0), Length::Shrink)
         );
         assert_eq!(
-            content_size(&node(None), &skin),
+            content_size(&node(None), &skin, DEFAULTS),
             (
                 length_for(skin.document().deck.time_size.w, Length::Fill),
                 length_for(skin.document().deck.time_size.h, Length::Fill)
@@ -249,6 +271,48 @@ mod tests {
             read: None,
             write: None,
         }
+    }
+
+    struct Measured(Option<f32>);
+
+    impl Snapshot for Measured {
+        fn hidden(&self, _: &BlockSpec) -> bool {
+            false
+        }
+
+        fn measure(&self, _: &Binding) -> Option<f32> {
+            self.0
+        }
+    }
+
+    #[kithara::test]
+    fn a_wrapper_over_an_adaptive_node_measures_the_selected_branch() {
+        let origin = SourceUri("tree-test.ron".to_owned());
+        let skin =
+            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
+        let mut interner = Interner::new(1024);
+        let narrow = SizeSpec::new(Dim::Fixed(34.0), Dim::Fixed(45.0));
+        let wide = SizeSpec::new(Dim::Fixed(68.0), Dim::Fixed(45.0));
+        let pressable = ExpandedNode::Pressable {
+            path: interner.intern("bank", &origin).unwrap(),
+            press: model(interner.intern("deck.eq.menu", &origin).unwrap()),
+            child: Box::new(ExpandedNode::Adaptive {
+                measure: model(interner.intern("deck.eq.bands", &origin).unwrap()),
+                base: Box::new(control(&mut interner, &origin, "three", narrow)),
+                steps: vec![(4.0, control(&mut interner, &origin, "four", wide))],
+            }),
+        };
+
+        assert_eq!(
+            effective_size(&pressable, &skin, &Measured(Some(4.0))),
+            Some(wide),
+            "a press target takes the size of the branch that is drawn"
+        );
+        assert_eq!(
+            effective_size(&pressable, &skin, &Measured(None)),
+            Some(narrow),
+            "nothing read leaves the base branch"
+        );
     }
 
     fn model(id: InternId) -> Binding {
@@ -283,11 +347,11 @@ mod tests {
         };
 
         assert_eq!(
-            effective_size(&popover, &skin),
+            effective_size(&popover, &skin, DEFAULTS),
             Some(anchor),
             "the content is laid out in the overlay and never in flow"
         );
-        assert_eq!(effective_size(&pressable, &skin), Some(content));
+        assert_eq!(effective_size(&pressable, &skin, DEFAULTS), Some(content));
     }
 
     #[kithara::test]

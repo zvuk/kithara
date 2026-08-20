@@ -150,6 +150,14 @@ pub enum ControlNode {
         #[serde(default)]
         with: BTreeMap<String, String>,
     },
+    /// Declares one place in several forms. `measure` picks the last step it
+    /// reaches; `base` is the form below every step.
+    Adaptive {
+        id: NodeId,
+        measure: BindingRef,
+        base: Box<Self>,
+        steps: Vec<AdaptiveStep>,
+    },
     /// Marks its child as a block the host may hide. While `hidden` reads
     /// true the child is not laid out.
     Optional {
@@ -623,10 +631,20 @@ pub enum ControlNode {
     },
 }
 
+/// One form of an adaptive node, taken from `from` logical pixels up.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct AdaptiveStep {
+    pub from: f32,
+    pub node: ControlNode,
+}
+
 impl ControlNode {
     pub(crate) const fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
         match self {
             Self::Row { write, .. } | Self::Column { write, .. } => (None, write.as_ref()),
+            Self::Adaptive { measure, .. } => (Some(measure), None),
             Self::Optional { hidden, .. } => (Some(hidden), None),
             Self::Popover { open, .. } => (Some(open), None),
             Self::Pressable { press, .. } => (None, Some(press)),
@@ -677,7 +695,8 @@ impl ControlNode {
 
     pub(crate) const fn size(&self) -> Option<&SizeSpec> {
         match self {
-            Self::Include { .. }
+            Self::Adaptive { .. }
+            | Self::Include { .. }
             | Self::Optional { .. }
             | Self::Popover { .. }
             | Self::Pressable { .. } => None,
@@ -805,10 +824,7 @@ mod tests {
 
         let document = parse_module(text, &origin()).unwrap();
         let ControlNode::Crossfader {
-            read,
-            write,
-            size,
-            ..
+            read, write, size, ..
         } = document.root
         else {
             panic!("expected crossfader");
@@ -834,10 +850,7 @@ mod tests {
 
         let document = parse_module(text, &origin()).unwrap();
         let ControlNode::Tree {
-            read,
-            query,
-            size,
-            ..
+            read, query, size, ..
         } = document.root
         else {
             panic!("expected tree");

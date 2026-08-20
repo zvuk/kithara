@@ -5,7 +5,7 @@ use crate::{
     expand::ControlSite,
     ids::{EndpointId, NodeId, SourceUri},
     layout::{LayoutDoc, LayoutNode},
-    module::{BindingRef, ControlNode, ModuleDoc, TrackColumn},
+    module::{AdaptiveStep, BindingRef, ControlNode, ModuleDoc, TrackColumn},
     registry::{EndpointCategory, EndpointRegistry, ValueKind},
 };
 
@@ -252,6 +252,14 @@ fn walk_module(
         ControlNode::Include { id, .. } => {
             record(&id.0, &path.push(format!("Include({id})")), origin, seen)
         }
+        ControlNode::Adaptive {
+            id, base, steps, ..
+        } => {
+            let here = path.push(format!("Adaptive({id})"));
+            record(&id.0, &here, origin, seen)?;
+            check_adaptive_steps(id, steps, &here, origin)?;
+            walk_branches(base, steps, &here, origin, seen)
+        }
         ControlNode::Optional { id, child, .. } => {
             let here = path.push(format!("Optional({id})"));
             check_block_position(id, &here, origin, sibling)?;
@@ -302,9 +310,71 @@ fn walk_module(
     }
 }
 
+/// Steps climb, so exactly one of them owns any measured value and the
+/// selection needs no tie-break.
+fn check_adaptive_steps(
+    id: &NodeId,
+    steps: &[AdaptiveStep],
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    if steps.is_empty() {
+        return Err(UiDocError::AdaptiveWithoutSteps {
+            origin: origin.clone(),
+            id: id.0.clone(),
+            path: path.render(),
+        });
+    }
+    let mut below = f32::NEG_INFINITY;
+    for (index, step) in steps.iter().enumerate() {
+        if step.from <= below || !step.from.is_finite() {
+            return Err(UiDocError::AdaptiveStepOrder {
+                origin: origin.clone(),
+                path: path.render(),
+                from: step.from,
+                index,
+            });
+        }
+        below = step.from;
+    }
+    Ok(())
+}
+
+/// Branches describe one place in several forms, so each claims ids from the
+/// same set its parent holds and none of them sees the others.
+fn walk_branches(
+    base: &ControlNode,
+    steps: &[AdaptiveStep],
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let taken = seen.clone();
+    walk_branch(base, &path.push("base"), origin, &taken, seen)?;
+    for (index, step) in steps.iter().enumerate() {
+        let branch = path.push(format!("steps[{index}]"));
+        walk_branch(&step.node, &branch, origin, &taken, seen)?;
+    }
+    Ok(())
+}
+
+fn walk_branch(
+    node: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    taken: &BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let mut claimed = taken.clone();
+    walk_module(node, path, origin, &mut claimed, Sibling::Only)?;
+    seen.extend(claimed);
+    Ok(())
+}
+
 const fn control_id(node: &ControlNode) -> Option<&NodeId> {
     match node {
         ControlNode::Row { .. }
+        | ControlNode::Adaptive { .. }
         | ControlNode::Column { .. }
         | ControlNode::Include { .. }
         | ControlNode::Optional { .. }
@@ -610,6 +680,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Text { .. }
         | ControlNode::Readout { .. } => (Some(ValueKind::Text), None),
         ControlNode::ContextBar { .. } => (Some(ValueKind::Text), Some(ValueKind::Scalar)),
+        ControlNode::Adaptive { .. } => (Some(ValueKind::Scalar), None),
         ControlNode::Optional { .. } => (Some(BLOCK_HIDDEN), None),
         ControlNode::Popover { .. } => (Some(ValueKind::Bool), None),
         ControlNode::Pressable { .. } => (None, Some(ValueKind::Trigger)),
@@ -880,6 +951,90 @@ mod tests {
             error,
             UiDocError::UnaddressedSurface { path, .. } if path == "root"
         ));
+    }
+
+    fn adaptive(steps: &str) -> Result<(), UiDocError> {
+        let text = format!(
+            r#"(schema: "kithara.module", version: 1, id: "m",
+                root: Adaptive(
+                    id: "bank",
+                    measure: Model(id: "ui.measure"),
+                    base: Knob(id: "low"),
+                    steps: [{steps}],
+                ))"#
+        );
+        let doc = parse_module(&text, &origin())?;
+        check_module_node_ids(&doc, &origin())
+    }
+
+    #[kithara::test]
+    fn an_adaptive_node_without_steps_is_rejected() {
+        let error = adaptive("").unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::AdaptiveWithoutSteps { id, path, .. }
+                if id == "bank" && path == "root/Adaptive(bank)"),
+            "{error:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn adaptive_steps_must_climb() {
+        for (steps, at) in [
+            (
+                r#"(from: 4.0, node: Knob(id: "a")), (from: 2.0, node: Knob(id: "b"))"#,
+                1,
+            ),
+            (
+                r#"(from: 4.0, node: Knob(id: "a")), (from: 4.0, node: Knob(id: "b"))"#,
+                1,
+            ),
+            (r#"(from: NaN, node: Knob(id: "a"))"#, 0),
+        ] {
+            let error = adaptive(steps).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::AdaptiveStepOrder { index, .. } if *index == at),
+                "{steps}: {error:?}"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn adaptive_branches_may_name_the_same_place() {
+        adaptive(r#"(from: 4.0, node: Knob(id: "low"))"#).unwrap();
+    }
+
+    #[kithara::test]
+    fn a_duplicate_id_inside_one_adaptive_branch_is_rejected() {
+        let error =
+            adaptive(r#"(from: 4.0, node: Row(children: [Knob(id: "dup"), Knob(id: "dup")]))"#)
+                .unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::DuplicateId { id, .. } if id == "dup"),
+            "{error:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn a_sibling_after_an_adaptive_node_sees_every_branch_id() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Row(children: [
+                Adaptive(
+                    id: "bank",
+                    measure: Model(id: "ui.measure"),
+                    base: Knob(id: "low"),
+                    steps: [(from: 4.0, node: Knob(id: "low-mid"))],
+                ),
+                Knob(id: "low-mid"),
+            ]))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::DuplicateId { id, .. } if id == "low-mid"),
+            "{error:?}"
+        );
     }
 
     #[kithara::test]

@@ -40,6 +40,21 @@ pub enum UiDocError {
         id: String,
         reason: String,
     },
+    #[error("{origin}: adaptive node {id:?} at {path} declares no steps")]
+    AdaptiveWithoutSteps {
+        origin: SourceUri,
+        id: String,
+        path: String,
+    },
+    #[error(
+        "{origin}: adaptive step {index} at {path} starts at {from}; steps climb from a finite value"
+    )]
+    AdaptiveStepOrder {
+        origin: SourceUri,
+        path: String,
+        index: usize,
+        from: f32,
+    },
     #[error("{origin}: optional block {id:?} at {path} has no parent to hide it")]
     RootBlock {
         origin: SourceUri,

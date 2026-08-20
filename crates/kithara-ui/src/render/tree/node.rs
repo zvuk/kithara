@@ -10,16 +10,16 @@ use super::{
         Rendered, active_tone, apply_size, bordered, content_size, effective_size, filled,
         frame_tone, length_for, padding,
     },
-    read::{read_flag, resolve},
+    read::{Answers, read_flag, resolve},
     size::{node_size, visible_children},
 };
 use crate::{
     compile::{CompiledNode, CompiledUi},
-    expand::{ExpandedNode, SurfaceSpec},
+    expand::{ExpandedNode, SurfaceSpec, adaptive_branch},
     layout::Axis,
     module::{ChromeStyle, TextAlign},
     render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent},
-    size::{Dim, Hidden, visible},
+    size::{Dim, Snapshot, visible},
     widgets::{
         DropZone, ModuleChrome, Widget,
         anchored::{Anchored, Placement},
@@ -33,24 +33,26 @@ pub(super) fn render_compiled<'a>(
     reads: &dyn Reads,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), reads, ui);
+    let snapshot = Answers { reads, ui };
     match node {
         CompiledNode::Optional { child, .. } => render_compiled(child, ui, reads, skin),
         CompiledNode::Split { axis, children, .. } => match axis {
             Axis::Horizontal => container(
-                Row::with_children(visible_children(children, hidden).map(|(weight, child)| {
-                    container(render_compiled(child, ui, reads, skin))
-                        .width(split_length(
-                            node_size(child, skin.document(), hidden).w,
-                            weight,
-                            skin,
-                        ))
-                        .height(length_for(
-                            node_size(child, skin.document(), hidden).h,
-                            Length::Fill,
-                        ))
-                        .into()
-                }))
+                Row::with_children(
+                    visible_children(children, &snapshot).map(|(weight, child)| {
+                        container(render_compiled(child, ui, reads, skin))
+                            .width(split_length(
+                                node_size(child, skin.document(), &snapshot).w,
+                                weight,
+                                skin,
+                            ))
+                            .height(length_for(
+                                node_size(child, skin.document(), &snapshot).h,
+                                Length::Fill,
+                            ))
+                            .into()
+                    }),
+                )
                 .width(Length::Fill)
                 .height(Length::Fill),
             )
@@ -58,16 +60,18 @@ pub(super) fn render_compiled<'a>(
             .height(Length::Fill)
             .into(),
             Axis::Vertical => container(
-                Column::with_children(visible_children(children, hidden).map(|(weight, child)| {
-                    container(render_compiled(child, ui, reads, skin))
-                        .width(Length::Fill)
-                        .height(split_length(
-                            node_size(child, skin.document(), hidden).h,
-                            weight,
-                            skin,
-                        ))
-                        .into()
-                }))
+                Column::with_children(visible_children(children, &snapshot).map(
+                    |(weight, child)| {
+                        container(render_compiled(child, ui, reads, skin))
+                            .width(Length::Fill)
+                            .height(split_length(
+                                node_size(child, skin.document(), &snapshot).h,
+                                weight,
+                                skin,
+                            ))
+                            .into()
+                    },
+                ))
                 .width(Length::Fill)
                 .height(Length::Fill),
             )
@@ -164,98 +168,20 @@ fn render_node<'a>(
     reads: &dyn Reads,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    let size = content_size(node, skin);
-    let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), reads, ui);
+    let snapshot = Answers { reads, ui };
+    let size = content_size(node, skin, &snapshot);
     let rendered = match node {
-        ExpandedNode::Optional { child, .. } => return render_node(child, ui, reads, skin),
-        ExpandedNode::Row {
-            children,
-            gap,
-            pad,
-            pad_x,
-            pad_y,
-            frame,
-            background,
-            background_alpha,
-            active,
-            active_background,
-            frame_color,
-            active_frame_color,
-            surface,
-            ..
+        ExpandedNode::Adaptive {
+            measure,
+            base,
+            steps,
         } => {
-            let active = read_flag(active.as_ref(), reads, ui);
-            Rendered::leading(wheeled(
-                bordered(
-                    filled(
-                        container(
-                            Row::with_children(
-                                visible(children, hidden)
-                                    .map(|child| render_node(child, ui, reads, skin)),
-                            )
-                            .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                            .align_y(Alignment::Center)
-                            .width(size.0)
-                            .height(size.1),
-                        )
-                        .padding(padding(*pad, *pad_x, *pad_y, skin))
-                        .width(size.0)
-                        .height(size.1),
-                        active_tone(*background, *active_background, active),
-                        *background_alpha,
-                        skin,
-                    ),
-                    *frame,
-                    frame_tone(*frame_color, *active_frame_color, active, skin),
-                    size,
-                    skin,
-                ),
-                surface.as_ref(),
-                size,
-                ui,
-            ))
+            let branch = adaptive_branch(base, steps, snapshot.measure(measure));
+            return render_node(branch, ui, reads, skin);
         }
-        ExpandedNode::Column {
-            children,
-            gap,
-            align,
-            pad,
-            pad_x,
-            pad_y,
-            frame,
-            frame_color,
-            background,
-            background_alpha,
-            surface,
-            ..
-        } => Rendered::leading(wheeled(
-            bordered(
-                filled(
-                    container(
-                        Column::with_children(
-                            visible(children, hidden)
-                                .map(|child| render_node(child, ui, reads, skin)),
-                        )
-                        .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                        .align_x(column_alignment(*align))
-                        .width(size.0),
-                    )
-                    .padding(padding(*pad, *pad_x, *pad_y, skin))
-                    .width(size.0)
-                    .height(size.1),
-                    *background,
-                    *background_alpha,
-                    skin,
-                ),
-                *frame,
-                frame_tone(*frame_color, None, false, skin),
-                size,
-                skin,
-            ),
-            surface.as_ref(),
-            size,
-            ui,
-        )),
+        ExpandedNode::Optional { child, .. } => return render_node(child, ui, reads, skin),
+        ExpandedNode::Row { .. } => render_row(node, size, ui, reads, skin),
+        ExpandedNode::Column { .. } => render_column(node, size, ui, reads, skin),
         ExpandedNode::Popover {
             path,
             open,
@@ -299,7 +225,7 @@ fn render_node<'a>(
         ExpandedNode::Slot { children, .. } => Rendered::leading(
             container(
                 Column::with_children(
-                    visible(children, hidden).map(|child| render_node(child, ui, reads, skin)),
+                    visible(children, &snapshot).map(|child| render_node(child, ui, reads, skin)),
                 )
                 .spacing(skin.layout.grid_gap)
                 .width(Length::Fill),
@@ -311,7 +237,121 @@ fn render_node<'a>(
             path, spec, read, ..
         } => render_control(*path, spec, read.as_ref(), ui, reads, skin),
     };
-    apply_size(rendered, effective_size(node, skin))
+    apply_size(rendered, effective_size(node, skin, &snapshot))
+}
+
+fn render_row<'a>(
+    node: &ExpandedNode,
+    size: (Length, Length),
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &'a Skin,
+) -> Rendered<'a> {
+    let ExpandedNode::Row {
+        children,
+        gap,
+        pad,
+        pad_x,
+        pad_y,
+        frame,
+        background,
+        background_alpha,
+        active,
+        active_background,
+        frame_color,
+        active_frame_color,
+        surface,
+        ..
+    } = node
+    else {
+        unreachable!("render_row is called only for a row")
+    };
+    let snapshot = Answers { reads, ui };
+    let active = read_flag(active.as_ref(), reads, ui);
+    Rendered::leading(wheeled(
+        bordered(
+            filled(
+                container(
+                    Row::with_children(
+                        visible(children, &snapshot)
+                            .map(|child| render_node(child, ui, reads, skin)),
+                    )
+                    .spacing(gap.unwrap_or(skin.layout.grid_gap))
+                    .align_y(Alignment::Center)
+                    .width(size.0)
+                    .height(size.1),
+                )
+                .padding(padding(*pad, *pad_x, *pad_y, skin))
+                .width(size.0)
+                .height(size.1),
+                active_tone(*background, *active_background, active),
+                *background_alpha,
+                skin,
+            ),
+            *frame,
+            frame_tone(*frame_color, *active_frame_color, active, skin),
+            size,
+            skin,
+        ),
+        surface.as_ref(),
+        size,
+        ui,
+    ))
+}
+
+fn render_column<'a>(
+    node: &ExpandedNode,
+    size: (Length, Length),
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &'a Skin,
+) -> Rendered<'a> {
+    let ExpandedNode::Column {
+        children,
+        gap,
+        align,
+        pad,
+        pad_x,
+        pad_y,
+        frame,
+        frame_color,
+        background,
+        background_alpha,
+        surface,
+        ..
+    } = node
+    else {
+        unreachable!("render_column is called only for a column")
+    };
+    let snapshot = Answers { reads, ui };
+    Rendered::leading(wheeled(
+        bordered(
+            filled(
+                container(
+                    Column::with_children(
+                        visible(children, &snapshot)
+                            .map(|child| render_node(child, ui, reads, skin)),
+                    )
+                    .spacing(gap.unwrap_or(skin.layout.grid_gap))
+                    .align_x(column_alignment(*align))
+                    .width(size.0),
+                )
+                .padding(padding(*pad, *pad_x, *pad_y, skin))
+                .width(size.0)
+                .height(size.1),
+                *background,
+                *background_alpha,
+                skin,
+            ),
+            *frame,
+            frame_tone(*frame_color, None, false, skin),
+            size,
+            skin,
+        ),
+        surface.as_ref(),
+        size,
+        ui,
+    ))
 }
 
 fn render_scroll<'a>(
