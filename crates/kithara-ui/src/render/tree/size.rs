@@ -134,7 +134,7 @@ mod tests {
                         press: Command(id: "ui.press"),
                         child: Adaptive(
                             id: "bank",
-                            measure: Model(id: "ui.measure"),
+                            measure: Read(Model(id: "ui.measure")),
                             base: Row(id: "narrow", gap: 0.0, pad: 0.0, children: [
                                 Knob(id: "low"),
                             ]),

@@ -5,6 +5,7 @@ pub(crate) mod deck;
 pub(crate) mod drag_ghost;
 pub(crate) mod fader;
 pub(crate) mod global_bar;
+pub(crate) mod measured;
 mod module;
 pub(crate) mod nav;
 pub(crate) mod telemetry;

@@ -4,7 +4,7 @@ use serde::de::DeserializeOwned;
 
 use super::{
     Binding, BlockSpec, Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec, ExpandedModule,
-    ExpandedNode, SurfaceSpec,
+    ExpandedNode, MeasureSpec, SurfaceSpec,
     binding_subst::{
         intern_binding, intern_module_text, intern_module_text_opt, intern_optional_binding,
         resolve_optional_param, resolve_param, substitute_binding, substitute_map,
@@ -15,7 +15,7 @@ use super::{
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
-    module::{AdaptiveStep, BindingRef, ControlNode, PopoverAlign, PopoverAt},
+    module::{AdaptiveStep, BindingRef, ControlNode, Measure, PopoverAlign, PopoverAt},
     param::Param,
     resolve::ModuleSet,
     size::SizeSpec,
@@ -293,20 +293,23 @@ fn expand_adaptive(
     context: &Context<'_>,
     node: &ControlNode,
     id: &NodeId,
-    measure: &BindingRef,
+    declared: (&Measure, Option<SizeSpec>),
     branches: (&ControlNode, &[AdaptiveStep]),
     depth: usize,
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
-    let (base, steps) = branches;
+    let ((measure, size), (base, steps)) = (declared, branches);
     machine.budget.charge(&context.origin)?;
     let path = child_path(&context.prefix, id);
-    let measure = context.substitute(measure, &path)?;
+    let read = match measure {
+        Measure::Read(binding) => Some(context.substitute(binding, &path)?),
+        Measure::Width | Measure::Height => None,
+    };
     (machine.visitor)(
         ControlSite {
             path: &path,
             control: node,
-            read: Some(&measure),
+            read: read.as_ref(),
             write: None,
             columns_state: None,
             query: None,
@@ -316,8 +319,17 @@ fn expand_adaptive(
         },
         &context.origin,
     )?;
+    let measure = match (measure, read) {
+        (Measure::Width, _) => MeasureSpec::Width,
+        (Measure::Height, _) => MeasureSpec::Height,
+        (Measure::Read(_), Some(binding)) => {
+            MeasureSpec::Read(intern_binding(machine.interner, &binding, &context.origin)?)
+        }
+        (Measure::Read(_), None) => unreachable!("a read measure substitutes its binding"),
+    };
     Ok(ExpandedNode::Adaptive {
-        measure: intern_binding(machine.interner, &measure, &context.origin)?,
+        measure,
+        size,
         base: Box::new(walk(context, base, depth, machine)?),
         steps: steps
             .iter()
@@ -606,13 +618,14 @@ fn walk(
         ControlNode::Adaptive {
             id,
             measure,
+            size,
             base,
             steps,
         } => expand_adaptive(
             context,
             node,
             id,
-            measure,
+            (measure, *size),
             (base.as_ref(), steps),
             depth,
             machine,

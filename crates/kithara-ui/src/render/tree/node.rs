@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Element, Length, mouse,
+    Alignment, Element, Length, Size, mouse,
     widget::{Column, Row, Space, Stack, container, mouse_area, scrollable},
 };
 use num_traits::cast::AsPrimitive;
@@ -15,14 +15,15 @@ use super::{
 };
 use crate::{
     compile::{CompiledNode, CompiledUi},
-    expand::{ExpandedNode, SurfaceSpec, adaptive_branch},
+    expand::{ExpandedNode, MeasureSpec, SurfaceSpec},
     layout::Axis,
     module::{ChromeStyle, TextAlign},
     render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent},
-    size::{Dim, Snapshot, visible},
+    size::{Dim, SizeSpec, Snapshot, branch, visible},
     widgets::{
         DropZone, ModuleChrome, Widget,
         anchored::{Anchored, Placement},
+        measured::Measured,
         wheel::WheelSurface,
     },
 };
@@ -173,11 +174,17 @@ fn render_node<'a>(
     let rendered = match node {
         ExpandedNode::Adaptive {
             measure,
+            size: Some(declared),
             base,
             steps,
+        } => measured_branches(measure, (base, steps), *declared, (ui, reads, skin)),
+        ExpandedNode::Adaptive {
+            measure,
+            base,
+            steps,
+            ..
         } => {
-            let branch = adaptive_branch(base, steps, snapshot.measure(measure));
-            return render_node(branch, ui, reads, skin);
+            return render_node(branch(measure, base, steps, &snapshot), ui, reads, skin);
         }
         ExpandedNode::Optional { child, .. } => return render_node(child, ui, reads, skin),
         ExpandedNode::Row { .. } => render_row(node, size, ui, reads, skin),
@@ -352,6 +359,37 @@ fn render_column<'a>(
         size,
         ui,
     ))
+}
+
+/// A self-measured node hands every branch to the toolkit and lets the box it
+/// is given pick one, so no branch is rebuilt when the pick changes.
+fn measured_branches<'a>(
+    measure: &MeasureSpec,
+    branches: (&ExpandedNode, &[(f32, ExpandedNode)]),
+    declared: SizeSpec,
+    context: (&'a CompiledUi, &dyn Reads, &'a Skin),
+) -> Rendered<'a> {
+    let ((base, steps), (ui, reads, skin)) = (branches, context);
+    let Some(axis) = measure.axis() else {
+        return Rendered::leading(render_node(base, ui, reads, skin));
+    };
+    let elements = std::iter::once(base)
+        .chain(steps.iter().map(|(_, node)| node))
+        .map(|node| render_node(node, ui, reads, skin))
+        .collect();
+    let size = Size::new(
+        length_for(declared.w, Length::Fill),
+        length_for(declared.h, Length::Fill),
+    );
+    Rendered::leading(
+        Measured::new(
+            elements,
+            steps.iter().map(|(from, _)| *from).collect(),
+            axis,
+            size,
+        )
+        .into(),
+    )
 }
 
 fn render_scroll<'a>(

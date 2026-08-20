@@ -5,8 +5,9 @@ use crate::{
     expand::ControlSite,
     ids::{EndpointId, NodeId, SourceUri},
     layout::{LayoutDoc, LayoutNode},
-    module::{AdaptiveStep, BindingRef, ControlNode, ModuleDoc, TrackColumn},
+    module::{AdaptiveStep, BindingRef, ControlNode, Measure, MeasureAxis, ModuleDoc, TrackColumn},
     registry::{EndpointCategory, EndpointRegistry, ValueKind},
+    size::{Dim, SizeSpec},
 };
 
 #[derive(Clone, Debug, Default)]
@@ -253,10 +254,15 @@ fn walk_module(
             record(&id.0, &path.push(format!("Include({id})")), origin, seen)
         }
         ControlNode::Adaptive {
-            id, base, steps, ..
+            id,
+            measure,
+            size,
+            base,
+            steps,
         } => {
             let here = path.push(format!("Adaptive({id})"));
             record(&id.0, &here, origin, seen)?;
+            check_measured_box(id, measure, *size, &here, origin)?;
             check_adaptive_steps(id, steps, &here, origin)?;
             walk_branches(base, steps, &here, origin, seen)
         }
@@ -338,6 +344,44 @@ fn check_adaptive_steps(
         below = step.from;
     }
     Ok(())
+}
+
+/// A node measuring itself takes the box it is given and answers that box to
+/// its parent, so the axis it reads has to be declared and cannot be the one
+/// the content decides.
+fn check_measured_box(
+    id: &NodeId,
+    measure: &Measure,
+    size: Option<SizeSpec>,
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    let Some(axis) = measure.axis() else {
+        return match size {
+            Some(_) => Err(UiDocError::MeasuredBoxWithoutAxis {
+                origin: origin.clone(),
+                id: id.0.clone(),
+                path: path.render(),
+            }),
+            None => Ok(()),
+        };
+    };
+    let declared = size.map(|size| match axis {
+        MeasureAxis::Width => size.w,
+        MeasureAxis::Height => size.h,
+    });
+    if matches!(declared, Some(dim) if dim != Dim::Shrink) {
+        return Ok(());
+    }
+    Err(UiDocError::UnmeasuredAxis {
+        origin: origin.clone(),
+        id: id.0.clone(),
+        path: path.render(),
+        axis: match axis {
+            MeasureAxis::Width => "width",
+            MeasureAxis::Height => "height",
+        },
+    })
 }
 
 /// Branches describe one place in several forms, so each claims ids from the
@@ -958,7 +1002,7 @@ mod tests {
             r#"(schema: "kithara.module", version: 1, id: "m",
                 root: Adaptive(
                     id: "bank",
-                    measure: Model(id: "ui.measure"),
+                    measure: Read(Model(id: "ui.measure")),
                     base: Knob(id: "low"),
                     steps: [{steps}],
                 ))"#
@@ -999,6 +1043,59 @@ mod tests {
         }
     }
 
+    fn measured(measure: &str, size: &str) -> Result<(), UiDocError> {
+        let text = format!(
+            r#"(schema: "kithara.module", version: 1, id: "m",
+                root: Adaptive(
+                    id: "bank",
+                    measure: {measure},
+                    {size}
+                    base: Knob(id: "low"),
+                    steps: [(from: 4.0, node: Knob(id: "high"))],
+                ))"#
+        );
+        let doc = parse_module(&text, &origin())?;
+        check_module_node_ids(&doc, &origin())
+    }
+
+    #[kithara::test]
+    fn a_self_measured_node_must_declare_the_axis_it_measures() {
+        for (measure, size) in [
+            ("Width", ""),
+            ("Height", ""),
+            ("Width", "size: Some((w: Shrink, h: Fill)),"),
+            ("Height", "size: Some((w: Fill, h: Shrink)),"),
+        ] {
+            let error = measured(measure, size).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::UnmeasuredAxis { id, .. } if id == "bank"),
+                "{measure} {size}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_declared_axis_carries_a_self_measured_node() {
+        measured("Width", "size: Some((w: Fill, h: Shrink)),").unwrap();
+        measured("Height", "size: Some((w: Shrink, h: Fixed(80.0))),").unwrap();
+    }
+
+    /// A box that came from the branch could not decide which branch to draw,
+    /// so a read measure keeps the node transparent.
+    #[kithara::test]
+    fn a_read_measure_declares_no_box() {
+        let error = measured(
+            r#"Read(Model(id: "ui.measure"))"#,
+            "size: Some((w: Fill, h: Fill)),",
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::MeasuredBoxWithoutAxis { id, .. } if id == "bank"),
+            "{error:?}",
+        );
+    }
+
     #[kithara::test]
     fn adaptive_branches_may_name_the_same_place() {
         adaptive(r#"(from: 4.0, node: Knob(id: "low"))"#).unwrap();
@@ -1022,7 +1119,7 @@ mod tests {
             root: Row(children: [
                 Adaptive(
                     id: "bank",
-                    measure: Model(id: "ui.measure"),
+                    measure: Read(Model(id: "ui.measure")),
                     base: Knob(id: "low"),
                     steps: [(from: 4.0, node: Knob(id: "low-mid"))],
                 ),

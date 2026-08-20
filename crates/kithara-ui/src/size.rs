@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    expand::{Binding, BlockSpec, ControlSpec, ExpandedNode, adaptive_branch},
+    expand::{Binding, BlockSpec, ControlSpec, ExpandedNode, MeasureSpec, adaptive_branch},
     module::{ButtonStyle, ChromeStyle, GlyphStyle, TextStyle},
     skin::{SkinDoc, WindowControlSkin},
 };
@@ -275,7 +275,8 @@ pub(crate) const DEFAULTS: &dyn Snapshot = &Unanswered;
 /// recorded at compile time.
 pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
     match node {
-        ExpandedNode::Adaptive { .. } | ExpandedNode::Optional { .. } => true,
+        ExpandedNode::Adaptive { size, .. } => size.is_none(),
+        ExpandedNode::Optional { .. } => true,
         ExpandedNode::Row { children, .. }
         | ExpandedNode::Column { children, .. }
         | ExpandedNode::Slot { children, .. } => children.iter().any(has_blocks),
@@ -304,6 +305,21 @@ pub(crate) fn visible<'a, N: BlockNode>(
         .filter(move |child| !is_hidden(*child, snapshot))
 }
 
+/// The branch a snapshot selects. A self-measured node takes its number from
+/// the box the toolkit gives it, which nothing outside the toolkit holds, so it
+/// answers its base branch here.
+pub(crate) fn branch<'a>(
+    measure: &MeasureSpec,
+    base: &'a ExpandedNode,
+    steps: &'a [(f32, ExpandedNode)],
+    snapshot: &dyn Snapshot,
+) -> &'a ExpandedNode {
+    let read = measure
+        .binding()
+        .and_then(|binding| snapshot.measure(binding));
+    adaptive_branch(base, steps, read)
+}
+
 /// Computes a node's intrinsic size from its override, children, or control specification.
 #[must_use]
 pub(crate) fn compute_size(
@@ -312,8 +328,8 @@ pub(crate) fn compute_size(
     snapshot: &dyn Snapshot,
 ) -> SizeSpec {
     let override_size = match node {
-        ExpandedNode::Adaptive { .. }
-        | ExpandedNode::Optional { .. }
+        ExpandedNode::Adaptive { size, .. } => *size,
+        ExpandedNode::Optional { .. }
         | ExpandedNode::Popover { .. }
         | ExpandedNode::Pressable { .. } => None,
         ExpandedNode::Scroll { size, .. }
@@ -331,11 +347,8 @@ pub(crate) fn compute_size(
             measure,
             base,
             steps,
-        } => compute_size(
-            adaptive_branch(base, steps, snapshot.measure(measure)),
-            skin,
-            snapshot,
-        ),
+            ..
+        } => compute_size(branch(measure, base, steps, snapshot), skin, snapshot),
         ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
             compute_size(child, skin, snapshot)
         }
@@ -809,5 +822,42 @@ mod tests {
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.w.max(), None);
+    }
+
+    struct Measured(f32);
+
+    impl Snapshot for Measured {
+        fn hidden(&self, _: &BlockSpec) -> bool {
+            false
+        }
+
+        fn measure(&self, _: &Binding) -> Option<f32> {
+            Some(self.0)
+        }
+    }
+
+    /// A node that measures itself answers the box it declares, whatever branch
+    /// it draws inside it - otherwise the branch it picks would move the
+    /// siblings whose room decided the pick.
+    #[kithara::test]
+    fn a_self_measured_node_is_opaque_to_its_parent() {
+        let mut interner = Interner::new(1024);
+        let declared = SizeSpec::new(Dim::Fill, Dim::Fixed(120.0));
+        let node = ExpandedNode::Adaptive {
+            measure: MeasureSpec::Width,
+            size: Some(declared),
+            base: Box::new(control(&mut interner, "narrow", fixed(40.0, 40.0))),
+            steps: vec![(1000.0, control(&mut interner, "wide", fixed(900.0, 600.0)))],
+        };
+
+        assert_eq!(compute_size(&node, builtin::skin_doc(), DEFAULTS), declared);
+        assert_eq!(
+            compute_size(&node, builtin::skin_doc(), &Measured(5000.0)),
+            declared,
+        );
+        assert!(
+            !has_blocks(&node),
+            "an opaque node keeps a constant size, so the renderer may memoise it",
+        );
     }
 }

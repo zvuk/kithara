@@ -154,7 +154,11 @@ pub enum ControlNode {
     /// reaches; `base` is the form below every step.
     Adaptive {
         id: NodeId,
-        measure: BindingRef,
+        measure: Measure,
+        /// Required by a self-measured node and refused by a read one: a box
+        /// that came from the branch could not decide which branch to draw.
+        #[serde(default)]
+        size: Option<SizeSpec>,
         base: Box<Self>,
         steps: Vec<AdaptiveStep>,
     },
@@ -640,11 +644,45 @@ pub struct AdaptiveStep {
     pub node: ControlNode,
 }
 
+/// Where the number that picks a branch comes from.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub enum Measure {
+    /// The width the node is given, in logical pixels.
+    Width,
+    /// The height the node is given, in logical pixels.
+    Height,
+    /// A scalar the host answers.
+    Read(BindingRef),
+}
+
+impl Measure {
+    /// The axis of the declared box this measure reads, if it reads its own.
+    pub(crate) const fn axis(&self) -> Option<MeasureAxis> {
+        match self {
+            Self::Width => Some(MeasureAxis::Width),
+            Self::Height => Some(MeasureAxis::Height),
+            Self::Read(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MeasureAxis {
+    Width,
+    Height,
+}
+
 impl ControlNode {
     pub(crate) const fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
         match self {
             Self::Row { write, .. } | Self::Column { write, .. } => (None, write.as_ref()),
-            Self::Adaptive { measure, .. } => (Some(measure), None),
+            Self::Adaptive {
+                measure: Measure::Read(measure),
+                ..
+            } => (Some(measure), None),
+            Self::Adaptive { .. } => (None, None),
             Self::Optional { hidden, .. } => (Some(hidden), None),
             Self::Popover { open, .. } => (Some(open), None),
             Self::Pressable { press, .. } => (None, Some(press)),
@@ -695,11 +733,11 @@ impl ControlNode {
 
     pub(crate) const fn size(&self) -> Option<&SizeSpec> {
         match self {
-            Self::Adaptive { .. }
-            | Self::Include { .. }
+            Self::Include { .. }
             | Self::Optional { .. }
             | Self::Popover { .. }
             | Self::Pressable { .. } => None,
+            Self::Adaptive { size, .. } => size.as_ref(),
             Self::Scroll { size, .. }
             | Self::Row { size, .. }
             | Self::Column { size, .. }

@@ -5,10 +5,10 @@ use iced::{
 };
 
 use crate::{
-    expand::{ControlSpec, ExpandedNode, adaptive_branch},
+    expand::{ControlSpec, ExpandedNode},
     layout::FrameSides,
     render::{Skin, UiEvent},
-    size::{Dim, SizeSpec, Snapshot, control_size},
+    size::{Dim, SizeSpec, Snapshot, branch, control_size},
     skin::ColorRole,
     widgets::frame_overlay,
 };
@@ -115,11 +115,13 @@ pub(super) fn effective_size(
     let declared = match node {
         ExpandedNode::Adaptive {
             measure,
+            size,
             base,
             steps,
         } => {
-            let branch = adaptive_branch(base, steps, snapshot.measure(measure));
-            return effective_size(branch, skin, snapshot);
+            return size.or_else(|| {
+                effective_size(branch(measure, base, steps, snapshot), skin, snapshot)
+            });
         }
         ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
             return effective_size(child, skin, snapshot);
@@ -180,7 +182,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        expand::{Binding, BindingKind, BlockSpec},
+        expand::{Binding, BindingKind, BlockSpec, MeasureSpec},
         ids::{InternId, Interner, SourceUri},
         module::{PopoverAlign, PopoverAt},
         size::{DEFAULTS, Snapshot},
@@ -297,7 +299,10 @@ mod tests {
             path: interner.intern("bank", &origin).unwrap(),
             press: model(interner.intern("deck.eq.menu", &origin).unwrap()),
             child: Box::new(ExpandedNode::Adaptive {
-                measure: model(interner.intern("deck.eq.bands", &origin).unwrap()),
+                measure: MeasureSpec::Read(model(
+                    interner.intern("deck.eq.bands", &origin).unwrap(),
+                )),
+                size: None,
                 base: Box::new(control(&mut interner, &origin, "three", narrow)),
                 steps: vec![(4.0, control(&mut interner, &origin, "four", wide))],
             }),

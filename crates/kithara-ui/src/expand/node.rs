@@ -6,8 +6,8 @@ use crate::{
     layout::FrameSides,
     module::{
         BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode, DeckSummaryStyle, FaderStyle,
-        GlyphStyle, IconName, PopoverAlign, PopoverAt, ScalarFormat, TextAlign, TextStyle, Tone,
-        TrackColumn, WaveStyle, WindowControlsStyle,
+        GlyphStyle, IconName, MeasureAxis, PopoverAlign, PopoverAt, ScalarFormat, TextAlign,
+        TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
     },
     size::{BlockNode, SizeSpec},
     skin::ColorRole,
@@ -56,7 +56,8 @@ pub enum ExpandedNode {
     /// Draws one branch: the last step whose threshold the measure reaches,
     /// and `base` below the first of them.
     Adaptive {
-        measure: Binding,
+        measure: MeasureSpec,
+        size: Option<SizeSpec>,
         base: Box<Self>,
         steps: Vec<(f32, Self)>,
     },
@@ -260,6 +261,35 @@ pub(crate) struct ExpandedModule {
 pub struct BlockSpec {
     pub hidden: Binding,
     pub path: InternId,
+}
+
+/// Where the number that picks a branch comes from: the box the node is given,
+/// or a scalar the host answers.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum MeasureSpec {
+    Width,
+    Height,
+    Read(Binding),
+}
+
+impl MeasureSpec {
+    /// The axis of the declared box this measure reads, if it reads its own.
+    pub(crate) const fn axis(&self) -> Option<MeasureAxis> {
+        match self {
+            Self::Width => Some(MeasureAxis::Width),
+            Self::Height => Some(MeasureAxis::Height),
+            Self::Read(_) => None,
+        }
+    }
+
+    /// The binding a read measure resolves, if the host answers this one.
+    pub(crate) const fn binding(&self) -> Option<&Binding> {
+        match self {
+            Self::Read(binding) => Some(binding),
+            Self::Width | Self::Height => None,
+        }
+    }
 }
 
 /// The branch a measure selects: the last step the value reaches, and `base`

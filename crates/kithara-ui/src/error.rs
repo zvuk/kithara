@@ -55,6 +55,23 @@ pub enum UiDocError {
         index: usize,
         from: f32,
     },
+    #[error(
+        "{origin}: adaptive node {id:?} at {path} measures its own {axis} and must declare that axis as a box"
+    )]
+    UnmeasuredAxis {
+        origin: SourceUri,
+        id: String,
+        path: String,
+        axis: &'static str,
+    },
+    #[error(
+        "{origin}: adaptive node {id:?} at {path} reads its measure and takes the size of the branch it draws"
+    )]
+    MeasuredBoxWithoutAxis {
+        origin: SourceUri,
+        id: String,
+        path: String,
+    },
     #[error("{origin}: optional block {id:?} at {path} has no parent to hide it")]
     RootBlock {
         origin: SourceUri,

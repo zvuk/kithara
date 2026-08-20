@@ -22,7 +22,7 @@
                         children: [
                             Adaptive(
                                 id: "eq-bands",
-                                measure: Model(id: "deck.eq.bands", with: { "deck": "$deck" }),
+                                measure: Read(Model(id: "deck.eq.bands", with: { "deck": "$deck" })),
                                 base: Include(
                                     id: "three-band",
                                     source: "app-strip/eq-3-band.kmodule.ron",

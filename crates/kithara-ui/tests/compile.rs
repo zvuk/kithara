@@ -5,7 +5,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledNode, CompiledUi, compile},
     error::UiDocError,
-    expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
+    expand::{Binding, BindingKind, ControlSpec, ExpandedNode, MeasureSpec},
     module::{ChromeStyle, IconName, PopoverAt, TrackColumn},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     size::{Dim, SizeSpec},
@@ -841,7 +841,7 @@ fn compile_blocks(resolver: &MemResolver, entry: &str) -> Result<CompiledUi, UiD
 const ADAPTIVE_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "mixer",
     root: Adaptive(
         id: "bank",
-        measure: Model(id: "ui.measure"),
+        measure: Read(Model(id: "ui.measure")),
         base: Row(id: "narrow", children: [Knob(id: "low")]),
         steps: [
             (from: 4.0, node: Row(id: "wide", children: [Knob(id: "low"), Knob(id: "high")])),
@@ -863,9 +863,13 @@ fn an_adaptive_node_leaves_no_segment_of_its_own_in_a_control_address() {
         measure,
         base,
         steps,
+        ..
     } = &**root
     else {
         panic!("expected an adaptive root");
+    };
+    let MeasureSpec::Read(measure) = measure else {
+        panic!("expected a read measure");
     };
     assert_eq!(ui.resolve(measure.id), "ui.measure");
 
@@ -891,7 +895,7 @@ fn an_adaptive_measure_must_read_a_scalar() {
         r#"(schema: "kithara.module", version: 1, id: "mixer",
             root: Adaptive(
                 id: "bank",
-                measure: Model(id: "ui.block.hidden"),
+                measure: Read(Model(id: "ui.block.hidden")),
                 base: Knob(id: "low"),
                 steps: [(from: 4.0, node: Knob(id: "high"))],
             ))"#,
