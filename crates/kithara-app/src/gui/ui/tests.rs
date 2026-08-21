@@ -185,6 +185,24 @@ fn instances<'a>(ui: &'a CompiledUi, node: &'a CompiledNode) -> Vec<&'a str> {
     out
 }
 
+/// The gate the width step carries, as `(micro form, threshold, full form)`:
+/// the full shape asks for room on both axes, and this node is the height one.
+fn height_gate(ui: &CompiledUi, layout: DeckLayout) -> (&CompiledNode, f32, &CompiledNode) {
+    let CompiledNode::Adaptive { steps, .. } = &ui.root else {
+        panic!("{layout:?}: expected an adaptive root");
+    };
+    let CompiledNode::Adaptive {
+        axis, base, steps, ..
+    } = &steps[0].1
+    else {
+        panic!("{layout:?}: the width step must gate the full shape by height");
+    };
+
+    assert_eq!(*axis, MeasureAxis::Height, "{layout:?}");
+    assert_eq!(steps.len(), 1, "{layout:?}: the gate holds two forms");
+    (base, steps[0].0, &steps[0].1)
+}
+
 fn module<'a>(ui: &'a CompiledUi, want: &str) -> &'a CompiledNode {
     let mut stack = vec![&ui.root];
     while let Some(node) = stack.pop() {
@@ -274,8 +292,9 @@ fn every_address_names_an_instance_the_host_routes() {
     }
 }
 
-/// The window draws one of two shapes, picked by the width it is given, and
-/// answers the box it declares whichever it draws.
+/// The width the window is given picks between the micro form and the gate the
+/// full one stands behind, and the root answers the box it declares whichever
+/// it draws.
 #[kithara::test]
 fn the_window_takes_its_shape_from_the_width_it_is_given() {
     for layout in LAYOUTS {
@@ -302,7 +321,7 @@ fn the_window_takes_its_shape_from_the_width_it_is_given() {
 fn a_narrow_window_lays_out_the_bar_and_the_browser() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
-        let CompiledNode::Adaptive { base, steps, .. } = &ui.root else {
+        let CompiledNode::Adaptive { base, .. } = &ui.root else {
             panic!("{layout:?}: expected an adaptive root");
         };
 
@@ -311,13 +330,40 @@ fn a_narrow_window_lays_out_the_bar_and_the_browser() {
             ["bar-micro", "bar-micro", "library"],
             "{layout:?}",
         );
-        let wide = instances(&ui, &steps[0].1);
+        let (_, _, full) = height_gate(&ui, layout);
         let mut want = vec!["bar", "library", "mixer", "overview", "deck-a"];
         if layout == DeckLayout::Dual {
             want.push("deck-b");
         }
         want.sort_unstable();
-        assert_eq!(wide, want, "{layout:?}");
+        assert_eq!(instances(&ui, full), want, "{layout:?}");
+    }
+}
+
+/// The full shape needs room on both axes: the width step it stands under
+/// gates it by its own compiled minimum height, so a window wide enough for it
+/// draws it once the rows it stacks fit. Under that height the step draws the
+/// micro form, the same one a narrow window draws.
+#[kithara::test]
+fn the_full_shape_stands_only_where_the_window_is_tall_enough_for_it() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let (micro, from, full) = height_gate(&ui, layout);
+
+        assert_eq!(
+            instances(&ui, micro),
+            ["bar-micro", "bar-micro", "library"],
+            "{layout:?}",
+        );
+        let CompiledNode::Split { size, .. } = full else {
+            panic!("{layout:?}: the full shape stacks its rows in a column");
+        };
+        assert!(
+            from >= size.h.min(),
+            "{layout:?}: a gate of {from} draws the full shape into a window \
+             under the {} it measures",
+            size.h.min(),
+        );
     }
 }
 
@@ -433,25 +479,25 @@ fn every_walker_reaches_the_nodes_the_documents_declare() {
             (
                 "controls",
                 controls(&ui).len(),
-                if dual { 263 } else { 205 },
+                if dual { 358 } else { 300 },
             ),
             (
                 "control_paths",
                 control_paths(&ui).len(),
-                if dual { 263 } else { 205 },
+                if dual { 358 } else { 300 },
             ),
             ("surfaces", surfaces(&ui).len(), layout.decks()),
             (
                 "pressables",
                 pressables(&ui).len(),
-                if dual { 59 } else { 48 },
+                if dual { 83 } else { 72 },
             ),
             ("drop_targets", drop_targets(&ui).len(), layout.decks()),
             ("guarded_by", guarded_by(&ui, "ui.module.hidden").len(), 4),
             (
                 "optional_modules",
                 optional_modules(&ui, "ui.module.hidden").len(),
-                3,
+                5,
             ),
         ] {
             assert!(
@@ -550,8 +596,8 @@ fn the_bar_carries_the_broadcast_cell() {
 }
 
 /// Whichever shape the window draws, its chrome is the bar that shape carries:
-/// the micro bar stands in both branches of the height it answers, so it names
-/// its pair twice.
+/// the micro form stands under both widths and in both branches of the height
+/// each of those answers, so the micro bar names its pair once per branch.
 #[kithara::test]
 fn the_bar_owns_the_window_chrome() {
     for layout in LAYOUTS {
@@ -574,6 +620,10 @@ fn the_bar_owns_the_window_chrome() {
             [
                 "bar-micro/drag",
                 "bar-micro/drag",
+                "bar-micro/drag",
+                "bar-micro/drag",
+                "bar-micro/window",
+                "bar-micro/window",
                 "bar-micro/window",
                 "bar-micro/window",
                 "bar/drag",
