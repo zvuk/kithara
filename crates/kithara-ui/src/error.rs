@@ -73,6 +73,14 @@ pub enum UiDocError {
         needs: f32,
         room: f32,
     },
+    #[error("{origin}: node at {path} declares {room} {axis} and holds content needing {needs}")]
+    DeclaredRoom {
+        origin: SourceUri,
+        path: String,
+        axis: &'static str,
+        needs: f32,
+        room: f32,
+    },
     #[error("{origin}: {path} measures its own {axis} and must declare that axis as a box")]
     UnmeasuredAxis {
         origin: SourceUri,

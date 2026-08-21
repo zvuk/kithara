@@ -4,7 +4,7 @@ use crate::{
     expand::ExpandedNode,
     ids::{NodeId, SourceUri},
     module::MeasureAxis,
-    size::{SizeSpec, axis_min, min_size, rooms},
+    size::{SizeSpec, axis_dim, axis_min, combine_vertical, min_size, rooms, settled},
     skin::SkinDoc,
     validate::NodePath,
 };
@@ -42,11 +42,12 @@ fn walk(
     match node {
         ExpandedNode::Adaptive {
             measure,
+            size,
             base,
             steps,
-            ..
         } => {
             let here = path.push("Adaptive");
+            check_box(*size, min_size(base, skin), &here, origin)?;
             if let Some(axis) = measure.axis() {
                 check_steps(steps, axis, &here, origin, |branch| min_size(branch, skin))?;
             }
@@ -57,17 +58,32 @@ fn walk(
             Ok(())
         }
         ExpandedNode::Row {
-            measure, children, ..
+            measure,
+            size,
+            children,
+            ..
         }
         | ExpandedNode::Column {
-            measure, children, ..
+            measure,
+            size,
+            children,
+            ..
         } => {
+            check_box(*size, settled(node, *measure, skin), path, origin)?;
             if let Some(axis) = measure {
                 check_cells(node, *axis, path, skin, origin)?;
             }
             walk_children(children, path, skin, origin)
         }
-        ExpandedNode::Slot { children, .. } => walk_children(children, path, skin, origin),
+        ExpandedNode::Slot { size, children, .. } => {
+            check_box(
+                *size,
+                combine_vertical(children.iter().map(|child| min_size(child, skin))),
+                path,
+                origin,
+            )?;
+            walk_children(children, path, skin, origin)
+        }
         ExpandedNode::Optional { child, .. }
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Scroll { child, .. } => walk(child, path, skin, origin),
@@ -113,6 +129,34 @@ fn check_steps<N>(
                 axis: axis.name(),
                 from: *from,
                 needs,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// A node draws in the box it declares, so what it holds has to fit that box.
+fn check_box(
+    declared: Option<SizeSpec>,
+    composed: SizeSpec,
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    let Some(declared) = declared else {
+        return Ok(());
+    };
+    for axis in [MeasureAxis::Width, MeasureAxis::Height] {
+        let Some(room) = axis_dim(declared, axis).max() else {
+            continue;
+        };
+        let needs = axis_min(composed, axis);
+        if needs > room {
+            return Err(UiDocError::DeclaredRoom {
+                origin: origin.clone(),
+                path: path.render(),
+                axis: axis.name(),
+                needs,
+                room,
             });
         }
     }

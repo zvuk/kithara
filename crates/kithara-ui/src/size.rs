@@ -447,7 +447,11 @@ pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
 
 /// What the cells of a row or a column settle on. A node laying out no cells
 /// asks for nothing of its own.
-fn settled(node: &ExpandedNode, measure: Option<MeasureAxis>, skin: &SkinDoc) -> SizeSpec {
+pub(crate) fn settled(
+    node: &ExpandedNode,
+    measure: Option<MeasureAxis>,
+    skin: &SkinDoc,
+) -> SizeSpec {
     Stack::of(node, skin).map_or(SizeSpec::new(Dim::Fixed(0.0), Dim::Fixed(0.0)), |stack| {
         stack.settled(measure, skin)
     })
@@ -475,12 +479,15 @@ pub(crate) fn rooms(node: &ExpandedNode, axis: MeasureAxis, skin: &SkinDoc) -> V
         .collect()
 }
 
-pub(crate) fn axis_min(size: SizeSpec, axis: MeasureAxis) -> f32 {
+pub(crate) fn axis_dim(size: SizeSpec, axis: MeasureAxis) -> Dim {
     match axis {
         MeasureAxis::Width => size.w,
         MeasureAxis::Height => size.h,
     }
-    .min()
+}
+
+pub(crate) fn axis_min(size: SizeSpec, axis: MeasureAxis) -> f32 {
+    axis_dim(size, axis).min()
 }
 
 /// A cell of a container: the room it waits for, and what it needs once it

@@ -1885,3 +1885,71 @@ fn a_threshold_may_not_promise_room_the_container_does_not_have() {
     compile_blocks(&block_resolver(&bar(300.0)), "blocks.klayout.ron")
         .expect("a threshold above what the cells take promises room they fit in");
 }
+
+/// A node draws in the box it declares, so content that box cannot hold is a
+/// document contradicting itself.
+#[kithara::test]
+fn a_declared_box_may_not_be_smaller_than_what_it_holds() {
+    let bar = |cell: &str| {
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Row(
+                    id: "bar",
+                    gap: 0.0,
+                    pad: 0.0,
+                    size: (w: Fill, h: Fixed(42.0)),
+                    children: [Knob(id: "low", size: {cell})],
+                ))"#
+        )
+    };
+
+    let error = compile_blocks(
+        &block_resolver(&bar("(w: Fixed(80.0), h: Fixed(120.0))")),
+        "blocks.klayout.ron",
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::DeclaredRoom { room, needs, axis, .. }
+            if *room == 42.0 && *needs == 120.0 && *axis == "height"),
+        "{error:?}"
+    );
+    compile_blocks(
+        &block_resolver(&bar("(w: Fixed(80.0), h: Fixed(20.0))")),
+        "blocks.klayout.ron",
+    )
+    .expect("a box above what the content takes is the floor the node keeps");
+}
+
+/// A slot answers for the box it declares the same way, and an adaptive one
+/// answers for the branch it falls back to.
+#[kithara::test]
+fn a_slot_and_an_adaptive_answer_for_the_box_they_declare() {
+    let tall = r#"Knob(id: "low", size: (w: Fixed(80.0), h: Fixed(120.0)))"#;
+    let modules = [
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Slot(id: "well", size: (w: Fill, h: Fixed(42.0)), default: [{tall}]))"#
+        ),
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Adaptive(
+                    id: "bank",
+                    measure: Width,
+                    size: (w: Fill, h: Fixed(42.0)),
+                    base: {tall},
+                    steps: [(from: 400.0, node: Knob(id: "high"))],
+                ))"#
+        ),
+    ];
+
+    for module in modules {
+        let error = compile_blocks(&block_resolver(&module), "blocks.klayout.ron").unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::DeclaredRoom { room, needs, axis, .. }
+                if *room == 42.0 && *needs == 120.0 && *axis == "height"),
+            "{error:?}"
+        );
+    }
+}

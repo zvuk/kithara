@@ -11,7 +11,7 @@
             Row(
                 id: "controls",
                 gap: 18.0,
-                size: (w: Fill, h: Fixed(36.0)),
+                size: (w: Fill, h: Fixed(38.0)),
                 children: [
                     Include(id: "key-lock", source: "../deck/key-lock.kmodule.ron", with: { "deck": "a" }),
                     Include(id: "master-clock", source: "../master-clock.kmodule.ron"),

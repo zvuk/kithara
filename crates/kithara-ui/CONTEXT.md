@@ -503,7 +503,7 @@ declared minimum and what the children compose to, so a box cannot swallow the r
   module's minimum maxes against the box its `CompiledNode` carries, which is the box the layout
   declared or, absent one, the composed size that box would have had - below the minimum either way.
 
-Two rules follow, both checked at compile time against the skin, because both are questions a
+Three rules follow, all checked at compile time against the skin, because each is a question a
 document can only answer once its controls have sizes.
 
 - A step draws in the room its threshold promises: `room::check_steps` requires
@@ -518,6 +518,14 @@ document can only answer once its controls have sizes.
   below the minimum names a cell that always stands, which the minimum already counts, and is no
   error. Failure is `UiDocError::RevealRoom`, naming the container, the room and what is needed
   there.
+- A node holds what its box can take: `room::check_box` requires, on both axes, that a declared box
+  naming a ceiling - `Dim::Fixed`, or `Dim::Range` with a closed top - covers what the node composes:
+  `size::settled` for a `Row` or a `Column`, the children combined for a `Slot`, the base for an
+  `Adaptive`. `Dim::Fill`, `Dim::Shrink` and an open range name no ceiling and are left alone, as are
+  a `Scroll`, which scrolls what overflows its box, and a `Control`, whose box overrides the skin on
+  purpose. The rule keeps `min_size` and `compute_size` answering about one box, so the number
+  reaching `CompiledUi::min` is the number the renderer draws. Failure is
+  `UiDocError::DeclaredRoom`, naming the node, the box and what it holds.
 
 ## Icon Identity
 

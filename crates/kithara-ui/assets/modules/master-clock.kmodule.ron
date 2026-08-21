@@ -8,7 +8,7 @@
         open: Model(id: "clock.open"),
         align: End,
         anchor: Row(
-            size: (w: Shrink, h: Fixed(36.0)),
+            size: (w: Shrink, h: Fixed(38.0)),
             gap: 0.0,
             background: BgPanel,
             active: Model(id: "clock.open"),
