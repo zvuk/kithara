@@ -171,11 +171,8 @@ pub enum ControlNode {
         steps: Vec<AdaptiveStep>,
     },
     /// Shows its child while the container measures a number in `[from,
-    /// until)` on the axis it declares: `from` is reached at its own value and
-    /// `until` is not, so `Reveal(from: 0.0, until: Some(350.0))` and
-    /// `Reveal(from: 350.0)` meet at 350 with neither an overlap nor a gap.
-    /// `until: None` names no ceiling. Only a container declaring `measure`
-    /// may hold one.
+    /// until)` on the axis it declares; `until: None` names no ceiling. Only a
+    /// container declaring `measure` may hold one.
     Reveal {
         from: f32,
         #[serde(default)]
@@ -678,7 +675,6 @@ pub enum Measure {
 }
 
 impl Measure {
-    /// The axis of the declared box this measure reads, if it reads its own.
     pub(crate) const fn axis(&self) -> Option<MeasureAxis> {
         match self {
             Self::Width => Some(MeasureAxis::Width),
@@ -697,7 +693,6 @@ pub enum MeasureAxis {
 }
 
 impl MeasureAxis {
-    /// Names the axis in a message about the box it reads.
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Width => "width",

@@ -251,9 +251,6 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
     }
 }
 
-/// What the host answers about a tree right now: which blocks it hides, and
-/// what each adaptive measure reads. A size is a function of the node and one
-/// of these.
 pub(crate) trait Snapshot {
     fn hidden(&self, block: &BlockSpec) -> bool;
     fn measure(&self, measure: &Binding) -> Option<f32>;
@@ -271,13 +268,8 @@ impl Snapshot for Unanswered {
     }
 }
 
-/// Every block visible, every measure silent: the state a tree is in before a
-/// host answers anything.
 pub(crate) const DEFAULTS: &dyn Snapshot = &Unanswered;
 
-/// Marks a subtree whose size is a function of the snapshot rather than a
-/// constant, so the renderer re-walks it instead of answering from the size
-/// recorded at compile time.
 pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
     match node {
         ExpandedNode::Adaptive { size, .. } => size.is_none(),
@@ -315,9 +307,6 @@ pub(crate) fn visible<'a, N: BlockNode>(
         .filter(move |child| !is_hidden(*child, snapshot))
 }
 
-/// The branch a snapshot selects. A self-measured node takes its number from
-/// the box the toolkit gives it, which nothing outside the toolkit holds, so it
-/// answers its base branch here.
 pub(crate) fn branch<'a>(
     measure: &MeasureSpec,
     base: &'a ExpandedNode,
@@ -421,8 +410,6 @@ pub(crate) fn compute_size(
     }
 }
 
-/// How much room a node needs on each axis: what its cells need, and never
-/// less than the box it declares.
 #[must_use]
 pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
     match node {
@@ -445,8 +432,6 @@ pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
     }
 }
 
-/// What the cells of a row or a column settle on. A node laying out no cells
-/// asks for nothing of its own.
 pub(crate) fn settled(
     node: &ExpandedNode,
     measure: Option<MeasureAxis>,
@@ -457,10 +442,6 @@ pub(crate) fn settled(
     })
 }
 
-/// What a container needs in each room its standing cells change at: its own
-/// minimum, and every threshold above that. The set stands still between them,
-/// so these are every room worth asking about, and a threshold below the
-/// minimum names a cell the minimum already counts.
 #[must_use]
 pub(crate) fn rooms(node: &ExpandedNode, axis: MeasureAxis, skin: &SkinDoc) -> Vec<(f32, f32)> {
     Cells::of(node, skin).map_or_else(Vec::new, |cells| {
@@ -479,8 +460,6 @@ pub(crate) fn axis_min(size: SizeSpec, axis: MeasureAxis) -> f32 {
     axis_dim(size, axis).min()
 }
 
-/// A cell of a container: the band of room it stands in, and what it needs
-/// while it does.
 pub(crate) struct Cell {
     from: f32,
     until: Option<f32>,
@@ -493,16 +472,11 @@ impl Cell {
     }
 }
 
-/// A cell stands while the room has reached `from` and has not reached
-/// `until`, so a band closing where the next one opens hands over with neither
-/// an overlap nor a gap.
 #[must_use]
 pub(crate) fn stands(from: f32, until: Option<f32>, room: f32) -> bool {
     from <= room && until.is_none_or(|until| room < until)
 }
 
-/// How many thresholds the cells declare: the `from` a cell waits for and the
-/// `until` it stops at each move the standing set once.
 fn thresholds(cells: &[Cell]) -> usize {
     cells
         .iter()
@@ -510,10 +484,6 @@ fn thresholds(cells: &[Cell]) -> usize {
         .sum()
 }
 
-/// The cells one container lays out along one axis, with the gap it charges
-/// between them and the padding it charges around them. It is the whole input
-/// the threshold arithmetic takes, so a row, a column and a layout split ask
-/// their questions of one value.
 pub(crate) struct Cells {
     along: Axis,
     cells: Vec<Cell>,
@@ -522,7 +492,6 @@ pub(crate) struct Cells {
 }
 
 impl Cells {
-    /// Cells laid out edge to edge, which is what a layout split draws.
     pub(crate) const fn new(along: Axis, cells: Vec<Cell>) -> Self {
         Self {
             along,
@@ -532,7 +501,6 @@ impl Cells {
         }
     }
 
-    /// The cells of a row or a column, and nothing for any other node.
     fn of(node: &ExpandedNode, skin: &SkinDoc) -> Option<Self> {
         let (along, children, gap, pad, pad_x, pad_y) = match node {
             ExpandedNode::Row {
@@ -571,9 +539,6 @@ impl Cells {
         })
     }
 
-    /// What the cells standing in `room` need together, the gaps and the
-    /// padding the renderer applies included. A container reading no room
-    /// stands every cell, which is what the renderer draws for it.
     fn need(&self, room: Option<f32>) -> SizeSpec {
         let standing: Vec<_> = self
             .cells
@@ -588,13 +553,6 @@ impl Cells {
         }
     }
 
-    /// Which cells stand at the narrowest the container gets depends on that
-    /// number, so the room climbs from the cells waiting for nothing and each
-    /// round asks what the room it reached stands. A band drops a cell as the
-    /// room grows, so a round may only raise the answer: the climb stays
-    /// monotone and settles on a room its own standing cells fit in. A round
-    /// that raises the room crosses a threshold or is the one that settles the
-    /// climb, so a round per threshold and two more reach the answer.
     pub(crate) fn settled(&self, measure: Option<MeasureAxis>) -> SizeSpec {
         let Some(axis) = measure else {
             return self.need(None);
@@ -606,9 +564,6 @@ impl Cells {
         size
     }
 
-    /// What the container needs in each room its standing cells change at:
-    /// `least`, which is the smallest room it takes, and every threshold above
-    /// that.
     pub(crate) fn rooms(&self, axis: MeasureAxis, least: f32) -> Vec<(f32, f32)> {
         std::iter::once(least)
             .chain(
@@ -622,7 +577,6 @@ impl Cells {
     }
 }
 
-/// The per-axis maximum of two boxes, leaving an open bound open.
 fn covering(left: SizeSpec, right: SizeSpec) -> SizeSpec {
     SizeSpec::new(
         Dim::from(Bounds::from(left.w).max(right.w)),
@@ -634,8 +588,6 @@ fn needs(size: SizeSpec) -> SizeSpec {
     SizeSpec::new(Dim::Fixed(size.w.min()), Dim::Fixed(size.h.min()))
 }
 
-/// The room a node needs once its declared box has its say, which is a floor
-/// rather than the answer.
 pub(crate) fn at_least(declared: Option<SizeSpec>, composed: SizeSpec) -> SizeSpec {
     declared.map_or(composed, |declared| {
         SizeSpec::new(
@@ -1088,9 +1040,6 @@ mod tests {
         }
     }
 
-    /// A node that measures itself answers the box it declares, whatever branch
-    /// it draws inside it - otherwise the branch it picks would move the
-    /// siblings whose room decided the pick.
     #[kithara::test]
     fn a_self_measured_node_is_opaque_to_its_parent() {
         let mut interner = Interner::new(1024);
@@ -1150,9 +1099,6 @@ mod tests {
         }
     }
 
-    /// A container that measures itself answers the box it declares, whatever
-    /// it shows inside it - otherwise a cell appearing would move the siblings
-    /// whose room decided that it appears.
     #[kithara::test]
     fn a_measuring_container_is_opaque_to_its_parent() {
         let mut interner = Interner::new(1024);
@@ -1178,9 +1124,6 @@ mod tests {
         );
     }
 
-    /// The box a node shows its parent and the room it needs are two questions
-    /// with two answers: a container answers `Fill` and still needs what its
-    /// cells, its gaps and its padding take.
     #[kithara::test]
     fn a_declared_box_leaves_the_cells_their_room() {
         let mut interner = Interner::new(1024);
@@ -1201,8 +1144,6 @@ mod tests {
         assert_eq!(min_size(&node, &skin), fixed(23.0, 12.0));
     }
 
-    /// Which cells stand at the narrowest width depends on that width, so the
-    /// answer is the width the cells standing there settle on.
     #[kithara::test]
     fn a_measuring_container_needs_the_room_its_standing_cells_settle_on() {
         let mut interner = Interner::new(1024);
@@ -1253,9 +1194,6 @@ mod tests {
         assert_eq!(min_size(&chained, skin), fixed(220.0, 42.0));
     }
 
-    /// A stretching strip and the wave that replaces it are two bands of one
-    /// line handing over at the same number, so the room the bar needs counts
-    /// the strip below the hand-over and the wave from it up.
     #[kithara::test]
     fn a_band_leaves_the_room_to_the_cell_opening_where_it_closes() {
         let mut interner = Interner::new(1024);
@@ -1288,8 +1226,6 @@ mod tests {
         );
     }
 
-    /// A layout split builds its cells out of compiled minimums instead of
-    /// expanded children, and asks the same value the same questions.
     #[kithara::test]
     fn cells_laid_edge_to_edge_settle_where_the_bar_does() {
         let cell = |from, until, width| Cell::new(from, until, fixed(width, 20.0));
@@ -1321,8 +1257,6 @@ mod tests {
         );
     }
 
-    /// A host hiding a block is a state, not a smaller tree: the bar has to
-    /// hold the block the host shows again.
     #[kithara::test]
     fn a_block_takes_its_room_whether_the_host_shows_it_or_not() {
         let mut interner = Interner::new(1024);

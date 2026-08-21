@@ -31,7 +31,6 @@ impl EndpointRegistry for MockRegistry {
     }
 }
 
-/// What the micro bar reads beside the deck.
 fn insert_engine_endpoints(registry: &mut MockRegistry) {
     registry.insert(
         EndpointCategory::Telemetry,

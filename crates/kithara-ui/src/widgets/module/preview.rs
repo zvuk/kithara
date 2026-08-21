@@ -192,8 +192,6 @@ mod tests {
         source::UiConfig,
     };
 
-    /// Answers every endpoint the builtin presets name, keyed the way the
-    /// documents bind them.
     #[derive(Default)]
     struct Registry {
         endpoints: BTreeMap<(EndpointCategory, String), EndpointDesc>,

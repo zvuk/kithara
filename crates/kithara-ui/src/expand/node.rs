@@ -283,7 +283,6 @@ pub enum MeasureSpec {
 }
 
 impl MeasureSpec {
-    /// The axis of the declared box this measure reads, if it reads its own.
     pub(crate) const fn axis(&self) -> Option<MeasureAxis> {
         match self {
             Self::Width => Some(MeasureAxis::Width),
@@ -292,7 +291,6 @@ impl MeasureSpec {
         }
     }
 
-    /// The binding a read measure resolves, if the host answers this one.
     pub(crate) const fn binding(&self) -> Option<&Binding> {
         match self {
             Self::Read(binding) => Some(binding),
@@ -301,8 +299,6 @@ impl MeasureSpec {
     }
 }
 
-/// The branch a measure selects: the last step the value reaches, and `base`
-/// below every threshold or when nothing was read.
 pub(crate) fn adaptive_branch<'a>(
     base: &'a ExpandedNode,
     steps: &'a [(f32, ExpandedNode)],
@@ -389,7 +385,6 @@ mod tests {
 
     use super::*;
 
-    /// Branches that differ only by a number the selector never reads.
     fn form(gap: f32) -> ExpandedNode {
         ExpandedNode::Row {
             gap: Some(gap),

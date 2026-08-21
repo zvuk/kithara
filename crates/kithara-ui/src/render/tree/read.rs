@@ -8,7 +8,6 @@ use crate::{
     widgets::wave::zoom_math::DEFAULT_ZOOM,
 };
 
-/// What the host answers this frame, read through the compiled arena.
 #[derive(Clone, Copy)]
 pub(super) struct Answers<'a> {
     pub(super) reads: &'a dyn Reads,
@@ -51,9 +50,6 @@ pub(super) fn read_flag(binding: Option<&Binding>, reads: &dyn Reads, ui: &Compi
     )
 }
 
-/// The one place an adaptive measure crosses from the host's `f64` into the
-/// `f32` the thresholds are written in; a value that survives neither the cast
-/// nor the read is no measurement.
 fn read_measure(binding: &Binding, reads: &dyn Reads, ui: &CompiledUi) -> Option<f32> {
     let Some(ReadValue::Scalar(value)) = resolve(reads, binding, ui) else {
         return None;

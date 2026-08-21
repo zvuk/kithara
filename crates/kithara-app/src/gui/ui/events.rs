@@ -33,9 +33,6 @@ pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> 
     }
 }
 
-/// Which block of the layout answers an address, named by its instance. The
-/// documents mint the instances and this names them, so a test holds the two
-/// lists against each other.
 pub(super) enum Route {
     Bar,
     Deck(usize),
@@ -74,8 +71,6 @@ fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Me
     }
 }
 
-/// The micro bar drives one deck and carries that deck's master volume beside
-/// its transport.
 fn micro_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     let index = deck_index(MICRO_DECK)?;
     match control {
@@ -84,7 +79,6 @@ fn micro_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
     }
 }
 
-/// A volume control sets the trim of the deck it addresses.
 fn volume_control(state: &Kithara, index: usize, action: &ControlAction) -> Option<Message> {
     let ControlAction::SetScalar(trim) = action else {
         return None;

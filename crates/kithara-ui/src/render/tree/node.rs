@@ -372,9 +372,6 @@ fn render_column<'a>(
     ))
 }
 
-/// A split lays its cells out along one axis, each taking the share of the
-/// room its weight names. One that measures itself hands the toolkit the band
-/// every cell stands in and lets the box it is given decide which of them do.
 fn render_split<'a>(
     node: &CompiledNode,
     ui: &'a CompiledUi,
@@ -445,9 +442,6 @@ fn render_split<'a>(
         .into()
 }
 
-/// A container that measures itself hands the toolkit every child it lays out
-/// with the band each stands in, and lets the box it is given decide which of
-/// them stand. A child the host hides never reaches it.
 fn revealed<'a>(
     children: &[ExpandedNode],
     shape: Shape,
@@ -466,8 +460,6 @@ fn revealed<'a>(
     Revealed::new(cells, shape).into()
 }
 
-/// A self-measured node hands every branch to the toolkit and lets the box it
-/// is given pick one, so no branch is rebuilt when the pick changes.
 fn measured_branches<'a>(
     measure: &MeasureSpec,
     branches: (&ExpandedNode, &[(f32, ExpandedNode)]),

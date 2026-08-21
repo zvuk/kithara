@@ -15,23 +15,15 @@ use iced::{
 
 use crate::{layout::Axis, module::MeasureAxis, size::stands};
 
-/// A child and the band of room it stands in, as `(from, until)`.
 pub(crate) type Cell<'a, Message, Theme, Renderer> =
     ((f32, Option<f32>), Element<'a, Message, Theme, Renderer>);
 
-/// Lays out the children whose band the box it is given falls in. A child
-/// outside its band takes neither its own room nor a gap beside it, and the
-/// box the widget answers is the one it declares either way.
 pub(crate) struct Revealed<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
     children: Vec<Element<'a, Message, Theme, Renderer>>,
-    /// One band per child, in logical pixels of the measured axis.
     bands: Vec<(f32, Option<f32>)>,
     shape: Shape,
 }
 
-/// What the container declares about its own box: the axis it lays children
-/// out along, the axis it measures, the box it answers, and how it spaces and
-/// aligns what it shows.
 pub(crate) struct Shape {
     pub(crate) flow: Axis,
     pub(crate) measure: MeasureAxis,
@@ -41,15 +33,11 @@ pub(crate) struct Shape {
     pub(crate) align: Alignment,
 }
 
-/// Which children the last layout pass revealed, so drawing and events reach
-/// the ones that were laid out.
 #[derive(Default)]
 struct State {
     shown: Vec<bool>,
 }
 
-/// Rotations that bring the shown children to the front of a slice without
-/// disturbing their order. Replayed backwards they put the slice back.
 fn gather(shown: &[bool]) -> Vec<(usize, usize)> {
     shown
         .iter()
@@ -61,8 +49,6 @@ fn gather(shown: &[bool]) -> Vec<(usize, usize)> {
 }
 
 impl<'a, Message, Theme, Renderer> Revealed<'a, Message, Theme, Renderer> {
-    /// Each child carries the band it stands in, so the two lists cannot drift
-    /// apart.
     pub(crate) fn new(children: Vec<Cell<'a, Message, Theme, Renderer>>, shape: Shape) -> Self {
         let (bands, children) = children.into_iter().unzip();
         Self {
@@ -90,7 +76,6 @@ impl<'a, Message, Theme, Renderer> Revealed<'a, Message, Theme, Renderer> {
         }
     }
 
-    /// The children the last pass revealed, each with its state and its box.
     fn revealed<'t>(
         &'t self,
         tree: &'t Tree,
@@ -306,8 +291,6 @@ mod tests {
         Space::new().width(width).height(20.0).into()
     }
 
-    /// A bar whose cells appear at thresholds of their own: the middle one
-    /// last, so a room that reveals two of three leaves a hole in the middle.
     fn bar(padding: Padding) -> Revealed<'static, UiEvent, Theme, ()> {
         Revealed::new(
             vec![
@@ -334,8 +317,6 @@ mod tests {
         }
     }
 
-    /// The widths and offsets of every child box, zero standing for a child
-    /// the room left out.
     fn lay_out(
         widget: &mut Revealed<'_, UiEvent, Theme, ()>,
         tree: &mut Tree,
@@ -351,8 +332,6 @@ mod tests {
         (node.size(), boxes)
     }
 
-    /// The share of the room a layout split gives one cell, which is what
-    /// `split_length` hands the widget.
     fn portion(weight: u16) -> Element<'static, UiEvent, Theme, ()> {
         Space::new()
             .width(Length::FillPortion(weight))
@@ -367,9 +346,6 @@ mod tests {
             .collect()
     }
 
-    /// A measuring split lays its cells out through the same resolver a plain
-    /// one does, so the weights the document names divide the room the same
-    /// way and the cell a band leaves out takes none of it.
     #[kithara::test]
     fn a_measuring_row_gives_its_cells_the_portions_a_plain_row_gives() {
         let room = Limits::new(Size::ZERO, Size::new(400.0, 42.0));
@@ -419,8 +395,6 @@ mod tests {
         assert_eq!(wide, vec![(0.0, 10.0), (14.0, 20.0), (38.0, 30.0)]);
     }
 
-    /// The cell left out costs neither its width nor the gap beside it, so its
-    /// neighbours close up as if it were never declared.
     #[kithara::test]
     fn a_hidden_cell_charges_no_gap() {
         let mut widget = bar(Padding::ZERO);
@@ -431,9 +405,6 @@ mod tests {
         assert_eq!(boxes, vec![(0.0, 10.0), (0.0, 0.0), (14.0, 30.0)]);
     }
 
-    /// Laying out the revealed cells reorders nothing that outlives the pass:
-    /// a widget's state is its position, so the next pass would address the
-    /// wrong cell.
     #[kithara::test]
     fn a_pass_that_reveals_some_cells_leaves_the_order_it_found() {
         let mut widget = bar(Padding::ZERO);
@@ -445,8 +416,6 @@ mod tests {
         assert_eq!(boxes, vec![(0.0, 10.0), (14.0, 20.0), (38.0, 30.0)]);
     }
 
-    /// A band ends where the next one begins, so the two cells sharing that
-    /// number never both stand and never both go missing.
     #[kithara::test]
     fn a_band_hands_the_line_over_at_the_number_it_ends_on() {
         let mut widget = Revealed::new(
@@ -476,8 +445,6 @@ mod tests {
         assert_eq!(reached, vec![(0.0, 0.0), (0.0, 30.0)], "350 is the wave");
     }
 
-    /// The container measures the box it declares, padding included, so a
-    /// threshold is the number the parent hands it.
     #[kithara::test]
     fn a_threshold_is_read_against_the_declared_box() {
         let mut widget = bar(Padding::ZERO.left(30.0).right(30.0));

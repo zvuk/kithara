@@ -159,9 +159,6 @@ fn documents_compile_against_the_registry() {
     }
 }
 
-/// The width from which the window lays out every module it has.
-/// Every module instance a branch lays out, sorted; a module standing in two
-/// branches of one adaptive node is named once per branch.
 fn instances<'a>(ui: &'a CompiledUi, node: &'a CompiledNode) -> Vec<&'a str> {
     let mut out = Vec::new();
     let mut stack = vec![node];
@@ -204,8 +201,6 @@ fn module<'a>(ui: &'a CompiledUi, want: &str) -> &'a CompiledNode {
     panic!("no module instance `{want}`");
 }
 
-/// The address a bar cell answers to: the cell itself, or the first addressed
-/// node behind the wrappers it stands in.
 fn cell_id<'a>(ui: &'a CompiledUi, node: &'a ExpandedNode) -> &'a str {
     match node {
         ExpandedNode::Control { path, .. }
@@ -232,8 +227,6 @@ fn module_root<'a>(ui: &'a CompiledUi, instance: &str) -> &'a ExpandedNode {
     root
 }
 
-/// The direct cells of a container that measures itself, as
-/// `(threshold, cell)` in document order.
 fn cells<'a>(
     node: &'a ExpandedNode,
     axis: MeasureAxis,
@@ -263,7 +256,6 @@ fn cells<'a>(
         .collect()
 }
 
-/// The direct cells of a bar, as `(threshold, address)` in document order.
 fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<((f32, Option<f32>), &'a str)> {
     cells(bar, MeasureAxis::Width)
         .into_iter()
@@ -271,7 +263,6 @@ fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<((f32, Option
         .collect()
 }
 
-/// The blocks the window stacks, as `(band, block)` in document order.
 fn root_cells(ui: &CompiledUi) -> Vec<((f32, Option<f32>), &CompiledNode)> {
     let CompiledNode::Split {
         measure, children, ..
@@ -290,7 +281,6 @@ fn root_cells(ui: &CompiledUi) -> Vec<((f32, Option<f32>), &CompiledNode)> {
         .collect()
 }
 
-/// The blocks standing in a window of `room`, named by their instances.
 fn standing<'a>(
     ui: &'a CompiledUi,
     cells: &[((f32, Option<f32>), &'a CompiledNode)],
@@ -305,7 +295,6 @@ fn standing<'a>(
     out
 }
 
-/// What the blocks standing in a window of `room` need of its height.
 fn standing_height(cells: &[((f32, Option<f32>), &CompiledNode)], room: f32) -> f32 {
     cells
         .iter()
@@ -314,12 +303,10 @@ fn standing_height(cells: &[((f32, Option<f32>), &CompiledNode)], room: f32) -> 
         .sum()
 }
 
-/// The bar the window stands while it is too short for the decks.
 fn micro_bar<'a>(ui: &'a CompiledUi) -> &'a ExpandedNode {
     module_root(ui, "micro-bar")
 }
 
-/// The box the micro bar declares for itself.
 fn bar_box(bar: &ExpandedNode) -> SizeSpec {
     let ExpandedNode::Row {
         size: Some(size), ..
@@ -330,8 +317,6 @@ fn bar_box(bar: &ExpandedNode) -> SizeSpec {
     *size
 }
 
-/// The height the track list asks for, read as the compiler reads it: the box
-/// the document declares for the control, and the skin's box otherwise.
 fn list_min(pane: &ExpandedNode) -> f32 {
     let mut found = None;
     each_expanded(pane, &mut |node| {
@@ -344,9 +329,6 @@ fn list_min(pane: &ExpandedNode) -> f32 {
     found.expect("the browser panel draws a track list").h.min()
 }
 
-/// The first segment of an address names the layout instance that answers it,
-/// and `gui::ui::events::route` is the host's own list; a document minting an
-/// instance that list does not name sends its controls nowhere.
 #[kithara::test]
 fn every_address_names_an_instance_the_host_routes() {
     for layout in LAYOUTS {
@@ -373,8 +355,6 @@ fn every_address_names_an_instance_the_host_routes() {
     }
 }
 
-/// Each block arrives once the window is tall enough to hold it under the ones
-/// above it, so every threshold is what the blocks standing at it need.
 #[kithara::test]
 fn every_block_stands_once_the_window_holds_the_ones_above_it() {
     for layout in LAYOUTS {
@@ -394,9 +374,6 @@ fn every_block_stands_once_the_window_holds_the_ones_above_it() {
     }
 }
 
-/// The window takes its blocks one at a time: the bar alone at its narrowest,
-/// then the browser, then the overview row, then the decks and the mixer with
-/// the full bar in place of the micro one.
 #[kithara::test]
 fn the_window_takes_its_blocks_one_by_one_as_it_grows_taller() {
     for layout in LAYOUTS {
@@ -437,8 +414,6 @@ fn the_window_takes_its_blocks_one_by_one_as_it_grows_taller() {
     }
 }
 
-/// The micro bar takes its cells as the window makes room for them; the menu,
-/// play, the stretched strip and the window controls stand at every width.
 #[kithara::test]
 fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
     for layout in LAYOUTS {
@@ -462,9 +437,6 @@ fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
     }
 }
 
-/// The drag strip and the wave share one place in the bar: the strip ends at
-/// the width the wave starts at, so exactly one of them stands at any width
-/// and a cell arriving beside the wave narrows it rather than taking it away.
 #[kithara::test]
 fn the_micro_drag_strip_hands_its_place_to_the_wave() {
     for layout in LAYOUTS {
@@ -492,8 +464,6 @@ fn the_micro_drag_strip_hands_its_place_to_the_wave() {
     }
 }
 
-/// The bar keeps the telemetry it has room for: the CPU cell and the wordmark
-/// stand only in a window wide enough to spare them the space.
 #[kithara::test]
 fn the_bar_reveals_its_telemetry_as_the_window_widens() {
     for layout in LAYOUTS {
@@ -515,9 +485,6 @@ fn the_bar_reveals_its_telemetry_as_the_window_widens() {
     }
 }
 
-/// The browser panel joins the micro bar once the window is as tall as the two
-/// of them together, so the threshold is the bar's own height plus the list's
-/// own minimum.
 #[kithara::test]
 fn the_browser_panel_stands_once_the_window_is_tall_enough_for_it() {
     for layout in LAYOUTS {
@@ -539,9 +506,6 @@ fn the_browser_panel_stands_once_the_window_is_tall_enough_for_it() {
     }
 }
 
-/// The window may be squeezed to the micro bar and no further, so the tree's
-/// minimum is that bar's own. The width is the room the bar's standing cells
-/// settle on, which no document names; the height is the box it declares.
 #[kithara::test]
 fn the_window_minimum_holds_the_micro_bar() {
     for layout in LAYOUTS {
@@ -560,9 +524,6 @@ fn the_window_minimum_holds_the_micro_bar() {
     }
 }
 
-/// Both node enums are `#[non_exhaustive]`, so every walker here ends at a
-/// `_ => {}`: a shape it does not name empties it in silence, and the tests
-/// that sweep its result stay true over nothing.
 #[kithara::test]
 fn every_walker_reaches_the_nodes_the_documents_declare() {
     for layout in LAYOUTS {
@@ -683,9 +644,6 @@ fn the_bar_carries_the_broadcast_cell() {
     }
 }
 
-/// Whichever shape the window draws, its chrome is the bar that shape carries:
-/// each bar owns a drag strip and a set of window controls, and those four
-/// addresses are the whole of it.
 #[kithara::test]
 fn the_bar_owns_the_window_chrome() {
     for layout in LAYOUTS {
@@ -758,15 +716,12 @@ fn every_channel_strip_carries_the_supported_control_set() {
     }
 }
 
-/// Answers one deck's band count and records every endpoint the renderer asks
-/// for on the way.
 struct BandReads {
     bands: Option<ReadValue<'static>>,
     seen: RefCell<BTreeSet<String>>,
 }
 
 impl BandReads {
-    /// Renders deck A and reports the EQ endpoints the bank it drew asked for.
     fn banked(bands: Option<ReadValue<'static>>) -> BTreeSet<String> {
         let ui = compile_ui(DeckLayout::Dual).unwrap();
         let reads = Self {
@@ -809,8 +764,6 @@ fn one_band_count_decides_which_eq_bank_a_deck_draws() {
     }
 }
 
-/// A count nobody states is no measurement, and the strip falls to the bank the
-/// document declares as its base.
 #[kithara::test]
 fn a_band_count_that_is_no_number_draws_the_three_band_bank() {
     for unstated in [
@@ -832,8 +785,6 @@ fn a_band_count_that_is_no_number_draws_the_three_band_bank() {
     }
 }
 
-/// The document builds the scoped key and the host answers it; each side is
-/// written by hand, so the two only meet if the compiled key is pinned.
 #[kithara::test]
 fn the_mode_menu_asks_the_key_the_deck_answers() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();

@@ -766,8 +766,6 @@ const fn em_dash() -> &'static str {
     "\u{2014}"
 }
 
-/// Cached extent as the strip draws it: never behind the playhead, and the
-/// playhead itself while the host answers nothing.
 fn cached_extent(reads: &dyn Reads, scope: &str, progress: f32) -> f32 {
     let played = progress.clamp(0.0, 1.0);
     match reads.get(&derived("deck.playback.cached_normalized", scope)) {

@@ -15,19 +15,13 @@ use iced::{
 
 use crate::module::MeasureAxis;
 
-/// Draws the branch that fits the box the toolkit gives it. Every branch is
-/// built once and kept, so switching costs no rebuild and each branch keeps the
-/// state it had.
 pub(crate) struct Measured<'a, Message> {
     branches: Vec<Element<'a, Message>>,
-    /// One threshold per branch after the first, ascending.
     steps: Vec<f32>,
     axis: MeasureAxis,
     size: Size<Length>,
 }
 
-/// Which branch the last layout pass picked, so drawing and events reach the
-/// one that was laid out.
 #[derive(Default)]
 struct State {
     drawn: usize,
@@ -245,8 +239,6 @@ mod tests {
         assert_eq!(node.pick(Size::new(200.0, 0.0)), 2);
     }
 
-    /// An unbounded axis is what a parent says when it will take whatever the
-    /// content asks for, and the widest branch is what fits that.
     #[kithara::test]
     fn an_unbounded_axis_takes_the_last_branch() {
         assert_eq!(

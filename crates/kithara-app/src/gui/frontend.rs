@@ -25,8 +25,7 @@ pub type FrontendError = Box<dyn Error + Send + Sync>;
 
 /// Settings for the app window. The bar draws the window chrome itself, so
 /// the system decorations stay off; close goes through `close_requests()`,
-/// whose handler exits the app. `min` is the room the compiled tree needs: a
-/// smaller window overflows the cells that stand in it at every size.
+/// whose handler exits the app.
 pub(crate) fn window_settings(min: Size) -> Settings {
     Settings {
         size: WINDOW_SIZE,

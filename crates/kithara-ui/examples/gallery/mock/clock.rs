@@ -75,8 +75,6 @@ impl Default for ClockState {
 }
 
 impl ClockState {
-    /// A tab that stands the clock shows its panel as the specimen it is;
-    /// every other tab leaves the bar's cells reachable.
     pub(super) const fn set_open(&mut self, open: bool) {
         self.open = open;
     }

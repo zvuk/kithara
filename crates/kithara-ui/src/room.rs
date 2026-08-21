@@ -9,8 +9,6 @@ use crate::{
     validate::NodePath,
 };
 
-/// Checks every threshold a module names against the room the tree behind it
-/// needs.
 pub(crate) fn check_module(
     node: &ExpandedNode,
     skin: &SkinDoc,
@@ -19,7 +17,6 @@ pub(crate) fn check_module(
     walk(node, &NodePath::default(), skin, origin)
 }
 
-/// Checks the thresholds of one layout node, whose branches are whole modules.
 pub(crate) fn check_layout_steps(
     id: &NodeId,
     axis: MeasureAxis,
@@ -111,8 +108,6 @@ fn walk_children(
     Ok(())
 }
 
-/// A step draws in the room its threshold promises, so the branch it holds has
-/// to live in that number.
 fn check_steps<N>(
     steps: &[(f32, N)],
     axis: MeasureAxis,
@@ -135,7 +130,6 @@ fn check_steps<N>(
     Ok(())
 }
 
-/// A node draws in the box it declares, so what it holds has to fit that box.
 pub(crate) fn check_box(
     declared: Option<SizeSpec>,
     composed: SizeSpec,
@@ -163,7 +157,6 @@ pub(crate) fn check_box(
     Ok(())
 }
 
-/// The cells standing in a given room have to fit in it.
 fn check_cells(
     node: &ExpandedNode,
     axis: MeasureAxis,
@@ -174,8 +167,6 @@ fn check_cells(
     check_rooms(&rooms(node, axis, skin), axis, path, origin)
 }
 
-/// The same question of a measuring layout split, whose cells hold whole
-/// modules.
 pub(crate) fn check_layout_cells(
     cells: &Cells,
     axis: MeasureAxis,

@@ -43,9 +43,6 @@ pub(crate) fn check_layout_instances(
     )
 }
 
-/// Where a child stands: alone under a wrapper, among the children of a
-/// container that lays them out, or among those of one that also measures
-/// itself and so can answer a threshold.
 #[derive(Clone, Copy, PartialEq)]
 enum Sibling {
     Among,
@@ -75,8 +72,6 @@ fn check_block_position(
     })
 }
 
-/// A threshold names a number the enclosing container measures, so only that
-/// container can answer one. A band closes above the room it opens in.
 fn check_reveal(
     from: f32,
     until: Option<f32>,
@@ -189,8 +184,6 @@ fn walk_layout(
     }
 }
 
-/// A layout node measuring itself answers the box it declares, so the axis it
-/// reads cannot be the one its content decides.
 pub(crate) fn check_layout_measure(
     id: &NodeId,
     measure: MeasureAxis,
@@ -431,8 +424,6 @@ fn walk_module(
     }
 }
 
-/// Steps climb, so exactly one of them owns any measured value and the
-/// selection needs no tie-break.
 fn check_adaptive_steps(
     id: &NodeId,
     steps: &[AdaptiveStep],
@@ -443,8 +434,6 @@ fn check_adaptive_steps(
     check_thresholds(id, &thresholds, path, origin)
 }
 
-/// One form has no threshold and every other climbs from a finite one, which is
-/// what makes the pick total without a tie-break.
 fn check_thresholds(
     id: &NodeId,
     steps: &[f32],
@@ -473,9 +462,6 @@ fn check_thresholds(
     Ok(())
 }
 
-/// A node measuring itself takes the box it is given and answers that box to
-/// its parent, so the axis it reads has to be declared and cannot be the one
-/// the content decides.
 fn check_measured_box(
     axis: MeasureAxis,
     size: Option<SizeSpec>,
@@ -496,8 +482,6 @@ fn check_measured_box(
     })
 }
 
-/// A read measure takes the size of the branch it draws, so it declares no box
-/// of its own.
 fn check_adaptive_measure(
     id: &NodeId,
     measure: &Measure,
@@ -516,8 +500,6 @@ fn check_adaptive_measure(
     }
 }
 
-/// Branches describe one place in several forms, so each claims ids from the
-/// same set its parent holds and none of them sees the others.
 fn walk_branches(
     base: &ControlNode,
     steps: &[AdaptiveStep],
@@ -1075,7 +1057,6 @@ mod tests {
         check_layout_instances(&doc, &origin())
     }
 
-    /// A split of one module cell, `head` on the split and `tail` on the cell.
     fn split_cell(head: &str, tail: &str) -> Result<(), UiDocError> {
         layout_root(&format!(
             r#"Split(axis: Horizontal, {head} children: [
@@ -1088,8 +1069,6 @@ mod tests {
         split_cell("measure: Width, size: (w: Fill, h: Fixed(42.0)),", tail)
     }
 
-    /// Only the split that measures itself answers a threshold, so a band
-    /// anywhere else would stand for good with nothing deciding otherwise.
     #[kithara::test]
     fn a_band_stands_only_among_the_cells_of_a_measuring_split() {
         for band in [", from: 350.0", ", until: Some(350.0)"] {
@@ -1300,8 +1279,6 @@ mod tests {
         measured("Height", "size: Some((w: Shrink, h: Fixed(80.0))),").unwrap();
     }
 
-    /// A box that came from the branch could not decide which branch to draw,
-    /// so a read measure keeps the node transparent.
     #[kithara::test]
     fn a_read_measure_declares_no_box() {
         let error = measured(
@@ -1324,9 +1301,6 @@ mod tests {
 
     const BAR: &str = r#"id: "bar", measure: Width, size: (w: Fill, h: Fixed(42.0)),"#;
 
-    /// The container that measures itself is the one that answers a threshold,
-    /// so a reveal anywhere else would stand for good with nothing deciding
-    /// otherwise.
     #[kithara::test]
     fn a_reveal_stands_only_among_the_children_of_a_measuring_container() {
         for root in [
@@ -1380,8 +1354,6 @@ mod tests {
         }
     }
 
-    /// Thresholds need no order among themselves, so each one carries the whole
-    /// rule: a number the measured axis can reach.
     #[kithara::test]
     fn a_threshold_is_finite_and_not_negative() {
         for from in ["-1.0", "inf", "-inf", "NaN"] {
@@ -1395,8 +1367,6 @@ mod tests {
         }
     }
 
-    /// A band names the room a cell stands in, so its ceiling lies above the
-    /// floor it closes.
     #[kithara::test]
     fn a_band_closes_above_the_room_it_opens_in() {
         for until in ["0.0", "350.0", "inf", "-inf", "NaN"] {
@@ -1412,9 +1382,6 @@ mod tests {
         }
     }
 
-    /// The canon holds a stretching strip and the wave that replaces it in one
-    /// line, so a band closing where the next one opens is a line a container
-    /// may stand.
     #[kithara::test]
     fn bands_meeting_at_one_number_stand_in_one_line() {
         module_root(&format!(

@@ -848,8 +848,6 @@ const ADAPTIVE_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "mix
         ],
     ))"#;
 
-/// Both branches describe one place, so a knob keeps its address whichever
-/// branch draws it.
 #[kithara::test]
 fn an_adaptive_node_leaves_no_segment_of_its_own_in_a_control_address() {
     let resolver = block_resolver(ADAPTIVE_MODULE);
@@ -889,8 +887,6 @@ fn an_adaptive_node_leaves_no_segment_of_its_own_in_a_control_address() {
     assert_eq!(path_of(&steps[0].1), "mixer/low");
 }
 
-/// A threshold names when a child appears, never where it lives, so the host
-/// addresses it exactly as it addresses the child beside it.
 #[kithara::test]
 fn a_reveal_leaves_no_segment_of_its_own_in_a_control_address() {
     let resolver = block_resolver(
@@ -925,8 +921,6 @@ fn a_reveal_leaves_no_segment_of_its_own_in_a_control_address() {
     assert_eq!(ui.resolve(*path), "mixer/high");
 }
 
-/// A layout picks how many modules stand in the window from the room the window
-/// gives it, and answers that room as its own size whichever form it draws.
 #[kithara::test]
 fn a_self_measured_layout_is_the_box_it_declares() {
     let mut resolver = block_resolver(
@@ -1784,8 +1778,6 @@ fn a_template_may_not_read_an_endpoint_the_registry_does_not_know() {
     );
 }
 
-/// A step draws in the room its threshold promises, so a branch needing more
-/// than that is a document that cannot hold together.
 #[kithara::test]
 fn an_adaptive_step_may_not_start_below_what_its_branch_needs() {
     let branch = r#"Row(id: "wide", gap: 0.0, pad: 0.0,
@@ -1820,8 +1812,6 @@ fn an_adaptive_step_may_not_start_below_what_its_branch_needs() {
     .expect("a read measure counts what its endpoint counts, which is no width");
 }
 
-/// A layout picks its form the same way, and the modules a form holds are what
-/// its threshold has to cover.
 #[kithara::test]
 fn a_layout_step_may_not_start_below_what_its_modules_need() {
     let mut resolver = block_resolver(
@@ -1854,8 +1844,6 @@ fn a_layout_step_may_not_start_below_what_its_modules_need() {
     );
 }
 
-/// A threshold names the room a cell waits for, so the cells standing at that
-/// room have to fit in it.
 #[kithara::test]
 fn a_threshold_may_not_promise_room_the_container_does_not_have() {
     let bar = |from: f32| {
@@ -1886,8 +1874,6 @@ fn a_threshold_may_not_promise_room_the_container_does_not_have() {
         .expect("a threshold above what the cells take promises room they fit in");
 }
 
-/// One module per cell, each a knob of the width the bar of the canon gives
-/// it.
 fn cell_resolver(cells: &[(&str, f32)], layout: &str) -> MemResolver {
     let mut resolver = MemResolver::default();
     resolver.insert("cells.klayout.ron", layout);
@@ -1911,9 +1897,6 @@ const BAR_CELLS: [(&str, f32); 5] = [
     ("window", 80.0),
 ];
 
-/// A split reading its own width stands the strip while the room is narrow and
-/// the wave once it is not, so the room it needs is what its standing cells
-/// settle on rather than what all of them take.
 #[kithara::test]
 fn a_measuring_split_needs_the_room_its_standing_cells_settle_on() {
     let bar = |head: &str, strip: &str, wave: &str| {
@@ -1951,7 +1934,6 @@ fn a_measuring_split_needs_the_room_its_standing_cells_settle_on() {
     );
 }
 
-/// A band names the room a cell waits for, so the cell has to fit in it.
 #[kithara::test]
 fn a_split_band_may_not_promise_room_the_cell_does_not_fit() {
     let bar = |from: f32| {
@@ -1978,9 +1960,6 @@ fn a_split_band_may_not_promise_room_the_cell_does_not_fit() {
         .expect("a band above what the cells take promises room they fit in");
 }
 
-/// The box a split declares is a floor under the room it takes, so the rooms
-/// its bands answer for start at that floor: a band below it names a cell the
-/// minimum already stands.
 #[kithara::test]
 fn a_declared_box_raises_the_room_a_split_holds_its_bands_against() {
     let bar = |room: f32| {
@@ -2008,8 +1987,6 @@ fn a_declared_box_raises_the_room_a_split_holds_its_bands_against() {
     );
 }
 
-/// A node draws in the box it declares, so content that box cannot hold is a
-/// document contradicting itself.
 #[kithara::test]
 fn a_declared_box_may_not_be_smaller_than_what_it_holds() {
     let bar = |cell: &str| {
@@ -2043,8 +2020,6 @@ fn a_declared_box_may_not_be_smaller_than_what_it_holds() {
     .expect("a box above what the content takes is the floor the node keeps");
 }
 
-/// A slot answers for the box it declares the same way, and an adaptive one
-/// answers for the branch it falls back to.
 #[kithara::test]
 fn a_slot_and_an_adaptive_answer_for_the_box_they_declare() {
     let tall = r#"Knob(id: "low", size: (w: Fixed(80.0), h: Fixed(120.0)))"#;
@@ -2076,8 +2051,6 @@ fn a_slot_and_an_adaptive_answer_for_the_box_they_declare() {
     }
 }
 
-/// A layout declares boxes of its own, and a module or a form standing in one
-/// answers for that box the same way.
 #[kithara::test]
 fn a_layout_box_may_not_be_smaller_than_the_node_standing_in_it() {
     let module = r#"(schema: "kithara.module", version: 1, id: "mixer",

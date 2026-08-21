@@ -310,9 +310,6 @@ impl Compiler<'_> {
         }
     }
 
-    /// A split answers for the box it declares and for the room its cells
-    /// settle on, so both checks run here rather than at the parent holding
-    /// it.
     fn build_split(
         &mut self,
         axis: Axis,
@@ -370,8 +367,6 @@ pub(crate) fn compiled_node_size(node: &CompiledNode) -> SizeSpec {
     }
 }
 
-/// The cells a compiled split lays out, each with the band it stands in and
-/// the room the node behind it needs.
 fn split_cells(axis: Axis, children: &[SplitCell], skin: &SkinDoc) -> Cells {
     Cells::new(
         axis,

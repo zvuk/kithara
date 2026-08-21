@@ -23,8 +23,6 @@ fn micro_preset() -> CompiledUi {
     .expect("the micro preset compiles")
 }
 
-/// The bar the micro preset stands at every height, above the blocks the
-/// window takes as it grows.
 fn micro_bar(ui: &CompiledUi) -> &ExpandedNode {
     let CompiledNode::Module { root, .. } = &ui.root else {
         panic!("the micro preset is one module");
@@ -35,8 +33,6 @@ fn micro_bar(ui: &CompiledUi) -> &ExpandedNode {
     children.first().expect("the bar stands at every height")
 }
 
-/// The direct cells of a bar, as `(band, address)` in document order. A cell
-/// standing at every width names the band `(0.0, None)`.
 fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<((f32, Option<f32>), &'a str)> {
     let ExpandedNode::Row { children, .. } = bar else {
         panic!("a bar is one row");
@@ -50,7 +46,6 @@ fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<((f32, Option
         .collect()
 }
 
-/// The blocks the micro preset stacks, as `(threshold, address)`.
 fn micro_blocks(ui: &CompiledUi) -> Vec<((f32, Option<f32>), &str)> {
     let CompiledNode::Module { root, .. } = &ui.root else {
         panic!("the micro preset is one module");
@@ -82,8 +77,6 @@ fn cell_id<'a>(ui: &'a CompiledUi, node: &'a ExpandedNode) -> &'a str {
     }
 }
 
-/// The micro bar takes its cells as the window widens, at the widths the
-/// prototype names.
 #[kithara::test]
 fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
     let ui = micro_preset();
@@ -107,8 +100,6 @@ fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
     );
 }
 
-/// The drag strip and the wave share one place in the bar: the strip ends at
-/// the width the wave starts at, so exactly one of them stands at any width.
 #[kithara::test]
 fn the_micro_drag_strip_hands_its_place_to_the_wave() {
     let ui = micro_preset();
@@ -132,8 +123,6 @@ fn the_micro_drag_strip_hands_its_place_to_the_wave() {
     assert_eq!(wave_until, None, "the wave stands from its width up");
 }
 
-/// The micro preset grows from one bar into the player: each block appears
-/// once the window is tall enough to hold it under the ones above it.
 #[kithara::test]
 fn the_micro_preset_takes_its_blocks_as_the_window_grows_taller() {
     let ui = micro_preset();
@@ -346,8 +335,6 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
     assert_eq!(ui.size, *composed);
 }
 
-/// The micro preset is a whole window: its bar stands the menu at every width,
-/// so the menu is part of the builtin preset surface.
 #[kithara::test]
 fn the_app_menu_is_part_of_the_builtin_preset_surface() {
     builtin::resolver()

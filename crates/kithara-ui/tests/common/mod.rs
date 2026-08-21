@@ -132,8 +132,6 @@ pub(crate) fn player_registry() -> TestRegistry {
     registry
 }
 
-/// What the micro bar reads beside the deck: engine load and latency, and the
-/// set the record cell watches.
 fn insert_bar_endpoints(registry: &mut TestRegistry) {
     registry.insert(
         EndpointCategory::Telemetry,

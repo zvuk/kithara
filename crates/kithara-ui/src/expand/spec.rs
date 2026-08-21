@@ -57,7 +57,6 @@ fn title_bar_spec(
     })
 }
 
-/// A container node has no spec of its own; the caller keeps walking it.
 pub(super) fn control_spec(
     context: &Context<'_>,
     control: &ControlNode,
@@ -198,8 +197,6 @@ pub(super) fn control_spec(
     Ok(Some(spec))
 }
 
-/// Specs for controls that need no context; the match stays exhaustive so a new
-/// `ControlNode` has to be classified here rather than falling through silently.
 fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
     match control {
         ControlNode::DeckSummary { style, .. } => Some(ControlSpec::DeckSummary { style: *style }),

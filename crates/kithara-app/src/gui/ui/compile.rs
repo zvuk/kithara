@@ -107,8 +107,6 @@ impl AppUi {
         })
     }
 
-    /// One window draws whichever layout the menu picks, so it holds the room
-    /// the more demanding of the two asks for.
     pub(crate) fn window_min(&self) -> Size {
         Size::new(
             self.single.min.w.min().max(self.dual.min.w.min()),

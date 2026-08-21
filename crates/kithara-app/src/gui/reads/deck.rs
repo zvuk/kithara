@@ -233,7 +233,6 @@ impl<'a> Node<'a> for EqNode<'a> {
 }
 
 impl EqNode<'_> {
-    /// The menu marks the rung whose band count the deck draws.
     fn drawn(&self, bands: &str) -> bool {
         bands.parse::<usize>() == Ok(self.mode.bands().len())
     }
