@@ -87,7 +87,7 @@ fn menu_skin_pins_the_design_canon() {
     let menu = parse_skin(builtin::DARK_SKIN, &origin()).unwrap().menu;
 
     assert_eq!(menu.icon_size, 11.0);
-    assert_eq!(menu.burger_icon_size, 13.0);
+    assert_eq!(menu.burger_icon_size, 14.0);
     assert_eq!(menu.small_icon_size, 10.0);
     assert_eq!(menu.cell_icon_size, 9.0);
 }
@@ -253,6 +253,9 @@ fn builtin_skin_pins_the_design_canon() {
     assert_eq!(document.vis.header_height, 26.0);
     assert_eq!(document.vis.size.h, Dim::Fixed(300.0));
     assert_eq!(document.vis.footer_height, 22.0);
+    assert_eq!(document.wave.cache_strip_alpha, 0.55);
+    assert_eq!(document.wave.cache_strip_color, ColorRole::TextDim);
+    assert_eq!(document.wave.cache_strip_height, 3.0);
     assert_eq!(document.wave.cue_badge_background, ColorRole::WaveHigh);
     assert_eq!(document.wave.downbeat_alpha, 0.6);
     assert_eq!(document.wave.grid_alpha, 0.4);
@@ -262,7 +265,7 @@ fn builtin_skin_pins_the_design_canon() {
     assert_eq!(document.wave.overlay.key_color, ColorRole::Accent);
     assert_eq!(document.wave.played_alpha, 0.35);
     assert_eq!(document.wave.playhead_width, 1.5);
-    assert_eq!(document.global_bar.brand_width, 112.0);
+    assert_eq!(document.global_bar.brand_width, 105.0);
     assert_eq!(document.telemetry.percent_scale, 100.0);
     assert_eq!(document.telemetry.percent_width, 3);
     assert_eq!(document.telemetry.scalar_precision, 2);

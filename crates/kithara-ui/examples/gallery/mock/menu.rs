@@ -169,6 +169,12 @@ impl MenuState {
         true
     }
 
+    /// A tab that stands the menu shows its surface as the specimen it is;
+    /// every other tab leaves the bar's cells reachable.
+    pub(super) const fn set_open(&mut self, open: bool) {
+        self.open = open;
+    }
+
     const fn can_open(&self) -> bool {
         self.windows.len() < Consts::MAX_WINDOWS
     }

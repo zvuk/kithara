@@ -13,18 +13,19 @@ use iced::{
     },
 };
 
-use crate::{layout::Axis, module::MeasureAxis};
+use crate::{layout::Axis, module::MeasureAxis, size::stands};
 
-/// A child and the threshold it appears at.
-pub(crate) type Cell<'a, Message, Theme, Renderer> = (f32, Element<'a, Message, Theme, Renderer>);
+/// A child and the band of room it stands in, as `(from, until)`.
+pub(crate) type Cell<'a, Message, Theme, Renderer> =
+    ((f32, Option<f32>), Element<'a, Message, Theme, Renderer>);
 
-/// Lays out the children whose threshold the box it is given reaches. A child
-/// below its threshold takes neither its own room nor a gap beside it, and the
+/// Lays out the children whose band the box it is given falls in. A child
+/// outside its band takes neither its own room nor a gap beside it, and the
 /// box the widget answers is the one it declares either way.
 pub(crate) struct Revealed<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
     children: Vec<Element<'a, Message, Theme, Renderer>>,
-    /// One threshold per child, in logical pixels of the measured axis.
-    thresholds: Vec<f32>,
+    /// One band per child, in logical pixels of the measured axis.
+    bands: Vec<(f32, Option<f32>)>,
     shape: Shape,
 }
 
@@ -60,13 +61,13 @@ fn gather(shown: &[bool]) -> Vec<(usize, usize)> {
 }
 
 impl<'a, Message, Theme, Renderer> Revealed<'a, Message, Theme, Renderer> {
-    /// Each child carries the threshold it appears at, so the two lists cannot
-    /// drift apart.
+    /// Each child carries the band it stands in, so the two lists cannot drift
+    /// apart.
     pub(crate) fn new(children: Vec<Cell<'a, Message, Theme, Renderer>>, shape: Shape) -> Self {
-        let (thresholds, children) = children.into_iter().unzip();
+        let (bands, children) = children.into_iter().unzip();
         Self {
             children,
-            thresholds,
+            bands,
             shape,
         }
     }
@@ -76,7 +77,10 @@ impl<'a, Message, Theme, Renderer> Revealed<'a, Message, Theme, Renderer> {
             MeasureAxis::Width => room.width,
             MeasureAxis::Height => room.height,
         };
-        self.thresholds.iter().map(|from| *from <= value).collect()
+        self.bands
+            .iter()
+            .map(|(from, until)| stands(*from, *until, value))
+            .collect()
     }
 
     fn flow(&self) -> flex::Axis {
@@ -289,7 +293,7 @@ mod tests {
             layout::Limits,
             widget::{Tree, tree::Tag},
         },
-        widget::Space,
+        widget::{Row, Space},
     };
     use kithara_test_utils::kithara;
 
@@ -306,7 +310,11 @@ mod tests {
     /// last, so a room that reveals two of three leaves a hole in the middle.
     fn bar(padding: Padding) -> Revealed<'static, UiEvent, Theme, ()> {
         Revealed::new(
-            vec![(0.0, cell(10.0)), (440.0, cell(20.0)), (350.0, cell(30.0))],
+            vec![
+                ((0.0, None), cell(10.0)),
+                ((440.0, None), cell(20.0)),
+                ((350.0, None), cell(30.0)),
+            ],
             Shape {
                 flow: Axis::Horizontal,
                 measure: MeasureAxis::Width,
@@ -341,6 +349,62 @@ mod tests {
             .map(|child| (child.bounds().x, child.bounds().width))
             .collect();
         (node.size(), boxes)
+    }
+
+    /// The share of the room a layout split gives one cell, which is what
+    /// `split_length` hands the widget.
+    fn portion(weight: u16) -> Element<'static, UiEvent, Theme, ()> {
+        Space::new()
+            .width(Length::FillPortion(weight))
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn boxes(node: &layout::Node) -> Vec<(f32, f32)> {
+        node.children()
+            .iter()
+            .map(|child| (child.bounds().x, child.bounds().width))
+            .collect()
+    }
+
+    /// A measuring split lays its cells out through the same resolver a plain
+    /// one does, so the weights the document names divide the room the same
+    /// way and the cell a band leaves out takes none of it.
+    #[kithara::test]
+    fn a_measuring_row_gives_its_cells_the_portions_a_plain_row_gives() {
+        let room = Limits::new(Size::ZERO, Size::new(400.0, 42.0));
+        let mut widget = Revealed::new(
+            vec![
+                ((0.0, None), portion(1)),
+                ((0.0, None), portion(3)),
+                ((900.0, None), portion(4)),
+            ],
+            Shape {
+                flow: Axis::Horizontal,
+                measure: MeasureAxis::Width,
+                size: Size::new(Length::Fill, Length::Fixed(42.0)),
+                padding: Padding::ZERO,
+                gap: 0.0,
+                align: Alignment::Start,
+            },
+        );
+        let mut tree = tree_for(&widget);
+        let mut plain: Element<'_, UiEvent, Theme, ()> =
+            Row::with_children(vec![portion(1), portion(3)])
+                .width(Length::Fill)
+                .height(Length::Fixed(42.0))
+                .into();
+        let mut plain_tree = Tree::new(&plain);
+
+        let revealed = boxes(&widget.layout(&mut tree, &(), &room));
+        let laid_out = boxes(&plain.as_widget_mut().layout(&mut plain_tree, &(), &room));
+
+        assert_eq!(laid_out, vec![(0.0, 100.0), (100.0, 300.0)]);
+        assert_eq!(
+            revealed,
+            vec![(0.0, 100.0), (100.0, 300.0), (0.0, 0.0)],
+            "the cell waiting for a room the bar does not have takes none of it",
+        );
     }
 
     #[kithara::test]
@@ -379,6 +443,37 @@ mod tests {
         let (_, boxes) = lay_out(&mut widget, &mut tree, 500.0);
 
         assert_eq!(boxes, vec![(0.0, 10.0), (14.0, 20.0), (38.0, 30.0)]);
+    }
+
+    /// A band ends where the next one begins, so the two cells sharing that
+    /// number never both stand and never both go missing.
+    #[kithara::test]
+    fn a_band_hands_the_line_over_at_the_number_it_ends_on() {
+        let mut widget = Revealed::new(
+            vec![
+                ((0.0, Some(350.0)), cell(10.0)),
+                ((350.0, None), cell(30.0)),
+            ],
+            Shape {
+                flow: Axis::Horizontal,
+                measure: MeasureAxis::Width,
+                size: Size::new(Length::Fill, Length::Fixed(42.0)),
+                padding: Padding::ZERO,
+                gap: GAP,
+                align: Alignment::Center,
+            },
+        );
+        let mut tree = tree_for(&widget);
+
+        let (_, below) = lay_out(&mut widget, &mut tree, 349.0);
+        let (_, reached) = lay_out(&mut widget, &mut tree, 350.0);
+
+        assert_eq!(
+            below,
+            vec![(0.0, 10.0), (0.0, 0.0)],
+            "349 is still the strip"
+        );
+        assert_eq!(reached, vec![(0.0, 0.0), (0.0, 30.0)], "350 is the wave");
     }
 
     /// The container measures the box it declares, padding included, so a

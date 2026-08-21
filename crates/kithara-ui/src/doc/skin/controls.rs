@@ -430,7 +430,7 @@ mod tests {
             builtin::skin_doc().menu,
             MenuSkin {
                 icon_size: 11.0,
-                burger_icon_size: 13.0,
+                burger_icon_size: 14.0,
                 small_icon_size: 10.0,
                 cell_icon_size: 9.0,
             }

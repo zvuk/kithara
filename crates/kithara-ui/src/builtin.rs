@@ -24,6 +24,46 @@ pub fn resolver() -> MemResolver {
             include_str!("../assets/modules/deck-micro.kmodule.ron"),
         ),
         (
+            "modules/deck-micro/bar.kmodule.ron",
+            include_str!("../assets/modules/deck-micro/bar.kmodule.ron"),
+        ),
+        (
+            "modules/app-menu.kmodule.ron",
+            include_str!("../assets/modules/app-menu.kmodule.ron"),
+        ),
+        (
+            "modules/app-menu/hint-row.kmodule.ron",
+            include_str!("../assets/modules/app-menu/hint-row.kmodule.ron"),
+        ),
+        (
+            "modules/app-menu/layout-row.kmodule.ron",
+            include_str!("../assets/modules/app-menu/layout-row.kmodule.ron"),
+        ),
+        (
+            "modules/app-menu/module-cell.kmodule.ron",
+            include_str!("../assets/modules/app-menu/module-cell.kmodule.ron"),
+        ),
+        (
+            "modules/app-menu/toggle-row.kmodule.ron",
+            include_str!("../assets/modules/app-menu/toggle-row.kmodule.ron"),
+        ),
+        (
+            "modules/app-menu/window-row.kmodule.ron",
+            include_str!("../assets/modules/app-menu/window-row.kmodule.ron"),
+        ),
+        (
+            "modules/master-clock.kmodule.ron",
+            include_str!("../assets/modules/master-clock.kmodule.ron"),
+        ),
+        (
+            "modules/master-clock/surface.kmodule.ron",
+            include_str!("../assets/modules/master-clock/surface.kmodule.ron"),
+        ),
+        (
+            "modules/master-clock/source-row.kmodule.ron",
+            include_str!("../assets/modules/master-clock/source-row.kmodule.ron"),
+        ),
+        (
             "modules/global-bar.kmodule.ron",
             include_str!("../assets/modules/global-bar.kmodule.ron"),
         ),

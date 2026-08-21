@@ -142,17 +142,17 @@ fn collect_areas(node: &CompiledNode, bounds: UnitRect, areas: &mut Vec<PreviewA
             });
             let total = children
                 .iter()
-                .map(|(weight, _)| weight.max(0.0))
+                .map(|cell| cell.weight.max(0.0))
                 .sum::<f32>();
             if total <= f32::EPSILON {
                 return;
             }
             let mut cursor = 0.0_f32;
-            for (index, (weight, child)) in children.iter().enumerate() {
+            for (index, cell) in children.iter().enumerate() {
                 let fraction = if index + 1 == children.len() {
                     (1.0 - cursor).max(0.0)
                 } else {
-                    weight.max(0.0) / total
+                    cell.weight.max(0.0) / total
                 };
                 let child_bounds = match axis {
                     Axis::Horizontal => UnitRect {
@@ -166,7 +166,7 @@ fn collect_areas(node: &CompiledNode, bounds: UnitRect, areas: &mut Vec<PreviewA
                         ..bounds
                     },
                 };
-                collect_areas(child, child_bounds, areas);
+                collect_areas(&cell.node, child_bounds, areas);
                 cursor += fraction;
             }
         }
@@ -179,6 +179,8 @@ fn collect_areas(node: &CompiledNode, bounds: UnitRect, areas: &mut Vec<PreviewA
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -190,103 +192,352 @@ mod tests {
         source::UiConfig,
     };
 
+    /// Answers every endpoint the builtin presets name, keyed the way the
+    /// documents bind them.
+    #[derive(Default)]
     struct Registry {
-        bool_value: EndpointDesc,
-        scalar: EndpointDesc,
-        scoped_scalar: EndpointDesc,
-        scoped_text: EndpointDesc,
-        scoped_trigger: EndpointDesc,
-        scoped_waveform: EndpointDesc,
-        stereo: EndpointDesc,
-        track_list: EndpointDesc,
-        variant_bool: EndpointDesc,
-        variant_text: EndpointDesc,
-        variant_trigger: EndpointDesc,
+        endpoints: BTreeMap<(EndpointCategory, String), EndpointDesc>,
     }
 
-    impl Default for Registry {
-        fn default() -> Self {
-            Self {
-                bool_value: EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
-                scalar: EndpointDesc::new(ValueKind::Scalar),
-                stereo: EndpointDesc::new(ValueKind::Stereo),
-                scoped_scalar: EndpointDesc::new(ValueKind::Scalar).with_scope("deck"),
-                scoped_text: EndpointDesc::new(ValueKind::Text).with_scope("deck"),
-                scoped_trigger: EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
-                scoped_waveform: EndpointDesc::new(ValueKind::Waveform).with_scope("deck"),
-                variant_bool: EndpointDesc::new(ValueKind::Bool)
-                    .with_scope("deck")
-                    .with_scope("variant"),
-                variant_text: EndpointDesc::new(ValueKind::Text)
-                    .with_scope("deck")
-                    .with_scope("variant"),
-                variant_trigger: EndpointDesc::new(ValueKind::Trigger)
-                    .with_scope("deck")
-                    .with_scope("variant"),
-                track_list: EndpointDesc::new(ValueKind::TrackList),
+    impl Registry {
+        fn preset_surface() -> Self {
+            let mut registry = Self::default();
+            registry.deck();
+            registry.player();
+            registry.bar();
+            registry.menu();
+            registry.clock();
+            registry
+        }
+
+        fn add(
+            &mut self,
+            category: EndpointCategory,
+            ids: &[&'static str],
+            kind: ValueKind,
+            scopes: &[&str],
+        ) {
+            let desc = scopes.iter().fold(EndpointDesc::new(kind), |desc, scope| {
+                desc.with_scope(scope)
+            });
+            for id in ids {
+                self.endpoints
+                    .insert((category, (*id).to_owned()), desc.clone());
             }
+        }
+
+        fn deck(&mut self) {
+            use EndpointCategory::{Command, Model, Telemetry};
+            self.add(
+                Command,
+                &[
+                    "deck.transport.jump_back",
+                    "deck.transport.jump_forward",
+                    "deck.transport.set_cue",
+                    "deck.transport.toggle_loop",
+                    "deck.transport.toggle_play",
+                    "deck.transport.toggle_reverse",
+                    "deck.transport.toggle_sync",
+                    "deck.view.zoom_in",
+                    "deck.view.zoom_out",
+                    "deck.stream.toggle_quality_menu",
+                ],
+                ValueKind::Trigger,
+                &["deck"],
+            );
+            self.add(
+                Command,
+                &["deck.transport.seek_normalized"],
+                ValueKind::Scalar,
+                &["deck"],
+            );
+            self.add(
+                Telemetry,
+                &[
+                    "deck.playback.position_normalized",
+                    "deck.playback.cached_normalized",
+                ],
+                ValueKind::Scalar,
+                &["deck"],
+            );
+            self.add(
+                Telemetry,
+                &[
+                    "deck.playback.looping",
+                    "deck.playback.playing",
+                    "deck.playback.reverse",
+                    "deck.playback.synced",
+                    "deck.stream.quality_hidden",
+                ],
+                ValueKind::Bool,
+                &["deck"],
+            );
+            self.add(
+                Model,
+                &["deck.stream.quality_menu"],
+                ValueKind::Bool,
+                &["deck"],
+            );
+            self.add(
+                Telemetry,
+                &["deck.playback.waveform"],
+                ValueKind::Waveform,
+                &["deck"],
+            );
+            self.add(
+                Telemetry,
+                &["deck.track.title", "deck.playback.tempo"],
+                ValueKind::Text,
+                &["deck"],
+            );
+            self.add(Model, &["deck.stream.quality"], ValueKind::Text, &["deck"]);
+            self.add(Model, &["deck.view.zoom"], ValueKind::Scalar, &[]);
+            self.add(
+                Telemetry,
+                &["deck.stream.variant_hidden"],
+                ValueKind::Bool,
+                &["deck", "variant"],
+            );
+            self.add(
+                Model,
+                &["deck.stream.variant_active"],
+                ValueKind::Bool,
+                &["deck", "variant"],
+            );
+            self.add(
+                Telemetry,
+                &["deck.stream.variant_label", "deck.stream.variant_sub"],
+                ValueKind::Text,
+                &["deck", "variant"],
+            );
+            self.add(
+                Command,
+                &["deck.stream.select_variant"],
+                ValueKind::Trigger,
+                &["deck", "variant"],
+            );
+        }
+
+        fn player(&mut self) {
+            use EndpointCategory::{Model, Parameter, Telemetry};
+            self.add(Telemetry, &["player.output.levels"], ValueKind::Stereo, &[]);
+            self.add(Parameter, &["player.output.volume"], ValueKind::Scalar, &[]);
+            self.add(
+                Model,
+                &["library.visible_tracks"],
+                ValueKind::TrackList,
+                &[],
+            );
+        }
+
+        fn bar(&mut self) {
+            use EndpointCategory::{Command, Model, Telemetry};
+            self.add(Telemetry, &["engine.load"], ValueKind::Scalar, &[]);
+            self.add(Telemetry, &["engine.latency"], ValueKind::Text, &[]);
+            self.add(Model, &["ui.set.recording"], ValueKind::Bool, &[]);
+            self.add(
+                Model,
+                &["ui.set.record_hint", "ui.set.record_time"],
+                ValueKind::Text,
+                &[],
+            );
+            self.add(Command, &["ui.set.toggle_record"], ValueKind::Trigger, &[]);
+        }
+
+        fn menu(&mut self) {
+            use EndpointCategory::{Command, Model};
+            self.add(
+                Model,
+                &[
+                    "ui.menu.open",
+                    "ui.window.can_open",
+                    "ui.prefs.wave_follow",
+                    "ui.prefs.autogain",
+                    "ui.prefs.mono",
+                    "ui.set.casting",
+                ],
+                ValueKind::Bool,
+                &[],
+            );
+            self.add(
+                Model,
+                &[
+                    "ui.window.count",
+                    "ui.modules.title",
+                    "ui.modules.count",
+                    "ui.layouts.active",
+                    "ui.set.cast_hint",
+                ],
+                ValueKind::Text,
+                &[],
+            );
+            self.add(
+                Model,
+                &["ui.menu.group_open", "ui.menu.group_hidden"],
+                ValueKind::Bool,
+                &["group"],
+            );
+            self.add(
+                Model,
+                &[
+                    "ui.window.active",
+                    "ui.window.hidden",
+                    "ui.window.close_hidden",
+                ],
+                ValueKind::Bool,
+                &["window"],
+            );
+            self.add(
+                Model,
+                &["ui.window.title", "ui.window.caption"],
+                ValueKind::Text,
+                &["window"],
+            );
+            self.add(Model, &["ui.module.on"], ValueKind::Bool, &["module"]);
+            self.add(Model, &["ui.layout.selected"], ValueKind::Bool, &["layout"]);
+            self.add(
+                Command,
+                &[
+                    "ui.menu.toggle",
+                    "ui.menu.close",
+                    "ui.window.open",
+                    "ui.window.toggle_full_screen",
+                    "ui.prefs.toggle_wave_follow",
+                    "ui.prefs.toggle_autogain",
+                    "ui.prefs.toggle_mono",
+                    "ui.set.toggle_cast",
+                    "ui.library.add_folder",
+                    "ui.settings.open",
+                ],
+                ValueKind::Trigger,
+                &[],
+            );
+            self.add(
+                Command,
+                &["ui.menu.toggle_group"],
+                ValueKind::Trigger,
+                &["group"],
+            );
+            self.add(
+                Command,
+                &[
+                    "ui.window.focus",
+                    "ui.window.cycle_display",
+                    "ui.window.close",
+                ],
+                ValueKind::Trigger,
+                &["window"],
+            );
+            self.add(
+                Command,
+                &["ui.module.toggle"],
+                ValueKind::Trigger,
+                &["module"],
+            );
+            self.add(
+                Command,
+                &["ui.layout.apply"],
+                ValueKind::Trigger,
+                &["layout"],
+            );
+        }
+
+        fn clock(&mut self) {
+            use EndpointCategory::{Command, Model, Parameter};
+            self.add(
+                Model,
+                &[
+                    "clock.open",
+                    "clock.family.step",
+                    "clock.family.leap",
+                    "clock.grid.quantize",
+                    "clock.grid.snap",
+                    "clock.grid.click",
+                    "clock.link.enabled",
+                    "clock.midi.send",
+                ],
+                ValueKind::Bool,
+                &[],
+            );
+            self.add(
+                Model,
+                &[
+                    "clock.bpm",
+                    "clock.source",
+                    "clock.warning",
+                    "clock.grid.division",
+                    "clock.link.peers",
+                    "clock.midi.input",
+                    "clock.midi.output",
+                ],
+                ValueKind::Text,
+                &[],
+            );
+            self.add(
+                Model,
+                &["clock.limit", "clock.tolerance"],
+                ValueKind::Scalar,
+                &[],
+            );
+            self.add(Parameter, &["clock.tempo"], ValueKind::Scalar, &[]);
+            self.add(
+                Model,
+                &["clock.source.active", "clock.source.synced"],
+                ValueKind::Bool,
+                &["source"],
+            );
+            self.add(
+                Model,
+                &[
+                    "clock.source.name",
+                    "clock.source.tempo",
+                    "clock.source.mode",
+                    "clock.source.pulse",
+                    "clock.source.stretch",
+                ],
+                ValueKind::Text,
+                &["source"],
+            );
+            self.add(
+                Command,
+                &[
+                    "clock.toggle",
+                    "clock.close",
+                    "clock.nudge_up",
+                    "clock.nudge_down",
+                    "clock.family.step",
+                    "clock.family.leap",
+                    "clock.grid.toggle_quantize",
+                    "clock.grid.toggle_snap",
+                    "clock.grid.toggle_click",
+                    "clock.link.toggle",
+                    "clock.midi.toggle_send",
+                    "clock.tap",
+                    "clock.half",
+                    "clock.double",
+                    "clock.reset",
+                ],
+                ValueKind::Trigger,
+                &[],
+            );
+            self.add(
+                Command,
+                &["clock.source.select"],
+                ValueKind::Trigger,
+                &["source"],
+            );
         }
     }
 
     impl EndpointRegistry for Registry {
         fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
-            match (category, id.0.as_str()) {
-                (
-                    EndpointCategory::Command,
-                    "deck.transport.jump_back"
-                    | "deck.transport.jump_forward"
-                    | "deck.transport.set_cue"
-                    | "deck.transport.toggle_loop"
-                    | "deck.transport.toggle_play"
-                    | "deck.transport.toggle_reverse"
-                    | "deck.transport.toggle_sync"
-                    | "deck.view.zoom_in"
-                    | "deck.view.zoom_out",
-                ) => Some(&self.scoped_trigger),
-                (EndpointCategory::Command, "deck.transport.seek_normalized")
-                | (EndpointCategory::Telemetry, "deck.playback.position_normalized") => {
-                    Some(&self.scoped_scalar)
-                }
-                (
-                    EndpointCategory::Telemetry,
-                    "deck.playback.looping"
-                    | "deck.playback.playing"
-                    | "deck.playback.reverse"
-                    | "deck.playback.synced"
-                    | "deck.stream.quality_hidden",
-                )
-                | (EndpointCategory::Model, "deck.stream.quality_menu") => Some(&self.bool_value),
-                (EndpointCategory::Telemetry, "deck.stream.variant_hidden")
-                | (EndpointCategory::Model, "deck.stream.variant_active") => {
-                    Some(&self.variant_bool)
-                }
-                (
-                    EndpointCategory::Telemetry,
-                    "deck.stream.variant_label" | "deck.stream.variant_sub",
-                ) => Some(&self.variant_text),
-                (EndpointCategory::Command, "deck.stream.toggle_quality_menu") => {
-                    Some(&self.scoped_trigger)
-                }
-                (EndpointCategory::Command, "deck.stream.select_variant") => {
-                    Some(&self.variant_trigger)
-                }
-                (EndpointCategory::Telemetry, "deck.playback.waveform") => {
-                    Some(&self.scoped_waveform)
-                }
-                (EndpointCategory::Telemetry, "deck.track.title" | "deck.playback.tempo")
-                | (EndpointCategory::Model, "deck.stream.quality") => Some(&self.scoped_text),
-                (EndpointCategory::Parameter, "player.output.volume")
-                | (EndpointCategory::Model, "deck.view.zoom") => Some(&self.scalar),
-                (EndpointCategory::Telemetry, "player.output.levels") => Some(&self.stereo),
-                (EndpointCategory::Model, "library.visible_tracks") => Some(&self.track_list),
-                _ => None,
-            }
+            self.endpoints.get(&(category, id.0.clone()))
         }
     }
 
     #[kithara::test]
     fn builtin_presets_build_preview_geometry() {
-        let registry = Registry::default();
+        let registry = Registry::preset_surface();
         let geometry = [builtin::MICRO_PRESET, builtin::PLAYER_PRESET].map(|preset| {
             let ui = compile(
                 preset,

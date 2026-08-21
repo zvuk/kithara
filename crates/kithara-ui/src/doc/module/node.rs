@@ -170,9 +170,18 @@ pub enum ControlNode {
         base: Box<Self>,
         steps: Vec<AdaptiveStep>,
     },
-    /// Shows its child once the container measures `from` on the axis it
-    /// declares. Only a container declaring `measure` may hold one.
-    Reveal { from: f32, child: Box<Self> },
+    /// Shows its child while the container measures a number in `[from,
+    /// until)` on the axis it declares: `from` is reached at its own value and
+    /// `until` is not, so `Reveal(from: 0.0, until: Some(350.0))` and
+    /// `Reveal(from: 350.0)` meet at 350 with neither an overlap nor a gap.
+    /// `until: None` names no ceiling. Only a container declaring `measure`
+    /// may hold one.
+    Reveal {
+        from: f32,
+        #[serde(default)]
+        until: Option<f32>,
+        child: Box<Self>,
+    },
     /// Marks its child as a block the host may hide. While `hidden` reads
     /// true the child is not laid out.
     Optional {

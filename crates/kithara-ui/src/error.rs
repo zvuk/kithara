@@ -98,6 +98,15 @@ pub enum UiDocError {
         from: f32,
     },
     #[error(
+        "{origin}: reveal at {path} appears from {from} and stops at {until}; a band ends above the room it starts in"
+    )]
+    RevealBand {
+        origin: SourceUri,
+        path: String,
+        from: f32,
+        until: f32,
+    },
+    #[error(
         "{origin}: adaptive node {id:?} at {path} reads its measure and takes the size of the branch it draws"
     )]
     MeasuredBoxWithoutAxis {

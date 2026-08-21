@@ -3,45 +3,17 @@
     version: 1,
     id: "deck-micro",
     parameters: ["deck"],
-    root: Row(
+    root: Column(
+        measure: Height,
+        size: (w: Fill, h: Fill),
         children: [
-            Button(
-                id: "play",
-                size: (w: Fixed(34.0), h: Fixed(34.0)),
-                label: "@deck.transport.play",
-                active_label: Some("@deck.transport.pause"),
-                style: MicroPrimary,
-                read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
-                write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
-            ),
-            DeckSummary(
-                id: "summary",
-                style: Micro,
-                read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
-            ),
-            Bpm(
-                id: "bpm",
-                size: (w: Fixed(56.0), h: Fixed(34.0)),
-                placeholder: Some("time"),
-                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
-            ),
-            VuStereo(
-                id: "volume",
-                size: (w: Fixed(64.0), h: Fixed(22.0)),
-                read: Telemetry(id: "player.output.levels"),
-                write: Parameter(id: "player.output.volume"),
-            ),
-            Wave(
-                id: "wave",
-                size: (w: Range(min: 90.0, max: None), h: Fixed(34.0)),
-                style: Micro,
-                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
-                write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
-            ),
-            SettingsButton(
-                id: "settings",
-                size: (w: Fixed(28.0), h: Fixed(34.0)),
-            ),
+            Include(id: "bar", source: "deck-micro/bar.kmodule.ron", with: { "deck": "$deck" }),
+            Reveal(from: 234.0, child: Include(
+                id: "deck",
+                source: "deck.kmodule.ron",
+                with: { "deck": "$deck" },
+            )),
+            Reveal(from: 494.0, child: Include(id: "library", source: "library.kmodule.ron")),
         ],
     ),
 )

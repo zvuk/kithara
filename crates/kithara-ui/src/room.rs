@@ -4,7 +4,7 @@ use crate::{
     expand::ExpandedNode,
     ids::{NodeId, SourceUri},
     module::MeasureAxis,
-    size::{SizeSpec, axis_dim, axis_min, combine_vertical, min_size, rooms, settled},
+    size::{Cells, SizeSpec, axis_dim, axis_min, combine_vertical, min_size, rooms, settled},
     skin::SkinDoc,
     validate::NodePath,
 };
@@ -171,7 +171,28 @@ fn check_cells(
     skin: &SkinDoc,
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
-    for (room, needs) in rooms(node, axis, skin) {
+    check_rooms(&rooms(node, axis, skin), axis, path, origin)
+}
+
+/// The same question of a measuring layout split, whose cells hold whole
+/// modules.
+pub(crate) fn check_layout_cells(
+    cells: &Cells,
+    axis: MeasureAxis,
+    least: f32,
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    check_rooms(&cells.rooms(axis, least), axis, path, origin)
+}
+
+fn check_rooms(
+    rooms: &[(f32, f32)],
+    axis: MeasureAxis,
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    for (room, needs) in rooms.iter().copied() {
         if needs > room {
             return Err(UiDocError::RevealRoom {
                 origin: origin.clone(),

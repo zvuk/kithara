@@ -380,7 +380,7 @@ pub(crate) fn compute_size(
                         .iter()
                         .map(|child| compute_size(child, skin, snapshot)),
                 ),
-                gap_total(*gap, laid_out.len(), skin.layout.size_gap),
+                gap_total(gap.unwrap_or(skin.layout.size_gap), laid_out.len()),
                 0.0,
                 Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
             )
@@ -401,7 +401,7 @@ pub(crate) fn compute_size(
                         .map(|child| compute_size(child, skin, snapshot)),
                 ),
                 0.0,
-                gap_total(*gap, laid_out.len(), skin.layout.size_gap),
+                gap_total(gap.unwrap_or(skin.layout.size_gap), laid_out.len()),
                 Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
             )
         }
@@ -452,8 +452,8 @@ pub(crate) fn settled(
     measure: Option<MeasureAxis>,
     skin: &SkinDoc,
 ) -> SizeSpec {
-    Stack::of(node, skin).map_or(SizeSpec::new(Dim::Fixed(0.0), Dim::Fixed(0.0)), |stack| {
-        stack.settled(measure, skin)
+    Cells::of(node, skin).map_or(SizeSpec::new(Dim::Fixed(0.0), Dim::Fixed(0.0)), |cells| {
+        cells.settled(measure)
     })
 }
 
@@ -463,20 +463,9 @@ pub(crate) fn settled(
 /// minimum names a cell the minimum already counts.
 #[must_use]
 pub(crate) fn rooms(node: &ExpandedNode, axis: MeasureAxis, skin: &SkinDoc) -> Vec<(f32, f32)> {
-    let Some(stack) = Stack::of(node, skin) else {
-        return Vec::new();
-    };
-    let cells = stack.cells(skin);
-    let least = axis_min(min_size(node, skin), axis);
-    std::iter::once(least)
-        .chain(
-            cells
-                .iter()
-                .map(|cell| cell.from)
-                .filter(|from| *from > least),
-        )
-        .map(|room| (room, axis_min(stack.need(&cells, room, skin), axis)))
-        .collect()
+    Cells::of(node, skin).map_or_else(Vec::new, |cells| {
+        cells.rooms(axis, axis_min(min_size(node, skin), axis))
+    })
 }
 
 pub(crate) fn axis_dim(size: SizeSpec, axis: MeasureAxis) -> Dim {
@@ -490,23 +479,61 @@ pub(crate) fn axis_min(size: SizeSpec, axis: MeasureAxis) -> f32 {
     axis_dim(size, axis).min()
 }
 
-/// A cell of a container: the room it waits for, and what it needs once it
-/// stands.
-struct Cell {
+/// A cell of a container: the band of room it stands in, and what it needs
+/// while it does.
+pub(crate) struct Cell {
     from: f32,
+    until: Option<f32>,
     min: SizeSpec,
 }
 
-/// A row or a column laying cells out along one axis.
-struct Stack<'a> {
+impl Cell {
+    pub(crate) const fn new(from: f32, until: Option<f32>, min: SizeSpec) -> Self {
+        Self { from, until, min }
+    }
+}
+
+/// A cell stands while the room has reached `from` and has not reached
+/// `until`, so a band closing where the next one opens hands over with neither
+/// an overlap nor a gap.
+#[must_use]
+pub(crate) fn stands(from: f32, until: Option<f32>, room: f32) -> bool {
+    from <= room && until.is_none_or(|until| room < until)
+}
+
+/// How many thresholds the cells declare: the `from` a cell waits for and the
+/// `until` it stops at each move the standing set once.
+fn thresholds(cells: &[Cell]) -> usize {
+    cells
+        .iter()
+        .map(|cell| usize::from(cell.from > 0.0) + usize::from(cell.until.is_some()))
+        .sum()
+}
+
+/// The cells one container lays out along one axis, with the gap it charges
+/// between them and the padding it charges around them. It is the whole input
+/// the threshold arithmetic takes, so a row, a column and a layout split ask
+/// their questions of one value.
+pub(crate) struct Cells {
     along: Axis,
-    children: &'a [ExpandedNode],
-    gap: Option<f32>,
+    cells: Vec<Cell>,
+    gap: f32,
     pad: Pad,
 }
 
-impl<'a> Stack<'a> {
-    fn of(node: &'a ExpandedNode, skin: &SkinDoc) -> Option<Self> {
+impl Cells {
+    /// Cells laid out edge to edge, which is what a layout split draws.
+    pub(crate) const fn new(along: Axis, cells: Vec<Cell>) -> Self {
+        Self {
+            along,
+            cells,
+            gap: 0.0,
+            pad: Pad::NONE,
+        }
+    }
+
+    /// The cells of a row or a column, and nothing for any other node.
+    fn of(node: &ExpandedNode, skin: &SkinDoc) -> Option<Self> {
         let (along, children, gap, pad, pad_x, pad_y) = match node {
             ExpandedNode::Row {
                 children,
@@ -526,36 +553,35 @@ impl<'a> Stack<'a> {
             } => (Axis::Vertical, children, gap, pad, pad_x, pad_y),
             _ => return None,
         };
+        let cells = children
+            .iter()
+            .map(|child| {
+                let (from, until) = match child {
+                    ExpandedNode::Reveal { from, until, .. } => (*from, *until),
+                    _ => (0.0, None),
+                };
+                Cell::new(from, until, min_size(child, skin))
+            })
+            .collect();
         Some(Self {
             along,
-            children,
-            gap: *gap,
+            cells,
+            gap: gap.unwrap_or(skin.layout.size_gap),
             pad: Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
         })
     }
 
-    fn cells(&self, skin: &SkinDoc) -> Vec<Cell> {
-        self.children
-            .iter()
-            .map(|child| Cell {
-                from: match child {
-                    ExpandedNode::Reveal { from, .. } => *from,
-                    _ => 0.0,
-                },
-                min: min_size(child, skin),
-            })
-            .collect()
-    }
-
     /// What the cells standing in `room` need together, the gaps and the
-    /// padding the renderer applies included.
-    fn need(&self, cells: &[Cell], room: f32, skin: &SkinDoc) -> SizeSpec {
-        let standing: Vec<_> = cells
+    /// padding the renderer applies included. A container reading no room
+    /// stands every cell, which is what the renderer draws for it.
+    fn need(&self, room: Option<f32>) -> SizeSpec {
+        let standing: Vec<_> = self
+            .cells
             .iter()
-            .filter(|cell| cell.from <= room)
+            .filter(|cell| room.is_none_or(|room| stands(cell.from, cell.until, room)))
             .map(|cell| cell.min)
             .collect();
-        let gaps = gap_total(self.gap, standing.len(), skin.layout.size_gap);
+        let gaps = gap_total(self.gap, standing.len());
         match self.along {
             Axis::Horizontal => inset(combine_horizontal(standing), gaps, 0.0, self.pad),
             Axis::Vertical => inset(combine_vertical(standing), 0.0, gaps, self.pad),
@@ -563,20 +589,45 @@ impl<'a> Stack<'a> {
     }
 
     /// Which cells stand at the narrowest the container gets depends on that
-    /// number, so the room climbs from the cells waiting for nothing until the
-    /// standing set stops growing - one round per waiting cell reaches it.
-    fn settled(&self, measure: Option<MeasureAxis>, skin: &SkinDoc) -> SizeSpec {
-        let cells = self.cells(skin);
+    /// number, so the room climbs from the cells waiting for nothing and each
+    /// round asks what the room it reached stands. A band drops a cell as the
+    /// room grows, so a round may only raise the answer: the climb stays
+    /// monotone and settles on a room its own standing cells fit in. A round
+    /// that raises the room crosses a threshold or is the one that settles the
+    /// climb, so a round per threshold and two more reach the answer.
+    pub(crate) fn settled(&self, measure: Option<MeasureAxis>) -> SizeSpec {
         let Some(axis) = measure else {
-            return self.need(&cells, f32::INFINITY, skin);
+            return self.need(None);
         };
-        let waiting = cells.iter().filter(|cell| cell.from > 0.0).count();
-        let mut size = self.need(&cells, 0.0, skin);
-        for _ in 0..waiting {
-            size = self.need(&cells, axis_min(size, axis), skin);
+        let mut size = self.need(Some(0.0));
+        for _ in 0..thresholds(&self.cells) + 2 {
+            size = covering(size, self.need(Some(axis_min(size, axis))));
         }
         size
     }
+
+    /// What the container needs in each room its standing cells change at:
+    /// `least`, which is the smallest room it takes, and every threshold above
+    /// that.
+    pub(crate) fn rooms(&self, axis: MeasureAxis, least: f32) -> Vec<(f32, f32)> {
+        std::iter::once(least)
+            .chain(
+                self.cells
+                    .iter()
+                    .map(|cell| cell.from)
+                    .filter(|from| *from > least),
+            )
+            .map(|room| (room, axis_min(self.need(Some(room)), axis)))
+            .collect()
+    }
+}
+
+/// The per-axis maximum of two boxes, leaving an open bound open.
+fn covering(left: SizeSpec, right: SizeSpec) -> SizeSpec {
+    SizeSpec::new(
+        Dim::from(Bounds::from(left.w).max(right.w)),
+        Dim::from(Bounds::from(left.h).max(right.h)),
+    )
 }
 
 fn needs(size: SizeSpec) -> SizeSpec {
@@ -603,9 +654,9 @@ pub(crate) fn with_module_chrome(size: SizeSpec, chrome: ChromeStyle, skin: &Ski
     SizeSpec::new(size.w, grow(size.h, height))
 }
 
-fn gap_total(gap: Option<f32>, child_count: usize, default: f32) -> f32 {
+fn gap_total(gap: f32, child_count: usize) -> f32 {
     let gaps = u16::try_from(child_count.saturating_sub(1)).unwrap_or(u16::MAX);
-    gap.unwrap_or(default) * f32::from(gaps)
+    gap * f32::from(gaps)
 }
 
 /// Padding a container adds on each axis, mirroring what the renderer applies:
@@ -617,6 +668,8 @@ struct Pad {
 }
 
 impl Pad {
+    const NONE: Self = Self { x: 0.0, y: 0.0 };
+
     fn new(pad: Option<f32>, pad_x: Option<f32>, pad_y: Option<f32>, default: f32) -> Self {
         let base = pad.unwrap_or(default);
         Self {
@@ -1072,9 +1125,10 @@ mod tests {
         }
     }
 
-    fn reveal(from: f32, child: ExpandedNode) -> ExpandedNode {
+    fn reveal(from: f32, until: Option<f32>, child: ExpandedNode) -> ExpandedNode {
         ExpandedNode::Reveal {
             from,
+            until,
             child: Box::new(child),
         }
     }
@@ -1107,8 +1161,8 @@ mod tests {
         let (wave, volume, quality) = (cell("wave"), cell("volume"), cell("cell"));
         let node = row(
             vec![
-                reveal(350.0, wave),
-                reveal(440.0, volume),
+                reveal(350.0, None, wave),
+                reveal(440.0, None, volume),
                 optional(&mut interner, "quality", quality),
             ],
             Some(declared),
@@ -1159,8 +1213,8 @@ mod tests {
             row(
                 vec![
                     control(interner, "menu", always),
-                    reveal(150.0, wave),
-                    reveal(500.0, remain),
+                    reveal(150.0, None, wave),
+                    reveal(500.0, None, remain),
                 ],
                 Some(SizeSpec::new(Dim::Fill, Dim::Fixed(42.0))),
                 Some(0.0),
@@ -1173,9 +1227,21 @@ mod tests {
         let chained = row(
             vec![
                 control(&mut interner, "menu", fixed(100.0, 20.0)),
-                reveal(100.0, control(&mut interner, "wave", fixed(40.0, 20.0))),
-                reveal(140.0, control(&mut interner, "remain", fixed(40.0, 20.0))),
-                reveal(180.0, control(&mut interner, "quality", fixed(40.0, 20.0))),
+                reveal(
+                    100.0,
+                    None,
+                    control(&mut interner, "wave", fixed(40.0, 20.0)),
+                ),
+                reveal(
+                    140.0,
+                    None,
+                    control(&mut interner, "remain", fixed(40.0, 20.0)),
+                ),
+                reveal(
+                    180.0,
+                    None,
+                    control(&mut interner, "quality", fixed(40.0, 20.0)),
+                ),
             ],
             Some(SizeSpec::new(Dim::Fill, Dim::Fixed(42.0))),
             Some(0.0),
@@ -1185,6 +1251,74 @@ mod tests {
         assert_eq!(min_size(&narrow, skin), fixed(100.0, 42.0));
         assert_eq!(min_size(&wide, skin), fixed(240.0, 42.0));
         assert_eq!(min_size(&chained, skin), fixed(220.0, 42.0));
+    }
+
+    /// A stretching strip and the wave that replaces it are two bands of one
+    /// line handing over at the same number, so the room the bar needs counts
+    /// the strip below the hand-over and the wave from it up.
+    #[kithara::test]
+    fn a_band_leaves_the_room_to_the_cell_opening_where_it_closes() {
+        let mut interner = Interner::new(1024);
+        let skin = builtin::skin_doc();
+        let mut cell = |id, width| control(&mut interner, id, fixed(width, 20.0));
+        let (menu, play, window) = (cell("menu", 40.0), cell("play", 38.0), cell("window", 80.0));
+        let (strip, wave) = (cell("strip", 36.0), cell("wave", 60.0));
+        let bar = row(
+            vec![
+                menu,
+                play,
+                reveal(0.0, Some(350.0), strip),
+                reveal(350.0, None, wave),
+                window,
+            ],
+            Some(SizeSpec::new(Dim::Fill, Dim::Fixed(42.0))),
+            Some(0.0),
+            Some(MeasureAxis::Width),
+        );
+
+        assert_eq!(
+            min_size(&bar, skin).w.min(),
+            194.0,
+            "the strip stands at the narrowest the bar gets",
+        );
+        assert_eq!(
+            rooms(&bar, MeasureAxis::Width, skin),
+            vec![(194.0, 194.0), (350.0, 218.0)],
+            "350 takes the strip out and stands the wave in its room",
+        );
+    }
+
+    /// A layout split builds its cells out of compiled minimums instead of
+    /// expanded children, and asks the same value the same questions.
+    #[kithara::test]
+    fn cells_laid_edge_to_edge_settle_where_the_bar_does() {
+        let cell = |from, until, width| Cell::new(from, until, fixed(width, 20.0));
+        let bar = Cells::new(
+            Axis::Horizontal,
+            vec![
+                cell(0.0, None, 40.0),
+                cell(0.0, None, 38.0),
+                cell(0.0, Some(350.0), 36.0),
+                cell(350.0, None, 60.0),
+                cell(0.0, None, 80.0),
+            ],
+        );
+
+        assert_eq!(
+            bar.settled(Some(MeasureAxis::Width)).w.min(),
+            194.0,
+            "the strip stands at the narrowest the bar gets",
+        );
+        assert_eq!(
+            bar.rooms(MeasureAxis::Width, 194.0),
+            vec![(194.0, 194.0), (350.0, 218.0)],
+            "350 takes the strip out and stands the wave in its room",
+        );
+        assert_eq!(
+            bar.settled(None).w.min(),
+            254.0,
+            "a split reading no room stands every cell it holds",
+        );
     }
 
     /// A host hiding a block is a state, not a smaller tree: the bar has to

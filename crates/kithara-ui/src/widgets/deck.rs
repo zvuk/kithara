@@ -1,13 +1,16 @@
 use iced::{
     Alignment, Background, Element, Length,
     alignment::Vertical,
-    widget::{Space, column, container, container::Style as ContainerStyle, row},
+    widget::{Space, column, container, container::Style as ContainerStyle},
 };
 use num_traits::ToPrimitive;
 
 use crate::{
     module::DeckSummaryStyle,
-    render::{ReadValue, Reads, Skin, UiEvent, WaveformView, fonts, model::derived, shaped_text},
+    render::{
+        ReadValue, Reads, Skin, UiEvent, WaveformView, fonts, model::derived, shaped_text,
+        typography::styled_text,
+    },
     widgets::Widget,
 };
 
@@ -46,18 +49,11 @@ impl<'a> Widget<'a> for DeckSummary<'_, '_, '_, '_, '_> {
             .unwrap_or(em_dash());
         let compact = self.style == DeckSummaryStyle::Micro;
         let content: Element<'a, UiEvent> = if compact {
-            row![
-                shaped_text(title)
-                    .font(fonts::display(self.skin.deck.micro_title.weight))
-                    .size(self.skin.deck.micro_title.size)
-                    .color(palette.text),
-                shaped_text(source.to_owned())
-                    .font(fonts::sans(self.skin.deck.micro_source.weight))
-                    .size(self.skin.deck.micro_source.size)
-                    .color(palette.muted),
+            column![
+                styled_text(source.to_owned(), self.skin.deck.micro_source, self.skin),
+                styled_text(title, self.skin.deck.micro_title, self.skin),
             ]
             .spacing(self.skin.deck.micro_summary_gap)
-            .align_y(Alignment::Center)
             .into()
         } else {
             column![
@@ -75,8 +71,8 @@ impl<'a> Widget<'a> for DeckSummary<'_, '_, '_, '_, '_> {
         };
 
         container(content)
-            .height(Length::Fixed(self.skin.deck.summary_height))
-            .width(Length::FillPortion(self.skin.deck.summary_fill))
+            .height(Length::Fill)
+            .width(Length::Shrink)
             .padding([
                 self.skin.deck.summary_padding_y,
                 self.skin.deck.summary_padding_x,

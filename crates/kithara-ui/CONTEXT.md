@@ -419,9 +419,13 @@ thresholds and the value alone.
 ## Threshold Reveal Ownership
 
 A `Row` or `Column` declaring `measure` reads the box it is given on that axis, and each child
-wrapped in `Reveal { from }` stands once the axis reaches `from`. Several children stand at once -
-as many as have thresholds the room reaches - which is where this differs from `Adaptive`, drawing
-one branch of several. A child carrying no wrapper always stands.
+wrapped in `Reveal { from, until }` stands while that axis is inside the band: `from` is reached at
+its own value and `until` is not, so `Reveal(from: 0.0, until: Some(350.0))` and `Reveal(from:
+350.0)` share one place and exactly one of them stands at any width. `size::stands` is that rule,
+and both the compile-time filter and the widget call it, so the two cannot drift. `until: None`
+names no ceiling. Several children stand at once - as many as have bands the room falls in - which
+is where this differs from `Adaptive`, drawing one branch of several. A child carrying no wrapper
+always stands.
 
 - The container obeys the same declared-box rule a self-measured `Adaptive` does, through the same
   `validate::check_measured_box` and the same `UiDocError::UnmeasuredAxis`: `measure` requires
@@ -440,9 +444,12 @@ one branch of several. A child carrying no wrapper always stands.
   `validate::Sibling::Measured` is what a container declaring `measure` passes its children, and
   `Sibling::Only` is what a `Reveal` passes its own, so an `Optional` directly below one - which no
   parent would iterate, and so no parent would hide - is rejected with the rest.
-- A threshold is finite and not negative (`UiDocError::RevealThreshold`) and that is the whole rule:
-  thresholds carry no order among themselves, unlike `Adaptive` steps, whose order is what makes one
-  branch total.
+- A threshold is finite and not negative (`UiDocError::RevealThreshold`), and a ceiling is finite
+  and above the threshold it closes (`UiDocError::RevealBand`). That is the whole rule: bands carry
+  no order among themselves, unlike `Adaptive` steps, whose order is what makes one branch total.
+- A ceiling can only take a cell out of a room, never put one in, so the rooms `size::rooms` asks
+  about stay the same set: the container's own minimum and every `from` above it. Between two of
+  them a ceiling may drop the need, and a smaller need than the room is what the check wants.
 - The node carries no `id` and contributes no segment to the addresses below it: it publishes
   nothing and its visibility is the room's answer rather than the host's, so a control inside one is
   addressed exactly as a control beside it.
@@ -455,6 +462,15 @@ one branch of several. A child carrying no wrapper always stands.
 - For the same reason a measuring `Column` is handed both axes of its declared box, where a plain
   one leaves its height to its content: the axis it measures has to be readable from the box, and a
   `Column` measuring `Height` declares one.
+
+A layout `Split` asks the same question of whole modules. Declaring `measure` reads the box it is
+given on that axis, and each `SplitChild` names the band it stands in beside the weight it takes -
+both answer how that child takes room, so the band sits on the child rather than in a wrapper. The
+arithmetic is the one value `size::Cells`: a row, a column and a split hand it their cells and ask
+`need`, `settled` and `rooms`, so there is one climb and one `size::stands` behind every threshold in
+the crate. `compile::compiled_min` climbs for a measuring split and composes for a plain one, and
+`room::check_layout_cells` holds each band against the tree behind it, which is the check a nested
+`Adaptive` could not give: a step answers only its base's minimum, while a cell answers its own.
 
 `widgets/adaptive` holds both self-measuring widgets. `Revealed` lays the shown children out
 through `iced`'s own `layout::flex::resolve`, so `gap`, padding, cross-axis alignment and `Fill`
@@ -488,17 +504,18 @@ declared minimum and what the children compose to, so a box cannot swallow the r
   steps need is a separate question, answered by the rule below rather than by the node's own
   minimum.
 - Which cells a measuring container stands at its own minimum depends on that minimum, so
-  `size::Stack::settled` resolves the circle by climbing: the room starts at what the cells waiting
-  for nothing take, and each round admits the cells whose threshold that room reaches. The climb is
-  monotone and thresholds are finite in number, so one round per waiting cell reaches the least fixed
-  point; the loop is bounded by that count and answers whatever it settled on, since a further round
-  on a settled set repeats it. Each child's minimum is taken once, before the rounds, so nested
+  `size::Cells::settled` resolves the circle by climbing: the room starts at what the cells waiting
+  for nothing take, and each round asks what the room it reached stands. A band takes a cell out as
+  the room grows, so a round may only raise the answer - the climb is monotone because it is held so,
+  and its fixed point is a room whose own standing cells fit in it. A round that raises the room
+  crosses a `from` or an `until` or is the one that settles the climb, so the loop is bounded by a
+  round per threshold and two more. Each child's minimum is taken once, before the rounds, so nested
   measuring containers cost one walk rather than one per round.
   A container reading no room stands every cell, which is what `render/tree/node.rs::render_node`
   draws for a `Reveal` outside a measuring container.
-- `compile::compiled_min` carries the same question up the layout tree - `Split` composes, `Optional`
-  takes its child, `Adaptive` takes its base, a `Module` takes its expanded root plus its chrome -
-  and `CompiledUi::min` is the answer at the root. That is the number a host holds its window to, and
+- `compile::compiled_min` carries the same question up the layout tree - `Split` settles its cells,
+  `Optional` takes its child, `Adaptive` takes its base, a `Module` takes its expanded root plus its
+  chrome - and `CompiledUi::min` is the answer at the root. That is the number a host holds its window to, and
   `compiled_min` is public so a host can ask the same of one branch it stands behind a threshold. A
   module's minimum maxes against the box its `CompiledNode` carries, which is the box the layout
   declared or, absent one, the composed size that box would have had - below the minimum either way.
@@ -523,11 +540,11 @@ document can only answer once its controls have sizes.
   `size::settled` for a `Row` or a `Column`, the children combined for a `Slot`, the base for an
   `Adaptive`. A layout declares boxes of its own, and `compile::Compiler::build` asks the same
   question of the box still in hand: what a `LayoutNode::Module` declares against its expanded root
-  plus chrome, what a `LayoutNode::Adaptive` declares against `compiled_min` of its base.
-  `LayoutNode::Split` and `LayoutNode::Optional` carry the size of what they hold, so the question
-  reaches them through their children. `Dim::Fill`, `Dim::Shrink` and an open range name no ceiling
-  and are left alone, as are a `Scroll`, which scrolls what overflows its box, and a `Control`, whose
-  box overrides the skin on purpose. The rule keeps `min_size` and `compute_size` answering about one
+  plus chrome, what a `LayoutNode::Adaptive` declares against `compiled_min` of its base, what a
+  `LayoutNode::Split` declares against the room its cells settle on. `LayoutNode::Optional` carries
+  the size of what it holds, so the question reaches it through its child. `Dim::Fill`, `Dim::Shrink`
+  and an open range name no ceiling and are left alone, as are a `Scroll`, which scrolls what
+  overflows its box, and a `Control`, whose box overrides the skin on purpose. The rule keeps `min_size` and `compute_size` answering about one
   box, so the number reaching `CompiledUi::min` is the number the renderer draws. Failure is
   `UiDocError::DeclaredRoom`, naming the node, the box and what it holds.
 
@@ -630,10 +647,10 @@ Everything else stays in `widgets/anchored.rs`:
 ## Shipped App Menu
 
 `assets/modules/app-menu.kmodule.ron` and the row templates it includes from
-`assets/modules/app-menu/` are shipped assets that `builtin::resolver()` deliberately does not
-answer for: their window-manager endpoints - window list, per-window module flags, saved layouts -
-are host state no crate owns, so the documents must not become canonical preset surface the app
-can resolve. Exactly one copy of each exists and every consumer reaches it with `include_str!`.
+`assets/modules/app-menu/` are the burger cell and the popover behind it. The micro bar stands the
+menu at every width, so `builtin::resolver()` answers for them and a host of `MICRO_PRESET` owes the
+window-manager endpoints the menu names: the window list, the per-window module flags and the saved
+layouts. Exactly one copy of each document exists.
 The window row, module-grid cell, saved-layout row, preference toggle and hint-reporting toggle are
 one template each (`window-row`, `module-cell`, `layout-row`, `toggle-row`, `hint-row`), taken as
 often as the menu needs through `Include`. Each instance's control paths are
@@ -643,9 +660,12 @@ often as the menu needs through `Include`. Each instance's control paths are
 
 `assets/modules/master-clock.kmodule.ron`, the deck key-lock and overview row, and
 `assets/modules/pivot-portals.kmodule.ron` are shipped component documents over host-owned timing
-state. They are not builtin app presets: the Gallery embeds them explicitly and supplies mock
-endpoints, while a production host must supply its measured clock sources, transport state and
-portal policy. The documents retain no tempo, source, range, Link or MIDI state.
+state. A production host supplies its measured clock sources, transport state and portal policy; the
+documents retain no tempo, source, range, Link or MIDI state. The clock's anchor is the bar cell -
+beat phase, master tempo, nudge and source - and its popover surface is a document of its own,
+`assets/modules/master-clock/surface.kmodule.ron`, so the standalone module and the micro bar open
+one panel. The deck key-lock, overview row and portals stay outside the builtin preset surface: the
+Gallery embeds them explicitly and supplies mock endpoints.
 
 `PortalMap` and `Range` are the dedicated renderer primitives in this group. `PortalMap` copies one
 `PortalMapView` snapshot for the iced canvas lifetime and draws the declared master, range and
@@ -653,6 +673,36 @@ target arcs with `SkinDoc.portal_map` geometry. `Range` reads normalized bounds 
 at `<control-path>/min` or `<control-path>/max`; the host owns snapping and the minimum gap. The
 generic `Scroll` document container provides the bounded portal table. Selection, portal
 enumeration and timing decisions remain host-owned.
+
+## Micro Bar
+
+The micro wave carries two marks the other styles do not. The playhead draws a tab of
+`skin.wave.playhead_marker_*` at the top of the box, and a strip of `skin.wave.cache_strip_height`
+runs along the bottom: the wave's own background across the whole width, `Accent` up to the
+playhead, and `cache_strip_color` at `cache_strip_alpha` from there to the cached extent. That
+extent is `deck.playback.cached_normalized`, read the way the position is and held to the playhead,
+so a host that answers nothing draws the played part alone.
+
+`assets/modules/deck-micro.kmodule.ron` is the micro window: a `Column` measuring `Height` that
+stacks the bar, the deck and the library. The bar stands at every height; the deck arrives at
+`234.0` and the library at `494.0`, which is the bar's `44.0` plus the heights the prototype gives a
+full deck and a panel. `size::rooms` holds those numbers on the height axis, so a block whose tree
+needs more than its threshold promises is a compile error.
+
+`assets/modules/deck-micro/bar.kmodule.ron` is the bar: one `Row` that measures `Width`, declares
+`(w: Fill, h: Fixed(44.0))` and reveals each cell at the width it earns. The menu, the play button,
+the stretched place and the window controls stand at every width and settle on the tree's minimum;
+the rest carry a threshold - the track on air at `440.0`, master volume at `520.0`, settings at
+`590.0`, record at `670.0`, the master clock at `790.0`, stream quality at `920.0`, and engine load
+and latency at `1120.0`. Every one of those is a width the prototype names. Cell order is the order
+the design draws and is independent of those numbers: the track cell sits left of the wave and
+appears after it.
+
+The stretched place is two cells sharing one band edge: a `WindowDrag` up to `350.0`, so the window
+stays movable at the bar's smallest, and the wave from `350.0` up. Both read the bar's own width,
+the same number every other cell reads, so a cell arriving beside the wave narrows it and can never
+take it away. Each cell from the second on carries its own left hairline, so a hidden cell takes
+neither room nor seam and the run of lines closes up behind it.
 
 ## Stream Quality Ownership
 

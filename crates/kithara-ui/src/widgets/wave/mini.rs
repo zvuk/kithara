@@ -58,6 +58,7 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
             Some(ReadValue::Scalar(value)) => value.as_(),
             _ => 0.0,
         };
+        let cached = cached_extent(self.reads, self.scope, progress);
         let zoom = clamp_zoom(self.zoom);
         let waveform = waveform.map(|view| WaveformData {
             buckets: view.buckets.to_vec().into_boxed_slice(),
@@ -89,6 +90,10 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
             metrics: self.skin.wave,
             background: self.skin.color(self.skin.wave.background),
             border_color: self.skin.color(self.skin.wave.frame.border),
+            cache_strip_color: with_alpha(
+                self.skin.color(self.skin.wave.cache_strip_color),
+                self.skin.wave.cache_strip_alpha,
+            ),
             cue_badge_background: self.skin.color(self.skin.wave.cue_badge_background),
             cue_badge_text_color: self.skin.color(self.skin.wave.cue_badge_text_color),
             drag: ScalarDrag::builder()
@@ -112,6 +117,7 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
             palette: self.skin.palette,
             style: self.style,
             waveform,
+            cached,
             progress,
             wave_revision,
             zoom,
@@ -125,6 +131,7 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
 struct MiniWaveCanvas {
     background: Color,
     border_color: Color,
+    cache_strip_color: Color,
     cue_badge_background: Color,
     cue_badge_text_color: Color,
     overlay: Option<OverlayData>,
@@ -135,6 +142,7 @@ struct MiniWaveCanvas {
     drag: ScalarDrag,
     metrics: WaveSkin,
     style: WaveStyle,
+    cached: f32,
     progress: f32,
     zoom: f32,
 }
@@ -262,9 +270,20 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
             frame.stroke(
                 &Path::line(Point::new(head_x, 0.0), Point::new(head_x, bounds.height)),
                 Stroke::default()
-                    .with_color(self.palette.accent_strong)
+                    .with_color(self.palette.accent)
                     .with_width(self.metrics.playhead_width),
             );
+            frame.fill_rectangle(
+                Point::new(head_x - self.metrics.playhead_marker_width / 2.0, 0.0),
+                Size::new(
+                    self.metrics.playhead_marker_width,
+                    self.metrics.playhead_marker_height,
+                ),
+                self.palette.accent,
+            );
+            if self.style == WaveStyle::Micro {
+                self.draw_cache_strip(&mut frame, bounds, head_x);
+            }
             layers.push(frame.into_geometry());
         }
         let header = overlay_strip(bounds, self.metrics.overlay);
@@ -361,6 +380,18 @@ impl MiniWaveCanvas {
             }
         }
         draw_border(frame, bounds, self.metrics.frame, self.border_color);
+    }
+
+    fn draw_cache_strip(&self, frame: &mut Frame, bounds: Rectangle, head_x: f32) {
+        let height = self.metrics.cache_strip_height;
+        let top = (bounds.height - height).max(0.0);
+        let cached_x = self.cached * bounds.width;
+        let mut fill = |x: f32, width: f32, color| {
+            frame.fill_rectangle(Point::new(x, top), Size::new(width, height), color);
+        };
+        fill(0.0, bounds.width, self.background);
+        fill(0.0, head_x, self.palette.accent);
+        fill(head_x, cached_x - head_x, self.cache_strip_color);
     }
 
     fn draw_zoom_wave(&self, frame: &mut Frame, bounds: Rectangle, data: &WaveformData) {
@@ -735,6 +766,19 @@ const fn em_dash() -> &'static str {
     "\u{2014}"
 }
 
+/// Cached extent as the strip draws it: never behind the playhead, and the
+/// playhead itself while the host answers nothing.
+fn cached_extent(reads: &dyn Reads, scope: &str, progress: f32) -> f32 {
+    let played = progress.clamp(0.0, 1.0);
+    match reads.get(&derived("deck.playback.cached_normalized", scope)) {
+        Some(ReadValue::Scalar(cached)) => {
+            let cached: f32 = cached.as_();
+            cached.max(played).min(1.0)
+        }
+        _ => played,
+    }
+}
+
 fn read_text<'a>(reads: &'a dyn Reads, endpoint: &str) -> Option<&'a str> {
     match reads.get(endpoint) {
         Some(ReadValue::Text(value)) => Some(value),
@@ -830,6 +874,35 @@ mod tests {
         let below = Cursor::Available(Point::new(150.0, 50.0 + metrics.height + 40.0));
         assert!(inside.is_over(strip));
         assert!(!below.is_over(strip));
+    }
+
+    struct CacheReads(Option<f64>);
+
+    impl Reads for CacheReads {
+        fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+            if endpoint == "deck.playback.cached_normalized@deck=a" {
+                self.0.map(ReadValue::Scalar)
+            } else {
+                None
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn cached_extent_stays_at_the_playhead_when_the_host_answers_behind_it() {
+        assert_eq!(cached_extent(&CacheReads(Some(0.1)), "@deck=a", 0.4), 0.4);
+    }
+
+    #[kithara::test]
+    fn cached_extent_holds_an_answer_ahead_of_the_playhead() {
+        assert_eq!(cached_extent(&CacheReads(Some(0.7)), "@deck=a", 0.4), 0.7);
+        assert_eq!(cached_extent(&CacheReads(Some(1.4)), "@deck=a", 0.4), 1.0);
+    }
+
+    #[kithara::test]
+    fn cached_extent_falls_back_to_the_playhead_without_a_host_answer() {
+        assert_eq!(cached_extent(&CacheReads(None), "@deck=a", 0.4), 0.4);
+        assert_eq!(cached_extent(&CacheReads(Some(0.9)), "@deck=b", 0.4), 0.4);
     }
 
     #[kithara::test]

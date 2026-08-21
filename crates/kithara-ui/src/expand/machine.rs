@@ -377,6 +377,7 @@ fn expand_optional(
 fn expand_reveal(
     context: &Context<'_>,
     from: f32,
+    until: Option<f32>,
     child: &ControlNode,
     depth: usize,
     machine: &mut Expander<'_, '_>,
@@ -384,6 +385,7 @@ fn expand_reveal(
     machine.budget.charge(&context.origin)?;
     Ok(ExpandedNode::Reveal {
         from,
+        until,
         child: Box::new(walk(context, child, depth, machine)?),
     })
 }
@@ -649,7 +651,9 @@ fn walk(
         ControlNode::Optional { id, hidden, child } => {
             expand_optional(context, node, id, hidden, child, depth, machine)
         }
-        ControlNode::Reveal { from, child } => expand_reveal(context, *from, child, depth, machine),
+        ControlNode::Reveal { from, until, child } => {
+            expand_reveal(context, *from, *until, child, depth, machine)
+        }
         ControlNode::Popover {
             id,
             open,

@@ -7,14 +7,15 @@ use crate::{
         substitute_binding, substitute_map,
     },
     ids::{InternId, Interner, SourceUri, StrArena},
-    layout::{Axis, FrameSides, LayoutNode, parse_layout},
+    layout::{Axis, FrameSides, LayoutNode, SplitChild, parse_layout},
     module::{ChromeStyle, MeasureAxis},
     registry::EndpointRegistry,
     resolve::load_module_graph,
     room,
     size::{
-        BlockNode, DEFAULTS, SizeSpec, Snapshot, at_least, combine_horizontal, combine_vertical,
-        compute_size, has_blocks, min_size, with_module_chrome,
+        BlockNode, Cell, Cells, DEFAULTS, SizeSpec, Snapshot, at_least, axis_min,
+        combine_horizontal, combine_vertical, compute_size, has_blocks, min_size,
+        with_module_chrome,
     },
     skin::SkinDoc,
     source::{SourceResolver, UiConfig},
@@ -51,8 +52,14 @@ impl CompiledUi {
 pub enum CompiledNode {
     Split {
         axis: Axis,
-        children: Vec<(f32, Self)>,
-        size: SizeSpec,
+        /// The axis the split reads to decide which of its cells stand.
+        measure: Option<MeasureAxis>,
+        children: Vec<SplitCell>,
+        /// The box the layout declares for the split.
+        size: Option<SizeSpec>,
+        /// What its cells compose to, which is the box it shows its parent
+        /// while it declares none of its own.
+        composed: SizeSpec,
         blocks: bool,
     },
     Optional {
@@ -82,6 +89,17 @@ pub enum CompiledNode {
         size: SizeSpec,
         blocks: bool,
     },
+}
+
+/// One cell of a split: the node, the share of the room it takes among the
+/// cells standing beside it, and the band of room it stands in.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct SplitCell {
+    pub node: CompiledNode,
+    pub weight: f32,
+    pub from: f32,
+    pub until: Option<f32>,
 }
 
 impl CompiledNode {
@@ -175,24 +193,12 @@ impl Compiler<'_> {
     ) -> Result<CompiledNode, UiDocError> {
         self.budget.charge(layout_uri)?;
         match node {
-            LayoutNode::Split { axis, children } => {
-                let children: Vec<_> = children
-                    .iter()
-                    .map(|child| Ok((child.weight, self.build(&child.node, layout_uri)?)))
-                    .collect::<Result<_, UiDocError>>()?;
-                let sizes = children.iter().map(|(_, child)| compiled_node_size(child));
-                let size = match axis {
-                    Axis::Horizontal => combine_horizontal(sizes),
-                    Axis::Vertical => combine_vertical(sizes),
-                };
-                let blocks = children.iter().any(|(_, child)| child.blocks());
-                Ok(CompiledNode::Split {
-                    children,
-                    size,
-                    blocks,
-                    axis: *axis,
-                })
-            }
+            LayoutNode::Split {
+                axis,
+                measure,
+                size,
+                children,
+            } => self.build_split(*axis, *measure, *size, children, layout_uri),
             LayoutNode::Optional { id, hidden, node } => {
                 let hidden = substitute_binding(&BTreeMap::new(), layout_uri, hidden, &id.0)?;
                 validate::check_layout_block(&hidden, &id.0, layout_uri, self.endpoints)?;
@@ -303,15 +309,77 @@ impl Compiler<'_> {
             }
         }
     }
+
+    /// A split answers for the box it declares and for the room its cells
+    /// settle on, so both checks run here rather than at the parent holding
+    /// it.
+    fn build_split(
+        &mut self,
+        axis: Axis,
+        measure: Option<MeasureAxis>,
+        size: Option<SizeSpec>,
+        children: &[SplitChild],
+        layout_uri: &SourceUri,
+    ) -> Result<CompiledNode, UiDocError> {
+        let children: Vec<_> = children
+            .iter()
+            .map(|child| {
+                Ok(SplitCell {
+                    node: self.build(&child.node, layout_uri)?,
+                    weight: child.weight,
+                    from: child.from,
+                    until: child.until,
+                })
+            })
+            .collect::<Result<Vec<_>, UiDocError>>()?;
+        let sizes = children.iter().map(|cell| compiled_node_size(&cell.node));
+        let composed = match axis {
+            Axis::Horizontal => combine_horizontal(sizes),
+            Axis::Vertical => combine_vertical(sizes),
+        };
+        let path = NodePath::default().push("Split");
+        let cells = split_cells(axis, &children, self.skin);
+        let needed = cells.settled(measure);
+        if let Some(measure) = measure {
+            room::check_layout_cells(
+                &cells,
+                measure,
+                axis_min(at_least(size, needed), measure),
+                &path,
+                layout_uri,
+            )?;
+        }
+        room::check_box(size, needed, &path, layout_uri)?;
+        let blocks = size.is_none() && children.iter().any(|cell| cell.node.blocks());
+        Ok(CompiledNode::Split {
+            axis,
+            measure,
+            children,
+            size,
+            composed,
+            blocks,
+        })
+    }
 }
 
 pub(crate) fn compiled_node_size(node: &CompiledNode) -> SizeSpec {
     match node {
         CompiledNode::Optional { child, .. } => compiled_node_size(child),
-        CompiledNode::Adaptive { size, .. }
-        | CompiledNode::Split { size, .. }
-        | CompiledNode::Module { size, .. } => *size,
+        CompiledNode::Split { size, composed, .. } => size.unwrap_or(*composed),
+        CompiledNode::Adaptive { size, .. } | CompiledNode::Module { size, .. } => *size,
     }
+}
+
+/// The cells a compiled split lays out, each with the band it stands in and
+/// the room the node behind it needs.
+fn split_cells(axis: Axis, children: &[SplitCell], skin: &SkinDoc) -> Cells {
+    Cells::new(
+        axis,
+        children
+            .iter()
+            .map(|cell| Cell::new(cell.from, cell.until, compiled_min(&cell.node, skin)))
+            .collect(),
+    )
 }
 
 /// The room one branch of a compiled tree needs, which is what a threshold
@@ -323,13 +391,13 @@ pub fn compiled_min(node: &CompiledNode, skin: &SkinDoc) -> SizeSpec {
         CompiledNode::Adaptive { size, base, .. } => {
             at_least(Some(*size), compiled_min(base, skin))
         }
-        CompiledNode::Split { axis, children, .. } => {
-            let sizes = children.iter().map(|(_, child)| compiled_min(child, skin));
-            match axis {
-                Axis::Horizontal => combine_horizontal(sizes),
-                Axis::Vertical => combine_vertical(sizes),
-            }
-        }
+        CompiledNode::Split {
+            axis,
+            measure,
+            children,
+            size,
+            ..
+        } => at_least(*size, split_cells(*axis, children, skin).settled(*measure)),
         CompiledNode::Module {
             root, chrome, size, ..
         } => at_least(

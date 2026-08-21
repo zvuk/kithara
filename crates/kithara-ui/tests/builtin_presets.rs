@@ -3,8 +3,7 @@ mod common;
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
-    compile::{CompiledNode, compile},
-    error::UiDocError,
+    compile::{CompiledNode, CompiledUi, compile},
     expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
     layout::Axis,
     module::{IconName, WaveStyle},
@@ -12,9 +11,8 @@ use kithara_ui::{
     source::{SourceResolver, UiConfig},
 };
 
-#[kithara::test]
-fn micro_preset_compiles_against_player_registry() {
-    let ui = compile(
+fn micro_preset() -> CompiledUi {
+    compile(
         builtin::MICRO_PRESET,
         &builtin::resolver(),
         &common::player_registry(),
@@ -22,26 +20,132 @@ fn micro_preset_compiles_against_player_registry() {
         builtin::text_doc(),
         &UiConfig::default(),
     )
-    .unwrap();
+    .expect("the micro preset compiles")
+}
+
+/// The bar the micro preset stands at every height, above the blocks the
+/// window takes as it grows.
+fn micro_bar(ui: &CompiledUi) -> &ExpandedNode {
     let CompiledNode::Module { root, .. } = &ui.root else {
-        panic!("expected micro module");
+        panic!("the micro preset is one module");
     };
-    let ExpandedNode::Row { children, .. } = &**root else {
-        panic!("micro must compile to one row");
+    let ExpandedNode::Column { children, .. } = &**root else {
+        panic!("the micro preset stacks its blocks");
     };
-    let specs: Vec<_> = children
+    children.first().expect("the bar stands at every height")
+}
+
+/// The direct cells of a bar, as `(band, address)` in document order. A cell
+/// standing at every width names the band `(0.0, None)`.
+fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<((f32, Option<f32>), &'a str)> {
+    let ExpandedNode::Row { children, .. } = bar else {
+        panic!("a bar is one row");
+    };
+    children
         .iter()
-        .filter_map(|child| match child {
-            ExpandedNode::Control { spec, .. } => Some(spec),
-            _ => None,
+        .map(|child| match child {
+            ExpandedNode::Reveal { from, until, child } => ((*from, *until), cell_id(ui, child)),
+            child => ((0.0, None), cell_id(ui, child)),
         })
-        .collect();
-    assert!(matches!(specs[0], ControlSpec::Button { .. }));
-    assert!(matches!(specs[1], ControlSpec::DeckSummary { .. }));
-    assert!(matches!(specs[2], ControlSpec::Bpm { .. }));
-    assert!(matches!(specs[3], ControlSpec::VuStereo));
-    assert!(matches!(specs[4], ControlSpec::Wave { .. }));
-    assert!(matches!(specs[5], ControlSpec::SettingsButton));
+        .collect()
+}
+
+/// The blocks the micro preset stacks, as `(threshold, address)`.
+fn micro_blocks(ui: &CompiledUi) -> Vec<((f32, Option<f32>), &str)> {
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("the micro preset is one module");
+    };
+    let ExpandedNode::Column { children, .. } = &**root else {
+        panic!("the micro preset stacks its blocks");
+    };
+    children
+        .iter()
+        .map(|child| match child {
+            ExpandedNode::Reveal { from, until, child } => ((*from, *until), cell_id(ui, child)),
+            child => ((0.0, None), cell_id(ui, child)),
+        })
+        .collect()
+}
+
+fn cell_id<'a>(ui: &'a CompiledUi, node: &'a ExpandedNode) -> &'a str {
+    match node {
+        ExpandedNode::Control { path, .. }
+        | ExpandedNode::Popover { path, .. }
+        | ExpandedNode::Pressable { path, .. } => ui.resolve(*path),
+        ExpandedNode::Reveal { child, .. } | ExpandedNode::Scroll { child, .. } => {
+            cell_id(ui, child)
+        }
+        ExpandedNode::Row { children, .. } | ExpandedNode::Column { children, .. } => {
+            children.first().map_or("", |child| cell_id(ui, child))
+        }
+        _ => "",
+    }
+}
+
+/// The micro bar takes its cells as the window widens, at the widths the
+/// prototype names.
+#[kithara::test]
+fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
+    let ui = micro_preset();
+
+    assert_eq!(
+        bar_cells(&ui, micro_bar(&ui)),
+        vec![
+            ((0.0, None), "deck-a/bar/menu/pop"),
+            ((0.0, None), "deck-a/bar/play"),
+            ((440.0, None), "deck-a/bar/summary"),
+            ((0.0, Some(350.0)), "deck-a/bar/drag"),
+            ((350.0, None), "deck-a/bar/wave"),
+            ((520.0, None), "deck-a/bar/speaker"),
+            ((920.0, None), "deck-a/bar/stream/pop"),
+            ((1120.0, None), "deck-a/bar/cpu-label"),
+            ((790.0, None), "deck-a/bar/clock/pop"),
+            ((670.0, None), "deck-a/bar/rec"),
+            ((590.0, None), "deck-a/bar/settings"),
+            ((0.0, None), "deck-a/bar/window"),
+        ],
+    );
+}
+
+/// The drag strip and the wave share one place in the bar: the strip ends at
+/// the width the wave starts at, so exactly one of them stands at any width.
+#[kithara::test]
+fn the_micro_drag_strip_hands_its_place_to_the_wave() {
+    let ui = micro_preset();
+    let cells = bar_cells(&ui, micro_bar(&ui));
+    let band = |id: &str| {
+        cells
+            .iter()
+            .find_map(|(band, cell)| (*cell == id).then_some(*band))
+            .expect("the bar names the cell")
+    };
+
+    let (strip_from, strip_until) = band("deck-a/bar/drag");
+    let (wave_from, wave_until) = band("deck-a/bar/wave");
+
+    assert_eq!(strip_from, 0.0, "the strip stands at the narrowest bar");
+    assert_eq!(
+        strip_until,
+        Some(wave_from),
+        "the strip ends where the wave starts"
+    );
+    assert_eq!(wave_until, None, "the wave stands from its width up");
+}
+
+/// The micro preset grows from one bar into the player: each block appears
+/// once the window is tall enough to hold it under the ones above it.
+#[kithara::test]
+fn the_micro_preset_takes_its_blocks_as_the_window_grows_taller() {
+    let ui = micro_preset();
+
+    assert_eq!(
+        micro_blocks(&ui),
+        vec![
+            ((0.0, None), "deck-a/bar/menu/pop"),
+            ((234.0, None), "deck-a/deck/wave"),
+            ((494.0, None), "deck-a/library/tracks"),
+        ],
+    );
 }
 
 #[kithara::test]
@@ -71,7 +175,7 @@ fn player_deck_starts_with_one_hero_wave() {
     let CompiledNode::Split { children, .. } = &ui.root else {
         panic!("expected split root");
     };
-    let CompiledNode::Module { root, .. } = &children[1].1 else {
+    let CompiledNode::Module { root, .. } = &children[1].node else {
         panic!("expected deck module");
     };
     let ExpandedNode::Column { children, .. } = &**root else {
@@ -113,7 +217,7 @@ fn player_deck_compiles_canonical_transport_row() {
     let CompiledNode::Split { children, .. } = &ui.root else {
         panic!("expected split root");
     };
-    let CompiledNode::Module { root, .. } = &children[1].1 else {
+    let CompiledNode::Module { root, .. } = &children[1].node else {
         panic!("expected deck module");
     };
     let ExpandedNode::Column { children, .. } = &**root else {
@@ -206,7 +310,7 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
     let CompiledNode::Split {
         axis,
         children,
-        size,
+        composed,
         ..
     } = &ui.root
     else {
@@ -215,19 +319,19 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
     assert_eq!(*axis, Axis::Vertical);
     let CompiledNode::Module {
         size: global_size, ..
-    } = &children[0].1
+    } = &children[0].node
     else {
         panic!("expected global bar module");
     };
     let CompiledNode::Module {
         size: deck_size, ..
-    } = &children[1].1
+    } = &children[1].node
     else {
         panic!("expected deck module");
     };
     let CompiledNode::Module {
         size: library_size, ..
-    } = &children[2].1
+    } = &children[2].node
     else {
         panic!("expected library module");
     };
@@ -239,17 +343,14 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
         ui.size.h.min(),
         global_size.h.min() + deck_size.h.min() + library_size.h.min()
     );
-    assert_eq!(ui.size, *size);
+    assert_eq!(ui.size, *composed);
 }
 
+/// The micro preset is a whole window: its bar stands the menu at every width,
+/// so the menu is part of the builtin preset surface.
 #[kithara::test]
-fn the_app_menu_is_a_shipped_asset_outside_builtin_preset_surface() {
-    let error = builtin::resolver()
+fn the_app_menu_is_part_of_the_builtin_preset_surface() {
+    builtin::resolver()
         .load(None, "modules/app-menu.kmodule.ron")
-        .unwrap_err();
-
-    assert!(
-        matches!(error, UiDocError::NotFound { ref rel, .. } if rel == "modules/app-menu.kmodule.ron"),
-        "{error}"
-    );
+        .expect("the micro bar includes the app menu");
 }

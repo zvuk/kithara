@@ -1,5 +1,5 @@
 use crate::{
-    compile::{CompiledNode, compiled_node_size, module_size},
+    compile::{CompiledNode, SplitCell, compiled_node_size, module_size},
     layout::Axis,
     size::{SizeSpec, Snapshot, combine_horizontal, combine_vertical, is_hidden},
     skin::SkinDoc,
@@ -12,7 +12,7 @@ pub(super) fn node_size(node: &CompiledNode, skin: &SkinDoc, snapshot: &dyn Snap
         node if !node.blocks() => compiled_node_size(node),
         CompiledNode::Split { axis, children, .. } => {
             let sizes = visible_children(children, snapshot)
-                .map(|(_, child)| node_size(child, skin, snapshot));
+                .map(|cell| node_size(&cell.node, skin, snapshot));
             match axis {
                 Axis::Horizontal => combine_horizontal(sizes),
                 Axis::Vertical => combine_vertical(sizes),
@@ -23,13 +23,12 @@ pub(super) fn node_size(node: &CompiledNode, skin: &SkinDoc, snapshot: &dyn Snap
 }
 
 pub(super) fn visible_children<'a>(
-    children: &'a [(f32, CompiledNode)],
+    children: &'a [SplitCell],
     snapshot: &'a dyn Snapshot,
-) -> impl Iterator<Item = (f32, &'a CompiledNode)> {
+) -> impl Iterator<Item = &'a SplitCell> {
     children
         .iter()
-        .filter(move |(_, child)| !is_hidden(child, snapshot))
-        .map(|(weight, child)| (*weight, child))
+        .filter(move |cell| !is_hidden(&cell.node, snapshot))
 }
 
 #[cfg(test)]

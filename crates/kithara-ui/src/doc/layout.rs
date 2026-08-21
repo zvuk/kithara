@@ -33,8 +33,15 @@ pub struct LayoutDoc {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub enum LayoutNode {
+    /// Lays its children out along one axis. Declaring `measure` reads the box
+    /// it is given on that axis, and each child stands while the band it names
+    /// holds that number.
     Split {
         axis: Axis,
+        #[serde(default)]
+        measure: Option<MeasureAxis>,
+        #[serde(default)]
+        size: Option<SizeSpec>,
         children: Vec<SplitChild>,
     },
     /// Marks its node as a block the host may hide. While `hidden` reads true
@@ -116,6 +123,13 @@ pub struct SplitChild {
     pub node: LayoutNode,
     #[serde(default = "default_weight")]
     pub weight: f32,
+    /// The room the child stands from, and the room it stands until. Both
+    /// answer the axis its split measures, and the pair a child keeps by
+    /// default stands in every room.
+    #[serde(default)]
+    pub from: f32,
+    #[serde(default)]
+    pub until: Option<f32>,
 }
 
 const fn default_weight() -> f32 {

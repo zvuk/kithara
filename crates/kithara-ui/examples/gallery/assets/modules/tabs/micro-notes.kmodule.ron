@@ -1,0 +1,20 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-micro-notes",
+    root: Column(
+        gap: Some(8.0),
+        pad: Some(14.0),
+        children: [
+            Text(id: "title", style: Section, label: "MICRO PLAYER"),
+            Text(
+                id: "note",
+                style: MicroLabel,
+                label: "DRAG THE WINDOW EDGE. WIDTH TAKES OR DROPS THE CELLS OF THE BAR, HEIGHT TAKES OR DROPS THE BLOCKS OF THE PLAYER.",
+                size: (w: Fill, h: Fixed(30.0)),
+            ),
+            Text(id: "width-steps", style: MicroLabel, label: "WIDTH - 350 WAVE, 440 TRACK, 520 VOLUME, 590 SETTINGS, 670 RECORD, 790 CLOCK, 920 STREAM, 1120 CPU AND LATENCY", size: (w: Fill, h: Fixed(30.0))),
+            Text(id: "height-steps", style: MicroLabel, label: "HEIGHT - 234 DECK, 494 LIBRARY", size: (w: Fill, h: Fixed(24.0))),
+        ],
+    ),
+)

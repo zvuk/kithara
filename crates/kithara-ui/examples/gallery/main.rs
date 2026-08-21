@@ -23,8 +23,10 @@ struct Consts;
 
 impl Consts {
     const HEIGHT: f32 = 720.0;
+    const MIN_HEIGHT: f32 = 320.0;
+    const MIN_WIDTH: f32 = 400.0;
     const STRESS_TICK_MS: u64 = 16;
-    const WIDTH: f32 = 1300.0;
+    const WIDTH: f32 = 1450.0;
 }
 
 const ASSETS: &[(&str, &str)] = &[
@@ -125,44 +127,12 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-vis.klayout.ron"),
     ),
     (
-        "modules/app-menu.kmodule.ron",
-        include_str!("../../assets/modules/app-menu.kmodule.ron"),
-    ),
-    (
-        "modules/app-menu/hint-row.kmodule.ron",
-        include_str!("../../assets/modules/app-menu/hint-row.kmodule.ron"),
-    ),
-    (
-        "modules/app-menu/layout-row.kmodule.ron",
-        include_str!("../../assets/modules/app-menu/layout-row.kmodule.ron"),
-    ),
-    (
-        "modules/app-menu/module-cell.kmodule.ron",
-        include_str!("../../assets/modules/app-menu/module-cell.kmodule.ron"),
-    ),
-    (
-        "modules/app-menu/toggle-row.kmodule.ron",
-        include_str!("../../assets/modules/app-menu/toggle-row.kmodule.ron"),
-    ),
-    (
-        "modules/app-menu/window-row.kmodule.ron",
-        include_str!("../../assets/modules/app-menu/window-row.kmodule.ron"),
-    ),
-    (
         "modules/deck/key-lock.kmodule.ron",
         include_str!("../../assets/modules/deck/key-lock.kmodule.ron"),
     ),
     (
         "modules/deck/overview-row.kmodule.ron",
         include_str!("../../assets/modules/deck/overview-row.kmodule.ron"),
-    ),
-    (
-        "modules/master-clock.kmodule.ron",
-        include_str!("../../assets/modules/master-clock.kmodule.ron"),
-    ),
-    (
-        "modules/master-clock/source-row.kmodule.ron",
-        include_str!("../../assets/modules/master-clock/source-row.kmodule.ron"),
     ),
     (
         "modules/pivot-portals.kmodule.ron",
@@ -297,20 +267,8 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/tabs/menu-notes.kmodule.ron"),
     ),
     (
-        "modules/tabs/micro-4a.kmodule.ron",
-        include_str!("assets/modules/tabs/micro-4a.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/micro-4b.kmodule.ron",
-        include_str!("assets/modules/tabs/micro-4b.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/micro-4c.kmodule.ron",
-        include_str!("assets/modules/tabs/micro-4c.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/micro-4d.kmodule.ron",
-        include_str!("assets/modules/tabs/micro-4d.kmodule.ron"),
+        "modules/tabs/micro-notes.kmodule.ron",
+        include_str!("assets/modules/tabs/micro-notes.kmodule.ron"),
     ),
     (
         "modules/tabs/mixer-1d.kmodule.ron",
@@ -423,7 +381,7 @@ impl Gallery {
         });
         let settings = Settings {
             size: Size::new(Consts::WIDTH, Consts::HEIGHT),
-            min_size: Some(Size::new(Consts::WIDTH, Consts::HEIGHT)),
+            min_size: Some(Size::new(Consts::MIN_WIDTH, Consts::MIN_HEIGHT)),
             decorations: false,
             exit_on_close_request: false,
             ..Settings::default()
@@ -579,14 +537,14 @@ mod tests {
             let CompiledNode::Split {
                 children: gallery_children,
                 ..
-            } = &children[1].1
+            } = &children[1].node
             else {
                 panic!("expected gallery content");
             };
             let CompiledNode::Split {
                 children: module_children,
                 ..
-            } = &gallery_children[1].1
+            } = &gallery_children[1].node
             else {
                 panic!("expected module demo stack");
             };
@@ -596,7 +554,7 @@ mod tests {
                 chrome,
                 footer,
                 ..
-            } = &module_children[1].1
+            } = &module_children[1].node
             else {
                 panic!("expected module demo");
             };
@@ -651,7 +609,8 @@ mod tests {
     fn collect_nav_item_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_nav_item_paths(child, ui, paths);
                 }
             }
@@ -820,7 +779,8 @@ mod tests {
     fn collect_tab_large_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_tab_large_paths(child, ui, paths);
                 }
             }
@@ -857,7 +817,8 @@ mod tests {
     fn collect_menu_tab<'a>(node: &'a CompiledNode, ui: &'a CompiledUi, found: &mut MenuTab<'a>) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_menu_tab(child, ui, found);
                 }
             }
@@ -906,7 +867,8 @@ mod tests {
     fn collect_menu_reads<'a>(node: &'a CompiledNode, ui: &'a CompiledUi, keys: &mut Vec<&'a str>) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_menu_reads(child, ui, keys);
                 }
             }
@@ -982,7 +944,8 @@ mod tests {
     ) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_tree_queries(child, ui, queries);
                 }
             }
@@ -1028,7 +991,8 @@ mod tests {
     ) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_context_scopes(child, ui, contexts);
                 }
             }

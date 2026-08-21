@@ -256,6 +256,8 @@ impl MockReads {
             self.stress.reset_clock();
         }
         self.active_tab = tab;
+        self.menu.set_open(tab == Tab::Menu);
+        self.clock.set_open(tab == Tab::Clock);
     }
 
     fn select_tree_row(&mut self, index: usize) {
@@ -499,6 +501,7 @@ impl Reads for MockReads {
             "deck.playback.position_normalized" => {
                 ReadValue::Scalar(self.transport.position_normalized())
             }
+            "deck.playback.cached_normalized" => ReadValue::Scalar(Consts::CACHED_NORMALIZED),
             "deck.playback.remaining_secs" => {
                 ReadValue::Scalar(Consts::DURATION_SECS - self.transport.position_secs())
             }
@@ -518,7 +521,11 @@ impl Reads for MockReads {
                 cues: self.transport.cues(),
             }),
             "deck.track.title" | "mock.track.title" => ReadValue::Text(CATALOG.title),
-            "deck.track.source_kind" | "mock.track.artist" => ReadValue::Text(CATALOG.artist),
+            "deck.track.source_kind" => ReadValue::Text(Consts::ON_AIR),
+            "mock.track.artist" => ReadValue::Text(CATALOG.artist),
+            "engine.load" => ReadValue::Scalar(Consts::ENGINE_LOAD),
+            "engine.latency" => ReadValue::Text(Consts::LATENCY),
+            "ui.set.record_time" => ReadValue::Text(Consts::RECORD_TIME),
             "deck.track.key" | "mock.key" => ReadValue::Text(Consts::KEY),
             "deck.view.zoom" => ReadValue::Scalar(self.transport.zoom()),
             "player.output.levels" => ReadValue::Stereo(StereoLevels {

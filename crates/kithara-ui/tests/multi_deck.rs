@@ -20,8 +20,8 @@ fn resolver_with(fixture_name: &str, text: &str) -> MemResolver {
 fn collect_instances(ui: &CompiledUi, node: &CompiledNode, instances: &mut Vec<String>) {
     match node {
         CompiledNode::Split { children, .. } => {
-            for (_, child) in children {
-                collect_instances(ui, child, instances);
+            for cell in children {
+                collect_instances(ui, &cell.node, instances);
             }
         }
         CompiledNode::Module { instance, .. } => {
@@ -66,8 +66,8 @@ fn collect_instance_decks(
 ) {
     match node {
         CompiledNode::Split { children, .. } => {
-            for (_, child) in children {
-                collect_instance_decks(ui, child, decks);
+            for cell in children {
+                collect_instance_decks(ui, &cell.node, decks);
             }
         }
         CompiledNode::Module { instance, root, .. } => {
@@ -172,8 +172,8 @@ fn scoped_read_keys_address_each_deck() {
     let CompiledNode::Split { children, .. } = &ui.root else {
         panic!("expected two-deck split");
     };
-    for (_, child) in children {
-        let CompiledNode::Module { instance, root, .. } = child else {
+    for cell in children {
+        let CompiledNode::Module { instance, root, .. } = &cell.node else {
             panic!("expected deck module");
         };
         let mut keys = Vec::new();

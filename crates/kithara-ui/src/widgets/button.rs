@@ -35,7 +35,7 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
         } else {
             self.label
         };
-        let highlighted = is_filled(self.style, active);
+        let highlighted = active;
         let font = if is_primary(self.style) || active {
             self.skin.button.primary_text
         } else if self.style == ButtonStyle::VisNav {
@@ -47,7 +47,8 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
         let content: Element<'a, UiEvent> = match self.style {
             ButtonStyle::MicroPrimary => {
                 let icon = if active { Icon::Pause } else { Icon::Play };
-                icon.view(self.skin.button.micro_icon_size, palette.bg)
+                let color = if active { palette.bg } else { palette.text_dim };
+                icon.view(self.skin.button.micro_icon_size, color)
             }
             ButtonStyle::Transport | ButtonStyle::TransportPrimary => {
                 transport_content(self.icon, label, font, highlighted, self.skin)
@@ -166,20 +167,13 @@ const fn is_primary(style: ButtonStyle) -> bool {
     )
 }
 
-/// Accent fill follows the read value: a transport button is filled while its
-/// state is on. The micro play button is the exception - it is a solid accent
-/// cell that only swaps its glyph.
-fn is_filled(style: ButtonStyle, active: bool) -> bool {
-    active || style == ButtonStyle::MicroPrimary
-}
-
 fn control_button_style(
     skin: &Skin,
     style: ButtonStyle,
     active: bool,
 ) -> impl Fn(&Theme, ButtonStatus) -> IcedButtonStyle + 'static {
     let palette = skin.palette;
-    let highlighted = is_filled(style, active);
+    let highlighted = active;
     let is_transport = matches!(
         style,
         ButtonStyle::Transport | ButtonStyle::TransportPrimary

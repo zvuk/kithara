@@ -31,6 +31,20 @@ impl EndpointRegistry for MockRegistry {
     }
 }
 
+/// What the micro bar reads beside the deck.
+fn insert_engine_endpoints(registry: &mut MockRegistry) {
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "engine.load",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "engine.latency",
+        EndpointDesc::new(ValueKind::Text),
+    );
+}
+
 fn insert_output_levels(registry: &mut MockRegistry) {
     registry.insert(
         EndpointCategory::Telemetry,
@@ -64,6 +78,7 @@ fn insert_deck_endpoints(registry: &mut MockRegistry) {
     for (id, kind) in [
         ("deck.playback.playing", ValueKind::Bool),
         ("deck.playback.position_normalized", ValueKind::Scalar),
+        ("deck.playback.cached_normalized", ValueKind::Scalar),
         ("deck.playback.remaining_secs", ValueKind::Scalar),
         ("deck.playback.remain", ValueKind::Text),
         ("deck.playback.position_secs", ValueKind::Scalar),
@@ -299,6 +314,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
     mock_mixer::insert_endpoints(&mut registry);
     mock_stress::insert_endpoints(&mut registry);
     insert_output_levels(&mut registry);
+    insert_engine_endpoints(&mut registry);
     for id in ["player.output.volume", "mock.cells.segmented", "vis.preset"] {
         registry.insert(
             EndpointCategory::Parameter,
@@ -449,6 +465,7 @@ fn insert_menu_endpoints(registry: &mut MockRegistry) {
         ("ui.modules.count", ValueKind::Text),
         ("ui.layouts.active", ValueKind::Text),
         ("ui.set.record_hint", ValueKind::Text),
+        ("ui.set.record_time", ValueKind::Text),
         ("ui.set.cast_hint", ValueKind::Text),
         ("gallery.menu.action", ValueKind::Text),
     ] {

@@ -63,10 +63,11 @@ pub enum ExpandedNode {
         base: Box<Self>,
         steps: Vec<(f32, Self)>,
     },
-    /// Laid out once the enclosing container measures `from` on the axis it
-    /// declares.
+    /// Laid out while the enclosing container measures a number in `[from,
+    /// until)` on the axis it declares.
     Reveal {
         from: f32,
+        until: Option<f32>,
         child: Box<Self>,
     },
     Optional {

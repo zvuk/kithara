@@ -914,7 +914,7 @@ fn a_reveal_leaves_no_segment_of_its_own_in_a_control_address() {
     let ExpandedNode::Row { children, .. } = &**root else {
         panic!("expected a row root");
     };
-    let ExpandedNode::Reveal { from, child } = &children[1] else {
+    let ExpandedNode::Reveal { from, child, .. } = &children[1] else {
         panic!("expected a reveal, got {:?}", children[1]);
     };
     let ExpandedNode::Control { path, .. } = &**child else {
@@ -1131,7 +1131,7 @@ fn a_layout_block_compiles_around_the_node_it_wraps() {
     let CompiledNode::Split { children, .. } = &ui.root else {
         panic!("expected a split root");
     };
-    let CompiledNode::Optional { block, child } = &children[0].1 else {
+    let CompiledNode::Optional { block, child } = &children[0].node else {
         panic!("expected an optional block");
     };
 
@@ -1596,7 +1596,7 @@ fn an_escaped_dollar_in_a_layout_block_binding_stays_a_literal() {
     let CompiledNode::Split { children, .. } = &ui.root else {
         panic!("expected a split root");
     };
-    let CompiledNode::Optional { block, .. } = &children[0].1 else {
+    let CompiledNode::Optional { block, .. } = &children[0].node else {
         panic!("expected an optional block");
     };
 
@@ -1884,6 +1884,128 @@ fn a_threshold_may_not_promise_room_the_container_does_not_have() {
     );
     compile_blocks(&block_resolver(&bar(300.0)), "blocks.klayout.ron")
         .expect("a threshold above what the cells take promises room they fit in");
+}
+
+/// One module per cell, each a knob of the width the bar of the canon gives
+/// it.
+fn cell_resolver(cells: &[(&str, f32)], layout: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert("cells.klayout.ron", layout);
+    for (name, width) in cells {
+        resolver.insert(
+            &format!("{name}.kmodule.ron"),
+            &format!(
+                r#"(schema: "kithara.module", version: 1, id: "{name}",
+                    root: Knob(id: "{name}", size: (w: Fixed({width}), h: Fixed(20.0))))"#
+            ),
+        );
+    }
+    resolver
+}
+
+const BAR_CELLS: [(&str, f32); 5] = [
+    ("menu", 40.0),
+    ("play", 38.0),
+    ("strip", 36.0),
+    ("wave", 60.0),
+    ("window", 80.0),
+];
+
+/// A split reading its own width stands the strip while the room is narrow and
+/// the wave once it is not, so the room it needs is what its standing cells
+/// settle on rather than what all of them take.
+#[kithara::test]
+fn a_measuring_split_needs_the_room_its_standing_cells_settle_on() {
+    let bar = |head: &str, strip: &str, wave: &str| {
+        format!(
+            r#"(schema: "kithara.layout", version: 1, id: "cells",
+                root: Split(axis: Horizontal, {head} children: [
+                    (node: Module(instance: "menu", source: "menu.kmodule.ron")),
+                    (node: Module(instance: "play", source: "play.kmodule.ron")),
+                    (node: Module(instance: "strip", source: "strip.kmodule.ron"){strip}),
+                    (node: Module(instance: "wave", source: "wave.kmodule.ron"){wave}),
+                    (node: Module(instance: "window", source: "window.kmodule.ron")),
+                ]))"#
+        )
+    };
+    let measured = bar(
+        "measure: Width, size: (w: Fill, h: Fixed(42.0)),",
+        ", until: Some(350.0)",
+        ", from: 350.0",
+    );
+    let plain = bar("", "", "");
+
+    let ui = compile_blocks(&cell_resolver(&BAR_CELLS, &measured), "cells.klayout.ron").unwrap();
+
+    assert_eq!(
+        ui.min,
+        SizeSpec::new(Dim::Fixed(194.0), Dim::Fixed(42.0)),
+        "the strip stands at the narrowest the bar gets, and the box holds its height",
+    );
+    let ui = compile_blocks(&cell_resolver(&BAR_CELLS, &plain), "cells.klayout.ron").unwrap();
+
+    assert_eq!(
+        ui.min,
+        SizeSpec::new(Dim::Fixed(254.0), Dim::Fixed(20.0)),
+        "a split reading no room needs every cell it holds",
+    );
+}
+
+/// A band names the room a cell waits for, so the cell has to fit in it.
+#[kithara::test]
+fn a_split_band_may_not_promise_room_the_cell_does_not_fit() {
+    let bar = |from: f32| {
+        format!(
+            r#"(schema: "kithara.layout", version: 1, id: "cells",
+                root: Split(axis: Horizontal, measure: Width, size: (w: Fill, h: Fixed(42.0)),
+                    children: [
+                        (node: Module(instance: "menu", source: "menu.kmodule.ron")),
+                        (node: Module(instance: "wide", source: "wide.kmodule.ron"), from: {from}),
+                    ]))"#
+        )
+    };
+    let cells = [("menu", 40.0), ("wide", 200.0)];
+
+    let error =
+        compile_blocks(&cell_resolver(&cells, &bar(100.0)), "cells.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RevealRoom { room, needs, axis, .. }
+            if *room == 100.0 && *needs == 240.0 && *axis == "width"),
+        "{error:?}"
+    );
+    compile_blocks(&cell_resolver(&cells, &bar(300.0)), "cells.klayout.ron")
+        .expect("a band above what the cells take promises room they fit in");
+}
+
+/// The box a split declares is a floor under the room it takes, so the rooms
+/// its bands answer for start at that floor: a band below it names a cell the
+/// minimum already stands.
+#[kithara::test]
+fn a_declared_box_raises_the_room_a_split_holds_its_bands_against() {
+    let bar = |room: f32| {
+        format!(
+            r#"(schema: "kithara.layout", version: 1, id: "cells",
+                root: Split(axis: Horizontal, measure: Width,
+                    size: (w: Fixed({room}), h: Fixed(42.0)),
+                    children: [
+                        (node: Module(instance: "menu", source: "menu.kmodule.ron")),
+                        (node: Module(instance: "wide", source: "wide.kmodule.ron"), from: 100.0),
+                    ]))"#
+        )
+    };
+    let cells = [("menu", 40.0), ("wide", 250.0)];
+
+    compile_blocks(&cell_resolver(&cells, &bar(300.0)), "cells.klayout.ron")
+        .expect("a box holding every cell standing in it leaves its bands nothing to promise");
+    let error =
+        compile_blocks(&cell_resolver(&cells, &bar(120.0)), "cells.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RevealRoom { room, needs, .. }
+            if *room == 120.0 && *needs == 290.0),
+        "{error:?}"
+    );
 }
 
 /// A node draws in the box it declares, so content that box cannot hold is a

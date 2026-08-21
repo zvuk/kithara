@@ -14,7 +14,7 @@ use super::{
     size::{node_size, visible_children},
 };
 use crate::{
-    compile::{CompiledNode, CompiledUi},
+    compile::{CompiledNode, CompiledUi, compiled_node_size},
     expand::{ExpandedNode, MeasureSpec, SurfaceSpec},
     layout::Axis,
     module::{ChromeStyle, TextAlign},
@@ -34,7 +34,6 @@ pub(super) fn render_compiled<'a>(
     reads: &dyn Reads,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    let snapshot = Answers { reads, ui };
     match node {
         CompiledNode::Optional { child, .. } => render_compiled(child, ui, reads, skin),
         CompiledNode::Adaptive {
@@ -55,49 +54,7 @@ pub(super) fn render_compiled<'a>(
             ),
         )
         .into(),
-        CompiledNode::Split { axis, children, .. } => match axis {
-            Axis::Horizontal => container(
-                Row::with_children(
-                    visible_children(children, &snapshot).map(|(weight, child)| {
-                        container(render_compiled(child, ui, reads, skin))
-                            .width(split_length(
-                                node_size(child, skin.document(), &snapshot).w,
-                                weight,
-                                skin,
-                            ))
-                            .height(length_for(
-                                node_size(child, skin.document(), &snapshot).h,
-                                Length::Fill,
-                            ))
-                            .into()
-                    }),
-                )
-                .width(Length::Fill)
-                .height(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-            Axis::Vertical => container(
-                Column::with_children(visible_children(children, &snapshot).map(
-                    |(weight, child)| {
-                        container(render_compiled(child, ui, reads, skin))
-                            .width(Length::Fill)
-                            .height(split_length(
-                                node_size(child, skin.document(), &snapshot).h,
-                                weight,
-                                skin,
-                            ))
-                            .into()
-                    },
-                ))
-                .width(Length::Fill)
-                .height(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-        },
+        CompiledNode::Split { .. } => render_split(node, ui, reads, skin),
         CompiledNode::Module {
             instance,
             module,
@@ -415,9 +372,82 @@ fn render_column<'a>(
     ))
 }
 
+/// A split lays its cells out along one axis, each taking the share of the
+/// room its weight names. One that measures itself hands the toolkit the band
+/// every cell stands in and lets the box it is given decide which of them do.
+fn render_split<'a>(
+    node: &CompiledNode,
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    let CompiledNode::Split {
+        axis,
+        measure,
+        children,
+        ..
+    } = node
+    else {
+        unreachable!("render_split is called only for a split")
+    };
+    let snapshot = Answers { reads, ui };
+    let cells: Vec<_> = visible_children(children, &snapshot)
+        .map(|cell| {
+            let size = node_size(&cell.node, skin.document(), &snapshot);
+            let element = container(render_compiled(&cell.node, ui, reads, skin));
+            let element = match axis {
+                Axis::Horizontal => element
+                    .width(split_length(size.w, cell.weight, skin))
+                    .height(length_for(size.h, Length::Fill)),
+                Axis::Vertical => {
+                    element
+                        .width(Length::Fill)
+                        .height(split_length(size.h, cell.weight, skin))
+                }
+            };
+            ((cell.from, cell.until), Element::from(element))
+        })
+        .collect();
+    if let Some(measure) = measure {
+        let declared = compiled_node_size(node);
+        return Revealed::new(
+            cells,
+            Shape {
+                flow: *axis,
+                measure: *measure,
+                size: Size::new(
+                    length_for(declared.w, Length::Fill),
+                    length_for(declared.h, Length::Fill),
+                ),
+                padding: Padding::ZERO,
+                gap: 0.0,
+                align: Alignment::Start,
+            },
+        )
+        .into();
+    }
+    let cells = cells.into_iter().map(|(_, element)| element);
+    let flow = match axis {
+        Axis::Horizontal => Element::from(
+            Row::with_children(cells)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        ),
+        Axis::Vertical => Element::from(
+            Column::with_children(cells)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        ),
+    };
+    container(flow)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
 /// A container that measures itself hands the toolkit every child it lays out
-/// with the threshold each appears at, and lets the box it is given decide
-/// which of them stand. A child the host hides never reaches it.
+/// with the band each stands in, and lets the box it is given decide which of
+/// them stand. A child the host hides never reaches it.
 fn revealed<'a>(
     children: &[ExpandedNode],
     shape: Shape,
@@ -427,8 +457,10 @@ fn revealed<'a>(
     let snapshot = Answers { reads, ui };
     let cells = visible(children, &snapshot)
         .map(|child| match child {
-            ExpandedNode::Reveal { from, child } => (*from, render_node(child, ui, reads, skin)),
-            child => (0.0, render_node(child, ui, reads, skin)),
+            ExpandedNode::Reveal { from, until, child } => {
+                ((*from, *until), render_node(child, ui, reads, skin))
+            }
+            child => ((0.0, None), render_node(child, ui, reads, skin)),
         })
         .collect();
     Revealed::new(cells, shape).into()

@@ -11,6 +11,8 @@ use crate::size::SizeSpec;
 #[non_exhaustive]
 pub struct WaveSkin {
     pub background: ColorRole,
+    /// Extent cached ahead of the playhead; the played part takes the accent.
+    pub cache_strip_color: ColorRole,
     pub cue_badge_background: ColorRole,
     pub cue_badge_text_color: ColorRole,
     pub cue_badge_text: FontSkin,
@@ -25,6 +27,8 @@ pub struct WaveSkin {
     pub bar_gap: f32,
     /// Width of every band bar; bands nest by level, not by width.
     pub bar_width: f32,
+    pub cache_strip_alpha: f32,
+    pub cache_strip_height: f32,
     pub content_inset: f32,
     pub cue_badge_size: f32,
     pub cue_line_width: f32,
@@ -89,8 +93,8 @@ pub struct WaveOverlaySkin {
 pub struct DeckSkin {
     pub artist: FontSkin,
     pub bpm_text: FontSkin,
-    pub micro_source: FontSkin,
-    pub micro_title: FontSkin,
+    pub micro_source: TextRoleSkin,
+    pub micro_title: TextRoleSkin,
     pub readout_label: FontSkin,
     pub time_text: FontSkin,
     pub title: FontSkin,
@@ -99,12 +103,10 @@ pub struct DeckSkin {
     pub time_size: SizeSpec,
     pub micro_summary_gap: f32,
     pub readout_gap: f32,
-    pub summary_height: f32,
     pub summary_padding_x: f32,
     pub summary_padding_y: f32,
     pub time_padding_x: f32,
     pub time_padding_y: f32,
-    pub summary_fill: u16,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -185,7 +187,7 @@ pub struct PopSkin {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct TelemetrySkin {
-    pub text: FontSkin,
+    pub text: TextRoleSkin,
     pub frame: FrameSkin,
     pub size: SizeSpec,
     pub padding_x: f32,

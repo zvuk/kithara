@@ -5,12 +5,17 @@ pub(super) struct Consts;
 impl Consts {
     pub(super) const BPM: &str = "70.00";
     pub(super) const BPM_VALUE: f32 = 70.0;
+    pub(super) const CACHED_NORMALIZED: f64 = 0.47;
     pub(super) const CUES: &[f32] = &[0.27, 0.31];
     pub(super) const DURATION_SECS: f64 = 360.0;
     pub(super) const KEY: &str = "4m";
     pub(super) const LOOP_REGION: [f32; 2] = [0.30, 0.34];
     pub(super) const POSITION_SECS: f64 = 103.0;
     pub(super) const REMAIN: &str = "−04:17";
+    pub(super) const ON_AIR: &str = "ON AIR · DECK A";
+    pub(super) const LATENCY: &str = "5.3 MS";
+    pub(super) const RECORD_TIME: &str = "00:42:18";
+    pub(super) const ENGINE_LOAD: f64 = 0.21;
     pub(super) const TEMPO: &str = "+0.0%";
     pub(super) const TRACKLIST_LIBRARY: [bool; 9] =
         [true, true, true, true, true, true, true, false, false];

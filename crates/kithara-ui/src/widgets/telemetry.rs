@@ -6,7 +6,7 @@ use iced::{
 
 use crate::{
     module::ScalarFormat,
-    render::{ReadValue, Skin, UiEvent, fonts, shaped_text},
+    render::{ReadValue, Skin, UiEvent, typography::styled_text},
     widgets::Widget,
 };
 
@@ -37,15 +37,10 @@ impl<'a> Widget<'a> for Telemetry<'_, '_, '_> {
             )
         };
         let palette = self.skin.palette;
-        let readout = container(
-            shaped_text(formatted)
-                .font(fonts::mono(self.skin.telemetry.text.weight))
-                .size(self.skin.telemetry.text.size)
-                .color(palette.text),
-        )
-        .height(Length::Fill)
-        .align_x(Horizontal::Center)
-        .align_y(Vertical::Center);
+        let readout = container(styled_text(formatted, self.skin.telemetry.text, self.skin))
+            .height(Length::Fill)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center);
         if !self.framed {
             return readout.width(Length::Shrink).into();
         }

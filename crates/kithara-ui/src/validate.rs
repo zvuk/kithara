@@ -76,9 +76,10 @@ fn check_block_position(
 }
 
 /// A threshold names a number the enclosing container measures, so only that
-/// container can answer one.
+/// container can answer one. A band closes above the room it opens in.
 fn check_reveal(
     from: f32,
+    until: Option<f32>,
     path: &NodePath,
     origin: &SourceUri,
     sibling: Sibling,
@@ -96,7 +97,15 @@ fn check_reveal(
             from,
         });
     }
-    Ok(())
+    match until {
+        Some(until) if !until.is_finite() || until <= from => Err(UiDocError::RevealBand {
+            origin: origin.clone(),
+            path: path.render(),
+            from,
+            until,
+        }),
+        _ => Ok(()),
+    }
 }
 
 fn walk_layout(
@@ -107,7 +116,19 @@ fn walk_layout(
     sibling: Sibling,
 ) -> Result<(), UiDocError> {
     match node {
-        LayoutNode::Split { children, .. } => {
+        LayoutNode::Split {
+            measure,
+            size,
+            children,
+            ..
+        } => {
+            let among = match measure {
+                Some(axis) => {
+                    check_measured_box(*axis, *size, &path.push("Split"), origin)?;
+                    Sibling::Measured
+                }
+                None => Sibling::Among,
+            };
             for (index, child) in children.iter().enumerate() {
                 let child_path = path.push(format!("Split[{index}]"));
                 let weight = child.weight;
@@ -118,7 +139,10 @@ fn walk_layout(
                         value: format!("{weight}"),
                     });
                 }
-                walk_layout(&child.node, &child_path, origin, seen, Sibling::Among)?;
+                if child.from != 0.0 || child.until.is_some() {
+                    check_reveal(child.from, child.until, &child_path, origin, among)?;
+                }
+                walk_layout(&child.node, &child_path, origin, seen, among)?;
             }
             Ok(())
         }
@@ -336,9 +360,9 @@ fn walk_module(
             }
             Ok(())
         }
-        ControlNode::Reveal { from, child } => {
+        ControlNode::Reveal { from, until, child } => {
             let here = path.push("Reveal");
-            check_reveal(*from, &here, origin, sibling)?;
+            check_reveal(*from, *until, &here, origin, sibling)?;
             walk_module(child, &here, origin, seen, Sibling::Only)
         }
         ControlNode::Include { id, .. } => {
@@ -1045,6 +1069,91 @@ mod tests {
         ));
     }
 
+    fn layout_root(root: &str) -> Result<(), UiDocError> {
+        let text = format!(r#"(schema: "kithara.layout", version: 1, id: "l", root: {root})"#);
+        let doc = parse_layout(&text, &origin())?;
+        check_layout_instances(&doc, &origin())
+    }
+
+    /// A split of one module cell, `head` on the split and `tail` on the cell.
+    fn split_cell(head: &str, tail: &str) -> Result<(), UiDocError> {
+        layout_root(&format!(
+            r#"Split(axis: Horizontal, {head} children: [
+                (node: Module(instance: "deck-a", source: "m.ron"){tail}),
+            ])"#
+        ))
+    }
+
+    fn measuring_split_cell(tail: &str) -> Result<(), UiDocError> {
+        split_cell("measure: Width, size: (w: Fill, h: Fixed(42.0)),", tail)
+    }
+
+    /// Only the split that measures itself answers a threshold, so a band
+    /// anywhere else would stand for good with nothing deciding otherwise.
+    #[kithara::test]
+    fn a_band_stands_only_among_the_cells_of_a_measuring_split() {
+        for band in [", from: 350.0", ", until: Some(350.0)"] {
+            let error = split_cell("", band).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::UnmeasuredReveal { path, .. }
+                    if path == "root/Split[0]"),
+                "{band}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_measuring_split_reveals_its_own_cells() {
+        layout_root(
+            r#"Split(axis: Horizontal, measure: Width, size: (w: Fill, h: Fixed(42.0)), children: [
+                (node: Module(instance: "menu", source: "m.ron")),
+                (node: Module(instance: "strip", source: "m.ron"), until: Some(350.0)),
+                (node: Module(instance: "wave", source: "m.ron"), from: 350.0),
+            ])"#,
+        )
+        .unwrap();
+    }
+
+    #[kithara::test]
+    fn a_measuring_split_must_declare_the_axis_it_measures() {
+        for head in [
+            "measure: Width,",
+            "measure: Height,",
+            "measure: Width, size: (w: Shrink, h: Fill),",
+            "measure: Height, size: (w: Fill, h: Shrink),",
+        ] {
+            let error = split_cell(head, "").unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::UnmeasuredAxis { path, .. }
+                    if path == "root/Split"),
+                "{head}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_split_band_is_finite_and_closes_above_the_room_it_opens_in() {
+        for band in [", from: -1.0", ", from: inf", ", from: NaN"] {
+            let error = measuring_split_cell(band).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::RevealThreshold { .. }),
+                "{band}: {error:?}",
+            );
+        }
+        for band in [
+            ", from: 350.0, until: Some(350.0)",
+            ", from: 350.0, until: Some(0.0)",
+            ", until: Some(-inf)",
+            ", until: Some(NaN)",
+        ] {
+            let error = measuring_split_cell(band).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::RevealBand { .. }),
+                "{band}: {error:?}",
+            );
+        }
+    }
+
     #[kithara::test]
     fn empty_and_parameter_like_ids_are_rejected() {
         for id in ["", "$deck"] {
@@ -1284,6 +1393,37 @@ mod tests {
                 "{from}: {error:?}",
             );
         }
+    }
+
+    /// A band names the room a cell stands in, so its ceiling lies above the
+    /// floor it closes.
+    #[kithara::test]
+    fn a_band_closes_above_the_room_it_opens_in() {
+        for until in ["0.0", "350.0", "inf", "-inf", "NaN"] {
+            let root = format!(
+                r#"Row({BAR} children: [Reveal(from: 350.0, until: Some({until}),
+                    child: Knob(id: "a"))])"#
+            );
+            let error = module_root(&root).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::RevealBand { .. }),
+                "{until}: {error:?}",
+            );
+        }
+    }
+
+    /// The canon holds a stretching strip and the wave that replaces it in one
+    /// line, so a band closing where the next one opens is a line a container
+    /// may stand.
+    #[kithara::test]
+    fn bands_meeting_at_one_number_stand_in_one_line() {
+        module_root(&format!(
+            r#"Row({BAR} children: [
+                Reveal(from: 0.0, until: Some(350.0), child: Knob(id: "strip")),
+                Reveal(from: 350.0, child: Knob(id: "wave")),
+            ])"#
+        ))
+        .unwrap();
     }
 
     #[kithara::test]

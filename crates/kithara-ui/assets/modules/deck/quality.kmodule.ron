@@ -13,18 +13,24 @@
             press: Command(id: "deck.stream.toggle_quality_menu", with: { "deck": "$deck" }),
             child: Row(
                 size: (w: Shrink, h: Fill),
-                pad_x: 10.0,
-                gap: 6.0,
+                pad_x: 9.0,
+                gap: 5.0,
                 frame: (top: false, right: false, bottom: false, left: true),
                 frame_color: LineInner,
                 active: Model(id: "deck.stream.quality_menu", with: { "deck": "$deck" }),
                 active_background: BgSelect,
                 children: [
-                    Text(id: "label", style: MicroLabel, label: "@deck.stream.hls_label"),
+                    Row(
+                        id: "dot",
+                        size: (w: Fixed(5.0), h: Fixed(5.0)),
+                        gap: 0.0,
+                        background: Success,
+                        children: [],
+                    ),
                     Text(
                         id: "value",
                         style: Mono,
-                        color: Text,
+                        color: TextDim,
                         read: Model(id: "deck.stream.quality", with: { "deck": "$deck" }),
                     ),
                     Glyph(id: "chevron", icon: ChevronDown, style: MenuCell, color: Muted),

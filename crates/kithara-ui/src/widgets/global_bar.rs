@@ -43,7 +43,7 @@ impl<'a> Widget<'a> for Brand<'_> {
             self.skin.global_bar.brand_padding_x,
         ])
         .width(Length::Fixed(self.skin.global_bar.brand_width))
-        .height(Length::Fixed(self.skin.global_bar.height))
+        .height(Length::Fill)
         .align_y(Vertical::Center)
         .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
         .into()
@@ -92,7 +92,7 @@ impl<'a> Widget<'a> for PresetSelector<'_, '_> {
             self.skin.global_bar.selector_padding_x,
         ])
         .width(Length::Fixed(self.skin.global_bar.selector_width))
-        .height(Length::Fixed(self.skin.global_bar.height))
+        .height(Length::Fill)
         .center_y(Length::Fill)
         .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
         .into()
@@ -109,7 +109,7 @@ impl<'a> Widget<'a> for Spacer<'_> {
         let palette = self.skin.palette;
         container(Space::new())
             .width(Length::Fill)
-            .height(Length::Fixed(self.skin.global_bar.height))
+            .height(Length::Fill)
             .align_y(Vertical::Center)
             .style(move |_| {
                 ContainerStyle::default().background(Background::Color(palette.bg_panel))
