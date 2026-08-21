@@ -10,7 +10,7 @@ use kithara_ui::{
     size::{Dim, SizeSpec, control_size},
 };
 
-use super::{cache::DeckLayout, compile::compile_ui, scope::MICRO_DECK};
+use super::{cache::DeckLayout, compile::compile_ui, events::route, scope::MICRO_DECK};
 
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
@@ -51,7 +51,7 @@ fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
     while let Some(node) = stack.pop() {
         match node {
             CompiledNode::Split { children, .. } => {
-                stack.extend(children.iter().map(|(_, child)| child));
+                stack.extend(children.iter().map(|cell| &cell.node));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
             CompiledNode::Adaptive { base, steps, .. } => {
@@ -131,7 +131,7 @@ fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
     while let Some(node) = stack.pop() {
         match node {
             CompiledNode::Split { children, .. } => {
-                stack.extend(children.iter().map(|(_, child)| child));
+                stack.extend(children.iter().map(|cell| &cell.node));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
             CompiledNode::Adaptive { base, steps, .. } => {
@@ -160,8 +160,6 @@ fn documents_compile_against_the_registry() {
 }
 
 /// The width from which the window lays out every module it has.
-const WIDE_FROM: f32 = 1080.0;
-
 /// Every module instance a branch lays out, sorted; a module standing in two
 /// branches of one adaptive node is named once per branch.
 fn instances<'a>(ui: &'a CompiledUi, node: &'a CompiledNode) -> Vec<&'a str> {
@@ -170,7 +168,7 @@ fn instances<'a>(ui: &'a CompiledUi, node: &'a CompiledNode) -> Vec<&'a str> {
     while let Some(node) = stack.pop() {
         match node {
             CompiledNode::Split { children, .. } => {
-                stack.extend(children.iter().map(|(_, child)| child));
+                stack.extend(children.iter().map(|cell| &cell.node));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
             CompiledNode::Adaptive { base, steps, .. } => {
@@ -185,30 +183,12 @@ fn instances<'a>(ui: &'a CompiledUi, node: &'a CompiledNode) -> Vec<&'a str> {
     out
 }
 
-/// The gate the width step carries, as `(micro form, threshold, full form)`:
-/// the full shape asks for room on both axes, and this node is the height one.
-fn height_gate(ui: &CompiledUi, layout: DeckLayout) -> (&CompiledNode, f32, &CompiledNode) {
-    let CompiledNode::Adaptive { steps, .. } = &ui.root else {
-        panic!("{layout:?}: expected an adaptive root");
-    };
-    let CompiledNode::Adaptive {
-        axis, base, steps, ..
-    } = &steps[0].1
-    else {
-        panic!("{layout:?}: the width step must gate the full shape by height");
-    };
-
-    assert_eq!(*axis, MeasureAxis::Height, "{layout:?}");
-    assert_eq!(steps.len(), 1, "{layout:?}: the gate holds two forms");
-    (base, steps[0].0, &steps[0].1)
-}
-
 fn module<'a>(ui: &'a CompiledUi, want: &str) -> &'a CompiledNode {
     let mut stack = vec![&ui.root];
     while let Some(node) = stack.pop() {
         match node {
             CompiledNode::Split { children, .. } => {
-                stack.extend(children.iter().map(|(_, child)| child));
+                stack.extend(children.iter().map(|cell| &cell.node));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
             CompiledNode::Adaptive { base, steps, .. } => {
@@ -254,7 +234,10 @@ fn module_root<'a>(ui: &'a CompiledUi, instance: &str) -> &'a ExpandedNode {
 
 /// The direct cells of a container that measures itself, as
 /// `(threshold, cell)` in document order.
-fn cells<'a>(node: &'a ExpandedNode, axis: MeasureAxis) -> Vec<(Option<f32>, &'a ExpandedNode)> {
+fn cells<'a>(
+    node: &'a ExpandedNode,
+    axis: MeasureAxis,
+) -> Vec<((f32, Option<f32>), &'a ExpandedNode)> {
     let (ExpandedNode::Row {
         measure, children, ..
     }
@@ -272,64 +255,68 @@ fn cells<'a>(node: &'a ExpandedNode, axis: MeasureAxis) -> Vec<(Option<f32>, &'a
     children
         .iter()
         .map(|child| match child {
-            ExpandedNode::Reveal { from, child } => (Some(*from), &**child),
-            child => (None, child),
+            ExpandedNode::Reveal {
+                from, until, child, ..
+            } => ((*from, *until), &**child),
+            child => ((0.0, None), child),
         })
         .collect()
 }
 
 /// The direct cells of a bar, as `(threshold, address)` in document order.
-fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<(Option<f32>, &'a str)> {
+fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<((f32, Option<f32>), &'a str)> {
     cells(bar, MeasureAxis::Width)
         .into_iter()
-        .map(|(from, cell)| (from, cell_id(ui, cell)))
+        .map(|(band, cell)| (band, cell_id(ui, cell)))
         .collect()
 }
 
-/// The panes the micro form stacks, as `(threshold, pane)` in document order.
-fn micro_panes<'a>(ui: &'a CompiledUi) -> Vec<(Option<f32>, &'a ExpandedNode)> {
-    cells(module_root(ui, "micro"), MeasureAxis::Height)
-}
-
-/// The bar the micro form stands at every height.
-fn micro_bar<'a>(ui: &'a CompiledUi) -> &'a ExpandedNode {
-    let Some((None, bar)) = micro_panes(ui).first().copied() else {
-        panic!("the micro form stands its bar under no threshold");
-    };
-    bar
-}
-
-/// The cell the micro bar stretches over the room its fixed cells leave, as
-/// the form it takes at every width and the steps that replace that form.
-fn stretch<'a>(bar: &'a ExpandedNode) -> (&'a ExpandedNode, &'a [(f32, ExpandedNode)]) {
-    cells(bar, MeasureAxis::Width)
-        .into_iter()
-        .find_map(|(_, cell)| match cell {
-            ExpandedNode::Adaptive { base, steps, .. } => Some((&**base, steps.as_slice())),
-            _ => None,
-        })
-        .expect("the micro bar stretches one cell")
-}
-
-/// The box a cell declares for itself.
-fn cell_box(cell: &ExpandedNode) -> SizeSpec {
-    let (ExpandedNode::Control {
-        size: Some(size), ..
-    }
-    | ExpandedNode::Row {
-        size: Some(size), ..
-    }) = cell
+/// The blocks the window stacks, as `(band, block)` in document order.
+fn root_cells(ui: &CompiledUi) -> Vec<((f32, Option<f32>), &CompiledNode)> {
+    let CompiledNode::Split {
+        measure, children, ..
+    } = &ui.root
     else {
-        panic!("the cell declares its own box");
+        panic!("the window stacks its blocks in one split");
     };
-    *size
+    assert_eq!(
+        *measure,
+        Some(MeasureAxis::Height),
+        "the window reads its own height",
+    );
+    children
+        .iter()
+        .map(|cell| ((cell.from, cell.until), &cell.node))
+        .collect()
 }
 
-/// What stands beside the stretched cell at every width. The tree's minimum
-/// width is the micro bar at its narrowest, where that cell is at its own, so
-/// the rest of that number is them.
-fn beside_stretch(ui: &CompiledUi, bar: &ExpandedNode) -> f32 {
-    ui.min.w.min() - cell_box(stretch(bar).0).w.min()
+/// The blocks standing in a window of `room`, named by their instances.
+fn standing<'a>(
+    ui: &'a CompiledUi,
+    cells: &[((f32, Option<f32>), &'a CompiledNode)],
+    room: f32,
+) -> Vec<&'a str> {
+    let mut out: Vec<&str> = cells
+        .iter()
+        .filter(|((from, until), _)| *from <= room && until.is_none_or(|until| room < until))
+        .flat_map(|(_, node)| instances(ui, node))
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// What the blocks standing in a window of `room` need of its height.
+fn standing_height(cells: &[((f32, Option<f32>), &CompiledNode)], room: f32) -> f32 {
+    cells
+        .iter()
+        .filter(|((from, until), _)| *from <= room && until.is_none_or(|until| room < until))
+        .map(|(_, node)| compiled_min(node, builtin::skin_doc()).h.min())
+        .sum()
+}
+
+/// The bar the window stands while it is too short for the decks.
+fn micro_bar<'a>(ui: &'a CompiledUi) -> &'a ExpandedNode {
+    module_root(ui, "micro-bar")
 }
 
 /// The box the micro bar declares for itself.
@@ -357,21 +344,9 @@ fn list_min(pane: &ExpandedNode) -> f32 {
     found.expect("the browser panel draws a track list").h.min()
 }
 
-/// Every part the micro form draws, named by the include that holds it.
-fn micro_parts(ui: &CompiledUi) -> Vec<&str> {
-    let mut out: Vec<&str> = control_paths(ui)
-        .into_iter()
-        .filter_map(|path| path.strip_prefix("micro/"))
-        .filter_map(|rest| rest.split_once('/').map(|(part, _)| part))
-        .collect();
-    out.sort_unstable();
-    out.dedup();
-    out
-}
-
 /// The first segment of an address names the layout instance that answers it,
-/// and `gui::ui::events::control` routes exactly these; a document minting a
-/// new one needs a new arm there or its controls go nowhere.
+/// and `gui::ui::events::route` is the host's own list; a document minting an
+/// instance that list does not name sends its controls nowhere.
 #[kithara::test]
 fn every_address_names_an_instance_the_host_routes() {
     for layout in LAYOUTS {
@@ -382,8 +357,14 @@ fn every_address_names_an_instance_the_host_routes() {
             .collect();
         named.sort_unstable();
         named.dedup();
+        for instance in &named {
+            assert!(
+                route(instance).is_some(),
+                "{layout:?}: `{instance}` addresses controls that `events::route` does not name",
+            );
+        }
 
-        let mut want = vec!["bar", "deck-a", "library", "micro", "mixer", "overview"];
+        let mut want = vec!["bar", "deck-a", "library", "micro-bar", "mixer", "overview"];
         if layout == DeckLayout::Dual {
             want.push("deck-b");
         }
@@ -392,71 +373,67 @@ fn every_address_names_an_instance_the_host_routes() {
     }
 }
 
-/// The width the window is given picks between the micro form and the gate the
-/// full one stands behind, and the root answers the box it declares whichever
-/// it draws.
+/// Each block arrives once the window is tall enough to hold it under the ones
+/// above it, so every threshold is what the blocks standing at it need.
 #[kithara::test]
-fn the_window_takes_its_shape_from_the_width_it_is_given() {
+fn every_block_stands_once_the_window_holds_the_ones_above_it() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
-        let CompiledNode::Adaptive {
-            axis, size, steps, ..
-        } = &ui.root
-        else {
-            panic!("{layout:?}: expected an adaptive root, got {:?}", ui.root);
-        };
+        let cells = root_cells(&ui);
 
-        assert_eq!(*axis, MeasureAxis::Width, "{layout:?}");
-        assert_eq!(*size, SizeSpec::new(Dim::Fill, Dim::Fill), "{layout:?}");
         assert_eq!(ui.size, SizeSpec::new(Dim::Fill, Dim::Fill), "{layout:?}");
-        assert_eq!(steps.len(), 1, "{layout:?}");
-        assert_eq!(steps[0].0, WIDE_FROM, "{layout:?}");
+        for from in cells.iter().map(|((from, _), _)| *from) {
+            if from > 0.0 {
+                assert_eq!(
+                    standing_height(&cells, from),
+                    from,
+                    "{layout:?}: the blocks standing at {from}",
+                );
+            }
+        }
     }
 }
 
-/// A window too narrow for both deck panes lays out the bar and the browser;
-/// the decks, the mixer and the overview row leave with the shape they belong
-/// to.
+/// The window takes its blocks one at a time: the bar alone at its narrowest,
+/// then the browser, then the overview row, then the decks and the mixer with
+/// the full bar in place of the micro one.
 #[kithara::test]
-fn a_narrow_window_lays_out_the_bar_and_the_browser() {
+fn the_window_takes_its_blocks_one_by_one_as_it_grows_taller() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
-        let CompiledNode::Adaptive { base, .. } = &ui.root else {
-            panic!("{layout:?}: expected an adaptive root");
+        let cells = root_cells(&ui);
+        let mut ladder: Vec<f32> = cells
+            .iter()
+            .map(|((from, _), _)| *from)
+            .filter(|from| *from > 0.0)
+            .collect();
+        ladder.sort_by(f32::total_cmp);
+        ladder.dedup();
+        let [browser, overview, decks] = ladder[..] else {
+            panic!("{layout:?}: the window climbs three rungs, got {ladder:?}");
         };
 
-        assert_eq!(instances(&ui, base), ["micro"], "{layout:?}");
-        assert_eq!(micro_parts(&ui), ["bar", "library"], "{layout:?}");
-        let (_, _, full) = height_gate(&ui, layout);
-        let mut want = vec!["bar", "library", "mixer", "overview", "deck-a"];
+        assert_eq!(
+            standing(&ui, &cells, ui.min.h.min()),
+            ["micro-bar"],
+            "{layout:?}",
+        );
+        assert_eq!(
+            standing(&ui, &cells, browser),
+            ["library", "micro-bar"],
+            "{layout:?}",
+        );
+        assert_eq!(
+            standing(&ui, &cells, overview),
+            ["library", "micro-bar", "overview"],
+            "{layout:?}",
+        );
+        let mut want = vec!["bar", "deck-a", "library", "mixer", "overview"];
         if layout == DeckLayout::Dual {
             want.push("deck-b");
         }
         want.sort_unstable();
-        assert_eq!(instances(&ui, full), want, "{layout:?}");
-    }
-}
-
-/// The full shape needs room on both axes: the width step it stands under
-/// gates it by its own compiled minimum height, so a window wide enough for it
-/// draws it once the rows it stacks fit. Under that height the step draws the
-/// micro form, the same one a narrow window draws.
-#[kithara::test]
-fn the_full_shape_stands_only_where_the_window_is_tall_enough_for_it() {
-    for layout in LAYOUTS {
-        let ui = compile_ui(layout).unwrap();
-        let (micro, from, full) = height_gate(&ui, layout);
-
-        assert_eq!(instances(&ui, micro), ["micro"], "{layout:?}");
-        assert!(
-            matches!(full, CompiledNode::Split { .. }),
-            "{layout:?}: the full shape stacks its rows in a column",
-        );
-        assert_eq!(
-            from,
-            compiled_min(full, builtin::skin_doc()).h.min(),
-            "{layout:?}",
-        );
+        assert_eq!(standing(&ui, &cells, decks), want, "{layout:?}");
     }
 }
 
@@ -470,62 +447,47 @@ fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
         assert_eq!(
             bar_cells(&ui, micro_bar(&ui)),
             [
-                (None, "micro/bar/menu/pop"),
-                (None, "micro/bar/play"),
-                (None, "micro/bar/drag"),
-                (Some(440.0), "micro/bar/remain"),
-                (None, "micro/bar/before-window"),
-                (None, "micro/bar/window"),
+                ((0.0, None), "micro-bar/menu/pop"),
+                ((0.0, None), "micro-bar/play"),
+                ((590.0, None), "micro-bar/summary"),
+                ((0.0, Some(350.0)), "micro-bar/drag"),
+                ((350.0, None), "micro-bar/wave"),
+                ((670.0, None), "micro-bar/speaker"),
+                ((440.0, None), "micro-bar/remain"),
+                ((0.0, None), "micro-bar/before-window"),
+                ((0.0, None), "micro-bar/window"),
             ],
             "{layout:?}",
         );
     }
 }
 
-/// The wave replaces the drag strip in place, so its threshold is read
-/// against that strip. The window minimum is that strip at its narrowest
-/// beside the cells that stand at every width, which carries one number into
-/// the other.
+/// The drag strip and the wave share one place in the bar: the strip ends at
+/// the width the wave starts at, so exactly one of them stands at any width
+/// and a cell arriving beside the wave narrows it rather than taking it away.
 #[kithara::test]
-fn the_micro_wave_stands_once_the_strip_it_replaces_has_room() {
+fn the_micro_drag_strip_hands_its_place_to_the_wave() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
-        let bar = micro_bar(&ui);
-        let [(from, wave)] = stretch(bar).1 else {
-            panic!("{layout:?}: the strip takes one other form");
+        let cells = bar_cells(&ui, micro_bar(&ui));
+        let band = |id: &str| {
+            cells
+                .iter()
+                .find_map(|(band, cell)| (*cell == id).then_some(*band))
+                .unwrap_or_else(|| panic!("{layout:?}: the bar names {id}"))
         };
 
-        assert_eq!(cell_id(&ui, wave), "micro/bar/wave", "{layout:?}");
+        let (strip_from, strip_until) = band("micro-bar/drag");
+        let (wave_from, wave_until) = band("micro-bar/wave");
+
         assert_eq!(
-            from + beside_stretch(&ui, bar),
-            350.0,
-            "{layout:?}: the bar width the wave stands from",
+            strip_from, 0.0,
+            "{layout:?}: the strip stands at the narrowest bar"
         );
-    }
-}
-
-/// The time cell takes its room out of the same strip, so a wave that stands
-/// has to outlast it: the strip left once the time cell stands still reaches
-/// the wave.
-#[kithara::test]
-fn the_micro_wave_outlasts_the_time_cell_taking_its_room() {
-    for layout in LAYOUTS {
-        let ui = compile_ui(layout).unwrap();
-        let bar = micro_bar(&ui);
-        let [(from, _)] = stretch(bar).1 else {
-            panic!("{layout:?}: the strip takes one other form");
-        };
-        let revealed: Vec<_> = cells(bar, MeasureAxis::Width)
-            .into_iter()
-            .filter_map(|(at, cell)| at.map(|at| (at, cell)))
-            .collect();
-        let [(stands, time)] = revealed[..] else {
-            panic!("{layout:?}: the micro bar reveals the time cell alone");
-        };
-
-        assert!(
-            from + beside_stretch(&ui, bar) + cell_box(time).w.min() <= stands,
-            "{layout:?}",
+        assert_eq!(strip_until, Some(wave_from), "{layout:?}");
+        assert_eq!(
+            wave_until, None,
+            "{layout:?}: the wave stands from its width up"
         );
     }
 }
@@ -540,13 +502,13 @@ fn the_bar_reveals_its_telemetry_as_the_window_widens() {
         assert_eq!(
             bar_cells(&ui, module_root(&ui, "bar")),
             [
-                (None, "bar/menu/pop"),
-                (Some(1250.0), "bar/brand"),
-                (None, "bar/drag"),
-                (Some(1120.0), "bar/cpu-block"),
-                (None, "bar/broadcast-block"),
-                (None, "bar/before-window"),
-                (None, "bar/window"),
+                ((0.0, None), "bar/menu/pop"),
+                ((1250.0, None), "bar/brand"),
+                ((0.0, None), "bar/drag"),
+                ((1120.0, None), "bar/cpu-block"),
+                ((0.0, None), "bar/broadcast-block"),
+                ((0.0, None), "bar/before-window"),
+                ((0.0, None), "bar/window"),
             ],
             "{layout:?}",
         );
@@ -560,24 +522,30 @@ fn the_bar_reveals_its_telemetry_as_the_window_widens() {
 fn the_browser_panel_stands_once_the_window_is_tall_enough_for_it() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
-        let panes = micro_panes(&ui);
-        let [(None, bar), (Some(from), panel)] = panes[..] else {
-            panic!("{layout:?}: the micro form stands a bar and reveals a panel over it");
+        let cells = root_cells(&ui);
+        let Some(((from, None), _)) = cells
+            .iter()
+            .copied()
+            .find(|(_, node)| instances(&ui, node) == ["library"])
+        else {
+            panic!("{layout:?}: the window stands the browser over the bar");
         };
 
-        assert_eq!(cell_id(&ui, panel), "micro/library-block", "{layout:?}");
-        assert_eq!(from, bar_box(bar).h.min() + list_min(panel), "{layout:?}");
+        assert_eq!(
+            from,
+            bar_box(micro_bar(&ui)).h.min() + list_min(module_root(&ui, "library")),
+            "{layout:?}",
+        );
     }
 }
 
 /// The window may be squeezed to the micro bar and no further, so the tree's
-/// minimum is the micro form's own. The width is the room the bar's standing
-/// cells settle on, which no document names; the height is the box it declares.
+/// minimum is that bar's own. The width is the room the bar's standing cells
+/// settle on, which no document names; the height is the box it declares.
 #[kithara::test]
 fn the_window_minimum_holds_the_micro_bar() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
-        let (micro, _, _) = height_gate(&ui, layout);
 
         assert_eq!(
             ui.min,
@@ -586,7 +554,7 @@ fn the_window_minimum_holds_the_micro_bar() {
         );
         assert_eq!(
             ui.min,
-            compiled_min(micro, builtin::skin_doc()),
+            compiled_min(module(&ui, "micro-bar"), builtin::skin_doc()),
             "{layout:?}",
         );
     }
@@ -604,16 +572,16 @@ fn every_walker_reaches_the_nodes_the_documents_declare() {
             (
                 "controls",
                 controls(&ui).len(),
-                if dual { 264 } else { 206 },
+                if dual { 213 } else { 156 },
             ),
             ("surfaces", surfaces(&ui).len(), layout.decks()),
             (
                 "pressables",
                 pressables(&ui).len(),
-                if dual { 59 } else { 48 },
+                if dual { 47 } else { 36 },
             ),
             ("drop_targets", drop_targets(&ui).len(), layout.decks()),
-            ("guarded_by", guarded_by(&ui, "ui.module.hidden").len(), 6),
+            ("guarded_by", guarded_by(&ui, "ui.module.hidden").len(), 4),
             (
                 "optional_modules",
                 optional_modules(&ui, "ui.module.hidden").len(),
@@ -645,7 +613,7 @@ fn deck_scoped_controls_are_routed_to_the_deck_they_read() {
                     format!("overview/{letter}/"),
                 ];
                 if letter == MICRO_DECK {
-                    routed.push("micro/bar/".to_owned());
+                    routed.push("micro-bar/".to_owned());
                 }
                 assert!(
                     routed.iter().any(|prefix| path.starts_with(prefix)),
@@ -741,8 +709,8 @@ fn the_bar_owns_the_window_chrome() {
             [
                 "bar/drag",
                 "bar/window",
-                "micro/bar/drag",
-                "micro/bar/window",
+                "micro-bar/drag",
+                "micro-bar/window",
             ],
             "{layout:?}",
         );
@@ -1174,7 +1142,7 @@ fn guarded_by<'a>(ui: &'a CompiledUi, key: &str) -> Vec<&'a str> {
     while let Some(node) = stack.pop() {
         match node {
             CompiledNode::Split { children, .. } => {
-                stack.extend(children.iter().map(|(_, child)| child));
+                stack.extend(children.iter().map(|cell| &cell.node));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
             CompiledNode::Adaptive { base, steps, .. } => {
@@ -1199,8 +1167,8 @@ fn optional_modules<'a>(ui: &'a CompiledUi, key: &str) -> Vec<(&'a str, &'a str)
     ) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
-                    walk(child, ui, key, guard, out);
+                for cell in children {
+                    walk(&cell.node, ui, key, guard, out);
                 }
             }
             CompiledNode::Adaptive { base, steps, .. } => {

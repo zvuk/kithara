@@ -95,6 +95,12 @@ static ENDPOINTS: &[Endpoint] = &[
         scopes: Endpoint::DECK,
     },
     Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.track.title",
+        value: ValueKind::Text,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
         category: EndpointCategory::Command,
         id: "deck.transport.toggle_play",
         value: ValueKind::Trigger,

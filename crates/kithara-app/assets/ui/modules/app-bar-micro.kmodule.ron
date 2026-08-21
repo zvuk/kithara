@@ -21,20 +21,49 @@
                 read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
             ),
-            Adaptive(
-                id: "stretch",
-                measure: Width,
-                size: (w: Fill, h: Fill),
-                base: WindowDrag(id: "drag", size: (w: Range(min: 36.0, max: None), h: Fill)),
-                steps: [
-                    (from: 165.0, node: Wave(
-                        id: "wave",
+            Reveal(from: 590.0, child: Row(
+                id: "now-cell",
+                gap: 0.0,
+                size: (w: Shrink, h: Fill),
+                frame: (top: false, right: false, bottom: false, left: true),
+                frame_color: LineInner,
+                children: [
+                    DeckSummary(
+                        id: "summary",
+                        size: (w: Fixed(230.0), h: Fill),
                         style: Micro,
-                        read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
-                        write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
-                    )),
+                        read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
+                    ),
                 ],
-            ),
+            )),
+            Reveal(from: 0.0, until: Some(350.0), child: WindowDrag(
+                id: "drag",
+                size: (w: Range(min: 36.0, max: None), h: Fill),
+            )),
+            Reveal(from: 350.0, child: Wave(
+                id: "wave",
+                size: (w: Range(min: 60.0, max: None), h: Fill),
+                style: Micro,
+                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+                write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
+            )),
+            Reveal(from: 670.0, child: Row(
+                id: "volume-cell",
+                gap: 6.0,
+                pad_x: 9.0,
+                size: (w: Shrink, h: Fill),
+                frame: (top: false, right: false, bottom: false, left: true),
+                frame_color: LineInner,
+                children: [
+                    Glyph(id: "speaker", icon: SpeakerHigh, style: Menu, color: Muted),
+                    VuStereo(
+                        id: "volume",
+                        size: (w: Fixed(64.0), h: Fixed(22.0)),
+                        read: Telemetry(id: "mixer.volume", with: { "deck": "$deck" }),
+                        write: Parameter(id: "mixer.trim", with: { "deck": "$deck" }),
+                    ),
+                ],
+            )),
             Reveal(from: 440.0, child: Row(
                 id: "remain-cell",
                 size: (w: Fixed(62.0), h: Fill),

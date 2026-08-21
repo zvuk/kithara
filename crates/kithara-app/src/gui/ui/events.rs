@@ -33,34 +33,66 @@ pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> 
     }
 }
 
+/// Which block of the layout answers an address, named by its instance. The
+/// documents mint the instances and this names them, so a test holds the two
+/// lists against each other.
+pub(super) enum Route {
+    Bar,
+    Deck(usize),
+    Library,
+    MicroBar,
+    Mixer,
+    Overview,
+}
+
+pub(super) fn route(instance: &str) -> Option<Route> {
+    match instance {
+        "micro-bar" => Some(Route::MicroBar),
+        "bar" => Some(Route::Bar),
+        "mixer" => Some(Route::Mixer),
+        "library" => Some(Route::Library),
+        "overview" => Some(Route::Overview),
+        deck => deck_index(deck.strip_prefix("deck-")?).map(Route::Deck),
+    }
+}
+
 fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
     let (instance, rest) = path.split_once('/')?;
-    // The micro form is one module, so the parts it carries answer a segment deeper.
-    let micro = instance == "micro";
-    let (instance, rest) = if micro {
-        rest.split_once('/')?
-    } else {
-        (instance, rest)
-    };
-    match instance {
-        "bar" if let Some(row) = rest.strip_prefix("menu/") => {
+    match route(instance)? {
+        Route::MicroBar | Route::Bar if let Some(row) = rest.strip_prefix("menu/") => {
             menu_control(&mut state.ui.cache, row, action)
         }
-        "bar" if micro => deck_control(state, deck_index(MICRO_DECK)?, rest, action),
-        "bar" => bar_control(rest, action),
-        "mixer" => mixer_control(state, rest, action),
-        "library" => library_control(state, rest, action),
-        "overview" => {
+        Route::MicroBar => micro_control(state, rest, action),
+        Route::Bar => bar_control(rest, action),
+        Route::Mixer => mixer_control(state, rest, action),
+        Route::Library => library_control(state, rest, action),
+        Route::Overview => {
             let (letter, control) = rest.split_once('/')?;
             deck_control(state, deck_index(letter)?, control, action)
         }
-        deck => deck_control(
-            state,
-            deck_index(deck.strip_prefix("deck-")?)?,
-            rest,
-            action,
-        ),
+        Route::Deck(index) => deck_control(state, index, rest, action),
     }
+}
+
+/// The micro bar drives one deck and carries that deck's master volume beside
+/// its transport.
+fn micro_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+    let index = deck_index(MICRO_DECK)?;
+    match control {
+        "volume" => volume_control(state, index, action),
+        control => deck_control(state, index, control, action),
+    }
+}
+
+/// A volume control sets the trim of the deck it addresses.
+fn volume_control(state: &Kithara, index: usize, action: &ControlAction) -> Option<Message> {
+    let ControlAction::SetScalar(trim) = action else {
+        return None;
+    };
+    Some(Message::Mix(MixMsg::Trim(
+        deck_id(state, index)?,
+        trim.clamp(0.0, 1.0).as_(),
+    )))
 }
 
 fn deck_control(
@@ -219,10 +251,7 @@ fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
             state.ui.cache.close_eq_menus();
             Some(Message::SetEqMode(EqMode::FourBand))
         }
-        ("volume", ControlAction::SetScalar(trim)) => Some(Message::Mix(MixMsg::Trim(
-            deck_id(state, index)?,
-            trim.clamp(0.0, 1.0).as_(),
-        ))),
+        ("volume", _) => volume_control(state, index, action),
         (_, ControlAction::SetScalar(value)) => Some(Message::Deck(
             deck_id(state, index)?,
             eq_msg(eq_band(state.eq_mode, name)?, *value),
