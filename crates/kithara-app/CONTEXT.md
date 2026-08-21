@@ -120,8 +120,10 @@ on a dropped deck clears and a focus on one moves to the first laid-out deck —
 pointer crossing, so nothing later would correct them.
 
 The two layout documents repeat their frame because the layout schema has no include: only deck bodies, overview rows and
-mixer channels may differ. The top bar and library nodes must stay identical, and the switch must offer one segment per
-layout in the host's own index order — a unit test holds that last part.
+mixer channels may differ. The top bar and library nodes must stay identical. The switch itself is a menu row per
+layout, addressed by the deck count it lays out (`layout-1`, `layout-2`), and `DeckLayout::from_decks` is the one place
+that count becomes a layout. Unit tests hold both ends: the menu carries a row per layout, and pressing a row applies
+the layout it names.
 
 ### Window shape
 
@@ -137,16 +139,25 @@ bar, the overview row (`82.0` over two decks, `40.0` over one), the deck row's `
 Under that height the gate draws the micro player, so a window reaching one axis and missing the other draws the shape
 that fits it.
 
+The gate reads the room the window offers rather than the rows the menu leaves standing, so a pane switched off still
+counts toward the height the full shape asks for: in a window past `1080.0` wide and `300.0` tall with the overview row
+and the browser panel off, the gate draws the micro player though the bar's `42.0` and the deck row's `158.0` fit.
+That is the price of `measure: Height`, which takes its number from the box the toolkit hands the node during layout.
+The other measure the mechanism offers, `measure: Read(<binding>)`, takes it from a host endpoint — the window size is
+already tracked in `gui/ui/window.rs` — and picks the branch while the tree is built, from a snapshot: one frame behind
+the size it describes, and open to a size-branch-size loop. The layout-time number is worth that frame here.
+
 The micro player is itself an `Adaptive` over `Height`: from `252.0` up the bar stands over the library panel,
 below it the bar stands alone. `252.0` is that two-pane form's own compiled minimum height — the bar's `42.0` plus the
 track list's `210.0` — so the panel appears exactly when the window can hold a usable list. The height reaching a
-measured node is bounded: `iced` lays the root out under `Limits::new(Size::ZERO, bounds)`, `Stack` forwards those
-limits to its base layer, and `widgets/adaptive/measured.rs` narrows with `Fill`, which raises the minimum and leaves
-the maximum the window set. The micro player stands in the document twice, as the root's base branch and as the height
-gate's, and `bar-micro` stands in both branches of each copy, because `Adaptive` needs a base branch and the layout
-schema has no include; a branch claims ids from its own set, so `micro`, `library-block` and `bar-micro` repeated across
-branches are one address and one host handler. The panel keeps the `library-block` guard it carries in the wide shape,
-so the room and the menu's LIBRARY cell both have to allow it and one answer does not survive the other shape.
+measured node is the window's own: `iced` lays the root out under `Limits::new(Size::ZERO, bounds)`, `Stack` forwards
+those limits to its base layer, and `widgets/adaptive/measured.rs` picks its branch from `limits.max()`, which a `Fill`
+declaration leaves as the window set it. The micro player stands in the document twice, as the root's base branch and
+as the height gate's, and `bar-micro` stands in both branches of each copy, because `Adaptive` needs a base branch and
+the layout schema has no include; a branch claims ids from its own set, so `micro`, `library-block` and `bar-micro`
+repeated across branches are one address and one host handler. The panel keeps the `library-block` guard it carries in
+the wide shape, so the room and the menu's LIBRARY cell both have to allow it and one answer does not survive the other
+shape.
 
 A bar reveals the cells it has room for: its root `Row` measures `Width` and each cell that costs room stands behind a
 threshold. The micro bar takes the wave from `350.0` and the remaining time from `440.0`; the full bar takes the CPU
@@ -159,6 +170,12 @@ smallest), the seam before the window controls (1) and the controls themselves (
 `WINDOW_MIN_HEIGHT` are held at or above that box by a unit test, because a window under it overflows the bar where
 nobody is looking. That box is the window minimum outright, because every gate falls back to the micro player and the
 micro player falls back to its bar: under `252.0` of height, at any width, the bar is the whole shape the window draws.
+
+The two axes carry their numbers differently. Every height threshold (`492.0`, `450.0`, `252.0`) is held equal to its
+form's own compiled minimum by a unit test, so a row changing size moves the gate with it. Both width numbers are
+written by hand: `1080.0` is a judgement about workable deck panes, and `221.0` is the sum of the always-standing cells
+above, arithmetic a reader redoes — `compute_size` returns the declared override, so the compiler reads that number
+and takes it.
 
 ## Track analysis cache
 

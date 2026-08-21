@@ -424,6 +424,12 @@ one branch of several. A child carrying no wrapper always stands.
   however many children it shows, `size::compute_size` and `geometry::effective_size` return that
   box, and `size::has_blocks` calls it constant - the cells appearing move no sibling, and the
   renderer memoises the subtree.
+- That box is the answer while every ancestor leaves the axis free. An ancestor asking for an
+  intrinsic size sets `Limits::compression` on that axis, `iced`'s `Limits::resolve` then takes the
+  intrinsic size over `Fill`, and the container answers the room its shown cells take while the
+  threshold still reads the maximum it was handed. Both widgets under `widgets/adaptive` size
+  themselves through that call, and validation lets such an ancestor through, so a document that
+  puts one there gets a box that moves with its cells inside a subtree `has_blocks` calls constant.
 - Only that container answers a threshold, so a `Reveal` stands only among its direct children;
   anywhere else is `UiDocError::UnmeasuredReveal`, never a child that silently stands for good.
   `validate::Sibling::Measured` is what a container declaring `measure` passes its children, and

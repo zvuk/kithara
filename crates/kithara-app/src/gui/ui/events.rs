@@ -36,11 +36,11 @@ pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> 
 fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
     let (instance, rest) = path.split_once('/')?;
     match instance {
-        "bar" => bar_control(&mut state.ui.cache, rest, action),
-        "bar-micro" => match rest.strip_prefix("menu/") {
-            Some(row) => menu_control(&mut state.ui.cache, row, action),
-            None => deck_control(state, deck_index(MICRO_DECK)?, rest, action),
-        },
+        "bar" | "bar-micro" if let Some(row) = rest.strip_prefix("menu/") => {
+            menu_control(&mut state.ui.cache, row, action)
+        }
+        "bar" => bar_control(rest, action),
+        "bar-micro" => deck_control(state, deck_index(MICRO_DECK)?, rest, action),
         "mixer" => mixer_control(state, rest, action),
         "library" => library_control(state, rest, action),
         "overview" => {
@@ -143,13 +143,10 @@ fn zoom_control(
     Some(())
 }
 
-/// The top bar owns the app's own view state. Narrowing the layout also
-/// silences the decks it stops laying out: a deck the user cannot see must
-/// not keep playing.
-fn bar_control(cache: &mut ViewCache, control: &str, action: &ControlAction) -> Option<Message> {
+fn bar_control(control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
         ("broadcast", ControlAction::Activate) => Some(Message::BroadcastToggle),
-        _ => menu_control(cache, control.strip_prefix("menu/")?, action),
+        _ => None,
     }
 }
 
@@ -260,11 +257,11 @@ mod tests {
     use super::*;
 
     fn select_layout(cache: &mut ViewCache, layout: DeckLayout) -> Option<Message> {
-        press_menu(cache, &format!("menu/layout-{}", layout.decks()))
+        press_menu(cache, &format!("layout-{}", layout.decks()))
     }
 
-    fn press_menu(cache: &mut ViewCache, control: &str) -> Option<Message> {
-        bar_control(cache, control, &ControlAction::Activate)
+    fn press_menu(cache: &mut ViewCache, row: &str) -> Option<Message> {
+        menu_control(cache, row, &ControlAction::Activate)
     }
 
     fn press_zoom(cache: &mut ViewCache, control: &str) -> f64 {
@@ -303,20 +300,20 @@ mod tests {
         let mut cache = ViewCache::default();
         assert!(!cache.menu.is_open());
 
-        press_menu(&mut cache, "menu/burger");
+        press_menu(&mut cache, "burger");
         assert!(cache.menu.is_open());
-        press_menu(&mut cache, "menu/burger");
+        press_menu(&mut cache, "burger");
         assert!(!cache.menu.is_open(), "the burger is also the way out");
 
-        press_menu(&mut cache, "menu/burger");
-        press_menu(&mut cache, "menu/pop");
+        press_menu(&mut cache, "burger");
+        press_menu(&mut cache, "pop");
         assert!(
             !cache.menu.is_open(),
             "a press outside the surface dismisses"
         );
 
-        press_menu(&mut cache, "menu/burger");
-        press_menu(&mut cache, "menu/header-close");
+        press_menu(&mut cache, "burger");
+        press_menu(&mut cache, "header-close");
         assert!(!cache.menu.is_open());
     }
 
@@ -325,11 +322,11 @@ mod tests {
         let mut cache = ViewCache::default();
         assert!(!cache.menu.are_layouts_open());
 
-        press_menu(&mut cache, "menu/layouts-head");
+        press_menu(&mut cache, "layouts-head");
         assert!(cache.menu.are_layouts_open());
 
         assert!(matches!(
-            press_menu(&mut cache, "menu/layout-1"),
+            press_menu(&mut cache, "layout-1"),
             Some(Message::PauseHiddenDecks)
         ));
         assert_eq!(cache.layout(), DeckLayout::Single);
@@ -338,10 +335,10 @@ mod tests {
             "applying a layout leaves the menu where it was"
         );
 
-        press_menu(&mut cache, "menu/layout-2");
+        press_menu(&mut cache, "layout-2");
         assert_eq!(cache.layout(), DeckLayout::Dual);
 
-        press_menu(&mut cache, "menu/layouts-head");
+        press_menu(&mut cache, "layouts-head");
         assert!(!cache.menu.are_layouts_open());
     }
 
@@ -350,15 +347,15 @@ mod tests {
         let mut cache = ViewCache::default();
         assert!(!cache.menu.are_modules_open());
 
-        press_menu(&mut cache, "menu/modules-head");
+        press_menu(&mut cache, "modules-head");
         assert!(cache.menu.are_modules_open());
 
         assert!(cache.modules.is_on("ov"));
-        press_menu(&mut cache, "menu/module-ov/cell");
+        press_menu(&mut cache, "module-ov/cell");
         assert!(!cache.modules.is_on("ov"));
         assert!(cache.modules.is_on("mix"), "one cell switches one pane");
 
-        press_menu(&mut cache, "menu/module-ov/cell");
+        press_menu(&mut cache, "module-ov/cell");
         assert!(cache.modules.is_on("ov"));
     }
 
@@ -367,11 +364,11 @@ mod tests {
         let mut cache = ViewCache::default();
 
         assert!(matches!(
-            press_menu(&mut cache, "menu/full-screen"),
+            press_menu(&mut cache, "full-screen"),
             Some(Message::Window(WindowCommand::ToggleFullScreen))
         ));
         assert!(matches!(
-            press_menu(&mut cache, "menu/cast"),
+            press_menu(&mut cache, "cast"),
             Some(Message::BroadcastToggle)
         ));
     }

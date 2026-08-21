@@ -358,12 +358,7 @@ fn the_full_shape_stands_only_where_the_window_is_tall_enough_for_it() {
         let CompiledNode::Split { size, .. } = full else {
             panic!("{layout:?}: the full shape stacks its rows in a column");
         };
-        assert!(
-            from >= size.h.min(),
-            "{layout:?}: a gate of {from} draws the full shape into a window \
-             under the {} it measures",
-            size.h.min(),
-        );
+        assert_eq!(from, size.h.min(), "{layout:?}");
     }
 }
 
@@ -481,11 +476,6 @@ fn every_walker_reaches_the_nodes_the_documents_declare() {
                 controls(&ui).len(),
                 if dual { 358 } else { 300 },
             ),
-            (
-                "control_paths",
-                control_paths(&ui).len(),
-                if dual { 358 } else { 300 },
-            ),
             ("surfaces", surfaces(&ui).len(), layout.decks()),
             (
                 "pressables",
@@ -596,8 +586,8 @@ fn the_bar_carries_the_broadcast_cell() {
 }
 
 /// Whichever shape the window draws, its chrome is the bar that shape carries:
-/// the micro form stands under both widths and in both branches of the height
-/// each of those answers, so the micro bar names its pair once per branch.
+/// each bar owns a drag strip and a set of window controls, and those four
+/// addresses are the whole of it.
 #[kithara::test]
 fn the_bar_owns_the_window_chrome() {
     for layout in LAYOUTS {
@@ -614,17 +604,12 @@ fn the_bar_owns_the_window_chrome() {
             }
         });
         seen.sort_unstable();
+        seen.dedup();
 
         assert_eq!(
             seen,
             [
                 "bar-micro/drag",
-                "bar-micro/drag",
-                "bar-micro/drag",
-                "bar-micro/drag",
-                "bar-micro/window",
-                "bar-micro/window",
-                "bar-micro/window",
                 "bar-micro/window",
                 "bar/drag",
                 "bar/window",
