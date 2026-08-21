@@ -1,0 +1,25 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "app-micro",
+    parameters: ["deck"],
+    root: Column(
+        gap: 0.0,
+        measure: Height,
+        size: (w: Fill, h: Fill),
+        children: [
+            Include(id: "bar", source: "app-bar-micro.kmodule.ron", with: { "deck": "$deck" }),
+            Reveal(from: 252.0, child: Column(
+                gap: 0.0,
+                size: (w: Fill, h: Fill),
+                children: [
+                    Optional(
+                        id: "library-block",
+                        hidden: Model(id: "ui.module.hidden", with: { "module": "lib" }),
+                        child: Include(id: "library", source: "app-library.kmodule.ron"),
+                    ),
+                ],
+            )),
+        ],
+    ),
+)

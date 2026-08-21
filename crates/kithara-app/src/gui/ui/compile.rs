@@ -33,6 +33,10 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../../assets/ui/modules/app-bar-micro.kmodule.ron"),
     ),
     (
+        "modules/app-micro.kmodule.ron",
+        include_str!("../../../assets/ui/modules/app-micro.kmodule.ron"),
+    ),
+    (
         "modules/app-menu.kmodule.ron",
         include_str!("../../../assets/ui/modules/app-menu.kmodule.ron"),
     ),

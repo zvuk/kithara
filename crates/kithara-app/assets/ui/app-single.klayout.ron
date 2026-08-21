@@ -8,76 +8,22 @@
         id: "shape",
         measure: Width,
         size: (w: Fill, h: Fill),
-        base: Adaptive(
-            id: "micro",
-            measure: Height,
-            size: (w: Fill, h: Fill),
-            base: Module(
-                instance: "bar-micro",
-                source: "modules/app-bar-micro.kmodule.ron",
-                with: { "deck": "a" },
-                frame: (top: false, right: false, bottom: true, left: false),
-            ),
-            steps: [
-                (from: 252.0, node: Split(
-                    axis: Vertical,
-                    children: [
-                        (node: Module(
-                            instance: "bar-micro",
-                            source: "modules/app-bar-micro.kmodule.ron",
-                            with: { "deck": "a" },
-                            frame: (top: false, right: false, bottom: true, left: false),
-                        )),
-                        (node: Optional(
-                            id: "library-block",
-                            hidden: Model(id: "ui.module.hidden", with: { "module": "lib" }),
-                            node: Module(
-                                instance: "library",
-                                source: "modules/app-library.kmodule.ron",
-                                frame: (top: false, right: false, bottom: false, left: false),
-                            ),
-                        )),
-                    ],
-                )),
-            ],
+        base: Module(
+            instance: "micro",
+            source: "modules/app-micro.kmodule.ron",
+            with: { "deck": "a" },
+            frame: (top: false, right: false, bottom: false, left: false),
         ),
         steps: [
             (from: 1080.0, node: Adaptive(
                 id: "tall",
                 measure: Height,
                 size: (w: Fill, h: Fill),
-                base: Adaptive(
-                    id: "micro",
-                    measure: Height,
-                    size: (w: Fill, h: Fill),
-                    base: Module(
-                        instance: "bar-micro",
-                        source: "modules/app-bar-micro.kmodule.ron",
-                        with: { "deck": "a" },
-                        frame: (top: false, right: false, bottom: true, left: false),
-                    ),
-                    steps: [
-                        (from: 252.0, node: Split(
-                            axis: Vertical,
-                            children: [
-                                (node: Module(
-                                    instance: "bar-micro",
-                                    source: "modules/app-bar-micro.kmodule.ron",
-                                    with: { "deck": "a" },
-                                    frame: (top: false, right: false, bottom: true, left: false),
-                                )),
-                                (node: Optional(
-                                    id: "library-block",
-                                    hidden: Model(id: "ui.module.hidden", with: { "module": "lib" }),
-                                    node: Module(
-                                        instance: "library",
-                                        source: "modules/app-library.kmodule.ron",
-                                        frame: (top: false, right: false, bottom: false, left: false),
-                                    ),
-                                )),
-                            ],
-                        )),
-                    ],
+                base: Module(
+                    instance: "micro",
+                    source: "modules/app-micro.kmodule.ron",
+                    with: { "deck": "a" },
+                    frame: (top: false, right: false, bottom: false, left: false),
                 ),
                 steps: [
                     (from: 450.0, node: Split(

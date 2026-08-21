@@ -7,46 +7,46 @@ use kithara_ui::{
     expand::{ControlSpec, ExpandedNode},
     module::{MeasureAxis, TextAlign, TextStyle},
     render::{ReadValue, Reads, tree},
-    size::{Dim, SizeSpec},
+    size::{Dim, SizeSpec, control_size},
 };
 
 use super::{cache::DeckLayout, compile::compile_ui, scope::MICRO_DECK};
 use crate::gui::frontend::consts::{WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH};
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
-fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
-    fn walk(node: &ExpandedNode, visit: &mut impl FnMut(&ExpandedNode)) {
-        visit(node);
-        match node {
-            ExpandedNode::Row { children, .. }
-            | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => {
-                for child in children {
-                    walk(child, visit);
-                }
+fn each_expanded(node: &ExpandedNode, visit: &mut impl FnMut(&ExpandedNode)) {
+    visit(node);
+    match node {
+        ExpandedNode::Row { children, .. }
+        | ExpandedNode::Column { children, .. }
+        | ExpandedNode::Slot { children, .. } => {
+            for child in children {
+                each_expanded(child, visit);
             }
-            ExpandedNode::Optional { child, .. }
-            | ExpandedNode::Pressable { child, .. }
-            | ExpandedNode::Reveal { child, .. }
-            | ExpandedNode::Scroll { child, .. } => {
-                walk(child, visit);
-            }
-            ExpandedNode::Adaptive { base, steps, .. } => {
-                walk(base, visit);
-                for (_, branch) in steps {
-                    walk(branch, visit);
-                }
-            }
-            ExpandedNode::Popover {
-                anchor, content, ..
-            } => {
-                walk(anchor, visit);
-                walk(content, visit);
-            }
-            _ => {}
         }
+        ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Reveal { child, .. }
+        | ExpandedNode::Scroll { child, .. } => {
+            each_expanded(child, visit);
+        }
+        ExpandedNode::Adaptive { base, steps, .. } => {
+            each_expanded(base, visit);
+            for (_, branch) in steps {
+                each_expanded(branch, visit);
+            }
+        }
+        ExpandedNode::Popover {
+            anchor, content, ..
+        } => {
+            each_expanded(anchor, visit);
+            each_expanded(content, visit);
+        }
+        _ => {}
     }
+}
 
+fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
     let mut stack = vec![&ui.root];
     while let Some(node) = stack.pop() {
         match node {
@@ -58,7 +58,7 @@ fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
                 stack.push(base);
                 stack.extend(steps.iter().map(|(_, branch)| branch));
             }
-            CompiledNode::Module { root, .. } => walk(root, visit),
+            CompiledNode::Module { root, .. } => each_expanded(root, visit),
             _ => {}
         }
     }
@@ -244,29 +244,95 @@ fn cell_id<'a>(ui: &'a CompiledUi, node: &'a ExpandedNode) -> &'a str {
     }
 }
 
-/// The direct cells of a bar, as `(threshold, address)` in document order.
-fn bar_cells<'a>(ui: &'a CompiledUi, instance: &str) -> Vec<(Option<f32>, &'a str)> {
+fn module_root<'a>(ui: &'a CompiledUi, instance: &str) -> &'a ExpandedNode {
     let CompiledNode::Module { root, .. } = module(ui, instance) else {
         panic!("`{instance}` is no module");
     };
-    let ExpandedNode::Row {
+    root
+}
+
+/// The direct cells of a container that measures itself, as
+/// `(threshold, cell)` in document order.
+fn cells<'a>(node: &'a ExpandedNode, axis: MeasureAxis) -> Vec<(Option<f32>, &'a ExpandedNode)> {
+    let (ExpandedNode::Row {
         measure, children, ..
-    } = &**root
+    }
+    | ExpandedNode::Column {
+        measure, children, ..
+    }) = node
     else {
-        panic!("`{instance}` must be rooted in a row");
+        panic!("a container that measures itself is a row or a column");
     };
     assert_eq!(
         *measure,
-        Some(MeasureAxis::Width),
-        "`{instance}` answers a threshold only while it measures its own width",
+        Some(axis),
+        "a cell answers a threshold on the axis its container measures",
     );
     children
         .iter()
         .map(|child| match child {
-            ExpandedNode::Reveal { from, .. } => (Some(*from), cell_id(ui, child)),
-            _ => (None, cell_id(ui, child)),
+            ExpandedNode::Reveal { from, child } => (Some(*from), &**child),
+            child => (None, child),
         })
         .collect()
+}
+
+/// The direct cells of a bar, as `(threshold, address)` in document order.
+fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<(Option<f32>, &'a str)> {
+    cells(bar, MeasureAxis::Width)
+        .into_iter()
+        .map(|(from, cell)| (from, cell_id(ui, cell)))
+        .collect()
+}
+
+/// The panes the micro form stacks, as `(threshold, pane)` in document order.
+fn micro_panes<'a>(ui: &'a CompiledUi) -> Vec<(Option<f32>, &'a ExpandedNode)> {
+    cells(module_root(ui, "micro"), MeasureAxis::Height)
+}
+
+/// The bar the micro form stands at every height.
+fn micro_bar<'a>(ui: &'a CompiledUi) -> &'a ExpandedNode {
+    let Some((None, bar)) = micro_panes(ui).first().copied() else {
+        panic!("the micro form stands its bar under no threshold");
+    };
+    bar
+}
+
+/// The box the micro bar declares for itself.
+fn bar_box(bar: &ExpandedNode) -> SizeSpec {
+    let ExpandedNode::Row {
+        size: Some(size), ..
+    } = bar
+    else {
+        panic!("the micro bar declares its own box");
+    };
+    *size
+}
+
+/// The height the track list asks for, read as the compiler reads it: the box
+/// the document declares for the control, and the skin's box otherwise.
+fn list_min(pane: &ExpandedNode) -> f32 {
+    let mut found = None;
+    each_expanded(pane, &mut |node| {
+        if let ExpandedNode::Control { spec, size, .. } = node
+            && matches!(spec, ControlSpec::TrackList { .. })
+        {
+            found = Some(size.unwrap_or_else(|| control_size(spec, builtin::skin_doc())));
+        }
+    });
+    found.expect("the browser panel draws a track list").h.min()
+}
+
+/// Every part the micro form draws, named by the include that holds it.
+fn micro_parts(ui: &CompiledUi) -> Vec<&str> {
+    let mut out: Vec<&str> = control_paths(ui)
+        .into_iter()
+        .filter_map(|path| path.strip_prefix("micro/"))
+        .filter_map(|rest| rest.split_once('/').map(|(part, _)| part))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// The first segment of an address names the layout instance that answers it,
@@ -283,7 +349,7 @@ fn every_address_names_an_instance_the_host_routes() {
         named.sort_unstable();
         named.dedup();
 
-        let mut want = vec!["bar", "bar-micro", "deck-a", "library", "mixer", "overview"];
+        let mut want = vec!["bar", "deck-a", "library", "micro", "mixer", "overview"];
         if layout == DeckLayout::Dual {
             want.push("deck-b");
         }
@@ -325,11 +391,8 @@ fn a_narrow_window_lays_out_the_bar_and_the_browser() {
             panic!("{layout:?}: expected an adaptive root");
         };
 
-        assert_eq!(
-            instances(&ui, base),
-            ["bar-micro", "bar-micro", "library"],
-            "{layout:?}",
-        );
+        assert_eq!(instances(&ui, base), ["micro"], "{layout:?}");
+        assert_eq!(micro_parts(&ui), ["bar", "library"], "{layout:?}");
         let (_, _, full) = height_gate(&ui, layout);
         let mut want = vec!["bar", "library", "mixer", "overview", "deck-a"];
         if layout == DeckLayout::Dual {
@@ -350,11 +413,7 @@ fn the_full_shape_stands_only_where_the_window_is_tall_enough_for_it() {
         let ui = compile_ui(layout).unwrap();
         let (micro, from, full) = height_gate(&ui, layout);
 
-        assert_eq!(
-            instances(&ui, micro),
-            ["bar-micro", "bar-micro", "library"],
-            "{layout:?}",
-        );
+        assert_eq!(instances(&ui, micro), ["micro"], "{layout:?}");
         let CompiledNode::Split { size, .. } = full else {
             panic!("{layout:?}: the full shape stacks its rows in a column");
         };
@@ -370,15 +429,15 @@ fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
         let ui = compile_ui(layout).unwrap();
 
         assert_eq!(
-            bar_cells(&ui, "bar-micro"),
+            bar_cells(&ui, micro_bar(&ui)),
             [
-                (None, "bar-micro/menu/pop"),
-                (None, "bar-micro/play"),
-                (None, "bar-micro/drag"),
-                (Some(350.0), "bar-micro/wave"),
-                (Some(440.0), "bar-micro/remain"),
-                (None, "bar-micro/before-window"),
-                (None, "bar-micro/window"),
+                (None, "micro/bar/menu/pop"),
+                (None, "micro/bar/play"),
+                (None, "micro/bar/drag"),
+                (Some(350.0), "micro/bar/wave"),
+                (Some(440.0), "micro/bar/remain"),
+                (None, "micro/bar/before-window"),
+                (None, "micro/bar/window"),
             ],
             "{layout:?}",
         );
@@ -393,7 +452,7 @@ fn the_bar_reveals_its_telemetry_as_the_window_widens() {
         let ui = compile_ui(layout).unwrap();
 
         assert_eq!(
-            bar_cells(&ui, "bar"),
+            bar_cells(&ui, module_root(&ui, "bar")),
             [
                 (None, "bar/menu/pop"),
                 (Some(1250.0), "bar/brand"),
@@ -409,33 +468,19 @@ fn the_bar_reveals_its_telemetry_as_the_window_widens() {
 }
 
 /// The browser panel joins the micro bar once the window is as tall as the two
-/// of them together, so the threshold is that form's own minimum height.
+/// of them together, so the threshold is the bar's own height plus the list's
+/// own minimum.
 #[kithara::test]
 fn the_browser_panel_stands_once_the_window_is_tall_enough_for_it() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
-        let CompiledNode::Adaptive { base, .. } = &ui.root else {
-            panic!("{layout:?}: expected an adaptive root");
-        };
-        let CompiledNode::Adaptive {
-            axis,
-            base: bar_only,
-            steps,
-            ..
-        } = &**base
-        else {
-            panic!("{layout:?}: the micro shape must answer the height it is given");
+        let panes = micro_panes(&ui);
+        let [(None, bar), (Some(from), panel)] = panes[..] else {
+            panic!("{layout:?}: the micro form stands a bar and reveals a panel over it");
         };
 
-        assert_eq!(*axis, MeasureAxis::Height, "{layout:?}");
-        assert_eq!(instances(&ui, bar_only), ["bar-micro"], "{layout:?}");
-        assert_eq!(steps.len(), 1, "{layout:?}");
-        let (from, tall) = &steps[0];
-        assert_eq!(instances(&ui, tall), ["bar-micro", "library"], "{layout:?}");
-        let CompiledNode::Split { size, .. } = tall else {
-            panic!("{layout:?}: the tall form stacks the bar over the panel");
-        };
-        assert_eq!(*from, size.h.min(), "{layout:?}");
+        assert_eq!(cell_id(&ui, panel), "micro/library-block", "{layout:?}");
+        assert_eq!(from, bar_box(bar).h.min() + list_min(panel), "{layout:?}");
     }
 }
 
@@ -445,9 +490,7 @@ fn the_browser_panel_stands_once_the_window_is_tall_enough_for_it() {
 fn the_window_minimum_holds_the_micro_bar() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
-        let CompiledNode::Module { size, .. } = module(&ui, "bar-micro") else {
-            panic!("{layout:?}: `bar-micro` is no module");
-        };
+        let size = bar_box(micro_bar(&ui));
 
         assert!(
             WINDOW_MIN_WIDTH >= size.w.min(),
@@ -474,20 +517,20 @@ fn every_walker_reaches_the_nodes_the_documents_declare() {
             (
                 "controls",
                 controls(&ui).len(),
-                if dual { 358 } else { 300 },
+                if dual { 264 } else { 206 },
             ),
             ("surfaces", surfaces(&ui).len(), layout.decks()),
             (
                 "pressables",
                 pressables(&ui).len(),
-                if dual { 83 } else { 72 },
+                if dual { 59 } else { 48 },
             ),
             ("drop_targets", drop_targets(&ui).len(), layout.decks()),
-            ("guarded_by", guarded_by(&ui, "ui.module.hidden").len(), 4),
+            ("guarded_by", guarded_by(&ui, "ui.module.hidden").len(), 6),
             (
                 "optional_modules",
                 optional_modules(&ui, "ui.module.hidden").len(),
-                5,
+                3,
             ),
         ] {
             assert!(
@@ -515,7 +558,7 @@ fn deck_scoped_controls_are_routed_to_the_deck_they_read() {
                     format!("overview/{letter}/"),
                 ];
                 if letter == MICRO_DECK {
-                    routed.push("bar-micro/".to_owned());
+                    routed.push("micro/bar/".to_owned());
                 }
                 assert!(
                     routed.iter().any(|prefix| path.starts_with(prefix)),
@@ -609,10 +652,10 @@ fn the_bar_owns_the_window_chrome() {
         assert_eq!(
             seen,
             [
-                "bar-micro/drag",
-                "bar-micro/window",
                 "bar/drag",
                 "bar/window",
+                "micro/bar/drag",
+                "micro/bar/window",
             ],
             "{layout:?}",
         );

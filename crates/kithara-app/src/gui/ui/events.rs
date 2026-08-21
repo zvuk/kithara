@@ -35,12 +35,19 @@ pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> 
 
 fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
     let (instance, rest) = path.split_once('/')?;
+    // The micro form is one module, so the parts it carries answer a segment deeper.
+    let micro = instance == "micro";
+    let (instance, rest) = if micro {
+        rest.split_once('/')?
+    } else {
+        (instance, rest)
+    };
     match instance {
-        "bar" | "bar-micro" if let Some(row) = rest.strip_prefix("menu/") => {
+        "bar" if let Some(row) = rest.strip_prefix("menu/") => {
             menu_control(&mut state.ui.cache, row, action)
         }
+        "bar" if micro => deck_control(state, deck_index(MICRO_DECK)?, rest, action),
         "bar" => bar_control(rest, action),
-        "bar-micro" => deck_control(state, deck_index(MICRO_DECK)?, rest, action),
         "mixer" => mixer_control(state, rest, action),
         "library" => library_control(state, rest, action),
         "overview" => {

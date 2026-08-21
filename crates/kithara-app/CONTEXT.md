@@ -36,8 +36,8 @@ A deck is addressed by channel letter, and the letter is its position in the ses
 independent places — the control path (`deck-<letter>/<control>` for a deck module, `mixer/<letter>/<control>` for a
 channel strip, `overview/<letter>/<control>` for an overview row) and the `deck=` scope of a binding — so they must agree.
 The micro bar is the one place carrying no letter: the document points it at a deck and `gui::ui::scope::MICRO_DECK`
-routes `bar-micro/<control>` to the same one, so the two name it once each. The unit test below holds them together — a
-binding scoped to any other deck under `bar-micro/` fails it.
+routes `micro/bar/<control>` to the same one, so the two name it once each. The unit test below holds them together — a
+binding scoped to any other deck under `micro/bar/` fails it.
 `scope` owns the mapping both ways (`deck_index`, `deck_letter`); the library's Deck column prints what `deck_letter`
 gives. A unit test walks the compiled tree asserting every deck-scoped binding is addressed by the letter it reads. Only
 lowercase ASCII maps to a position; the session bounds the letter, so one past the last deck resolves to nothing rather
@@ -92,7 +92,7 @@ to both four-band mids, and two mids are averaged on the way back.
 
 The window opens without system decorations, so the bar of whichever shape draws is the chrome: `drag` is a `WindowDrag`
 surface and `window` carries minimise, maximise and close, executed by `Message::Window` against the window this app
-opened. Both bars carry the pair, under `bar/` and `bar-micro/`.
+opened. Both bars carry the pair, under `bar/` and `micro/bar/`.
 Resizing comes back through the layout's `resize_edges` flag, which lays eight drag zones over the window's own edges; the
 platform window menu and fullscreen stay out of reach and the bar looks the same everywhere. The CPU cell reports
 `engine.load` — the heaviest deck's audio-engine load, not processor time — bound twice, as a `Meter` bar and as text. It
@@ -147,17 +147,23 @@ The other measure the mechanism offers, `measure: Read(<binding>)`, takes it fro
 already tracked in `gui/ui/window.rs` — and picks the branch while the tree is built, from a snapshot: one frame behind
 the size it describes, and open to a size-branch-size loop. The layout-time number is worth that frame here.
 
-The micro player is itself an `Adaptive` over `Height`: from `252.0` up the bar stands over the library panel,
-below it the bar stands alone. `252.0` is that two-pane form's own compiled minimum height — the bar's `42.0` plus the
-track list's `210.0` — so the panel appears exactly when the window can hold a usable list. The height reaching a
+The micro player is one module, `modules/app-micro.kmodule.ron`, rooted in a `Column` that measures `Height` and
+declares `(w: Fill, h: Fill)`. The bar is its first cell and stands at every height; the browser panel is a `Reveal`
+from `252.0`, which is the bar's own `42.0` plus the track list's own `210.0`, so the panel appears exactly when the
+window can hold a usable list. A `Reveal` hands its child the position of an only child, so the `Optional` carrying the
+`library-block` guard stands in a `Column` between them. The panel keeps that guard from the wide shape, so the room and
+the menu's LIBRARY cell both have to allow it and one answer does not survive the other shape. The height reaching a
 measured node is the window's own: `iced` lays the root out under `Limits::new(Size::ZERO, bounds)`, `Stack` forwards
-those limits to its base layer, and `widgets/adaptive/measured.rs` picks its branch from `limits.max()`, which a `Fill`
-declaration leaves as the window set it. The micro player stands in the document twice, as the root's base branch and
-as the height gate's, and `bar-micro` stands in both branches of each copy, because `Adaptive` needs a base branch and
-the layout schema has no include; a branch claims ids from its own set, so `micro`, `library-block` and `bar-micro`
-repeated across branches are one address and one host handler. The panel keeps the `library-block` guard it carries in
-the wide shape, so the room and the menu's LIBRARY cell both have to allow it and one answer does not survive the other
-shape.
+those limits to its base layer, and `widgets/adaptive/revealed.rs` reads its cells' thresholds against `limits.max()`,
+which a `Fill` declaration leaves as the window set it.
+
+Each layout document stands the module twice, as the root's base branch and as the height gate's, under one instance
+name — `micro` — so both draw one address set and one host handler. Its parts answer one segment deeper than the wide
+shape's do: `micro/bar/<control>` and `micro/library/tracks`. `gui::ui::events::control` takes that segment off once and
+routes what is left the way it routes `bar/` and `library/`, so the browser reaches the host through one arm whichever
+shape draws it, and the `menu/` prefix both bars carry is stripped in one place. The bar and the panel reach the module
+through `Include`, which carries no module chrome: the panel background is the `micro` module node's own chrome, and the
+bar draws its bottom hairline itself, from `frame` and `frame_color: Line` on its root `Row`.
 
 A bar reveals the cells it has room for: its root `Row` measures `Width` and each cell that costs room stands behind a
 threshold. The micro bar takes the wave from `350.0` and the remaining time from `440.0`; the full bar takes the CPU
@@ -169,10 +175,12 @@ width: the menu (36), play (68), the drag strip (36, held to the menu cell's wid
 smallest), the seam before the window controls (1) and the controls themselves (80). `WINDOW_MIN_WIDTH` and
 `WINDOW_MIN_HEIGHT` are held at or above that box by a unit test, because a window under it overflows the bar where
 nobody is looking. That box is the window minimum outright, because every gate falls back to the micro player and the
-micro player falls back to its bar: under `252.0` of height, at any width, the bar is the whole shape the window draws.
+micro player stands its bar under every threshold: below `252.0` of height, at any width, the bar is the whole shape the
+window draws.
 
-The two axes carry their numbers differently. Every height threshold (`492.0`, `450.0`, `252.0`) is held equal to its
-form's own compiled minimum by a unit test, so a row changing size moves the gate with it. Both width numbers are
+The two axes carry their numbers differently. Every height threshold is held to the compiled tree by a unit test, so a
+row changing size moves the gate with it: `492.0` and `450.0` equal the full shape's own compiled minimum, and `252.0`
+equals the box the bar declares plus the minimum the track list's control specification carries. Both width numbers are
 written by hand: `1080.0` is a judgement about workable deck panes, and `221.0` is the sum of the always-standing cells
 above, arithmetic a reader redoes — `compute_size` returns the declared override, so the compiler reads that number
 and takes it.
