@@ -232,6 +232,7 @@ fn cell_id<'a>(ui: &'a CompiledUi, node: &'a ExpandedNode) -> &'a str {
         | ExpandedNode::Popover { path, .. }
         | ExpandedNode::Pressable { path, .. } => ui.resolve(*path),
         ExpandedNode::Optional { block, .. } => ui.resolve(block.path),
+        ExpandedNode::Adaptive { base, .. } => cell_id(ui, base),
         ExpandedNode::Reveal { child, .. } | ExpandedNode::Scroll { child, .. } => {
             cell_id(ui, child)
         }
@@ -296,6 +297,39 @@ fn micro_bar<'a>(ui: &'a CompiledUi) -> &'a ExpandedNode {
         panic!("the micro form stands its bar under no threshold");
     };
     bar
+}
+
+/// The cell the micro bar stretches over the room its fixed cells leave, as
+/// the form it takes at every width and the steps that replace that form.
+fn stretch<'a>(bar: &'a ExpandedNode) -> (&'a ExpandedNode, &'a [(f32, ExpandedNode)]) {
+    cells(bar, MeasureAxis::Width)
+        .into_iter()
+        .find_map(|(_, cell)| match cell {
+            ExpandedNode::Adaptive { base, steps, .. } => Some((&**base, steps.as_slice())),
+            _ => None,
+        })
+        .expect("the micro bar stretches one cell")
+}
+
+/// The box a cell declares for itself.
+fn cell_box(cell: &ExpandedNode) -> SizeSpec {
+    let (ExpandedNode::Control {
+        size: Some(size), ..
+    }
+    | ExpandedNode::Row {
+        size: Some(size), ..
+    }) = cell
+    else {
+        panic!("the cell declares its own box");
+    };
+    *size
+}
+
+/// What stands beside the stretched cell at every width. The tree's minimum
+/// width is the micro bar at its narrowest, where that cell is at its own, so
+/// the rest of that number is them.
+fn beside_stretch(ui: &CompiledUi, bar: &ExpandedNode) -> f32 {
+    ui.min.w.min() - cell_box(stretch(bar).0).w.min()
 }
 
 /// The box the micro bar declares for itself.
@@ -427,7 +461,7 @@ fn the_full_shape_stands_only_where_the_window_is_tall_enough_for_it() {
 }
 
 /// The micro bar takes its cells as the window makes room for them; the menu,
-/// play, the drag strip and the window controls stand at every width.
+/// play, the stretched strip and the window controls stand at every width.
 #[kithara::test]
 fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
     for layout in LAYOUTS {
@@ -439,11 +473,58 @@ fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
                 (None, "micro/bar/menu/pop"),
                 (None, "micro/bar/play"),
                 (None, "micro/bar/drag"),
-                (Some(350.0), "micro/bar/wave"),
                 (Some(440.0), "micro/bar/remain"),
                 (None, "micro/bar/before-window"),
                 (None, "micro/bar/window"),
             ],
+            "{layout:?}",
+        );
+    }
+}
+
+/// The wave replaces the drag strip in place, so its threshold is read
+/// against that strip. The window minimum is that strip at its narrowest
+/// beside the cells that stand at every width, which carries one number into
+/// the other.
+#[kithara::test]
+fn the_micro_wave_stands_once_the_strip_it_replaces_has_room() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let bar = micro_bar(&ui);
+        let [(from, wave)] = stretch(bar).1 else {
+            panic!("{layout:?}: the strip takes one other form");
+        };
+
+        assert_eq!(cell_id(&ui, wave), "micro/bar/wave", "{layout:?}");
+        assert_eq!(
+            from + beside_stretch(&ui, bar),
+            350.0,
+            "{layout:?}: the bar width the wave stands from",
+        );
+    }
+}
+
+/// The time cell takes its room out of the same strip, so a wave that stands
+/// has to outlast it: the strip left once the time cell stands still reaches
+/// the wave.
+#[kithara::test]
+fn the_micro_wave_outlasts_the_time_cell_taking_its_room() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let bar = micro_bar(&ui);
+        let [(from, _)] = stretch(bar).1 else {
+            panic!("{layout:?}: the strip takes one other form");
+        };
+        let revealed: Vec<_> = cells(bar, MeasureAxis::Width)
+            .into_iter()
+            .filter_map(|(at, cell)| at.map(|at| (at, cell)))
+            .collect();
+        let [(stands, time)] = revealed[..] else {
+            panic!("{layout:?}: the micro bar reveals the time cell alone");
+        };
+
+        assert!(
+            from + beside_stretch(&ui, bar) + cell_box(time).w.min() <= stands,
             "{layout:?}",
         );
     }

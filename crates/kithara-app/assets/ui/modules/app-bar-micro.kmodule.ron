@@ -21,13 +21,20 @@
                 read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
             ),
-            WindowDrag(id: "drag", size: (w: Range(min: 36.0, max: None), h: Fill)),
-            Reveal(from: 350.0, child: Wave(
-                id: "wave",
-                style: Micro,
-                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
-                write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
-            )),
+            Adaptive(
+                id: "stretch",
+                measure: Width,
+                size: (w: Fill, h: Fill),
+                base: WindowDrag(id: "drag", size: (w: Range(min: 36.0, max: None), h: Fill)),
+                steps: [
+                    (from: 165.0, node: Wave(
+                        id: "wave",
+                        style: Micro,
+                        read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+                        write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
+                    )),
+                ],
+            ),
             Reveal(from: 440.0, child: Row(
                 id: "remain-cell",
                 size: (w: Fixed(62.0), h: Fill),
