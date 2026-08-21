@@ -136,7 +136,7 @@ fn check_steps<N>(
 }
 
 /// A node draws in the box it declares, so what it holds has to fit that box.
-fn check_box(
+pub(crate) fn check_box(
     declared: Option<SizeSpec>,
     composed: SizeSpec,
     path: &NodePath,

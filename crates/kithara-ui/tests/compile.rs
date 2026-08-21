@@ -1953,3 +1953,65 @@ fn a_slot_and_an_adaptive_answer_for_the_box_they_declare() {
         );
     }
 }
+
+/// A layout declares boxes of its own, and a module or a form standing in one
+/// answers for that box the same way.
+#[kithara::test]
+fn a_layout_box_may_not_be_smaller_than_the_node_standing_in_it() {
+    let module = r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Row(
+            id: "bar",
+            gap: 0.0,
+            pad: 0.0,
+            children: [Knob(id: "low", size: (w: Fixed(80.0), h: Fixed(120.0)))],
+        ))"#;
+    let layouts = |room: f32| {
+        [
+            (
+                "root/Module(mixer)",
+                format!(
+                    r#"(schema: "kithara.layout", version: 1, id: "boxed",
+                        root: Module(
+                            instance: "mixer",
+                            source: "blocks.kmodule.ron",
+                            size: (w: Fill, h: Fixed({room})),
+                        ))"#
+                ),
+            ),
+            (
+                "root/Adaptive(bank)",
+                format!(
+                    r#"(schema: "kithara.layout", version: 1, id: "boxed",
+                        root: Adaptive(
+                            id: "bank",
+                            measure: Width,
+                            size: (w: Fill, h: Fixed({room})),
+                            base: Module(instance: "mixer", source: "blocks.kmodule.ron"),
+                            steps: [(
+                                from: 400.0,
+                                node: Module(instance: "mixer", source: "blocks.kmodule.ron"),
+                            )],
+                        ))"#
+                ),
+            ),
+        ]
+    };
+    let compile_layout = |layout: &str| {
+        let mut resolver = block_resolver(module);
+        resolver.insert("boxed.klayout.ron", layout);
+        compile_blocks(&resolver, "boxed.klayout.ron")
+    };
+
+    for (at, layout) in layouts(42.0) {
+        let error = compile_layout(&layout).unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::DeclaredRoom { path, room, needs, axis, .. }
+                if path == at && *room == 42.0 && *needs == 120.0 && *axis == "height"),
+            "{error:?}"
+        );
+    }
+    for (_, layout) in layouts(120.0) {
+        compile_layout(&layout).expect("a box the node fills exactly is a box it fits in");
+    }
+}

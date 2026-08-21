@@ -19,7 +19,7 @@ use crate::{
     skin::SkinDoc,
     source::{SourceResolver, UiConfig},
     text::TextDoc,
-    validate,
+    validate::{self, NodePath},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -219,6 +219,12 @@ impl Compiler<'_> {
                     .map(|step| Ok((step.from, self.build(&step.node, layout_uri)?)))
                     .collect::<Result<_, UiDocError>>()?;
                 room::check_layout_steps(id, *measure, &steps, self.skin, layout_uri)?;
+                room::check_box(
+                    Some(*size),
+                    compiled_min(&base, self.skin),
+                    &NodePath::default().push(format!("Adaptive({id})")),
+                    layout_uri,
+                )?;
                 Ok(CompiledNode::Adaptive {
                     steps,
                     axis: *measure,
@@ -263,6 +269,16 @@ impl Compiler<'_> {
                 .expand_module(&set, &module_uri, &args, &instance.0)?;
                 room::check_module(&expanded.root, self.skin, &module_uri)?;
                 let declared = *size;
+                room::check_box(
+                    declared,
+                    with_module_chrome(
+                        min_size(&expanded.root, self.skin),
+                        expanded.chrome,
+                        self.skin,
+                    ),
+                    &NodePath::default().push(format!("Module({instance})")),
+                    layout_uri,
+                )?;
                 let size = declared.unwrap_or_else(|| {
                     module_size(&expanded.root, expanded.chrome, self.skin, DEFAULTS)
                 });

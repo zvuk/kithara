@@ -521,10 +521,14 @@ document can only answer once its controls have sizes.
 - A node holds what its box can take: `room::check_box` requires, on both axes, that a declared box
   naming a ceiling - `Dim::Fixed`, or `Dim::Range` with a closed top - covers what the node composes:
   `size::settled` for a `Row` or a `Column`, the children combined for a `Slot`, the base for an
-  `Adaptive`. `Dim::Fill`, `Dim::Shrink` and an open range name no ceiling and are left alone, as are
-  a `Scroll`, which scrolls what overflows its box, and a `Control`, whose box overrides the skin on
-  purpose. The rule keeps `min_size` and `compute_size` answering about one box, so the number
-  reaching `CompiledUi::min` is the number the renderer draws. Failure is
+  `Adaptive`. A layout declares boxes of its own, and `compile::Compiler::build` asks the same
+  question of the box still in hand: what a `LayoutNode::Module` declares against its expanded root
+  plus chrome, what a `LayoutNode::Adaptive` declares against `compiled_min` of its base.
+  `LayoutNode::Split` and `LayoutNode::Optional` carry the size of what they hold, so the question
+  reaches them through their children. `Dim::Fill`, `Dim::Shrink` and an open range name no ceiling
+  and are left alone, as are a `Scroll`, which scrolls what overflows its box, and a `Control`, whose
+  box overrides the skin on purpose. The rule keeps `min_size` and `compute_size` answering about one
+  box, so the number reaching `CompiledUi::min` is the number the renderer draws. Failure is
   `UiDocError::DeclaredRoom`, naming the node, the box and what it holds.
 
 ## Icon Identity
