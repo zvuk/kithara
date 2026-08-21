@@ -1,0 +1,48 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "app-bar-micro",
+    parameters: ["deck"],
+    root: Row(
+        gap: 0.0,
+        pad: 0.0,
+        measure: Width,
+        size: (w: Range(min: 221.0, max: None), h: Fixed(42.0)),
+        children: [
+            Include(id: "menu", source: "app-menu.kmodule.ron"),
+            Button(
+                id: "play",
+                size: (w: Fixed(68.0), h: Fill),
+                label: "@deck.transport.play",
+                icon: Some(Play),
+                style: TransportPrimary,
+                read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
+                write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
+            ),
+            WindowDrag(id: "drag", size: (w: Range(min: 36.0, max: None), h: Fill)),
+            Reveal(from: 350.0, child: Wave(
+                id: "wave",
+                style: Micro,
+                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+                write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
+            )),
+            Reveal(from: 440.0, child: Row(
+                id: "remain-cell",
+                size: (w: Fixed(62.0), h: Fill),
+                background: BgPanel,
+                frame: (top: false, right: false, bottom: false, left: true),
+                children: [
+                    Text(
+                        id: "remain",
+                        size: (w: Fill, h: Fill),
+                        style: Telemetry,
+                        align: Center,
+                        read: Telemetry(id: "deck.playback.remain", with: { "deck": "$deck" }),
+                    ),
+                ],
+            )),
+            Divider(id: "before-window"),
+            WindowControls(id: "window", style: Standard),
+        ],
+    ),
+)

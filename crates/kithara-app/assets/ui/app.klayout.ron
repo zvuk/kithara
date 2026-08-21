@@ -4,60 +4,100 @@
     id: "app",
     resize_edges: true,
     dragged: Some(Model(id: "ui.drag.track")),
-    root: Split(
-        axis: Vertical,
-        children: [
-            (node: Module(
-                instance: "bar",
-                source: "modules/app-bar.kmodule.ron",
-                size: (w: Fill, h: Fixed(42.0)),
+    root: Adaptive(
+        id: "shape",
+        measure: Width,
+        size: (w: Fill, h: Fill),
+        base: Adaptive(
+            id: "micro",
+            measure: Height,
+            size: (w: Fill, h: Fill),
+            base: Module(
+                instance: "bar-micro",
+                source: "modules/app-bar-micro.kmodule.ron",
+                with: { "deck": "a" },
                 frame: (top: false, right: false, bottom: true, left: false),
-            )),
-            (node: Optional(
-                id: "overview-block",
-                hidden: Model(id: "ui.module.hidden", with: { "module": "ov" }),
-                node: Module(
-                    instance: "overview",
-                    source: "modules/app-overview.kmodule.ron",
-                    size: (w: Fill, h: Fixed(82.0)),
-                    frame: (top: false, right: false, bottom: true, left: false),
-                ),
-            )),
-            (weight: 2.1, node: Split(
-                axis: Horizontal,
+            ),
+            steps: [
+                (from: 252.0, node: Split(
+                    axis: Vertical,
+                    children: [
+                        (node: Module(
+                            instance: "bar-micro",
+                            source: "modules/app-bar-micro.kmodule.ron",
+                            with: { "deck": "a" },
+                            frame: (top: false, right: false, bottom: true, left: false),
+                        )),
+                        (node: Optional(
+                            id: "library-block",
+                            hidden: Model(id: "ui.module.hidden", with: { "module": "lib" }),
+                            node: Module(
+                                instance: "library",
+                                source: "modules/app-library.kmodule.ron",
+                                frame: (top: false, right: false, bottom: false, left: false),
+                            ),
+                        )),
+                    ],
+                )),
+            ],
+        ),
+        steps: [
+            (from: 1080.0, node: Split(
+                axis: Vertical,
                 children: [
-                    (weight: 1.0, node: Module(
-                        instance: "deck-a",
-                        source: "modules/app-deck.kmodule.ron",
-                        with: { "deck": "a", "letter": "A" },
-                        frame: (top: false, right: true, bottom: true, left: false),
-                    )),
-                    (node: Optional(
-                        id: "mixer-block",
-                        hidden: Model(id: "ui.module.hidden", with: { "module": "mix" }),
-                        node: Module(
-                            instance: "mixer",
-                            source: "modules/app-mixer.kmodule.ron",
-                            size: (w: Fixed(224.0), h: Fill),
-                            frame: (top: false, right: true, bottom: true, left: false),
-                        ),
-                    )),
-                    (weight: 1.0, node: Module(
-                        instance: "deck-b",
-                        source: "modules/app-deck.kmodule.ron",
-                        with: { "deck": "b", "letter": "B" },
+                    (node: Module(
+                        instance: "bar",
+                        source: "modules/app-bar.kmodule.ron",
+                        size: (w: Fill, h: Fixed(42.0)),
                         frame: (top: false, right: false, bottom: true, left: false),
                     )),
+                    (node: Optional(
+                        id: "overview-block",
+                        hidden: Model(id: "ui.module.hidden", with: { "module": "ov" }),
+                        node: Module(
+                            instance: "overview",
+                            source: "modules/app-overview.kmodule.ron",
+                            size: (w: Fill, h: Fixed(82.0)),
+                            frame: (top: false, right: false, bottom: true, left: false),
+                        ),
+                    )),
+                    (weight: 2.1, node: Split(
+                        axis: Horizontal,
+                        children: [
+                            (weight: 1.0, node: Module(
+                                instance: "deck-a",
+                                source: "modules/app-deck.kmodule.ron",
+                                with: { "deck": "a", "letter": "A" },
+                                frame: (top: false, right: true, bottom: true, left: false),
+                            )),
+                            (node: Optional(
+                                id: "mixer-block",
+                                hidden: Model(id: "ui.module.hidden", with: { "module": "mix" }),
+                                node: Module(
+                                    instance: "mixer",
+                                    source: "modules/app-mixer.kmodule.ron",
+                                    size: (w: Fixed(224.0), h: Fill),
+                                    frame: (top: false, right: true, bottom: true, left: false),
+                                ),
+                            )),
+                            (weight: 1.0, node: Module(
+                                instance: "deck-b",
+                                source: "modules/app-deck.kmodule.ron",
+                                with: { "deck": "b", "letter": "B" },
+                                frame: (top: false, right: false, bottom: true, left: false),
+                            )),
+                        ],
+                    )),
+                    (weight: 1.3, node: Optional(
+                        id: "library-block",
+                        hidden: Model(id: "ui.module.hidden", with: { "module": "lib" }),
+                        node: Module(
+                            instance: "library",
+                            source: "modules/app-library.kmodule.ron",
+                            frame: (top: false, right: false, bottom: false, left: false),
+                        ),
+                    )),
                 ],
-            )),
-            (weight: 1.3, node: Optional(
-                id: "library-block",
-                hidden: Model(id: "ui.module.hidden", with: { "module": "lib" }),
-                node: Module(
-                    instance: "library",
-                    source: "modules/app-library.kmodule.ron",
-                    frame: (top: false, right: false, bottom: false, left: false),
-                ),
             )),
         ],
     ),

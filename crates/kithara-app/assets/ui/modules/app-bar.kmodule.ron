@@ -5,40 +5,54 @@
     root: Row(
         gap: 0.0,
         pad: 0.0,
+        measure: Width,
+        size: (w: Fill, h: Fill),
         children: [
             Include(id: "menu", source: "app-menu.kmodule.ron"),
-            Brand(id: "brand"),
-            Divider(id: "after-brand"),
+            Reveal(from: 1250.0, child: Row(
+                gap: 0.0,
+                size: (w: Shrink, h: Fill),
+                children: [
+                    Brand(id: "brand"),
+                    Divider(id: "after-brand"),
+                ],
+            )),
             WindowDrag(id: "drag"),
-            Optional(
-                id: "cpu-block",
-                hidden: Model(id: "ui.module.hidden", with: { "module": "cpu" }),
-                child: Row(
-                    id: "cpu-group",
-                    gap: 0.0,
-                    size: (w: Shrink, h: Fill),
-                    children: [
-                        Divider(id: "before-cpu"),
-                        Row(
-                            id: "cpu",
-                            gap: 6.0,
-                            pad: 11.0,
+            Reveal(from: 1120.0, child: Row(
+                gap: 0.0,
+                size: (w: Shrink, h: Fill),
+                children: [
+                    Optional(
+                        id: "cpu-block",
+                        hidden: Model(id: "ui.module.hidden", with: { "module": "cpu" }),
+                        child: Row(
+                            id: "cpu-group",
+                            gap: 0.0,
                             size: (w: Shrink, h: Fill),
                             children: [
-                                Text(id: "cpu-label", style: MicroLabel, label: "@bar.cpu"),
-                                Meter(id: "cpu-bar", read: Telemetry(id: "engine.load")),
-                                Scalar(
-                                    id: "cpu-value",
+                                Divider(id: "before-cpu"),
+                                Row(
+                                    id: "cpu",
+                                    gap: 6.0,
+                                    pad: 11.0,
                                     size: (w: Shrink, h: Fill),
-                                    format: Percent,
-                                    framed: false,
-                                    read: Telemetry(id: "engine.load"),
+                                    children: [
+                                        Text(id: "cpu-label", style: MicroLabel, label: "@bar.cpu"),
+                                        Meter(id: "cpu-bar", read: Telemetry(id: "engine.load")),
+                                        Scalar(
+                                            id: "cpu-value",
+                                            size: (w: Shrink, h: Fill),
+                                            format: Percent,
+                                            framed: false,
+                                            read: Telemetry(id: "engine.load"),
+                                        ),
+                                    ],
                                 ),
                             ],
                         ),
-                    ],
-                ),
-            ),
+                    ),
+                ],
+            )),
             Optional(
                 id: "broadcast-block",
                 hidden: Telemetry(id: "broadcast.hidden"),

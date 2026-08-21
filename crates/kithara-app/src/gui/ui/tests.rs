@@ -5,11 +5,13 @@ use kithara_ui::{
     builtin,
     compile::{CompiledNode, CompiledUi},
     expand::{ControlSpec, ExpandedNode},
-    module::{TextAlign, TextStyle},
+    module::{MeasureAxis, TextAlign, TextStyle},
     render::{ReadValue, Reads, tree},
+    size::{Dim, SizeSpec},
 };
 
-use super::{cache::DeckLayout, compile::compile_ui};
+use super::{cache::DeckLayout, compile::compile_ui, scope::MICRO_DECK};
+use crate::gui::frontend::consts::{WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH};
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
 fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
@@ -122,23 +124,6 @@ fn surfaces(ui: &CompiledUi) -> Vec<(&str, &str)> {
     out
 }
 
-/// Labels the segmented control at `want` declares, in document order.
-fn segments<'a>(ui: &'a CompiledUi, want: &str) -> Vec<&'a str> {
-    let mut found = Vec::new();
-    each_node(ui, &mut |node| {
-        if let ExpandedNode::Control {
-            path,
-            spec: ControlSpec::Segmented { items },
-            ..
-        } = node
-            && ui.resolve(*path) == want
-        {
-            found = items.iter().map(|item| ui.resolve(*item)).collect();
-        }
-    });
-    found
-}
-
 /// Every module that takes drops, as `(instance, scoped binding keys)`.
 fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
     let mut out = Vec::new();
@@ -174,6 +159,268 @@ fn documents_compile_against_the_registry() {
     }
 }
 
+/// The width from which the window lays out every module it has.
+const WIDE_FROM: f32 = 1080.0;
+
+/// Every module instance a branch lays out, sorted; a module standing in two
+/// branches of one adaptive node is named once per branch.
+fn instances<'a>(ui: &'a CompiledUi, node: &'a CompiledNode) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut stack = vec![node];
+    while let Some(node) = stack.pop() {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                stack.extend(children.iter().map(|(_, child)| child));
+            }
+            CompiledNode::Optional { child, .. } => stack.push(child),
+            CompiledNode::Adaptive { base, steps, .. } => {
+                stack.push(base);
+                stack.extend(steps.iter().map(|(_, branch)| branch));
+            }
+            CompiledNode::Module { instance, .. } => out.push(ui.resolve(*instance)),
+            _ => {}
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+fn module<'a>(ui: &'a CompiledUi, want: &str) -> &'a CompiledNode {
+    let mut stack = vec![&ui.root];
+    while let Some(node) = stack.pop() {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                stack.extend(children.iter().map(|(_, child)| child));
+            }
+            CompiledNode::Optional { child, .. } => stack.push(child),
+            CompiledNode::Adaptive { base, steps, .. } => {
+                stack.push(base);
+                stack.extend(steps.iter().map(|(_, branch)| branch));
+            }
+            CompiledNode::Module { instance, .. } if ui.resolve(*instance) == want => {
+                return node;
+            }
+            _ => {}
+        }
+    }
+    panic!("no module instance `{want}`");
+}
+
+/// The address a bar cell answers to: the cell itself, or the first addressed
+/// node behind the wrappers it stands in.
+fn cell_id<'a>(ui: &'a CompiledUi, node: &'a ExpandedNode) -> &'a str {
+    match node {
+        ExpandedNode::Control { path, .. }
+        | ExpandedNode::Popover { path, .. }
+        | ExpandedNode::Pressable { path, .. } => ui.resolve(*path),
+        ExpandedNode::Optional { block, .. } => ui.resolve(block.path),
+        ExpandedNode::Reveal { child, .. } | ExpandedNode::Scroll { child, .. } => {
+            cell_id(ui, child)
+        }
+        ExpandedNode::Row { children, .. }
+        | ExpandedNode::Column { children, .. }
+        | ExpandedNode::Slot { children, .. } => {
+            children.first().map_or("", |child| cell_id(ui, child))
+        }
+        _ => "",
+    }
+}
+
+/// The direct cells of a bar, as `(threshold, address)` in document order.
+fn bar_cells<'a>(ui: &'a CompiledUi, instance: &str) -> Vec<(Option<f32>, &'a str)> {
+    let CompiledNode::Module { root, .. } = module(ui, instance) else {
+        panic!("`{instance}` is no module");
+    };
+    let ExpandedNode::Row {
+        measure, children, ..
+    } = &**root
+    else {
+        panic!("`{instance}` must be rooted in a row");
+    };
+    assert_eq!(
+        *measure,
+        Some(MeasureAxis::Width),
+        "`{instance}` answers a threshold only while it measures its own width",
+    );
+    children
+        .iter()
+        .map(|child| match child {
+            ExpandedNode::Reveal { from, .. } => (Some(*from), cell_id(ui, child)),
+            _ => (None, cell_id(ui, child)),
+        })
+        .collect()
+}
+
+/// The first segment of an address names the layout instance that answers it,
+/// and `gui::ui::events::control` routes exactly these; a document minting a
+/// new one needs a new arm there or its controls go nowhere.
+#[kithara::test]
+fn every_address_names_an_instance_the_host_routes() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let mut named: Vec<&str> = control_paths(&ui)
+            .into_iter()
+            .filter_map(|path| path.split_once('/').map(|(instance, _)| instance))
+            .collect();
+        named.sort_unstable();
+        named.dedup();
+
+        let mut want = vec!["bar", "bar-micro", "deck-a", "library", "mixer", "overview"];
+        if layout == DeckLayout::Dual {
+            want.push("deck-b");
+        }
+        want.sort_unstable();
+        assert_eq!(named, want, "{layout:?}");
+    }
+}
+
+/// The window draws one of two shapes, picked by the width it is given, and
+/// answers the box it declares whichever it draws.
+#[kithara::test]
+fn the_window_takes_its_shape_from_the_width_it_is_given() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let CompiledNode::Adaptive {
+            axis, size, steps, ..
+        } = &ui.root
+        else {
+            panic!("{layout:?}: expected an adaptive root, got {:?}", ui.root);
+        };
+
+        assert_eq!(*axis, MeasureAxis::Width, "{layout:?}");
+        assert_eq!(*size, SizeSpec::new(Dim::Fill, Dim::Fill), "{layout:?}");
+        assert_eq!(ui.size, SizeSpec::new(Dim::Fill, Dim::Fill), "{layout:?}");
+        assert_eq!(steps.len(), 1, "{layout:?}");
+        assert_eq!(steps[0].0, WIDE_FROM, "{layout:?}");
+    }
+}
+
+/// A window too narrow for both deck panes lays out the bar and the browser;
+/// the decks, the mixer and the overview row leave with the shape they belong
+/// to.
+#[kithara::test]
+fn a_narrow_window_lays_out_the_bar_and_the_browser() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let CompiledNode::Adaptive { base, steps, .. } = &ui.root else {
+            panic!("{layout:?}: expected an adaptive root");
+        };
+
+        assert_eq!(
+            instances(&ui, base),
+            ["bar-micro", "bar-micro", "library"],
+            "{layout:?}",
+        );
+        let wide = instances(&ui, &steps[0].1);
+        let mut want = vec!["bar", "library", "mixer", "overview", "deck-a"];
+        if layout == DeckLayout::Dual {
+            want.push("deck-b");
+        }
+        want.sort_unstable();
+        assert_eq!(wide, want, "{layout:?}");
+    }
+}
+
+/// The micro bar takes its cells as the window makes room for them; the menu,
+/// play, the drag strip and the window controls stand at every width.
+#[kithara::test]
+fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+
+        assert_eq!(
+            bar_cells(&ui, "bar-micro"),
+            [
+                (None, "bar-micro/menu/pop"),
+                (None, "bar-micro/play"),
+                (None, "bar-micro/drag"),
+                (Some(350.0), "bar-micro/wave"),
+                (Some(440.0), "bar-micro/remain"),
+                (None, "bar-micro/before-window"),
+                (None, "bar-micro/window"),
+            ],
+            "{layout:?}",
+        );
+    }
+}
+
+/// The bar keeps the telemetry it has room for: the CPU cell and the wordmark
+/// stand only in a window wide enough to spare them the space.
+#[kithara::test]
+fn the_bar_reveals_its_telemetry_as_the_window_widens() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+
+        assert_eq!(
+            bar_cells(&ui, "bar"),
+            [
+                (None, "bar/menu/pop"),
+                (Some(1250.0), "bar/brand"),
+                (None, "bar/drag"),
+                (Some(1120.0), "bar/cpu-block"),
+                (None, "bar/broadcast-block"),
+                (None, "bar/before-window"),
+                (None, "bar/window"),
+            ],
+            "{layout:?}",
+        );
+    }
+}
+
+/// The browser panel joins the micro bar once the window is as tall as the two
+/// of them together, so the threshold is that form's own minimum height.
+#[kithara::test]
+fn the_browser_panel_stands_once_the_window_is_tall_enough_for_it() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let CompiledNode::Adaptive { base, .. } = &ui.root else {
+            panic!("{layout:?}: expected an adaptive root");
+        };
+        let CompiledNode::Adaptive {
+            axis,
+            base: bar_only,
+            steps,
+            ..
+        } = &**base
+        else {
+            panic!("{layout:?}: the micro shape must answer the height it is given");
+        };
+
+        assert_eq!(*axis, MeasureAxis::Height, "{layout:?}");
+        assert_eq!(instances(&ui, bar_only), ["bar-micro"], "{layout:?}");
+        assert_eq!(steps.len(), 1, "{layout:?}");
+        let (from, tall) = &steps[0];
+        assert_eq!(instances(&ui, tall), ["bar-micro", "library"], "{layout:?}");
+        let CompiledNode::Split { size, .. } = tall else {
+            panic!("{layout:?}: the tall form stacks the bar over the panel");
+        };
+        assert_eq!(*from, size.h.min(), "{layout:?}");
+    }
+}
+
+/// The window may be squeezed to the micro bar and no further: below its own
+/// minimum the cells that make the window usable would overflow the bar.
+#[kithara::test]
+fn the_window_minimum_holds_the_micro_bar() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let CompiledNode::Module { size, .. } = module(&ui, "bar-micro") else {
+            panic!("{layout:?}: `bar-micro` is no module");
+        };
+
+        assert!(
+            WINDOW_MIN_WIDTH >= size.w.min(),
+            "{layout:?}: a window of {WINDOW_MIN_WIDTH} overflows a bar of {}",
+            size.w.min(),
+        );
+        assert!(
+            WINDOW_MIN_HEIGHT >= size.h.min(),
+            "{layout:?}: a window of {WINDOW_MIN_HEIGHT} overflows a bar of {}",
+            size.h.min(),
+        );
+    }
+}
+
 /// Both node enums are `#[non_exhaustive]`, so every walker here ends at a
 /// `_ => {}`: a shape it does not name empties it in silence, and the tests
 /// that sweep its result stay true over nothing.
@@ -186,18 +433,18 @@ fn every_walker_reaches_the_nodes_the_documents_declare() {
             (
                 "controls",
                 controls(&ui).len(),
-                if dual { 168 } else { 110 },
+                if dual { 263 } else { 205 },
             ),
             (
                 "control_paths",
                 control_paths(&ui).len(),
-                if dual { 168 } else { 110 },
+                if dual { 263 } else { 205 },
             ),
             ("surfaces", surfaces(&ui).len(), layout.decks()),
             (
                 "pressables",
                 pressables(&ui).len(),
-                if dual { 35 } else { 24 },
+                if dual { 59 } else { 48 },
             ),
             ("drop_targets", drop_targets(&ui).len(), layout.decks()),
             ("guarded_by", guarded_by(&ui, "ui.module.hidden").len(), 4),
@@ -226,11 +473,14 @@ fn deck_scoped_controls_are_routed_to_the_deck_they_read() {
                 }) else {
                     continue;
                 };
-                let routed = [
+                let mut routed = vec![
                     format!("deck-{letter}/"),
                     format!("mixer/{letter}/"),
                     format!("overview/{letter}/"),
                 ];
+                if letter == MICRO_DECK {
+                    routed.push("bar-micro/".to_owned());
+                }
                 assert!(
                     routed.iter().any(|prefix| path.starts_with(prefix)),
                     "{layout:?}: control `{path}` is bound to `{key}` but is not addressed by deck `{letter}`",
@@ -299,6 +549,9 @@ fn the_bar_carries_the_broadcast_cell() {
     }
 }
 
+/// Whichever shape the window draws, its chrome is the bar that shape carries:
+/// the micro bar stands in both branches of the height it answers, so it names
+/// its pair twice.
 #[kithara::test]
 fn the_bar_owns_the_window_chrome() {
     for layout in LAYOUTS {
@@ -314,8 +567,20 @@ fn the_bar_owns_the_window_chrome() {
                 seen.push(ui.resolve(*path));
             }
         });
+        seen.sort_unstable();
 
-        assert_eq!(seen, ["bar/drag", "bar/window"], "{layout:?}");
+        assert_eq!(
+            seen,
+            [
+                "bar-micro/drag",
+                "bar-micro/drag",
+                "bar-micro/window",
+                "bar-micro/window",
+                "bar/drag",
+                "bar/window",
+            ],
+            "{layout:?}",
+        );
         assert!(
             ui.resize_edges,
             "{layout:?}: the window has no other way to be resized"

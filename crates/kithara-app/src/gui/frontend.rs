@@ -9,7 +9,7 @@ use kithara_ui::render::fonts;
 
 use super::{
     app::{Decks, Kithara},
-    ui::AppUi,
+    ui::{AppUi, window::WINDOW_SIZE},
     update, view,
 };
 use crate::{
@@ -23,15 +23,13 @@ use crate::{
 /// Error returned by the GUI frontend.
 pub type FrontendError = Box<dyn Error + Send + Sync>;
 
-mod consts {
-    /// The minimum keeps both deck panes wide enough for their fixed
-    /// transport and timestretch controls.
-    pub(super) const WINDOW_MIN_WIDTH: f32 = 1080.0;
-    pub(super) const WINDOW_MIN_HEIGHT: f32 = super::WINDOW_SIZE.height;
+pub(in crate::gui) mod consts {
+    /// The minimum is the box the micro bar declares: a smaller window
+    /// overflows the cells that stand in it at every size.
+    pub(in crate::gui) const WINDOW_MIN_WIDTH: f32 = 221.0;
+    pub(in crate::gui) const WINDOW_MIN_HEIGHT: f32 = 42.0;
 }
 use consts::*;
-
-use super::ui::window::WINDOW_SIZE;
 
 /// Settings for the app window. The bar draws the window chrome itself, so
 /// the system decorations stay off; close goes through `close_requests()`,
