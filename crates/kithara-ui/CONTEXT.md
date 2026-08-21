@@ -233,6 +233,11 @@ the column pitch for both the deck wave and the overview row.
   what remains, so a 28 px dial asks for a 39 px box and a square declaration renders a squashed
   dial. A knob declaring no size takes `skin.knob.size`, the one place those two numbers are kept
   together.
+- A wave takes its box from its style: `Hero` from `skin.wave.size`, `Default` from
+  `skin.wave.default_size`, `Micro` from `skin.wave.micro_size`. The three floors - `120`, `40` and
+  `34` - are the heights the rows those styles stand in are built to, so the strip in a `42` bar
+  asks for the room a `42` bar has. `size::control_size` matches all three, so a fourth style names
+  its own number before it renders.
 - A menu glyph is the one control whose declared size names one axis only: drawn as a text glyph,
   its box is the icon size wide and a line box tall (`1.3` times the size, the iced default), so a
   square declaration overflows. `size::icon_cell` fixes the width and leaves the height to the row.
@@ -462,6 +467,57 @@ was built in. A child left out is given a layout node of no size, and `draw`, `u
 widget state - so a hidden cell holding an open `Popover` floats nothing.
 Neither widget forwards `Widget::operate` to its children, so an operation traversal - focus,
 programmatic scroll-to - stops at the container and reaches nothing inside it.
+
+## Minimum Room Ownership
+
+A tree answers two questions. `size::compute_size` answers what box a node shows its parent, where a
+declared `size` replaces everything below it - that constancy is what lets `size::has_blocks` call a
+self-measured subtree memoisable. `size::min_size` answers how much room the node actually needs, and
+there a declared box is a floor rather than the answer: the result is the per-axis maximum of the
+declared minimum and what the children compose to, so a box cannot swallow the room its cells take.
+`min_size` takes no `Snapshot`: it is a property of the document and the skin alone.
+
+- A `Control` needs what `compute_size` answers for it, a declared box included - it holds no cells
+  whose room a box could swallow. `Popover` needs its anchor, `Pressable` needs its child, and
+  `Scroll` needs its declared box when it has one, since its content is what scrolls inside it.
+- An `Optional` child counts as standing. The host owns that switch, and a bar that overflows the
+  moment the host shows a block again is a bar that never fitted. A `Reveal` child is the opposite
+  case - the room owns it - so a cell waiting for a threshold contributes nothing until the room
+  reaches it, on both axes.
+- An `Adaptive` needs its base branch: that is the form it draws in the smallest window. What its
+  steps need is a separate question, answered by the rule below rather than by the node's own
+  minimum.
+- Which cells a measuring container stands at its own minimum depends on that minimum, so
+  `size::Stack::settled` resolves the circle by climbing: the room starts at what the cells waiting
+  for nothing take, and each round admits the cells whose threshold that room reaches. The climb is
+  monotone and thresholds are finite in number, so one round per waiting cell reaches the least fixed
+  point; the loop is bounded by that count and answers whatever it settled on, since a further round
+  on a settled set repeats it. Each child's minimum is taken once, before the rounds, so nested
+  measuring containers cost one walk rather than one per round.
+  A container reading no room stands every cell, which is what `render/tree/node.rs::render_node`
+  draws for a `Reveal` outside a measuring container.
+- `compile::compiled_min` carries the same question up the layout tree - `Split` composes, `Optional`
+  takes its child, `Adaptive` takes its base, a `Module` takes its expanded root plus its chrome -
+  and `CompiledUi::min` is the answer at the root. That is the number a host holds its window to, and
+  `compiled_min` is public so a host can ask the same of one branch it stands behind a threshold. A
+  module's minimum maxes against the box its `CompiledNode` carries, which is the box the layout
+  declared or, absent one, the composed size that box would have had - below the minimum either way.
+
+Two rules follow, both checked at compile time against the skin, because both are questions a
+document can only answer once its controls have sizes.
+
+- A step draws in the room its threshold promises: `room::check_steps` requires
+  `step.from >= min_size(step)` on the measured axis, for `ExpandedNode::Adaptive` reading `Width` or
+  `Height` and for every `CompiledNode::Adaptive`, which reads one of them by construction. A
+  `MeasureSpec::Read` step is left alone: its threshold counts whatever its endpoint counts - bands,
+  decks, anything - and pixels are not that unit. Failure is `UiDocError::AdaptiveStepRoom`, naming
+  the step, the threshold and the room the branch needs.
+- A threshold names room the container has: `room::check_cells` requires that the cells standing in a
+  room fit in it, at the container's own minimum and at every threshold above it. The standing set
+  stands still between those points, so they cover every width rather than sample it. A threshold
+  below the minimum names a cell that always stands, which the minimum already counts, and is no
+  error. Failure is `UiDocError::RevealRoom`, naming the container, the room and what is needed
+  there.
 
 ## Icon Identity
 

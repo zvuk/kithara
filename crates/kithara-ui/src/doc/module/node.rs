@@ -687,6 +687,16 @@ pub enum MeasureAxis {
     Height,
 }
 
+impl MeasureAxis {
+    /// Names the axis in a message about the box it reads.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Width => "width",
+            Self::Height => "height",
+        }
+    }
+}
+
 impl ControlNode {
     pub(crate) const fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
         match self {

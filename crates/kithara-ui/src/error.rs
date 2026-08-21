@@ -55,6 +55,24 @@ pub enum UiDocError {
         index: usize,
         from: f32,
     },
+    #[error("{origin}: adaptive step at {path} draws from {from} {axis} and needs {needs}")]
+    AdaptiveStepRoom {
+        origin: SourceUri,
+        path: String,
+        axis: &'static str,
+        from: f32,
+        needs: f32,
+    },
+    #[error(
+        "{origin}: container at {path} stands cells needing {needs} {axis} in the {room} it has"
+    )]
+    RevealRoom {
+        origin: SourceUri,
+        path: String,
+        axis: &'static str,
+        needs: f32,
+        room: f32,
+    },
     #[error("{origin}: {path} measures its own {axis} and must declare that axis as a box")]
     UnmeasuredAxis {
         origin: SourceUri,

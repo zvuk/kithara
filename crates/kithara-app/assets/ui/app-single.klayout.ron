@@ -26,7 +26,7 @@
                     frame: (top: false, right: false, bottom: false, left: false),
                 ),
                 steps: [
-                    (from: 450.0, node: Split(
+                    (from: 467.0, node: Split(
                         axis: Vertical,
                         children: [
                             (node: Module(

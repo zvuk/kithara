@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::BTreeSet};
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
-    compile::{CompiledNode, CompiledUi},
+    compile::{CompiledNode, CompiledUi, compiled_min},
     expand::{ControlSpec, ExpandedNode},
     module::{MeasureAxis, TextAlign, TextStyle},
     render::{ReadValue, Reads, tree},
@@ -11,7 +11,7 @@ use kithara_ui::{
 };
 
 use super::{cache::DeckLayout, compile::compile_ui, scope::MICRO_DECK};
-use crate::gui::frontend::consts::{WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH};
+
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
 fn each_expanded(node: &ExpandedNode, visit: &mut impl FnMut(&ExpandedNode)) {
@@ -414,10 +414,15 @@ fn the_full_shape_stands_only_where_the_window_is_tall_enough_for_it() {
         let (micro, from, full) = height_gate(&ui, layout);
 
         assert_eq!(instances(&ui, micro), ["micro"], "{layout:?}");
-        let CompiledNode::Split { size, .. } = full else {
-            panic!("{layout:?}: the full shape stacks its rows in a column");
-        };
-        assert_eq!(from, size.h.min(), "{layout:?}");
+        assert!(
+            matches!(full, CompiledNode::Split { .. }),
+            "{layout:?}: the full shape stacks its rows in a column",
+        );
+        assert_eq!(
+            from,
+            compiled_min(full, builtin::skin_doc()).h.min(),
+            "{layout:?}",
+        );
     }
 }
 
@@ -484,23 +489,24 @@ fn the_browser_panel_stands_once_the_window_is_tall_enough_for_it() {
     }
 }
 
-/// The window may be squeezed to the micro bar and no further: below its own
-/// minimum the cells that make the window usable would overflow the bar.
+/// The window may be squeezed to the micro bar and no further, so the tree's
+/// minimum is the micro form's own. The width is the room the bar's standing
+/// cells settle on, which no document names; the height is the box it declares.
 #[kithara::test]
 fn the_window_minimum_holds_the_micro_bar() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
-        let size = bar_box(micro_bar(&ui));
+        let (micro, _, _) = height_gate(&ui, layout);
 
-        assert!(
-            WINDOW_MIN_WIDTH >= size.w.min(),
-            "{layout:?}: a window of {WINDOW_MIN_WIDTH} overflows a bar of {}",
-            size.w.min(),
+        assert_eq!(
+            ui.min,
+            SizeSpec::new(Dim::Fixed(221.0), Dim::Fixed(42.0)),
+            "{layout:?}",
         );
-        assert!(
-            WINDOW_MIN_HEIGHT >= size.h.min(),
-            "{layout:?}: a window of {WINDOW_MIN_HEIGHT} overflows a bar of {}",
-            size.h.min(),
+        assert_eq!(
+            ui.min,
+            compiled_min(micro, builtin::skin_doc()),
+            "{layout:?}",
         );
     }
 }

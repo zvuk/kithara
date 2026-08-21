@@ -23,21 +23,14 @@ use crate::{
 /// Error returned by the GUI frontend.
 pub type FrontendError = Box<dyn Error + Send + Sync>;
 
-pub(in crate::gui) mod consts {
-    /// The minimum is the box the micro bar declares: a smaller window
-    /// overflows the cells that stand in it at every size.
-    pub(in crate::gui) const WINDOW_MIN_WIDTH: f32 = 221.0;
-    pub(in crate::gui) const WINDOW_MIN_HEIGHT: f32 = 42.0;
-}
-use consts::*;
-
 /// Settings for the app window. The bar draws the window chrome itself, so
 /// the system decorations stay off; close goes through `close_requests()`,
-/// whose handler exits the app.
-pub(crate) fn window_settings() -> Settings {
+/// whose handler exits the app. `min` is the room the compiled tree needs: a
+/// smaller window overflows the cells that stand in it at every size.
+pub(crate) fn window_settings(min: Size) -> Settings {
     Settings {
         size: WINDOW_SIZE,
-        min_size: Some(Size::new(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)),
+        min_size: Some(min),
         decorations: false,
         exit_on_close_request: false,
         ..Settings::default()

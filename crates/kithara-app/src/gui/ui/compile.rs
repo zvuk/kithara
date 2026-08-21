@@ -1,4 +1,4 @@
-use iced::Element;
+use iced::{Element, Size};
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
@@ -109,6 +109,15 @@ impl AppUi {
             dual: compile_ui(DeckLayout::Dual)?,
             cache: ViewCache::default(),
         })
+    }
+
+    /// One window draws whichever layout the menu picks, so it holds the room
+    /// the more demanding of the two asks for.
+    pub(crate) fn window_min(&self) -> Size {
+        Size::new(
+            self.single.min.w.min().max(self.dual.min.w.min()),
+            self.single.min.h.min().max(self.dual.min.h.min()),
+        )
     }
 
     const fn compiled(&self, layout: DeckLayout) -> &CompiledUi {

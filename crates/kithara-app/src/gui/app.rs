@@ -86,7 +86,7 @@ impl Kithara {
         palette: gui::GuiPalette,
         broadcast: crate::broadcast::Broadcaster,
     ) -> (Self, Task<Message>) {
-        let (window_id, open) = window::open(window_settings());
+        let (window_id, open) = window::open(window_settings(ui.window_min()));
 
         let state = Self {
             broadcast,

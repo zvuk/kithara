@@ -11,9 +11,10 @@ use crate::{
     module::{ChromeStyle, MeasureAxis},
     registry::EndpointRegistry,
     resolve::load_module_graph,
+    room,
     size::{
-        BlockNode, DEFAULTS, SizeSpec, Snapshot, combine_horizontal, combine_vertical,
-        compute_size, has_blocks, with_module_chrome,
+        BlockNode, DEFAULTS, SizeSpec, Snapshot, at_least, combine_horizontal, combine_vertical,
+        compute_size, has_blocks, min_size, with_module_chrome,
     },
     skin::SkinDoc,
     source::{SourceResolver, UiConfig},
@@ -28,6 +29,8 @@ pub struct CompiledUi {
     /// Names the item the pointer is carrying; drawn at the pointer.
     pub dragged: Option<Binding>,
     pub size: SizeSpec,
+    /// The room the whole tree needs, which is the smallest window it draws in.
+    pub min: SizeSpec,
     /// The layout asked to be framed by its own resize edges.
     pub resize_edges: bool,
     arena: StrArena,
@@ -137,6 +140,7 @@ pub fn compile(
     }
     .build(&document.root, &loaded.uri)?;
     let size = compiled_node_size(&root);
+    let min = compiled_min(&root, skin);
     let dragged = document
         .dragged
         .as_ref()
@@ -146,6 +150,7 @@ pub fn compile(
     Ok(CompiledUi {
         root,
         size,
+        min,
         dragged,
         arena,
         resize_edges: document.resize_edges,
@@ -208,14 +213,17 @@ impl Compiler<'_> {
                 steps,
             } => {
                 validate::check_layout_measure(id, *measure, *size, layout_uri)?;
+                let base = self.build(base, layout_uri)?;
+                let steps: Vec<_> = steps
+                    .iter()
+                    .map(|step| Ok((step.from, self.build(&step.node, layout_uri)?)))
+                    .collect::<Result<_, UiDocError>>()?;
+                room::check_layout_steps(id, *measure, &steps, self.skin, layout_uri)?;
                 Ok(CompiledNode::Adaptive {
+                    steps,
                     axis: *measure,
                     size: *size,
-                    base: Box::new(self.build(base, layout_uri)?),
-                    steps: steps
-                        .iter()
-                        .map(|step| Ok((step.from, self.build(&step.node, layout_uri)?)))
-                        .collect::<Result<_, UiDocError>>()?,
+                    base: Box::new(base),
                 })
             }
             LayoutNode::Module {
@@ -253,6 +261,7 @@ impl Compiler<'_> {
                     &mut visitor,
                 )
                 .expand_module(&set, &module_uri, &args, &instance.0)?;
+                room::check_module(&expanded.root, self.skin, &module_uri)?;
                 let declared = *size;
                 let size = declared.unwrap_or_else(|| {
                     module_size(&expanded.root, expanded.chrome, self.skin, DEFAULTS)
@@ -286,6 +295,31 @@ pub(crate) fn compiled_node_size(node: &CompiledNode) -> SizeSpec {
         CompiledNode::Adaptive { size, .. }
         | CompiledNode::Split { size, .. }
         | CompiledNode::Module { size, .. } => *size,
+    }
+}
+
+/// The room one branch of a compiled tree needs, which is what a threshold
+/// standing that branch has to promise.
+#[must_use]
+pub fn compiled_min(node: &CompiledNode, skin: &SkinDoc) -> SizeSpec {
+    match node {
+        CompiledNode::Optional { child, .. } => compiled_min(child, skin),
+        CompiledNode::Adaptive { size, base, .. } => {
+            at_least(Some(*size), compiled_min(base, skin))
+        }
+        CompiledNode::Split { axis, children, .. } => {
+            let sizes = children.iter().map(|(_, child)| compiled_min(child, skin));
+            match axis {
+                Axis::Horizontal => combine_horizontal(sizes),
+                Axis::Vertical => combine_vertical(sizes),
+            }
+        }
+        CompiledNode::Module {
+            root, chrome, size, ..
+        } => at_least(
+            Some(*size),
+            with_module_chrome(min_size(root, skin), *chrome, skin),
+        ),
     }
 }
 

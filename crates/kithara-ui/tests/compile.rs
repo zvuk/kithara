@@ -1783,3 +1783,105 @@ fn a_template_may_not_read_an_endpoint_the_registry_does_not_know() {
         "{error}"
     );
 }
+
+/// A step draws in the room its threshold promises, so a branch needing more
+/// than that is a document that cannot hold together.
+#[kithara::test]
+fn an_adaptive_step_may_not_start_below_what_its_branch_needs() {
+    let branch = r#"Row(id: "wide", gap: 0.0, pad: 0.0,
+        children: [Knob(id: "low"), Knob(id: "high")])"#;
+    let module = |measure: &str| {
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Adaptive(
+                    id: "bank",
+                    measure: {measure},
+                    base: Knob(id: "low"),
+                    steps: [(from: 4.0, node: {branch})],
+                ))"#
+        )
+    };
+
+    let error = compile_blocks(
+        &block_resolver(&module("Width, size: (w: Fill, h: Fixed(42.0))")),
+        "blocks.klayout.ron",
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::AdaptiveStepRoom { from, needs, axis, .. }
+            if *from == 4.0 && *needs == 56.0 && *axis == "width"),
+        "{error:?}"
+    );
+    compile_blocks(
+        &block_resolver(&module(r#"Read(Model(id: "ui.measure"))"#)),
+        "blocks.klayout.ron",
+    )
+    .expect("a read measure counts what its endpoint counts, which is no width");
+}
+
+/// A layout picks its form the same way, and the modules a form holds are what
+/// its threshold has to cover.
+#[kithara::test]
+fn a_layout_step_may_not_start_below_what_its_modules_need() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "deck",
+            root: Row(id: "body", gap: 0.0, pad: 0.0, children: [Knob(id: "low")]))"#,
+    );
+    resolver.insert(
+        "wide.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "wide",
+            root: Adaptive(
+                id: "body",
+                measure: Width,
+                size: (w: Fill, h: Fill),
+                base: Module(instance: "deck-a", source: "blocks.kmodule.ron"),
+                steps: [
+                    (from: 40.0, node: Split(axis: Horizontal, children: [
+                        (node: Module(instance: "deck-a", source: "blocks.kmodule.ron")),
+                        (node: Module(instance: "deck-b", source: "blocks.kmodule.ron")),
+                    ])),
+                ],
+            ))"#,
+    );
+
+    let error = compile_blocks(&resolver, "wide.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::AdaptiveStepRoom { from, needs, .. }
+            if *from == 40.0 && *needs == 56.0),
+        "{error:?}"
+    );
+}
+
+/// A threshold names the room a cell waits for, so the cells standing at that
+/// room have to fit in it.
+#[kithara::test]
+fn a_threshold_may_not_promise_room_the_container_does_not_have() {
+    let bar = |from: f32| {
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Row(
+                    id: "bar",
+                    measure: Width,
+                    size: (w: Fill, h: Fixed(42.0)),
+                    gap: 0.0,
+                    pad: 0.0,
+                    children: [
+                        Knob(id: "low"),
+                        Reveal(from: {from}, child: Knob(id: "high", size: (w: Fixed(200.0), h: Fill))),
+                    ],
+                ))"#
+        )
+    };
+
+    let error = compile_blocks(&block_resolver(&bar(100.0)), "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RevealRoom { room, needs, axis, .. }
+            if *room == 100.0 && *needs == 228.0 && *axis == "width"),
+        "{error:?}"
+    );
+    compile_blocks(&block_resolver(&bar(300.0)), "blocks.klayout.ron")
+        .expect("a threshold above what the cells take promises room they fit in");
+}

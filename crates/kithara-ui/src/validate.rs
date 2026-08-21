@@ -468,10 +468,7 @@ fn check_measured_box(
     Err(UiDocError::UnmeasuredAxis {
         origin: origin.clone(),
         path: path.render(),
-        axis: match axis {
-            MeasureAxis::Width => "width",
-            MeasureAxis::Height => "height",
-        },
+        axis: axis.name(),
     })
 }
 

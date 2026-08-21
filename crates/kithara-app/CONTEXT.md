@@ -134,14 +134,16 @@ which deck layout renders belongs to `DeckLayout`, and a width may not reassign 
 
 The full tree asks for room on both axes, and nesting is how a document says "and": the wide step holds a second
 `Adaptive` measuring `Height`, and the tree stands in that node's step. The threshold is the tree's own compiled minimum
-height — `492.0` in `app.klayout.ron`, `450.0` in `app-single.klayout.ron` — which is the wide column summed: the `42.0`
-bar, the overview row (`82.0` over two decks, `40.0` over one), the deck row's `158.0` and the library panel's `210.0`.
-Under that height the gate draws the micro player, so a window reaching one axis and missing the other draws the shape
-that fits it.
+height — `573.0` in `app.klayout.ron`, `467.0` in `app-single.klayout.ron` — which is the wide column summed: the `42.0`
+bar, the overview row (`82.0` over two decks, `40.0` over one), the deck row and the library panel's `210.0`. The deck
+row is a horizontal split, so it takes the tallest pane standing in it: the mixer's `239.0` over two decks, `175.0` over
+one, against a deck pane's `158.0`. The mixer stacks a channel strip on the crossfader's `64.0`, and the strip is the
+EQ bank's `159.0` under the volume section's `16.0` of padding. Under that height the gate draws the micro player, so a
+window reaching one axis and missing the other draws the shape that fits it.
 
 The gate reads the room the window offers rather than the rows the menu leaves standing, so a pane switched off still
 counts toward the height the full shape asks for: in a window past `1080.0` wide and `300.0` tall with the overview row
-and the browser panel off, the gate draws the micro player though the bar's `42.0` and the deck row's `158.0` fit.
+and the browser panel off, the gate draws the micro player though the bar's `42.0` and the deck row fit.
 That is the price of `measure: Height`, which takes its number from the box the toolkit hands the node during layout.
 The other measure the mechanism offers, `measure: Read(<binding>)`, takes it from a host endpoint — the window size is
 already tracked in `gui/ui/window.rs` — and picks the branch while the tree is built, from a snapshot: one frame behind
@@ -170,20 +172,19 @@ threshold. The micro bar takes the wave from `350.0` and the remaining time from
 block from `1120.0` and the wordmark from `1250.0`. A threshold below the width at which its bar exists at all would be
 an always-true wrapper, which is why the broadcast cell in the full bar carries none.
 
-The micro bar declares `(w: Range(min: 221.0, max: None), h: Fixed(42.0))`, the box of the cells that stand at every
-width: the menu (36), play (68), the drag strip (36, held to the menu cell's width so the window stays movable at its
-smallest), the seam before the window controls (1) and the controls themselves (80). `WINDOW_MIN_WIDTH` and
-`WINDOW_MIN_HEIGHT` are held at or above that box by a unit test, because a window under it overflows the bar where
-nobody is looking. That box is the window minimum outright, because every gate falls back to the micro player and the
-micro player stands its bar under every threshold: below `252.0` of height, at any width, the bar is the whole shape the
-window draws.
+The micro bar declares `(w: Fill, h: Fixed(42.0))` and composes its width from the cells that stand at every one: the
+menu (36), play (68), the drag strip (36, held to the menu cell's width so the window stays movable at its smallest),
+the seam before the window controls (1) and the controls themselves (80), which is `221.0`. That is the whole tree's
+minimum, because every gate falls back to the micro player and the micro player stands its bar under every threshold:
+below `252.0` of height, at any width, the bar is the whole shape the window draws. `CompiledUi::min` carries it,
+`AppUi::window_min` takes the larger of the two layouts' — one window draws whichever the menu picks, and both come out
+at `221.0` by `42.0` since both stand the same micro player — and `frontend::window_settings` hands it to `iced` as
+`min_size`.
 
-The two axes carry their numbers differently. Every height threshold is held to the compiled tree by a unit test, so a
-row changing size moves the gate with it: `492.0` and `450.0` equal the full shape's own compiled minimum, and `252.0`
-equals the box the bar declares plus the minimum the track list's control specification carries. Both width numbers are
-written by hand: `1080.0` is a judgement about workable deck panes, and `221.0` is the sum of the always-standing cells
-above, arithmetic a reader redoes — `compute_size` returns the declared override, so the compiler reads that number
-and takes it.
+Every threshold is held to the compiled tree by a unit test, so a cell changing size moves the gate with it: `573.0`
+and `467.0` equal the full shape's own compiled minimum, `252.0` equals the box the bar declares plus the minimum the
+track list's control specification carries, and the window minimum is what the bar's own cells settle on. `1080.0` is
+the one number written by hand, a judgement about workable deck panes.
 
 ## Track analysis cache
 

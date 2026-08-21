@@ -7,7 +7,7 @@
         gap: 0.0,
         pad: 0.0,
         measure: Width,
-        size: (w: Range(min: 221.0, max: None), h: Fixed(42.0)),
+        size: (w: Fill, h: Fixed(42.0)),
         frame: (top: false, right: false, bottom: true, left: false),
         frame_color: Line,
         children: [

@@ -414,6 +414,8 @@
     ),
     wave: (
         size: (w: Fill, h: Range(min: 120.0, max: None)),
+        default_size: (w: Fill, h: Range(min: 40.0, max: None)),
+        micro_size: (w: Fill, h: Range(min: 34.0, max: None)),
         frame: (radius: 0.0, border_width: 0.0, border: Line),
         overlay: (
             background: BgDeep,

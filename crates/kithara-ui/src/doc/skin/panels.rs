@@ -15,6 +15,11 @@ pub struct WaveSkin {
     pub cue_badge_text_color: ColorRole,
     pub cue_badge_text: FontSkin,
     pub frame: FrameSkin,
+    /// `WaveStyle::Default`.
+    pub default_size: SizeSpec,
+    /// `WaveStyle::Micro`.
+    pub micro_size: SizeSpec,
+    /// `WaveStyle::Hero`.
     pub size: SizeSpec,
     pub overlay: WaveOverlaySkin,
     pub bar_gap: f32,

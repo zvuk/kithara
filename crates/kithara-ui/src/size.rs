@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     expand::{Binding, BlockSpec, ControlSpec, ExpandedNode, MeasureSpec, adaptive_branch},
-    module::{ButtonStyle, ChromeStyle, GlyphStyle, TextStyle},
+    layout::Axis,
+    module::{ButtonStyle, ChromeStyle, GlyphStyle, MeasureAxis, TextStyle, WaveStyle},
     skin::{SkinDoc, WindowControlSkin},
 };
 
@@ -221,7 +222,11 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::Scalar { .. } => skin.telemetry.size,
         ControlSpec::Crossfader { .. } => skin.crossfader.size,
         ControlSpec::Fader { .. } => skin.fader.size,
-        ControlSpec::Wave { .. } => skin.wave.size,
+        ControlSpec::Wave { style, .. } => match style {
+            WaveStyle::Default => skin.wave.default_size,
+            WaveStyle::Hero => skin.wave.size,
+            WaveStyle::Micro => skin.wave.micro_size,
+        },
         ControlSpec::Vis => skin.vis.size,
         ControlSpec::PortalMap => skin.portal_map.size,
         ControlSpec::Range => skin.range.size,
@@ -414,6 +419,172 @@ pub(crate) fn compute_size(
         }
         ExpandedNode::Control { spec, .. } => control_size(spec, skin),
     }
+}
+
+/// How much room a node needs on each axis: what its cells need, and never
+/// less than the box it declares.
+#[must_use]
+pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
+    match node {
+        ExpandedNode::Control { .. } => needs(compute_size(node, skin, DEFAULTS)),
+        ExpandedNode::Scroll { size, child, .. } => {
+            size.map_or_else(|| min_size(child, skin), needs)
+        }
+        ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Reveal { child, .. } => min_size(child, skin),
+        ExpandedNode::Popover { anchor, .. } => min_size(anchor, skin),
+        ExpandedNode::Adaptive { size, base, .. } => at_least(*size, min_size(base, skin)),
+        ExpandedNode::Slot { size, children, .. } => at_least(
+            *size,
+            combine_vertical(children.iter().map(|child| min_size(child, skin))),
+        ),
+        ExpandedNode::Row { size, measure, .. } | ExpandedNode::Column { size, measure, .. } => {
+            at_least(*size, settled(node, *measure, skin))
+        }
+    }
+}
+
+/// What the cells of a row or a column settle on. A node laying out no cells
+/// asks for nothing of its own.
+fn settled(node: &ExpandedNode, measure: Option<MeasureAxis>, skin: &SkinDoc) -> SizeSpec {
+    Stack::of(node, skin).map_or(SizeSpec::new(Dim::Fixed(0.0), Dim::Fixed(0.0)), |stack| {
+        stack.settled(measure, skin)
+    })
+}
+
+/// What a container needs in each room its standing cells change at: its own
+/// minimum, and every threshold above that. The set stands still between them,
+/// so these are every room worth asking about, and a threshold below the
+/// minimum names a cell the minimum already counts.
+#[must_use]
+pub(crate) fn rooms(node: &ExpandedNode, axis: MeasureAxis, skin: &SkinDoc) -> Vec<(f32, f32)> {
+    let Some(stack) = Stack::of(node, skin) else {
+        return Vec::new();
+    };
+    let cells = stack.cells(skin);
+    let least = axis_min(min_size(node, skin), axis);
+    std::iter::once(least)
+        .chain(
+            cells
+                .iter()
+                .map(|cell| cell.from)
+                .filter(|from| *from > least),
+        )
+        .map(|room| (room, axis_min(stack.need(&cells, room, skin), axis)))
+        .collect()
+}
+
+pub(crate) fn axis_min(size: SizeSpec, axis: MeasureAxis) -> f32 {
+    match axis {
+        MeasureAxis::Width => size.w,
+        MeasureAxis::Height => size.h,
+    }
+    .min()
+}
+
+/// A cell of a container: the room it waits for, and what it needs once it
+/// stands.
+struct Cell {
+    from: f32,
+    min: SizeSpec,
+}
+
+/// A row or a column laying cells out along one axis.
+struct Stack<'a> {
+    along: Axis,
+    children: &'a [ExpandedNode],
+    gap: Option<f32>,
+    pad: Pad,
+}
+
+impl<'a> Stack<'a> {
+    fn of(node: &'a ExpandedNode, skin: &SkinDoc) -> Option<Self> {
+        let (along, children, gap, pad, pad_x, pad_y) = match node {
+            ExpandedNode::Row {
+                children,
+                gap,
+                pad,
+                pad_x,
+                pad_y,
+                ..
+            } => (Axis::Horizontal, children, gap, pad, pad_x, pad_y),
+            ExpandedNode::Column {
+                children,
+                gap,
+                pad,
+                pad_x,
+                pad_y,
+                ..
+            } => (Axis::Vertical, children, gap, pad, pad_x, pad_y),
+            _ => return None,
+        };
+        Some(Self {
+            along,
+            children,
+            gap: *gap,
+            pad: Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
+        })
+    }
+
+    fn cells(&self, skin: &SkinDoc) -> Vec<Cell> {
+        self.children
+            .iter()
+            .map(|child| Cell {
+                from: match child {
+                    ExpandedNode::Reveal { from, .. } => *from,
+                    _ => 0.0,
+                },
+                min: min_size(child, skin),
+            })
+            .collect()
+    }
+
+    /// What the cells standing in `room` need together, the gaps and the
+    /// padding the renderer applies included.
+    fn need(&self, cells: &[Cell], room: f32, skin: &SkinDoc) -> SizeSpec {
+        let standing: Vec<_> = cells
+            .iter()
+            .filter(|cell| cell.from <= room)
+            .map(|cell| cell.min)
+            .collect();
+        let gaps = gap_total(self.gap, standing.len(), skin.layout.size_gap);
+        match self.along {
+            Axis::Horizontal => inset(combine_horizontal(standing), gaps, 0.0, self.pad),
+            Axis::Vertical => inset(combine_vertical(standing), 0.0, gaps, self.pad),
+        }
+    }
+
+    /// Which cells stand at the narrowest the container gets depends on that
+    /// number, so the room climbs from the cells waiting for nothing until the
+    /// standing set stops growing - one round per waiting cell reaches it.
+    fn settled(&self, measure: Option<MeasureAxis>, skin: &SkinDoc) -> SizeSpec {
+        let cells = self.cells(skin);
+        let Some(axis) = measure else {
+            return self.need(&cells, f32::INFINITY, skin);
+        };
+        let waiting = cells.iter().filter(|cell| cell.from > 0.0).count();
+        let mut size = self.need(&cells, 0.0, skin);
+        for _ in 0..waiting {
+            size = self.need(&cells, axis_min(size, axis), skin);
+        }
+        size
+    }
+}
+
+fn needs(size: SizeSpec) -> SizeSpec {
+    SizeSpec::new(Dim::Fixed(size.w.min()), Dim::Fixed(size.h.min()))
+}
+
+/// The room a node needs once its declared box has its say, which is a floor
+/// rather than the answer.
+pub(crate) fn at_least(declared: Option<SizeSpec>, composed: SizeSpec) -> SizeSpec {
+    declared.map_or(composed, |declared| {
+        SizeSpec::new(
+            Dim::Fixed(declared.w.min().max(composed.w.min())),
+            Dim::Fixed(declared.h.min().max(composed.h.min())),
+        )
+    })
 }
 
 pub(crate) fn with_module_chrome(size: SizeSpec, chrome: ChromeStyle, skin: &SkinDoc) -> SizeSpec {
@@ -944,5 +1115,89 @@ mod tests {
             !has_blocks(&node),
             "an opaque container keeps a constant size, so the renderer may memoise it",
         );
+    }
+
+    /// The box a node shows its parent and the room it needs are two questions
+    /// with two answers: a container answers `Fill` and still needs what its
+    /// cells, its gaps and its padding take.
+    #[kithara::test]
+    fn a_declared_box_leaves_the_cells_their_room() {
+        let mut interner = Interner::new(1024);
+        let node = row(
+            vec![
+                control(&mut interner, "left", fixed(10.0, 4.0)),
+                control(&mut interner, "right", fixed(6.0, 8.0)),
+            ],
+            Some(SizeSpec::FILL),
+            None,
+            None,
+        );
+        let mut skin = builtin::skin_doc().clone();
+        skin.layout.size_gap = 3.0;
+        skin.layout.size_pad = 2.0;
+
+        assert_eq!(compute_size(&node, &skin, DEFAULTS), SizeSpec::FILL);
+        assert_eq!(min_size(&node, &skin), fixed(23.0, 12.0));
+    }
+
+    /// Which cells stand at the narrowest width depends on that width, so the
+    /// answer is the width the cells standing there settle on.
+    #[kithara::test]
+    fn a_measuring_container_needs_the_room_its_standing_cells_settle_on() {
+        let mut interner = Interner::new(1024);
+        let skin = builtin::skin_doc();
+        let bar = |always: SizeSpec, interner: &mut Interner| {
+            let wave = control(interner, "wave", fixed(40.0, 20.0));
+            let remain = control(interner, "remain", fixed(40.0, 20.0));
+            row(
+                vec![
+                    control(interner, "menu", always),
+                    reveal(150.0, wave),
+                    reveal(500.0, remain),
+                ],
+                Some(SizeSpec::new(Dim::Fill, Dim::Fixed(42.0))),
+                Some(0.0),
+                Some(MeasureAxis::Width),
+            )
+        };
+
+        let narrow = bar(fixed(100.0, 20.0), &mut interner);
+        let wide = bar(fixed(200.0, 20.0), &mut interner);
+        let chained = row(
+            vec![
+                control(&mut interner, "menu", fixed(100.0, 20.0)),
+                reveal(100.0, control(&mut interner, "wave", fixed(40.0, 20.0))),
+                reveal(140.0, control(&mut interner, "remain", fixed(40.0, 20.0))),
+                reveal(180.0, control(&mut interner, "quality", fixed(40.0, 20.0))),
+            ],
+            Some(SizeSpec::new(Dim::Fill, Dim::Fixed(42.0))),
+            Some(0.0),
+            Some(MeasureAxis::Width),
+        );
+
+        assert_eq!(min_size(&narrow, skin), fixed(100.0, 42.0));
+        assert_eq!(min_size(&wide, skin), fixed(240.0, 42.0));
+        assert_eq!(min_size(&chained, skin), fixed(220.0, 42.0));
+    }
+
+    /// A host hiding a block is a state, not a smaller tree: the bar has to
+    /// hold the block the host shows again.
+    #[kithara::test]
+    fn a_block_takes_its_room_whether_the_host_shows_it_or_not() {
+        let mut interner = Interner::new(1024);
+        let skin = builtin::skin_doc();
+        let quality = control(&mut interner, "quality", fixed(80.0, 20.0));
+        let node = row(
+            vec![
+                control(&mut interner, "menu", fixed(100.0, 20.0)),
+                optional(&mut interner, "quality", quality),
+            ],
+            None,
+            Some(0.0),
+            None,
+        );
+
+        assert_eq!(min_size(&node, skin), fixed(180.0, 20.0));
+        assert_eq!(compute_size(&node, skin, &Folded).w.min(), 100.0);
     }
 }
