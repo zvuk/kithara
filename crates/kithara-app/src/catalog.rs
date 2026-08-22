@@ -109,9 +109,11 @@ fn display_name(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn adding_the_same_url_twice_yields_one_entry() {
         let mut catalog = Catalog::new(vec!["/music/a.mp3".to_string()]);
         let first = catalog.add("/music/b.mp3".to_string());
@@ -121,14 +123,14 @@ mod tests {
         assert_eq!(catalog.entries().len(), 2);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn display_name_strips_directory_and_extension() {
         assert_eq!(display_name("https://host/path/Song 1.flac"), "Song 1");
         assert_eq!(display_name("/music/track.mp3"), "track");
         assert_eq!(display_name("noslash"), "noslash");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn entry_source_is_normalized_like_queue_urls() {
         let mut catalog = Catalog::default();
         let url = catalog.add("HTTPS://Example.COM:443/a.mp3".to_string());

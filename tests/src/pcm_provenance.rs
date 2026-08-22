@@ -123,6 +123,8 @@ fn is_silence(sample: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::{
         FrameClass, Replay, SAWTOOTH_PERIOD_FRAMES, ascending_phase_replays, classify_windows,
         phase_units,
@@ -130,7 +132,7 @@ mod tests {
 
     const WINDOW: usize = 64;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn classify_windows_labels_pure_signals_including_wrap() {
         let ascending = ascending_signal(SAWTOOTH_PERIOD_FRAMES - 32, WINDOW);
         assert_eq!(
@@ -151,7 +153,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn phase_units_round_trips_i16_sawtooth_values() {
         assert_eq!(phase_units(i16_to_f32(-32_768)), 0);
         assert_eq!(phase_units(i16_to_f32(-32_767)), 1);
@@ -159,14 +161,14 @@ mod tests {
         assert_eq!(phase_units(i16_to_f32(32_767)), 65_535);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn ascending_phase_replays_accepts_pure_ascending_run_including_wrap() {
         let left = ascending_signal(SAWTOOTH_PERIOD_FRAMES - 32, WINDOW * 2);
 
         assert!(ascending_phase_replays(&left, 0, left.len(), 3).is_empty());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn ascending_phase_replays_reports_spliced_replay_from_start() {
         let splice_start = 200_000;
         let replay_len = 1_000;
@@ -188,7 +190,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn ascending_phase_replays_reports_descending_region() {
         let descending_start = 128;
         let descending_len = 64;

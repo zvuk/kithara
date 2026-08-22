@@ -102,9 +102,11 @@ impl Playlist {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::Playlist;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn remove_at_shifts_current_and_reopens_announce() {
         let mut playlist = Playlist::default();
         playlist.reserve(3);
@@ -117,7 +119,7 @@ mod tests {
         assert!(playlist.mark_announced(1));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn clear_resets_cursor_and_announce() {
         let mut playlist = Playlist::default();
         playlist.reserve(2);
@@ -131,7 +133,7 @@ mod tests {
         assert!(playlist.mark_announced(0));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn advance_stops_at_end() {
         let mut playlist = Playlist::default();
         playlist.reserve(2);
@@ -141,7 +143,7 @@ mod tests {
         assert_eq!(playlist.current(), 1);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn mark_announced_uses_swap_semantics() {
         let mut playlist = Playlist::default();
 

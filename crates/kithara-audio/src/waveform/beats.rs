@@ -34,7 +34,7 @@ pub struct BeatGrid {
     downbeats: Vec<u64>,
     /// Piecewise-constant stretch segments, sorted and non-overlapping.
     segments: Vec<GridSegment>,
-    /// Stable-window tempo of the track, beats per minute.
+    /// Tempo estimated from cleaned beat marks, with a downbeat fallback.
     bpm: f64,
 }
 

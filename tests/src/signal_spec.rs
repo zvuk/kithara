@@ -606,7 +606,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn parses_valid_sweep_modes() {
         for (mode, expected_mode) in [("linear", SweepMode::Linear), ("log", SweepMode::Log)] {
             let spec = format!(
@@ -623,7 +623,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn rejects_invalid_sweep_payloads() {
         let cases = [
             (
@@ -663,7 +663,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn rejects_sweep_fields_on_non_sweep_routes() {
         let error = parse_signal_request(
             SignalKind::Sawtooth,

@@ -111,6 +111,8 @@ mod tests {
         time::Instant as RealInstant,
     };
 
+    use kithara_test_utils::kithara;
+
     use super::*;
     use crate::{
         flash::{Duration, system::credit},
@@ -177,7 +179,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn pacer_fires_on_time_under_pacing() {
         let _guard = guard();
         let flash = FlashInner::new_arc();
@@ -199,7 +201,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn pacer_has_near_zero_wakes_for_far_deadline() {
         let _guard = guard();
         let flash = FlashInner::new_arc();
@@ -221,7 +223,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn pacer_retargets_earlier_deadline_mid_wait() {
         let _guard = guard();
         let flash = FlashInner::new_arc();
@@ -249,7 +251,7 @@ mod tests {
         assert_eq!(flash.advance_log(), vec![base + ms(120), base + ms(350)]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn pacer_wakes_on_quiescence_edge() {
         let _guard = guard();
         let flash = FlashInner::new_arc();
@@ -284,7 +286,7 @@ mod tests {
         blocker.join().expect("blocker thread panicked");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn pacer_disarms_to_zero_and_rearms() {
         let _guard = guard();
         let flash = FlashInner::new_arc();
@@ -328,7 +330,7 @@ mod tests {
     /// response hold the very slots that freeze the clock it waits on. Those
     /// dumps name a `Running` holder — mid-poll — which the stranded-task rule
     /// cannot release, since that one requires `Runnable`.
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_held_async_slot_does_not_veto_a_paced_deadline() {
         let _guard = guard();
         let flash = FlashInner::new_arc();
@@ -353,7 +355,7 @@ mod tests {
         waiter.join().expect("waiter thread panicked");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn reset_preserves_pacer_wake() {
         let _guard = guard();
         let flash = FlashInner::new_arc();

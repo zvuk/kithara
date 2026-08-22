@@ -36,6 +36,8 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 kithara-apple = { workspace = true, features = ["accelerate", "audio-toolbox"] }
 
 [dev-dependencies]
+kithara-test-utils = { workspace = true }
+
 criterion = { workspace = true }
 
 [[bench]]

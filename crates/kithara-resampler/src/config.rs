@@ -195,6 +195,7 @@ mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
     use kithara_bufpool::PcmPool;
+    use kithara_test_utils::kithara;
 
     use crate::{
         ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerConfig,
@@ -245,7 +246,7 @@ mod tests {
         NonZeroUsize::new(2).expect("channel count must be non-zero")
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn defaults_match_current_playback_values() {
         let options = ResamplerOptions::default();
 
@@ -254,7 +255,7 @@ mod tests {
         assert_eq!(options.max_ratio_adjustment, 8.0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn builder_overrides_single_tunable_without_losing_defaults() {
         let options = ResamplerOptions::builder().chunk_size(1_024).build();
 
@@ -263,7 +264,7 @@ mod tests {
         assert_eq!(options.max_ratio_adjustment, 8.0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn resample_scope_keeps_backend_in_the_type() {
         let resample = crate::Resample::builder()
             .target_sample_rate(sample_rate(48_000))
@@ -273,7 +274,7 @@ mod tests {
         assert_eq!(resample.scope.0.name(), "test");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn config_requires_positive_chunk_size() {
         let settings = ResamplerSettings::builder()
             .channels(stereo())
@@ -298,7 +299,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn standalone_config_uses_injected_pool() {
         let pool = PcmPool::new(4, 4_096);
         let settings = ResamplerSettings::builder()

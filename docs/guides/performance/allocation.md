@@ -70,7 +70,7 @@ let mut buf = self.pcm_pool.get_with(|b| { b.clear(); b.resize(frames * channels
 // PooledOwned recycles on drop; take PcmPool/BytePool from the app top, never the global accessor
 ```
 
-*tier: hot | detector: `perf.prefer-pcm-pool` / `perf.prefer-byte-pool` / `perf.no-global-pool-accessor` (ast-grep) | already-enforced*
+*tier: hot | detector: `perf.prefer-primitive-pool` / `perf.no-global-pool-accessor` (ast-grep) | already-enforced*
 
 **format! for concat / owned compare**
 
@@ -175,7 +175,7 @@ loop {
 }
 ```
 
-Segregate lifetimes: recurring buffers on pools (chosen over `thread_local` for cross-task ownership), parse-and-discard scratch on a single-thread `thread_local! RefCell<Vec>` with `clear()`-on-entry; keep churn off long-lived caches. *tier: warm | detector: perf.prefer-byte-pool + perf.prefer-pcm-pool + perf.no-collect-iter-roundtrip (enforced ast-grep) | present in kithara*
+Segregate lifetimes: recurring buffers on pools (chosen over `thread_local` for cross-task ownership), parse-and-discard scratch on a single-thread `thread_local! RefCell<Vec>` with `clear()`-on-entry; keep churn off long-lived caches. *tier: warm | detector: perf.prefer-primitive-pool + perf.no-collect-iter-roundtrip (enforced ast-grep) | present in kithara*
 
 **Media payloads copied instead of ref-counted**
 

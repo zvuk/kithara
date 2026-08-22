@@ -648,7 +648,7 @@ mod tests {
         assert_eq!(packaged.segment_durations_secs, vec![9216.0 / 48_000.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn edts_only_writes_edit_list_and_no_itunsmpb() {
         let packaged = mux_audio_track(&padded_track(), GaplessEncoding::Edts).unwrap();
         let init = packaged.init_segment.as_slice();
@@ -659,7 +659,7 @@ mod tests {
         assert!(!has_marker(init, b"udta"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn itunsmpb_only_writes_freeform_tag_and_no_edit_list() {
         let packaged = mux_audio_track(&padded_track(), GaplessEncoding::ItunSmpb).unwrap();
         let init = packaged.init_segment.as_slice();
@@ -678,7 +678,7 @@ mod tests {
         assert!(has_marker(init, b"00000780"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn both_writes_edit_list_and_itunsmpb() {
         let packaged = mux_audio_track(&padded_track(), GaplessEncoding::Both).unwrap();
         let init = packaged.init_segment.as_slice();
@@ -688,7 +688,7 @@ mod tests {
         assert!(has_marker(init, b"iTunSMPB"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn none_omits_all_gapless_metadata() {
         let packaged = mux_audio_track(&padded_track(), GaplessEncoding::None).unwrap();
         let init = packaged.init_segment.as_slice();
@@ -699,7 +699,7 @@ mod tests {
         assert!(!has_marker(init, b"udta"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn unpadded_track_with_edts_encoding_skips_edit_list() {
         let packaged = mux_audio_track(&test_track(), GaplessEncoding::Edts).unwrap();
         let init = packaged.init_segment.as_slice();

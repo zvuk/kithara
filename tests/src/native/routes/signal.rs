@@ -467,7 +467,7 @@ mod tests {
         URL_SAFE_NO_PAD.encode(json)
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn l2_payload_roundtrips_bytes_and_content_type() {
         let enc = EncodedSignal {
             bytes: Arc::new(b"RIFFxxxx".to_vec()),
@@ -479,14 +479,14 @@ mod tests {
         assert_eq!(back.content_type, "audio/wav");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn l2_blob_rejects_unknown_content_type() {
         let mut blob = b"audio/exotic\n".to_vec();
         blob.extend_from_slice(b"data");
         assert!(decode_l2_blob(&blob).is_none());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn signal_l2_hits_on_second_call_through_cache_dir() {
         let dir = std::env::temp_dir().join(format!("fixcache-sig-{}", uuid::Uuid::new_v4()));
         let cache = crate::fixture_cache::FixtureCache::from_dir(Some(dir.clone()));

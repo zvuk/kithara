@@ -249,7 +249,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn offline_session_requests_immediate_off_rt_consumer_wakes() {
         let session = OfflineSession::new_manual();
 

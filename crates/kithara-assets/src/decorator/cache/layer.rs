@@ -711,7 +711,7 @@ mod tests {
 
     /// The identity bytes can be AES `key||iv`; `Debug` must never print them,
     /// neither directly nor via `CacheKey`'s derived `Debug`.
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn debug_redacts_identity_bytes() {
         let key = [0xAB_u8; 16];
         let iv = [0xCD_u8; 16];

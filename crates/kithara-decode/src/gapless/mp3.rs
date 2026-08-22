@@ -215,6 +215,8 @@ const fn side_info_len(header: FrameHeader) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     fn build_mpeg1_stereo_xing(enc_delay: u32, enc_padding: u32) -> Vec<u8> {
@@ -238,7 +240,7 @@ mod tests {
         buf
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn finds_the_frame_when_the_id3_tag_fits_the_buffer() {
         let mut data = vec![0u8; 10 + 64];
         data[..3].copy_from_slice(b"ID3");
@@ -251,7 +253,7 @@ mod tests {
         assert_eq!(lame.enc_delay, 576);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn extracts_lame_trim_from_xing_frame() {
         let buf = build_mpeg1_stereo_xing(576, 960);
         let lame = read_lame_trim(&buf).expect("BUG: lame");
@@ -259,14 +261,14 @@ mod tests {
         assert_eq!(lame.enc_padding, 960);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn extracts_duration_from_xing_frame_count() {
         let buf = build_mpeg1_stereo_xing(576, 960);
         let duration = read_xing_duration(&buf).expect("BUG: duration");
         assert_eq!(duration, duration_for_frames(44_100, 100 * 1152));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn returns_none_when_tag_missing() {
         let buf = vec![0xFF, 0xFB, 0x90, 0x00, 0, 0, 0, 0];
         assert!(read_lame_trim(&buf).is_none());

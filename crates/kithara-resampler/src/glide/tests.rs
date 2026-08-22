@@ -1,6 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::PcmPool;
+use kithara_test_utils::kithara;
 
 use super::{GlideBackend, GlideConfig, GlideInterpolation, resampler::GlideResampler};
 use crate::{
@@ -40,7 +41,7 @@ fn build_glide(source: u32, target: u32) -> GlideResampler {
     create_resampler(&config).unwrap_or_else(|err| panic!("glide resampler should build: {err}"))
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn backend_reports_glide_capabilities() {
     let capabilities = GlideBackend::new().capabilities();
 
@@ -51,14 +52,14 @@ fn backend_reports_glide_capabilities() {
     assert!(capabilities.contains(ResamplerCapabilities::STANDALONE));
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn fixed_ratio_output_contract_uses_glide_ratio() {
     let resampler = build_glide(44_100, 48_000);
 
     assert_eq!(resampler.output_frames_for_input(4_410), 4_800);
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn unity_fast_path_copies_input() {
     let mut resampler = build_glide(44_100, 44_100);
     let input = [0.0, 0.25, -0.5, 0.75];
@@ -72,7 +73,7 @@ fn unity_fast_path_copies_input() {
     assert_eq!(output, input);
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn quadratic_interpolates_between_input_frames() {
     let mut resampler = build_glide(44_100, 88_200);
     let input = [0.0, 1.0, 0.0, -1.0, 0.0, 1.0];
@@ -88,7 +89,7 @@ fn quadratic_interpolates_between_input_frames() {
     }));
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn glide_ratio_reaches_target_without_discontinuity() {
     let mode = ResamplerMode::VariableRatio {
         sample_rate: rate(48_000),
@@ -121,7 +122,7 @@ fn glide_ratio_reaches_target_without_discontinuity() {
     }
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn factory_output_exposes_glide_control_surface() {
     let mode = ResamplerMode::VariableRatio {
         sample_rate: rate(48_000),
@@ -146,7 +147,7 @@ fn factory_output_exposes_glide_control_surface() {
         .unwrap_or_else(|err| panic!("glide glide should be accepted: {err}"));
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn linear_mode_can_be_selected_by_config() {
     let backend = GlideBackend::with_config(
         GlideConfig::builder()
@@ -162,7 +163,7 @@ fn linear_mode_can_be_selected_by_config() {
         .unwrap_or_else(|err| panic!("linear glide resampler should build: {err}"));
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn anti_alias_smooths_fast_glide() {
     let input = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
     let mut plain = GlideResampler::new(

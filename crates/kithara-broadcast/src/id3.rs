@@ -54,6 +54,8 @@ impl TimestampTag {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::TimestampTag;
 
     struct Consts;
@@ -71,7 +73,7 @@ mod tests {
             .expect("the tag ends in eight timestamp bytes")
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn the_tag_is_an_id3_header_a_priv_frame_and_eight_timestamp_bytes() {
         let tag = TimestampTag::render(Consts::SAMPLE_RATE.into(), Consts::SAMPLE_RATE);
 
@@ -93,7 +95,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn the_declared_sizes_span_the_rendered_tag() {
         let tag = TimestampTag::render(0, Consts::SAMPLE_RATE);
 
@@ -109,7 +111,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn the_timestamp_leaves_the_top_thirty_one_bits_zero() {
         let tag = TimestampTag::render(Consts::WRAP - 1, Consts::MPEG_TIMESCALE);
         let timestamp = timestamp_bytes(&tag);
@@ -119,7 +121,7 @@ mod tests {
         assert_eq!(timestamp[3], 1, "bit 32 is the timestamp's top bit");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn the_timestamp_wraps_at_thirty_three_bits() {
         assert_eq!(
             TimestampTag::mpeg_timestamp(Consts::WRAP, Consts::MPEG_TIMESCALE),
@@ -131,7 +133,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn the_conversion_rounds_to_the_nearest_tick() {
         assert_eq!(TimestampTag::mpeg_timestamp(1, Consts::SAMPLE_RATE), 2);
         assert_eq!(

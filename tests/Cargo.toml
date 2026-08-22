@@ -209,7 +209,7 @@ kithara = { workspace = true, features = [
     "tokio-net",
     "tokio-rt-multi-thread",
 ] }
-kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
+kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn", "lib-only"] }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]

@@ -20,7 +20,7 @@ const EXPLANATION: &str = "\
 Detected a heap-allocating expression inside a loop body that runs once \
 per iteration.
 
-Why it matters. `format!()`, `String::new()`, `Vec::new()`, `Box::new(...)`, \
+Why it matters. `format!()`, `String::with_capacity()`, `Vec::with_capacity()`, `Box::new(...)`, \
 `.to_string()`, `.to_owned()` — each one allocates from the global allocator. \
 Inside a loop that runs N times, this is N allocations, N drops, N free-list \
 churn rounds. For audio/render hot paths (process callback, decoder loop, \
@@ -31,7 +31,7 @@ The fix is usually one of:
 - Hoist the allocation out of the loop.
 - Reuse a buffer (`Vec::clear()` + `extend(...)` or `write!(&mut buf, ...)`).
 - Use a pool — `kithara_bufpool::{BytePool, PcmPool}` for byte/PCM buffers.
-- Pre-size with `Vec::with_capacity(N)` so growth is amortised.
+- Pre-size once with `Vec::with_capacity(N)` outside the loop so growth is amortised.
 
 ❌  for sample in chunk.frames() { let label = format!(\"frame-{}\", sample.id); log_debug(&label); }
 ✅  let mut label = String::new(); for sample in chunk.frames() { label.clear(); write!(&mut label, \"frame-{}\", sample.id).unwrap(); log_debug(&label); }
@@ -39,8 +39,7 @@ The fix is usually one of:
 Suppress with `// xtask-lint-ignore: loop_allocation` when the allocation \
 is unavoidable (each iteration produces a distinct owned output that \
 escapes the loop) or when the loop is cold and the allocation isn't a \
-performance concern (initialization, error formatting). `Vec::with_capacity(N)` \
-with literal N is allowed automatically.";
+performance concern (initialization, error formatting).";
 
 pub(crate) struct LoopAllocation;
 
@@ -187,13 +186,13 @@ impl<'ast> Visit<'ast> for LoopVisitor<'_> {
 }
 
 fn format_macro_message(m: &Macro) -> Option<&'static str> {
+    if path_ends_with(&m.path, "vec") {
+        return Some("L7: `vec![...]` in loop - hoist or reuse a pooled buffer");
+    }
     if path_ends_with(&m.path, "format") {
         return Some(
             "L1: `format!(...)` in loop — hoist the buffer or use `write!` into a reused `String`",
         );
-    }
-    if path_ends_with(&m.path, "format_args") {
-        return Some("L2: `format_args!(...)` in loop — same as L1, allocates per call");
     }
     None
 }
@@ -209,36 +208,16 @@ fn call_path_message(c: &ExprCall) -> Option<&'static str> {
     let last = segs[segs.len() - 1];
     let parent = segs[segs.len() - 2];
 
-    if parent == "Vec" && last == "with_capacity" {
-        let allowed = c
-            .args
-            .first()
-            .is_some_and(|arg| matches!(arg, Expr::Lit(_)));
-        if allowed {
-            return None;
-        }
-    }
-
     let constructors: &[(&str, &str, &str)] = &[
         (
             "Vec",
-            "new",
-            "L3: `Vec::new()` in loop — pre-size with `Vec::with_capacity(N)` outside the loop, or reuse via `clear()`",
-        ),
-        (
-            "Vec",
             "with_capacity",
-            "L3: `Vec::with_capacity(...)` with non-literal in loop — hoist the allocation",
-        ),
-        (
-            "String",
-            "new",
-            "L3: `String::new()` in loop — reuse via `clear()`",
+            "L3: `Vec::with_capacity(...)` in loop - hoist the allocation",
         ),
         (
             "String",
             "with_capacity",
-            "L3: `String::with_capacity(...)` with non-literal in loop — hoist the allocation",
+            "L3: `String::with_capacity(...)` in loop - hoist the allocation",
         ),
         (
             "String",
@@ -252,28 +231,13 @@ fn call_path_message(c: &ExprCall) -> Option<&'static str> {
         ),
         (
             "HashMap",
-            "new",
-            "L3: `HashMap::new()` in loop — hoist or reuse via `clear()`",
-        ),
-        (
-            "HashMap",
             "with_capacity",
             "L3: `HashMap::with_capacity(...)` in loop — hoist",
         ),
         (
             "HashSet",
-            "new",
-            "L3: `HashSet::new()` in loop — hoist or reuse via `clear()`",
-        ),
-        (
-            "BTreeMap",
-            "new",
-            "L3: `BTreeMap::new()` in loop — hoist or reuse via `clear()`",
-        ),
-        (
-            "BTreeSet",
-            "new",
-            "L3: `BTreeSet::new()` in loop — hoist or reuse via `clear()`",
+            "with_capacity",
+            "L3: `HashSet::with_capacity(...)` in loop - hoist",
         ),
         (
             "Box",
@@ -292,6 +256,8 @@ fn call_path_message(c: &ExprCall) -> Option<&'static str> {
 fn method_message(mc: &ExprMethodCall) -> Option<&'static str> {
     let name = mc.method.to_string();
     match name.as_str() {
+        "collect" => Some("L7: `.collect()` in loop - collect outside the loop or reuse storage"),
+        "repeat" => Some("L7: `.repeat()` in loop - fill a reused buffer instead"),
         "to_string" => Some("L6: `.to_string()` in loop — allocates a `String` per iteration"),
         "to_owned" => Some("L6: `.to_owned()` in loop — allocates per iteration"),
         "to_vec" => Some("L6: `.to_vec()` in loop — allocates a `Vec` per iteration"),
@@ -337,17 +303,23 @@ mod tests {
     }
 
     #[test]
-    fn vec_new_in_loop_flagged() {
-        let n = count_in("fn f() { for _ in 0..10 { let v: Vec<u8> = Vec::new(); drop(v); } }");
-        assert_eq!(n, 1);
+    fn format_args_in_loop_is_not_an_allocation() {
+        let n = count_in(r#"fn f() { for i in 0..10 { let args = format_args!("x-{i}"); } }"#);
+        assert_eq!(n, 0);
     }
 
     #[test]
-    fn vec_with_capacity_literal_allowed() {
+    fn vec_new_in_loop_is_not_an_allocation() {
+        let n = count_in("fn f() { for _ in 0..10 { let v: Vec<u8> = Vec::new(); drop(v); } }");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn vec_with_capacity_literal_flagged() {
         let n = count_in(
             "fn f() { for _ in 0..10 { let v: Vec<u8> = Vec::with_capacity(64); drop(v); } }",
         );
-        assert_eq!(n, 0);
+        assert_eq!(n, 1);
     }
 
     #[test]
@@ -369,6 +341,26 @@ mod tests {
         let n = count_in(
             r#"fn f(x: &str) { for _ in 0..10 { let s: String = x.to_string(); drop(s); } }"#,
         );
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn collect_in_loop_flagged() {
+        let n =
+            count_in("fn f() { for _ in 0..10 { let v: Vec<u8> = bytes().collect(); drop(v); } }");
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn repeat_in_loop_flagged() {
+        let n =
+            count_in("fn f(n: usize) { for _ in 0..10 { let v = [0_u8].repeat(n); drop(v); } }");
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn vec_macro_in_loop_flagged() {
+        let n = count_in("fn f(n: usize) { for _ in 0..10 { let v = vec![0_u8; n]; drop(v); } }");
         assert_eq!(n, 1);
     }
 

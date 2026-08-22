@@ -1,0 +1,28 @@
+id: arch.no-raw-test
+message: |
+  Product crates must use the Kithara test harness instead of raw `#[test]`.
+  The native and flash(false) flags preserve the execution surface and clock
+  semantics of an existing Rust test; broader coverage remains explicit.
+
+  Import the harness macro in the owning test module with
+  `use kithara_test_utils::kithara;`.
+
+  Apply configured fixes to the workspace or an explicit crate/path scope with
+  `just lint ast-grep --fix --allow-dirty [<path> ...]`.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+ignores:
+  - "**/kithara-devtools/**"
+  - "**/kithara-encode/**"
+  - "**/kithara-fuzz/**"
+  - "**/kithara-integration-tests/**"
+  - "**/kithara-test-macros/**"
+  - "**/kithara-test-utils/**"
+rule:
+  all:
+    - kind: attribute_item
+    - regex: '^#\[test\]$'
+fix: "#[kithara::test(native, flash(false))]"

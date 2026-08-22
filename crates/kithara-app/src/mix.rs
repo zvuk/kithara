@@ -87,23 +87,25 @@ const fn bus_for(index: usize, count: usize) -> CrossfaderBus {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn two_decks_are_assigned_to_the_a_and_b_buses() {
         let mix = MixState::new(2);
         assert_eq!(mix.strips[0].bus, CrossfaderBus::A);
         assert_eq!(mix.strips[1].bus, CrossfaderBus::B);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_single_deck_bypasses_the_crossfader() {
         let mix = MixState::new(1);
         assert_eq!(mix.strips[0].bus, CrossfaderBus::Bypass);
         assert_eq!(mix.levels().unwrap(), vec![1.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn crossfader_endpoints_resolve_to_full_and_silent() {
         let mut mix = MixState::new(2);
 
@@ -114,7 +116,7 @@ mod tests {
         assert_eq!(mix.levels().unwrap(), vec![0.0, 1.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn trim_mute_and_group_master_fold_into_the_level() {
         let mut mix = MixState::new(2);
         mix.position = 0.0;
@@ -126,7 +128,7 @@ mod tests {
         assert_eq!(mix.levels().unwrap(), vec![0.25, 0.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn an_invalid_position_is_rejected_rather_than_clamped() {
         let mut mix = MixState::new(2);
         mix.position = 1.5;

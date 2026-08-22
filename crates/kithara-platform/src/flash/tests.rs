@@ -10,6 +10,8 @@ use std::{
     time::Instant as RealInstant,
 };
 
+use kithara_test_utils::kithara;
+
 use super::{
     Duration, Instant, advance, ambient_scope, enter_dynamic, flash_enabled, participate, reset,
     system::{FlashInner, credit, forward},
@@ -115,7 +117,7 @@ fn poll_once_no_block<F: Future>(fut: F) -> std::task::Poll<F::Output> {
 }
 
 #[cfg(feature = "no-block")]
-#[test]
+#[kithara::test(native, flash(false))]
 fn no_block_bridged_engine_wait_panics() {
     let _g = guard();
     reset();
@@ -148,7 +150,7 @@ fn no_block_bridged_engine_wait_panics() {
 }
 
 #[cfg(feature = "no-block")]
-#[test]
+#[kithara::test(native, flash(false))]
 fn no_block_permit_poll_suppresses_bridged_wait_and_budget() {
     let _g = guard();
     reset();
@@ -169,7 +171,7 @@ fn no_block_permit_poll_suppresses_bridged_wait_and_budget() {
     assert!(poll_once_no_block(task).is_ready());
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn flash_active_defaults_real_and_nests() {
     let _g = guard();
     assert!(!flash_enabled(), "default must be real (`active` flag off)");
@@ -189,7 +191,7 @@ fn flash_active_defaults_real_and_nests() {
     assert!(!flash_enabled(), "restored on scope drop");
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn dynamic_is_noop_without_ambient() {
     let _g = guard();
     let _d = enter_dynamic(true);
@@ -204,7 +206,7 @@ fn dynamic_is_noop_without_ambient() {
 /// so no GUARD; `feature = "flash"` is structural (the whole module is gated
 /// in `lib.rs`), only the assert needs `debug_assertions`.
 #[cfg(debug_assertions)]
-#[test]
+#[kithara::test(native, flash(false))]
 #[should_panic(expected = "non-LIFO mode-scope drop")]
 fn non_lifo_mode_scope_drop_is_caught() {
     let outer = ambient_scope(true);
@@ -219,7 +221,7 @@ fn non_lifo_mode_scope_drop_is_caught() {
 /// seek-test `DecodeError::Interrupted` root cause (a parked sync reader's budget
 /// burns while a runnable download task never runs in virtual time). Drives the
 /// production `participate` poll-wrapper directly — no runtime.
-#[test]
+#[kithara::test(native, flash(false))]
 fn woken_async_task_stays_counted_until_repolled() {
     let _g = guard();
     reset();
@@ -261,7 +263,7 @@ fn woken_async_task_stays_counted_until_repolled() {
 /// A run's nine hangs were all pinned by one task at one spawn site, with
 /// nothing in the dump to separate a task spinning through wake-poll-park from
 /// one the runtime never re-polled after a wake. The poll count separates them.
-#[test]
+#[kithara::test(native, flash(false))]
 fn a_task_that_has_never_been_polled_pins_the_clock_at_zero_polls() {
     let _g = guard();
     reset();
@@ -278,7 +280,7 @@ fn a_task_that_has_never_been_polled_pins_the_clock_at_zero_polls() {
     assert!(dump.contains("polls=0"), "{dump}");
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn a_pinning_task_reports_the_polls_it_entered() {
     let _g = guard();
     reset();
@@ -307,7 +309,7 @@ fn a_pinning_task_reports_the_polls_it_entered() {
 /// waiter holding it, and the pin had to be re-derived by hand from the
 /// counters. A deadline-less waiter is freed by nothing but a matching signal,
 /// so when its task is still counted, that waiter IS the pin — mark it.
-#[test]
+#[kithara::test(native, flash(false))]
 fn a_deadline_less_waiter_of_a_counted_task_is_marked_as_pinning() {
     let _g = guard();
     reset();
@@ -349,7 +351,7 @@ fn a_deadline_less_waiter_of_a_counted_task_is_marked_as_pinning() {
 /// The other half of that contract. A healthy flash test parks hundreds of
 /// deadline-less waiters whose tasks are simply idle; marking those would make
 /// the pin marker — and the parking stack it gates — noise again.
-#[test]
+#[kithara::test(native, flash(false))]
 fn a_deadline_less_waiter_of_a_parked_task_is_not_marked_as_pinning() {
     let _g = guard();
     reset();
@@ -387,7 +389,7 @@ fn a_deadline_less_waiter_of_a_parked_task_is_not_marked_as_pinning() {
 /// clear the pin never runs — the crossfade hang, whose sixteen dumps all named
 /// one `Runnable` task with a frozen poll count. A task no live thread can poll
 /// must not pin the clock. Broken: this hangs forever (the deadlock verbatim).
-#[test]
+#[kithara::test(native, flash(false))]
 fn a_runnable_task_whose_only_poller_is_bridged_does_not_pin_the_clock() {
     let _g = guard();
     reset();
@@ -434,7 +436,7 @@ fn a_runnable_task_whose_only_poller_is_bridged_does_not_pin_the_clock() {
     assert_fast(start);
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn now_advances_only_on_advance() {
     let _g = guard();
     reset();
@@ -448,7 +450,7 @@ fn now_advances_only_on_advance() {
     assert!(t1 > t0);
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn elapsed_tracks_virtual_clock() {
     let _g = guard();
     reset();
@@ -464,7 +466,7 @@ fn elapsed_tracks_virtual_clock() {
 // `Instant::now()` is the REAL arm (a lock-free monotonic read off the
 // process clock anchor) and no engine state — global or local — is touched.
 // Instance-agnostic, hence no GUARD, no reset, no local engine.
-#[test]
+#[kithara::test(native, flash(false))]
 fn arithmetic_saturates_and_orders() {
     let now = Instant::now();
     let later = now + Duration::from_secs(1);
@@ -475,14 +477,14 @@ fn arithmetic_saturates_and_orders() {
     assert_eq!(now.saturating_duration_since(later), Duration::ZERO);
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn base_keeps_backward_offset_positive() {
     let now = Instant::now();
     let earlier = now - Duration::from_secs(3600);
     assert_eq!(now.duration_since(earlier), Duration::from_secs(3600));
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn quiescence_advances_to_max_deadline_fast() {
     let flash = FlashInner::new_arc();
     let base = flash.clock.now_nanos();
@@ -503,7 +505,7 @@ fn quiescence_advances_to_max_deadline_fast() {
     );
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn equal_deadlines_wake_in_one_step() {
     let flash = FlashInner::new_arc();
     let base = flash.clock.now_nanos();
@@ -520,7 +522,7 @@ fn equal_deadlines_wake_in_one_step() {
     assert_eq!(flash.clock.now_nanos(), base + 8 * NANOS_PER_SEC);
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn sequence_is_deterministic_across_runs() {
     let flash = FlashInner::new_arc();
     let run = || {
@@ -552,7 +554,7 @@ fn sequence_is_deterministic_across_runs() {
     );
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn first_park_bootstraps_and_self_advances() {
     let flash = FlashInner::new_arc();
     let base = flash.clock.now_nanos();
@@ -580,7 +582,7 @@ fn first_park_bootstraps_and_self_advances() {
     assert_eq!(flash.active_count(), 0, "bootstrap balanced on exit");
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn real_io_defers_advance_past_real_pace() {
     let flash = FlashInner::new_arc();
     let t0 = flash.clock.now_nanos();
@@ -619,7 +621,7 @@ fn real_io_defers_advance_past_real_pace() {
     );
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn real_io_paces_deadline_to_real_time_not_pin() {
     let flash = FlashInner::new_arc();
     let t0 = flash.clock.now_nanos();
@@ -650,7 +652,7 @@ fn real_io_paces_deadline_to_real_time_not_pin() {
     assert_eq!(flash.clock.now_nanos(), t0 + 20_000_000);
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn real_io_nests_overlapping_ops() {
     let flash = FlashInner::new_arc();
 
@@ -720,7 +722,7 @@ fn xs(state: &mut u64) -> u64 {
 /// settles, so a round exercises a realistic mix of running and parked threads.
 /// Every spawned body is `bracketed_on` (reset credit on entry, drop on exit)
 /// the way the production spawn bracket does.
-#[test]
+#[kithara::test(native, flash(false))]
 fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
     const ROUNDS: u64 = 16;
     const K: u64 = 5;
@@ -920,7 +922,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
 /// `advance_log` and final clock across repeated `reset()`+run. Uses only timed
 /// condvar waiters (deterministic deadlines, no racing wake) so the only source
 /// of clock motion is the engine's min-jump rule.
-#[test]
+#[kithara::test(native, flash(false))]
 fn stress_advance_log_is_deterministic_across_runs() {
     let flash = FlashInner::new_arc();
     let secs = [6_u64, 2, 9, 2, 4, 9, 1];
@@ -995,7 +997,7 @@ fn stress_advance_log_is_deterministic_across_runs() {
 /// 0`, a circular dependency the engine cannot break with no driver. `yield_now`
 /// therefore branches on `flash_ambient`: a real scheduler yield when ambient is
 /// off, so it resolves on the next poll WITHOUT the engine.
-#[test]
+#[kithara::test(native, flash(false))]
 fn ambient_off_yield_now_is_real_passthrough() {
     let _g = guard();
     reset();
@@ -1029,7 +1031,7 @@ fn ambient_off_yield_now_is_real_passthrough() {
 /// and parks (resolved only by an engine advance / the lone-yield rescue), so a
 /// flash(true) busy-poll loop still relinquishes the virtual clock. This guards
 /// against over-correcting the flash(false) fix into making yield real everywhere.
-#[test]
+#[kithara::test(native, flash(false))]
 fn ambient_on_yield_now_is_engine_backed() {
     let _g = guard();
     reset();
@@ -1059,7 +1061,7 @@ fn ambient_on_yield_now_is_engine_backed() {
 /// had (the watchdog-burn failure mode). The closure spins until a real-time
 /// helper releases it ~50ms later; a 10ms-virtual engine park taken meanwhile
 /// must be held (measured in REAL elapsed) until the closure exits.
-#[test]
+#[kithara::test(native, flash(false))]
 fn ambient_blocking_closure_pins_virtual_clock() {
     let _g = guard();
     reset();
@@ -1107,7 +1109,7 @@ fn ambient_blocking_closure_pins_virtual_clock() {
 /// timeout. Delivery must hold in BOTH orderings (wake-then-park / park-then-wake),
 /// so no synchronization beyond the handle send is needed.
 #[cfg(not(feature = "loom"))]
-#[test]
+#[kithara::test(native, flash(false))]
 fn unpark_from_flash_callstack_reaches_real_parked_thread() {
     let _g = guard();
     reset();
@@ -1131,7 +1133,7 @@ fn unpark_from_flash_callstack_reaches_real_parked_thread() {
 /// wrongly settle the firer's wake bump (`active -= 1` + advance). The bump
 /// must therefore still be visible after `park_for` returns; converting
 /// `park_for` to `resume()` turns this red deterministically.
-#[test]
+#[kithara::test(native, flash(false))]
 fn park_for_keeps_firer_bump_unsettled() {
     let flash = FlashInner::new_arc();
     credit::reset_credit();

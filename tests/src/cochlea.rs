@@ -161,9 +161,11 @@ pub fn assert_oracle_load_bearing(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn comparator_rejects_one_missing_quantum_and_one_clipped_frame() {
         let sample_rate = 48_000;
         let channels = 2;
@@ -178,7 +180,7 @@ mod tests {
         assert_oracle_load_bearing(&control, channels, sample_rate, 512);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn loudness_fields_match_the_cochlea_probe() {
         let sample_rate = 48_000;
         let channels = 2;

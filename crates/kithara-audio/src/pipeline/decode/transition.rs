@@ -811,9 +811,11 @@ fn shares_default_profile(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::{content_time, frame_at_or_after};
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn same_rate_cut_preserves_exact_nonzero_origin() {
         const RATE: u32 = 44_100;
         const ORIGIN: u64 = 1_024;

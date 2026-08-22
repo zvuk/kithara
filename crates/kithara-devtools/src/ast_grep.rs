@@ -167,6 +167,9 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
         if args.strict {
             rule_cmd.arg("--warning");
         }
+        for p in &args.paths {
+            rule_cmd.arg(p);
+        }
         rule_cmd.stdout(Stdio::piped());
         rule_cmd.stderr(Stdio::inherit());
         let rule_out = rule_cmd.output()?;
@@ -277,4 +280,136 @@ fn print_grouped(groups: &BTreeMap<String, RuleGroup>) {
         rules_n = rules.len(),
         rules_plural = if rules.len() == 1 { "" } else { "s" },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf, process::Command};
+
+    use tempfile::tempdir;
+
+    fn primitive_pool_hits(source: &str) -> usize {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp
+            .path()
+            .join("crates/kithara-audio/src/analysis/fixture.rs");
+        fs::create_dir_all(source_path.parent().expect("fixture parent"))
+            .expect("create fixture directory");
+        fs::write(&source_path, source).expect("write fixture");
+
+        let rule = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.config/ast-grep/perf.prefer-primitive-pool.yml");
+        let output = Command::new("ast-grep")
+            .current_dir(temp.path())
+            .args(["scan", "--rule"])
+            .arg(rule)
+            .args([
+                "--json=stream",
+                "crates/kithara-audio/src/analysis/fixture.rs",
+            ])
+            .output()
+            .expect("run ast-grep");
+        let stdout = String::from_utf8(output.stdout).expect("ast-grep stdout");
+        assert!(
+            output.status.success() || !stdout.is_empty(),
+            "ast-grep produced no findings: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+    }
+
+    #[test]
+    fn primitive_pool_rule_covers_vec_allocation_forms() {
+        let source = r#"
+fn scratch(values: &[f64], count: usize) {
+    let bytes = Vec::<u8>::with_capacity(count);
+    let pcm: Vec<f32> = values.iter().map(|&value| value as f32).collect();
+    let inferred_bytes = vec![0_u8; count];
+    let collected: Vec<f64> = values.iter().copied().collect();
+    let copied: Vec<i16> = [1_i16, 2].to_vec();
+    let repeated: Vec<bool> = [true].repeat(count);
+    let macro_buffer: Vec<char> = vec!['x'; count];
+    let empty = Vec::<u64>::new();
+    let reserved = Vec::<usize>::with_capacity(count);
+    let converted = Vec::<u32>::from([1_u32, 2]);
+    let inferred = values.iter().copied().collect::<Vec<_>>();
+}
+"#;
+
+        assert_eq!(primitive_pool_hits(source), 10);
+    }
+
+    #[test]
+    fn primitive_pool_rule_allows_empty_vec_without_capacity() {
+        let source = "fn owner() { let empty = Vec::<u64>::new(); }";
+
+        assert_eq!(primitive_pool_hits(source), 0);
+    }
+
+    #[test]
+    fn primitive_pool_rule_allows_non_primitive_vectors() {
+        let source = r#"
+struct Item;
+
+fn owner(count: usize) {
+    let values: Vec<Item> = Vec::with_capacity(count);
+}
+"#;
+
+        assert_eq!(primitive_pool_hits(source), 0);
+    }
+
+    #[test]
+    fn primitive_pool_rule_allows_owned_result_construction() {
+        let source = r#"
+struct Owner {
+    values: Vec<f64>,
+}
+
+fn direct(values: &[f64]) -> Vec<f64> {
+    return values.to_vec();
+}
+
+fn field(values: &[f64]) -> Owner {
+    Owner {
+        values: values.to_vec(),
+    }
+}
+
+fn local(count: usize) -> Vec<u8> {
+    let mut values = vec![0_u8; count];
+    values.fill(1);
+    return values;
+}
+
+fn tuple(count: usize) -> Result<(usize, Vec<u8>), ()> {
+    let mut values = vec![0_u8; count];
+    values.fill(1);
+    return Ok((count, values));
+}
+"#;
+
+        assert_eq!(primitive_pool_hits(source), 0);
+    }
+
+    #[test]
+    fn primitive_pool_rule_ignores_inline_tests() {
+        let source = r#"
+fn production(values: &[f64]) {
+    let scratch: Vec<f64> = values.to_vec();
+}
+
+#[cfg(test)]
+mod tests {
+    fn fixture(values: &[f64]) {
+        let owned: Vec<f64> = values.to_vec();
+    }
+}
+"#;
+
+        assert_eq!(primitive_pool_hits(source), 1);
+    }
 }

@@ -528,7 +528,9 @@ standalone resampler backend handle. Defaults: 1024-frame mono resampler blocks,
 `ResamplerQuality::High`. The analyzer never stores whole-track PCM: it
 downmixes/resamples into a bounded detector window, runs the detector as each
 window fills, offsets window-relative events, and keeps only raw event times for
-final grid cleanup. Beat scratch buffers come from the builder's `PcmPool`.
+final grid cleanup. PCM windows come from the builder's `PcmPool`; grid cleanup
+reuses a builder-owned, four-shard `SharedPool` of typed scratch storage. Each
+shard retains one scratch set and trims vectors above a 65,536-element watermark.
 
 `AnalysisWorker<B>` / `AnalysisNode<B>` are a public handle over a second
 `runtime::Scheduler` named `kithara-analysis` with one long-lived `Idle`/`Heavy`

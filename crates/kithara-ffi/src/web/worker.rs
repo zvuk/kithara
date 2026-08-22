@@ -388,9 +388,11 @@ fn replace_track(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn shared_store_keeps_two_hls_working_sets() {
         let state = BuildState::default();
 

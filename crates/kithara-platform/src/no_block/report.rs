@@ -226,11 +226,13 @@ fn classify(wall: Duration, cpu: Option<Duration>) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     const WALL: Duration = Duration::from_millis(50);
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn classify_splits_cpu_spin_blocked_and_unclassified() {
         assert_eq!(classify(WALL, Some(Duration::from_millis(49))), "CPU spin");
         assert_eq!(
@@ -240,7 +242,7 @@ mod tests {
         assert_eq!(classify(WALL, None), "unclassified (no thread CPU clock)");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn nextest_prefix_includes_run_attempt_and_canonical_test_identity() {
         let prefix = nextest_prefix_from(
             Some("run-id"),
@@ -258,7 +260,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn nextest_prefix_falls_back_to_test_and_stress_identity() {
         assert_eq!(
             nextest_prefix_from(
@@ -273,12 +275,12 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn nextest_prefix_is_empty_without_nextest_metadata() {
         assert_eq!(nextest_prefix_from(None, None, None, None, None), "");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn nextest_prefix_encodes_and_bounds_untrusted_metadata() {
         assert_eq!(
             nextest_prefix_from(Some("run\n:id]"), None, None, None, None),

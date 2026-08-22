@@ -288,6 +288,7 @@ mod tests {
         thread,
         time::Duration,
     };
+    use kithara_test_utils::kithara;
 
     use super::{Broadcast, BroadcastHandle, Worker};
     use crate::{
@@ -440,7 +441,7 @@ mod tests {
         Arc::clone(&handle.origin.snapshot.load().playlist)
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_gap_in_the_feed_marks_the_next_segment_discontinuous() {
         let mut feed = chunks(6);
         feed.push((Consts::SAMPLE_RATE.into(), pcm(Consts::CHUNK_FRAMES)));
@@ -461,7 +462,7 @@ mod tests {
         handle.token().cancel();
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn the_end_of_the_feed_finishes_the_stream() {
         let handle =
             Broadcast::start(&config(), VecFeed::new(chunks(8), true), None).expect("on air");
@@ -479,7 +480,7 @@ mod tests {
         handle.token().cancel();
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn the_break_falls_behind_the_audio_the_gap_came_after() {
         const CHUNK: usize = 24_000;
         const CHUNK_SECONDS: f64 = 0.5;
@@ -512,7 +513,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn stopping_puts_everything_the_feed_holds_on_air() {
         const HELD: usize = 8;
         const SLACK: f64 = 0.05;
@@ -531,7 +532,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn stopping_twice_is_the_same_as_stopping_once() {
         let handle =
             Broadcast::start(&config(), VecFeed::new(chunks(8), false), None).expect("on air");

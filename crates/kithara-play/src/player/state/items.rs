@@ -154,6 +154,7 @@ mod tests {
     use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
     use kithara_events::{Envelope, Event, PlayerEvent};
     use kithara_platform::time::Duration;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -225,7 +226,7 @@ mod tests {
         Resource::from_reader(EofReader::default(), Some(Arc::from(src)))
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn insert_and_remove_preserve_resource() {
         let queue = ItemQueue::new(EventBus::default());
         queue.insert(resource("first"), None, None);
@@ -236,7 +237,7 @@ mod tests {
         assert_eq!(queue.item_count(), 0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn announce_deduplicates_current_item_event() {
         let bus = EventBus::default();
         let mut events = bus.subscribe();

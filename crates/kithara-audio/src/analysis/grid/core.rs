@@ -2,10 +2,17 @@ use bon::Builder;
 use num_traits::cast::ToPrimitive;
 
 use super::{
-    clean::{bar_gaps, classify_outliers, filter_downbeats, find_stable_window, median},
+    clean::{
+        bar_gaps, classify_outliers, filter_close, filter_close_preferring, find_stable_window,
+        median,
+    },
     fit::{GridFitCtx, anchored_boundaries, build_segments},
+    scratch::{GridPool, GridScratch},
 };
 use crate::{analysis::beat::detector::RawBeats, waveform::BeatGrid};
+
+#[cfg(feature = "beat-nn")]
+pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v1";
 
 struct Consts;
 
@@ -16,6 +23,9 @@ impl Consts {
     const MEDIAN_TRUST_RATIO: f64 = 0.10;
     const MERGE_RATIO_EPS: f64 = 1e-3;
     const MIN_BAR_RATIO: f64 = 0.5;
+    /// Minimum mark gaps required to estimate tempo.
+    const MIN_BEAT_GAPS: usize = 8;
+    const MIN_MAP_BEATS: usize = 2;
     /// A bar gap needs two downbeats to measure.
     const MIN_DOWNBEATS: usize = 2;
     const MIN_GAP_RATIO: f64 = 0.7;
@@ -42,8 +52,7 @@ pub(crate) struct GridParams {
     /// Hard sanity bounds on a bar length, as fractions of the nominal bar.
     #[builder(default = Consts::MIN_BAR_RATIO)]
     pub(crate) min_bar_ratio: f64,
-    /// Drop a downbeat closer than this fraction of a nominal bar to its
-    /// predecessor (double-detection filter).
+    /// Drop a detector mark closer than this fraction of its nominal interval.
     #[builder(default = Consts::MIN_GAP_RATIO)]
     pub(crate) min_gap_ratio: f64,
     /// Outlier threshold vs the neighbour-window median bar factor.
@@ -72,56 +81,163 @@ impl Default for GridParams {
     }
 }
 
-/// Build a cleaned [`BeatGrid`] from raw detections: double-detection filter,
-/// outlier classification, stable-window anchor, recursive bisection into
-/// uniform-ratio segments. Positions convert from seconds to source frames at `sample_rate`.
-pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) -> BeatGrid {
-    let sr = f64::from(sample_rate);
-    let beats = secs_to_frames(&raw.beats, sr);
+/// Builds a cleaned [`BeatGrid`] in source frames, preferring beat marks for tempo.
+pub(crate) fn build_grid(
+    raw: &RawBeats,
+    sample_rate: u32,
+    params: &GridParams,
+    pool: &GridPool,
+) -> BeatGrid {
+    pool.with(raw.beats.len(), raw.downbeats.len(), |scratch| {
+        build_grid_with(raw, sample_rate, params, scratch)
+    })
+}
 
-    let mut db: Vec<f64> = raw
-        .downbeats
-        .iter()
-        .map(|&t| f64::from(t) * sr)
-        .filter(|p| p.is_finite() && *p >= 0.0)
-        .collect();
-    db.sort_by(f64::total_cmp);
-    if db.len() < Consts::MIN_DOWNBEATS {
-        return BeatGrid::new(0.0, beats, positions_to_frames(&db), Vec::new());
+fn build_grid_with(
+    raw: &RawBeats,
+    sample_rate: u32,
+    params: &GridParams,
+    scratch: &mut GridScratch,
+) -> BeatGrid {
+    let sr = f64::from(sample_rate);
+    scratch.positions.clear();
+    scratch.positions.extend(
+        raw.downbeats
+            .iter()
+            .map(|&time| f64::from(time) * sr)
+            .filter(|position| position.is_finite() && *position >= 0.0),
+    );
+    scratch.positions.sort_unstable_by(f64::total_cmp);
+    bar_gaps(&scratch.positions, &mut scratch.gaps);
+    let nominal_seed = median(&scratch.gaps, &mut scratch.sorted);
+    filter_close(&mut scratch.positions, params.min_gap_ratio * nominal_seed);
+    bar_gaps(&scratch.positions, &mut scratch.gaps);
+    let downbeat_bpm = bar_to_bpm(median(&scratch.gaps, &mut scratch.sorted), sr);
+
+    let beats = clean_beats(
+        &raw.beats,
+        &scratch.positions,
+        sr,
+        params,
+        &mut scratch.marks,
+        &mut scratch.gaps,
+        &mut scratch.sorted,
+    );
+    let marks_bpm = beats_bpm(&beats, sr, &mut scratch.gaps, &mut scratch.sorted);
+    if beats.len() >= Consts::MIN_MAP_BEATS {
+        scratch.positions.retain(|position| {
+            position
+                .round()
+                .to_u64()
+                .is_some_and(|frame| beats.binary_search(&frame).is_ok())
+        });
     }
 
-    // Nominal-bar seed for the double-detection filter and the trust band:
-    // the global median gap is robust against scattered double detections.
-    let nominal_seed = median(&bar_gaps(&db));
-    let db = filter_downbeats(db, params.min_gap_ratio * nominal_seed);
-    let downbeats = positions_to_frames(&db);
+    if scratch.positions.len() < Consts::MIN_DOWNBEATS {
+        return BeatGrid::new(
+            marks_bpm.unwrap_or(downbeat_bpm),
+            beats,
+            positions_to_frames(&scratch.positions),
+            Vec::new(),
+        );
+    }
+    bar_gaps(&scratch.positions, &mut scratch.gaps);
+    let nominal_seed = median(&scratch.gaps, &mut scratch.sorted);
+    let downbeats = positions_to_frames(&scratch.positions);
 
     // Degraded mode (per plan): too short / no stable tempo region means no
     // trustworthy piecewise grid — report tempo only, no segments.
-    let Some((anchor_idx, nominal_bar)) = find_stable_window(&db, nominal_seed, params) else {
+    let Some((anchor_idx, nominal_bar)) = find_stable_window(
+        &scratch.positions,
+        nominal_seed,
+        params,
+        &mut scratch.gaps,
+        &mut scratch.sorted,
+    ) else {
         return BeatGrid::new(
-            bar_to_bpm(median(&bar_gaps(&db)), sr),
+            marks_bpm.unwrap_or(downbeat_bpm),
             beats,
             downbeats,
             Vec::new(),
         );
     };
 
-    let outliers = classify_outliers(&db, nominal_bar, params);
-    let fit = GridFitCtx::new(&db, &outliers, sr, params);
-    let boundaries = anchored_boundaries(&fit, anchor_idx);
-    let segments = build_segments(&fit, &boundaries, nominal_bar);
+    classify_outliers(
+        &scratch.positions,
+        nominal_bar,
+        params,
+        &mut scratch.outliers,
+        &mut scratch.neighbors,
+        &mut scratch.sorted,
+    );
+    let fit = GridFitCtx::new(&scratch.positions, &scratch.outliers, sr, params);
+    anchored_boundaries(&fit, anchor_idx, &mut scratch.boundaries);
+    let segments = build_segments(&fit, &scratch.boundaries, nominal_bar, &mut scratch.spans);
 
-    BeatGrid::new(bar_to_bpm(nominal_bar, sr), beats, downbeats, segments)
+    BeatGrid::new(
+        marks_bpm.unwrap_or_else(|| bar_to_bpm(nominal_bar, sr)),
+        beats,
+        downbeats,
+        segments,
+    )
 }
 
-fn secs_to_frames(secs: &[f32], sr: f64) -> Vec<u64> {
-    let mut out: Vec<u64> = secs
-        .iter()
-        .filter_map(|&t| (f64::from(t) * sr).round().to_u64())
-        .collect();
-    out.sort_unstable();
-    out
+/// Converts beat marks to source frames and removes close double detections.
+fn clean_beats(
+    secs: &[f32],
+    downbeats: &[f64],
+    sr: f64,
+    params: &GridParams,
+    marks: &mut Vec<f64>,
+    gaps: &mut Vec<f64>,
+    sorted: &mut Vec<f64>,
+) -> Vec<u64> {
+    marks.clear();
+    marks.extend(
+        secs.iter()
+            .map(|&time| f64::from(time) * sr)
+            .filter(|position| position.is_finite() && *position >= 0.0),
+    );
+    marks.sort_unstable_by(f64::total_cmp);
+    bar_gaps(marks, gaps);
+    let nominal = median(gaps, sorted);
+    filter_close_preferring(marks, downbeats, params.min_gap_ratio * nominal);
+    positions_to_frames(marks)
+}
+
+/// Estimates tempo by weighting each gap by the beat spans it covers.
+fn beats_bpm(beats: &[u64], sr: f64, gaps: &mut Vec<f64>, sorted: &mut Vec<f64>) -> Option<f64> {
+    gaps.clear();
+    gaps.extend(beats.windows(2).filter_map(|window| {
+        window[1]
+            .checked_sub(window[0])
+            .and_then(|gap| gap.to_f64())
+            .filter(|gap| *gap > 0.0)
+    }));
+    if gaps.len() < Consts::MIN_BEAT_GAPS {
+        return None;
+    }
+
+    let mut beat = median(gaps, sorted);
+    for _ in 0..2 {
+        if beat <= 0.0 {
+            return None;
+        }
+        let mut span = 0.0;
+        let mut count = 0.0;
+        for &gap in gaps.iter() {
+            let k = (gap / beat).round();
+            if k > 0.0 {
+                span += gap;
+                count += k;
+            }
+        }
+        if count == 0.0 {
+            return None;
+        }
+        beat = span / count;
+    }
+    (beat > 0.0).then(|| Consts::SECS_PER_MIN * sr / beat)
 }
 
 fn positions_to_frames(positions: &[f64]) -> Vec<u64> {
@@ -142,6 +258,8 @@ fn bar_to_bpm(bar_samples: f64, sr: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     struct Consts;
@@ -158,6 +276,195 @@ mod tests {
             downbeats,
             beats: Vec::new(),
         }
+    }
+
+    fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) -> BeatGrid {
+        super::build_grid(raw, sample_rate, params, &GridPool::default())
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_doubled_beat_is_dropped_like_a_doubled_downbeat() {
+        let beat = 0.5f32;
+        let mut beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * beat).collect();
+        let doubles: Vec<f32> = beats.iter().step_by(8).map(|t| t + beat * 0.1).collect();
+        beats.extend(doubles);
+        beats.sort_by(f32::total_cmp);
+
+        let grid = build_grid(
+            &RawBeats {
+                downbeats: steady(0.0, 2.0, 16),
+                beats,
+            },
+            Consts::SR,
+            &GridParams::default(),
+        );
+
+        assert_eq!(
+            grid.beats().len(),
+            64,
+            "the doubled strikes must be dropped"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn cleaning_keeps_every_downbeat_on_a_retained_beat() {
+        let beat = 0.5f32;
+        let mut beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * beat).collect();
+        beats.insert(1, beat * 0.1);
+        let mut downbeats = steady(0.0, 2.0, 16);
+        downbeats[0] = beat * 0.1;
+
+        let grid = build_grid(
+            &RawBeats { beats, downbeats },
+            Consts::SR,
+            &GridParams::default(),
+        );
+
+        assert_eq!(grid.downbeats().first(), grid.beats().first());
+        assert!(
+            grid.downbeats()
+                .iter()
+                .all(|downbeat| grid.beats().binary_search(downbeat).is_ok()),
+            "every downbeat must remain a beat after cleaning"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_downbeat_wins_a_close_beat_collision() {
+        let mut beats = steady(0.0, 0.5, 12);
+        beats.push(1.9);
+        beats.sort_by(f32::total_cmp);
+
+        let grid = build_grid(
+            &RawBeats {
+                beats,
+                downbeats: vec![0.0, 2.0, 4.0, 6.0],
+            },
+            100,
+            &GridParams::default(),
+        );
+
+        assert!(grid.beats().binary_search(&200).is_ok());
+        assert!(grid.beats().binary_search(&190).is_err());
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn unmatched_downbeat_is_omitted_from_a_map_capable_grid() {
+        let grid = build_grid(
+            &RawBeats {
+                beats: steady(0.0, 0.5, 12),
+                downbeats: vec![0.0, 2.25, 4.0, 6.0],
+            },
+            100,
+            &GridParams::default(),
+        );
+
+        assert!(grid.downbeats().binary_search(&225).is_err());
+        assert!(
+            grid.downbeats()
+                .iter()
+                .all(|downbeat| grid.beats().binary_search(downbeat).is_ok())
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_evenly_spaced_beat_track_survives_the_filter_whole() {
+        let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.5).collect();
+        let grid = build_grid(
+            &RawBeats {
+                downbeats: steady(0.0, 2.0, 16),
+                beats,
+            },
+            Consts::SR,
+            &GridParams::default(),
+        );
+
+        assert_eq!(grid.beats().len(), 64, "no clean beat may be dropped");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn quantized_gaps_average_out_instead_of_latching_to_the_grid() {
+        // 37 gaps of 0.48 s and 25 of 0.46 s: a 127.14 BPM record seen
+        // through a 20 ms grid. The single-gap median latches onto 0.48 s.
+        let mut beats = vec![0.0f32];
+        let mut t = 0.0f32;
+        for i in 0..62usize {
+            t += if i < 50 && i % 2 == 1 { 0.46 } else { 0.48 };
+            beats.push(t);
+        }
+
+        let grid = build_grid(
+            &RawBeats {
+                downbeats: Vec::new(),
+                beats,
+            },
+            Consts::SR,
+            &GridParams::default(),
+        );
+
+        assert!(
+            (grid.bpm() - 127.136).abs() < 0.1,
+            "tempo must match the span the marks actually cover, got {}",
+            grid.bpm()
+        );
+        assert!(
+            (grid.bpm() - 125.0).abs() > 0.5,
+            "tempo must not latch onto the 0.48 s grid step, got {}",
+            grid.bpm()
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn skipped_marks_do_not_bend_the_tempo() {
+        let beats: Vec<f32> = (0..64u16)
+            .filter(|i| i % 7 != 6)
+            .map(|i| f32::from(i) * 0.5)
+            .collect();
+
+        let grid = build_grid(
+            &RawBeats {
+                downbeats: Vec::new(),
+                beats,
+            },
+            Consts::SR,
+            &GridParams::default(),
+        );
+
+        assert!(
+            (grid.bpm() - 120.0).abs() < 0.1,
+            "tempo must survive the holes, got {}",
+            grid.bpm()
+        );
+        // 54 gaps over 31.5 s: a plain average over the gaps reads 102.86.
+        assert!(
+            (grid.bpm() - 102.86).abs() > 5.0,
+            "a doubled gap must count as two beats, not one, got {}",
+            grid.bpm()
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn marks_out_vote_downbeats_that_strike_every_beat() {
+        let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.4).collect();
+        let grid = build_grid(
+            &RawBeats {
+                downbeats: beats.clone(),
+                beats,
+            },
+            Consts::SR,
+            &GridParams::default(),
+        );
+
+        assert!(
+            (grid.bpm() - 150.0).abs() < 0.2,
+            "tempo must read off the marks, got {}",
+            grid.bpm()
+        );
+        assert!(
+            (600.0 - grid.bpm()).abs() > 100.0,
+            "the four-beat bar must not quadruple the tempo, got {}",
+            grid.bpm()
+        );
     }
 
     /// `bars + 1` downbeats starting at `start`, one every `bar` seconds.
@@ -184,7 +491,7 @@ mod tests {
         best
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn clean_track_is_one_on_grid_segment() {
         let grid = build_grid(
             &raw(steady(1.0, 2.0, 64)),
@@ -212,7 +519,7 @@ mod tests {
         assert!(seg.end_frame().abs_diff(last) < Consts::TOL_20MS);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn drifting_track_splits_into_phrase_aligned_segments() {
         // 32 bars at 2.00 s, then 32 bars at 2.06 s (3 % drift, not outlier).
         let mut db = Vec::new();
@@ -269,7 +576,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn double_detections_are_filtered() {
         // Clean 64-bar track plus spurious half-bar downbeats (halving error).
         let mut db = steady(1.0, 2.0, 64);
@@ -288,7 +595,7 @@ mod tests {
         assert!((grid.bpm() - 120.0).abs() < 0.2);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn fade_out_garbage_does_not_bend_the_grid() {
         // Clean 64 bars, then a sparse fade-out tail with bogus gaps.
         let mut db = steady(1.0, 2.0, 64);
@@ -308,7 +615,7 @@ mod tests {
         assert!(!grid.segments().is_empty());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn short_track_yields_tempo_without_segments() {
         let beats = vec![0.5f32, 1.0, 1.5];
         let grid = build_grid(
@@ -326,6 +633,25 @@ mod tests {
             "no stable window means no trustworthy segments"
         );
         assert_eq!(grid.beats(), [22_050, 44_100, 66_150]);
+        assert_eq!(grid.downbeats(), [44_100]);
+        assert!(
+            grid.downbeats()
+                .iter()
+                .all(|downbeat| grid.beats().binary_search(downbeat).is_ok())
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn downbeat_only_short_track_remains_a_degraded_tempo_grid() {
+        let grid = build_grid(
+            &raw(steady(1.0, 2.0, 8)),
+            Consts::SR,
+            &GridParams::default(),
+        );
+
+        assert!((grid.bpm() - 120.0).abs() < 0.2, "bpm {}", grid.bpm());
+        assert!(grid.segments().is_empty());
+        assert!(grid.beats().is_empty());
         assert_eq!(grid.downbeats().len(), 9);
     }
 }

@@ -84,9 +84,11 @@ pub(crate) fn f_measure(reference: &[f32], estimated: &[f32], window: f64) -> Sc
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn identical_sequences_score_one() {
         let seq = vec![0.3, 0.54, 0.84, 1.12];
         let s = f_measure(&seq, &seq, 0.070);
@@ -95,7 +97,7 @@ mod tests {
         assert_eq!(s.max_matched_diff, 0.0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn within_window_still_matches() {
         let reference = vec![1.0, 2.0, 3.0];
         let estimated = vec![1.05, 1.96, 3.02];
@@ -104,7 +106,7 @@ mod tests {
         assert!(s.max_matched_diff <= 0.05 + 1e-9);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn beat_outside_window_lowers_f() {
         let reference = vec![1.0, 2.0, 3.0];
         let estimated = vec![1.0, 2.0, 3.2];
@@ -113,7 +115,7 @@ mod tests {
         assert!(s.f_measure < 1.0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn extra_estimate_lowers_precision() {
         let reference = vec![1.0, 2.0];
         let estimated = vec![1.0, 2.0, 5.0];
@@ -122,7 +124,7 @@ mod tests {
         assert!(s.f_measure < 1.0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn empty_sequences() {
         let s = f_measure(&[], &[], 0.070);
         assert_eq!(s.f_measure, 0.0);

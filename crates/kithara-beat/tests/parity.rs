@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use common::{Score, f_measure, load_golden};
 use kithara_beat::{BEAT_MODEL_BYTES, BeatThis, MEL_MODEL_BYTES};
+use kithara_test_utils::kithara;
 
 const WINDOW: f64 = 0.070;
 const SMALL_MIN_F: f64 = 0.99;
@@ -47,7 +48,7 @@ fn report(kind: &str, s: &Score) {
     );
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn python_parity_small_model() {
     let pcm = load_pcm_fixture();
     let mut bt = BeatThis::try_from((MEL_MODEL_BYTES, BEAT_MODEL_BYTES))

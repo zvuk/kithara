@@ -937,7 +937,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn packaged_delay_padding_can_extend_playlist_tail() {
         let spec = crate::test_server::HlsFixtureBuilder::new()
             .variant_count(1)

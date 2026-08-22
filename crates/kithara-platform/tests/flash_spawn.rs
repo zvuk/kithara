@@ -10,8 +10,9 @@ use kithara_platform::{
     thread::spawn_named,
     tokio,
 };
+use kithara_test_utils::kithara;
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn spawn_named_propagates_ambient() {
     let _a = ambient_scope(true);
     let (tx, rx) = mpsc::channel();
@@ -25,7 +26,7 @@ fn spawn_named_propagates_ambient() {
     );
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn spawn_named_without_ambient_is_false() {
     let (tx, rx) = mpsc::channel();
     spawn_named("probe2", move || {
@@ -38,7 +39,7 @@ fn spawn_named_without_ambient_is_false() {
     );
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn spawn_task_propagates_ambient() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -53,7 +54,7 @@ fn spawn_task_propagates_ambient() {
     assert!(seen, "spawned async task must see ambient=true");
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn spawn_task_without_ambient_is_false() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

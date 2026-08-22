@@ -17,13 +17,14 @@ use kithara_platform::{
     sync::Arc,
     time::{self, Duration},
 };
+use kithara_test_utils::kithara;
 
 #[kithara_test_macros::flash(true)]
 async fn does_sleep() {
     time::sleep(Duration::from_secs(3600)).await;
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn prod_flash_collapses_under_ambient() {
     let _a = ambient_scope(true);
     let t0 = RealInstant::now();
@@ -50,7 +51,7 @@ async fn short_virtual_sleep() {
     time::sleep(Duration::from_millis(100)).await;
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn prod_flash_io_paces_virtual_clock_across_await() {
     let _a = ambient_scope(true);
     let (tx, rx) = futures::channel::oneshot::channel::<()>();
@@ -83,7 +84,7 @@ fn prod_flash_io_paces_virtual_clock_across_await() {
     );
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn prod_flash_real_without_ambient() {
     // No ambient: `enter_dynamic(true)` gates on ambient, so `flash(true)` is a
     // no-op and the sleep is REAL. A real `time::sleep` is a `tokio` timer, so it

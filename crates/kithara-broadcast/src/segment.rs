@@ -113,6 +113,7 @@ impl Segmenter {
 mod tests {
     use kithara_encode::EncodedAccessUnit;
     use kithara_platform::time::Duration;
+    use kithara_test_utils::kithara;
 
     use super::{Segment, Segmenter};
     use crate::{adts::AdtsPacker, config::BroadcastConfig, id3::TimestampTag};
@@ -157,7 +158,7 @@ mod tests {
             .collect()
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn the_unit_that_crosses_the_target_closes_the_segment() {
         let mut segmenter = segmenter();
 
@@ -172,7 +173,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn segments_carry_every_framed_access_unit_and_number_from_zero() {
         let mut segmenter = segmenter();
 
@@ -186,7 +187,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_segment_opens_with_the_timestamp_of_its_first_sample() {
         let mut segmenter = segmenter();
 
@@ -207,7 +208,7 @@ mod tests {
         assert_eq!(start_ts(&segments[0]), 0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_drop_leaves_the_media_clock_running() {
         let mut segmenter = segmenter();
 
@@ -223,7 +224,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn segment_durations_sum_to_the_pushed_audio() {
         let mut segmenter = segmenter();
         let units = 3 * Consts::UNITS_PER_TARGET + 7;
@@ -236,7 +237,7 @@ mod tests {
         assert_eq!(packaged, pushed);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_drop_closes_the_open_segment_and_marks_the_next_one() {
         let mut segmenter = segmenter();
 
@@ -255,7 +256,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_drop_on_an_empty_buffer_emits_nothing_and_still_marks_the_next_one() {
         let mut segmenter = segmenter();
 
@@ -274,7 +275,7 @@ mod tests {
         assert!(next.discontinuity);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_rejected_access_unit_leaves_the_media_clock_alone() {
         let mut segmenter = segmenter();
         let oversized = EncodedAccessUnit {
@@ -297,12 +298,12 @@ mod tests {
         assert_eq!(segment.bytes.len(), frame_bytes(10));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn flushing_an_empty_segmenter_emits_nothing() {
         assert!(segmenter().flush().is_none());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_target_shorter_than_one_tick_is_rejected() {
         assert!(
             Segmenter::new(

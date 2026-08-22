@@ -255,13 +255,15 @@ pub(in crate::flash) fn snapshot() -> String {
 mod tests {
     use std::panic::Location;
 
+    use kithara_test_utils::kithara;
+
     use super::{PrimKind, build, snapshot};
 
     // `build` is the toggle-free core, so these tests are deterministic without
     // touching the process-wide `KITHARA_FLASH_SYNC_TRACE` env. Assertions key on
     // THIS entry's id tag (not global counts), so they hold even when other tests
     // share the process (cargo test threads) rather than nextest's per-test fork.
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn registers_holder_and_prunes_on_drop() {
         let loc: &'static Location<'static> = Location::caller();
         let entry = build(PrimKind::Mutex, None, loc);
@@ -277,7 +279,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn pending_acquirer_shows_in_contended_section() {
         let loc: &'static Location<'static> = Location::caller();
         let entry = build(PrimKind::Mutex, Some(7), loc);
@@ -290,7 +292,7 @@ mod tests {
         assert!(dump.contains("contended locks"), "wait-for section: {dump}");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn rwlock_read_holders_and_blocked_writer_show_in_dump() {
         let loc: &'static Location<'static> = Location::caller();
         let entry = build(PrimKind::RwLock, None, loc);

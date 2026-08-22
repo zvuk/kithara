@@ -3,7 +3,7 @@ use tracing::warn;
 
 use crate::analysis::{
     BeatAnalysisConfig,
-    beat::{BeatDetectorKind, GridParams, build_detector},
+    beat::{BeatDetectorKind, GRID_SEMANTICS_TAG, GridParams, build_detector},
 };
 
 const NN_MODEL_TAG: &str = "beat_this_small_v1";
@@ -24,7 +24,8 @@ where
 {
     BeatDetectorKind::ALL.first().map(|kind| {
         format!(
-            "{kind}:{NN_MODEL_TAG}:{:?}:{:?}",
+            "{kind}:{NN_MODEL_TAG}:{}:{:?}:{:?}",
+            GRID_SEMANTICS_TAG,
             GridParams::default(),
             config
         )

@@ -341,6 +341,7 @@ mod tests {
     use std::f32::consts::TAU;
 
     use kithara_bufpool::PcmPool;
+    use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
     use super::AudioToolboxConverterFactory;
@@ -373,17 +374,17 @@ mod tests {
         Rubato,
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn resampler_apple_rubato_length_contract_44100_to_48000_stereo() {
         assert_length_contract(44_100, 48_000, 2);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn resampler_apple_rubato_length_contract_48000_to_44100_mono() {
         assert_length_contract(48_000, 44_100, 1);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn resampler_apple_tail_flush_drain_eventually_empty() {
         let input = planar_signal(2, test_consts::CHUNK_FRAMES, 44_100);
         let rendered = render(TestBackend::Apple, &input, 44_100, 48_000);
@@ -394,7 +395,7 @@ mod tests {
         assert!(output_energy > input_energy * 0.5);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn resampler_apple_passthrough_near_identity() {
         let input = planar_signal(2, test_consts::CHUNK_FRAMES, 48_000);
         let rendered = render(TestBackend::Apple, &input, 48_000, 48_000);
@@ -408,7 +409,7 @@ mod tests {
         assert!(rms <= test_consts::PASSTHROUGH_RMS_TOLERANCE);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn resampler_apple_rubato_shape_energy_close() {
         let input = planar_signal(2, test_consts::CHUNK_FRAMES, 44_100);
         let apple = render(TestBackend::Apple, &input, 44_100, 48_000);

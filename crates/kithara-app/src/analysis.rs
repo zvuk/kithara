@@ -495,7 +495,7 @@ mod tests {
         (controller, tx)
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn plan_skips_shown_track() {
         let a = target("root_a");
         let displayed = a.clone();
@@ -506,7 +506,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn plan_decodes_a_new_or_unkeyable_track() {
         let a = target("root_a");
         let b = target("root_b");
@@ -523,7 +523,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn plan_serves_a_cached_track_without_decoding() {
         let a = target("root_a");
         let mut cache = cache();
@@ -534,7 +534,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn pending_puts_current_track_first_then_list_order() {
         let ids: Vec<TrackId> = [10u64, 11, 12].into_iter().map(TrackId::from).collect();
 
@@ -562,7 +562,7 @@ mod tests {
         controller.cache.get(&target).is_some()
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn commit_caches_the_complete_result() {
         assert!(
             commit_caches(Some(analysis())),
@@ -570,7 +570,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn commit_caches_nothing_when_the_run_failed() {
         assert!(
             !commit_caches(None),

@@ -289,7 +289,7 @@ mod tests {
         deck_set_on(count, &SessionHandle::spawn_native())
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     #[cfg(feature = "gui")]
     fn eq_mode_maps_the_middle_band_without_moving_the_outer_bands() {
         let four = EqMode::ThreeBand
@@ -303,7 +303,7 @@ mod tests {
         assert_eq!(three, [-6.0, 1.0, 5.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn decks_own_independent_players_and_share_one_session() {
         let mut set = deck_set(4);
         assert_eq!(set.decks().len(), 4);
@@ -322,7 +322,7 @@ mod tests {
             .expect("all decks share one session");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn crossfader_commit_reaches_every_deck() {
         let mut set = deck_set(2);
         set.set_crossfader(0.0).expect("crossfader to A");
@@ -332,7 +332,7 @@ mod tests {
         assert_eq!(set.mix().levels().unwrap(), vec![0.0, 1.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn per_deck_trim_and_mute_are_independent() {
         let mut set = deck_set(4);
         let before = set.mix().levels().unwrap();
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(levels[1], before[1]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn failed_apply_rolls_the_app_mix_back() {
         let mut set = deck_set(2);
         set.set_crossfader(0.25).expect("valid crossfader");
@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(set.mix(), &before);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn adding_a_second_deck_turns_the_crossfader_on() {
         let session = SessionHandle::spawn_native();
         let mut set = deck_set_on(1, &session);
@@ -372,7 +372,7 @@ mod tests {
         assert_eq!(set.mix().levels().unwrap(), vec![1.0, 0.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn removing_a_deck_keeps_the_survivors_settings() {
         let mut set = deck_set(3);
         set.set_trim(DeckId(2), 0.25).expect("trim deck 2");
@@ -387,14 +387,14 @@ mod tests {
         assert_eq!(set.mix().strips[1].trim, 0.25);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_removed_deck_leaves_no_id_reuse() {
         let mut set = deck_set(2);
         set.remove(DeckId(1)).expect("remove deck 1");
         assert_eq!(set.next_id(), DeckId(2));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn session_mix_never_writes_player_content_volume() {
         let mut set = deck_set(2);
         set.set_trim(DeckId(0), 0.5).expect("trim deck 0");

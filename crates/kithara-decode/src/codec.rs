@@ -132,9 +132,11 @@ pub(crate) trait FrameCodec: Send + 'static {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn codec_priming_default_is_all_zero() {
         let p = CodecPriming::default();
         assert_eq!(p.frames, 0);

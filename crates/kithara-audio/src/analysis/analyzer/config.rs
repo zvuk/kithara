@@ -81,14 +81,28 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_resampler::rubato::RubatoBackend;
+    use kithara_test_utils::kithara;
 
     use super::BeatAnalysisConfig;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn default_beat_config_reports_configured_backend() {
         assert_eq!(
             BeatAnalysisConfig::<RubatoBackend>::default().resampler_backend_name(),
             "rubato"
+        );
+    }
+
+    #[cfg(feature = "beat-nn")]
+    #[kithara::test(native, flash(false))]
+    fn cache_tag_invalidates_pre_bpm_from_beats_results() {
+        let tag = BeatAnalysisConfig::<RubatoBackend>::default()
+            .cache_tag()
+            .expect("beat NN has a cache tag");
+
+        assert!(
+            tag.contains(":grid_bpm_from_beats_v1:"),
+            "grid semantics must participate in durable-cache identity"
         );
     }
 }

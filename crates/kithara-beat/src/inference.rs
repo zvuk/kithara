@@ -174,16 +174,18 @@ fn extract_chunk(mel: &Tensor, start: i64) -> Tensor {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn generate_starts_short() {
         // 100 frames — fits in a single chunk.
         let starts = generate_starts(100);
         assert_eq!(starts, vec![-6]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn generate_starts_exact_chunk() {
         // Exactly 1500 frames — needs 2 chunks: after border trimming the
         // first chunk only covers frames 0..1488.
@@ -193,7 +195,7 @@ mod tests {
         assert_eq!(starts[1], 6);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn generate_starts_two_chunks() {
         let starts = generate_starts(2000);
         assert_eq!(starts.len(), 2);
@@ -202,7 +204,7 @@ mod tests {
         assert_eq!(starts[1], 506);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn generate_starts_long() {
         let starts = generate_starts(5000);
         assert_eq!(starts[0], -6);
@@ -213,7 +215,7 @@ mod tests {
         assert_eq!(starts[3], 3506);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn generate_starts_coverage() {
         // Every frame is covered by at least one chunk after border trimming.
         for full_time in [50usize, 100, 500, 1488, 1500, 2000, 3000, 5000, 7800] {
@@ -243,7 +245,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn extract_chunk_short_audio() {
         // Short audio (100 frames < STRIDE): pad_left 6 + 100 + pad_right 6 = 112.
         let n_mels = 128;
@@ -274,7 +276,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn extract_chunk_long_audio_first() {
         let n_mels = 128;
         let full_time = 5000;
@@ -292,7 +294,7 @@ mod tests {
         assert_eq!(chunk.data[6 * n_mels], 1.0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn extract_chunk_long_audio_middle() {
         let n_mels = 128;
         let full_time = 5000;

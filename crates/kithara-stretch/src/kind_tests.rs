@@ -1,13 +1,15 @@
+use kithara_test_utils::kithara;
+
 use crate::StretchKind;
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn roundtrips_compiled_variants_through_u8() {
     for kind in StretchKind::all().iter().copied() {
         assert_eq!(StretchKind::from(u8::from(kind)), kind);
     }
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn keeps_stable_discriminants_and_default_decode() {
     #[cfg(feature = "stretch-signalsmith")]
     assert_eq!(u8::from(StretchKind::Signalsmith), 1);

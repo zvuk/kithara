@@ -8,7 +8,7 @@ use tracing::warn;
 
 use super::{
     detector::{BeatDetectError, BeatDetector, RawBeats},
-    grid::{GridParams, build_grid},
+    grid::{GridParams, GridPool, build_grid},
 };
 use crate::{analysis::analyzer::BeatAnalysisConfig, waveform::BeatGrid};
 
@@ -20,6 +20,7 @@ where
     resampler: BeatAnalysisConfig<B>,
     #[builder(default)]
     params: GridParams,
+    grid_pool: GridPool,
     pcm_pool: PcmPool,
     source_rate: u32,
 }
@@ -35,6 +36,7 @@ where
     params: GridParams,
     feed: MonoFeed,
     failure: Option<BeatDetectError>,
+    grid_pool: GridPool,
     resampler: Option<MonoStream<B>>,
     windows: WindowedBeats,
     source_rate: u32,
@@ -56,6 +58,7 @@ where
             source_rate,
             params,
             resampler: config,
+            grid_pool,
             pcm_pool,
         } = config;
         let (feed, resampler) = if source_rate == config.target_rate() {
@@ -73,6 +76,7 @@ where
             resampler,
             source_rate,
             failure: None,
+            grid_pool,
             windows: WindowedBeats::new(&config, &pcm_pool),
         }
     }
@@ -101,7 +105,12 @@ where
         })?;
 
         let raw = self.windows.finish(detector)?;
-        Ok(build_grid(&raw, self.source_rate, &self.params))
+        Ok(build_grid(
+            &raw,
+            self.source_rate,
+            &self.params,
+            &self.grid_pool,
+        ))
     }
 
     pub(crate) fn push_interleaved(
@@ -358,7 +367,10 @@ mod tests {
         super::detector::{BeatDetectError, BeatDetector, BeatDetectorMock, RawBeats},
         BeatAnalyzer,
     };
-    use crate::analysis::{BeatAnalysisConfig, beat::BeatPassConfig};
+    use crate::analysis::{
+        BeatAnalysisConfig,
+        beat::{BeatPassConfig, GridPool},
+    };
 
     struct Consts;
 
@@ -386,6 +398,7 @@ mod tests {
             BeatPassConfig::builder()
                 .source_rate(source_rate)
                 .resampler(config)
+                .grid_pool(GridPool::default())
                 .pcm_pool(pcm_pool())
                 .build(),
         )

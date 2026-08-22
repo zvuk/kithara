@@ -474,9 +474,11 @@ fn variant_short_label(v: &VariantInfo) -> String {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::{codec_label, frames_to_fractions};
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn frames_to_fractions_maps_and_clamps() {
         assert!(frames_to_fractions(&[], 100).is_empty(), "empty input");
         assert!(
@@ -500,7 +502,7 @@ mod tests {
         assert!(clamped[0] < clamped[1], "ascending preserved");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn codec_label_maps_known_hls_codecs() {
         assert_eq!(codec_label("mp4a.40.2"), Some("AAC"));
         assert_eq!(codec_label("mp4a.40.5"), Some("AAC"));

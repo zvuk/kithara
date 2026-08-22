@@ -45,7 +45,7 @@ let mut buf = Vec::with_capacity(content_length);
 Bytes::from(buf)                                     // per-segment scratch -> kithara-bufpool
 ```
 
-*tier: warm | detector: enforced-ast-grep (perf.prefer-byte-pool) | present in kithara (Bytes handoff; missing with_capacity in net/client body_bytes)*
+*tier: warm | detector: enforced-ast-grep (perf.prefer-primitive-pool) | present in kithara (Bytes handoff; missing with_capacity in net/client body_bytes)*
 
 Absent in kithara today - watch for regressions:
 

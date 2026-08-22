@@ -53,30 +53,33 @@ impl Segment {
 /// Fewer than two trusted points: line through the endpoints, residual 0.
 fn fit_segment(ctx: &GridFitCtx<'_>, segment: Segment) -> (f64, f64, f64) {
     let Segment { start, end } = segment;
-    let points: Vec<(f64, f64)> = (start..=end)
-        .filter(|&i| !ctx.outliers[i])
-        .map(|i| {
-            let x: f64 = i.as_();
-            (x, ctx.db[i])
-        })
-        .collect();
-    if points.len() < Consts::MIN_FIT_POINTS {
+    let trusted = (start..=end).filter(|&index| !ctx.outliers[index]);
+    let (count, sum_x, sum_y) =
+        trusted
+            .clone()
+            .fold((0usize, 0.0, 0.0), |(count, sum_x, sum_y), index| {
+                let x: f64 = index.as_();
+                (count + 1, sum_x + x, sum_y + ctx.db[index])
+            });
+    if count < Consts::MIN_FIT_POINTS {
         let span: f64 = (end - start).max(1).as_();
         return (ctx.db[start], (ctx.db[end] - ctx.db[start]) / span, 0.0);
     }
-    let n: f64 = points.len().as_();
-    let mean_x = points.iter().map(|p| p.0).sum::<f64>() / n;
-    let mean_y = points.iter().map(|p| p.1).sum::<f64>() / n;
-    let var_x = points.iter().map(|p| (p.0 - mean_x).powi(2)).sum::<f64>();
-    let cov = points
-        .iter()
-        .map(|p| (p.0 - mean_x) * (p.1 - mean_y))
-        .sum::<f64>();
+    let n: f64 = count.as_();
+    let mean_x = sum_x / n;
+    let mean_y = sum_y / n;
+    let (var_x, cov) = trusted.clone().fold((0.0, 0.0), |(var_x, cov), index| {
+        let x: f64 = index.as_();
+        let dx = x - mean_x;
+        (var_x + dx.powi(2), cov + dx * (ctx.db[index] - mean_y))
+    });
     let slope = cov / var_x;
     let intercept = mean_y - slope * mean_x;
-    let max_resid = points
-        .iter()
-        .map(|p| (p.1 - (intercept + slope * p.0)).abs())
+    let max_resid = trusted
+        .map(|index| {
+            let x: f64 = index.as_();
+            (ctx.db[index] - (intercept + slope * x)).abs()
+        })
         .fold(0.0, f64::max);
     (intercept, slope, max_resid)
 }
@@ -108,39 +111,44 @@ fn aligned_mid(start: usize, end: usize, align: usize, min_seg: usize) -> usize 
 /// Step 4: recursively split `[start, end]` until each leaf's trusted
 /// downbeats fit one line within `residual_ms`, or the leaf is too short to
 /// split into two `min_leaf_bars` halves. Returns leaf boundary bar indices.
-fn bisect_segment(ctx: &GridFitCtx<'_>, segment: Segment) -> Vec<usize> {
+fn bisect_segment(ctx: &GridFitCtx<'_>, segment: Segment, boundaries: &mut Vec<usize>) {
     let Segment { start, end } = segment;
+    if boundaries.last().copied() != Some(start) {
+        boundaries.push(start);
+    }
     if end - start <= 1 {
-        return vec![start, end];
+        boundaries.push(end);
+        return;
     }
     let (_, _, max_resid) = fit_segment(ctx, segment);
     let resid_ms = max_resid / ctx.sample_rate * Consts::MS_PER_SEC;
     if resid_ms < ctx.params.residual_ms
         || (end - start) < Consts::SPLIT_HALVES * ctx.params.min_leaf_bars
     {
-        return vec![start, end];
+        boundaries.push(end);
+        return;
     }
     let mid = aligned_mid(start, end, ctx.params.align_bars, ctx.params.min_leaf_bars);
-    let mut left = bisect_segment(ctx, Segment::new(start, mid));
-    let right = bisect_segment(ctx, Segment::new(mid, end));
-    left.pop();
-    left.extend(right);
-    left
+    bisect_segment(ctx, Segment::new(start, mid), boundaries);
+    bisect_segment(ctx, Segment::new(mid, end), boundaries);
 }
 
 /// Bisect each half of the track left and right of the anchor and join the
 /// boundary lists at the anchor bar.
-pub(super) fn anchored_boundaries(ctx: &GridFitCtx<'_>, anchor_idx: usize) -> Vec<usize> {
+pub(super) fn anchored_boundaries(
+    ctx: &GridFitCtx<'_>,
+    anchor_idx: usize,
+    boundaries: &mut Vec<usize>,
+) {
+    boundaries.clear();
     let last = ctx.db.len() - 1;
     if anchor_idx == 0 || anchor_idx >= last {
         let end = if anchor_idx == 0 { last } else { anchor_idx };
-        return bisect_segment(ctx, Segment::new(0, end));
+        bisect_segment(ctx, Segment::new(0, end), boundaries);
+        return;
     }
-    let mut left = bisect_segment(ctx, Segment::new(0, anchor_idx));
-    let right = bisect_segment(ctx, Segment::new(anchor_idx, last));
-    left.pop();
-    left.extend(right);
-    left
+    bisect_segment(ctx, Segment::new(0, anchor_idx), boundaries);
+    bisect_segment(ctx, Segment::new(anchor_idx, last), boundaries);
 }
 
 /// Step 5: per-leaf fits become [`GridSegment`]s. Adjacent leaves whose
@@ -150,11 +158,12 @@ pub(super) fn build_segments(
     ctx: &GridFitCtx<'_>,
     boundaries: &[usize],
     nominal_bar: f64,
+    spans: &mut Vec<(usize, usize, f64, f64)>,
 ) -> Vec<GridSegment> {
     if boundaries.len() < 2 {
         return Vec::new();
     }
-    let mut spans: Vec<(usize, usize, f64, f64)> = Vec::with_capacity(boundaries.len() - 1);
+    spans.clear();
     for pair in boundaries.windows(2) {
         let segment = Segment::new(pair[0], pair[1]);
         let (intercept, slope, _) = fit_segment(ctx, segment);

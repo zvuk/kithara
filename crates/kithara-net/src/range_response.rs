@@ -132,6 +132,7 @@ fn parse_content_range(raw: &str) -> Option<ContentRange> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use url::Url;
 
     use super::{accepts_response_status, validate_range_response};
@@ -141,7 +142,7 @@ mod tests {
         Url::parse("https://example.com/audio.bin").expect("test URL")
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn partial_status_requires_range_permission() {
         assert!(accepts_response_status(200, false));
         assert!(accepts_response_status(206, true));
@@ -149,7 +150,7 @@ mod tests {
         assert!(!accepts_response_status(404, true));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn partial_range_requires_content_range() {
         let mut headers = Headers::default();
         headers.insert("content-length", "16");
@@ -161,7 +162,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn partial_range_requires_content_length() {
         let mut headers = Headers::default();
         headers.insert("content-range", "bytes 0-3/8");
@@ -173,7 +174,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn full_response_may_ignore_range() {
         let mut headers = Headers::default();
         headers.insert("content-length", "60");
@@ -182,7 +183,7 @@ mod tests {
         assert!(validate_range_response(200, Some(&range), &headers, &test_url()).is_ok());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn partial_range_accepts_content_range() {
         let mut headers = Headers::default();
         headers.insert("content-length", "16");
@@ -192,7 +193,7 @@ mod tests {
         assert!(validate_range_response(206, Some(&range), &headers, &test_url()).is_ok());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn partial_range_rejects_an_unknown_total() {
         let mut headers = Headers::default();
         headers.insert("content-length", "8");
@@ -205,7 +206,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn full_response_rejects_content_range() {
         let mut headers = Headers::default();
         headers.insert("content-length", "60");
@@ -218,7 +219,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn resumed_range_rejects_a_different_interval() {
         let mut headers = Headers::default();
         headers.insert("content-length", "8");
@@ -231,7 +232,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn partial_range_rejects_an_inconsistent_span() {
         let mut headers = Headers::default();
         headers.insert("content-length", "7");
@@ -244,7 +245,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn range_request_rejects_other_success_statuses() {
         let range = RangeSpec::new(0, Some(15));
 

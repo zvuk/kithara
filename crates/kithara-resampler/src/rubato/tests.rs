@@ -1,6 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::PcmPool;
+use kithara_test_utils::kithara;
 
 use super::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
 use crate::{
@@ -8,7 +9,7 @@ use crate::{
     ResamplerOptions, ResamplerSettings, create_resampler,
 };
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn rubato_backend_reports_fixed_ratio_standalone_support() {
     let capabilities = RubatoBackend::new().capabilities();
 
@@ -16,7 +17,7 @@ fn rubato_backend_reports_fixed_ratio_standalone_support() {
     assert!(capabilities.contains(ResamplerCapabilities::STANDALONE));
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn rubato_resamples_borrowed_planar_slices() {
     let channels = NonZeroUsize::new(2).unwrap_or_else(|| panic!("test channels"));
     let settings = ResamplerSettings::builder()
@@ -50,7 +51,7 @@ fn rubato_resamples_borrowed_planar_slices() {
     assert!(process.output_frames > 0);
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn rubato_factory_output_has_no_ratio_control_surface() {
     let channels = NonZeroUsize::new(1).unwrap_or_else(|| panic!("test channels"));
     let settings = ResamplerSettings::builder()
@@ -74,7 +75,7 @@ fn rubato_factory_output_has_no_ratio_control_surface() {
     assert!(resampler.control_mut().is_none());
 }
 
-#[test]
+#[kithara::test(native, flash(false))]
 fn rubato_fft_is_selected_by_backend_config() {
     let channels = NonZeroUsize::new(1).unwrap_or_else(|| panic!("test channels"));
     let settings = ResamplerSettings::builder()

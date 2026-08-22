@@ -260,10 +260,11 @@ impl AppleTask {
 mod tests {
     use kithara_apple::foundation::ns::NSData;
     use kithara_bufpool::ByteBudget;
+    use kithara_test_utils::kithara;
 
     use super::{super::response::copy_data, *};
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn configured_byte_pool_reaches_response_copy_path() {
         let pool = BytePool::with_byte_budget(usize::MAX, 0, ByteBudget(64));
         let options = NetOptions::builder().byte_pool(pool.clone()).build();
@@ -282,7 +283,7 @@ mod tests {
         assert!(after.home_hits + after.steal_hits > before.home_hits + before.steal_hits);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn response_copy_reports_byte_budget_exhaustion() {
         let pool = BytePool::with_byte_budget(usize::MAX, 0, ByteBudget(1));
         let data = NSData::with_bytes(b"ab");

@@ -102,10 +102,11 @@ impl BroadcastConfig {
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::Duration;
+    use kithara_test_utils::kithara;
 
     use super::BroadcastConfig;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn the_default_configuration_serves_a_long_enough_playlist() {
         BroadcastConfig::builder()
             .build()
@@ -113,7 +114,7 @@ mod tests {
             .expect("the defaults hold the RFC 8216 live window");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_window_shorter_than_three_target_durations_is_rejected() {
         let short = BroadcastConfig::builder()
             .segment_target(Duration::from_millis(500))
@@ -131,7 +132,7 @@ mod tests {
             .expect("six of them span exactly three target durations");
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn the_target_duration_rounds_the_segment_target_up_to_seconds() {
         let config = BroadcastConfig::builder()
             .segment_target(Duration::from_millis(1_500))
@@ -141,7 +142,7 @@ mod tests {
         assert_eq!(config.target_ticks().expect("ticks"), 72_000);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn zero_audio_is_rejected() {
         assert!(
             BroadcastConfig::builder()

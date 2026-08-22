@@ -25,6 +25,8 @@ rten-tensor = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+kithara-test-utils = { workspace = true }
+
 serde = { workspace = true }
 serde_json = { workspace = true }
 

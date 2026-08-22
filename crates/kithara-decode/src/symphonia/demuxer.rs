@@ -608,6 +608,7 @@ mod tests {
     use std::io;
 
     use kithara_stream::{NotReadyCause, PendingReason};
+    use kithara_test_utils::kithara;
     use symphonia::core::{
         errors::Error as SymphoniaError,
         units::{Duration as SymphoniaDuration, Timestamp},
@@ -615,7 +616,7 @@ mod tests {
 
     use super::{Packet, packet_ends_at_or_before, pending_reason};
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn resume_floor_rejects_the_packet_before_the_authoritative_timestamp() {
         let packet = Packet::new(
             0,
@@ -628,7 +629,7 @@ mod tests {
         assert!(!packet_ends_at_or_before(&packet, 2_151));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn would_block_uses_source_pending_reason() {
         let error = SymphoniaError::IoError(io::Error::from(io::ErrorKind::WouldBlock));
 

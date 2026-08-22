@@ -705,7 +705,7 @@ mod tests {
         assert!(error.to_string().contains("Nyquist"));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn resolves_packaged_audio_start_frame_on_sine() {
         let spec = HlsSpec {
             packaged_audio: Some(PackagedAudioRequest {

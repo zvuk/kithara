@@ -567,9 +567,10 @@ impl TestServerState {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn behavior_register_returns_token_and_counts_start_at_zero() {
         let state = TestServerState::new();
         let token = state.insert_behavior(FixtureBehavior {
@@ -581,7 +582,7 @@ mod tests {
         assert_eq!(state.behavior_hits("nonexistent"), None);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn behavior_bump_increments_count() {
         let state = TestServerState::new();
         let token = state.insert_behavior(FixtureBehavior {

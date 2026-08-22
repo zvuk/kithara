@@ -1,0 +1,92 @@
+id: perf.prefer-primitive-pool
+message: |
+  Allocating a primitive `Vec` directly in a hot-path crate. Reuse storage
+  through the pool injected by the owning subsystem:
+
+    - `Vec<u8>` uses `BytePool`;
+    - `Vec<f32>` containing PCM uses `PcmPool`;
+    - other primitive scratch uses `SharedPool<_, Vec<T>>`.
+
+  The rule covers capacity-bearing constructors, `vec!`, `collect`, `to_vec`,
+  and `repeat` when the primitive type is explicit. An explicit
+  `collect::<Vec<_>>()` is also rejected conservatively in these crates.
+  `Vec::new()` alone does not allocate and is intentionally not a finding.
+  Long-lived result storage is allowed, but disposable scratch must come from
+  a pool owned and injected by the subsystem rather than a global accessor.
+severity: error
+language: Rust
+files:
+  - crates/kithara-audio/src/**/*.rs
+  - crates/kithara-decode/src/**/*.rs
+  - crates/kithara-file/src/**/*.rs
+  - crates/kithara-hls/src/**/*.rs
+  - crates/kithara-resampler/src/**/*.rs
+  - crates/kithara-stream/src/**/*.rs
+  - crates/kithara-stretch/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/benches/**"
+rule:
+  all:
+    - any:
+        - all:
+            - any:
+                - pattern: "let $NAME: Vec<$TYPE> = $ALLOC;"
+                - pattern: "let mut $NAME: Vec<$TYPE> = $ALLOC;"
+        - pattern: "$ITER.collect::<Vec<_>>()"
+        - pattern: "$ITER.collect::<Vec<$TYPE>>()"
+        - pattern: "Vec::<$TYPE>::with_capacity($CAPACITY)"
+        - pattern: "Vec::<$TYPE>::from($VALUE)"
+        - pattern: "let $NAME = vec![$ELEMENT; $CAPACITY];"
+        - pattern: "let mut $NAME = vec![$ELEMENT; $CAPACITY];"
+    - not:
+        inside:
+          all:
+            - kind: function_item
+            - regex: '(?s)^[^{]*->[^{]*Vec\s*<\s*(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64|bool|char)\s*>'
+          stopBy: end
+    - not:
+        inside:
+          kind: return_expression
+          stopBy: end
+    - not:
+        inside:
+          kind: field_initializer
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: mod_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: function_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b|^#\[test\]$|kithara::test'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+constraints:
+  TYPE:
+    regex: '^(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64|bool|char)$'
+  ALLOC:
+    regex: '(?s)(?:^vec!\s*\[|^Vec(?:::\s*<[^>]+>)?::(?:with_capacity|from)\s*\(|\.(?:collect(?:\s*::\s*<[^>]+>)?|to_vec|repeat)\s*\()'
+  ELEMENT:
+    any:
+      - kind: integer_literal
+      - kind: float_literal
+      - kind: boolean_literal
+      - kind: char_literal

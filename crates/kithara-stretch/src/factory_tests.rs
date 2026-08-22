@@ -1,4 +1,5 @@
 use kithara_bufpool::PcmPool;
+use kithara_test_utils::kithara;
 
 use super::build_backend;
 use crate::{StretchKind, StretchOptions};
@@ -54,13 +55,13 @@ fn smoke(kind: StretchKind) {
 }
 
 #[cfg(feature = "stretch-signalsmith")]
-#[test]
+#[kithara::test(native, flash(false))]
 fn builds_and_processes_signalsmith_backend() {
     smoke(StretchKind::Signalsmith);
 }
 
 #[cfg(feature = "stretch-bungee")]
-#[test]
+#[kithara::test(native, flash(false))]
 fn builds_and_processes_bungee_backend() {
     smoke(StretchKind::Bungee);
 }

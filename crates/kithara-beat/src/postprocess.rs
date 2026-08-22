@@ -146,23 +146,25 @@ fn snap_downbeats_to_beats(beat_times: &[f32], downbeat_times: &mut Vec<f32>) {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn find_peaks_single_peak() {
         let logits = [0.0, 0.0, 0.5, 1.0, 0.5, 0.0, 0.0];
         let peaks = find_peaks(&logits);
         assert_eq!(peaks, vec![3.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn find_peaks_below_threshold() {
         let logits = [-1.0, -0.5, -2.0, -0.1];
         let peaks = find_peaks(&logits);
         assert!(peaks.is_empty());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn find_peaks_multiple_peaks() {
         // Two peaks separated by more than 3 frames.
         let mut logits = vec![0.0; 20];
@@ -172,7 +174,7 @@ mod tests {
         assert_eq!(peaks, vec![3.0, 15.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn find_peaks_window_suppresses_smaller_neighbour() {
         // A smaller positive value 3 frames from a larger one is not a peak.
         let mut logits = vec![0.0; 10];
@@ -182,7 +184,7 @@ mod tests {
         assert_eq!(peaks, vec![4.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn find_peaks_outside_window_both_survive() {
         // 4 frames apart: each is the max of its own ±3 window.
         let mut logits = vec![0.0; 10];
@@ -192,7 +194,7 @@ mod tests {
         assert_eq!(peaks, vec![2.0, 6.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn find_peaks_plateau_collapses_to_centre() {
         // Adjacent frames with equal positive values: both tie the max-pool,
         // dedup merges them to the plateau centre.
@@ -202,19 +204,19 @@ mod tests {
         assert_eq!(peaks[0], 1.5);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn deduplicate_peaks_empty() {
         let peaks = deduplicate_peaks(&[], 1);
         assert!(peaks.is_empty());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn deduplicate_peaks_no_adjacent() {
         let peaks = deduplicate_peaks(&[5, 10, 20], 1);
         assert_eq!(peaks, vec![5.0, 10.0, 20.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn deduplicate_peaks_merge() {
         // 10 and 11 merge (gap 1) to 10.5; 12 is 1.5 from the mean → new group.
         let peaks = deduplicate_peaks(&[10, 11, 12, 20], 1);
@@ -227,13 +229,13 @@ mod tests {
         assert_eq!(peaks[1], 20.0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn deduplicate_peaks_single() {
         let peaks = deduplicate_peaks(&[42], 1);
         assert_eq!(peaks, vec![42.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn snap_downbeats() {
         let beats = vec![1.0, 2.0, 3.0];
         let mut downbeats = vec![1.1, 2.8];
@@ -241,7 +243,7 @@ mod tests {
         assert_eq!(downbeats, vec![1.0, 3.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn snap_downbeats_dedup() {
         let beats = vec![1.0, 2.0, 3.0];
         // Both downbeats snap to 2.0 and collapse to one.
@@ -250,7 +252,7 @@ mod tests {
         assert_eq!(downbeats, vec![2.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn snap_downbeats_empty_beats() {
         let beats: Vec<f32> = vec![];
         let mut downbeats = vec![1.0, 2.0];
@@ -258,7 +260,7 @@ mod tests {
         assert_eq!(downbeats, vec![1.0, 2.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn snap_downbeats_empty_downbeats() {
         let beats = vec![1.0, 2.0];
         let mut downbeats: Vec<f32> = vec![];
@@ -266,7 +268,7 @@ mod tests {
         assert!(downbeats.is_empty());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn decode_full() {
         let mut beat_logits = vec![-5.0; 200];
         let mut downbeat_logits = vec![-5.0; 200];
@@ -284,7 +286,7 @@ mod tests {
         assert_eq!(downbeats, vec![1.0]);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn decode_empty_logits() {
         let pp = PeakPicker::default();
         let (beats, downbeats) = pp.decode(&[], &[]).unwrap();
@@ -292,7 +294,7 @@ mod tests {
         assert!(downbeats.is_empty());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn decode_mismatched_lengths() {
         let pp = PeakPicker::default();
         let err = pp.decode(&[1.0, 2.0], &[1.0]);

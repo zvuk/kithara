@@ -480,7 +480,7 @@ mod tests {
         let _ = measure_audio_level("no-block-guard", AudioRole::FinalMix, SOURCE_RATE, capture);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn matched_mix_rejects_global_attenuation_and_each_missing_deck() {
         let samples = 8_192;
         let stem_a = (0..samples)

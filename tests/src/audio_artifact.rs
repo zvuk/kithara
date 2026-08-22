@@ -137,11 +137,12 @@ fn write_float_wav(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use tempfile::tempdir;
 
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn float_wav_has_expected_header_and_payload_size() {
         let temp = tempdir().expect("temporary artifact directory");
         let path = temp.path().join("capture.wav");
@@ -154,7 +155,7 @@ mod tests {
         assert_eq!(bytes.len(), 44 + 4 * size_of::<f32>());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn float_wav_preserves_payload_across_batch_boundary() {
         let temp = tempdir().expect("temporary artifact directory");
         let path = temp.path().join("batched.wav");

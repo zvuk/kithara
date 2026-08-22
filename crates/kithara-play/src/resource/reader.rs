@@ -265,6 +265,7 @@ mod tests {
     use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_platform::CancelToken;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -337,7 +338,7 @@ mod tests {
     /// `T.child()`, so `Audio::Drop` alone would only reach its own child and
     /// leave the stream-side fetch loops running. `Resource::Drop` must cancel
     /// `T` so the stream subtree (modelled here by `stream_sub`) is torn down.
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn drop_cancels_whole_per_track_subtree_not_just_audio() {
         let track = CancelToken::never();
         let stream_sub = track.child(); // File/Hls subtree F = T.child()
@@ -358,7 +359,7 @@ mod tests {
 
     /// A resource with no per-track cancel wired in (custom reader) drops
     /// without panicking and cancels nothing.
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn drop_without_cancel_is_passive() {
         let resource = Resource::from_reader(EofReader::default(), None);
         drop(resource);

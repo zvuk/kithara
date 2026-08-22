@@ -531,7 +531,7 @@ mod tests {
         assert!(!pcm.is_past_eof(usize::MAX));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn sweep_first_sample_is_zero() {
         let sweep = signal::Sweep::new(100.0, 8_000.0, SAMPLE_RATE as usize, SweepMode::Linear);
         let pcm = SignalPcm::new(sweep, SAMPLE_RATE, 1, Finite::new(SAMPLE_RATE as usize));
@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(i16::from_le_bytes(buf), 0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn sweep_zero_crossing_density_increases_over_time() {
         let total_frames = (SAMPLE_RATE * 2) as usize;
         let sweep = signal::Sweep::new(100.0, 6_400.0, total_frames, SweepMode::Linear);
@@ -556,7 +556,7 @@ mod tests {
         assert!(middle < late);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn sweep_has_no_discontinuity_across_chunk_boundaries() {
         let total_frames = (SAMPLE_RATE * 2) as usize;
         let pcm = SignalPcm::new(
@@ -577,7 +577,7 @@ mod tests {
         assert_eq!(stitched, full);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn sweep_frequency_near_end_matches_target() {
         let total_frames = SAMPLE_RATE as usize;
         let pcm = SignalPcm::new(
@@ -593,7 +593,7 @@ mod tests {
         assert!((tail_frequency - 4_000.0).abs() < 220.0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn log_sweep_midpoint_frequency_matches_geometric_mean() {
         let total_frames = (SAMPLE_RATE * 2) as usize;
         let pcm = SignalPcm::new(
@@ -613,7 +613,7 @@ mod tests {
         assert!((estimate - expected).abs() < 25.0);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn sweep_stereo_duplicates_channels() {
         let total_frames = SAMPLE_RATE as usize / 10;
         let pcm = SignalPcm::new(
@@ -629,7 +629,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn sweep_reads_are_idempotent_across_offsets() {
         let total_frames = (SAMPLE_RATE * 2) as usize;
         let pcm = SignalPcm::new(
@@ -645,7 +645,7 @@ mod tests {
         assert_eq!(&full[offset..], overlap.as_slice());
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn sweep_large_offsets_remain_deterministic() {
         let total_frames = 1_250_000usize;
         let pcm = SignalPcm::new(

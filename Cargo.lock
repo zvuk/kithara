@@ -4286,6 +4286,7 @@ dependencies = [
  "block2 0.6.2",
  "fieldwork",
  "kithara-platform",
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "objc2 0.6.4",
@@ -4387,6 +4388,7 @@ dependencies = [
 name = "kithara-beat"
 version = "0.0.1-alpha4"
 dependencies = [
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "rten",
@@ -4407,6 +4409,7 @@ dependencies = [
  "hls_m3u8",
  "kithara-encode",
  "kithara-platform",
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "ringbuf 0.5.0",
  "thiserror 2.0.18",
@@ -4888,6 +4891,7 @@ dependencies = [
  "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "rubato",

@@ -126,13 +126,15 @@ impl PlanGuard<'_> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     fn plan() -> PlanQueue {
         PlanQueue::new(8, 4)
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_replaced_plan_is_visible_without_the_lock() {
         let queue = plan();
 
@@ -145,7 +147,7 @@ mod tests {
         assert!(!queue.planned(PlannedFetch::Segment(1)));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_popped_fetch_leaves_the_mirror() {
         let queue = plan();
         queue
@@ -157,7 +159,7 @@ mod tests {
         assert!(!queue.planned(PlannedFetch::Segment(1)));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_requeued_fetch_reenters_the_mirror() {
         let queue = plan();
 
@@ -166,7 +168,7 @@ mod tests {
         assert!(queue.planned(PlannedFetch::Segment(3)));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_segment_outside_the_map_is_never_planned() {
         let queue = plan();
 
