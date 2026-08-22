@@ -443,6 +443,69 @@ fn seek_seconds_updates_position_optimistically() {
     assert_eq!(player.position_seconds(), Some(54.689_879_542));
 }
 
+/// Bug #5's dispatch-side sibling: the track honestly finalizes its natural
+/// end and the report sits in the slot ring; before the control thread
+/// drains it, the user seeks back — publishing a newer epoch and reviving
+/// the track. The stale end describes a position the user already left, and
+/// delivering it would let the queue auto-advance out from under the seek.
+#[kithara::test]
+fn an_end_minted_before_a_published_seek_is_not_delivered() {
+    let (player, session) = make_offline_player(0.0);
+    let mut rx = player.subscribe();
+    let (item, item_id) = make_tagged_resource("item-1", 0.05);
+    player.insert(item, Some(item_id), None);
+
+    player.play();
+    let _ = drain_player_events(&player, &mut rx);
+
+    // Reach the natural end without draining notifications: the EOF report
+    // stays queued, exactly like a queue tick that has not yet run.
+    for _ in 0..64 {
+        let _ = session.render(512);
+    }
+
+    let outcome = player.seek_seconds(0.01).expect("seek must land");
+    assert!(matches!(outcome, SeekOutcome::Landed { .. }));
+
+    let events = drain_player_events(&player, &mut rx);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. })),
+        "an end minted before a published seek must not reach the queue: {events:?}"
+    );
+}
+
+/// Valve for the fence above: the revived track plays to its end again and
+/// the fresh report — minted at the epoch the seek published — is delivered.
+#[kithara::test]
+fn a_revived_track_delivers_the_end_it_reaches_again() {
+    let (player, session) = make_offline_player(0.0);
+    let mut rx = player.subscribe();
+    let (item, item_id) = make_tagged_resource("item-1", 0.05);
+    player.insert(item, Some(item_id), None);
+
+    player.play();
+    let _ = drain_player_events(&player, &mut rx);
+    for _ in 0..64 {
+        let _ = session.render(512);
+    }
+
+    player.seek_seconds(0.01).expect("seek must land");
+    let _ = drain_player_events(&player, &mut rx);
+
+    let events = render_until_events(&player, &session, &mut rx, 256, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }))
+    });
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. })),
+        "the re-ended track must report its new end: {events:?}"
+    );
+}
+
 #[kithara::test]
 fn arm_next_returns_none_for_empty_slot() {
     let (player, _session) = make_offline_player(0.0);

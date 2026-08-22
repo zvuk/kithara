@@ -4,7 +4,7 @@ use kithara_platform::sync::Arc;
 
 use super::super::core::PlayerImpl;
 use crate::{
-    api::{EngineEvent, PlayerEvent},
+    api::{EngineEvent, PlayerEvent, SlotId},
     bridge::{PlayerNotification, TrackPlaybackStopReason},
 };
 
@@ -27,7 +27,14 @@ impl Deref for Notifier<'_> {
 }
 
 impl Notifier<'_> {
-    fn dispatch_notification(&self, notification: PlayerNotification) {
+    fn dispatch_notification(&self, slot_id: SlotId, notification: PlayerNotification) {
+        if self.natural_end_outranked_by_seek(slot_id, &notification) {
+            tracing::debug!(
+                src = ?notification.src(),
+                "dropping a natural end outranked by a published seek"
+            );
+            return;
+        }
         let emitted = player_events_from_notification(self, &notification);
         let emitted_any = !emitted.is_empty();
         for event in emitted {
@@ -59,6 +66,34 @@ impl Notifier<'_> {
                 }
             }
         }
+    }
+
+    /// Bug #5's dispatch-side sibling: a natural end minted at an older
+    /// epoch describes a position the user has already left — a newer
+    /// published seek revives the track (`apply_seek`), and delivering the
+    /// stale end would hand the queue an `ItemDidPlayToEnd` it answers with
+    /// an auto-advance out from under the accepted seek. Compared with `!=`,
+    /// not `<`: epochs wrap, and `withdraw_seek_epoch` legally steps the
+    /// published value back. `Stop` and `Failed` are never fenced — a broken
+    /// source stays broken across a seek, and a slot without playback state
+    /// has nothing to outrank the end.
+    fn natural_end_outranked_by_seek(
+        &self,
+        slot_id: SlotId,
+        notification: &PlayerNotification,
+    ) -> bool {
+        let PlayerNotification::PlaybackStopped {
+            reason: TrackPlaybackStopReason::Eof,
+            seek_epoch,
+            ..
+        } = notification
+        else {
+            return false;
+        };
+        self.core
+            .engine
+            .slot_playback(slot_id)
+            .is_some_and(|playback| playback.seek_epoch.load(Ordering::SeqCst) != *seek_epoch)
     }
 
     fn finalize_handover_if_armed(&self) {
@@ -127,7 +162,7 @@ impl Notifier<'_> {
                 if let PlayerNotification::Unloaded { src } = &notification {
                     self.core.engine.unbind_slot_seek(slot_id, src);
                 }
-                self.dispatch_notification(notification);
+                self.dispatch_notification(slot_id, notification);
             }
             if !self.core.engine.drain_slot_trash(slot_id) && !saw_slot {
                 tracing::warn!(?slot_id, "process_notifications: slot has no control state");
@@ -167,11 +202,13 @@ pub(crate) fn player_event_from_notification(
             reason: TrackPlaybackStopReason::Eof,
             src,
             item_id,
+            ..
         } => Some(PlayerEvent::ItemDidPlayToEnd { src, item_id }),
         PlayerNotification::PlaybackStopped {
             reason: TrackPlaybackStopReason::Failed,
             src,
             item_id,
+            ..
         } => Some(PlayerEvent::ItemDidFail { src, item_id }),
         _ => None,
     }
@@ -229,6 +266,7 @@ mod tests {
             src: Arc::from("track.mp3"),
             item_id: Some(Arc::from("item-1")),
             reason: TrackPlaybackStopReason::Eof,
+            seek_epoch: 0,
         });
         assert!(matches!(event, Some(PlayerEvent::ItemDidPlayToEnd { .. })));
     }
@@ -239,6 +277,7 @@ mod tests {
             src: Arc::from("track.mp3"),
             item_id: Some(Arc::from("item-1")),
             reason: TrackPlaybackStopReason::Stop,
+            seek_epoch: 0,
         });
         assert!(event.is_none());
     }

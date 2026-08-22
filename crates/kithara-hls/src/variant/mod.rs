@@ -50,6 +50,7 @@ pub(crate) use self::core::VariantParts;
 pub(in crate::variant) use self::{core::segment_placeholder_size, probe::SizeDemand};
 pub(crate) use self::{
     core::{HlsVariant, PlanCtx},
+    dispatch::DispatchTokens,
     profile::VariantReaderPreparation,
     seek::ResolvedSeekProjection,
 };

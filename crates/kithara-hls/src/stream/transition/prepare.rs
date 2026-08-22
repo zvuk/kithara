@@ -151,7 +151,7 @@ impl HlsCoord {
         let reader = OpenedVariantReader::new(plan, reader);
         let outgoing = self.active_session();
         self.sessions
-            .publish_exact_two(outgoing, Arc::clone(&session));
+            .publish_exact_two(Arc::clone(&outgoing), Arc::clone(&session));
         state.incoming = Some(IncomingSlot {
             claim,
             landing_time,
@@ -161,6 +161,11 @@ impl HlsCoord {
             reader: Some(reader),
         });
         drop(state);
+        // The outgoing look-ahead holds the downloader capacity this slot's
+        // construction needs, and its bytes lie past the cut the transition
+        // latches. Retired after the lock drops: cancellation settles claims,
+        // and those settle paths take variant locks of their own.
+        outgoing.retire_lookahead();
         self.signal().wake_peer();
         Ok(Some(transition))
     }

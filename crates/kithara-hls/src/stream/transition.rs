@@ -172,12 +172,21 @@ impl HlsCoord {
     }
 
     /// Fetches for the variant that is audible right now.
+    ///
+    /// While an incoming slot exists the audible session is held to its owed
+    /// window: its look-ahead was retired when the slot was installed, and
+    /// letting the next poll refill it would starve the construction all over
+    /// again — the downloader runs a queued pack only when a slot frees.
     pub(crate) fn dispatch_active(
         &self,
         ctx: &crate::variant::PlanCtx,
         budget: usize,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
-        self.active_session().dispatch(ctx, budget)
+        let session = self.active_session();
+        if self.has_incoming() {
+            return session.dispatch_owed(ctx, budget);
+        }
+        session.dispatch(ctx, budget)
     }
 
     /// Fetches for the variant a switch is preparing.

@@ -9,6 +9,15 @@ use tracing::{debug, warn};
 use super::{HlsVariant, PlanCtx, core::NO_PREFETCH_DEFERRAL};
 use crate::segment::{Downloading, FetchClaim, PlannedFetch};
 
+/// The cancel pair one dispatch rides. `fetch` covers owed work — inits,
+/// size demands, and segments inside the owed window; `lookahead` covers an
+/// audible session's prefetches past it, so a variant transition can retire
+/// them without touching what playback waits on.
+pub(crate) struct DispatchTokens {
+    pub(crate) fetch: CancelToken,
+    pub(crate) lookahead: CancelToken,
+}
+
 impl HlsVariant {
     #[kithara::probe(
         variant = self.variant as u64,
@@ -16,6 +25,11 @@ impl HlsVariant {
         queue_len = self.flow.queue.lock().len() as u64
     )]
     /// Emits prioritized fetches within construction and look-ahead bounds.
+    ///
+    /// Owed fetches ride `tokens.fetch`; an audible session's prefetches past
+    /// the owed window (the playing segment and the next) ride
+    /// `tokens.lookahead`, which a variant transition retires to free
+    /// downloader capacity without touching what playback waits on.
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch_from(
         self: &Arc<Self>,
@@ -24,14 +38,21 @@ impl HlsVariant {
         position: u64,
         construction_segment_end: Option<u32>,
         audible: bool,
-        cancel: CancelToken,
+        tokens: DispatchTokens,
     ) -> Vec<FetchCmd> {
+        let DispatchTokens {
+            fetch: cancel,
+            lookahead,
+        } = tokens;
         let mut out = Vec::new();
         let mut deferred: Vec<PlannedFetch> = Vec::new();
         let owed_through = audible
             .then(|| self.find_at_offset(position).map(|(seg_idx, _, _)| seg_idx))
             .flatten();
         let owed = |seg_idx: u32| !audible || owed_through.is_some_and(|last| seg_idx <= last);
+        let beyond_owed = |seg_idx: u32| {
+            audible && owed_through.is_some_and(|last| seg_idx > last.saturating_add(1))
+        };
         let mut remaining = budget;
         self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
         let prefetch_base = position.max(self.prefetch_anchor());
@@ -124,8 +145,12 @@ impl HlsVariant {
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, cancel.clone())
-                    else {
+                    let token = if beyond_owed(seg_idx) {
+                        lookahead.clone()
+                    } else {
+                        cancel.clone()
+                    };
+                    let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, token) else {
                         // WHY: A reverted claim must remain queued for another acquisition attempt.
                         deferred.push(planned);
                         continue;

@@ -556,6 +556,7 @@ async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
                     src,
                     item_id,
                     reason: TrackPlaybackStopReason::Eof,
+                    ..
                 }
                 if src.as_ref() == "test.mp3"
                     && matches!(item_id, Some(id) if id.as_ref() == "item-1")
@@ -603,6 +604,7 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
                     src,
                     item_id,
                     reason: TrackPlaybackStopReason::Eof,
+                    ..
                 } if src.as_ref() == "test.mp3"
                     && matches!(&item_id, Some(id) if id.as_ref() == "item-1") =>
                 {

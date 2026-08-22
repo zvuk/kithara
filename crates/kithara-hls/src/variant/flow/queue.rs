@@ -89,13 +89,14 @@ impl HlsVariant {
     /// sent the fetch, so a slot returned to `Missing` describes work nobody
     /// holds. The peer then wakes to an empty plan and asks for nothing, and
     /// the segment is never fetched again — playback stops at that gap even
-    /// once the network is back. Front of the queue, because playback is
-    /// waiting on it; only when absent, so a rebuild that already re-planned
-    /// it is not duplicated.
+    /// once the network is back. In plan order, not at the front: dispatch
+    /// caps read the queue head, and a retired look-ahead entry parked there
+    /// would wall off every nearer segment behind it. Only when absent, so a
+    /// rebuild that already re-planned it is not duplicated.
     pub(crate) fn requeue_planned(&self, planned: PlannedFetch) {
         let mut queue = self.flow.queue.lock();
         if !queue.contains(&planned) {
-            queue.push_front(planned);
+            queue.insert_sorted(planned);
         }
     }
 

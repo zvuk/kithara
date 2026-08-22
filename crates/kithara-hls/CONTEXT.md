@@ -72,6 +72,18 @@ so only the reader's consumption can make it stale and only that consumption may
 Popped-but-undispatchable non-terminal entries are pushed back to the queue front, so an orphaned
 `Downloading` slot is re-claimed, never dropped.
 
+While a variant transition is building, the outgoing session yields the downloader to the
+construction. An audible session's prefetches past the owed window (the playing segment and the
+next) ride a rotating `lookahead` cancel token — a child of the session's fetch token, so a seek's
+rearm still burns both. Installing the incoming slot (`prepare_planned_variant_reader`) retires
+that token: queued look-ahead packs deliver cancelled and in-flight ones abort, freeing capacity
+the construction is otherwise starved of — those bytes lie past the cut the transition latches and
+are dead to the splice anyway. Until the transition resolves, `dispatch_active` holds the audible
+session to the same owed window (`dispatch_owed`), or the next poll would refill the look-ahead.
+Retired and recovering fetches re-enter the plan in plan order (`requeue_planned` is an ordered
+insert): dispatch caps read the queue head, and a far look-ahead entry parked at the front would
+wall off every nearer segment behind it.
+
 When the downloader's `soft_timeout` marks an in-flight slot stalled, it wakes the peer immediately
 so `reconcile_escape` can move away from that variant; a stalled reader produces no progress wake.
 Reader progress reaches the downloader peer through one forwarding task. It delivers at most one

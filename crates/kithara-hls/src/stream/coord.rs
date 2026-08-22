@@ -629,6 +629,13 @@ mod tests {
     fn switch_coord_with_reason(
         reason: AbrReason,
     ) -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
+        switch_coord_sized(reason, 1)
+    }
+
+    fn switch_coord_sized(
+        reason: AbrReason,
+        v0_segments: u32,
+    ) -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
         let bus = EventBus::new(8);
         let cancel = CancelToken::never();
         let store = Arc::new(
@@ -656,16 +663,26 @@ mod tests {
             size_probe_method: SizeProbeMethod::Head,
             signal: signal.clone(),
         };
+        let v0_urls: Vec<url::Url> = (0..v0_segments)
+            .map(|idx| {
+                format!("https://example.com/v0-seg{idx}.m4s")
+                    .parse()
+                    .expect("url")
+            })
+            .collect();
         let playlist = Arc::new(PlaylistState::new(vec![
             VariantState {
                 codec: Some(AudioCodec::AacLc),
                 container: Some(ContainerFormat::Fmp4),
                 init_url: None,
-                segments: vec![SegmentState {
-                    url: "https://example.com/v0-seg0.m4s".parse().expect("url"),
-                    duration: Duration::from_secs(2),
-                    byte_range_len: Some(100),
-                }],
+                segments: v0_urls
+                    .iter()
+                    .map(|url| SegmentState {
+                        url: url.clone(),
+                        duration: Duration::from_secs(2),
+                        byte_range_len: Some(100),
+                    })
+                    .collect(),
             },
             VariantState {
                 codec: Some(AudioCodec::Mp3),
@@ -681,20 +698,24 @@ mod tests {
         let variants: Arc<[Arc<HlsVariant>]> = Arc::from(vec![
             VariantParts {
                 init: None,
-                segments: vec![Segment::Media(MediaSegment {
-                    url: "https://example.com/v0-seg0.m4s".parse().expect("url"),
-                    resource_id: ctx
-                        .scope
-                        .key(&AssetResource::Url(
-                            "https://example.com/v0-seg0.m4s".parse().expect("url"),
-                        ))
-                        .expect("segment key"),
-                    state: SegmentSlotState::missing(),
-                    size: SegmentSize::seed(100),
-                    content: SegmentContent::Plain,
-                    decode_time: Duration::ZERO,
-                    duration: Duration::from_secs(2),
-                })],
+                segments: v0_urls
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, url)| {
+                        Segment::Media(MediaSegment {
+                            url: url.clone(),
+                            resource_id: ctx
+                                .scope
+                                .key(&AssetResource::Url(url.clone()))
+                                .expect("segment key"),
+                            state: SegmentSlotState::missing(),
+                            size: SegmentSize::seed(100),
+                            content: SegmentContent::Plain,
+                            decode_time: Duration::from_secs(2) * u32::try_from(idx).expect("idx"),
+                            duration: Duration::from_secs(2),
+                        })
+                    })
+                    .collect(),
                 seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(0),
                 container: playlist.variant_container(0),
@@ -724,31 +745,33 @@ mod tests {
         ]);
         let abr_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let abr_publisher = abr_state.publisher();
-        let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
-            state: Arc::clone(&abr_state),
-            variants: vec![
-                kithara_events::VariantInfo {
-                    variant_index: VariantIndex::new(0),
-                    bandwidth_bps: Some(128_000),
-                    codecs: Some("mp4a.40.2".into()),
-                    container: Some("fmp4".into()),
-                    duration: kithara_events::VariantDuration::Segmented(vec![
-                        Duration::from_secs(2),
+        let peer: Arc<dyn Abr> =
+            Arc::new(TestAbrPeer {
+                state: Arc::clone(&abr_state),
+                variants: vec![
+                    kithara_events::VariantInfo {
+                        variant_index: VariantIndex::new(0),
+                        bandwidth_bps: Some(128_000),
+                        codecs: Some("mp4a.40.2".into()),
+                        container: Some("fmp4".into()),
+                        duration: kithara_events::VariantDuration::Segmented(vec![
+                        Duration::from_secs(2);
+                        v0_segments as usize
                     ]),
-                    name: None,
-                },
-                kithara_events::VariantInfo {
-                    variant_index: VariantIndex::new(1),
-                    bandwidth_bps: Some(96_000),
-                    codecs: Some("mp3".into()),
-                    container: Some("mpeg-audio".into()),
-                    duration: kithara_events::VariantDuration::Segmented(vec![
-                        Duration::from_secs(2),
-                    ]),
-                    name: None,
-                },
-            ],
-        });
+                        name: None,
+                    },
+                    kithara_events::VariantInfo {
+                        variant_index: VariantIndex::new(1),
+                        bandwidth_bps: Some(96_000),
+                        codecs: Some("mp3".into()),
+                        container: Some("mpeg-audio".into()),
+                        duration: kithara_events::VariantDuration::Segmented(vec![
+                            Duration::from_secs(2),
+                        ]),
+                        name: None,
+                    },
+                ],
+            });
         let controller = Arc::new(AbrController::new(AbrSettings::default()));
         let handle = controller.register(&peer);
         abr_state.request_target(VariantIndex::new(1), reason);
@@ -1668,5 +1691,71 @@ mod tests {
             .expect("manual selection survives epoch change");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
         assert_eq!(replacement.id().seek_epoch(), next_epoch);
+    }
+
+    fn v0_seg_idx(cmd: &kithara_stream::dl::FetchCmd) -> u32 {
+        cmd.url()
+            .path()
+            .trim_start_matches("/v0-seg")
+            .trim_end_matches(".m4s")
+            .parse()
+            .expect("v0 segment url")
+    }
+
+    /// Installing the incoming slot retires the outgoing session's look-ahead.
+    /// Those fetches hold the downloader capacity the construction is waiting
+    /// on, and their bytes lie past the cut the transition latches — measured
+    /// on an urgent down-switch, five in-flight look-ahead prefetches kept the
+    /// incoming variant's construction queued for seconds.
+    #[kithara::test]
+    fn prepare_retires_the_outgoing_lookahead() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild(&ctx, 0);
+        let cmds = coord.dispatch_active(&ctx, 10);
+        assert_eq!(cmds.len(), 6, "precondition: the look-ahead is in flight");
+
+        prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        for cmd in &cmds {
+            let seg = v0_seg_idx(cmd);
+            if seg <= 1 {
+                continue;
+            }
+            assert!(
+                cmd.cancel()
+                    .expect("segment cmd carries a cancel token")
+                    .is_cancelled(),
+                "outgoing look-ahead fetch for segment {seg} must be retired"
+            );
+        }
+    }
+
+    /// While the incoming slot exists, the audible session re-dispatches only
+    /// its owed window; a retire that refills the look-ahead on the next poll
+    /// would starve the construction all over again.
+    #[kithara::test]
+    fn dispatch_active_is_capped_while_a_transition_builds() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild(&ctx, 0);
+        let cmds = coord.dispatch_active(&ctx, 10);
+        assert_eq!(cmds.len(), 6, "precondition: the look-ahead is in flight");
+        prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        drop(cmds);
+
+        let refill = coord.dispatch_active(&ctx, 10);
+
+        let beyond: Vec<u32> = refill
+            .iter()
+            .map(v0_seg_idx)
+            .filter(|seg| *seg > 1)
+            .collect();
+        assert!(
+            beyond.is_empty(),
+            "capped dispatch re-emitted look-ahead segments {beyond:?}"
+        );
     }
 }

@@ -78,6 +78,7 @@ impl PlayerTrack {
                 src: Arc::clone(self.src()),
                 item_id: self.item_id.clone(),
                 reason: TrackPlaybackStopReason::Failed,
+                seek_epoch: self.seek_epoch,
             })
             .ok();
         self.state_dirty = false;
@@ -163,6 +164,7 @@ impl PlayerTrack {
                 src: Arc::clone(self.src()),
                 item_id: self.item_id.clone(),
                 reason: TrackPlaybackStopReason::Eof,
+                seek_epoch: self.seek_epoch,
             })
             .ok();
         self.state_dirty = false;
@@ -228,6 +230,7 @@ impl PlayerTrack {
                 src: Arc::clone(self.src()),
                 item_id: self.item_id.clone(),
                 reason: TrackPlaybackStopReason::Stop,
+                seek_epoch: self.seek_epoch,
             },
         };
 

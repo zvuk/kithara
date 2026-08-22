@@ -226,6 +226,19 @@ where
         let peer_wake = shared_stream.peer_wake();
         let seek_prepare = shared_stream.seek_prepare();
         let emit = AudioEvents::deferred(&bus);
+        // Publish the initial decoder events before the worker holds the
+        // decoder: a registered track may decode its first chunk and flush
+        // `FormatDetected` immediately, and `DecoderChanged { Initial }`
+        // must reach the bus first.
+        publish_initial_decoder_events(
+            &bus,
+            &deps,
+            &host_sample_rate,
+            initial_media_info.as_ref(),
+            initial_spec,
+            &initial_track_info,
+            total_duration,
+        );
         let registered = register_stream_audio_source(StreamSourceRegistration {
             decoder,
             effects,
@@ -249,15 +262,6 @@ where
             recreate_on_host_rate_change: true,
             worker: config_worker,
         });
-        publish_initial_decoder_events(
-            &bus,
-            &deps,
-            &host_sample_rate,
-            initial_media_info.as_ref(),
-            initial_spec,
-            &initial_track_info,
-            total_duration,
-        );
 
         let ring = RingConsumer::new(RingParts {
             block_on_underrun,

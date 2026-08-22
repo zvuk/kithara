@@ -2146,3 +2146,117 @@ fn wait_range_flush_short_circuits_without_sleeping() {
         "flush short-circuit must not sleep; took {elapsed:?}"
     );
 }
+
+fn seg_idx_by_url(v: &HlsVariant, url: &Url) -> u32 {
+    let idx = v
+        .segments()
+        .iter()
+        .position(|seg| seg.url() == url)
+        .expect("cmd url belongs to the variant");
+    u32::try_from(idx).expect("segment index fits u32")
+}
+
+/// While a variant transition is building, the audible session may hold only
+/// its owed window — the playing segment and the next. The look-ahead it
+/// would otherwise queue is what starves the incoming construction.
+#[kithara::test]
+fn dispatch_owed_stops_after_the_next_segment() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+
+    let cmds = session.dispatch_owed(&ctx, 10);
+
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![v.segments()[0].url().clone(), v.segments()[1].url().clone(),],
+        "position 0 owes segment 0 and its successor, nothing further"
+    );
+}
+
+/// Retiring the look-ahead burns the tokens of fetches past the owed window,
+/// so the downloader frees their slots instead of finishing bytes the latched
+/// cut already declared dead.
+#[kithara::test]
+fn retire_lookahead_burns_fetches_beyond_the_owed_window() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 10);
+    assert_eq!(cmds.len(), 6, "precondition: every segment dispatches");
+
+    session.retire_lookahead();
+
+    for cmd in &cmds {
+        let seg = seg_idx_by_url(&v, cmd.url());
+        if seg <= 1 {
+            continue;
+        }
+        assert!(
+            cmd.cancel()
+                .expect("segment cmd carries a cancel token")
+                .is_cancelled(),
+            "look-ahead fetch for segment {seg} must be retired"
+        );
+    }
+}
+
+/// The owed window survives a look-ahead retire: the reader is still
+/// consuming those bytes and cancelling them would underrun the splice.
+#[kithara::test]
+fn retire_lookahead_spares_the_owed_window() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 10);
+    assert_eq!(cmds.len(), 6, "precondition: every segment dispatches");
+
+    session.retire_lookahead();
+
+    for cmd in &cmds {
+        let seg = seg_idx_by_url(&v, cmd.url());
+        if seg > 1 {
+            continue;
+        }
+        assert!(
+            !cmd.cancel()
+                .expect("segment cmd carries a cancel token")
+                .is_cancelled(),
+            "owed fetch for segment {seg} must stay live"
+        );
+    }
+}
+
+/// A recoverably failed fetch re-enters the plan in plan order, not at the
+/// front: dispatch caps read the queue head, and a far look-ahead entry
+/// parked there would wall off every nearer segment behind it.
+#[kithara::test]
+fn requeue_planned_reenters_in_plan_order() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    {
+        let mut queue = v.flow.queue.lock();
+        for _ in 0..3 {
+            queue.pop_front();
+        }
+    }
+
+    v.requeue_planned(PlannedFetch::Segment(0));
+    v.requeue_planned(PlannedFetch::Segment(2));
+
+    let queue: Vec<_> = v.flow.queue.lock().iter().copied().collect();
+    assert_eq!(
+        queue,
+        vec![
+            PlannedFetch::Segment(0),
+            PlannedFetch::Segment(2),
+            PlannedFetch::Segment(3),
+        ],
+        "requeued fetches must land between their plan-order neighbours"
+    );
+}

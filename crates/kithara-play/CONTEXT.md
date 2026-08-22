@@ -236,6 +236,15 @@ the signal: `apply_seek` re-bases *every* loaded track onto the applied epoch �
 the seek does not move — and a track planted later starts at the epoch already published, so no track
 can be born behind. `Failed` is not held: a broken source stays broken across a seek.
 
+The refusal covers only ends not yet minted. An end the track finalized *honestly* — epochs equal
+at mint time — sits in the slot's notification ring until the control thread drains it, and a seek
+published in that window revives the track (`apply_seek` re-bases a `Finished`-at-EOF track back to
+life) while the stale report is still queued. So every `PlaybackStopped` carries the epoch its track
+sat at when minted, and `dispatch_notification` drops an `Eof` whose epoch is no longer the
+published one (`slot_playback().seek_epoch`). The comparison is `!=`, not `<`: epochs wrap, and
+withdrawal legally steps the published value back. `Stop` and `Failed` are never fenced, and a slot
+with no playback state delivers as-is.
+
 Publishing is a promise that a re-base is coming, and the send can fail — a full slot command ring
 answers `PlayError::SlotChannelFull`. A promise nobody carries would hold the natural end forever, so
 `seek_seconds` withdraws the epoch on a send error (`PlaybackShared::withdraw_seek_epoch`).

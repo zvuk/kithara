@@ -125,6 +125,12 @@ pub enum PlayerNotification {
         src: Arc<str>,
         item_id: Option<Arc<str>>,
         reason: TrackPlaybackStopReason,
+        /// The slot seek epoch the track sat at when this stop was minted.
+        /// An `Eof` stop is delivered only while this is still the published
+        /// epoch: a newer published seek revives the track, and the end the
+        /// user left behind must not reach the queue. `Stop` and `Failed`
+        /// carry the epoch too but are never fenced on it.
+        seek_epoch: u64,
     },
     /// The next track should be loaded into the processor (position
     /// reached the prefetch lead window before EOF). Preload-only —
@@ -181,6 +187,7 @@ mod tests {
             src: Arc::from("ended.mp3"),
             item_id: Some(Arc::from("item-1")),
             reason: TrackPlaybackStopReason::Eof,
+            seek_epoch: 0,
         },
         "PlaybackStopped"
     )]
@@ -195,6 +202,7 @@ mod tests {
             src: Arc::from("ended.mp3"),
             item_id: None,
             reason: TrackPlaybackStopReason::Stop,
+            seek_epoch: 0,
         };
         let cloned = n.clone();
         assert!(matches!(

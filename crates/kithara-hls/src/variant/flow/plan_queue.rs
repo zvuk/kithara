@@ -100,6 +100,19 @@ impl PlanGuard<'_> {
         PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
     }
 
+    /// Insert keeping plan order (`Init` first, segments ascending). The
+    /// queue is built sorted and every mutation preserves that, so a single
+    /// ordered insert is enough.
+    pub(in crate::variant) fn insert_sorted(&mut self, planned: PlannedFetch) {
+        let at = self
+            .queue
+            .iter()
+            .position(|queued| *queued > planned)
+            .unwrap_or(self.queue.len());
+        self.queue.insert(at, planned);
+        PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
+    }
+
     #[cfg(test)]
     pub(in crate::variant) fn push_back(&mut self, planned: PlannedFetch) {
         self.queue.push_back(planned);

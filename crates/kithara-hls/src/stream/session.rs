@@ -58,10 +58,6 @@ struct SessionPosition {
 }
 
 impl HlsSession {
-    pub(crate) fn abort(&self) {
-        self.cancel.abort();
-    }
-
     pub(crate) fn activate(&self) {
         self.active.store(true, Ordering::Release);
     }
@@ -107,6 +103,15 @@ impl HlsSession {
     }
 
     delegate::delegate! {
+        to self.cancel {
+            pub(crate) fn abort(&self);
+            /// Retire this session's look-ahead fetches — queued and in
+            /// flight — while keeping the owed window live. Called when an
+            /// incoming variant slot is installed: the capacity those fetches
+            /// hold is what the construction needs, and their bytes lie past
+            /// the cut the transition latches.
+            pub(crate) fn retire_lookahead(&self);
+        }
         to self.signal {
             pub(crate) fn arm_peer(&self);
             /// Ask the peer to plan for a session that answered [`Self::is_ready`] with
@@ -169,8 +174,25 @@ impl HlsSession {
             self.projected_position().byte,
             construction_segment_end,
             self.active.load(Ordering::Acquire),
-            self.cancel.handle(),
+            self.cancel.dispatch_tokens(),
         )
+    }
+
+    /// Fetches for the audible session while a variant transition is building.
+    ///
+    /// Capped at the owed window — the playing segment and the next — so the
+    /// outgoing look-ahead cannot hold downloader capacity the incoming
+    /// construction is waiting on. Everything past the latched cut is dead to
+    /// the splice anyway; only the frontier the reader is consuming stays owed.
+    pub(crate) fn dispatch_owed(
+        &self,
+        ctx: &crate::variant::PlanCtx,
+        budget: usize,
+    ) -> Vec<kithara_stream::dl::FetchCmd> {
+        let owed_end = self
+            .find_at_offset(self.projected_position().byte)
+            .map(|(seg_idx, _, _)| seg_idx.saturating_add(1));
+        self.dispatch_capped(ctx, budget, owed_end)
     }
 
     /// Fetches for an incoming session whose reader has not been handed to a

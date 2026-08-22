@@ -242,8 +242,10 @@ impl Drop for DownloadClaim {
 
 /// One unit of pending fetch work for the variant. `Init` is the only
 /// non-segment entry — placed at the front of the queue by `rebuild` so
-/// the fMP4 init prefix is fetched before any media segment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// the fMP4 init prefix is fetched before any media segment. The derived
+/// order (`Init` first, segments ascending) is the plan order the queue
+/// keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum PlannedFetch {
     Init,
     Segment(u32),
