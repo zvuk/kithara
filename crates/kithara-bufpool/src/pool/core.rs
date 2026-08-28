@@ -92,7 +92,11 @@ where
     /// Return a buffer to the pool.
     pub fn put(&self, value: T, shard_idx: usize) {
         let bytes = value.byte_size();
-        if !self.shards[shard_idx].try_put(value) {
+        // A trimmed return handed memory back; the budget holds the charge the
+        // buffer carried at its widest until it is told.
+        if let Ok(kept) = self.shards[shard_idx].try_put(value) {
+            self.release_budget(bytes.saturating_sub(kept));
+        } else {
             self.release_budget(bytes);
             self.stat_put_drops.fetch_add(1, Ordering::Relaxed);
         }

@@ -218,3 +218,41 @@ fn amortized_growth_falls_back_to_exact_fit_under_budget() {
     assert_eq!(bytes.capacity(), 6);
     assert_eq!(region.stats().allocated_bytes, 6);
 }
+
+/// Default PCM policy trims a returned buffer to 200_000 elements once its
+/// capacity is past twice that.
+const PCM_TRIM_LEN: usize = 200_000;
+
+#[kithara::test]
+fn a_trimmed_return_releases_what_it_gave_back() {
+    let region = Region::new(RegionConfig::default());
+    let pcm_pool = region.pcm_pool();
+
+    let mut buf = pcm_pool.get();
+    buf.ensure_len(PCM_TRIM_LEN * 4).unwrap();
+    let charged = region.stats().allocated_bytes;
+    drop(buf);
+
+    assert!(
+        region.stats().allocated_bytes < charged,
+        "a return that shrank the buffer still holds {} of the {charged} bytes it charged",
+        region.stats().allocated_bytes
+    );
+}
+
+#[kithara::test]
+fn cycling_one_oversized_buffer_does_not_drain_the_budget() {
+    let region = Region::new(RegionConfig::default());
+    let pcm_pool = region.pcm_pool();
+
+    for _ in 0..64 {
+        let mut buf = pcm_pool.get();
+        buf.ensure_len(PCM_TRIM_LEN * 4).unwrap();
+    }
+
+    let held = region.stats().allocated_bytes;
+    assert!(
+        held < PCM_TRIM_LEN * 4 * size_of::<f32>() * 2,
+        "reusing one buffer 64 times charges {held} bytes"
+    );
+}

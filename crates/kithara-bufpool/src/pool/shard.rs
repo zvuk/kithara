@@ -38,12 +38,14 @@ where
 
     /// Try to return a buffer to this shard.
     ///
-    /// Trims via [`Reuse::reuse`] before storing. Returns `false` when the
-    /// value is unfit for reuse or the queue is full; the caller drops it.
-    pub(super) fn try_put(&self, mut value: T) -> bool {
+    /// Trims via [`Reuse::reuse`] before storing. `Ok` carries the bytes the
+    /// shard kept, which the trim may have cut below what the caller charged;
+    /// `Err` hands the value back for the caller to drop.
+    pub(super) fn try_put(&self, mut value: T) -> Result<usize, T> {
         if !value.reuse(self.trim_capacity) {
-            return false;
+            return Err(value);
         }
-        self.free.push(value).is_ok()
+        let kept = value.byte_size();
+        self.free.push(value).map(|()| kept)
     }
 }
