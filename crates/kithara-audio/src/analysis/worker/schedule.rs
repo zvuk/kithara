@@ -13,17 +13,22 @@ pub(crate) struct Schedule {
 }
 
 impl Schedule {
-    pub(crate) fn next(&self, coverage: &Coverage, extent: Option<u64>) -> Option<u64> {
+    pub(crate) fn next(
+        &self,
+        coverage: &Coverage,
+        extent: Option<u64>,
+        window: Option<u64>,
+    ) -> Option<u64> {
         let mut widest: Option<FrameRange> = None;
         for gap in coverage.gaps(extent?) {
-            if self.barren.contains(&middle(gap)) {
+            if self.barren.contains(&aim(gap, window)) {
                 continue;
             }
             if widest.is_none_or(|held| gap.frames() > held.frames()) {
                 widest = Some(gap);
             }
         }
-        widest.map(middle)
+        widest.map(|gap| aim(gap, window))
     }
 
     pub(crate) fn barren(&mut self, at: u64) {
@@ -52,8 +57,19 @@ impl Extent {
     }
 }
 
-fn middle(range: FrameRange) -> u64 {
-    range.start().saturating_add(range.frames() / 2)
+// A run reaches a window past where it starts, so what is placed is that
+// window and not a point. It sits in the middle of a gap wider than itself,
+// which is what spreads early coverage over the track, and at the gap's own
+// start once one run can close it. Aiming at the middle either way would
+// leave the front of every gap behind and halve it again next time.
+fn aim(gap: FrameRange, window: Option<u64>) -> u64 {
+    let Some(inset) = window
+        .filter(|window| gap.frames() > *window)
+        .map(|window| (gap.frames() - window) / 2)
+    else {
+        return gap.start();
+    };
+    gap.start().saturating_add(inset)
 }
 
 fn extent_frames(duration: Option<Duration>, rate: NonZeroU32) -> Option<u64> {
@@ -71,7 +87,12 @@ mod tests {
     use super::{Extent, Schedule};
     use crate::coverage::{Coverage, FrameRange};
 
-    const EXTENT: u64 = 1000;
+    struct Consts;
+
+    impl Consts {
+        const EXTENT: u64 = 1000;
+        const WINDOW: u64 = 200;
+    }
 
     fn coverage(runs: &[(u64, u64)]) -> Coverage {
         let mut out = Coverage::default();
@@ -82,21 +103,30 @@ mod tests {
     }
 
     #[kithara::test]
-    fn an_uncovered_track_is_split_in_the_middle() {
+    fn an_untouched_track_takes_the_window_from_its_middle() {
         let schedule = Schedule::default();
         assert_eq!(
-            schedule.next(&Coverage::default(), Some(EXTENT)),
-            Some(500),
-            "the largest uncovered range of an untouched track is the track"
+            schedule.next(
+                &Coverage::default(),
+                Some(Consts::EXTENT),
+                Some(Consts::WINDOW)
+            ),
+            Some(400),
+            "the run spans [400, 600), which is the middle of the track"
         );
     }
 
     #[kithara::test]
-    fn a_hole_is_taken_from_its_middle() {
+    fn a_hole_one_run_can_close_is_taken_from_its_start() {
         let schedule = Schedule::default();
         assert_eq!(
-            schedule.next(&coverage(&[(0, 200), (400, 600)]), Some(EXTENT)),
-            Some(300)
+            schedule.next(
+                &coverage(&[(0, 200), (400, 600)]),
+                Some(Consts::EXTENT),
+                Some(Consts::WINDOW)
+            ),
+            Some(200),
+            "a run from the middle of this hole would leave its front behind"
         );
     }
 
@@ -105,23 +135,71 @@ mod tests {
         let schedule = Schedule::default();
         // Holes of 100 and 300 frames; the second one is the wider.
         let covered = coverage(&[(0, 100), (200, 200), (700, 300)]);
-        assert_eq!(covered.gaps(EXTENT).len(), 2, "two holes to choose between");
-        assert_eq!(schedule.next(&covered, Some(EXTENT)), Some(550));
+        assert_eq!(
+            covered.gaps(Consts::EXTENT).len(),
+            2,
+            "two holes to choose between"
+        );
+        assert_eq!(
+            schedule.next(&covered, Some(Consts::EXTENT), Some(Consts::WINDOW)),
+            Some(450)
+        );
+    }
+
+    #[kithara::test]
+    fn an_unbounded_run_is_aimed_at_the_start_of_its_gap() {
+        let schedule = Schedule::default();
+        assert_eq!(
+            schedule.next(&coverage(&[(600, 400)]), Some(Consts::EXTENT), None),
+            Some(0),
+            "a run with no window decodes to the end, so only its start matters"
+        );
+    }
+
+    #[kithara::test]
+    fn every_gap_closes_in_a_bounded_number_of_runs() {
+        // Each choice covers the window it was aimed at, the way a run does.
+        let schedule = Schedule::default();
+        let mut covered = Coverage::default();
+        let mut runs = 0;
+
+        while let Some(at) = schedule.next(&covered, Some(Consts::EXTENT), Some(Consts::WINDOW)) {
+            covered.insert(FrameRange::new(at, Consts::WINDOW));
+            runs += 1;
+            assert!(
+                runs <= 2 * Consts::EXTENT.div_ceil(Consts::WINDOW),
+                "a choice that leaves the front of its gap behind never converges: {:?}",
+                covered.runs()
+            );
+        }
+
+        assert!(
+            covered.contains(FrameRange::new(0, Consts::EXTENT)),
+            "the track is covered, not approached: {:?}",
+            covered.gaps(Consts::EXTENT)
+        );
     }
 
     #[kithara::test]
     fn a_covered_extent_schedules_nothing() {
         let schedule = Schedule::default();
-        assert_eq!(schedule.next(&coverage(&[(0, EXTENT)]), Some(EXTENT)), None);
+        assert_eq!(
+            schedule.next(
+                &coverage(&[(0, Consts::EXTENT)]),
+                Some(Consts::EXTENT),
+                Some(Consts::WINDOW)
+            ),
+            None
+        );
     }
 
     #[kithara::test]
     fn nothing_is_scheduled_without_an_extent() {
         let schedule = Schedule::default();
         assert_eq!(
-            schedule.next(&coverage(&[(0, 200)]), None),
+            schedule.next(&coverage(&[(0, 200)]), None, Some(Consts::WINDOW)),
             None,
-            "a source that reports no duration has no middle to seek to"
+            "a source that reports no duration has no span to place a run in"
         );
     }
 
@@ -129,19 +207,22 @@ mod tests {
     fn a_position_that_added_nothing_is_not_chosen_again() {
         let mut schedule = Schedule::default();
         let covered = coverage(&[(0, 100), (200, 200), (700, 300)]);
-        assert_eq!(schedule.next(&covered, Some(EXTENT)), Some(550));
-
-        // The seek to 550 snapped back into covered audio and added nothing.
-        schedule.barren(550);
         assert_eq!(
-            schedule.next(&covered, Some(EXTENT)),
-            Some(150),
+            schedule.next(&covered, Some(Consts::EXTENT), Some(Consts::WINDOW)),
+            Some(450)
+        );
+
+        // The seek to 450 snapped back into covered audio and added nothing.
+        schedule.barren(450);
+        assert_eq!(
+            schedule.next(&covered, Some(Consts::EXTENT), Some(Consts::WINDOW)),
+            Some(100),
             "the next choice comes from what is still uncovered"
         );
 
-        schedule.barren(150);
+        schedule.barren(100);
         assert_eq!(
-            schedule.next(&covered, Some(EXTENT)),
+            schedule.next(&covered, Some(Consts::EXTENT), Some(Consts::WINDOW)),
             None,
             "a pass with nowhere left to reach is finished, not spinning"
         );

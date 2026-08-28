@@ -37,6 +37,7 @@ where
     pub(super) fingerprint: AnalysisFingerprint,
     pub(super) extent: Option<u64>,
     pub(super) revision: u64,
+    pub(super) settled: bool,
     #[field(get, copy, vis = "pub(crate)")]
     pub(super) source_sample_rate: NonZeroU32,
     pub(super) token: AnalysisToken,
@@ -54,6 +55,11 @@ where
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn plan_extent(&mut self, frames: u64) {
         self.extent = Some(self.extent.map_or(frames, |held| held.max(frames)));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) const fn settle(&mut self) {
+        self.settled = true;
     }
 
     pub(crate) fn covered_frames(&self) -> u64 {
@@ -145,6 +151,7 @@ where
             .maybe_extent(self.extent)
             .coverage(self.coverage.clone())
             .fingerprint(self.fingerprint.clone())
+            .settled(self.settled)
             .maybe_waveform(waveform)
             .maybe_beat(beat)
             .build()

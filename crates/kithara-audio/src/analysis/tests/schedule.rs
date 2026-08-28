@@ -53,6 +53,7 @@ struct Source {
     reports: Option<u64>,
     chunk: u64,
     snap: u64,
+    floor: u64,
     refines: bool,
     stalls: bool,
     echoes: bool,
@@ -69,6 +70,7 @@ impl Source {
             reports: Some(frames),
             chunk: Consts::CHUNK,
             snap: 1,
+            floor: 0,
             refines: false,
             stalls: false,
             echoes: false,
@@ -83,6 +85,10 @@ impl Source {
 
     fn snapping(self, snap: u64) -> Self {
         Self { snap, ..self }
+    }
+
+    fn flooring(self, floor: u64) -> Self {
+        Self { floor, ..self }
     }
 
     fn reporting(self, frames: Option<u64>) -> Self {
@@ -208,7 +214,10 @@ impl PcmControl for Source {
             });
         }
 
-        let landed = target.saturating_div(self.snap).saturating_mul(self.snap);
+        let landed = target
+            .saturating_div(self.snap)
+            .saturating_mul(self.snap)
+            .max(self.floor);
         self.at = landed;
         self.push(Call::Seek { to: target, landed });
         let reported = if self.echoes { target } else { landed };
@@ -332,6 +341,14 @@ fn decoded_at(calls: &[Call]) -> Vec<u64> {
         .collect()
 }
 
+/// Runs it takes to cover the fixture track at best: its length over the
+/// window one run carries. A schedule that leaves part of a gap behind pays
+/// a halving sequence on top of this, which is what the bound catches.
+fn least_runs() -> usize {
+    let window = u64::from(SR).saturating_mul(u64::from(Consts::WINDOW_SECONDS));
+    usize::try_from(Consts::EXTENT.div_ceil(window)).unwrap_or(usize::MAX)
+}
+
 fn run_lengths(calls: &[Call]) -> Vec<usize> {
     let mut out = Vec::new();
     for call in calls {
@@ -356,14 +373,15 @@ fn a_scheduled_pass_seeks_before_it_decodes_anything() {
     );
     pass.drive(2);
 
+    // A one-second run inside a four-second track spans [1.5s, 2.5s).
     assert_eq!(
         pass.calls().first(),
         Some(&Call::Seek {
-            to: Consts::EXTENT / 2,
-            landed: Consts::EXTENT / 2,
+            to: 66_150,
+            landed: 66_150,
         }),
-        "the source reports its length, so the middle is known before the \
-         first chunk is decoded"
+        "the source reports its length, so where the run goes is known before \
+         the first chunk is decoded"
     );
 }
 
@@ -381,8 +399,8 @@ fn a_growing_duration_replaces_the_one_the_schedule_had() {
     pass.drive(2);
     assert_eq!(
         targets(&pass.calls()),
-        vec![short / 2],
-        "the first choice is the middle of the length reported so far"
+        vec![22_050],
+        "the first run is placed inside the length reported so far"
     );
 
     assert!(pass.drive(Consts::TICKS), "the pass ends");
@@ -406,7 +424,7 @@ fn a_run_starts_where_the_seek_landed_and_the_next_choice_follows_it() {
     assert_eq!(
         calls.first(),
         Some(&Call::Seek {
-            to: 88_200,
+            to: 66_150,
             landed: 60_000,
         })
     );
@@ -417,15 +435,38 @@ fn a_run_starts_where_the_seek_landed_and_the_next_choice_follows_it() {
     );
 
     // Five chunks make the one-second run, so the coverage is
-    // [60 000, 104 100); the wider of the two gaps left is the tail, and its
-    // middle is 140 250. Had the schedule planned on the requested 88 200,
-    // the head would have looked like the wider gap instead.
+    // [60 000, 104 100); the wider of the two gaps left is the tail, and a
+    // run centred in it starts at 118 200. Had the schedule planned on the
+    // requested 66 150, the head would have looked like the wider gap.
     pass.drive(Consts::TICKS);
     let next = targets(&pass.calls()).get(1).copied().unwrap_or(0);
     assert!(
-        next.abs_diff(140_250) <= 1,
+        next.abs_diff(118_200) <= 1,
         "the next choice is computed from what was covered, not from what \
          was asked for: {next}"
+    );
+}
+
+#[kithara::test]
+fn covering_a_track_costs_the_runs_its_window_divides_it_into() {
+    let mut pass = Pass::open(
+        Source::new(Consts::EXTENT),
+        scheduled(Consts::WINDOW_SECONDS),
+    );
+    assert!(pass.drive(Consts::TICKS), "the pass ends");
+
+    let analysis = pass.analysis();
+    assert!(
+        analysis.is_complete(),
+        "a reader that can seek anywhere leaves nothing behind: {:?}",
+        analysis.missing()
+    );
+    let runs = targets(&pass.calls()).len();
+    assert!(
+        runs <= 2 * least_runs(),
+        "{runs} runs for a track {least} of them cover: the schedule is \
+         approaching its gaps rather than closing them",
+        least = least_runs()
     );
 }
 
@@ -573,13 +614,36 @@ fn a_snapshot_published_early_describes_the_whole_track() {
 }
 
 #[kithara::test]
-fn a_source_that_snaps_out_of_its_own_gaps_still_finishes() {
-    // Seeks land on whole 30 000 frames, so once the coverage is dense the
-    // schedule keeps asking for positions the reader answers with audio it
-    // already holds. Each such position costs one chunk to find out and is
-    // then retired, which is what bounds this.
+fn a_snapping_source_has_its_gaps_closed_rather_than_halved() {
+    // Seeks land on whole 30 000 frames, so a run aimed at a gap's start
+    // begins in covered audio and has to read through it to get there.
     let mut pass = Pass::open(
         Source::new(Consts::EXTENT).snapping(30_000),
+        scheduled(Consts::WINDOW_SECONDS),
+    );
+
+    assert!(pass.drive(Consts::TICKS), "the pass ends");
+    let analysis = pass.analysis();
+    assert!(
+        analysis.is_complete(),
+        "a gap one run can span must be closed, not halved: {:?}",
+        analysis.missing()
+    );
+    let runs = targets(&pass.calls()).len();
+    assert!(
+        runs <= 2 * least_runs(),
+        "closing the track must cost runs, not a halving sequence: {runs} runs"
+    );
+}
+
+#[kithara::test]
+fn a_source_that_snaps_out_of_its_own_gaps_still_finishes() {
+    // Seeks land on whole 88 200 frames, so the two gaps left between them
+    // are further from a landing than a run is long: the run spends its
+    // window on covered audio and never reaches them. Each such position
+    // costs one run to find out and is then retired, which bounds this.
+    let mut pass = Pass::open(
+        Source::new(Consts::EXTENT).snapping(88_200),
         scheduled(Consts::WINDOW_SECONDS),
     );
 
@@ -589,23 +653,81 @@ fn a_source_that_snaps_out_of_its_own_gaps_still_finishes() {
     );
     let analysis = pass.analysis();
     assert!(
-        analysis.coverage().frames() > Consts::EXTENT / 2,
+        analysis.coverage().frames() >= Consts::EXTENT / 2,
         "what the reader can reach is still covered: {}",
         analysis.coverage().frames()
     );
-    let calls = pass.calls().len();
+    let runs = targets(&pass.calls()).len();
     assert!(
-        calls < 200,
-        "an unreachable position must be retired, not retried: {calls} calls"
+        runs <= 2 * least_runs(),
+        "an unreachable position must be retired, not retried: {runs} runs"
+    );
+}
+
+#[kithara::test]
+fn a_head_the_source_cannot_reach_is_retired_after_one_chunk() {
+    // Encoder priming: the decoder's first output frame is 1000, so nothing
+    // in front of it is a position any seek can be answered with.
+    const FLOOR: u64 = 1000;
+    let mut pass = Pass::open(
+        Source::new(Consts::EXTENT).flooring(FLOOR),
+        scheduled(Consts::WINDOW_SECONDS),
+    );
+    assert!(pass.drive(Consts::TICKS), "the pass ends");
+
+    assert_eq!(
+        pass.analysis().missing(),
+        vec![FrameRange::new(0, FLOOR)],
+        "only what the source cannot deliver is left over"
+    );
+    let lengths = run_lengths(&pass.calls());
+    assert_eq!(
+        lengths.last().copied().unwrap_or(0),
+        1,
+        "one chunk is enough to learn the aim cannot be met: {lengths:?}"
+    );
+}
+
+#[kithara::test]
+fn a_pass_with_nothing_left_to_reach_is_settled() {
+    const FLOOR: u64 = 1000;
+    let mut pass = Pass::open(
+        Source::new(Consts::EXTENT).flooring(FLOOR),
+        scheduled(Consts::WINDOW_SECONDS),
+    );
+    assert!(pass.drive(Consts::TICKS), "the pass ends");
+
+    let analysis = pass.analysis();
+    assert!(
+        !analysis.is_complete(),
+        "the head of this source is out of its own reach"
+    );
+    assert!(
+        analysis.is_settled(),
+        "a pass with nowhere left to go holds what the content gives"
+    );
+}
+
+#[kithara::test]
+fn a_pass_its_reader_cut_short_is_not_settled() {
+    let mut pass = Pass::open(
+        Source::new(Consts::EXTENT).failing_after(3),
+        scheduled(Consts::WINDOW_SECONDS),
+    );
+    assert!(pass.drive(Consts::TICKS), "the failed reader ends the pass");
+
+    assert!(
+        !pass.analysis().is_settled(),
+        "a pass that still had ranges to reach must not pass for a finished one"
     );
 }
 
 #[kithara::test]
 fn a_pass_that_gave_up_still_reports_what_it_never_reached() {
-    // Seeks land on whole 30 000 frames, so the schedule retires positions
+    // Seeks land on whole 88 200 frames, so the schedule retires positions
     // it cannot reach and ends with the track only partly covered.
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).snapping(30_000),
+        Source::new(Consts::EXTENT).snapping(88_200),
         scheduled(Consts::WINDOW_SECONDS),
     );
     assert!(pass.drive(Consts::TICKS), "the pass ends");
@@ -727,7 +849,7 @@ mod artifacts {
     use super::{
         super::{
             super::{analyzer::AnalyzerBuilder, beat::GridParams},
-            fixtures::{Artifacts, artifacts, assert_agrees, beat_detector},
+            fixtures::{Artifacts, SR, artifacts, assert_agrees, beat_detector},
         },
         Consts, Pass, Source, targets,
     };
@@ -741,6 +863,13 @@ mod artifacts {
         artifacts: Artifacts,
         seeks: usize,
         reclaimed: bool,
+    }
+
+    /// Runs it takes to cover this track at best: its length over the window
+    /// one run carries.
+    fn least_runs() -> usize {
+        let window = u64::from(SR).saturating_mul(u64::from(WINDOW_SECONDS));
+        usize::try_from(EXTENT.div_ceil(window)).unwrap_or(usize::MAX)
     }
 
     fn beat_pass() -> AnalyzerBuilder<RubatoBackend> {
@@ -794,6 +923,11 @@ mod artifacts {
         assert!(
             scheduled.seeks > 1,
             "the other route must really have been scheduled, not read in order"
+        );
+        assert!(
+            scheduled.seeks <= 2 * least_runs(),
+            "the same artifacts must not cost a halving sequence to reach: {} runs",
+            scheduled.seeks
         );
         assert!(
             linear.reclaimed && scheduled.reclaimed,

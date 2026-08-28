@@ -138,13 +138,15 @@ impl TrackAnalysisCache {
         if analysis.waveform().is_none() && analysis.beat().is_none() {
             return;
         }
-        // A pass publishes while it decodes, so a run that ends early leaves a
+        // A pass publishes while it decodes, so a run cut short leaves a
         // partial snapshot behind. Caching it would serve that partial result
-        // as the whole track on every later hit.
-        if !analysis.is_complete() {
+        // as the whole track on every later hit. A pass that ran out of
+        // reachable ranges is not that: what it holds is what the content
+        // gives, gaps the source refuses included.
+        if !analysis.is_settled() {
             debug!(
                 completeness = ?analysis.waveform_completeness(),
-                "track analysis cache: partial snapshot left uncached"
+                "track analysis cache: unsettled snapshot left uncached"
             );
             return;
         }
@@ -327,11 +329,13 @@ fn analysis_from_bytes(
         restored.insert(range);
     }
 
+    // Only a settled pass is stored, so what comes back is one.
     Ok(TrackAnalysis::builder()
         .token(token.as_str().into())
         .revision(revision)
         .source_sample_rate(source_sample_rate)
         .maybe_extent(extent)
+        .settled(true)
         .coverage(restored)
         .fingerprint(AnalysisFingerprint::new(
             beat_ok.then_some(beat_tag.as_str()),
@@ -514,6 +518,7 @@ mod tests {
             .revision(7)
             .source_sample_rate(rate())
             .extent(extent)
+            .settled(true)
             .coverage(coverage)
             .fingerprint(fp())
             .maybe_waveform(waveform)
@@ -876,6 +881,35 @@ mod tests {
         assert!(
             cache.get(&target).is_none(),
             "half a track must not be memoized as the whole of it"
+        );
+    }
+
+    #[kithara::test]
+    fn a_settled_snapshot_is_cached_even_with_a_gap_left_in_it() {
+        let store = memory_store();
+        let target = target(&store, "root_settled");
+        let mut cache = analysis_cache();
+
+        // Encoder priming: the source cannot deliver its first frames, so the
+        // pass ended with them uncovered and nothing left to try.
+        let mut coverage = Coverage::default();
+        coverage.insert(FrameRange::new(20, 980));
+        let settled = TrackAnalysis::builder()
+            .token("assets/track.analysis".into())
+            .revision(3)
+            .source_sample_rate(rate())
+            .extent(1_000)
+            .settled(true)
+            .coverage(coverage)
+            .fingerprint(fp())
+            .waveform(wave())
+            .build();
+        assert!(!settled.is_complete(), "a gap is left at the head");
+
+        cache.put(target.clone(), settled);
+        assert!(
+            cache.get(&target).is_some(),
+            "a pass with nothing left to reach must not be re-run every launch"
         );
     }
 

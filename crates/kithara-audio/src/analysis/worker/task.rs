@@ -98,13 +98,13 @@ where
             .is_some_and(|extent| self.is_covered(FrameRange::new(0, extent)))
     }
 
-    fn choose(&self) -> Option<u64> {
+    fn choose(&self, window: Option<u64>) -> Option<u64> {
         let empty = Coverage::default();
         let coverage = self
             .analyzers
             .as_ref()
             .map_or(&empty, TrackAnalyzers::coverage);
-        self.schedule.next(coverage, self.extent.frames())
+        self.schedule.next(coverage, self.extent.frames(), window)
     }
 
     fn decode(
@@ -136,10 +136,15 @@ where
             Ok(ChunkOutcome::Eof { .. }) => {
                 // End of stream bounds the extent; gaps behind it may remain.
                 if self.extent.frames().is_none() {
-                    self.finish();
+                    self.finish(true);
                 } else {
                     if let Some(run) = &self.run {
                         self.extent.unreachable(run.frontier);
+                        debug!(
+                            frontier = run.frontier,
+                            extent = ?self.extent.frames(),
+                            "analysis: eof bounds the extent"
+                        );
                     }
                     self.retire();
                 }
@@ -148,7 +153,7 @@ where
             Err(error) => {
                 // The reader failed; the ranges it delivered did not.
                 warn!(?error, "analysis: decode error; pass ended");
-                self.finish();
+                self.finish(false);
                 TickResult::Progress
             }
         }
@@ -181,14 +186,25 @@ where
         analyzers.covered_frames().saturating_sub(self.published_at) >= interval
     }
 
-    fn finish(&mut self) {
+    /// `settled` when the pass ran out of reachable ranges rather than being
+    /// cut short: that is what tells a consumer this is all the content gives.
+    fn finish(&mut self, settled: bool) {
         let planned = self.extent.frames();
+        debug!(
+            extent = ?planned,
+            covered = ?self.analyzers.as_ref().map(TrackAnalyzers::covered_frames),
+            settled,
+            "analysis: pass ended"
+        );
         let Some(analyzers) = &mut self.analyzers else {
             self.phase = TaskPhase::Done;
             return;
         };
         if let Some(frames) = planned {
             analyzers.plan_extent(frames);
+        }
+        if settled {
+            analyzers.settle();
         }
         self.phase = TaskPhase::Ending;
     }
@@ -209,16 +225,17 @@ where
         self.tx.send(Some(snapshot)).ok();
     }
 
-    fn reschedule(&mut self) -> TickResult {
+    fn reschedule(&mut self, window: Option<u64>) -> TickResult {
         self.retire();
-        let Some(at) = self.choose() else {
-            self.finish();
+        let Some(at) = self.choose(window) else {
+            self.finish(true);
             return TickResult::Progress;
         };
 
         match self.reader.seek(duration_for_frames(self.rate.get(), at)) {
             // `landed_at` only echoes the target here; the first chunk says where.
             Ok(SeekOutcome::Landed { .. }) => {
+                debug!(at, "analysis: run scheduled");
                 self.run = Some(Run {
                     chosen: at,
                     at,
@@ -264,9 +281,15 @@ where
         {
             return true;
         }
-        // Only after a chunk: a seek can park inside covered audio with its
-        // scheduled range still ahead, and abandoning it retires that unread.
-        if run.frontier > run.at && self.is_covered(FrameRange::new(run.frontier, 1)) {
+        // Covered audio ends a run that already reached its gap. Before that
+        // it is the lead-in a seek snapping back off the gap's start left in
+        // front, and ending there would retire the gap unread.
+        if run.grew && self.is_covered(FrameRange::new(run.frontier, 1)) {
+            return true;
+        }
+        // Read past what it was aimed at with nothing gained: the gap the
+        // schedule saw there is not where this source can put the reader.
+        if !run.grew && run.frontier > run.chosen {
             return true;
         }
         run_frames.is_some_and(|window| run.frontier.saturating_sub(run.at) >= window)
@@ -281,11 +304,12 @@ where
             return self.decode(builder, detector);
         }
         if self.is_complete() {
-            self.finish();
+            self.finish(true);
             return TickResult::Progress;
         }
-        if self.run_over(builder.run_frames(self.rate)) {
-            return self.reschedule();
+        let window = builder.run_frames(self.rate);
+        if self.run_over(window) {
+            return self.reschedule(window);
         }
         self.decode(builder, detector)
     }

@@ -41,6 +41,7 @@ where
             fingerprint: self.fingerprint(),
             extent: None,
             revision: 0,
+            settled: false,
             source_sample_rate: rate,
             token,
         }

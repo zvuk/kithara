@@ -80,6 +80,8 @@ pub struct TrackAnalysis {
     coverage: Coverage,
     #[builder(default)]
     fingerprint: AnalysisFingerprint,
+    #[builder(default)]
+    settled: bool,
     waveform: Option<Waveform>,
     beat: Option<BeatSnapshot>,
 }
@@ -112,6 +114,15 @@ impl TrackAnalysis {
     pub fn is_complete(&self) -> bool {
         self.extent
             .is_some_and(|extent| self.coverage.contains(FrameRange::new(0, extent)))
+    }
+
+    /// Whether the pass ended with nothing left it could reach. A complete
+    /// pass is one of these, and so is one whose only gaps are ranges the
+    /// source refused - what encoder priming leaves in front of a track. A
+    /// pass its reader cut short is not.
+    #[must_use]
+    pub const fn is_settled(&self) -> bool {
+        self.settled
     }
 
     /// Source ranges no producer covered, derived from the coverage rather
