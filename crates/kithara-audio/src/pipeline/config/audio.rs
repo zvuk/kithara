@@ -28,7 +28,8 @@ pub enum ConsumerWakeMode {
     /// Arm a coalesced scheduler pass without signaling a thread gate.
     #[default]
     RealtimeDeferred,
-    /// Signal the worker immediately from a consumer known to run off-RT.
+    /// Signal the worker immediately, unparking its thread. Only a consumer
+    /// that pulls audio outside the render graph may ask for this.
     ImmediateOffRt,
 }
 

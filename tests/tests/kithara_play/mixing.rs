@@ -80,7 +80,7 @@ fn counting_session_preserves_inner_consumer_wake_mode() {
 
     assert_eq!(
         session.consumer_wake_mode(),
-        ConsumerWakeMode::ImmediateOffRt
+        ConsumerWakeMode::RealtimeDeferred
     );
 }
 
