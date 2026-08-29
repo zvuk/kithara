@@ -1,6 +1,10 @@
-use kithara_decode::{ChunkRetire, GaplessMode, GaplessOutput, GaplessProfile, GaplessTrimmer};
+use kithara_decode::{
+    ChunkRetire, GaplessMode, GaplessOutput, GaplessProfile, GaplessTailCompensation,
+    GaplessTrimmer,
+};
 use kithara_platform::time::Duration;
 use kithara_signal::AudioChunk;
+use kithara_stream::AudioCodec;
 
 /// Iterator over one pending gapless output batch.
 type GaplessOutputIter = <GaplessOutput as IntoIterator>::IntoIter;
@@ -21,9 +25,13 @@ pub(crate) struct GaplessStage {
 impl GaplessStage {
     /// Builds one per-generation trimmer from immutable decoder facts.
     #[must_use]
-    pub(crate) fn build(profile: GaplessProfile, mode: GaplessMode) -> Self {
-        let from_info =
-            |info| GaplessTrimmer::from(info).with_tail_compensation(profile.tail_compensation());
+    pub(crate) fn build(
+        profile: GaplessProfile,
+        mode: GaplessMode,
+        codec: Option<AudioCodec>,
+    ) -> Self {
+        let tail = tail_compensation(profile, codec);
+        let from_info = |info| GaplessTrimmer::from(info).with_tail_compensation(tail);
         let trimmer = match mode {
             GaplessMode::MediaOnly => profile
                 .gapless()
@@ -91,10 +99,27 @@ impl GaplessStage {
         self.pending = (!output.is_empty()).then(|| output.into_iter());
     }
 
-    pub(crate) fn set_tail_compensation(&mut self, profile: GaplessProfile) {
+    pub(crate) fn set_tail_compensation(
+        &mut self,
+        profile: GaplessProfile,
+        codec: Option<AudioCodec>,
+    ) {
         self.trimmer
-            .set_tail_compensation(profile.tail_compensation());
+            .set_tail_compensation(tail_compensation(profile, codec));
     }
+}
+
+/// Tail compensation buys the frame the resampler rounded away back off the
+/// trailing trim. Where padding meets audio inside a transform window, the
+/// frame that buys is the tapered one, so an exact length would cost a step
+/// the listener hears at the end of every track.
+fn tail_compensation(
+    profile: GaplessProfile,
+    codec: Option<AudioCodec>,
+) -> Option<GaplessTailCompensation> {
+    profile
+        .tail_compensation()
+        .filter(|_| !codec.is_some_and(AudioCodec::transform_padded))
 }
 
 fn resolve_codec_priming(profile: GaplessProfile) -> GaplessTrimmer {

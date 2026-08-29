@@ -183,6 +183,22 @@ impl AudioCodec {
         }
     }
 
+    /// Whether the codec's gapless padding meets its audio inside a
+    /// transform window, leaving the frame next to a trim tapered rather
+    /// than exact.
+    ///
+    /// Free-standing for the same reason as
+    /// [`encoder_priming_frames`](Self::encoder_priming_frames).
+    #[must_use]
+    pub const fn transform_padded(codec: Self) -> bool {
+        match codec {
+            Self::AacLc | Self::AacHe | Self::AacHeV2 | Self::Mp3 | Self::Vorbis | Self::Opus => {
+                true
+            }
+            Self::Flac | Self::Alac | Self::Pcm | Self::Adpcm => false,
+        }
+    }
+
     /// Parse from HLS CODECS attribute value.
     ///
     /// Examples:
@@ -304,6 +320,25 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    #[kithara::test]
+    #[case(AudioCodec::AacLc, true, "AAC-LC pads inside its MDCT window")]
+    #[case(AudioCodec::AacHe, true, "AAC-HE pads inside its MDCT window")]
+    #[case(AudioCodec::AacHeV2, true, "AAC-HE v2 pads inside its MDCT window")]
+    #[case(AudioCodec::Mp3, true, "MP3 pads inside its MDCT window")]
+    #[case(AudioCodec::Vorbis, true, "Vorbis pads inside its MDCT window")]
+    #[case(AudioCodec::Opus, true, "Opus pads inside its MDCT window")]
+    #[case(AudioCodec::Flac, false, "FLAC carries every frame exactly")]
+    #[case(AudioCodec::Alac, false, "ALAC carries every frame exactly")]
+    #[case(AudioCodec::Pcm, false, "PCM carries every frame exactly")]
+    #[case(AudioCodec::Adpcm, false, "ADPCM carries every frame exactly")]
+    fn transform_padding_follows_the_codec_family(
+        #[case] codec: AudioCodec,
+        #[case] expected: bool,
+        #[case] label: &str,
+    ) {
+        assert_eq!(AudioCodec::transform_padded(codec), expected, "{label}");
+    }
 
     #[kithara::test(wasm)]
     #[case("mp4a.40.2", Some(AudioCodec::AacLc), "AAC-LC standard")]

@@ -96,7 +96,7 @@ impl DecoderGeneration {
     ) -> Self {
         let codec = media_info.as_ref().and_then(|info| info.codec);
         let gapless_profile = decoder.gapless_profile(codec);
-        let gapless = GaplessStage::build(gapless_profile, gapless_mode);
+        let gapless = GaplessStage::build(gapless_profile, gapless_mode, codec);
         Self {
             decoder,
             media_info,
@@ -142,7 +142,7 @@ impl DecoderGeneration {
         // zero, before the decoder had seen any of it.
         let codec = self.media_info.as_ref().and_then(|info| info.codec);
         self.gapless
-            .set_tail_compensation(self.decoder.gapless_profile(codec));
+            .set_tail_compensation(self.decoder.gapless_profile(codec), codec);
         self.gapless.flush();
     }
 
@@ -509,10 +509,26 @@ mod tests {
     /// full trailing run instead of holding the frame the resampler rounded
     /// away.
     #[kithara::test]
-    fn finish_installs_the_tail_compensation_the_decoder_resolved_while_decoding() {
+    #[case(None, 4, "an unnamed codec keeps the compensated trim")]
+    #[case(
+        Some(kithara_stream::AudioCodec::Flac),
+        4,
+        "FLAC carries the frame exactly, so the compensation applies"
+    )]
+    #[case(
+        Some(kithara_stream::AudioCodec::AacLc),
+        3,
+        "AAC would buy back its tapered frame, so the trim stays whole"
+    )]
+    fn finish_installs_the_tail_compensation_the_decoder_resolved_while_decoding(
+        #[case] codec: Option<kithara_stream::AudioCodec>,
+        #[case] expected_frames: u64,
+        #[case] label: &str,
+    ) {
         let pushed_frames = 5_u64;
         let trailing_frames = 2_u64;
         let spec = spec(2, 44_100);
+        let media_info = codec.map(|codec| MediaInfo::builder().codec(codec).build());
         let mut generation = DecoderGeneration::new(
             Box::new(EofDecoder {
                 gapless: Some(GaplessInfo::new(0, trailing_frames)),
@@ -521,7 +537,7 @@ mod tests {
                 late_tail_frames: Some(pushed_frames + 1),
                 profile_calls: Cell::new(0),
             }),
-            None,
+            media_info,
             0,
             0,
             None,
@@ -538,11 +554,7 @@ mod tests {
             frames = frames.saturating_add(u64::from(next.meta.frames));
         }
 
-        assert_eq!(
-            frames,
-            pushed_frames - (trailing_frames - 1),
-            "the one-frame deficit must come back off the trailing trim"
-        );
+        assert_eq!(frames, expected_frames, "{label}");
     }
 
     /// An unlabelled AAC track keeps its encoder priming in the PCM (the

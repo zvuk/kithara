@@ -342,14 +342,17 @@ async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch() {
 async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
-    let expected_device_frames = usize::try_from(ceil_scaled_frames(
+    // AAC's padding meets its audio inside a transform window, so the frame
+    // the exact ratio rounds up to is the tapered one and the trailing trim
+    // takes it. The track ends on its last untapered frame: the floored ratio.
+    let expected_device_frames = usize::try_from(floor_scaled_frames(
         source_stitch_frame,
         FUSED_FIXTURE_DEVICE_RATE,
         FUSED_FIXTURE_SOURCE_RATE,
     ))
     .expect("fixture length fits usize");
     assert_eq!(
-        expected_device_frames, 284_213,
+        expected_device_frames, 284_212,
         "fixture must keep the selected one-frame-deficit search geometry"
     );
 
@@ -372,7 +375,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
     let probe = drain_resource_to_eof(probe).await;
     assert_eq!(
         probe.output_frames, expected_device_frames,
-        "tail-side compensation should restore exact visible device-frame length"
+        "the trailing trim must end the track on its last untapered frame"
     );
 
     let pending_decision =
@@ -392,10 +395,17 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
     );
 
     assert!(pending_decision.seam_db.is_finite());
+    // The join can be no cleaner than the material. Both encodes taper their
+    // boundary frame inside a transform window, and sequential playback
+    // concatenates them rather than overlap-adding, so a step at the stitch is
+    // the fixture's, not the player's. What the player owns is adding nothing
+    // on top: its step stays under the one the next track already carries
+    // between its own first two frames.
     assert!(
-        pending_decision.seam_db < -26.0,
-        "tail-side fused seam regression floor: {:.2} dB",
-        pending_decision.seam_db
+        pending_decision.seam_db < pending_decision.head_db,
+        "fused seam must not exceed the next track's own head step: seam={:.2} dB, head={:.2} dB",
+        pending_decision.seam_db,
+        pending_decision.head_db
     );
 }
 
@@ -468,6 +478,7 @@ async fn render_apple_fused_deficit_seam(
     );
     AppleFusedSeamRender {
         control_db,
+        head_db: seam_step_db(&left, stitch_frame.saturating_add(1)),
         nearby_db: nearby_seam_step_db(&left, stitch_frame),
         seam_db,
         stitch_frame,
@@ -1010,6 +1021,9 @@ struct SyntheticSeamRender {
 #[derive(Debug)]
 struct AppleFusedSeamRender {
     control_db: f32,
+    /// Step the next track carries between its own first two frames — the
+    /// discontinuity its encode brings to the join on its own.
+    head_db: f32,
     nearby_db: [f32; 7],
     seam_db: f32,
     stitch_frame: usize,
@@ -1337,6 +1351,12 @@ fn gapless_control_peak(left: &[f32], stitch_frame: usize) -> (f32, usize) {
         count += 1;
     }
     (peak, count)
+}
+
+fn floor_scaled_frames(frames: u64, output_rate: u32, input_rate: u32) -> u64 {
+    let numerator = u128::from(frames).saturating_mul(u128::from(output_rate));
+    let scaled = numerator / u128::from(input_rate.max(1));
+    u64::try_from(scaled).unwrap_or(u64::MAX)
 }
 
 fn ceil_scaled_frames(frames: u64, output_rate: u32, input_rate: u32) -> u64 {
