@@ -40,6 +40,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # The store the build-time audio assets are read from; see ci.yml.
+  KITHARA_FIXTURE_CACHE: /cache/fixtures
 
 # CI runs this soak as one of its jobs, so it must never name the queue its
 # caller already holds - a called workflow that does can never start. Waiting

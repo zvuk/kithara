@@ -11,6 +11,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Where the build-time audio assets are kept. A job that finds the store
+  # empty regenerates every asset it needs, which is encode work no test
+  # should pay for; the bytes are identical for every job sharing a build
+  # fingerprint. The path is the one the GitLab container executor already
+  # mounts on this host, so both CIs fill one store. Lanes that build on
+  # macOS or Windows leave the variable unset and land in the temporary
+  # directory instead.
+  KITHARA_FIXTURE_CACHE: /cache/fixtures
 
 # One queue per branch. Pushes to different branches hold nothing from each
 # other: they share the machine at the runner, where a job waits for the cores

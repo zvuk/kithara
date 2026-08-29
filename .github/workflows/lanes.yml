@@ -16,6 +16,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # The store the build-time audio assets are read from; see ci.yml.
+  KITHARA_FIXTURE_CACHE: /cache/fixtures
 
 # Heavy work: this asks for the whole fleet, so it queues with the other heavy
 # lanes and takes its turn among them rather than beside them. A push is not

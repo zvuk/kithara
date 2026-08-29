@@ -46,6 +46,10 @@ on:
         required: false
         type: string
 
+env:
+  # The store the build-time audio assets are read from; see ci.yml.
+  KITHARA_FIXTURE_CACHE: /cache/fixtures
+
 # The run queues against itself, not against fork CI. Sharing CI's group
 # was right while both drew on one pool of runners; now that the run has a
 # runner of its own it is a way to lose runs, because a group admits one queued
