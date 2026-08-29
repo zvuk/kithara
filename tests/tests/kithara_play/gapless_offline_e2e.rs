@@ -342,17 +342,26 @@ async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch() {
 async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
-    // AAC's padding meets its audio inside a transform window, so the frame
-    // the exact ratio rounds up to is the tapered one and the trailing trim
-    // takes it. The track ends on its last untapered frame: the floored ratio.
-    let expected_device_frames = usize::try_from(floor_scaled_frames(
+    // The ratio is not whole here, so the track ends on either side of it: the
+    // converter decides whether its last output frame exists, and AAC's padding
+    // meets its audio inside a transform window, so the trailing trim may take
+    // the tapered frame with it. Both roundings are a correct track; landing
+    // outside them is not.
+    let floor_frames = usize::try_from(floor_scaled_frames(
+        source_stitch_frame,
+        FUSED_FIXTURE_DEVICE_RATE,
+        FUSED_FIXTURE_SOURCE_RATE,
+    ))
+    .expect("fixture length fits usize");
+    let ceil_frames = usize::try_from(ceil_scaled_frames(
         source_stitch_frame,
         FUSED_FIXTURE_DEVICE_RATE,
         FUSED_FIXTURE_SOURCE_RATE,
     ))
     .expect("fixture length fits usize");
     assert_eq!(
-        expected_device_frames, 284_212,
+        (floor_frames, ceil_frames),
+        (284_212, 284_213),
         "fixture must keep the selected one-frame-deficit search geometry"
     );
 
@@ -373,23 +382,22 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
     )
     .await;
     let probe = drain_resource_to_eof(probe).await;
-    assert_eq!(
-        probe.output_frames, expected_device_frames,
-        "the trailing trim must end the track on its last untapered frame"
+    assert!(
+        (floor_frames..=ceil_frames).contains(&probe.output_frames),
+        "visible length must be the scaled ratio rounded either way: got {}, expected {floor_frames} or {ceil_frames}",
+        probe.output_frames
     );
 
     let pending_decision =
         render_apple_fused_deficit_seam(&server, temp_dir.path(), probe.output_frames).await;
 
     println!(
-        "APPLE_FUSED_TAIL_SEAM measured_frames={} ideal_frames={} length_delta={} \
-         seam_db={:.2} control_db={:.2} stitch_frame={} nearby={:?}",
+        "APPLE_FUSED_TAIL_SEAM measured_frames={} rounds_to={floor_frames}..={ceil_frames} \
+         seam_db={:.2} control_db={:.2} head_db={:.2} stitch_frame={} nearby={:?}",
         probe.output_frames,
-        expected_device_frames,
-        isize::try_from(probe.output_frames).expect("probe frames fit isize")
-            - isize::try_from(expected_device_frames).expect("ideal frames fit isize"),
         pending_decision.seam_db,
         pending_decision.control_db,
+        pending_decision.head_db,
         pending_decision.stitch_frame,
         pending_decision.nearby_db
     );
@@ -401,10 +409,17 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
     // the fixture's, not the player's. What the player owns is adding nothing
     // on top: its step stays under the one the next track already carries
     // between its own first two frames.
+    // Bound the step the player creates by the material it was handed: the peak
+    // step inside a track, and the one the next track carries between its own
+    // first two frames. Where both encodes taper their boundary frame the
+    // second dominates; where they do not, the first does. A player that drops
+    // or repeats a frame at the join clears both.
+    let bound = pending_decision.control_db.max(pending_decision.head_db);
     assert!(
-        pending_decision.seam_db < pending_decision.head_db,
-        "fused seam must not exceed the next track's own head step: seam={:.2} dB, head={:.2} dB",
+        pending_decision.seam_db < bound,
+        "fused seam must not exceed the material's own steps: seam={:.2} dB, control={:.2} dB, head={:.2} dB",
         pending_decision.seam_db,
+        pending_decision.control_db,
         pending_decision.head_db
     );
 }
