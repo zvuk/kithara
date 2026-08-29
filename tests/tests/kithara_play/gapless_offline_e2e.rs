@@ -342,11 +342,6 @@ async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch() {
 async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
-    // The ratio is not whole here, so the track ends on either side of it: the
-    // converter decides whether its last output frame exists, and AAC's padding
-    // meets its audio inside a transform window, so the trailing trim may take
-    // the tapered frame with it. Both roundings are a correct track; landing
-    // outside them is not.
     let floor_frames = usize::try_from(floor_scaled_frames(
         source_stitch_frame,
         FUSED_FIXTURE_DEVICE_RATE,
@@ -403,17 +398,6 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
     );
 
     assert!(pending_decision.seam_db.is_finite());
-    // The join can be no cleaner than the material. Both encodes taper their
-    // boundary frame inside a transform window, and sequential playback
-    // concatenates them rather than overlap-adding, so a step at the stitch is
-    // the fixture's, not the player's. What the player owns is adding nothing
-    // on top: its step stays under the one the next track already carries
-    // between its own first two frames.
-    // Bound the step the player creates by the material it was handed: the peak
-    // step inside a track, and the one the next track carries between its own
-    // first two frames. Where both encodes taper their boundary frame the
-    // second dominates; where they do not, the first does. A player that drops
-    // or repeats a frame at the join clears both.
     let bound = pending_decision.control_db.max(pending_decision.head_db);
     assert!(
         pending_decision.seam_db < bound,
@@ -1036,8 +1020,6 @@ struct SyntheticSeamRender {
 #[derive(Debug)]
 struct AppleFusedSeamRender {
     control_db: f32,
-    /// Step the next track carries between its own first two frames — the
-    /// discontinuity its encode brings to the join on its own.
     head_db: f32,
     nearby_db: [f32; 7],
     seam_db: f32,

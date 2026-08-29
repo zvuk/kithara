@@ -137,9 +137,6 @@ impl DecoderGeneration {
         }
         self.finished = true;
         self.holdback = None;
-        // The tail compensation counts the whole source, so it resolves only
-        // here; the profile snapshot this generation holds was taken at frame
-        // zero, before the decoder had seen any of it.
         let codec = self.media_info.as_ref().and_then(|info| info.codec);
         self.gapless
             .set_tail_compensation(self.decoder.gapless_profile(codec), codec);
@@ -389,8 +386,6 @@ mod tests {
         gapless: Option<GaplessInfo>,
         default_priming: u64,
         spec: AudioSpec,
-        /// Ideal pre-trim length, resolved only once decoding has started —
-        /// the way a fused decode-and-resample codec counts its source.
         late_tail_frames: Option<u64>,
         profile_calls: Cell<u32>,
     }
@@ -502,12 +497,6 @@ mod tests {
         )
     }
 
-    /// A resampled track's tail compensation counts the whole source, so the
-    /// decoder resolves it only as the last packet lands. Answering the flush
-    /// from the profile this generation snapshotted at frame zero installs the
-    /// value from before any of that was known, and the trimmer then cuts the
-    /// full trailing run instead of holding the frame the resampler rounded
-    /// away.
     #[kithara::test]
     #[case(None, 4, "an unnamed codec keeps the compensated trim")]
     #[case(

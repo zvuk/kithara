@@ -185,8 +185,7 @@ impl Drop for OfflineSession {
 }
 
 impl SessionDispatcher for OfflineSession {
-    /// The render thread runs the device callback's processor, so the
-    /// consumers this session hosts are real-time consumers.
+    /// The render thread runs the device callback's processor.
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
     }

@@ -183,12 +183,8 @@ impl AudioCodec {
         }
     }
 
-    /// Whether the codec's gapless padding meets its audio inside a
-    /// transform window, leaving the frame next to a trim tapered rather
-    /// than exact.
-    ///
-    /// Free-standing for the same reason as
-    /// [`encoder_priming_frames`](Self::encoder_priming_frames).
+    /// Whether padding meets audio inside a transform window, leaving the
+    /// frame next to a trim tapered rather than exact.
     #[must_use]
     pub const fn transform_padded(codec: Self) -> bool {
         match codec {

@@ -25,8 +25,7 @@ impl Consts {
     const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
 }
 
-/// Reader-side event sink. Reads run on the audio callback, so events take the
-/// producer lane's deferred ring and reach the bus when the shell flushes it.
+/// Reader-side event sink, deferred because reads run on the audio callback.
 pub(super) struct AudioEvents {
     emit: Arc<DeferredBus<Event>>,
     last_progress_emit: Option<(u64, u64)>,

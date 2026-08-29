@@ -109,10 +109,6 @@ impl GaplessStage {
     }
 }
 
-/// Tail compensation buys the frame the resampler rounded away back off the
-/// trailing trim. Where padding meets audio inside a transform window, the
-/// frame that buys is the tapered one, so an exact length would cost a step
-/// the listener hears at the end of every track.
 fn tail_compensation(
     profile: GaplessProfile,
     codec: Option<AudioCodec>,

@@ -312,8 +312,7 @@ impl SessionDispatcher for ManualRingSession {
         Self::exec(self, cmd).map_err(|error| PlayError::Internal(error.to_string()))
     }
 
-    /// The ring backend drives the device callback's processor, so the
-    /// consumers this session hosts are real-time consumers.
+    /// The ring backend drives the device callback's processor.
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
     }
