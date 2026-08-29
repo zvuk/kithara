@@ -109,7 +109,7 @@ impl<S> From<AudioParts<S>> for Audio<S> {
             runtime: parts.runtime,
             ring: parts.ring,
             cursor: ChunkCursor::new(&parts.sample_pool, parts.spec),
-            events: AudioEvents::new(parts.emit.bus().clone()),
+            events: AudioEvents::new(parts.emit),
             session: parts.session,
             controls: parts.controls,
             _marker: parts.marker,

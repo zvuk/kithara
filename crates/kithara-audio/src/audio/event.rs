@@ -25,21 +25,28 @@ impl Consts {
     const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
 }
 
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
+/// Reader-side event sink. Reads run on the audio callback, so events take the
+/// producer lane's deferred ring and reach the bus when the shell flushes it.
 pub(super) struct AudioEvents {
-    #[field(get, vis = "pub(super)")]
-    bus: EventBus,
+    emit: Arc<DeferredBus<Event>>,
     last_progress_emit: Option<(u64, u64)>,
     underrun_active: bool,
 }
 
 impl AudioEvents {
-    pub(super) const fn new(bus: EventBus) -> Self {
+    pub(super) const fn new(emit: Arc<DeferredBus<Event>>) -> Self {
         Self {
-            bus,
+            emit,
             last_progress_emit: None,
             underrun_active: false,
+        }
+    }
+
+    delegate::delegate! {
+        to self.emit {
+            pub(super) fn bus(&self) -> &EventBus;
+            #[call(enqueue)]
+            pub(super) fn publish(&self, #[into] event: AudioEvent);
         }
     }
 
@@ -144,17 +151,13 @@ impl AudioEvents {
         });
     }
 
-    pub(super) fn publish(&self, event: AudioEvent) {
-        self.bus.publish(event);
-    }
-
     pub(super) const fn reset_underrun(&mut self) {
         self.underrun_active = false;
     }
 
     #[cfg(test)]
     pub(super) fn test() -> Self {
-        Self::new(EventBus::new(16))
+        Self::new(Self::deferred(&EventBus::new(16)))
     }
 }
 
@@ -414,16 +417,23 @@ mod tests {
     }
 
     #[kithara::test]
-    fn post_seek_output_publishes_without_worker_flush() {
+    fn post_seek_output_reaches_the_bus_once_the_shell_flushes() {
         let bus = EventBus::new(8);
         let mut receiver = bus.subscribe();
-        let events = AudioEvents::new(bus);
+        let emit = AudioEvents::deferred(&bus);
+        let events = AudioEvents::new(Arc::clone(&emit));
         let seek = SeekState::new();
         let position = Duration::from_millis(500);
         let epoch = seek.begin(position);
         seek.mark_pending(epoch);
 
         events.post_seek_output(&seek, epoch, None, position);
+
+        assert!(
+            receiver.try_recv().is_err(),
+            "a read runs on the audio callback, so its events wait for the shell"
+        );
+        emit.flush();
 
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
@@ -525,11 +535,13 @@ mod tests {
     fn underrun_edges_emit_once_per_starvation_window() {
         let bus = EventBus::new(8);
         let mut receiver = bus.subscribe();
-        let mut events = AudioEvents::new(bus);
+        let emit = AudioEvents::deferred(&bus);
+        let mut events = AudioEvents::new(Arc::clone(&emit));
         let position = Duration::from_millis(321);
 
         events.fill_result(false, true, false, position, 0);
         events.fill_result(false, true, false, position, 0);
+        emit.flush();
 
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
@@ -541,6 +553,7 @@ mod tests {
         assert!(receiver.try_recv().is_err());
 
         events.fill_result(true, true, false, position, 0);
+        emit.flush();
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
             Ok(Event::Audio(AudioEvent::UnderrunEnded {
