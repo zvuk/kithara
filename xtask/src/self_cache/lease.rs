@@ -5,14 +5,15 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use fs4::{FileExt, TryLockError};
+use fs4::TryLockError;
+use kithara_devtools::lock::FileLock;
 use tracing::warn;
 
 use super::layout::{self, GENERATION_PREFIX, LEASE_FILE, REFRESH_LOCK};
 
 #[derive(Debug)]
 pub(crate) struct GenerationLease {
-    file: Option<File>,
+    lock: Option<FileLock>,
     cleanup: Option<LeaseCleanup>,
 }
 
@@ -35,29 +36,30 @@ impl GenerationLease {
 
     #[cfg(test)]
     fn acquire(generation: &Path) -> Result<Self> {
-        let file = Self::open(generation)?;
-        FileExt::lock_shared(&file)
-            .with_context(|| format!("lock self-cache generation {}", generation.display()))?;
         Ok(Self {
-            file: Some(file),
+            lock: Some(Self::claim(generation, Self::open(generation)?)?),
             cleanup: None,
         })
     }
 
     fn finish(root: &Path, generation: &Path, file: File) -> Result<Self> {
-        FileExt::lock_shared(&file)
-            .with_context(|| format!("lock self-cache generation {}", generation.display()))?;
+        let lock = Self::claim(generation, file)?;
         let current = layout::load(root, generation)?;
         Ok(Self {
-            file: Some(file),
+            lock: Some(lock),
             cleanup: Some(LeaseCleanup::new(root, current.path)),
         })
+    }
+
+    fn claim(generation: &Path, file: File) -> Result<FileLock> {
+        FileLock::shared(file)
+            .with_context(|| format!("lock self-cache generation {}", generation.display()))
     }
 }
 
 impl Drop for GenerationLease {
     fn drop(&mut self) {
-        drop(self.file.take());
+        drop(self.lock.take());
         if let Some(cleanup) = self.cleanup.take() {
             // Retention is opportunistic — the next lease to fall away retries
             // it — but a failure has to be sayable. Discarded, the cache simply
@@ -103,7 +105,7 @@ impl LeaseCleanup {
 
 #[derive(Debug)]
 pub(super) struct RefreshLock {
-    _file: File,
+    _lock: FileLock,
 }
 
 pub(crate) fn lease_current() -> Result<Option<GenerationLease>> {
@@ -117,14 +119,15 @@ pub(crate) fn lease_current() -> Result<Option<GenerationLease>> {
 
 pub(super) fn refresh(root: &Path) -> Result<RefreshLock> {
     let (file, path) = open_refresh(root)?;
-    FileExt::lock(&file).with_context(|| format!("lock self-cache refresh {}", path.display()))?;
-    Ok(RefreshLock { _file: file })
+    let lock = FileLock::exclusive(file)
+        .with_context(|| format!("lock self-cache refresh {}", path.display()))?;
+    Ok(RefreshLock { _lock: lock })
 }
 
 fn try_refresh(root: &Path) -> Result<Option<RefreshLock>> {
     let (file, path) = open_refresh(root)?;
-    match FileExt::try_lock(&file) {
-        Ok(()) => Ok(Some(RefreshLock { _file: file })),
+    match FileLock::try_exclusive(file) {
+        Ok(lock) => Ok(Some(RefreshLock { _lock: lock })),
         Err(TryLockError::WouldBlock) => Ok(None),
         Err(TryLockError::Error(error)) => {
             Err(error).with_context(|| format!("try lock self-cache refresh {}", path.display()))
@@ -200,8 +203,8 @@ pub(super) fn cleanup(
                     .with_context(|| format!("open self-cache lease {}", lease_path.display()));
             }
         };
-        match FileExt::try_lock(&lease) {
-            Ok(()) => remove_generation(&path)?,
+        match FileLock::try_exclusive(lease) {
+            Ok(_held) => remove_generation(&path)?,
             Err(TryLockError::WouldBlock) => {}
             Err(TryLockError::Error(error)) => {
                 return Err(error).with_context(|| {

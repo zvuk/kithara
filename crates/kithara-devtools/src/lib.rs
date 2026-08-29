@@ -16,6 +16,7 @@ pub mod junit;
 pub mod lease;
 #[cfg(feature = "lint")]
 pub mod lint;
+pub mod lock;
 pub mod manifest;
 pub mod orphans;
 pub mod perf;

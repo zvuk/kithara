@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use fs4::FileExt;
+use kithara_devtools::lock::FileLock;
 use serde::{Deserialize, Serialize};
 
 use super::model::VerificationState;
@@ -196,20 +196,17 @@ impl Ledger {
         &self,
         operation: impl FnOnce(&mut LedgerData) -> Result<T>,
     ) -> Result<T> {
-        let lock = OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
             .open(&self.lock_path)
             .with_context(|| format!("opening ledger lock {}", self.lock_path.display()))?;
-        FileExt::lock(&lock)
+        let _lock = FileLock::exclusive(file)
             .with_context(|| format!("locking ledger {}", self.lock_path.display()))?;
         let mut data = self.read()?;
-        let result = operation(&mut data);
-        FileExt::unlock(&lock)
-            .with_context(|| format!("unlocking ledger {}", self.lock_path.display()))?;
-        result
+        operation(&mut data)
     }
 
     fn read(&self) -> Result<LedgerData> {

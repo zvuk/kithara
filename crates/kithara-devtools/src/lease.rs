@@ -1,9 +1,9 @@
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     path::{self, Path},
 };
 
-use fs4::FileExt;
+use crate::lock::FileLock;
 
 /// The file a process locks for as long as it works in a build directory, so a
 /// reclaim running elsewhere can tell "in use" from "left behind".
@@ -18,7 +18,7 @@ pub const FILE: &str = ".kithara-job-lease";
 /// A live claim on a build directory, released when this drops or the process
 /// dies.
 pub struct Lease {
-    _file: File,
+    _lock: FileLock,
 }
 
 /// Claims `directory` until the returned guard drops.
@@ -51,8 +51,8 @@ pub fn hold(directory: &Path) -> Option<Lease> {
         .write(true)
         .open(directory.join(FILE))
         .ok()?;
-    FileExt::try_lock_shared(&file).ok()?;
-    Some(Lease { _file: file })
+    let lock = FileLock::try_shared(file).ok()?;
+    Some(Lease { _lock: lock })
 }
 
 #[cfg(test)]

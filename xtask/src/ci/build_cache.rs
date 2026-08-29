@@ -10,8 +10,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use fs4::{FileExt, TryLockError};
-use kithara_devtools::lease;
+use fs4::TryLockError;
+use kithara_devtools::{lease, lock::FileLock};
 use tracing::info;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,13 +24,13 @@ pub(crate) struct CacheEntry {
 struct CacheContents {
     entries: Vec<CacheEntry>,
     active: bool,
-    locks: Vec<File>,
+    locks: Vec<FileLock>,
 }
 
 struct DirectoryScan {
     bytes: u64,
     active: bool,
-    locks: Vec<File>,
+    locks: Vec<FileLock>,
 }
 
 pub(crate) fn select_evictions(mut entries: Vec<CacheEntry>, budget_bytes: u64) -> Vec<CacheEntry> {
@@ -91,7 +91,7 @@ pub(crate) fn reclaim_at_least(target_dirs: &[PathBuf], bytes_needed: u64) -> Re
 fn collect(
     target_dirs: &[PathBuf],
     budget_bytes: u64,
-) -> Result<(Vec<CacheEntry>, u64, Vec<File>)> {
+) -> Result<(Vec<CacheEntry>, u64, Vec<FileLock>)> {
     let mut target_dirs = target_dirs.to_vec();
     target_dirs.sort();
     let mut candidates = Vec::new();
@@ -163,7 +163,7 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         entries: Vec::new(),
         // A target a live job leased is active even between compilations,
         // when no `.cargo-lock` is held.
-        active: lease_is_held(target_dir, FileExt::try_lock),
+        active: lease_is_held(target_dir, FileLock::try_exclusive),
         locks: Vec::new(),
     };
     for entry in entries {
@@ -229,14 +229,14 @@ fn scan_directory(path: &Path) -> Result<DirectoryScan> {
     })
 }
 
-fn cargo_lock(path: &Path) -> Result<(bool, Option<File>)> {
-    let lock = OpenOptions::new()
+fn cargo_lock(path: &Path) -> Result<(bool, Option<FileLock>)> {
+    let file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
         .with_context(|| format!("opening Cargo build lock {}", path.display()))?;
-    match FileExt::try_lock(&lock) {
-        Ok(()) => Ok((false, Some(lock))),
+    match FileLock::try_exclusive(file) {
+        Ok(lock) => Ok((false, Some(lock))),
         Err(TryLockError::WouldBlock) => Ok((true, None)),
         Err(TryLockError::Error(error)) => {
             Err(error).with_context(|| format!("checking Cargo build lock {}", path.display()))
@@ -271,13 +271,13 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 /// Linux with four observers and no owner, 37694 of 80000 answers were that
 /// invention. Target holders take the lease shared so several coexist, so only
 /// an exclusive request sees them at all.
-fn lease_is_held(directory: &Path, ask: fn(&File) -> Result<(), TryLockError>) -> bool {
+fn lease_is_held(directory: &Path, ask: fn(File) -> Result<FileLock, TryLockError>) -> bool {
     let path = directory.join(lease::FILE);
     let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
         return false;
     };
     // Held by a live job, or unreadable — either way, not ours to remove.
-    ask(&file).is_err()
+    ask(file).is_err()
 }
 
 /// Claims `CARGO_TARGET_DIR` for the life of this process, if one is named.
@@ -368,8 +368,6 @@ mod tests {
         time::{Duration, UNIX_EPOCH},
     };
 
-    use fs4::FileExt;
-
     use super::*;
 
     fn entry(path: &str, size_bytes: u64, age: u64) -> CacheEntry {
@@ -380,13 +378,6 @@ mod tests {
         }
     }
 
-    /// Nobody holds this lease, so every "held" answer is invented. Observers
-    /// must not invent one about each other, which is what asking for the
-    /// owner's own exclusive lock did.
-    ///
-    /// The invention needs `flock` to conflict between two descriptors of one
-    /// process. That is Linux behaviour and what CI runs on; on macOS the same
-    /// pair never conflicts, so this test cannot fail there.
     #[test]
     fn concurrent_observers_do_not_invent_a_checkout_holder() {
         let directory = tempfile::tempdir().unwrap();
@@ -405,7 +396,7 @@ mod tests {
                 let invented = Arc::clone(&invented);
                 thread::spawn(move || {
                     for _ in 0..2_000 {
-                        if lease_is_held(&checkout, FileExt::try_lock_shared) {
+                        if lease_is_held(&checkout, FileLock::try_shared) {
                             invented.fetch_add(1, Ordering::Relaxed);
                         }
                     }
@@ -531,16 +522,17 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let profile = directory.path().join("debug");
         fs::create_dir(&profile).unwrap();
-        let lock = OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
             .open(profile.join(".cargo-lock"))
             .unwrap();
-        FileExt::lock(&lock).unwrap();
+        let lock = FileLock::exclusive(file).unwrap();
 
         assert!(candidate_entries(directory.path()).unwrap().active);
+        drop(lock);
     }
 
     /// A run that is only executing its built tests holds no
@@ -549,16 +541,17 @@ mod tests {
     #[test]
     fn a_leased_target_defers_eviction() {
         let directory = tempfile::tempdir().unwrap();
-        let lease = OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
             .open(directory.path().join(lease::FILE))
             .unwrap();
-        FileExt::try_lock_shared(&lease).unwrap();
+        let held = FileLock::try_shared(file).unwrap();
 
         assert!(candidate_entries(directory.path()).unwrap().active);
+        drop(held);
     }
 
     /// A lease file nobody holds is a leftover, not a claim.
@@ -623,14 +616,14 @@ mod tests {
         for name in ["target", "target-flash-off"] {
             checkout_target(&checkout, name, 1);
         }
-        let job = OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
             .open(checkout.join(lease::FILE))
             .unwrap();
-        FileExt::try_lock(&job).unwrap();
+        let job = FileLock::try_exclusive(file).unwrap();
         let lane = lease::hold(&checkout.join("target")).expect("the lane claims what it builds");
 
         let targets = persistent_target_dirs(root.path()).unwrap();
@@ -654,14 +647,14 @@ mod tests {
         fs::write(checkout.join("Cargo.toml"), b"").unwrap();
         let running = checkout_target(&checkout, "target", 400_000);
         let idle = checkout_target(&checkout, "target-flash-off", 400_000);
-        let job = OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
             .open(checkout.join(lease::FILE))
             .unwrap();
-        FileExt::try_lock(&job).unwrap();
+        let job = FileLock::try_exclusive(file).unwrap();
         let lane = lease::hold(&running).expect("the lane claims what it builds");
 
         let targets = persistent_target_dirs(root.path()).unwrap();

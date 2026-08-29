@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use fs4::FileExt;
+use kithara_devtools::lock::FileLock;
 use tracing::{info, warn};
 
 use super::{
@@ -25,22 +25,22 @@ pub(super) struct Bridge {
 }
 
 struct ReconcileLock {
-    _file: File,
+    _lock: FileLock,
 }
 
 impl ReconcileLock {
     fn acquire(state_dir: &Path) -> Result<Self> {
         let file = open_reconcile_lock(state_dir)?;
-        FileExt::lock(&file)
+        let lock = FileLock::exclusive(file)
             .with_context(|| format!("locking bridge state {}", state_dir.display()))?;
-        Ok(Self { _file: file })
+        Ok(Self { _lock: lock })
     }
 
     #[cfg(test)]
     fn try_acquire(state_dir: &Path) -> Result<Option<Self>> {
         let file = open_reconcile_lock(state_dir)?;
-        match FileExt::try_lock(&file) {
-            Ok(()) => Ok(Some(Self { _file: file })),
+        match FileLock::try_exclusive(file) {
+            Ok(lock) => Ok(Some(Self { _lock: lock })),
             Err(fs4::TryLockError::WouldBlock) => Ok(None),
             Err(fs4::TryLockError::Error(error)) => {
                 Err(error).with_context(|| format!("locking bridge state {}", state_dir.display()))
