@@ -137,7 +137,12 @@ impl DecoderGeneration {
         }
         self.finished = true;
         self.holdback = None;
-        self.gapless.set_tail_compensation(self.gapless_profile());
+        // The tail compensation counts the whole source, so it resolves only
+        // here; the profile snapshot this generation holds was taken at frame
+        // zero, before the decoder had seen any of it.
+        let codec = self.media_info.as_ref().and_then(|info| info.codec);
+        self.gapless
+            .set_tail_compensation(self.decoder.gapless_profile(codec));
         self.gapless.flush();
     }
 
@@ -369,10 +374,10 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{cell::Cell, num::NonZeroU32};
 
     use kithara_bufpool::SamplePool;
-    use kithara_decode::{DecoderSeekOutcome, DropChunks, GaplessInfo};
+    use kithara_decode::{DecoderSeekOutcome, DropChunks, GaplessInfo, GaplessTailCompensation};
     use kithara_platform::time::Duration;
     use kithara_signal::AudioChunkInfo;
     use kithara_stream::PrerollHint;
@@ -384,6 +389,10 @@ mod tests {
         gapless: Option<GaplessInfo>,
         default_priming: u64,
         spec: AudioSpec,
+        /// Ideal pre-trim length, resolved only once decoding has started —
+        /// the way a fused decode-and-resample codec counts its source.
+        late_tail_frames: Option<u64>,
+        profile_calls: Cell<u32>,
     }
 
     impl Decoder for EofDecoder {
@@ -409,7 +418,13 @@ mod tests {
         }
 
         fn gapless_profile(&self, _codec: Option<kithara_stream::AudioCodec>) -> GaplessProfile {
-            GaplessProfile::new(self.spec, self.gapless, None, self.default_priming)
+            let call = self.profile_calls.get();
+            self.profile_calls.set(call.saturating_add(1));
+            let tail = (call > 0)
+                .then_some(self.late_tail_frames)
+                .flatten()
+                .map(GaplessTailCompensation::new);
+            GaplessProfile::new(self.spec, self.gapless, tail, self.default_priming)
         }
 
         fn update_byte_len(&self, _len: u64) {}
@@ -428,6 +443,8 @@ mod tests {
                 gapless: None,
                 default_priming: 0,
                 spec,
+                late_tail_frames: None,
+                profile_calls: Cell::new(0),
             }),
             None,
             0,
@@ -443,6 +460,8 @@ mod tests {
                 gapless: Some(GaplessInfo::new(0, trailing_frames)),
                 default_priming: 0,
                 spec,
+                late_tail_frames: None,
+                profile_calls: Cell::new(0),
             }),
             None,
             0,
@@ -460,6 +479,8 @@ mod tests {
                 gapless: None,
                 default_priming: 1_024,
                 spec,
+                late_tail_frames: None,
+                profile_calls: Cell::new(0),
             }),
             None,
             0,
@@ -479,6 +500,49 @@ mod tests {
             },
             SamplePool::default().attach(vec![0.25; sample_frames * usize::from(spec.channels)]),
         )
+    }
+
+    /// A resampled track's tail compensation counts the whole source, so the
+    /// decoder resolves it only as the last packet lands. Answering the flush
+    /// from the profile this generation snapshotted at frame zero installs the
+    /// value from before any of that was known, and the trimmer then cuts the
+    /// full trailing run instead of holding the frame the resampler rounded
+    /// away.
+    #[kithara::test]
+    fn finish_installs_the_tail_compensation_the_decoder_resolved_while_decoding() {
+        let pushed_frames = 5_u64;
+        let trailing_frames = 2_u64;
+        let spec = spec(2, 44_100);
+        let mut generation = DecoderGeneration::new(
+            Box::new(EofDecoder {
+                gapless: Some(GaplessInfo::new(0, trailing_frames)),
+                default_priming: 0,
+                spec,
+                late_tail_frames: Some(pushed_frames + 1),
+                profile_calls: Cell::new(0),
+            }),
+            None,
+            0,
+            0,
+            None,
+            GaplessMode::MediaOnly,
+        );
+
+        for frame in 0..pushed_frames {
+            generation.stage(chunk(spec, frame, 1, 1));
+        }
+        generation.finish_staging();
+
+        let mut frames = 0u64;
+        while let Some(next) = generation.next() {
+            frames = frames.saturating_add(u64::from(next.meta.frames));
+        }
+
+        assert_eq!(
+            frames,
+            pushed_frames - (trailing_frames - 1),
+            "the one-frame deficit must come back off the trailing trim"
+        );
     }
 
     /// An unlabelled AAC track keeps its encoder priming in the PCM (the
