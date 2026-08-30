@@ -162,7 +162,7 @@ fn garbage_availability_bin_costs_a_refetch() {
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn segment_deleted_externally_after_checkpoint_degrades_gracefully() {
+fn segment_deleted_externally_after_checkpoint_is_refetched() {
     let dir = tempdir().unwrap();
     seed_clean_state_then(dir.path(), |root, scope, key| {
         fs::remove_file(segment_path(root, scope, key)).unwrap();
@@ -178,23 +178,17 @@ fn segment_deleted_externally_after_checkpoint_degrades_gracefully() {
 
     assert_eq!(
         scope.store().final_len(&key),
-        Some(12),
-        "aggregate is not re-verified against disk on hydration"
+        None,
+        "hydration must not vouch for a file that is gone"
     );
+    assert!(!scope.store().contains_range(&key, 0..12));
+    assert!(scope.store().available_ranges(&key).is_empty());
 
-    match scope.store().acquire_resource(&key, None) {
-        Ok(acq) => {
-            let mut buf = Vec::new();
-            let _ = match acq {
-                AcquisitionResult::Pending(w) => w.reader().read_into(&mut buf),
-                AcquisitionResult::Ready(r) => r.read_into(&mut buf),
-                _ => Ok(0),
-            };
-        }
-        Err(e) => {
-            tracing::debug!(error = %e, "stale-claim resource correctly errored on acquire");
-        }
-    }
+    let acq = store.acquire_resource(&key, None).unwrap();
+    assert!(
+        matches!(acq, AcquisitionResult::Pending(_)),
+        "the acquire path reaches the same verdict and refetches"
+    );
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
