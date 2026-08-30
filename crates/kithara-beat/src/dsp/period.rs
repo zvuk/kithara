@@ -197,6 +197,12 @@ fn interpolate(autocorrelation: &[f32], lag: usize) -> f32 {
     ) else {
         return centre;
     };
+    // Only a sample that tops its neighbours has a parabola to refine, and
+    // that bound keeps the vertex inside the half-lag it stands for. A ramp
+    // with a whisker of concavity otherwise puts it arbitrarily far away.
+    if at < before || at < after {
+        return centre;
+    }
     let curvature = before - 2.0 * at + after;
     if curvature >= 0.0 {
         return centre;
@@ -268,6 +274,26 @@ mod tests {
             "75 BPM read as {} and 150 BPM as {}: the two levels must not collapse",
             bpm(slow_lag),
             bpm(fast_lag)
+        );
+    }
+
+    /// Sub-bin interpolation may only move a peak inside its own bin. A nearly
+    /// flat peak makes the parabola's vertex run away, and the result becomes a
+    /// period no filterbank ever proposed.
+    #[kithara::test(native, flash(false))]
+    fn interpolation_stays_inside_the_searched_range() {
+        let mut autocorrelation = vec![0.0; ACF_FRAME];
+        // An upward ramp with a whisker of concavity: the parabola's vertex
+        // sits nowhere near the three lags that defined it.
+        autocorrelation[50] = 1.0;
+        autocorrelation[51] = 1.1;
+        autocorrelation[52] = 1.199_999_9;
+
+        let period = interpolate(&autocorrelation, 50);
+        assert!(
+            (Consts::MIN_LAG.to_f32().unwrap_or(0.0)..=Consts::MAX_LAG.to_f32().unwrap_or(0.0))
+                .contains(&period),
+            "interpolated period {period} left the searched lag range"
         );
     }
 
