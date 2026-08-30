@@ -3,7 +3,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fs::OpenOptions,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::OnceLock,
 };
 
@@ -13,7 +13,6 @@ use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{Availability, AvailabilityIndex, Entry, InnerIndex};
 use crate::{
-    backend::indexed_path,
     error::{AssetsError, AssetsResult},
     index::persistence::{
         init_atomic, open_existing,
@@ -30,19 +29,18 @@ pub(super) struct AvailabilityPersist {
 impl AvailabilityIndex {
     /// Enable disk persistence rooted at `path`. Hydrates the
     /// in-memory aggregate from the existing on-disk snapshot (if
-    /// any), drops what `root_dir` no longer backs, then caches the
-    /// `Atomic<MmapDriver>` for subsequent flushes. Idempotent.
+    /// any), then caches the `Atomic<MmapDriver>` for subsequent
+    /// flushes. Idempotent.
     ///
     /// Failures (open, load) collapse silently — the aggregate
     /// stays empty and the persist resource is materialised lazily
     /// on first flush.
-    pub(crate) fn enable_persistence(&self, path: PathBuf, cancel: CancelToken, root_dir: &Path) {
+    pub(crate) fn enable_persistence(&self, path: PathBuf, cancel: CancelToken) {
         let opened = if path.exists() {
             match open_existing(&path, &cancel) {
                 Ok(res) => {
                     let atomic = Atomic::new(res);
                     let _ = self.load_from(&atomic);
-                    self.drop_absent(root_dir);
                     Some(atomic)
                 }
                 Err(e) => {
@@ -63,28 +61,6 @@ impl AvailabilityIndex {
                 cell
             }),
         });
-    }
-
-    /// Drop hydrated entries whose files `root_dir` no longer holds.
-    fn drop_absent(&self, root_dir: &Path) {
-        let mut dropped = false;
-        self.edit_tree(|tree| {
-            tree.retain(|root, entries| {
-                let present: HashMap<String, Entry> = entries
-                    .iter()
-                    .filter(|(path, _)| {
-                        indexed_path(root_dir, root, path).is_some_and(|p| p.exists())
-                    })
-                    .map(|(path, entry)| (path.clone(), Arc::clone(entry)))
-                    .collect();
-                dropped |= present.len() != entries.len();
-                *entries = Arc::new(present);
-                !entries.is_empty()
-            });
-        });
-        if dropped {
-            self.mark_dirty();
-        }
     }
 
     /// Load the availability index from a persistent resource.

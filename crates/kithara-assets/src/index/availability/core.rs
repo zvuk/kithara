@@ -169,6 +169,26 @@ impl AvailabilityIndex {
         }
     }
 
+    /// Keep only the entries `keep` accepts, by asset root and relative path.
+    pub(crate) fn retain<F: Fn(&str, &str) -> bool>(&self, keep: F) {
+        let mut dropped = false;
+        self.edit_tree(|tree| {
+            tree.retain(|root, entries| {
+                let kept: HashMap<String, Entry> = entries
+                    .iter()
+                    .filter(|(path, _)| keep(root, path))
+                    .map(|(path, entry)| (path.clone(), Arc::clone(entry)))
+                    .collect();
+                dropped |= kept.len() != entries.len();
+                *entries = Arc::new(kept);
+                !entries.is_empty()
+            });
+        });
+        if dropped {
+            self.mark_dirty();
+        }
+    }
+
     /// Called from the decode produce path (`phase_at` cascade): reads the
     /// snapshots in place and parks them instead of dropping, so a read
     /// racing a writer never frees a replaced generation on the audio thread.
@@ -267,7 +287,7 @@ impl AvailabilityIndex {
     /// throughout, and a racing edit re-runs against the tree that won. The
     /// closure must therefore be idempotent — every caller here is (map
     /// insert-if-absent and removals).
-    pub(super) fn edit_tree(&self, mut edit: impl FnMut(&mut AssetTree)) {
+    fn edit_tree(&self, mut edit: impl FnMut(&mut AssetTree)) {
         self.inner.assets.rcu(|tree| {
             let mut next = AssetTree::clone(tree);
             edit(&mut next);
@@ -275,7 +295,7 @@ impl AvailabilityIndex {
         });
     }
 
-    pub(super) fn mark_dirty(&self) {
+    fn mark_dirty(&self) {
         self.inner.dirty.store(true, Ordering::Release);
         if let Some(hub) = self.inner.hub.get() {
             hub.signal();

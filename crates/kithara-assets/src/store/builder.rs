@@ -15,7 +15,7 @@ use super::{
     handle::{AssetStore, AssetStoreInner, StoreBackendInner},
 };
 #[cfg(not(target_arch = "wasm32"))]
-use crate::backend::{DiskAssetDeleter, DiskAssetStore};
+use crate::backend::{DiskAssetDeleter, DiskAssetStore, indexed_path};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::decorator::ByteRecorder;
 use crate::{
@@ -277,7 +277,9 @@ fn open_disk_backend(setup: DiskStoreSetup) -> StoreBackendInner {
     ));
 
     if let Some(path) = lazy_index_path(&root_dir, "availability.bin") {
-        availability.enable_persistence(path, cancel.clone(), &root_dir);
+        availability.enable_persistence(path, cancel.clone());
+        availability
+            .retain(|root, rel| indexed_path(&root_dir, root, rel).is_some_and(|p| p.exists()));
     }
     availability.attach_to(&hub);
 
