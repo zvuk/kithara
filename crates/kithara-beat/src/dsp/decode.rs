@@ -8,20 +8,13 @@ use super::{
 struct Consts;
 
 impl Consts {
-    /// Keeps a log-likelihood finite where the curve touches its own extremes.
     const EPSILON: f32 = 1e-6;
-    /// The Gaussian's 99% support, as a multiple of the standard deviation.
+    /// The Gaussian's 99% support, in standard deviations.
     const SUPPORT: f32 = 2.58;
 }
 
-/// Beat positions in detection-function frames, decoded by Viterbi over a
-/// first-order hidden Markov model whose state is the frames elapsed since the
-/// last beat.
-///
-/// State 0 is the beat state; the only transitions out of a state are to the
-/// next non-beat state or back to the beat. The observation likelihoods are
-/// first-order polynomials in the normalised curve, and every non-beat state
-/// shares one distribution.
+/// Beat positions in frames, by Viterbi over a hidden Markov model whose
+/// state counts the frames since the last beat. State 0 is the beat.
 pub(crate) fn beats<S>(
     curve: &[f32],
     periods: &[f32],
@@ -149,8 +142,6 @@ pub(super) fn estimate_of(frame: usize, estimates: usize) -> usize {
     estimate_for(frame, estimates)
 }
 
-/// An estimate describes the window it was measured over, so the frame it
-/// applies to is that window's centre rather than its start.
 fn estimate_for(frame: usize, estimates: usize) -> usize {
     frame
         .saturating_sub(ACF_FRAME / 2)
@@ -175,8 +166,6 @@ where
             if value > best.1 { (index, value) } else { best }
         })
         .0;
-    // Walked backwards, so the beats are written front to back and turned
-    // round once the count is known.
     let mut out = pools.get_with_len::<f32>(frames)?;
     let mut found = 0;
     for frame in (0..frames).rev() {
@@ -191,8 +180,6 @@ where
     Ok(out)
 }
 
-/// The curve read as a probability: the beat state is likelier where the curve
-/// is large, every non-beat state where it is small.
 fn normalise<S>(curve: &[f32], pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,
@@ -217,8 +204,6 @@ fn log_observation(value: f32, state: usize) -> f32 {
     }
 }
 
-/// Probability of leaving each state for the beat state, from a Gaussian over
-/// the time between consecutive beats centred on the estimated period.
 fn hazard<S>(period: f32, states: usize, pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,

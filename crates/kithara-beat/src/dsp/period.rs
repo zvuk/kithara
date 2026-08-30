@@ -21,13 +21,8 @@ impl Consts {
     const RAYLEIGH_B: f32 = 48.0;
 }
 
-/// Beat period in detection-function frames, one per [`ACF_STEP`].
-///
-/// Fractional: a beat period is rarely a whole number of frames, and at these
-/// tempi one lag is worth about 2.4 BPM, which a grid cannot absorb.
-///
-/// Empty when the curve is shorter than one periodicity window: there is no
-/// periodicity to measure over less than 6 seconds.
+/// Fractional beat period in frames, one per [`ACF_STEP`]. Empty when the
+/// curve is shorter than one periodicity window.
 pub(crate) fn periods<S>(curve: &[f32], pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,
@@ -72,17 +67,13 @@ where
     Ok(out)
 }
 
-/// The beat period is a slowly varying process, so the sequence of estimates is
-/// decoded rather than read off each window's own maximum: a window whose
-/// salience momentarily favours another metrical level does not drag the grid
-/// with it.
-///
-/// The transition is Gaussian over lag. Its width is not the beat-to-beat
-/// deviation but that deviation accumulated over the beats separating two
-/// estimates: timing wanders as a random walk, so over `n` beats it spreads by
-/// `sqrt(n)`. Reading the phase model's tolerance as the per-beat step makes
-/// this the same constant rather than a second, invented one.
-fn track<S>(saliences: &[SampleBuffer], pools: &PoolRegion<S>) -> Result<Vec<Option<usize>>, PoolError>
+/// Viterbi over the salience: the period is a slowly varying process. The
+/// transition width is the per-beat deviation spread over the beats between
+/// two estimates, timing being a random walk.
+fn track<S>(
+    saliences: &[SampleBuffer],
+    pools: &PoolRegion<S>,
+) -> Result<Vec<Option<usize>>, PoolError>
 where
     S: HasPool<f32>,
 {
@@ -138,8 +129,6 @@ where
     Ok(out)
 }
 
-/// Unbiased autocorrelation of the frame, mean-thresholded and half-wave
-/// rectified first so a loud passage does not outweigh a quiet one.
 fn correlate<S>(frame: &[f32], out: &mut [f32], pools: &PoolRegion<S>) -> Result<(), PoolError>
 where
     S: HasPool<f32>,
@@ -159,12 +148,8 @@ where
     Ok(())
 }
 
-/// Shift-invariant comb filterbank under the tempo preference curve: each lag
-/// scores the autocorrelation at its own multiples, so a period beats its own
-/// submultiples only when the harmonics agree.
-///
-/// All zero when the window carries no onset energy: silence has no period, and
-/// reporting one would put a grid on nothing.
+/// Shift-invariant comb filterbank under the tempo preference curve. All zero
+/// when the window carries no onset energy: silence has no period.
 fn salience<S>(
     autocorrelation: &[f32],
     weights: &[f32],
@@ -194,10 +179,6 @@ where
     Ok(out)
 }
 
-/// Sub-lag period by fitting a parabola through the autocorrelation peak the
-/// winning lag stands on. The filterbank picks the metrical level; this reads
-/// the period off the correlation itself, whose peak is symmetric where the
-/// filterbank's score is not.
 fn interpolate(autocorrelation: &[f32], lag: usize) -> f32 {
     let peak = [lag, lag + 1]
         .into_iter()

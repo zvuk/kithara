@@ -191,26 +191,20 @@ compile-time no-op and `is_empty()` is the runtime signal.
 ## Which detector a build carries
 
 `beat-nn` and `beat-dsp` are detector backends above `analysis-beat`, and each
-implies it. Neither implies the other, and all four combinations are valid.
+implies it. Neither implies the other; all four combinations are valid.
 
-- `beat-nn` is `BeatThis`, a neural network with 9.3 MB of ONNX weights read
-  through `rten`.
-- `beat-dsp` is `SpectralBeats`, signal processing after the family of beat
-  tracker Essentia ships: it carries no model bytes, needs no network runtime,
-  and compiles for `wasm32`. It reports beats and never downbeats, because this
-  family of tracker does not establish bar starts.
-- A build carrying both uses `BeatThis`. The signal-processing backend is for
-  the builds the network cannot reach, not a replacement for it.
-- A build carrying neither still opens passes and publishes snapshots with
-  coverage and a waveform, and no beat artifact. `with_beat()` drops its
-  configuration when no detector can be constructed, and the pass runs on.
+- `beat-nn` is `BeatThis`, a neural network with 9.3 MB of ONNX weights.
+- `beat-dsp` is `SpectralBeats`, signal processing: no model bytes, no network
+  runtime, compiles for `wasm32`, and reports beats but never downbeats.
+- Carrying both selects `BeatThis`.
+- Carrying neither still publishes coverage and a waveform, with no beat
+  artifact. `with_beat()` drops its configuration and the pass runs on.
 
-The two backends are **not expected to agree**. They report different metrical
-levels on the same track — on the crate's own fixture `BeatThis` tracks
-230.8 BPM and `SpectralBeats` 114.8 — and neither is wrong. `backend::SELECTED`
-is the single expression of which one a build uses; the fingerprint tag is
-derived from that same value, so a grid is never served from cache to a build
-that would not have produced it.
+The backends are not expected to agree; on the crate's own fixture they track
+different metrical levels. `backend::SELECTED_DETECTOR` is the single
+expression of which one a build uses, and the fingerprint tag derives from it,
+so a grid is never served from cache to a build that would not have produced
+it.
 
 ## Waveform
 

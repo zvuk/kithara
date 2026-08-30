@@ -7,11 +7,7 @@ use super::frames::{FRAME, HOP};
 
 const HANN_A0: f32 = 0.5;
 
-/// Rectified complex spectral difference, one value per [`HOP`]: the distance
-/// between the observed spectrum and the one predicted by carrying the previous
-/// magnitude forward at the previous rate of phase change. A steady tone
-/// predicts itself and contributes nothing; a transient breaks both magnitude
-/// and phase. Only bins that grew count, so a note ending is not an onset.
+/// Rectified complex spectral difference, one value per [`HOP`].
 pub(crate) struct Novelty<S>
 where
     S: HasPool<f32>,
@@ -67,8 +63,6 @@ where
 }
 
 impl Frames {
-    /// Predicting a spectrum needs two frames behind it, so the first two carry no
-    /// difference rather than the whole spectrum's worth.
     fn difference(&mut self, fft: &Arc<dyn RealToComplex<f32>>, warming: bool) -> f32 {
         if fft
             .process_with_scratch(&mut self.input, &mut self.output, &mut self.scratch)
@@ -96,7 +90,6 @@ impl Frames {
     }
 }
 
-/// Phase differences only mean anything inside one turn.
 fn wrap(angle: f32) -> f32 {
     let turn = std::f32::consts::TAU;
     angle - turn * (angle / turn).round()

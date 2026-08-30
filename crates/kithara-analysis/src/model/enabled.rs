@@ -5,14 +5,14 @@ use tracing::warn;
 
 use crate::{
     BeatAnalysisConfig,
-    beat::{BeatDetectorKind, GRID_SEMANTICS_TAG, GridParams, SELECTED, build_detector},
+    beat::{BeatDetectorKind, GRID_SEMANTICS_TAG, GridParams, SELECTED_DETECTOR, build_detector},
 };
 
 pub(crate) fn detector<S>(pools: &PoolRegion<S>) -> Option<Arc<dyn crate::beat::BeatDetector>>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    match build_detector(SELECTED, pools) {
+    match build_detector(SELECTED_DETECTOR, pools) {
         Ok(detector) => Some(Arc::from(detector)),
         Err(e) => {
             warn!(?e, "beat detector init failed; beat analysis disabled");
@@ -21,13 +21,13 @@ where
     }
 }
 
-/// Names the detector this build selected, so a cached grid is only served back
-/// to a build that would have produced it.
+/// Names the detector this build selected, so a cached grid is only served
+/// back to a build that would have produced it.
 pub(crate) fn tag<B>(config: &BeatAnalysisConfig<B>) -> String
 where
     B: ResamplerBackend,
 {
-    tag_for(SELECTED, config)
+    tag_for(SELECTED_DETECTOR, config)
 }
 
 fn tag_for<B>(kind: BeatDetectorKind, config: &BeatAnalysisConfig<B>) -> String
@@ -60,12 +60,12 @@ mod tests {
     fn the_tag_names_the_detector_that_was_built() {
         let pool = SamplePool::default();
         assert!(
-            build_detector(SELECTED, &pool).is_ok(),
+            build_detector(SELECTED_DETECTOR, &pool).is_ok(),
             "the selected detector is the one a build can construct"
         );
         let tag = tag(&config());
         assert!(
-            tag.starts_with(&format!("{SELECTED}:")),
+            tag.starts_with(&format!("{SELECTED_DETECTOR}:")),
             "the fingerprint names the detector that ran, not another: {tag}"
         );
     }
@@ -81,11 +81,9 @@ mod tests {
         );
     }
 
-    /// The signal-processing backend is for the builds the network cannot
-    /// reach, never a replacement for it.
     #[cfg(all(feature = "beat-nn", feature = "beat-dsp"))]
     #[kithara::test(native, flash(false))]
     fn a_build_carrying_both_uses_the_network() {
-        assert_eq!(SELECTED, BeatDetectorKind::NnBeatThis);
+        assert_eq!(SELECTED_DETECTOR, BeatDetectorKind::NnBeatThis);
     }
 }

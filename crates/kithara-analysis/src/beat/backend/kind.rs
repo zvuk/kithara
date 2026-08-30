@@ -10,9 +10,9 @@ pub(crate) enum BeatDetectorKind {
 /// The detector this build uses. A build carrying both uses the network: the
 /// signal-processing backend is there for the builds that cannot run one.
 #[cfg(feature = "beat-nn")]
-pub(crate) const SELECTED: BeatDetectorKind = BeatDetectorKind::NnBeatThis;
+pub(crate) const SELECTED_DETECTOR: BeatDetectorKind = BeatDetectorKind::NnBeatThis;
 #[cfg(all(not(feature = "beat-nn"), feature = "beat-dsp"))]
-pub(crate) const SELECTED: BeatDetectorKind = BeatDetectorKind::DspSpectral;
+pub(crate) const SELECTED_DETECTOR: BeatDetectorKind = BeatDetectorKind::DspSpectral;
 
 impl BeatDetectorKind {
     /// What the detector reads from, named in the analysis fingerprint so a

@@ -1,10 +1,9 @@
 #![cfg(feature = "dsp")]
 
-//! Golden parity against a real Essentia `BeatTrackerDegara` run.
-//!
-//! Scores the signal-processing backend by F-measure over the ±70 ms MIR
-//! window. The floor and the window were chosen from the fixture material
-//! before the detector existed; the change's `design.md` records why.
+//! Scores the signal-processing backend against the recorded `BeatTrackerDegara`
+//! reference by F-measure over the ±70 ms MIR window. The floor and the window
+//! were chosen from the fixture material before the detector existed;
+//! `tests/fixtures/README.md` holds the reference's provenance.
 mod common;
 
 use std::path::{Path, PathBuf};
@@ -46,7 +45,7 @@ fn report(s: &Score) {
 }
 
 #[kithara::test(native, flash(false))]
-fn essentia_parity() {
+fn degara_parity() {
     let pcm = load_pcm_fixture();
     let raw = SpectralBeats::new(pools())
         .expect("a fresh region has room for the window")

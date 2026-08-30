@@ -4,16 +4,14 @@ use num_traits::cast::ToPrimitive;
 use super::{decode, frames, novelty::Novelty, period};
 use crate::mark::{BeatMark, RawBeats};
 
-/// Smallest and largest probability a mark may carry: a beat the grid predicts
-/// over nothing is still a beat, and no beat is ever a certainty.
+/// A mark is never a certainty, and never nothing.
 const CONFIDENCE_BOUNDS: (f32, f32) = (0.001, 0.999);
 
-/// Signal-processing beat detector: a spectral difference novelty curve, a
-/// comb-filtered period sequence decoded as a slowly varying process, then
-/// beats decoded over inter-beat intervals. No model data and no network.
+/// Signal-processing beat detector: novelty curve, comb-filtered period,
+/// then beats decoded over inter-beat intervals. No model data, no network.
 ///
-/// Reports beats only. Bar starts are not established by this family of
-/// tracker, and a grid with no downbeats is a valid grid.
+/// Reports beats and never downbeats: this family of tracker does not
+/// establish bar starts.
 pub struct SpectralBeats<S>
 where
     S: HasPool<f32>,
@@ -35,9 +33,8 @@ where
         })
     }
 
-    /// Input: whole-track mono f32 at `22_050` Hz. Output: seconds.
-    ///
-    /// Audio too short to measure a periodicity over yields no marks.
+    /// Input: whole-track mono f32 at `22_050` Hz. Output: seconds. Audio
+    /// too short to measure a periodicity over yields no marks.
     ///
     /// # Errors
     /// [`PoolError`] when a stage does not fit the region.
@@ -67,8 +64,6 @@ fn mean(curve: &[f32]) -> f32 {
     curve.iter().sum::<f32>() / curve.len().to_f32().unwrap_or(1.0)
 }
 
-/// How far the novelty at a beat stands above the track's own average, read as
-/// a probability.
 fn confidence(curve: &[f32], at: f32, mean: f32) -> f32 {
     if mean <= 0.0 {
         return 0.5;
@@ -95,7 +90,6 @@ mod tests {
 
     const SECONDS: f32 = 20.0;
 
-    /// Two click tracks end to end: `first` for `switch_seconds`, then `second`.
     fn tempo_change(switch_seconds: f32, total_seconds: f32, first: f32, second: f32) -> Vec<f32> {
         let mut pcm = clicks::track(switch_seconds, first);
         pcm.extend(clicks::track(total_seconds - switch_seconds, second));
@@ -136,8 +130,6 @@ mod tests {
         }
     }
 
-    /// The grid has to follow a tempo change, not average across it: a
-    /// consumer splits a grid into segments by the periods it reports.
     #[kithara::test(native, flash(false))]
     fn a_tempo_change_lands_in_separate_segments() {
         let switch = 20.0;
@@ -212,9 +204,7 @@ mod optimality {
         test_pools::pools,
     };
 
-    /// The model's score for a beat set over the whole curve, maximised over
-    /// the state the path starts in: the decoder's initial distribution is
-    /// uniform, so any starting state is free.
+    /// Maximised over the starting state: the initial distribution is uniform.
     fn score(
         beats: &[usize],
         hazards: &[SampleBuffer],
@@ -251,9 +241,6 @@ mod optimality {
             .fold(f64::NEG_INFINITY, f64::max)
     }
 
-    /// Viterbi is exact, so the path it returns must score exactly what its own
-    /// dynamic program reported. Scoring the path independently is the only way
-    /// to know the decode is not quietly returning a lesser path.
     #[kithara::test(native, flash(false))]
     fn the_decoded_path_scores_the_dynamic_programs_optimum() {
         let region = pools();

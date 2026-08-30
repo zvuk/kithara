@@ -1,7 +1,7 @@
-"""Record the Degara golden fixture from a real Essentia run.
+"""Record the Degara golden fixture.
 
-Reference output only: Essentia is AGPL-3.0, so its numbers are data and its
-source is never read. Run it, commit the JSON, keep the crate MIT OR Apache-2.0.
+Run for its output only: the tool is AGPL-3.0, so its numbers are data and its
+source is never read. Commit the JSON; the crate stays MIT OR Apache-2.0.
 
     python3 -m venv venv && venv/bin/pip install --pre essentia numpy
     venv/bin/python record_degara_golden.py

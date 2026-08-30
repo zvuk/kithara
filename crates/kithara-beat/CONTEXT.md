@@ -18,16 +18,14 @@ Detailed contracts and invariants for the kithara-beat crate; the README is the 
 ## Backends
 
 `nn` is the neural pipeline below; `embed-small-model` adds the bundled weights
-and implies it. `dsp` is `SpectralBeats`, a signal-processing detector reading
-the same `RawBeats`: spectral difference novelty, comb-filtered periodicity over
-a Viterbi-decoded period sequence, then beats decoded by Viterbi over inter-beat
-intervals. It pulls `realfft` and neither `rten` nor any model data, so a `dsp`
-build compiles for `wasm32`. It reports beats and never downbeats.
+and implies it. `dsp` is `SpectralBeats`, a signal-processing detector over the
+same `RawBeats`: novelty curve, comb-filtered periodicity, then Viterbi over
+inter-beat intervals. It pulls `realfft` and neither `rten` nor model data, so a
+`dsp` build compiles for `wasm32`. It reports beats and never downbeats.
 
 Neither feature implies the other and a build may carry both, one, or neither.
-The two are not expected to agree: on the crate's own fixture `BeatThis` tracks
-230.8 BPM and `SpectralBeats` 114.8, different metrical levels of the same
-track.
+The two are not expected to agree: on the crate's own fixture they track
+different metrical levels of the same track.
 
 ## Pipeline
 
@@ -66,6 +64,6 @@ and explains why the small model is not held to F = 1.0. The run takes a couple 
 `cargo test -p kithara-beat --features dsp` is the scoped probe for the signal-processing
 backend. Its unit tests read no fixture at all — click tracks, a tempo change, and silence,
 generated in the test — and are the layer that still means something when the golden cannot be
-regenerated. `tests/degara.rs` scores the backend against a real Essentia run at the same ±70 ms
+regenerated. `tests/degara.rs` scores the backend against the recorded reference at the same ±70 ms
 window; both parity test files carry a file-level `#![cfg]` so a build without their feature does
 not compile them.
