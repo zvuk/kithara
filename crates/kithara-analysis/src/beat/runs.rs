@@ -113,11 +113,31 @@ where
     }
 
     fn detector_frames(&self, frames: u64) -> usize {
-        let frames: f64 = frames.to_f64().unwrap_or(0.0);
-        (frames * self.ratio)
-            .round()
-            .to_usize()
-            .unwrap_or(usize::MAX)
+        scale(frames, self.ratio)
+    }
+
+    /// Drops what a run has already fed the detector. `opens_at` answers, for a
+    /// run starting at that detector frame, the frame its next window opens at.
+    /// A run emptied this way keeps its place: it still holds the resampler the
+    /// audio behind it continues.
+    pub(super) fn release(&mut self, opens_at: impl Fn(usize) -> usize) {
+        let ratio = self.ratio;
+        for run in &mut self.runs {
+            let base = scale(run.start, ratio);
+            let target = (opens_at(base).to_f64().unwrap_or(0.0) / ratio)
+                .floor()
+                .to_u64()
+                .unwrap_or(0)
+                .clamp(run.start, run.end);
+            let exact = scale(target, ratio)
+                .saturating_sub(base)
+                .min(run.mono.len());
+            if exact == 0 {
+                continue;
+            }
+            run.mono.drain(..exact);
+            run.start = target;
+        }
     }
 
     pub(super) fn flush(&mut self) -> Result<(), BeatDetectError> {
@@ -379,6 +399,15 @@ where
             .build();
         MonoStream::new(config).map_err(resample_error)
     }
+}
+
+/// Source frames on the detector axis. Rounding, so a join keeps its position
+/// instead of drifting by a sample per segment.
+fn scale(frames: u64, ratio: f64) -> usize {
+    (frames.to_f64().unwrap_or(0.0) * ratio)
+        .round()
+        .to_usize()
+        .unwrap_or(usize::MAX)
 }
 
 fn write_padded(writer: &mut Writer<'_>, samples: &[f32], expected: usize) {
@@ -660,6 +689,37 @@ mod tests {
             reclaimed > 0 && reclaimed < 44_100,
             "the budget reclaims the overflow, not the track: {reclaimed}"
         );
+    }
+
+    #[kithara::test]
+    fn released_audio_leaves_the_rest_where_it_was() {
+        // 48 kHz -> 22.05 kHz is not a whole ratio, so a release rounded up
+        // would move the run past the window it must resume at, and one
+        // rounded anywhere would shift the audio behind it.
+        let source = ramp(48_000 * 4, 0);
+        let mut whole = runs(48_000);
+        whole.push(&source, 0);
+        whole.flush();
+        let held = mono_of(&whole);
+
+        for opens_at in [1, 4321, 22_050, 40_000] {
+            let mut set = runs(48_000);
+            set.push(&source, 0);
+            set.flush();
+            set.release(|_| opens_at);
+
+            let (start, mono) = set.spans().next().expect("one run");
+            let base = set.offset_in_run(0, start);
+            assert!(
+                base <= opens_at,
+                "a run resuming at {base} skips the window opening at {opens_at}"
+            );
+            assert_eq!(
+                mono,
+                &held[base..],
+                "released at {opens_at}, the audio behind it moved"
+            );
+        }
     }
 
     #[kithara::test]

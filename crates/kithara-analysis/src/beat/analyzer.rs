@@ -104,9 +104,8 @@ where
             .min(config.detector_window_seconds().saturating_sub(1));
         let overlap_frames = frames_for_seconds(detector_rate, overlap_seconds);
         let ready_frames = window_frames.saturating_add(overlap_frames);
-        // Four detector windows: detection consumes the front of a run, so the
-        // live window plus the runs waiting behind it stay in the budget while
-        // a fragmented coverage set cannot grow it with the track length.
+        // Four detector windows of backlog: a run releases everything ahead of
+        // the window it still waits on, so the hold follows the wait.
         let budget = ready_frames.saturating_mul(BUDGET_WINDOWS);
 
         Self {
@@ -125,6 +124,11 @@ where
             grid: GridBuffers::new(&pools),
             source_rate,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn held_frames(&self) -> usize {
+        self.runs.held_frames()
     }
 
     pub(crate) fn unanalysed(&self) -> Vec<FrameRange> {
@@ -360,6 +364,21 @@ where
         } else {
             self.short.insert(window.index);
         }
+        self.release_detected();
+    }
+
+    /// A run releases everything ahead of the window it still waits on: earlier
+    /// audio fed a full window, and a window is read again only when it was cut
+    /// short.
+    fn release_detected(&mut self) {
+        let (windows, short, hop) = (&self.windows, &self.short, self.hop_frames);
+        self.runs.release(|base| {
+            let mut index = base.div_ceil(hop);
+            while windows.contains_key(&index) && !short.contains(&index) {
+                index = index.saturating_add(1);
+            }
+            index.saturating_mul(hop)
+        });
     }
 
     fn detect<S>(
@@ -893,6 +912,73 @@ mod tests {
         assert!(
             grid.regions().is_empty(),
             "9 downbeats are below the stable window: tempo only"
+        );
+    }
+
+    #[kithara::test]
+    fn a_run_holds_what_waits_rather_than_the_track() {
+        // Window 2 s, overlap 1 s: a 3 s window, a 12 s budget. Detection
+        // keeps pace, so what waits is one window however long the track is.
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(Consts::SRC)
+            .detector_window_seconds(2)
+            .detector_overlap_seconds(1)
+            .build();
+        let second = usize::try_from(Consts::SRC).unwrap_or(1);
+        let pcm = stereo(60 * second, |_| 0.25);
+        let mut analyzer = analyzer(Consts::SRC, config);
+        let mut detector = detector(|_| empty_raw());
+
+        let mut worst = 0;
+        for (index, chunk) in pcm.chunks(second * 2).enumerate() {
+            let at = u64::try_from(index * second).unwrap_or(0);
+            analyzer.push_interleaved_deferred(chunk, 2, at);
+            while let Some(request) = analyzer.prepare_detection(false) {
+                analyzer.apply_detection(request.detect(&mut detector));
+            }
+            worst = worst.max(analyzer.held_frames());
+        }
+
+        assert!(
+            worst <= 6 * second,
+            "one window is 3 s, yet the run held {worst} frames of {}",
+            60 * second
+        );
+    }
+
+    #[kithara::test]
+    fn a_track_past_the_budget_is_analysed_to_its_end() {
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(Consts::SRC)
+            .detector_window_seconds(2)
+            .detector_overlap_seconds(1)
+            .build();
+        let second = usize::try_from(Consts::SRC).unwrap_or(1);
+        let pcm = stereo(60 * second, |_| 0.25);
+        let mut analyzer = analyzer(Consts::SRC, config);
+        let mut detector = detector(|_| empty_raw());
+
+        for (index, chunk) in pcm.chunks(second * 2).enumerate() {
+            let at = u64::try_from(index * second).unwrap_or(0);
+            analyzer.push_interleaved_deferred(chunk, 2, at);
+            while let Some(request) = analyzer.prepare_detection(false) {
+                analyzer.apply_detection(request.detect(&mut detector));
+            }
+        }
+        analyzer
+            .snapshot(&mut detector, true)
+            .expect("mock detects");
+
+        let lost: u64 = analyzer
+            .unanalysed()
+            .iter()
+            .map(|range| range.frames())
+            .sum();
+        assert_eq!(
+            lost, 0,
+            "the detector read every second, yet {lost} frames are reported unanalysed"
         );
     }
 

@@ -888,7 +888,7 @@ mod artifacts {
     struct Route {
         artifacts: Artifacts,
         seeks: usize,
-        reclaimed: bool,
+        lost: u64,
     }
 
     /// Runs it takes to cover this track at best: its length over the fixed
@@ -928,9 +928,9 @@ mod artifacts {
         Route {
             artifacts: artifacts(&analysis),
             seeks: targets(&pass.calls()).len(),
-            reclaimed: analysis
-                .beat()
-                .is_some_and(|beat| !beat.unanalysed().is_empty()),
+            lost: analysis.beat().map_or(0, |beat| {
+                beat.unanalysed().iter().map(|range| range.frames()).sum()
+            }),
         }
     }
 
@@ -955,9 +955,20 @@ mod artifacts {
             "the same artifacts must not cost a halving sequence to reach: {} runs",
             scheduled.seeks
         );
+        // The track is longer than the audio the beat pass may hold, so it
+        // reaches the end only by releasing what the detector has read.
+        assert_eq!(
+            linear.lost, 0,
+            "read in order, a track longer than the hold reaches its end whole"
+        );
+        // Scheduling opens a run per seek, and a run holds its window whole
+        // until the detector can read one, so enough of them at once crosses
+        // the hold. What that costs stays under one window.
+        let window = u64::from(SR) * u64::from(WINDOW_SECONDS);
         assert!(
-            linear.reclaimed && scheduled.reclaimed,
-            "both routes must reach the regime where the beat pass reclaims"
+            scheduled.lost < window,
+            "the scheduled route lost {} frames, past the {window} a window carries",
+            scheduled.lost
         );
         assert_agrees(
             &linear.artifacts,

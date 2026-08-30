@@ -154,9 +154,12 @@ re-detected when its full window fills. Once the extent is known, the artifact i
 spread across it at its own tempo while retaining detected marker positions. Run
 mono comes from sample guards acquired through `TrackAnalyzers`; the logical run
 set retains at most four detector windows while every physical allocation still
-competes under the region-wide hard byte budget. Detection consumes a run
-front-first. Reclaimed spans remain covered for every other consumer but are
-reported as no longer beat-analyzable. Downmix and grid-cleanup scratch stay as
+competes under the region-wide hard byte budget. A run releases everything ahead
+of the window it still waits on, so the hold follows the detection backlog rather
+than the track length; a run short of its first window holds it whole, so enough
+concurrent runs still cross the budget and the earliest is reclaimed. Reclaimed
+spans remain covered for every other consumer but are reported as no longer
+beat-analyzable. Downmix and grid-cleanup scratch stay as
 guards for the pass lifetime; no lower component constructs or stores another
 pool facade.
 
