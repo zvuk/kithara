@@ -1,8 +1,8 @@
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    api::{BeatError, BeatMark},
-    config::BeatConfig,
+    mark::BeatMark,
+    nn::{api::BeatError, config::BeatConfig},
 };
 
 pub(crate) struct PeakPicker {

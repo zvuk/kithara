@@ -7,11 +7,11 @@ mod runs;
 
 pub(crate) use analyzer::{BeatPassConfig, DetectOutput, DetectRequest};
 pub(crate) use detector::BeatDetector;
-#[cfg(feature = "beat-nn")]
-pub(crate) use detector::backend::{BeatDetectorKind, build_detector};
+#[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
+pub(crate) use detector::backend::{BeatDetectorKind, SELECTED, build_detector};
 #[cfg(test)]
 pub(crate) use detector::{BeatDetectError, BeatDetectorMock, BeatMark, RawBeats};
-#[cfg(feature = "beat-nn")]
+#[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
 pub(crate) use grid::GRID_SEMANTICS_TAG;
 pub(crate) use grid::GridParams;
 pub(crate) use pass::BeatPass;

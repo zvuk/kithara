@@ -5,7 +5,7 @@ use rten::{Model as RtenGraph, NodeId, ValueOrView, ValueView};
 use rten_tensor::{AsView, Layout};
 use smallvec::SmallVec;
 
-use crate::api::BeatError;
+use crate::nn::api::BeatError;
 
 /// Simple f32 tensor with shape (row-major / C-order).
 #[derive(Debug)]

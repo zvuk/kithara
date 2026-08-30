@@ -344,7 +344,12 @@ impl Drop for AnalysisWorker {
     }
 }
 
-#[cfg(all(test, feature = "analysis-beat", not(feature = "beat-nn")))]
+#[cfg(all(
+    test,
+    feature = "analysis-beat",
+    not(feature = "beat-nn"),
+    not(feature = "beat-dsp")
+))]
 mod tests {
     use kithara_platform::CancelToken;
     use kithara_resampler::NoResamplerBackend;

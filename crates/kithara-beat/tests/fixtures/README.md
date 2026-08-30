@@ -20,3 +20,26 @@ beats and downbeats. The small structural model has a few logit peaks right at
 the `> 0` threshold where rten's float output differs from torch by an epsilon,
 so exact F = 1.0 is not guaranteed (it is for the full FP32 model, which proves
 the shared pipeline stages exact).
+
+## Degara golden
+
+`golden_degara.json` — beat times in seconds from a real Essentia run, the
+reference the signal-processing backend is scored against.
+
+- **Essentia version**: 2.1-beta6-dev, PyPI wheel `cp314-macosx_15_0_arm64`.
+- **Algorithm**: `BeatTrackerDegara`.
+- **Parameters**: `minTempo=40`, `maxTempo=208` — the algorithm's defaults.
+- **Input**: `beat_test_mono_22050.f32le`, the same track the neural parity test
+  uses, resampled 22 050 -> 44 100 Hz by Essentia's own `Resample` because
+  `BeatTrackerDegara` requires that rate.
+
+292 beats over 155.69 s, median inter-beat interval 0.5225 s (114.8 BPM). The
+neural backend tracks the same track at 230.8 BPM, twice that: the two backends
+report different metrical levels and are not expected to agree.
+
+`record_degara_golden.py` regenerates the file and carries the run instructions.
+Essentia is AGPL-3.0, so it is run and its output read as data; its source is
+not read and nothing is carried across.
+
+Parity criterion: F-measure >= 0.85 at the ±70 ms MIR window for beats. The
+change's `design.md` records why that floor and not another.

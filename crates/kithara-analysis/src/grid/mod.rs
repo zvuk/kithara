@@ -4,7 +4,7 @@ mod extend;
 mod fit;
 mod scratch;
 
-#[cfg(feature = "beat-nn")]
+#[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
 pub(crate) use core::GRID_SEMANTICS_TAG;
 pub(crate) use core::GridParams;
 pub(super) use core::build_grid_with;

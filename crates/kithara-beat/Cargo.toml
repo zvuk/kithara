@@ -15,18 +15,26 @@ ignored = ["kithara-workspace-hack"]
 
 [features]
 default = []
-embed-small-model = []
+# The neural pipeline and its runtime. `dsp` selects the signal-processing
+# detector; neither feature implies the other and a build may carry both.
+nn = ["dep:rten", "dep:rten-tensor"]
+dsp = ["dep:kithara-platform", "dep:realfft"]
+embed-small-model = ["nn"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+kithara-platform = { workspace = true, optional = true }
 
 bon = { workspace = true }
 num-traits = { workspace = true }
-rten = { workspace = true }
-rten-tensor = { workspace = true }
+realfft = { workspace = true, optional = true }
+rten = { workspace = true, optional = true }
+rten-tensor = { workspace = true, optional = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }

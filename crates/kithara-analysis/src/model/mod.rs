@@ -1,9 +1,9 @@
-#[cfg(not(feature = "beat-nn"))]
+#[cfg(not(any(feature = "beat-nn", feature = "beat-dsp")))]
 mod disabled;
-#[cfg(feature = "beat-nn")]
+#[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
 mod enabled;
 
-#[cfg(not(feature = "beat-nn"))]
+#[cfg(not(any(feature = "beat-nn", feature = "beat-dsp")))]
 pub(crate) use disabled::*;
-#[cfg(feature = "beat-nn")]
+#[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
 pub(crate) use enabled::*;

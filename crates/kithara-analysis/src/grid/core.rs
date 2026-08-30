@@ -18,7 +18,7 @@ use crate::{
     beat::detector::{BeatMark, RawBeats},
 };
 
-#[cfg(feature = "beat-nn")]
+#[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
 pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v2";
 
 struct Consts;

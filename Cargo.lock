@@ -4800,9 +4800,11 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "kithara-bufpool",
+ "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
+ "realfft",
  "rten",
  "rten-tensor",
  "serde",

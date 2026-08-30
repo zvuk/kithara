@@ -1310,3 +1310,54 @@ fn pending_is_tolerated_mid_stream() {
     let out = stages(reader, builder, &CancelToken::root());
     assert!(out.len() == 1 && out[0].waveform().is_some());
 }
+
+/// A build that carries no beat detector still runs the pass: the spec requires
+/// the absence to cost the snapshot nothing but its beat artifact.
+#[cfg(all(
+    feature = "analysis-beat",
+    feature = "analysis-waveform",
+    not(feature = "beat-nn"),
+    not(feature = "beat-dsp")
+))]
+#[kithara::test]
+fn a_pass_with_no_detector_publishes_the_rest() {
+    let rate = super::fixtures::spec().sample_rate;
+    let (jobs, receiver) = mpsc::channel();
+    let (tx, results) = watch::channel(None);
+    let (writer, ingest) = ring::open_for(rate);
+    let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
+    jobs.send(Job {
+        token: "test-track".into(),
+        reader: Box::new(FakeReader::stalled(3)),
+        tx,
+        rate,
+        ingest,
+        cancel: CancelToken::root(),
+        resume: None,
+    })
+    .expect("analysis node accepts the test job");
+    let mut node = NodeHarness::new(waveform_only().with_beat(), receiver);
+
+    assert_eq!(
+        producer.offer(&sine(1024), super::fixtures::spec(), 0),
+        Ok(())
+    );
+    for _ in 0..128 {
+        let _ = node.tick();
+    }
+
+    let analysis = latest_analysis(&results).expect("a pass with no detector still publishes");
+    assert_eq!(
+        analysis.coverage().runs(),
+        &[FrameRange::new(0, 1024)],
+        "coverage is recorded whether or not a detector ran"
+    );
+    assert!(
+        analysis.waveform().is_some(),
+        "the missing detector does not suppress the waveform"
+    );
+    assert!(
+        analysis.beat().is_none(),
+        "there is no detector, so there is no beat artifact"
+    );
+}

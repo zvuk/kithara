@@ -1,3 +1,5 @@
+#![cfg(feature = "embed-small-model")]
+
 //! Golden parity test.
 //!
 //! Feeds the pre-decoded mono 22 050 Hz PCM fixture through the full pipeline

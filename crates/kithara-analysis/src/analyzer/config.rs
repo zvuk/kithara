@@ -40,9 +40,18 @@ impl<B> BeatAnalysisConfig<B>
 where
     B: ResamplerBackend,
 {
+    /// What a cached analysis must have been produced under to be served back.
+    /// A build with no beat detector has none.
     #[must_use]
     pub fn cache_tag(&self) -> Option<String> {
-        super::nn::tag(self)
+        #[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
+        {
+            Some(crate::model::tag(self))
+        }
+        #[cfg(not(any(feature = "beat-nn", feature = "beat-dsp")))]
+        {
+            None
+        }
     }
 
     fn resampler_backend_name(&self) -> &'static str {

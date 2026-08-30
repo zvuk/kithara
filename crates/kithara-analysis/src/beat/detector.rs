@@ -1,8 +1,8 @@
 use kithara_bufpool::PoolError;
 use thiserror::Error;
 
-#[cfg(feature = "beat-nn")]
-#[path = "backend.rs"]
+#[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
+#[path = "backend/mod.rs"]
 pub(super) mod backend;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -4,7 +4,7 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 use smallvec::smallvec;
 
-use crate::{
+use crate::nn::{
     api::BeatError,
     runtime::{RtenModel, Tensor},
 };

@@ -1,7 +1,7 @@
 use kithara_bufpool::{HasPool, PoolRegion};
 use smallvec::smallvec;
 
-use crate::{
+use crate::nn::{
     api::BeatError,
     runtime::{RtenModel, Tensor},
 };
