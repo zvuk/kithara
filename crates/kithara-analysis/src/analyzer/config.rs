@@ -105,18 +105,18 @@ mod tests {
 
     #[cfg(feature = "beat-nn")]
     #[kithara::test(native, flash(false))]
-    fn cache_tag_invalidates_pre_confidence_results() {
+    fn the_cache_tag_carries_what_decides_the_grid() {
         let tag = BeatAnalysisConfig::<RubatoBackend>::default()
             .cache_tag()
             .expect("beat NN has a cache tag");
 
         assert!(
-            tag.contains(":grid_bpm_from_beats_v2:"),
+            tag.contains(":grid_bpm_from_beats_v3:"),
             "grid semantics must participate in durable-cache identity"
         );
         assert!(
-            !tag.contains(":grid_bpm_from_beats_v1:"),
-            "a grid carrying per-marker confidence is not the grid v1 cached"
+            !tag.contains(":grid_bpm_from_beats_v2:"),
+            "a grid counted at the rate it is played is not the grid v2 cached"
         );
         assert!(
             tag.contains(":detector_audio_seamless_v1:"),

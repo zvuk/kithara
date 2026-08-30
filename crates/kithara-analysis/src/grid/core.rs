@@ -10,6 +10,7 @@ use super::{
         median,
     },
     fit::{GridFitCtx, build_segments},
+    octave,
     scratch::{GridBuffers, fill, retain},
 };
 use crate::{
@@ -19,7 +20,7 @@ use crate::{
 };
 
 #[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
-pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v2";
+pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v3";
 
 struct Consts;
 
@@ -85,7 +86,8 @@ where
     S: HasPool<f32>,
 {
     let mut buffers = GridBuffers::new(pools);
-    build_grid_with(raw, sample_rate, params, &mut buffers)
+    let grid = build_grid_with(raw, sample_rate, params, &mut buffers)?;
+    Ok(octave::fold(grid))
 }
 
 pub(crate) fn build_grid_with(
