@@ -10,8 +10,14 @@ use crate::{
     BlobError,
     analyzer::BeatAnalysisConfig,
     blob::Writer,
-    progress::{BeatRunResume, write_samples},
+    progress::BeatRunResume,
 };
+
+/// What the detector was fed under. A grid built from audio assembled another
+/// way is not this build's answer, so it names itself in the analysis
+/// fingerprint.
+#[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
+pub(crate) const DETECTOR_AUDIO_TAG: &str = "detector_audio_seamless_v1";
 
 struct Run<B>
 where
@@ -141,7 +147,14 @@ where
         for run in &self.runs {
             writer.write_u64(run.start);
             writer.write_u64(run.end);
-            write_samples(writer, &run.mono);
+            // A live resampler still holds this run's tail. The blob carries the
+            // span the run declares, so the part still inside reads as silence
+            // rather than costing the live run its resampler.
+            write_padded(
+                writer,
+                &run.mono,
+                self.detector_frames(run.end.saturating_sub(run.start)),
+            );
         }
         writer.write_len(self.dropped.len());
         for (from, to) in &self.dropped {
@@ -251,38 +264,38 @@ where
         let mut cursor = base;
         let mut stream = None;
 
-        for run in absorbed {
+        for mut run in absorbed {
             if cursor < run.start {
                 let Some(piece) = slice(mono, at, cursor, run.start) else {
                     return Ok(None);
                 };
-                self.segment(pools, &mut out, piece)?;
-                pad(
-                    &mut out,
-                    self.detector_frames(run.start.saturating_sub(base)),
-                )?;
+                self.resample(pools, &mut out, piece, &mut stream)?;
+                cursor = run.start;
             }
+            // Audio the run already holds came out of its own resampler, so
+            // ours ends here and its tail lands before that audio.
+            finish_into(&mut out, stream.take())?;
+            pad(&mut out, self.detector_frames(cursor.saturating_sub(base)))?;
             if run.end <= cursor {
                 continue;
-            }
-            let mut run = run;
-            if let Some(inner) = run.stream.take() {
-                let tail = &mut run.mono;
-                finish_stream(inner, tail)?;
             }
             let skip = self.detector_frames(cursor.saturating_sub(run.start));
             append(&mut out, run.mono.get(skip..).unwrap_or_default())?;
             cursor = run.end;
-            pad(&mut out, self.detector_frames(cursor.saturating_sub(base)))?;
+            // The run the arriving audio continues keeps its resampler. Closing
+            // one and opening another leaves a step at the seam, and an onset
+            // detector reads a step as a beat.
+            stream = run.stream.take();
+            if stream.is_none() {
+                pad(&mut out, self.detector_frames(cursor.saturating_sub(base)))?;
+            }
         }
 
         if cursor < end {
             let Some(piece) = slice(mono, at, cursor, end) else {
                 return Ok(None);
             };
-            let opened = self.open(pools, piece, cursor, end)?;
-            append(&mut out, &opened.mono)?;
-            stream = opened.stream;
+            self.resample(pools, &mut out, piece, &mut stream)?;
             cursor = end;
         }
 
@@ -321,11 +334,14 @@ where
         })
     }
 
-    fn segment<S>(
+    /// Resamples one contiguous piece through `stream`, opening one when there
+    /// is none. What the stream still holds stays in it.
+    fn resample<S>(
         &self,
         pools: &PoolRegion<S>,
         out: &mut SampleBuffer,
         mono: &[f32],
+        stream: &mut Option<MonoStream<B>>,
     ) -> Result<(), BeatDetectError>
     where
         S: HasPool<f32>,
@@ -334,9 +350,13 @@ where
             append(out, mono)?;
             return Ok(());
         }
-        let mut stream = self.stream(pools)?;
-        push_stream(&mut stream, mono, out)?;
-        finish_stream(stream, out)
+        let mut inner = match stream.take() {
+            Some(inner) => inner,
+            None => self.stream(pools)?,
+        };
+        push_stream(&mut inner, mono, out)?;
+        *stream = Some(inner);
+        Ok(())
     }
 
     fn stream<S>(&self, pools: &PoolRegion<S>) -> Result<MonoStream<B>, BeatDetectError>
@@ -358,6 +378,29 @@ where
             .pools(pools.clone())
             .build();
         MonoStream::new(config).map_err(resample_error)
+    }
+}
+
+fn write_padded(writer: &mut Writer<'_>, samples: &[f32], expected: usize) {
+    writer.write_len(expected);
+    for sample in samples.iter().take(expected) {
+        writer.write_f32(*sample);
+    }
+    for _ in samples.len()..expected {
+        writer.write_f32(0.0);
+    }
+}
+
+fn finish_into<B>(
+    out: &mut SampleBuffer,
+    stream: Option<MonoStream<B>>,
+) -> Result<(), BeatDetectError>
+where
+    B: ResamplerBackend,
+{
+    match stream {
+        Some(stream) => finish_stream(stream, out),
+        None => Ok(()),
     }
 }
 
@@ -488,6 +531,41 @@ mod tests {
         runs.spans()
             .map(|(start, mono)| (start, mono.len()))
             .collect()
+    }
+
+    fn mono_of(set: &TestRuns) -> Vec<f32> {
+        set.spans()
+            .flat_map(|(_, mono)| mono.iter().copied())
+            .collect()
+    }
+
+    /// One resampler per run, carried across arrivals: closing one and opening
+    /// another leaves a step at the seam, and an onset detector reads a step
+    /// as a beat.
+    #[kithara::test]
+    fn arrival_size_does_not_change_the_resampled_audio() {
+        let source = ramp(88_200, 0);
+        let mut whole = runs(SRC);
+        whole.push(&source, 0);
+        whole.flush();
+
+        let mut piecemeal = runs(SRC);
+        for (index, block) in source.chunks(2205).enumerate() {
+            piecemeal.push(block, u64::try_from(index * 2205).unwrap_or(0));
+        }
+        piecemeal.flush();
+
+        let (whole, piecemeal) = (mono_of(&whole), mono_of(&piecemeal));
+        assert_eq!(whole.len(), piecemeal.len(), "same source, same length");
+        let worst = whole
+            .iter()
+            .zip(&piecemeal)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst < 1e-4,
+            "arriving in blocks changed the audio by {worst}: a seam the detector reads as an onset"
+        );
     }
 
     #[kithara::test]

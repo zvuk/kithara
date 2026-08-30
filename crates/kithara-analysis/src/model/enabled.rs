@@ -5,7 +5,10 @@ use tracing::warn;
 
 use crate::{
     BeatAnalysisConfig,
-    beat::{BeatDetectorKind, GRID_SEMANTICS_TAG, GridParams, SELECTED_DETECTOR, build_detector},
+    beat::{
+        BeatDetectorKind, DETECTOR_AUDIO_TAG, GRID_SEMANTICS_TAG, GridParams, SELECTED_DETECTOR,
+        build_detector,
+    },
 };
 
 pub(crate) fn detector<S>(pools: &PoolRegion<S>) -> Option<Arc<dyn crate::beat::BeatDetector>>
@@ -35,8 +38,9 @@ where
     B: ResamplerBackend,
 {
     format!(
-        "{kind}:{}:{}:{:?}:{:?}",
+        "{kind}:{}:{}:{}:{:?}:{:?}",
         kind.model_tag(),
+        DETECTOR_AUDIO_TAG,
         GRID_SEMANTICS_TAG,
         GridParams::default(),
         config
@@ -58,9 +62,9 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_tag_names_the_detector_that_was_built() {
-        let pool = SamplePool::default();
+        let pools = kithara_bufpool::testing::pools();
         assert!(
-            build_detector(SELECTED_DETECTOR, &pool).is_ok(),
+            build_detector(SELECTED_DETECTOR, &pools).is_ok(),
             "the selected detector is the one a build can construct"
         );
         let tag = tag(&config());

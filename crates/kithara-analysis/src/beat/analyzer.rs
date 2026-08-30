@@ -302,9 +302,6 @@ where
     }
 
     pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>) {
-        if let Err(error) = self.runs.flush() {
-            self.failure = Some(error);
-        }
         let mut writer = Writer::new(out);
         self.runs.write_resume(&mut writer);
         writer.write_len(self.windows.len());
@@ -539,6 +536,10 @@ mod tests {
         ) -> Result<crate::BeatArtifact, BeatDetectError> {
             self.analyzer.snapshot(&self.pools, detector, ending)
         }
+
+        fn write_resume(&mut self, out: &mut Vec<u8>) {
+            self.analyzer.write_resume(out);
+        }
     }
 
     fn analyzer(source_rate: u32, config: BeatAnalysisConfig<RubatoBackend>) -> Pass {
@@ -590,6 +591,40 @@ mod tests {
         }
         let n: f32 = samples.len().as_();
         (samples.iter().map(|s| s * s).sum::<f32>() / n).sqrt()
+    }
+
+    #[kithara::test]
+    fn resume_between_blocks_leaves_no_step_in_the_audio() {
+        // A 440 Hz sine at 22 050 Hz moves at most 0.063 between neighbouring
+        // samples. Anything larger is a seam, and an onset detector reads a
+        // seam as a beat.
+        let step = std::f32::consts::TAU * 440.0 / 44_100.0;
+        let pcm = stereo(2 * 44_100, |n| {
+            let t: f32 = n.as_();
+            0.5 * (step * t).sin()
+        });
+        let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
+        let detector = detector(|mono| {
+            let worst = mono
+                .windows(2)
+                .map(|pair| (pair[1] - pair[0]).abs())
+                .fold(0.0f32, f32::max);
+            assert!(
+                worst < 0.1,
+                "neighbouring samples jump by {worst} in a 440 Hz sine"
+            );
+            empty_raw()
+        });
+
+        let mut resume = Vec::new();
+        let mut at = 0;
+        for chunk in pcm.chunks(1000 * 2) {
+            analyzer.push_interleaved(chunk, 2, at, &detector);
+            at += u64::try_from(chunk.len() / 2).unwrap_or(0);
+            resume.clear();
+            analyzer.write_resume(&mut resume);
+        }
+        analyzer.snapshot(&detector, true).expect("mock detects");
     }
 
     #[kithara::test]

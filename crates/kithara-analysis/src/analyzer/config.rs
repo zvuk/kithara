@@ -118,5 +118,9 @@ mod tests {
             !tag.contains(":grid_bpm_from_beats_v1:"),
             "a grid carrying per-marker confidence is not the grid v1 cached"
         );
+        assert!(
+            tag.contains(":detector_audio_seamless_v1:"),
+            "how the detector was fed decides the grid, so it must decide the tag"
+        );
     }
 }

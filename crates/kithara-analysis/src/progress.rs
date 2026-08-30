@@ -345,10 +345,7 @@ pub(crate) fn write_coverage(writer: &mut Writer<'_>, coverage: &Coverage) {
     }
 }
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "analysis-waveform", feature = "analysis-beat")
-))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "analysis-waveform"))]
 pub(crate) fn write_samples(writer: &mut Writer<'_>, samples: &[f32]) {
     writer.write_len(samples.len());
     for sample in samples {

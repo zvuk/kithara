@@ -15,3 +15,5 @@ pub(crate) use detector::{BeatDetectError, BeatDetectorMock, BeatMark, RawBeats}
 pub(crate) use grid::GRID_SEMANTICS_TAG;
 pub(crate) use grid::GridParams;
 pub(crate) use pass::BeatPass;
+#[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
+pub(crate) use runs::DETECTOR_AUDIO_TAG;
