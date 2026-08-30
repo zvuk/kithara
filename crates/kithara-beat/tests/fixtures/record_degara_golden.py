@@ -6,8 +6,8 @@ source is never read. Commit the JSON; the crate stays MIT OR Apache-2.0.
     python3 -m venv venv && venv/bin/pip install --pre essentia numpy
     venv/bin/python record_degara_golden.py
 
-Reads `beat_test_mono_22050.f32le`, resamples to the 44 100 Hz the algorithm
-requires, and writes `golden_degara.json`.
+Reads each pre-decoded mono fixture, resamples to the 44 100 Hz the algorithm
+requires, and writes its golden beside it.
 """
 
 import json
@@ -23,15 +23,20 @@ ESSENTIA_RATE = 44100
 MIN_TEMPO = 40
 MAX_TEMPO = 208
 
+FIXTURES = [
+    ("beat_test_mono_22050.f32le", "golden_degara.json"),
+    ("track_excerpt_mono_22050.f32le", "golden_degara_track.json"),
+]
 
-def main() -> None:
-    pcm = np.fromfile(HERE / "beat_test_mono_22050.f32le", dtype="<f4")
+
+def record(source: str, golden: str) -> None:
+    pcm = np.fromfile(HERE / source, dtype="<f4")
     resampled = es.Resample(
         inputSampleRate=SOURCE_RATE, outputSampleRate=ESSENTIA_RATE
     )(pcm)
     ticks = es.BeatTrackerDegara(minTempo=MIN_TEMPO, maxTempo=MAX_TEMPO)(resampled)
 
-    (HERE / "golden_degara.json").write_text(
+    (HERE / golden).write_text(
         json.dumps(
             {
                 "beats": [round(float(t), 6) for t in ticks],
@@ -41,8 +46,17 @@ def main() -> None:
         )
         + "\n"
     )
+    gaps = np.diff(ticks)
+    print(
+        f"{golden}: {len(ticks)} beats over {len(pcm) / SOURCE_RATE:.2f} s, "
+        f"median {60 / float(np.median(gaps)):.2f} BPM"
+    )
+
+
+def main() -> None:
     print(f"essentia {essentia.__version__}")
-    print(f"{len(ticks)} beats over {len(pcm) / SOURCE_RATE:.2f} s")
+    for source, golden in FIXTURES:
+        record(source, golden)
 
 
 if __name__ == "__main__":

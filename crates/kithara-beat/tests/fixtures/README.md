@@ -21,11 +21,20 @@ the `> 0` threshold where rten's float output differs from torch by an epsilon,
 so exact F = 1.0 is not guaranteed (it is for the full FP32 model, which proves
 the shared pipeline stages exact).
 
-## Degara golden
+## Degara goldens
 
-`golden_degara.json` — beat times in seconds, the reference the
-signal-processing backend is scored against. Recorded by
-`record_degara_golden.py`, which carries the run instructions.
+Beat times in seconds, the reference the signal-processing backend is scored
+against. Both are recorded by `record_degara_golden.py`, which carries the run
+instructions.
+
+- `golden_degara.json` over `beat_test_mono_22050.f32le`: 292 beats over
+  155.69 s, median 114.84 BPM. The track the neural parity test also uses.
+- `golden_degara_track.json` over `track_excerpt_mono_22050.f32le`: 86 beats
+  over 45.00 s, median 109.96 BPM. The first 45 seconds of `assets/track.mp3`,
+  where the reference holds one steady level and reading a submultiple is the
+  failure to catch. An excerpt rather than the whole track because a decoded
+  fixture costs four times what the committed mp3 does, and 45 s covers the
+  region that discriminates.
 
 Provenance, so a later disagreement can be attributed:
 
@@ -34,12 +43,12 @@ Provenance, so a later disagreement can be attributed:
   never read or carried across.
 - **Algorithm**: `BeatTrackerDegara`, parameters `minTempo=40`,
   `maxTempo=208`, its defaults.
-- **Input**: `beat_test_mono_22050.f32le`, the track the neural parity test
-  uses, resampled 22 050 -> 44 100 Hz because the algorithm requires that rate.
+- **Input**: the pre-decoded mono fixtures above, resampled 22 050 -> 44 100 Hz
+  because the algorithm requires that rate.
 
-292 beats over 155.69 s, median inter-beat interval 0.5225 s (114.8 BPM). The
-neural backend tracks the same track at twice that: the two report different
-metrical levels and are not expected to agree.
+The neural backend tracks the first track at twice the reference's level: the
+two backends report different metrical levels and are not expected to agree.
 
-Parity criterion: F-measure >= 0.85 at the ±70 ms MIR window for beats. The
-change's `design.md` records why that floor and not another.
+Parity criterion: F-measure >= 0.85 at the ±70 ms MIR window for beats, and a
+grid within 5% of the reference's tempo. The change's `design.md` records why
+that floor and not another.

@@ -165,23 +165,32 @@ mod tests {
         );
     }
 
-    /// A reused tracker carries pooled buffers between calls, so the same
-    /// audio must decode to the same grid however it is reached.
+    /// A tracker takes its buffers from a shared region, so the same audio
+    /// must decode to the same grid however it is reached.
     #[kithara::test(native, flash(false))]
     fn the_same_audio_yields_the_same_marks() {
         let pcm = tempo_change(9.0, 24.0, 60.0 / 100.0, 60.0 / 137.0);
-        let pool = SamplePool::default();
+        let region = pools();
+        let marks = |tracker: &SpectralBeats<_>, pcm: &[f32]| -> Vec<f32> {
+            tracker
+                .analyze(pcm)
+                .expect("the analysis fits the region")
+                .beats
+                .iter()
+                .map(|m| m.at)
+                .collect()
+        };
 
-        let mut reused = SpectralBeats::new(&pool);
-        let first: Vec<f32> = reused.analyze(&pcm).beats.iter().map(|m| m.at).collect();
-        let _ = reused.analyze(&clicks::track(12.0, 0.4));
-        let again: Vec<f32> = reused.analyze(&pcm).beats.iter().map(|m| m.at).collect();
-        let fresh: Vec<f32> = SpectralBeats::new(&pool)
-            .analyze(&pcm)
-            .beats
-            .iter()
-            .map(|m| m.at)
-            .collect();
+        let reused = SpectralBeats::new(region.clone())
+            .expect("a fresh region has room for the window");
+        let first = marks(&reused, &pcm);
+        let _ = marks(&reused, &clicks::track(12.0, 0.4));
+        let again = marks(&reused, &pcm);
+        let fresh = marks(
+            &SpectralBeats::new(region.clone())
+                .expect("a fresh region has room for the window"),
+            &pcm,
+        );
 
         assert_eq!(
             first, again,

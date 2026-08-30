@@ -19,6 +19,17 @@ impl Consts {
     /// Rayleigh mode, in lags: the mean beat period of the source paper's
     /// database.
     const RAYLEIGH_B: f32 = 48.0;
+    /// Resolution the period is searched at. A beat period is rarely a whole
+    /// number of frames, and sampling the correlation between lags is what
+    /// lets a hypothesis be scored at its own multiples rather than at the
+    /// nearest integers to them.
+    const STEP: f32 = 0.25;
+    /// Hypotheses spanning `MIN_LAG..=MAX_LAG` at [`Consts::STEP`].
+    const HYPOTHESES: usize = (Self::MAX_LAG - Self::MIN_LAG) * 4 + 1;
+}
+
+fn period_of(hypothesis: usize) -> f32 {
+    Consts::MIN_LAG.to_f32().unwrap_or(0.0) + hypothesis.to_f32().unwrap_or(0.0) * Consts::STEP
 }
 
 /// Fractional beat period in frames, one per [`ACF_STEP`]. Empty when the
@@ -30,21 +41,17 @@ where
     if curve.len() < ACF_FRAME {
         return Ok(pools.get::<f32>());
     }
-    let weights = rayleigh(pools)?;
-    let mut correlations: Vec<SampleBuffer> = Vec::new();
     let mut saliences: Vec<SampleBuffer> = Vec::new();
     for start in (0..=curve.len() - ACF_FRAME).step_by(ACF_STEP) {
         let mut autocorrelation = zeroed(pools, ACF_FRAME)?;
         correlate(&curve[start..start + ACF_FRAME], &mut autocorrelation, pools)?;
-        saliences.push(salience(&autocorrelation, &weights, pools)?);
-        correlations.push(autocorrelation);
+        saliences.push(salience(&autocorrelation, pools)?);
     }
     collected(
         pools,
         track(&saliences, pools)?
             .into_iter()
-            .zip(correlations.iter())
-            .map(|(lag, autocorrelation)| lag.map_or(0.0, |lag| interpolate(autocorrelation, lag))),
+            .map(|hypothesis| hypothesis.map_or(0.0, period_of)),
     )
 }
 
@@ -77,7 +84,7 @@ fn track<S>(
 where
     S: HasPool<f32>,
 {
-    let lags = Consts::MAX_LAG - Consts::MIN_LAG + 1;
+    let lags = Consts::HYPOTHESES;
     let gap_frames = ACF_STEP.to_f32().unwrap_or(1.0);
     let sigma = frames::sigma();
     let mut costs = collected(
@@ -96,9 +103,10 @@ where
         for (index, slot) in next.iter_mut().enumerate() {
             let mut best = (0usize, f32::NEG_INFINITY);
             for (from, cost) in costs.iter().enumerate() {
-                let period = (Consts::MIN_LAG + from).to_f32().unwrap_or(1.0);
+                let period = period_of(from);
                 let spread = sigma * (gap_frames / period).sqrt();
-                let gap = index.to_f32().unwrap_or(0.0) - from.to_f32().unwrap_or(0.0);
+                let gap =
+                    (index.to_f32().unwrap_or(0.0) - from.to_f32().unwrap_or(0.0)) * Consts::STEP;
                 let score = cost - gap * gap / (2.0 * spread * spread);
                 if score > best.1 {
                     best = (from, score);
@@ -119,11 +127,10 @@ where
         .0;
     let mut out = vec![None; saliences.len()];
     for step in (0..saliences.len()).rev() {
-        out[step] = if saliences[step].iter().any(|&v| v > 0.0) {
-            Some(Consts::MIN_LAG + index)
-        } else {
-            None
-        };
+        out[step] = saliences[step]
+            .iter()
+            .any(|&value| value > 0.0)
+            .then_some(index);
         index = back[step * lags + index];
     }
     Ok(out)
@@ -137,91 +144,53 @@ where
     let mean = frame.iter().sum::<f32>() / count;
     let rectified = collected(pools, frame.iter().map(|&v| (v - mean).max(0.0)))?;
     for (lag, slot) in out.iter_mut().enumerate() {
-        let pairs = rectified.len() - lag;
-        let sum: f32 = rectified[lag..]
+        *slot = rectified[lag..]
             .iter()
             .zip(rectified.iter())
             .map(|(a, b)| a * b)
             .sum();
-        *slot = sum / pairs.to_f32().unwrap_or(1.0);
     }
     Ok(())
 }
 
 /// Shift-invariant comb filterbank under the tempo preference curve. All zero
 /// when the window carries no onset energy: silence has no period.
-fn salience<S>(
-    autocorrelation: &[f32],
-    weights: &[f32],
-    pools: &PoolRegion<S>,
-) -> Result<SampleBuffer, PoolError>
+fn salience<S>(autocorrelation: &[f32], pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,
 {
     if autocorrelation.first().is_none_or(|&energy| energy <= 0.0) {
-        return zeroed(pools, Consts::MAX_LAG - Consts::MIN_LAG + 1);
+        return zeroed(pools, Consts::HYPOTHESES);
     }
-    let mut out = zeroed(pools, Consts::MAX_LAG - Consts::MIN_LAG + 1)?;
-    for (lag, weight) in weights.iter().enumerate().skip(Consts::MIN_LAG) {
+    let mut out = zeroed(pools, Consts::HYPOTHESES)?;
+    for (hypothesis, slot) in out.iter_mut().enumerate() {
+        let period = period_of(hypothesis);
         let mut score = 0.0;
         for harmonic in 1..=Consts::COMB_HARMONICS {
-            // An integer lag stands for periods in `[lag, lag + 1]`, so its
-            // `harmonic`th multiple falls anywhere across that many lags.
-            let span = harmonic + 1;
-            let first = harmonic * lag;
-            let sum: f32 = (first..=first + harmonic)
-                .filter_map(|offset| autocorrelation.get(offset))
-                .sum();
-            score += sum / span.to_f32().unwrap_or(1.0);
+            let weight = (2 * harmonic - 1).to_f32().unwrap_or(1.0);
+            let at = period * harmonic.to_f32().unwrap_or(1.0);
+            score += sample(autocorrelation, at) / weight;
         }
-        out[lag - Consts::MIN_LAG] = score * weight;
+        *slot = score * rayleigh(period);
     }
     Ok(out)
 }
 
-fn interpolate(autocorrelation: &[f32], lag: usize) -> f32 {
-    let peak = [lag, lag + 1]
-        .into_iter()
-        .max_by(|&a, &b| {
-            autocorrelation
-                .get(a)
-                .unwrap_or(&0.0)
-                .total_cmp(autocorrelation.get(b).unwrap_or(&0.0))
-        })
-        .unwrap_or(lag);
-    let centre = peak.to_f32().unwrap_or(0.0);
-    let (Some(&before), Some(&at), Some(&after)) = (
-        peak.checked_sub(1).and_then(|i| autocorrelation.get(i)),
-        autocorrelation.get(peak),
-        autocorrelation.get(peak + 1),
-    ) else {
-        return centre;
+/// The correlation between its samples, so a hypothesis is read at its own
+/// multiples instead of at the whole lags nearest them.
+fn sample(autocorrelation: &[f32], at: f32) -> f32 {
+    let below = at.floor();
+    let Some(index) = below.to_usize() else {
+        return 0.0;
     };
-    // Only a sample that tops its neighbours has a parabola to refine, and
-    // that bound keeps the vertex inside the half-lag it stands for. A ramp
-    // with a whisker of concavity otherwise puts it arbitrarily far away.
-    if at < before || at < after {
-        return centre;
-    }
-    let curvature = before - 2.0 * at + after;
-    if curvature >= 0.0 {
-        return centre;
-    }
-    centre + 0.5 * (before - after) / curvature
+    let here = autocorrelation.get(index).copied().unwrap_or(0.0);
+    let next = autocorrelation.get(index + 1).copied().unwrap_or(0.0);
+    here + (next - here) * (at - below)
 }
 
-fn rayleigh<S>(pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
-where
-    S: HasPool<f32>,
-{
+fn rayleigh(period: f32) -> f32 {
     let variance = Consts::RAYLEIGH_B * Consts::RAYLEIGH_B;
-    collected(
-        pools,
-        (0..=Consts::MAX_LAG).map(|lag| {
-            let l = lag.to_f32().unwrap_or(0.0);
-            l / variance * (-l * l / (2.0 * variance)).exp()
-        }),
-    )
+    period / variance * (-period * period / (2.0 * variance)).exp()
 }
 
 #[cfg(test)]
@@ -234,6 +203,13 @@ mod tests {
         test_pools::pools,
     };
 
+    fn curve_of(pcm: &[f32], region: &PoolRegion<impl HasPool<f32>>) -> SampleBuffer {
+        Novelty::new(region.clone())
+            .expect("a fresh region has room for the window")
+            .curve(pcm)
+            .expect("the curve fits the region")
+    }
+
     fn bpm(lag: f32) -> f32 {
         60.0 / (lag * frames::frame_seconds())
     }
@@ -241,10 +217,7 @@ mod tests {
     fn track_bpm(beats_per_minute: f32) -> SampleBuffer {
         let region = pools();
         let pcm = clicks::track(20.0, 60.0 / beats_per_minute);
-        let curve = Novelty::new(region.clone())
-            .expect("a fresh region has room for the window")
-            .curve(&pcm)
-            .expect("the curve fits the region");
+        let curve = curve_of(&pcm, &region);
         periods(&curve, &region).expect("the estimates fit the region")
     }
 
@@ -277,33 +250,29 @@ mod tests {
         );
     }
 
-    /// Sub-bin interpolation may only move a peak inside its own bin. A nearly
-    /// flat peak makes the parabola's vertex run away, and the result becomes a
-    /// period no filterbank ever proposed.
+    /// The decoder sizes its state space from the longest period it is given
+    /// and allocates against it, so a period from outside the searched range
+    /// is not a wrong answer but an unbounded allocation.
     #[kithara::test(native, flash(false))]
-    fn interpolation_stays_inside_the_searched_range() {
-        let mut autocorrelation = vec![0.0; ACF_FRAME];
-        // An upward ramp with a whisker of concavity: the parabola's vertex
-        // sits nowhere near the three lags that defined it.
-        autocorrelation[50] = 1.0;
-        autocorrelation[51] = 1.1;
-        autocorrelation[52] = 1.199_999_9;
+    fn every_period_stays_inside_the_searched_range() {
+        let region = pools();
+        let curve = curve_of(&clicks::track(20.0, 0.5), &region);
+        let reported = periods(&curve, &region).expect("the estimates fit the region");
+        assert!(!reported.is_empty(), "20 s of audio yields estimates");
 
-        let period = interpolate(&autocorrelation, 50);
-        assert!(
-            (Consts::MIN_LAG.to_f32().unwrap_or(0.0)..=Consts::MAX_LAG.to_f32().unwrap_or(0.0))
-                .contains(&period),
-            "interpolated period {period} left the searched lag range"
-        );
+        let range = period_of(0)..=period_of(Consts::HYPOTHESES - 1);
+        for &period in reported.iter() {
+            assert!(
+                period == 0.0 || range.contains(&period),
+                "period {period} left the searched range {range:?}"
+            );
+        }
     }
 
     #[kithara::test(native, flash(false))]
     fn silence_has_no_period_to_report() {
         let region = pools();
-        let curve = Novelty::new(region.clone())
-            .expect("a fresh region has room for the window")
-            .curve(&clicks::silence(0.5))
-            .expect("the curve fits the region");
+        let curve = curve_of(&clicks::silence(0.5), &region);
         assert!(
             periods(&curve, &region)
                 .expect("the estimates fit the region")
