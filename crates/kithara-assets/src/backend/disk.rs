@@ -428,9 +428,7 @@ pub(crate) fn delete_asset_dir(root_dir: &Path, asset_root: &str) -> io::Result<
     }
 }
 
-/// The file an availability-index entry names, or `None` when the pair cannot
-/// name one. The index files a resource under the same `(root, path)` split
-/// [`DiskAssetStore::resource_path`] resolves, so both answer for one layout.
+/// The file an availability-index entry names.
 pub(crate) fn indexed_path(root_dir: &Path, root: &str, path: &str) -> Option<PathBuf> {
     if root == ABSOLUTE_ROOT {
         return Some(PathBuf::from(path));

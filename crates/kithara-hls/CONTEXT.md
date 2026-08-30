@@ -342,12 +342,10 @@ later session retries persistence, while `PlaylistCache` keeps the parsed value 
 (`OnceCell` per master / per variant) for the rest of that instance.
 
 Reads serve from a held resource. `VariantSegments` keeps the reader the store handed back in two
-slots — one for the init prefix, one for the media segment — because a single `read_at` walks both,
-and a decoder consumes a segment in many small buffers. Opening the store per buffer puts every
-reader of every deck on the store's cache lock once per buffer. The slots are keyed by
-`ResourceKey`, so advancing to the next segment replaces one; a reader whose resource went `Failed`
-or `Cancelled` is dropped and opened again. Two slots is the bound: a held reader pins its asset,
-and a slot per segment would pin a whole track against a store that caches far fewer resources.
+slots — init prefix and media segment, which is what one `read_at` walks — so a decoder consuming a
+segment in small buffers opens the store once rather than once per buffer. Slots are keyed by
+`ResourceKey`; a reader whose resource went `Failed` or `Cancelled` is dropped and opened again.
+Two slots is the bound: a held reader pins its asset.
 
 Eviction is routed through an `EvictionSubscription` guard held by `HlsSource`:
 `HlsCoord::broadcast_eviction` marks the lost key `Missing` on every variant that owned it and

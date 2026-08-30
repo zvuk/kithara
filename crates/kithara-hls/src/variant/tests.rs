@@ -2827,9 +2827,6 @@ fn a_settle_after_the_space_re_mint_applies_immediately() {
     );
 }
 
-/// Put `len` bytes for segment `idx` on the store, without settling the slot:
-/// the two halves of "a fetch landed" are separate steps here so a test can
-/// read between them.
 fn write_seg_bytes(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
     let key = v.segments()[idx as usize].resource_id().clone();
     let AcquisitionResult::Pending(writer) = ctx
@@ -2845,9 +2842,7 @@ fn write_seg_bytes(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
     writer.commit(Some(len)).expect("commit segment");
 }
 
-/// The demuxer reads a segment in small buffers. Opening the store per buffer
-/// puts every reader on the store's cache lock for each one, so a chunked run
-/// over one slot must open its resource once.
+/// A chunked run over one slot opens its resource once.
 #[kithara::test]
 fn reading_a_segment_in_chunks_opens_its_resource_once() {
     let ctx = test_ctx(1);
@@ -2876,8 +2871,7 @@ fn reading_a_segment_in_chunks_opens_its_resource_once() {
     );
 }
 
-/// A slot with no bytes yet answers `NotFound`, which is the common case while
-/// its fetch is in flight. Holding that answer would park the reader for good.
+/// A `NotFound` while the fetch is in flight must not be held.
 #[kithara::test]
 fn a_read_before_the_bytes_land_does_not_stick() {
     let ctx = test_ctx(1);
@@ -2900,8 +2894,7 @@ fn a_read_before_the_bytes_land_does_not_stick() {
     );
 }
 
-/// Eviction takes the bytes away under the reader. A held resource that
-/// survives it would keep serving what is no longer there.
+/// Eviction takes the bytes away under the reader.
 #[kithara::test]
 fn an_evicted_slot_is_opened_again() {
     let ctx = test_ctx(1);
@@ -2927,9 +2920,6 @@ fn an_evicted_slot_is_opened_again() {
     );
 }
 
-
-/// A disk-backed plan context over `root`, so a test can outlive one store and
-/// come back to the index it left behind.
 fn disk_ctx(root: &std::path::Path) -> PlanCtx {
     let cancel = CancelToken::never();
     let backend = Arc::new(
@@ -2953,16 +2943,11 @@ fn disk_ctx(root: &std::path::Path) -> PlanCtx {
     }
 }
 
-/// The readiness gate and the read must answer for the same bytes. A gate that
-/// reports ready while the read reports pending is a loop with no exit: the
-/// reader wakes, reads nothing, waits, and is told ready again -- which is what
-/// a cache directory holding an index but no segment bytes leaves behind.
+/// A ready gate over a pending read is a loop with no exit.
 #[kithara::test]
 fn a_ready_gate_never_outruns_the_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
 
-    // One session commits the segment, so the availability index on disk
-    // records its range.
     let path = {
         let ctx = disk_ctx(dir.path());
         let v = make_var(0, 0, &[64], &ctx);
@@ -2975,7 +2960,6 @@ fn a_ready_gate_never_outruns_the_bytes() {
     };
     std::fs::remove_file(&path).expect("prune the cached bytes");
 
-    // The next session comes back to that index with the bytes gone.
     let ctx = disk_ctx(dir.path());
     let v = make_var(0, 0, &[64], &ctx);
     settle_seg(&v, &ctx, 0, 64);

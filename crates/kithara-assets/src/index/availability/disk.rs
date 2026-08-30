@@ -31,8 +31,7 @@ impl AvailabilityIndex {
     /// Enable disk persistence rooted at `path`. Hydrates the
     /// in-memory aggregate from the existing on-disk snapshot (if
     /// any), drops what `root_dir` no longer backs, then caches the
-    /// `Atomic<MmapDriver>` for subsequent flushes. Idempotent:
-    /// subsequent calls are no-ops.
+    /// `Atomic<MmapDriver>` for subsequent flushes. Idempotent.
     ///
     /// Failures (open, load) collapse silently — the aggregate
     /// stays empty and the persist resource is materialised lazily
@@ -66,14 +65,7 @@ impl AvailabilityIndex {
         });
     }
 
-    /// Drop every hydrated entry whose bytes `root_dir` no longer holds.
-    ///
-    /// A snapshot outlives the files it names whenever a cache directory is
-    /// pruned, or a session writes the manifest and loses its bytes. Hydrating
-    /// such a snapshot verbatim makes `contains_range` claim ranges nothing can
-    /// serve, and a reader then alternates a ready gate with a read that finds
-    /// no file. The claim is only as good as the file behind it, so the file is
-    /// what decides.
+    /// Drop hydrated entries whose files `root_dir` no longer holds.
     fn drop_absent(&self, root_dir: &Path) {
         let mut dropped = false;
         self.edit_tree(|tree| {

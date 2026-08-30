@@ -172,12 +172,9 @@ aggregate `AvailabilityIndex` keyed by the `asset_root` and relative path alread
   unwritten blocks. `DiskAssetStore` therefore treats an existing file as ready only when
   `availability` knows its final length; anything else is a torn write and is refetched. A missing
   or corrupt `availability.bin` costs a refetch, never a wrong read.
-- **Reconciled** on hydration in the other direction: an entry the store root no longer backs is
-  dropped as the snapshot loads, so a cache directory whose files went away cannot come back
-  claiming ranges nothing can serve. Without it a reader alternates a ready gate with a read that
-  finds no file, and no fetch is dispatched for a slot nothing considers missing. The check costs
-  one `exists` per persisted resource, once, at startup; `contains_range` stays lock-free and
-  filesystem-free for the produce path.
+- **Reconciled** on hydration: an entry the store root no longer backs is dropped as the snapshot
+  loads, so a pruned cache cannot come back claiming ranges nothing can serve. One `exists` per
+  persisted resource, at startup only; `contains_range` stays lock-free and filesystem-free.
 
 The persisted snapshot is a **committed-only** contract — an uncommitted partial write is never
 serialised, so a flush racing a writer's cleanup cannot resurrect a partial segment whose `.tmp`

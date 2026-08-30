@@ -91,8 +91,7 @@ pub(super) type Entry = Arc<ArcSwap<Availability>>;
 /// snapshots in [`Retired`] and the write side pays the frees when it drains.
 pub(super) type AssetTree = HashMap<String, Arc<HashMap<String, Entry>>>;
 
-/// The asset root an absolute key is filed under: it has no asset root of its
-/// own, and its whole path is the entry name.
+/// The asset root an absolute key is filed under.
 pub(crate) const ABSOLUTE_ROOT: &str = "__absolute__";
 
 pub(super) struct InnerIndex {

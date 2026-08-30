@@ -835,12 +835,6 @@ mod tests {
         );
     }
 
-    /// Pins the third path to the same HLS spin: an index that outlives its
-    /// bytes. A store hydrates `availability.bin` at startup, so a cache
-    /// directory whose resource files went away — pruned by hand, or left
-    /// behind by a session that wrote the index but not the bytes — comes back
-    /// claiming ranges nothing can serve, and the HLS reader spins on
-    /// `wait_range=Ready` / `read_at=Retry` until the hang detector fires.
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_hydrated_index_strands_a_pruned_cache() {
@@ -863,8 +857,6 @@ mod tests {
             store.checkpoint().expect("persist the availability index");
         }
 
-        // Guard: the claim must survive a restart while the bytes are there,
-        // or the assertion below would pass on an index that never hydrated.
         assert!(
             open_store().contains_range(&target, 0..4),
             "a committed range must still be claimed after a restart"

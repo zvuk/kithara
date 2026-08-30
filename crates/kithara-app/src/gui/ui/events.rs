@@ -278,11 +278,9 @@ fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
     }
 }
 
-/// The library hands a row to whichever deck the pointer released it over.
-/// Neither side knows the other: the list reports the drag it started, the
-/// deck reports the pointer crossing it, and the host joins them here. A row
-/// is a position in the listed group, so it is resolved back to a catalog
-/// entry through the same scope the rows were drawn from.
+/// The list reports the drag, the deck reports the pointer crossing it, and the
+/// host joins them here. A row is a position in its group, resolved back to a
+/// catalog entry through the scope the rows were drawn from.
 fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
         ("browser" | "context", ControlAction::SelectIndex(row)) => {

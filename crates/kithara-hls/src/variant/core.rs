@@ -175,11 +175,8 @@ pub(super) struct VariantSegments {
     /// `init_handle`); the produce-core's disk read and acquire flow through
     /// that handle.
     pub(super) scope: kithara_assets::AssetScope,
-    /// The open resources reads serve from, so a read run opens the store once
-    /// per slot rather than once per buffer.
     held: HeldReaders,
-    /// Store opens the read path performed. Test-only: the contract it guards
-    /// is that reading a slot in chunks opens its resource once.
+    /// Store opens the read path performed.
     #[cfg(test)]
     pub(super) opens: std::sync::atomic::AtomicUsize,
     /// Init slot: `Some(Segment::Init)` for a variant that advertises a
@@ -210,7 +207,7 @@ impl VariantSegments {
     }
 
     /// Copy `range` of `seg` into `dst`. `Ok(None)` means the bytes are not on
-    /// disk yet — the caller treats that as a pending read.
+    /// disk yet.
     pub(super) fn read_at(
         &self,
         seg: &Segment,
@@ -230,7 +227,6 @@ impl VariantSegments {
     }
 
     /// Drop the held resource for `key`, so the next read opens it again.
-    /// Eviction takes the bytes away under the reader.
     pub(super) fn release(&self, key: &ResourceKey) {
         for slot in [&self.held.init, &self.held.media] {
             let mut held = slot.lock();
@@ -240,9 +236,7 @@ impl VariantSegments {
         }
     }
 
-    /// The slot's open resource, opening and holding it on first use. A read
-    /// run walks one segment in many small buffers; re-opening per buffer puts
-    /// every reader on the store's cache lock for each one.
+    /// The slot's open resource, opened and held on first use.
     fn reader(&self, seg: &Segment) -> StreamResult<Option<AssetReader>> {
         let mut held = match seg {
             Segment::Init(_) => self.held.init.lock(),
@@ -268,11 +262,9 @@ impl VariantSegments {
     }
 }
 
-/// The open resource a read run serves from: one slot for the init prefix and
-/// one for the media segment, which is what a single
-/// [`read_at`](HlsVariant::read_at) walks. Bounded on purpose — a held reader
-/// pins its asset, so a slot per segment would pin the whole track against an
-/// asset store that caches far fewer.
+/// One slot for the init prefix and one for the media segment, which is what a
+/// single [`read_at`](HlsVariant::read_at) walks. A held reader pins its asset,
+/// so the count is bounded on purpose.
 #[derive(Default)]
 struct HeldReaders {
     init: Mutex<Option<Held>>,
@@ -284,7 +276,6 @@ struct Held {
     reader: AssetReader,
 }
 
-/// Whether a held reader still answers for its resource.
 fn serves(reader: &AssetReader) -> bool {
     !matches!(
         reader.status(),
