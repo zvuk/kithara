@@ -280,7 +280,9 @@ fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
 
 /// The library hands a row to whichever deck the pointer released it over.
 /// Neither side knows the other: the list reports the drag it started, the
-/// deck reports the pointer crossing it, and the host joins them here.
+/// deck reports the pointer crossing it, and the host joins them here. A row
+/// is a position in the listed group, so it is resolved back to a catalog
+/// entry through the same scope the rows were drawn from.
 fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
         ("browser" | "context", ControlAction::SelectIndex(row)) => {
@@ -288,14 +290,18 @@ fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -
             state.ui.cache.library.scope = picked;
             None
         }
-        ("tracks", ControlAction::SelectIndex(index)) => Some(Message::SelectCatalogTrack(*index)),
+        ("tracks", ControlAction::SelectIndex(row)) => {
+            let index = state.ui.cache.library.catalog_index(&state.catalog, *row)?;
+            Some(Message::SelectCatalogTrack(index))
+        }
         ("tracks", ControlAction::Drag(DragPhase::Start(row))) => {
             state.ui.cache.drag = Some(*row);
             None
         }
         ("tracks", ControlAction::Drag(DragPhase::Drop)) => {
             let (row, deck) = state.ui.cache.take_drop()?;
-            Some(Message::LoadOntoDeck(row, deck_id(state, deck)?))
+            let index = state.ui.cache.library.catalog_index(&state.catalog, row)?;
+            Some(Message::LoadOntoDeck(index, deck_id(state, deck)?))
         }
         _ => None,
     }

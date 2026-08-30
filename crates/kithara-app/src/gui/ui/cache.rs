@@ -98,6 +98,18 @@ pub(in crate::gui) struct LibraryView {
 }
 
 impl LibraryView {
+    /// The catalog entry a browser row names. Rows are the listed group, so a
+    /// row is a position in that group; only `All` makes the two coincide.
+    pub(in crate::gui) fn catalog_index(&self, catalog: &Catalog, row: usize) -> Option<usize> {
+        catalog
+            .entries()
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| self.scope.holds(entry))
+            .nth(row)
+            .map(|(index, _)| index)
+    }
+
     /// The groups the browser is listing, in the order it lists them. The tree
     /// draws these and the host resolves a row the user picked back through the
     /// same order, so a search can never make the two disagree.
