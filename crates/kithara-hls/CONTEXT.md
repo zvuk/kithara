@@ -341,10 +341,20 @@ A valid network body stays usable when persistence fails: the failure is logged 
 later session retries persistence, while `PlaylistCache` keeps the parsed value in memory
 (`OnceCell` per master / per variant) for the rest of that instance.
 
+Reads serve from a held resource. `VariantSegments` keeps the reader the store handed back in two
+slots — one for the init prefix, one for the media segment — because a single `read_at` walks both,
+and a decoder consumes a segment in many small buffers. Opening the store per buffer puts every
+reader of every deck on the store's cache lock once per buffer. The slots are keyed by
+`ResourceKey`, so advancing to the next segment replaces one; a reader whose resource went `Failed`
+or `Cancelled` is dropped and opened again. Two slots is the bound: a held reader pins its asset,
+and a slot per segment would pin a whole track against a store that caches far fewer resources.
+
 Eviction is routed through an `EvictionSubscription` guard held by `HlsSource`:
 `HlsCoord::broadcast_eviction` marks the lost key `Missing` on every variant that owned it and
 rebuilds the active variant's queue from the reader's segment. Non-active variants stay relaxed and
-pick the `Missing` entries up on their next activation.
+pick the `Missing` entries up on their next activation. `HlsVariant::on_evict` also releases the
+held resource for the lost key: the bytes go away under the reader, so the next read opens it
+again.
 
 ## Integration
 

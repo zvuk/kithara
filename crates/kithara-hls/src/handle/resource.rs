@@ -1,7 +1,7 @@
 use std::{io::ErrorKind, ops::Range};
 
 use kithara_assets::{
-    AssetScope, AssetsError, AssetsResult, ReadSide, ResourceAcquisition, ResourceKey,
+    AssetReader, AssetScope, AssetsError, AssetsResult, ResourceAcquisition, ResourceKey,
 };
 use kithara_stream::{StreamError, StreamResult};
 use url::Url;
@@ -48,22 +48,14 @@ impl<'a> ResourceHandle<'a> {
         self.scope.store().contains_range(self.key, range)
     }
 
-    /// Open the resource and copy `range` into `dst`. `Ok(None)` means the
-    /// resource is not on disk yet (`NotFound`) — the caller treats that as a
-    /// pending read.
-    pub(crate) fn read_at(&self, range: Range<u64>, dst: &mut [u8]) -> StreamResult<Option<usize>> {
-        let resource = match self.scope.store().open_resource(self.key, None) {
-            Ok(res) => res,
-            Err(AssetsError::Io(e)) if e.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(StreamError::Source(HlsError::from(e).into())),
-        };
-        resource
-            .wait_range(range.clone())
-            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
-        let n = resource
-            .read_at(range.start, dst)
-            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
-        Ok(Some(n))
+    /// Open the resource for reading. `Ok(None)` means it is not on disk yet
+    /// (`NotFound`) — the caller treats that as a pending read.
+    pub(crate) fn open(&self) -> StreamResult<Option<AssetReader>> {
+        match self.scope.store().open_resource(self.key, None) {
+            Ok(res) => Ok(Some(res)),
+            Err(AssetsError::Io(e)) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(StreamError::Source(HlsError::from(e).into())),
+        }
     }
 }
 

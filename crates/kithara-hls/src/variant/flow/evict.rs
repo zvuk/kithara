@@ -10,6 +10,7 @@ impl HlsVariant {
     /// variants without a reader are rebuilt lazily on the next ABR flip).
     #[kithara::probe(variant = self.variant as u64)]
     pub(crate) fn on_evict(&self, key: &ResourceKey) -> Option<i32> {
+        self.segments.release(key);
         if let Some(init) = self.segments.init.as_ref()
             && init.resource_id() == key
         {
