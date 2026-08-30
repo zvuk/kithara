@@ -91,6 +91,10 @@ pub(super) type Entry = Arc<ArcSwap<Availability>>;
 /// snapshots in [`Retired`] and the write side pays the frees when it drains.
 pub(super) type AssetTree = HashMap<String, Arc<HashMap<String, Entry>>>;
 
+/// The asset root an absolute key is filed under: it has no asset root of its
+/// own, and its whole path is the entry name.
+pub(crate) const ABSOLUTE_ROOT: &str = "__absolute__";
+
 pub(super) struct InnerIndex {
     /// Maps `asset_root` -> `RelativePath` -> `Availability`
     pub(super) assets: ArcSwap<AssetTree>,
@@ -264,7 +268,7 @@ impl AvailabilityIndex {
     /// throughout, and a racing edit re-runs against the tree that won. The
     /// closure must therefore be idempotent — every caller here is (map
     /// insert-if-absent and removals).
-    fn edit_tree(&self, mut edit: impl FnMut(&mut AssetTree)) {
+    pub(super) fn edit_tree(&self, mut edit: impl FnMut(&mut AssetTree)) {
         self.inner.assets.rcu(|tree| {
             let mut next = AssetTree::clone(tree);
             edit(&mut next);
@@ -272,7 +276,7 @@ impl AvailabilityIndex {
         });
     }
 
-    fn mark_dirty(&self) {
+    pub(super) fn mark_dirty(&self) {
         self.inner.dirty.store(true, Ordering::Release);
         if let Some(hub) = self.inner.hub.get() {
             hub.signal();
@@ -334,7 +338,7 @@ impl AvailabilityIndex {
                 asset_root,
                 rel_path,
             } => (asset_root, rel_path),
-            ResourceKeyKind::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
+            ResourceKeyKind::Absolute(path) => (ABSOLUTE_ROOT, path.to_str().unwrap_or("")),
         }
     }
 }

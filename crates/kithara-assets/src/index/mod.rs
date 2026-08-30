@@ -8,7 +8,7 @@ pub(crate) mod persistence;
 mod pins;
 mod transaction;
 
-pub(crate) use availability::{AvailabilityIndex, ScopedAvailabilityObserver};
+pub(crate) use availability::{ABSOLUTE_ROOT, AvailabilityIndex, ScopedAvailabilityObserver};
 pub(crate) use lru::{EvictConfig, LruIndex};
 pub(crate) use pending::{DemandEntry, PendingResourceIndex};
 pub(crate) use pending_resource::RemoveResource;

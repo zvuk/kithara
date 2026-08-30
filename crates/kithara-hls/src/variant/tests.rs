@@ -2926,3 +2926,67 @@ fn an_evicted_slot_is_opened_again() {
         "a read after eviction must open the resource again"
     );
 }
+
+
+/// A disk-backed plan context over `root`, so a test can outlive one store and
+/// come back to the index it left behind.
+fn disk_ctx(root: &std::path::Path) -> PlanCtx {
+    let cancel = CancelToken::never();
+    let backend = Arc::new(
+        AssetStore::builder()
+            .backend(StorageBackend::Disk { root: root.into() })
+            .cancel(cancel)
+            .build(),
+    );
+    PlanCtx {
+        bus: EventBus::new(8),
+        scope: backend
+            .scope::<crate::Hls>(&AssetSource::Remote {
+                url: Url::parse("https://example.com/master.m3u8").expect("master url"),
+                discriminator: Some("disk".to_owned()),
+            })
+            .expect("test asset scope"),
+        seek_epoch: 0,
+        headers: None,
+        signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+        config: PlanConfig::builder().prefetch_budget(1).build(),
+    }
+}
+
+/// The readiness gate and the read must answer for the same bytes. A gate that
+/// reports ready while the read reports pending is a loop with no exit: the
+/// reader wakes, reads nothing, waits, and is told ready again -- which is what
+/// a cache directory holding an index but no segment bytes leaves behind.
+#[kithara::test]
+fn a_ready_gate_never_outruns_the_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // One session commits the segment, so the availability index on disk
+    // records its range.
+    let path = {
+        let ctx = disk_ctx(dir.path());
+        let v = make_var(0, 0, &[64], &ctx);
+        write_seg_bytes(&v, &ctx, 0, 64);
+        let key = v.segments()[0].resource_id().clone();
+        ctx.scope.store().checkpoint().expect("persist the index");
+        dir.path()
+            .join(ctx.scope.asset_root())
+            .join(key.rel_path().expect("relative key"))
+    };
+    std::fs::remove_file(&path).expect("prune the cached bytes");
+
+    // The next session comes back to that index with the bytes gone.
+    let ctx = disk_ctx(dir.path());
+    let v = make_var(0, 0, &[64], &ctx);
+    settle_seg(&v, &ctx, 0, 64);
+
+    let mut buf = [0_u8; 8];
+    let read = v.read_at(0, &mut buf).expect("read");
+    let gate = v.wait_range(0..8, Some(Duration::ZERO));
+
+    assert!(
+        !(matches!(gate, Ok(WaitOutcome::Ready)) && matches!(read, ReadOutcome::Pending(_))),
+        "gate and read disagree, so the reader spins with no exit: \
+         gate={gate:?} read={read:?}"
+    );
+}

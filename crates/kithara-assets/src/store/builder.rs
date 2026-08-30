@@ -277,7 +277,7 @@ fn open_disk_backend(setup: DiskStoreSetup) -> StoreBackendInner {
     ));
 
     if let Some(path) = lazy_index_path(&root_dir, "availability.bin") {
-        availability.enable_persistence(path, cancel.clone());
+        availability.enable_persistence(path, cancel.clone(), &root_dir);
     }
     availability.attach_to(&hub);
 
@@ -832,6 +832,54 @@ mod tests {
              place that calls `availability.remove`. Consequence in \
              production: HLS reader spins on wait_range=Ready / \
              read_at=Retry until hang_detector fires"
+        );
+    }
+
+    /// Pins the third path to the same HLS spin: an index that outlives its
+    /// bytes. A store hydrates `availability.bin` at startup, so a cache
+    /// directory whose resource files went away — pruned by hand, or left
+    /// behind by a session that wrote the index but not the bytes — comes back
+    /// claiming ranges nothing can serve, and the HLS reader spins on
+    /// `wait_range=Ready` / `read_at=Retry` until the hang detector fires.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn red_test_hydrated_index_strands_a_pruned_cache() {
+        let dir = tempdir().unwrap();
+        let seg_root = "seg_root";
+        let target = ResourceKey::relative(seg_root, "v0_15.m4s");
+        let path = dir.path().join(seg_root).join("v0_15.m4s");
+        let open_store = || {
+            AssetStore::builder()
+                .backend(StorageBackend::Disk {
+                    root: dir.path().into(),
+                })
+                .build()
+        };
+
+        {
+            let store = open_store();
+            write_commit(store.acquire_resource(&target, None).unwrap(), b"data");
+            assert!(store.contains_range(&target, 0..4));
+            store.checkpoint().expect("persist the availability index");
+        }
+
+        // Guard: the claim must survive a restart while the bytes are there,
+        // or the assertion below would pass on an index that never hydrated.
+        assert!(
+            open_store().contains_range(&target, 0..4),
+            "a committed range must still be claimed after a restart"
+        );
+
+        fs::remove_file(&path).expect("prune the cached bytes");
+
+        assert!(
+            !open_store().contains_range(&target, 0..4),
+            "contains_range must NOT claim a range whose file is gone. \
+             The availability index is the canonical reflection of disk \
+             state, and hydration reads it back without asking whether the \
+             bytes are still there. Consequence in production: the HLS \
+             reader spins on wait_range=Ready / read_at=Retry, no fetch is \
+             ever dispatched for the slot, and the deck never loads"
         );
     }
 

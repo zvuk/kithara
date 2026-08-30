@@ -5,4 +5,4 @@ mod core;
 mod disk;
 mod retire;
 
-pub(crate) use core::{AvailabilityIndex, ScopedAvailabilityObserver};
+pub(crate) use core::{ABSOLUTE_ROOT, AvailabilityIndex, ScopedAvailabilityObserver};
