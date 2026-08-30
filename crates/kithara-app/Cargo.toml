@@ -32,6 +32,8 @@ gui = ["dep:iced", "kithara/ui-iced"]
 masonry = ["gui", "kithara/ui-masonry"]
 # NN beat/downbeat detection.
 beat-nn = ["kithara/beat-nn"]
+# Signal-processing beat detection, for builds that cannot carry the model.
+beat-dsp = ["kithara/beat-dsp"]
 # Waveform analysis for the deck overview.
 analysis-waveform = ["kithara/analysis-waveform"]
 # Build kithara-app as a plain library — exposes `config`/`sources`/`drm`
