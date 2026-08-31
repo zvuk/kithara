@@ -5,9 +5,16 @@ use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 
 use super::frames::{FRAME, HOP};
 
-const HANN_A0: f32 = 0.5;
+struct Consts;
 
-/// Rectified complex spectral difference, one value per [`HOP`].
+impl Consts {
+    const HANN_A0: f32 = 0.5;
+    /// Analysis stride, 23.2 ms: the rate the difference is actually
+    /// measured at.
+    const STRIDE: usize = 2 * HOP;
+}
+
+/// Complex spectral difference, one value per [`HOP`].
 pub(crate) struct Novelty<S>
 where
     S: HasPool<f32>,
@@ -34,13 +41,23 @@ where
 {
     pub(crate) fn new(pools: PoolRegion<S>) -> Result<Self, PoolError> {
         let fft = RealFftPlanner::<f32>::new().plan_fft_forward(FRAME);
-        let hann = hann_window(&pools)?;
-        Ok(Self { pools, fft, hann })
+        Ok(Self {
+            hann: hann_window(&pools)?,
+            fft,
+            pools,
+        })
     }
 
+    /// The difference is measured every [`Consts::STRIDE`] samples and interpolated
+    /// onto the [`HOP`] grid, the resolution the reference reaches the same
+    /// way. The last window is filled out with zeros, and the first window
+    /// that needs that is the last.
     pub(crate) fn curve(&self, mono: &[f32]) -> Result<SampleBuffer, PoolError> {
-        let frames = mono.len().saturating_sub(FRAME) / HOP + usize::from(mono.len() >= FRAME);
-        let mut curve = self.pools.get_with_len::<f32>(frames)?;
+        if mono.len() < FRAME {
+            return Ok(self.pools.get::<f32>());
+        }
+        let frames = (mono.len() - FRAME) / Consts::STRIDE + 2;
+        let mut coarse = self.pools.get_with_len::<f32>(frames)?;
         let bins = self.fft.make_output_vec().len();
         let mut work = Frames {
             input: self.pools.get_with_len::<f32>(FRAME)?,
@@ -50,20 +67,35 @@ where
             output: self.fft.make_output_vec(),
             scratch: self.fft.make_scratch_vec(),
         };
-        for index in 0..frames {
-            let at = index * HOP;
-            work.input
+        for (index, slot) in coarse.iter_mut().enumerate() {
+            let at = index * Consts::STRIDE;
+            let end = (at + FRAME).min(mono.len());
+            let (signal, padding) = work.input.split_at_mut(end - at);
+            signal
                 .iter_mut()
-                .zip(mono[at..at + FRAME].iter().zip(self.hann.iter()))
-                .for_each(|(slot, (sample, window))| *slot = sample * window);
-            curve[index] = work.difference(&self.fft, index < 2);
+                .zip(mono[at..end].iter().zip(self.hann.iter()))
+                .for_each(|(sample_slot, (sample, window))| *sample_slot = sample * window);
+            padding.fill(0.0);
+            *slot = work.difference(&self.fft);
+        }
+        let mut curve = self
+            .pools
+            .get_with_len::<f32>((coarse.len() - 1) * (Consts::STRIDE / HOP) + 1)?;
+        for (index, slot) in curve.iter_mut().enumerate() {
+            let (whole, half) = (index / 2, index % 2 == 1);
+            *slot = if half {
+                (coarse[whole] + coarse[whole + 1]) / 2.0
+            } else {
+                coarse[whole]
+            };
         }
         Ok(curve)
     }
+
 }
 
 impl Frames {
-    fn difference(&mut self, fft: &Arc<dyn RealToComplex<f32>>, warming: bool) -> f32 {
+    fn difference(&mut self, fft: &Arc<dyn RealToComplex<f32>>) -> f32 {
         if fft
             .process_with_scratch(&mut self.input, &mut self.output, &mut self.scratch)
             .is_err()
@@ -78,15 +110,13 @@ impl Frames {
                 .zip(self.phase_step.iter_mut()),
         ) {
             let (observed, angle) = (bin.norm(), bin.arg());
-            if observed >= *magnitude {
-                let predicted = Complex::from_polar(*magnitude, wrap(*phase + *step));
-                total += (bin - predicted).norm();
-            }
+            let predicted = Complex::from_polar(*magnitude, wrap(*phase + *step));
+            total += (bin - predicted).norm();
             *step = wrap(angle - *phase);
             *phase = angle;
             *magnitude = observed;
         }
-        if warming { 0.0 } else { total }
+        total
     }
 }
 
@@ -104,7 +134,7 @@ where
     let scale = std::f32::consts::TAU / denom;
     for (n, sample) in hann.iter_mut().enumerate() {
         let phase = scale * n.to_f32().unwrap_or(0.0);
-        *sample = HANN_A0.mul_add(-phase.cos(), HANN_A0);
+        *sample = Consts::HANN_A0.mul_add(-phase.cos(), Consts::HANN_A0);
     }
     Ok(hann)
 }
@@ -115,10 +145,6 @@ mod tests {
 
     use super::*;
     use crate::test_pools::pools;
-
-    fn novelty() -> Novelty<impl HasPool<f32>> {
-        Novelty::new(pools()).expect("a fresh region has room for the window")
-    }
     use crate::dsp::{clicks, frames};
 
     fn peaks(curve: &[f32]) -> Vec<usize> {
@@ -133,14 +159,14 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn clicks_raise_peaks_where_the_clicks_are() {
         let pcm = clicks::track(4.0, 0.5);
-        let curve = novelty().curve(&pcm).expect("the curve fits the region");
+        let curve = Novelty::new(pools()).expect("a fresh region has room for the window").curve(&pcm).expect("the curve fits the region");
 
         let found: Vec<f32> = peaks(&curve)
             .into_iter()
             .map(|i| frames::seconds(i.to_f32().unwrap_or(0.0)))
             .collect();
-        // A click inside the first window has nothing to be differenced
-        // against, so the curve cannot carry it.
+        // The click at zero lands on the first frame, where a peak has no
+        // left neighbour to stand above.
         let first_observable = FRAME.to_f32().unwrap_or(0.0) / frames::RATE;
         let expected: Vec<f32> = clicks::positions(4.0, 0.5)
             .into_iter()
@@ -161,7 +187,8 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn silence_is_flat() {
-        let curve = novelty().curve(&clicks::silence(4.0)).expect("the curve fits the region");
+        let curve = Novelty::new(pools()).expect("a fresh region has room for the window").curve(&clicks::silence(4.0))
+            .expect("the curve fits the region");
         assert!(!curve.is_empty(), "silence still yields a curve");
         assert!(
             curve.iter().all(|&v| v == 0.0),

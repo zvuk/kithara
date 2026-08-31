@@ -238,41 +238,34 @@ mod optimality {
         test_pools::pools,
     };
 
-    /// Maximised over the starting state: the initial distribution is uniform.
+    /// The chain starts at the beat state, as if a beat fell just before the
+    /// first frame; every frame then pays one transition and one observation.
     fn score(
         beats: &[usize],
         hazards: &[SampleBuffer],
         observations: &[f32],
         states: usize,
     ) -> f64 {
-        let first = beats.first().copied().unwrap_or(0);
-        (0..states)
-            .filter(|start| start + first < states)
-            .map(|start| {
-                let mut total = 0.0f64;
-                let mut state = start;
-                for frame in 0..observations.len() {
-                    if frame > 0 {
-                        let hazard = &hazards[decode::estimate_of(frame, hazards.len())];
-                        if beats.binary_search(&frame).is_ok() {
-                            total += f64::from(hazard[state].max(1e-6).ln());
-                            state = 0;
-                        } else if state + 1 < states {
-                            total += f64::from((1.0 - hazard[state]).max(1e-6).ln());
-                            state += 1;
-                        } else {
-                            return f64::NEG_INFINITY;
-                        }
-                    }
-                    total += f64::from(if state == 0 {
-                        observations[frame].ln()
-                    } else {
-                        (1.0 - observations[frame]).ln()
-                    });
-                }
-                total
-            })
-            .fold(f64::NEG_INFINITY, f64::max)
+        let mut total = 0.0f64;
+        let mut state = 0usize;
+        for frame in 0..observations.len() {
+            let hazard = &hazards[decode::estimate_of(frame, hazards.len())];
+            if beats.binary_search(&frame).is_ok() {
+                total += f64::from(hazard[state].max(1e-6).ln());
+                state = 0;
+            } else if state + 1 < states {
+                total += f64::from((1.0 - hazard[state]).max(1e-6).ln());
+                state += 1;
+            } else {
+                return f64::NEG_INFINITY;
+            }
+            total += f64::from(if state == 0 {
+                observations[frame].ln()
+            } else {
+                (1.0 - observations[frame]).ln()
+            });
+        }
+        total
     }
 
     #[kithara::test(native, flash(false))]

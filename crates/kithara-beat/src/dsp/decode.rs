@@ -1,16 +1,21 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 
-use super::{
-    frames,
-    period::{ACF_FRAME, ACF_STEP},
-};
+use super::{frames, period::ACF_STEP};
 struct Consts;
 
 impl Consts {
+    /// Height scale of the interval density: the Gaussian claims about 0.43
+    /// of each state's transition mass, keeping every beat transition soft.
+    const DENSITY_SCALE: f32 = 0.005;
     const EPSILON: f32 = 1e-6;
-    /// The Gaussian's 99% support, in standard deviations.
-    const SUPPORT: f32 = 2.58;
+    /// Observations top out below one, so a skipped peak stays payable.
+    const OBSERVED_CEILING: f32 = 0.99;
+    /// How far past the longest period the state space reaches, in standard
+    /// deviations: the longest wait the decoder can express.
+    const STATE_MARGIN: f32 = 3.0;
+    /// The interval density's support, in standard deviations.
+    const SUPPORT: f32 = 4.0;
 }
 
 /// Beat positions in frames, by Viterbi over a hidden Markov model whose
@@ -25,6 +30,7 @@ where
 {
     decode(curve, periods, pools).map(|(beats, _)| beats)
 }
+
 
 /// Fills a pooled buffer from `values` in the order they arrive.
 fn collected<S, I>(pools: &PoolRegion<S>, values: I) -> Result<SampleBuffer, PoolError>
@@ -54,11 +60,10 @@ where
     else {
         return Ok((pools.get::<f32>(), f32::NEG_INFINITY));
     };
-    let states = (longest + Consts::SUPPORT * frames::sigma())
-        .ceil()
+    let states = (longest + Consts::STATE_MARGIN * frames::sigma())
+        .floor()
         .to_usize()
-        .unwrap_or(0)
-        + 1;
+        .unwrap_or(0);
     if states < 2 || curve.is_empty() {
         return Ok((pools.get::<f32>(), f32::NEG_INFINITY));
     }
@@ -68,27 +73,29 @@ where
         .iter()
         .map(|&p| hazard(p, states, pools))
         .collect::<Result<_, _>>()?;
-    let mut previous = collected(
-        pools,
-        (0..states).map(|state| log_observation(observation[0], state)),
-    )?;
+    // The path starts as if a beat fell just before the first frame.
+    let mut previous = pools.get_with_len::<f32>(states)?;
+    previous.fill(f32::NEG_INFINITY);
+    if let Some(first) = previous.first_mut() {
+        *first = 0.0;
+    }
     let mut current = pools.get_with_len::<f32>(states)?;
     current.fill(f32::NEG_INFINITY);
     let mut back = vec![0u16; curve.len() * states];
 
-    for frame in 1..curve.len() {
+    for frame in 0..curve.len() {
         let hazard = &hazards[estimate_for(frame, hazards.len())];
         let (from, score) = previous
             .iter()
             .enumerate()
-            .map(|(state, value)| (state, value + hazard[state].max(Consts::EPSILON).ln()))
+            .map(|(state, value)| (state, value + hazard[state].ln()))
             .fold((0usize, f32::NEG_INFINITY), |best, next| {
                 if next.1 > best.1 { next } else { best }
             });
         current[0] = score + log_observation(observation[frame], 0);
         back[frame * states] = u16::try_from(from).unwrap_or(0);
         for state in 1..states {
-            let stay = (1.0 - hazard[state - 1]).max(Consts::EPSILON).ln();
+            let stay = (1.0 - hazard[state - 1]).ln();
             current[state] =
                 previous[state - 1] + stay + log_observation(observation[frame], state);
             back[frame * states + state] = u16::try_from(state - 1).unwrap_or(0);
@@ -119,22 +126,15 @@ where
         .filter(|period| *period > 0.0)
         .max_by(f32::total_cmp)
         .unwrap_or(0.0);
-    let states = (longest + Consts::SUPPORT * frames::sigma())
-        .ceil()
+    let states = (longest + Consts::STATE_MARGIN * frames::sigma())
+        .floor()
         .to_usize()
-        .unwrap_or(0)
-        + 1;
+        .unwrap_or(0);
     let hazards = periods
         .iter()
         .map(|&p| hazard(p, states, pools))
         .collect::<Result<_, _>>()?;
-    Ok((
-        beats,
-        optimum,
-        hazards,
-        normalise(curve, pools)?,
-        states,
-    ))
+    Ok((beats, optimum, hazards, normalise(curve, pools)?, states))
 }
 
 #[cfg(test)]
@@ -142,11 +142,10 @@ pub(super) fn estimate_of(frame: usize, estimates: usize) -> usize {
     estimate_for(frame, estimates)
 }
 
+/// The estimate measured over the window opening at step `k` applies during
+/// step `k + 1`.
 fn estimate_for(frame: usize, estimates: usize) -> usize {
-    frame
-        .saturating_sub(ACF_FRAME / 2)
-        .div_euclid(ACF_STEP)
-        .min(estimates - 1)
+    (frame / ACF_STEP).saturating_sub(1).min(estimates - 1)
 }
 
 fn backtrack<S>(
@@ -186,13 +185,14 @@ where
 {
     let peak = curve.iter().copied().fold(0.0f32, f32::max);
     if peak <= 0.0 {
-        return pools.get_with_len::<f32>(curve.len());
+        let mut flat = pools.get_with_len::<f32>(curve.len())?;
+        flat.fill(Consts::EPSILON);
+        return Ok(flat);
     }
-    collected(
-        pools,
+    collected(pools, 
         curve
             .iter()
-            .map(|value| (value / peak).clamp(Consts::EPSILON, 1.0 - Consts::EPSILON)),
+            .map(|value| (Consts::OBSERVED_CEILING * value / peak).max(Consts::EPSILON)),
     )
 }
 
@@ -204,33 +204,37 @@ fn log_observation(value: f32, state: usize) -> f32 {
     }
 }
 
+/// Per-state chance the interval ends here, from a Gaussian interval density
+/// about the period. An estimate with no period allows a beat anywhere, at a
+/// uniform floor: a stretch with no periodicity must stay traversable.
 fn hazard<S>(period: f32, states: usize, pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,
 {
     if period <= 0.0 {
-        return pools.get_with_len::<f32>(states);
+        let mut flat = pools.get_with_len::<f32>(states)?;
+        flat.fill(Consts::EPSILON);
+        return Ok(flat);
     }
     let sigma = frames::sigma();
-    let variance = 2.0 * sigma * sigma;
-    let interval = collected(
-        pools,
-        (0..states).map(|state| {
-            let gap = (state + 1).to_f32().unwrap_or(0.0) - period;
-            (-gap * gap / variance).exp()
-        }),
-    )?;
-    let mut remaining: f32 = interval.iter().sum();
-    collected(
-        pools,
-        interval.iter().map(|&density| {
+    let support = (Consts::SUPPORT * sigma).ceil();
+    let peak = Consts::DENSITY_SCALE / (frames::SIGMA_SECONDS * std::f32::consts::TAU.sqrt());
+    let interval = collected(pools, (0..states).map(|state| {
+        let gap = (state + 1).to_f32().unwrap_or(0.0) - period;
+        if gap.abs() > support {
+            0.0
+        } else {
+            peak * (-gap * gap / (2.0 * sigma * sigma)).exp()
+        }
+    }))?;
+    let mut remaining = 1.0f32;
+    collected(pools, interval.iter().map(|&density| {
         let leave = if remaining > 0.0 {
             density / remaining
         } else {
             1.0
         };
-            remaining -= density;
-            leave.clamp(0.0, 1.0)
-        }),
-    )
+        remaining -= density;
+        leave.clamp(0.0, 1.0)
+    }))
 }
