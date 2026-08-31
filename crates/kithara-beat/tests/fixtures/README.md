@@ -24,8 +24,10 @@ the shared pipeline stages exact).
 ## Degara goldens
 
 Beat times in seconds, the reference the signal-processing backend is scored
-against. Both are recorded by `record_degara_golden.py`, which carries the run
+against. All are recorded by `record_degara_golden.py`, which carries the run
 instructions.
+
+Whole-file references, one run over the entire fixture:
 
 - `golden_degara.json` over `beat_test_mono_22050.f32le`: 292 beats over
   155.69 s, median 114.84 BPM. The track the neural parity test also uses.
@@ -36,15 +38,32 @@ instructions.
   fixture costs four times what the committed mp3 does, and 45 s covers the
   region that discriminates.
 
+Windowed references, the ones `tests/degara.rs` scores against: the reference
+run over the same windows that test cuts (30 s per call, the front 28 s kept,
+a window only cut to length while 32 s is still ahead). A detector called on
+windows must be compared to the reference called on the same windows: a
+30-second window does not determine the phase a whole-file run settles on, so
+the whole-file references above, sliced into these windows, agree with the
+windowed runs at only F = 0.64-0.84 - regime noise no implementation can
+close.
+
+- `golden_degara_windowed.json`: the click fixture from 0 s, 289 beats.
+- `golden_degara_track_windowed.json`: the track excerpt from 0 s, 87 beats.
+- `golden_degara_track_windowed_from7.json`: the excerpt from 7 s, 74 beats,
+  cutting the same music at another alignment.
+
 Provenance, so a later disagreement can be attributed:
 
-- **Reference**: version 2.1-beta6-dev, PyPI wheel `cp314-macosx_15_0_arm64`.
-  `record_degara_golden.py` names what it runs. AGPL-3.0 — run for its output,
-  never read or carried across.
+- **Reference**: version 2.1-beta6-dev, a PyPI `cp314` macOS arm64 wheel
+  (whole-file goldens: build `macosx_15_0`; windowed goldens: build
+  `2.1b6.dev1438`, `macosx_26_0`, whose whole-file run reproduces both
+  committed whole-file goldens byte for byte). `record_degara_golden.py`
+  names what it runs. AGPL-3.0 — run for its output, never carried across.
 - **Algorithm**: `BeatTrackerDegara`, parameters `minTempo=40`,
   `maxTempo=208`, its defaults.
 - **Input**: the pre-decoded mono fixtures above, resampled 22 050 -> 44 100 Hz
-  because the algorithm requires that rate.
+  because the algorithm requires that rate; windowed goldens slice at
+  22 050 Hz first, the way the test slices, and resample each window.
 
 The neural backend tracks the first track at twice the reference's level: the
 two backends report different metrical levels and are not expected to agree.

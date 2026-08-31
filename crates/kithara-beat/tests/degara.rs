@@ -6,9 +6,13 @@
 //! `tests/fixtures/README.md` holds the reference's provenance.
 //!
 //! A detector is called with one window of audio at a time and the front of
-//! each window is kept, so the fixtures are scored that way here. Every window
-//! landing on the reference tempo is what a correct grid needs; the single BPM
-//! an application shows is built from these marks in `kithara-analysis`.
+//! each window is kept, so the detector and the reference are both run that
+//! way: each golden here is recorded over the same windows this file cuts,
+//! because a window does not determine the phase a whole-file run settles on
+//! and comparing across the two regimes measures that, not the detector.
+//! Every window landing on the reference tempo is what a correct grid needs;
+//! the single BPM an application shows is built from these marks in
+//! `kithara-analysis`.
 mod common;
 
 use std::path::{Path, PathBuf};
@@ -204,7 +208,11 @@ fn parity(pcm: &str, name: &str, from_seconds: usize) {
 
 #[kithara::test(native, flash(false))]
 fn degara_parity() {
-    parity("beat_test_mono_22050.f32le", "golden_degara.json", 0);
+    parity(
+        "beat_test_mono_22050.f32le",
+        "golden_degara_windowed.json",
+        0,
+    );
 }
 
 /// The material the first fixture does not cover: music the reference itself
@@ -214,7 +222,7 @@ fn degara_parity() {
 fn degara_parity_holds_the_metrical_level() {
     parity(
         "track_excerpt_mono_22050.f32le",
-        "golden_degara_track.json",
+        "golden_degara_track_windowed.json",
         0,
     );
 }
@@ -227,7 +235,7 @@ fn degara_parity_holds_the_metrical_level() {
 fn degara_parity_holds_at_another_alignment() {
     parity(
         "track_excerpt_mono_22050.f32le",
-        "golden_degara_track.json",
+        "golden_degara_track_windowed_from7.json",
         7,
     );
 }
