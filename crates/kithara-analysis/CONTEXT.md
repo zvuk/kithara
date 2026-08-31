@@ -77,8 +77,10 @@ until then, the same rule `source_frames` uses.
 `AnalysisTask` does not read its reader in order. It picks the middle of the
 largest uncovered range. That becomes binary subdivision on an uncovered track,
 so an early snapshot describes the whole track rather than its opening, and
-refills holes when playback has mostly covered the track; a range another
-producer covered is never decoded again.
+refills holes when playback has mostly covered the track. It schedules against
+the beat pass's own coverage while that pass has room, and against what the pass
+has merely seen while it does not, so a range the beat pass turned down is read
+again and one nothing is waiting for is not.
 
 - **Two extents.** The pass publishes the covered frontier at end of stream, or
   the length the schedule planned against when that is longer, so a range given
@@ -87,15 +89,23 @@ producer covered is never decoded again.
   stream or a seek answered `PastEof`. That figure is never written into the
   pass, because `TrackAnalyzers::ingest` refuses a range reaching past the extent
   it holds and an under-reported duration would refuse the source's own tail.
-- **Run bounds.** A run decodes at least one beat-detector window before another
-  position is chosen. It ends at covered audio or the extent. It starts from the
-  first decoded chunk, not `landed_at`: a seek is begun rather than completed
-  when it answers, so the decoder resumes at its own boundary.
+- **Run bounds.** A run decodes one schedule chunk before another position is
+  chosen. While the beat pass can only continue a run it already has, the run is
+  instead unbounded and aimed where covered audio ends, so it continues one
+  rather than opening an island the beat pass would turn down. It ends at
+  covered audio or the extent. It starts from the first decoded chunk, not `landed_at`: a seek is
+  begun rather than completed when it answers, so the decoder resumes at its own
+  boundary.
 - **End and retirement.** A pass ends when its extent is covered or every
-  uncovered position proved unreachable. A run that decoded nothing new is never
-  chosen again, preventing a coarse-seeking source from being asked forever. The
-  cost is explicit: retiring the middle of a gap drops that gap from the
-  schedule, and it remains reported as missing.
+  uncovered position proved unreachable. With nothing to read only because the
+  beat pass is full, it waits instead: room comes from the detector, so there is
+  nothing to conclude yet. Read in order there is no second chance at a range,
+  so the reader waits there rather than reading past a full beat pass. A run
+  that decoded nothing new is never chosen again, preventing a coarse-seeking
+  source from being asked forever; audio the beat pass turned down says nothing
+  about the source, so a position it waits on stays. The cost is explicit:
+  retiring the middle of a gap drops that gap from the schedule, and it remains
+  reported as missing.
 - **Decode error.** It ends the pass without discarding it: delivered ranges are
   published and the rest reported missing.
 
@@ -154,12 +164,16 @@ re-detected when its full window fills. Once the extent is known, the artifact i
 spread across it at its own tempo while retaining detected marker positions. Run
 mono comes from sample guards acquired through `TrackAnalyzers`; the logical run
 set retains at most four detector windows while every physical allocation still
-competes under the region-wide hard byte budget. A run releases everything ahead
-of the window it still waits on, so the hold follows the detection backlog rather
-than the track length; a run short of its first window holds it whole, so enough
-concurrent runs still cross the budget and the earliest is reclaimed. Reclaimed
-spans remain covered for every other consumer but are reported as no longer
-beat-analyzable. Downmix and grid-cleanup scratch stay as
+competes under the region-wide hard byte budget, in at most four runs. A run
+releases everything ahead of the window it still waits on, and a run that has fed
+no window releases nothing, since the audio in front of its first window belongs
+to a window starting before it. The hold therefore follows the detection backlog
+rather than the track length. Audio past the budget is turned down rather than
+given up: it stays outside the beat coverage, and the pass reads it again once
+the detector frees room. The run cap is what makes that terminate, since a hold
+at its budget then always holds a run long enough for the detector to read. Audio
+the pass did not read for itself extends a run it already has and does not open
+one. Downmix and grid-cleanup scratch stay as
 guards for the pass lifetime; no lower component constructs or stores another
 pool facade.
 

@@ -3,13 +3,13 @@ use std::num::NonZeroU32;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_resampler::{MonoStream, MonoStreamConfig, ResamplerBackend, ResamplerOptions};
 use num_traits::cast::ToPrimitive;
-use tracing::debug;
 
 use super::detector::BeatDetectError;
 use crate::{
     BlobError,
     analyzer::BeatAnalysisConfig,
     blob::Writer,
+    coverage::{Coverage, FrameRange},
     progress::BeatRunResume,
 };
 
@@ -17,7 +17,18 @@ use crate::{
 /// way is not this build's answer, so it names itself in the analysis
 /// fingerprint.
 #[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
-pub(crate) const DETECTOR_AUDIO_TAG: &str = "detector_audio_seamless_v1";
+pub(crate) const DETECTOR_AUDIO_TAG: &str = "detector_audio_seamless_v2";
+
+/// What audio the pass can take right now.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Intake {
+    /// Nothing, until the detector reads what is held.
+    Full,
+    /// Only audio continuing a run the pass already has.
+    Continuing,
+    /// Audio anywhere in the track.
+    Anywhere,
+}
 
 struct Run<B>
 where
@@ -38,8 +49,9 @@ where
     runs: Vec<Run<B>>,
     config: BeatAnalysisConfig<B>,
     budget: usize,
+    max_runs: usize,
     #[field(get, vis = "pub(super)")]
-    dropped: Vec<(u64, u64)>,
+    taken: Coverage,
     ratio: f64,
     source_rate: u32,
     #[field(get, copy, vis = "pub(super)")]
@@ -50,66 +62,71 @@ impl<B> Runs<B>
 where
     B: ResamplerBackend,
 {
-    pub(super) fn new(config: BeatAnalysisConfig<B>, source_rate: u32, budget: usize) -> Self {
+    pub(super) fn new(
+        config: BeatAnalysisConfig<B>,
+        source_rate: u32,
+        budget: usize,
+        max_runs: usize,
+    ) -> Self {
         let target_rate = config.target_rate().max(1);
         let source = f64::from(source_rate.max(1));
         Self {
             runs: Vec::new(),
             ratio: f64::from(target_rate) / source,
             budget,
-            dropped: Vec::new(),
+            max_runs: max_runs.max(1),
+            taken: Coverage::default(),
             config,
             source_rate: source_rate.max(1),
             target_rate,
         }
     }
 
-    fn held(&self) -> usize {
+    pub(super) fn held(&self) -> usize {
         self.runs.iter().map(|run| run.mono.len()).sum()
     }
 
-    #[cfg(test)]
-    pub(super) fn held_frames(&self) -> usize {
-        self.held()
+    /// What is held is what the detector has yet to read, so a full hold waits
+    /// on it. Capping runs at the windows the budget carries means a full hold
+    /// always includes a run long enough for the detector to read.
+    pub(super) fn intake(&self) -> Intake {
+        if self.held() >= self.budget {
+            Intake::Full
+        } else if self.runs.len() >= self.max_runs {
+            Intake::Continuing
+        } else {
+            Intake::Anywhere
+        }
     }
 
-    fn enforce_budget(&mut self) {
-        let mut held = self.held();
-        while held > self.budget {
-            let over = held - self.budget;
-            let Some(run) = self.runs.first_mut() else {
-                return;
-            };
-            let drop_detector = over.min(run.mono.len());
-            let source = self.ratio.recip() * drop_detector.to_f64().unwrap_or(0.0);
-            let source = source
-                .round()
-                .to_u64()
-                .unwrap_or(0)
-                .min(run.end - run.start);
-            let at = run.start;
-            let exact = (source.to_f64().unwrap_or(0.0) * self.ratio)
-                .round()
-                .to_usize()
-                .unwrap_or(0)
-                .min(run.mono.len());
-            if exact == 0 {
-                return;
-            }
-
-            run.mono.drain(..exact);
-            run.start = at.saturating_add(source);
-            held -= exact;
-            self.dropped.push((at, run.start));
-            debug!(
-                from = at,
-                to = run.start,
-                "beat analysis: detector mono reclaimed; range left unanalysed"
-            );
-            if run.start >= run.end {
-                self.runs.remove(0);
-            }
+    fn admits(&self, range: FrameRange, opens: bool) -> bool {
+        match self.intake() {
+            Intake::Full => false,
+            Intake::Continuing => self.touches(range),
+            Intake::Anywhere => opens || self.touches(range),
         }
+    }
+
+    fn touches(&self, range: FrameRange) -> bool {
+        self.runs
+            .iter()
+            .any(|run| run.start <= range.end() && range.start() <= run.end)
+    }
+
+    /// The next stretch of `[from, until)` the pass has not taken.
+    fn missing(&self, from: u64, until: u64) -> Option<FrameRange> {
+        let mut at = from;
+        for run in self.taken.runs() {
+            if run.end() <= at {
+                continue;
+            }
+            if at < run.start() {
+                let end = run.start().min(until);
+                return (at < end).then(|| FrameRange::new(at, end - at));
+            }
+            at = run.end();
+        }
+        (at < until).then(|| FrameRange::new(at, until - at))
     }
 
     fn detector_frames(&self, frames: u64) -> usize {
@@ -124,10 +141,10 @@ where
         let ratio = self.ratio;
         for run in &mut self.runs {
             let base = scale(run.start, ratio);
-            let target = (opens_at(base).to_f64().unwrap_or(0.0) / ratio)
+            let target = (opens_at(base).to_f64().unwrap_or(f64::MAX) / ratio)
                 .floor()
                 .to_u64()
-                .unwrap_or(0)
+                .unwrap_or(u64::MAX)
                 .clamp(run.start, run.end);
             let exact = scale(target, ratio)
                 .saturating_sub(base)
@@ -154,17 +171,18 @@ where
                 continue;
             };
             let mono = &mut run.mono;
-            if let Some(stream) = stream {
-                finish_stream(stream, mono)?;
-            }
+            finish_into(mono, stream)?;
             pad(mono, expected)?;
         }
         Ok(())
     }
 
     pub(super) fn write_resume(&self, writer: &mut Writer<'_>) {
-        writer.write_len(self.runs.len());
-        for run in &self.runs {
+        // A run the detector has read to its end holds nothing but the
+        // resampler continuing it, which the blob does not carry.
+        let live = || self.runs.iter().filter(|run| run.start < run.end);
+        writer.write_len(live().count());
+        for run in live() {
             writer.write_u64(run.start);
             writer.write_u64(run.end);
             // A live resampler still holds this run's tail. The blob carries the
@@ -176,10 +194,10 @@ where
                 self.detector_frames(run.end.saturating_sub(run.start)),
             );
         }
-        writer.write_len(self.dropped.len());
-        for (from, to) in &self.dropped {
-            writer.write_u64(*from);
-            writer.write_u64(*to);
+        writer.write_len(self.taken.runs().len());
+        for run in self.taken.runs() {
+            writer.write_u64(run.start());
+            writer.write_u64(run.end());
         }
     }
 
@@ -187,7 +205,7 @@ where
         &mut self,
         pools: &PoolRegion<S>,
         runs: Vec<BeatRunResume>,
-        dropped: Vec<(u64, u64)>,
+        taken: Vec<(u64, u64)>,
     ) -> Result<(), BlobError>
     where
         S: HasPool<f32>,
@@ -210,45 +228,75 @@ where
                 stream: None,
             });
         }
-        if restored.iter().any(|run| {
-            dropped
-                .iter()
-                .any(|(from, to)| *from < run.end && run.start < *to)
-        }) {
+        let mut coverage = Coverage::default();
+        for (from, to) in taken {
+            coverage.insert(FrameRange::new(from, to.saturating_sub(from)));
+        }
+        if restored
+            .iter()
+            .any(|run| !coverage.contains(FrameRange::new(run.start, run.end - run.start)))
+        {
             return Err(BlobError::Corrupt);
         }
 
         self.runs = restored;
-        self.dropped = dropped;
-        if self.held() > self.budget {
+        self.taken = coverage;
+        if self.held() > self.budget || self.runs.len() > self.max_runs {
             return Err(BlobError::Corrupt);
         }
         Ok(())
     }
 
+    /// Takes what of `mono` the pass has not taken and has room for. Audio it
+    /// turns down stays outside its coverage, so the pass is asked for it again.
+    /// `opens` says whether this audio may start a run of its own.
     pub(super) fn push<S>(
         &mut self,
         pools: &PoolRegion<S>,
         mono: &[f32],
         at: u64,
-    ) -> Result<(), BeatDetectError>
+        opens: bool,
+    ) -> Result<bool, BeatDetectError>
     where
         S: HasPool<f32>,
     {
         let Ok(span) = u64::try_from(mono.len()) else {
-            return Ok(());
+            return Ok(false);
         };
-        if span == 0 {
-            return Ok(());
-        }
         let end = at.saturating_add(span);
+        let mut cursor = at;
+        let mut took = false;
 
+        while let Some(piece) = self.missing(cursor, end) {
+            if !self.admits(piece, opens) {
+                break;
+            }
+            let Some(block) = slice(mono, at, piece.start(), piece.end()) else {
+                break;
+            };
+            self.absorb(pools, block, piece.start(), piece.end())?;
+            self.taken.insert(piece);
+            cursor = piece.end();
+            took = true;
+        }
+        Ok(took)
+    }
+
+    fn absorb<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        mono: &[f32],
+        at: u64,
+        end: u64,
+    ) -> Result<(), BeatDetectError>
+    where
+        S: HasPool<f32>,
+    {
         let first = self.runs.partition_point(|run| run.end < at);
         let last = self.runs.partition_point(|run| run.start <= end);
         if first == last {
             let run = self.open(pools, mono, at, end)?;
             self.runs.insert(first, run);
-            self.enforce_budget();
             return Ok(());
         }
 
@@ -256,7 +304,6 @@ where
         if let Some(merged) = self.merge(pools, absorbed, mono, at, end)? {
             self.runs.insert(first, merged);
         }
-        self.enforce_budget();
         Ok(())
     }
 
@@ -328,7 +375,7 @@ where
     }
 
     fn open<S>(
-        &self,
+        &mut self,
         pools: &PoolRegion<S>,
         mono: &[f32],
         at: u64,
@@ -499,24 +546,25 @@ mod tests {
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;
 
-    use super::Runs;
+    use super::{Intake, Runs};
     use crate::{
         BeatAnalysisConfig,
-        test_pools::{TestPools, pools},
+        coverage::FrameRange,
+        test_pools::{Pools, pools},
     };
 
     const SRC: u32 = 44_100;
 
     struct TestRuns {
         inner: Runs<RubatoBackend>,
-        pools: kithara_bufpool::PoolRegion<TestPools>,
+        pools: Pools,
     }
 
     impl TestRuns {
-        fn push(&mut self, mono: &[f32], at: u64) {
+        fn push(&mut self, mono: &[f32], at: u64, opens: bool) -> bool {
             self.inner
-                .push(&self.pools, mono, at)
-                .expect("run buffers fit the test region");
+                .push(&self.pools, mono, at, opens)
+                .expect("run buffers fit the test region")
         }
 
         fn flush(&mut self) {
@@ -532,16 +580,23 @@ mod tests {
         }
     }
 
-    fn runs(source_rate: u32) -> TestRuns {
-        budgeted(source_rate, usize::MAX)
+    impl std::ops::DerefMut for TestRuns {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.inner
+        }
     }
 
-    fn budgeted(source_rate: u32, budget: usize) -> TestRuns {
+    fn runs(source_rate: u32) -> TestRuns {
+        budgeted(source_rate, usize::MAX, usize::MAX)
+    }
+
+    fn budgeted(source_rate: u32, budget: usize, max_runs: usize) -> TestRuns {
         TestRuns {
             inner: Runs::new(
                 BeatAnalysisConfig::<RubatoBackend>::default(),
                 source_rate,
                 budget,
+                max_runs,
             ),
             pools: pools(),
         }
@@ -556,7 +611,7 @@ mod tests {
             .collect()
     }
 
-    fn layout(runs: &Runs<RubatoBackend>) -> Vec<(u64, usize)> {
+    fn layout(runs: &TestRuns) -> Vec<(u64, usize)> {
         runs.spans()
             .map(|(start, mono)| (start, mono.len()))
             .collect()
@@ -568,19 +623,16 @@ mod tests {
             .collect()
     }
 
-    /// One resampler per run, carried across arrivals: closing one and opening
-    /// another leaves a step at the seam, and an onset detector reads a step
-    /// as a beat.
     #[kithara::test]
     fn arrival_size_does_not_change_the_resampled_audio() {
         let source = ramp(88_200, 0);
         let mut whole = runs(SRC);
-        whole.push(&source, 0);
+        whole.push(&source, 0, true);
         whole.flush();
 
         let mut piecemeal = runs(SRC);
         for (index, block) in source.chunks(2205).enumerate() {
-            piecemeal.push(block, u64::try_from(index * 2205).unwrap_or(0));
+            piecemeal.push(block, (index * 2205) as u64, true);
         }
         piecemeal.flush();
 
@@ -600,8 +652,8 @@ mod tests {
     #[kithara::test]
     fn adjacent_blocks_form_one_run() {
         let mut set = runs(SRC);
-        set.push(&ramp(4410, 0), 0);
-        set.push(&ramp(4410, 4410), 4410);
+        set.push(&ramp(4410, 0), 0, true);
+        set.push(&ramp(4410, 4410), 4410, true);
         set.flush();
         assert_eq!(layout(&set), vec![(0, 4410)], "8820 source frames at 2:1");
     }
@@ -609,12 +661,12 @@ mod tests {
     #[kithara::test]
     fn a_gap_keeps_two_runs_until_it_is_filled() {
         let mut set = runs(SRC);
-        set.push(&ramp(4410, 0), 0);
-        set.push(&ramp(4410, 88_200), 88_200);
+        set.push(&ramp(4410, 0), 0, true);
+        set.push(&ramp(4410, 88_200), 88_200, true);
         set.flush();
         assert_eq!(layout(&set), vec![(0, 2205), (88_200, 2205)]);
 
-        set.push(&ramp(83_790, 4410), 4410);
+        set.push(&ramp(83_790, 4410), 4410, true);
         set.flush();
         assert_eq!(
             layout(&set),
@@ -626,8 +678,8 @@ mod tests {
     #[kithara::test]
     fn a_block_before_a_run_extends_it_backwards() {
         let mut set = runs(SRC);
-        set.push(&ramp(4410, 4410), 4410);
-        set.push(&ramp(4410, 0), 0);
+        set.push(&ramp(4410, 4410), 4410, true);
+        set.push(&ramp(4410, 0), 0, true);
         set.flush();
         assert_eq!(layout(&set), vec![(0, 4410)]);
     }
@@ -640,7 +692,7 @@ mod tests {
 
         let mut ascending = runs(SRC);
         for (at, pcm) in &blocks {
-            ascending.push(pcm, *at);
+            ascending.push(pcm, *at, true);
         }
         ascending.flush();
 
@@ -649,7 +701,7 @@ mod tests {
             let Some((at, pcm)) = blocks.get(index) else {
                 continue;
             };
-            shuffled.push(pcm, *at);
+            shuffled.push(pcm, *at, true);
         }
         shuffled.flush();
 
@@ -669,25 +721,90 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_budget_reclaims_the_earliest_mono_and_reports_it() {
-        let mut set = budgeted(SRC, 20_000);
+    fn a_full_hold_turns_audio_down_instead_of_giving_it_up() {
+        // Ten blocks of 4410 source frames are 22_050 at the detector rate,
+        // well past a 10_000 frame hold.
+        let mut set = budgeted(SRC, 10_000, usize::MAX);
+        let mut refused = 0;
         for block in 0..10u64 {
-            set.push(&ramp(4410, block * 4410), block * 4410);
+            if !set.push(&ramp(4410, block * 4410), block * 4410, true) {
+                refused += 1;
+            }
         }
-        assert!(
-            set.held_frames() <= 20_000,
-            "held detector frames must stay under the budget, got {}",
-            set.held_frames()
-        );
 
-        let dropped = set.dropped();
-        assert!(!dropped.is_empty(), "the reclaimed ranges must be reported");
-        let (from, _) = dropped.first().copied().unwrap_or((1, 1));
-        assert_eq!(from, 0, "the earliest source frames go first");
-        let reclaimed: u64 = dropped.iter().map(|(from, to)| to - from).sum();
+        assert!(refused > 0, "ten blocks must not fit the hold");
         assert!(
-            reclaimed > 0 && reclaimed < 44_100,
-            "the budget reclaims the overflow, not the track: {reclaimed}"
+            set.taken().contains(FrameRange::new(0, 4410)),
+            "what it took starts at the front of the track"
+        );
+        let taken: u64 = set.taken().frames();
+        assert!(
+            taken < 10 * 4410,
+            "audio it turned down must stay outside its coverage, got {taken}"
+        );
+        assert_eq!(
+            set.taken().gaps(10 * 4410).len(),
+            1,
+            "the tail it has not taken is one stretch the pass can be asked for again"
+        );
+    }
+
+    #[kithara::test]
+    fn audio_turned_down_is_taken_once_there_is_room() {
+        let mut set = budgeted(SRC, 10_000, usize::MAX);
+        for block in 0..10u64 {
+            set.push(&ramp(4410, block * 4410), block * 4410, true);
+        }
+        let stopped = set.taken().frontier();
+
+        set.release(|_| 10_000);
+        assert_eq!(
+            set.intake(),
+            Intake::Anywhere,
+            "the detector read everything it held"
+        );
+        assert!(
+            set.push(&ramp(4410, stopped), stopped, true),
+            "the stretch it turned down is taken on the next offer"
+        );
+        assert_eq!(set.taken().frontier(), stopped + 4410);
+    }
+
+    #[kithara::test]
+    fn audio_the_pass_did_not_read_extends_a_run_without_opening_one() {
+        let mut set = budgeted(SRC, usize::MAX, usize::MAX);
+        assert!(
+            !set.push(&ramp(4410, 88_200), 88_200, false),
+            "audio offered from elsewhere is backlog the pass did not plan for"
+        );
+        assert!(
+            set.push(&ramp(4410, 0), 0, true),
+            "the pass reads for itself"
+        );
+        assert!(
+            set.push(&ramp(4410, 4410), 4410, false),
+            "the same audio continuing a run costs the pass nothing new"
+        );
+    }
+
+    #[kithara::test]
+    fn a_run_cap_leaves_room_for_a_window_in_every_run() {
+        // The cap keeps blocks far apart from filling the hold with runs too
+        // short for the detector to read.
+        let mut set = budgeted(SRC, usize::MAX, 2);
+        assert!(set.push(&ramp(4410, 0), 0, true));
+        assert!(set.push(&ramp(4410, 88_200), 88_200, true));
+        assert!(
+            set.intake() == Intake::Continuing,
+            "the cap is reached, so audio away from both runs waits"
+        );
+        assert!(
+            !set.push(&ramp(4410, 441_000), 441_000, true),
+            "a third run is what the cap turns down"
+        );
+        assert!(
+            set.push(&ramp(4410, 4410), 4410, true),
+            "audio continuing a run is what carries it to a full window"
         );
     }
 
@@ -698,13 +815,13 @@ mod tests {
         // rounded anywhere would shift the audio behind it.
         let source = ramp(48_000 * 4, 0);
         let mut whole = runs(48_000);
-        whole.push(&source, 0);
+        whole.push(&source, 0, true);
         whole.flush();
         let held = mono_of(&whole);
 
         for opens_at in [1, 4321, 22_050, 40_000] {
             let mut set = runs(48_000);
-            set.push(&source, 0);
+            set.push(&source, 0, true);
             set.flush();
             set.release(|_| opens_at);
 
@@ -728,7 +845,7 @@ mod tests {
         // error would show up as a length drift at every join.
         let mut set = runs(48_000);
         for block in 0..10u64 {
-            set.push(&ramp(4801, block * 4801), block * 4801);
+            set.push(&ramp(4801, block * 4801), block * 4801, true);
         }
         set.flush();
         let total = set.offset_in_run(0, 48_010);

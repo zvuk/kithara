@@ -6,8 +6,13 @@ use super::{
     analyzer::{BeatAnalyzer, BeatPassConfig, DetectOutput, DetectRequest},
     detector::BeatDetector,
     grid::extend_over,
+    runs::Intake,
 };
-use crate::{BeatArtifact, BlobError, coverage::FrameRange, progress::BeatResume};
+use crate::{
+    BeatArtifact, BlobError,
+    coverage::{Coverage, FrameRange},
+    progress::BeatResume,
+};
 
 pub(crate) struct BeatPass<B>
 where
@@ -31,6 +36,8 @@ where
 
     delegate::delegate! {
         to self.analyzer {
+            pub(crate) fn coverage(&self) -> &Coverage;
+            pub(crate) fn intake(&self) -> Intake;
             pub(crate) fn apply_detection(&mut self, output: DetectOutput);
             pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>);
         }
@@ -42,12 +49,14 @@ where
         pcm: &[f32],
         channels: usize,
         at: u64,
+        opens: bool,
         detector: &dyn BeatDetector,
-    ) where
+    ) -> bool
+    where
         S: HasPool<f32>,
     {
         self.analyzer
-            .push_interleaved(pools, pcm, channels, at, detector);
+            .push_interleaved(pools, pcm, channels, at, opens, detector)
     }
 
     pub(crate) fn push_deferred<S>(
@@ -56,11 +65,13 @@ where
         pcm: &[f32],
         channels: usize,
         at: u64,
-    ) where
+        opens: bool,
+    ) -> bool
+    where
         S: HasPool<f32>,
     {
         self.analyzer
-            .push_interleaved_deferred(pools, pcm, channels, at);
+            .push_interleaved_deferred(pools, pcm, channels, at, opens)
     }
 
     pub(crate) fn prepare_detection<S>(
@@ -102,7 +113,7 @@ where
                     Some(extent) => extend_over(grid, extent, rate),
                     None => grid,
                 };
-                Some((grid, self.analyzer.unanalysed()))
+                Some((grid, self.analyzer.unanalysed(extent)))
             }
             Err(e) => {
                 warn!(?e, "beat analysis failed; leaving the beat slot empty");
@@ -123,7 +134,7 @@ where
                     Some(extent) => extend_over(grid, extent, rate),
                     None => grid,
                 };
-                Some((grid, self.analyzer.unanalysed()))
+                Some((grid, self.analyzer.unanalysed(extent)))
             }
             Err(error) => {
                 warn!(?error, "beat analysis failed; leaving the beat slot empty");

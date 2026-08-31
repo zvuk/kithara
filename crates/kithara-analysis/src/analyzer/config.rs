@@ -119,8 +119,12 @@ mod tests {
             "a grid counted at the rate it is played is not the grid v2 cached"
         );
         assert!(
-            tag.contains(":detector_audio_seamless_v1:"),
+            tag.contains(":detector_audio_seamless_v2:"),
             "how the detector was fed decides the grid, so it must decide the tag"
+        );
+        assert!(
+            !tag.contains(":detector_audio_seamless_v1:"),
+            "a grid built from a track read whole is not the grid v1 cached"
         );
     }
 }

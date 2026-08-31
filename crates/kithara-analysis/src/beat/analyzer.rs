@@ -7,17 +7,18 @@ use num_traits::cast::ToPrimitive;
 
 use super::{
     detector::{BeatDetectError, BeatDetector, BeatMark, RawBeats},
-    grid::{GridBuffers, GridParams, build_grid_with},
-    runs::Runs,
+    grid::{GridBuffers, GridParams, build_grid_with, fold_octave},
+    runs::{Intake, Runs},
 };
 use crate::{
     BeatArtifact, BlobError,
     analyzer::BeatAnalysisConfig,
     blob::Writer,
-    coverage::FrameRange,
+    coverage::{Coverage, FrameRange},
     progress::{BeatMarkResume, BeatResume, RawBeatsResume},
 };
 
+/// Detector windows of backlog the pass holds before it turns audio down.
 const BUDGET_WINDOWS: usize = 4;
 
 #[derive(Clone, Copy)]
@@ -104,19 +105,21 @@ where
             .min(config.detector_window_seconds().saturating_sub(1));
         let overlap_frames = frames_for_seconds(detector_rate, overlap_seconds);
         let ready_frames = window_frames.saturating_add(overlap_frames);
-        // Four detector windows of backlog: a run releases everything ahead of
-        // the window it still waits on, so the hold follows the wait.
+        let hop_frames = window_frames.saturating_sub(overlap_frames).max(1);
+        // Four detector windows of backlog, in at most four runs. Held audio
+        // past the budget then always includes a run the detector can read,
+        // which is what frees room for the audio the pass waits to take.
         let budget = ready_frames.saturating_mul(BUDGET_WINDOWS);
 
         Self {
             params,
-            hop_frames: window_frames.saturating_sub(overlap_frames).max(1),
+            hop_frames,
             min_frames: frames_for_seconds(detector_rate, config.detector_min_window_seconds())
                 .min(window_frames)
                 .max(1),
             ready_frames,
             window_frames,
-            runs: Runs::new(config, source_rate, budget),
+            runs: Runs::new(config, source_rate, budget, BUDGET_WINDOWS),
             windows: BTreeMap::new(),
             short: BTreeSet::new(),
             failure: None,
@@ -126,17 +129,21 @@ where
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn held_frames(&self) -> usize {
-        self.runs.held_frames()
+    /// What the pass never took, which is only ever the tail a source stopped
+    /// short of delivering.
+    pub(crate) fn unanalysed(&self, extent: Option<u64>) -> Vec<FrameRange> {
+        extent.map_or_else(Vec::new, |extent| self.runs.taken().gaps(extent))
     }
 
-    pub(crate) fn unanalysed(&self) -> Vec<FrameRange> {
-        self.runs
-            .dropped()
-            .iter()
-            .map(|(from, to)| FrameRange::new(*from, to.saturating_sub(*from)))
-            .collect()
+    delegate::delegate! {
+        to self.runs {
+            pub(crate) fn intake(&self) -> Intake;
+            #[call(taken)]
+            pub(crate) fn coverage(&self) -> &Coverage;
+            #[cfg(test)]
+            #[call(held)]
+            pub(crate) fn held_frames(&self) -> usize;
+        }
     }
 
     pub(crate) fn snapshot<S>(
@@ -182,7 +189,9 @@ where
         normalize_marks(&mut raw.beats);
         normalize_marks(&mut raw.downbeats);
 
-        build_grid_with(&raw, self.source_rate, &self.params, &mut self.grid).map_err(Into::into)
+        build_grid_with(&raw, self.source_rate, &self.params, &mut self.grid)
+            .map(fold_octave)
+            .map_err(Into::into)
     }
 
     pub(crate) fn push_interleaved<S>(
@@ -191,12 +200,15 @@ where
         pcm: &[f32],
         channels: usize,
         at: u64,
+        opens: bool,
         detector: &dyn BeatDetector,
-    ) where
+    ) -> bool
+    where
         S: HasPool<f32>,
     {
-        self.push_interleaved_deferred(pools, pcm, channels, at);
+        let took = self.push_interleaved_deferred(pools, pcm, channels, at, opens);
         self.failure = self.detect(pools, detector, false).err();
+        took
     }
 
     pub(crate) fn push_interleaved_deferred<S>(
@@ -205,27 +217,35 @@ where
         pcm: &[f32],
         channels: usize,
         at: u64,
-    ) where
+        opens: bool,
+    ) -> bool
+    where
         S: HasPool<f32>,
     {
         if channels == 0 || self.failure.is_some() {
-            return;
+            return false;
         }
         let frames = pcm.len() / channels;
         if frames == 0 {
-            return;
+            return false;
         }
 
         let inv = 1.0 / channels.to_f32().unwrap_or(1.0);
         if let Err(error) = self.downmix.ensure_len(frames) {
             self.failure = Some(error.into());
-            return;
+            return false;
         }
         self.downmix.truncate(frames);
         for (dst, frame) in self.downmix.iter_mut().zip(pcm.chunks_exact(channels)) {
             *dst = frame.iter().sum::<f32>() * inv;
         }
-        self.failure = self.runs.push(pools, &self.downmix, at).err();
+        match self.runs.push(pools, &self.downmix, at, opens) {
+            Ok(took) => took,
+            Err(error) => {
+                self.failure = Some(error);
+                false
+            }
+        }
     }
 
     pub(crate) fn prepare_detection<S>(
@@ -330,11 +350,11 @@ where
     {
         let BeatResume {
             runs,
-            dropped,
+            taken,
             windows,
             short,
         } = resume;
-        self.runs.restore(pools, runs, dropped)?;
+        self.runs.restore(pools, runs, taken)?;
         self.windows = windows
             .into_iter()
             .map(|(index, raw)| (index, raw_beats(raw)))
@@ -369,15 +389,21 @@ where
 
     /// A run releases everything ahead of the window it still waits on: earlier
     /// audio fed a full window, and a window is read again only when it was cut
-    /// short.
+    /// short. A run that has fed none keeps what it holds, since the audio in
+    /// front of its first window belongs to a window starting before it.
     fn release_detected(&mut self) {
         let (windows, short, hop) = (&self.windows, &self.short, self.hop_frames);
         self.runs.release(|base| {
-            let mut index = base.div_ceil(hop);
+            let first = base.div_ceil(hop);
+            let mut index = first;
             while windows.contains_key(&index) && !short.contains(&index) {
                 index = index.saturating_add(1);
             }
-            index.saturating_mul(hop)
+            if index == first {
+                base
+            } else {
+                index.saturating_mul(hop)
+            }
         });
     }
 
@@ -542,10 +568,11 @@ mod tests {
             pcm: &[f32],
             channels: usize,
             at: u64,
+            opens: bool,
             detector: &dyn BeatDetector,
-        ) {
+        ) -> bool {
             self.analyzer
-                .push_interleaved(&self.pools, pcm, channels, at, detector);
+                .push_interleaved(&self.pools, pcm, channels, at, opens, detector)
         }
 
         fn snapshot(
@@ -558,6 +585,33 @@ mod tests {
 
         fn write_resume(&mut self, out: &mut Vec<u8>) {
             self.analyzer.write_resume(out);
+        }
+
+        fn push_interleaved_deferred(
+            &mut self,
+            pcm: &[f32],
+            channels: usize,
+            at: u64,
+            opens: bool,
+        ) -> bool {
+            self.analyzer
+                .push_interleaved_deferred(&self.pools, pcm, channels, at, opens)
+        }
+
+        fn prepare_detection(&mut self, trailing: bool) -> Option<super::DetectRequest> {
+            self.analyzer.prepare_detection(&self.pools, trailing)
+        }
+
+        fn apply_detection(&mut self, output: super::DetectOutput) {
+            self.analyzer.apply_detection(output);
+        }
+
+        fn held_frames(&self) -> usize {
+            self.analyzer.held_frames()
+        }
+
+        fn unanalysed(&self, extent: Option<u64>) -> Vec<crate::coverage::FrameRange> {
+            self.analyzer.unanalysed(extent)
         }
     }
 
@@ -599,7 +653,7 @@ mod tests {
     ) {
         let mut at = 0;
         for chunk in pcm.chunks(frames_per_chunk * 2) {
-            analyzer.push_interleaved(chunk, 2, at, detector);
+            analyzer.push_interleaved(chunk, 2, at, true, detector);
             at += u64::try_from(chunk.len() / 2).unwrap_or(0);
         }
     }
@@ -638,7 +692,7 @@ mod tests {
         let mut resume = Vec::new();
         let mut at = 0;
         for chunk in pcm.chunks(1000 * 2) {
-            analyzer.push_interleaved(chunk, 2, at, &detector);
+            analyzer.push_interleaved(chunk, 2, at, true, &detector);
             at += u64::try_from(chunk.len() / 2).unwrap_or(0);
             resume.clear();
             analyzer.write_resume(&mut resume);
@@ -721,7 +775,7 @@ mod tests {
             assert!(peak < 0.05, "cancelling stereo must downmix to ~0: {peak}");
             empty_raw()
         });
-        analyzer.push_interleaved(&pcm, 2, 0, &mut detector);
+        analyzer.push_interleaved(&pcm, 2, 0, true, &mut detector);
         analyzer
             .snapshot(&mut detector, true)
             .expect("mock detects");
@@ -754,7 +808,7 @@ mod tests {
             assert_eq!(mono, vec![0.25_f32; 4096].as_slice());
             empty_raw()
         });
-        analyzer.push_interleaved(&pcm, 2, 0, &mut detector);
+        analyzer.push_interleaved(&pcm, 2, 0, true, &mut detector);
         analyzer
             .snapshot(&mut detector, true)
             .expect("mock detects");
@@ -804,7 +858,7 @@ mod tests {
         });
         let mut analyzer = analyzer(Consts::SRC, config);
 
-        analyzer.push_interleaved(&pcm, 2, 0, &mut detector);
+        analyzer.push_interleaved(&pcm, 2, 0, true, &mut detector);
         assert_eq!(
             seen.lock().as_slice(),
             &[2 * 44_100],
@@ -845,7 +899,7 @@ mod tests {
         let mut analyzer = analyzer(Consts::SRC, config);
 
         // Three seconds: past the minimum, far short of a window.
-        analyzer.push_interleaved(&pcm[..3 * second * 2], 2, 0, &mut detector);
+        analyzer.push_interleaved(&pcm[..3 * second * 2], 2, 0, true, &mut detector);
         let early = analyzer
             .snapshot(&mut detector, false)
             .expect("a short run still builds a grid");
@@ -864,6 +918,7 @@ mod tests {
             &pcm[3 * second * 2..],
             2,
             u64::try_from(3 * second).unwrap_or(0),
+            true,
             &mut detector,
         );
         analyzer
@@ -896,7 +951,7 @@ mod tests {
         };
         let mut analyzer = analyzer(48_000, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(move |_| raw.clone());
-        analyzer.push_interleaved(&stereo(17 * 48_000, |_| 0.1), 2, 0, &mut detector);
+        analyzer.push_interleaved(&stereo(17 * 48_000, |_| 0.1), 2, 0, true, &mut detector);
         let grid = analyzer
             .snapshot(&mut detector, true)
             .expect("mock detects");
@@ -933,7 +988,7 @@ mod tests {
         let mut worst = 0;
         for (index, chunk) in pcm.chunks(second * 2).enumerate() {
             let at = u64::try_from(index * second).unwrap_or(0);
-            analyzer.push_interleaved_deferred(chunk, 2, at);
+            analyzer.push_interleaved_deferred(chunk, 2, at, true);
             while let Some(request) = analyzer.prepare_detection(false) {
                 analyzer.apply_detection(request.detect(&mut detector));
             }
@@ -948,7 +1003,46 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_track_past_the_budget_is_analysed_to_its_end() {
+    fn a_run_that_fed_no_window_keeps_what_it_holds() {
+        // Window 2 s, no overlap. The first run opens half a second in and is
+        // too short for any window; the second is a whole one. Releasing on
+        // the second must leave the first alone: what it holds sits in front
+        // of a window that starts before it, and the audio arriving there
+        // later is the only thing that can complete it.
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(Consts::SRC)
+            .detector_window_seconds(2)
+            .detector_overlap_seconds(0)
+            .build();
+        let second = usize::try_from(Consts::SRC).unwrap_or(1);
+        let mut analyzer = analyzer(Consts::SRC, config);
+        let mut detector = detector(|_| empty_raw());
+
+        let at = u64::try_from(second / 2).unwrap_or(0);
+        analyzer.push_interleaved_deferred(&stereo(second, |_| 0.25), 2, at, true);
+        let held = analyzer.held_frames();
+        assert!(held > 0, "the short run holds what it was given");
+
+        // One whole window on the grid, so releasing on it leaves nothing of
+        // its own behind and the hold that remains is the short run's.
+        let far = u64::try_from(10 * second).unwrap_or(0);
+        analyzer.push_interleaved_deferred(&stereo(2 * second, |_| 0.25), 2, far, true);
+        while let Some(request) = analyzer.prepare_detection(false) {
+            analyzer.apply_detection(request.detect(&mut detector));
+        }
+
+        assert!(
+            analyzer.held_frames() >= held,
+            "the run that fed no window gave up {} of its {held} frames",
+            held.saturating_sub(analyzer.held_frames())
+        );
+    }
+
+    #[kithara::test]
+    fn a_track_past_the_budget_is_taken_whole_by_waiting() {
+        // A detector too slow to keep pace fills the hold. Offered the same
+        // second again once room appears, the pass takes the whole track.
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
@@ -956,30 +1050,45 @@ mod tests {
             .detector_overlap_seconds(1)
             .build();
         let second = usize::try_from(Consts::SRC).unwrap_or(1);
-        let pcm = stereo(60 * second, |_| 0.25);
+        let seconds = 60;
+        let pcm = stereo(seconds * second, |_| 0.25);
         let mut analyzer = analyzer(Consts::SRC, config);
         let mut detector = detector(|_| empty_raw());
 
-        for (index, chunk) in pcm.chunks(second * 2).enumerate() {
-            let at = u64::try_from(index * second).unwrap_or(0);
-            analyzer.push_interleaved_deferred(chunk, 2, at);
-            while let Some(request) = analyzer.prepare_detection(false) {
+        let mut taken = 0;
+        let mut offers = 0;
+        while taken < seconds {
+            offers += 1;
+            assert!(
+                offers <= 4 * seconds,
+                "the pass stalled after {taken} seconds"
+            );
+            let from = taken * second * 2;
+            if let Some(block) = pcm.get(from..from + second * 2)
+                && analyzer.push_interleaved_deferred(
+                    block,
+                    2,
+                    u64::try_from(taken * second).unwrap_or(0),
+                    true,
+                )
+            {
+                taken += 1;
+            }
+            // One window per offer: a detector that lags is what fills the hold.
+            if let Some(request) = analyzer.prepare_detection(false) {
                 analyzer.apply_detection(request.detect(&mut detector));
             }
         }
         analyzer
             .snapshot(&mut detector, true)
             .expect("mock detects");
-
+        let track = u64::try_from(seconds * second).unwrap_or(0);
         let lost: u64 = analyzer
-            .unanalysed()
+            .unanalysed(Some(track))
             .iter()
             .map(|range| range.frames())
             .sum();
-        assert_eq!(
-            lost, 0,
-            "the detector read every second, yet {lost} frames are reported unanalysed"
-        );
+        assert_eq!(lost, 0, "{lost} frames were never taken");
     }
 
     #[kithara::test]
@@ -991,7 +1100,7 @@ mod tests {
                     reason: "scripted".to_string(),
                 })
             }));
-        analyzer.push_interleaved(&stereo(4096, |_| 0.1), 2, 0, &mut detector);
+        analyzer.push_interleaved(&stereo(4096, |_| 0.1), 2, 0, true, &mut detector);
         assert!(analyzer.snapshot(&mut detector, true).is_err());
     }
 
@@ -1037,7 +1146,7 @@ mod tests {
                 let Some((at, part)) = blocks.get(*index) else {
                     continue;
                 };
-                analyzer.push_interleaved(part, 2, *at, &mut detector);
+                analyzer.push_interleaved(part, 2, *at, true, &mut detector);
             }
             analyzer
                 .snapshot(&mut detector, true)

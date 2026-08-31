@@ -955,20 +955,16 @@ mod artifacts {
             "the same artifacts must not cost a halving sequence to reach: {} runs",
             scheduled.seeks
         );
-        // The track is longer than the audio the beat pass may hold, so it
-        // reaches the end only by releasing what the detector has read.
+        // The track is longer than the audio the beat pass may hold, and
+        // scheduling fragments it further. Either way the pass waits for room
+        // rather than giving audio up, so neither route loses any.
         assert_eq!(
             linear.lost, 0,
             "read in order, a track longer than the hold reaches its end whole"
         );
-        // Scheduling opens a run per seek, and a run holds its window whole
-        // until the detector can read one, so enough of them at once crosses
-        // the hold. What that costs stays under one window.
-        let window = u64::from(SR) * u64::from(WINDOW_SECONDS);
-        assert!(
-            scheduled.lost < window,
-            "the scheduled route lost {} frames, past the {window} a window carries",
-            scheduled.lost
+        assert_eq!(
+            scheduled.lost, 0,
+            "scheduled into fragments, the track still reaches its end whole"
         );
         assert_agrees(
             &linear.artifacts,

@@ -9,6 +9,7 @@ use tracing::warn;
 use super::{AnalysisFingerprint, AnalysisToken, TrackAnalysis};
 use crate::{
     AnalysisProgress, BeatSnapshot, BeatState, BlobError,
+    beat::Intake,
     coverage::{Coverage, FrameRange},
     progress::{AnalysisResume, ResumeState},
     slots::{
@@ -21,6 +22,9 @@ use crate::{
 pub(crate) enum Ingest {
     Accepted,
     Covered,
+    /// The pass has this range, and the beat pass turned it down until the
+    /// detector frees room.
+    Deferred,
     ForeignRate,
     OutOfExtent,
 }
@@ -52,6 +56,12 @@ where
         &self.coverage
     }
 
+    /// What the beat pass has taken. It takes audio only as fast as the
+    /// detector frees room, so it trails what the pass has seen.
+    pub(crate) fn analysed(&self) -> &Coverage {
+        self.beat.coverage(&self.coverage)
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn plan_extent(&mut self, frames: u64) {
         self.extent = Some(self.extent.map_or(frames, |held| held.max(frames)));
@@ -68,6 +78,11 @@ where
 
     pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<beat::DetectionRequest> {
         self.beat.prepare_detection(&self.pools, trailing)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn beat_intake(&self) -> Intake {
+        self.beat.intake()
     }
 
     pub(crate) fn apply_detection(&mut self, output: beat::DetectionOutput) {
@@ -91,7 +106,7 @@ where
 
         let channels = usize::from(chunk.spec().channels.max(1));
         let range = FrameRange::from(&chunk.meta);
-        self.ingest(&chunk.samples[..], channels, range, detector)
+        self.ingest(&chunk.samples[..], channels, range, true, detector)
     }
 
     pub(crate) fn push_mono(
@@ -101,7 +116,10 @@ where
         detector: Option<&mut beat::Detector>,
     ) -> Ingest {
         let frames = mono.len().to_u64().unwrap_or(0);
-        self.ingest(mono, 1, FrameRange::new(at, frames), detector)
+        // Audio the pass did not read for itself extends what the beat pass
+        // holds; a run of its own is backlog the pass did not plan for and
+        // would have to be read again anyway.
+        self.ingest(mono, 1, FrameRange::new(at, frames), false, detector)
     }
 
     fn ingest(
@@ -109,6 +127,7 @@ where
         pcm: &[f32],
         channels: usize,
         range: FrameRange,
+        opens: bool,
         detector: Option<&mut beat::Detector>,
     ) -> Ingest {
         if self.ended && self.extent.is_some_and(|extent| range.end() > extent) {
@@ -123,27 +142,36 @@ where
         if self.extent.is_some_and(|extent| range.end() > extent) {
             self.extent = Some(range.end());
         }
-        if self.coverage.contains(range) {
-            return Ingest::Covered;
+        // The beat pass trails the rest, so a range the pass has already seen
+        // can still be what the beat pass is waiting to be offered again.
+        let seen = self.coverage.contains(range);
+        if !seen {
+            self.coverage.insert(range);
+            waveform::push(
+                &mut self.waveform,
+                &self.pools,
+                pcm,
+                channels,
+                range.start(),
+            );
         }
-        self.coverage.insert(range);
-
-        waveform::push(
-            &mut self.waveform,
-            &self.pools,
-            pcm,
-            channels,
-            range.start(),
-        );
-        Slot::push(
+        let analysed = self.beat.coverage(&self.coverage).contains(range);
+        let took = Slot::push(
             &mut self.beat,
             &self.pools,
             pcm,
             channels,
             range.start(),
+            opens,
             detector,
         );
-        Ingest::Accepted
+        if took || !seen {
+            return Ingest::Accepted;
+        }
+        if analysed {
+            return Ingest::Covered;
+        }
+        Ingest::Deferred
     }
 
     pub(crate) fn snapshot(
@@ -231,7 +259,7 @@ where
     fn beat_state(&self) -> BeatState {
         let covered = self
             .extent
-            .is_some_and(|extent| self.coverage.contains(FrameRange::new(0, extent)));
+            .is_some_and(|extent| self.analysed().contains(FrameRange::new(0, extent)));
         if covered {
             BeatState::Final
         } else {

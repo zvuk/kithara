@@ -7,8 +7,10 @@ use kithara_resampler::ResamplerBackend;
 use crate::{
     BeatArtifact, BlobError,
     analyzer::{BeatAnalysisConfig, default_beat_detector},
-    beat::{BeatDetector, BeatPass, BeatPassConfig, DetectOutput, DetectRequest, GridParams},
-    coverage::FrameRange,
+    beat::{
+        BeatDetector, BeatPass, BeatPassConfig, DetectOutput, DetectRequest, GridParams, Intake,
+    },
+    coverage::{Coverage, FrameRange},
     progress::BeatResume,
 };
 
@@ -147,22 +149,39 @@ where
         }
     }
 
+    /// Whether the pass took audio it did not have. `opens` says whether this
+    /// audio may start a run of its own. A build with no beat pass takes
+    /// nothing.
     pub(crate) fn push<S>(
         &mut self,
         pools: &PoolRegion<S>,
         pcm: &[f32],
         channels: usize,
         at: u64,
+        opens: bool,
         detector: Option<&mut Detector>,
-    ) where
+    ) -> bool
+    where
         S: HasPool<f32>,
     {
-        if let Some(analyzer) = &mut self.0 {
-            match detector {
-                Some(detector) => analyzer.push(pools, pcm, channels, at, detector.as_ref()),
-                None => analyzer.push_deferred(pools, pcm, channels, at),
-            }
+        let Some(analyzer) = &mut self.0 else {
+            return false;
+        };
+        match detector {
+            Some(detector) => analyzer.push(pools, pcm, channels, at, opens, detector.as_ref()),
+            None => analyzer.push_deferred(pools, pcm, channels, at, opens),
         }
+    }
+
+    /// What the beat pass has taken, which trails what the pass has seen while
+    /// the detector is behind. A build with no beat pass is governed by `seen`,
+    /// and takes anything.
+    pub(crate) fn coverage<'a>(&'a self, seen: &'a Coverage) -> &'a Coverage {
+        self.0.as_ref().map_or(seen, BeatPass::coverage)
+    }
+
+    pub(crate) fn intake(&self) -> Intake {
+        self.0.as_ref().map_or(Intake::Anywhere, BeatPass::intake)
     }
 
     pub(crate) fn prepare_detection<S>(

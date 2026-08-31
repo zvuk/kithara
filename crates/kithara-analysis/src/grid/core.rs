@@ -10,7 +10,6 @@ use super::{
         median,
     },
     fit::{GridFitCtx, build_segments},
-    octave,
     scratch::{GridBuffers, fill, retain},
 };
 use crate::{
@@ -87,7 +86,7 @@ where
 {
     let mut buffers = GridBuffers::new(pools);
     let grid = build_grid_with(raw, sample_rate, params, &mut buffers)?;
-    Ok(octave::fold(grid))
+    Ok(super::octave::fold(grid))
 }
 
 pub(crate) fn build_grid_with(

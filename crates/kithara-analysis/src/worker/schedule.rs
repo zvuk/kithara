@@ -58,6 +58,23 @@ impl Schedule {
             .or_else(|| self.gap_target(coverage, extent, Some(window)))
     }
 
+    /// Where a run can continue covered audio instead of opening an island of
+    /// its own: in front of the widest gap that has covered audio before it.
+    pub(crate) fn extend(&self, coverage: &Coverage, extent: Option<u64>) -> Option<u64> {
+        let extent = extent?;
+        let mut widest: Option<FrameRange> = None;
+        for gap in coverage.gaps(extent) {
+            if gap.start() == 0 || self.barren.contains(&gap.start()) {
+                continue;
+            }
+            if widest.is_none_or(|held| gap.frames() > held.frames()) {
+                widest = Some(gap);
+            }
+        }
+        widest.map(FrameRange::start)
+    }
+
+
     fn untouched(
         &self,
         coverage: &Coverage,
@@ -255,6 +272,23 @@ mod tests {
             covered.contains(FrameRange::new(0, Consts::EXTENT)),
             "the track is covered, not approached: {:?}",
             covered.gaps(Consts::EXTENT)
+        );
+    }
+
+    #[kithara::test]
+    fn extending_aims_at_the_end_of_covered_audio() {
+        let schedule = Schedule::default();
+        // Gaps of 200 and 300 frames; only the second has audio before it.
+        let covered = coverage(&[(200, 200), (700, 300)]);
+        assert_eq!(
+            schedule.extend(&covered, Some(Consts::EXTENT)),
+            Some(400),
+            "the leading gap opens an island, so it is not where a run continues"
+        );
+        assert_eq!(
+            schedule.extend(&coverage(&[(200, 800)]), Some(Consts::EXTENT)),
+            None,
+            "with only a leading gap there is nothing to continue"
         );
     }
 
