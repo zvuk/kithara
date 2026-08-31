@@ -181,6 +181,10 @@ fn offender(windows: &[Window], golden: &[f32]) -> Option<(f64, f64, f64)> {
 fn parity(pcm: &str, name: &str, from_seconds: usize) {
     let pcm = load_pcm_fixture(pcm);
     let golden = load_golden(&fixture(name));
+    assert!(
+        golden.downbeats.is_empty(),
+        "this reference records beats alone"
+    );
     let windows = windows(&pcm, from_seconds * Pass::RATE);
     let covered = windows.last().map_or(0.0, |window| window.until);
 
