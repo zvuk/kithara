@@ -4,7 +4,7 @@ use firewheel::{
     event::ProcEvents,
     node::{ProcInfo, ProcStore},
 };
-use kithara_warp::{SessionAnchor, SessionBeat, SessionFrame};
+use kithara_warp::{SessionAnchor, SessionBeat, SessionEpoch, SessionFrame};
 use triple_buffer::Input;
 
 use super::commit::{
@@ -16,6 +16,13 @@ use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
 #[derive(Clone, Copy, Debug)]
 struct RenderBoundary {
     frame: SessionFrame,
+}
+
+#[derive(Debug)]
+pub(super) struct TransportFrame {
+    pub(super) session_beats: Option<Range<SessionBeat>>,
+    pub(super) session_epoch: SessionEpoch,
+    pub(super) transport_revision: Option<TransportRevision>,
 }
 
 #[derive(Debug)]
@@ -46,11 +53,11 @@ impl TransportObservationInput {
     }
 }
 
-pub(crate) fn process_transport(
+pub(super) fn process_transport(
     info: &ProcInfo,
     events: &mut ProcEvents,
     store: &mut ProcStore,
-) -> Result<(), TransportProcessError> {
+) -> Result<TransportFrame, TransportProcessError> {
     let result = store
         .try_get_mut::<TransportCommitState>()
         .ok_or(TransportProcessError::MissingState)?
@@ -353,14 +360,18 @@ impl TransportCommitState {
         &mut self,
         info: &ProcInfo,
         events: &mut ProcEvents,
-    ) -> Result<(), TransportProcessError> {
+    ) -> Result<TransportFrame, TransportProcessError> {
         self.reanchor(info)?;
         self.validate_frame(info)?;
         self.apply_events(info, events)?;
         let session_beats = self.session_beats(info)?;
         self.boundary = Self::next_boundary(info, self.active, self.boundary)?;
         self.snapshot = self.next_snapshot(session_beats.as_ref())?;
-        Ok(())
+        Ok(TransportFrame {
+            session_beats,
+            session_epoch: self.session_grid.epoch(),
+            transport_revision: self.active.map(|commit| commit.revision()),
+        })
     }
 
     fn reanchor(&mut self, info: &ProcInfo) -> Result<(), TransportProcessError> {

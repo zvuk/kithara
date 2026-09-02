@@ -72,7 +72,7 @@ pub enum AudioEvent {
         seek_epoch: SeekEpoch,
         location: SegmentLocation,
     },
-    /// Seek completed.
+    /// Seek completed at the first committed post-seek output frame.
     SeekComplete {
         position: Duration,
         seek_epoch: SeekEpoch,

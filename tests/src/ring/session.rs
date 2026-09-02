@@ -1,4 +1,7 @@
-use std::{any::Any, num::NonZeroU32};
+use std::{
+    any::Any,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use firewheel::FirewheelCtx;
 use kithara::{
@@ -140,6 +143,7 @@ impl ManualRingSession {
                 &ready_tx,
                 backend_config,
                 config.session_rate,
+                config.block_frames,
                 starter_probe,
                 Box::new(setup),
             );
@@ -329,6 +333,7 @@ fn ring_session_thread(
     ready_tx: &mpsc::Sender<Result<RingSnapshot, RingSessionError>>,
     backend_config: RingBackendConfig,
     session_rate: NonZeroU32,
+    block_frames: u32,
     probe: RingBackendProbe,
     setup: RingSetup,
 ) {
@@ -352,7 +357,8 @@ fn ring_session_thread(
         backend.arm();
         Ok(())
     });
-    let ready = bootstrap(&mut state, session_rate, setup).and_then(|()| snapshot(&mut state));
+    let ready = bootstrap(&mut state, session_rate, block_frames, setup)
+        .and_then(|()| snapshot(&mut state));
     let is_ready = ready.is_ok();
     if ready_tx.send(ready).is_err() || !is_ready {
         return;
@@ -373,8 +379,22 @@ fn ring_session_thread(
 fn bootstrap(
     state: &mut GraphSession<RingBackend, TestPools>,
     session_rate: NonZeroU32,
+    block_frames: u32,
     setup: RingSetup,
 ) -> Result<(), RingSessionError> {
+    const RENDER_QUANTUM_FRAMES: usize = 64;
+
+    let render_quantum_frames =
+        NonZeroUsize::new(RENDER_QUANTUM_FRAMES).expect("fixture render quantum is non-zero");
+    let block_frames = usize::try_from(block_frames)
+        .map_err(|_| RingSessionError::Setup(String::from("block size does not fit usize")))?;
+    let response_budget_frames = block_frames
+        .div_ceil(render_quantum_frames.get())
+        .checked_add(2)
+        .and_then(|chunks| chunks.checked_mul(render_quantum_frames.get()))
+        .and_then(|frames| frames.checked_sub(1))
+        .and_then(NonZeroUsize::new)
+        .ok_or_else(|| RingSessionError::Setup(String::from("response geometry overflow")))?;
     let player_id = match state.exec(Cmd::RegisterPlayer {
         grid_id: BeatGridId::allocate().map_err(RingSessionError::GridId)?,
         bus: EventBus::default(),
@@ -389,6 +409,8 @@ fn bootstrap(
     match state.exec(Cmd::StartPlayer {
         master_volume: 1.0,
         player_id,
+        render_quantum_frames,
+        response_budget_frames,
         sample_rate: session_rate.get(),
     }) {
         Reply::Ok => {}

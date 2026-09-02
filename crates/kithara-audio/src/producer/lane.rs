@@ -48,20 +48,11 @@ impl ProducerPort {
 
     delegate::delegate! {
         to self.outlet {
-            /// Forward a parked item after the consumer frees ring capacity.
+            /// Report whether one item can enter the final playback ring directly.
             #[must_use]
-            pub fn flush(&mut self) -> bool;
-            /// Push one produced item into the final playback ring.
-            #[call(try_push)]
-            #[expr($.is_ok())]
-            #[must_use]
-            pub fn try_push(&mut self, item: Fetch<AudioChunk>) -> bool;
-            /// Report whether one item is parked in the overflow slot.
-            #[must_use]
-            pub const fn has_pending(&self) -> bool;
-            /// Remove the item parked in the overflow slot.
-            #[must_use]
-            pub const fn take_pending(&mut self) -> Option<Fetch<AudioChunk>>;
+            pub fn can_push_direct(&self) -> bool;
+            /// Push one produced item directly into the final playback ring.
+            pub fn push_direct(&mut self, item: Fetch<AudioChunk>);
             /// Deliver deferred wake signals outside the checked producer core.
             #[call(flush_wake_signals)]
             pub fn flush_wake(&self);

@@ -110,8 +110,7 @@ mod tests {
         ));
         let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
         let resource = PlayerResource::new(resource, src, &pools())
-            .map(Box::new)
-            .unwrap_or_else(|error| panic!("test player resource: {error}"));
+            .map_or_else(|error| panic!("test player resource: {error}"), Box::new);
 
         PlayerTrack::builder()
             .sample_rate(sample_rate)

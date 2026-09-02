@@ -385,6 +385,7 @@ fn standalone_decoder_seek_reanchors_output_to_trimmed_target() {
         u64::try_from(test_frames(TARGET_RATE, TARGET)).expect("target frame fits u64");
 
     assert_eq!(output.meta.frame_offset, target_frame);
+    assert_eq!(output.frames(), FRAMES);
     assert_eq!(output.meta.timestamp, TARGET);
     assert_eq!(
         output.meta.timestamp,

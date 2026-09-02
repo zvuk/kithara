@@ -10,8 +10,9 @@ mod runtime;
 
 use std::{num::NonZeroU32, path::PathBuf};
 
+#[cfg(feature = "perf")]
+use hotpath::HotpathGuardBuilder;
 use kithara::{
-    audio::ConsumerWakeMode,
     events::{EventBus, TrackId},
     hls::AbrMode,
     platform::{
@@ -22,7 +23,7 @@ use kithara::{
         Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, Resource,
         ResourceConfig, ResourceSrc, SeekOutcome, SelectTransition, SessionDispatcher, apply_mix,
     },
-    warp::{StretchControls, StretchKind},
+    warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, audio_artifact::write_audio_artifact,
@@ -40,7 +41,7 @@ use crate::bufpool_ext::{TestPools, pools};
 
 const CHANNELS: u16 = 2;
 const SOURCE_RATE: u32 = 44_100;
-const BLOCK_FRAMES: usize = 512;
+const BLOCK_FRAMES: usize = 128;
 const CAPTURE_SECS: u32 = 2;
 const CAPTURE_START_SECS: f64 = 10.0;
 const CAPTURE_START_STEP_SECS: f64 = 4.0;
@@ -262,7 +263,10 @@ async fn run_real_media_matrix(record_artifacts: bool) {
 }
 
 async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String> {
-    let session = Arc::new(OfflineSession::new_manual());
+    #[cfg(feature = "perf")]
+    let _guard = HotpathGuardBuilder::new(case.label).build();
+
+    let session = Arc::new(OfflineSession::new_manual_with_block_frames(BLOCK_FRAMES));
     let mut failures = Vec::new();
 
     let media_dir = TestTempDir::new();
@@ -869,7 +873,7 @@ async fn prepare_deck(
                 NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero"),
             )
             .crossfade_duration(0.0)
-            .timestretch(Arc::clone(&controls))
+            .warp(WarpConfig::builder().stretch(Arc::clone(&controls)).build())
             .session(dispatcher)
             .build(),
     ));
@@ -893,7 +897,14 @@ async fn prepare_deck(
         case,
         deck_index,
         "playback",
-        player.prepare_config(playback_config),
+        player
+            .prepare_config(playback_config)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{} deck {deck_index}: prepare playback resource: {error}",
+                    case.label
+                )
+            }),
     )
     .await;
 
@@ -903,7 +914,6 @@ async fn prepare_deck(
         }))
         .store(memory_asset_store())
         .worker(player.worker().clone())
-        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .initial_abr_mode(AbrMode::manual(0))
         .host_sample_rate(NonZeroU32::new(case.host_rate).expect("host rate is non-zero"))
         .events(EventBus::new(16_384))

@@ -10,13 +10,14 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
-use kithara_warp::{StretchControls, WarpConfig};
+use kithara_warp::{
+    PresentationFrontier, RenderContext, RenderPublisher, RenderReader, StretchControls,
+};
 use tracing::warn;
 
 use super::{ResourceConfig, SourceType};
 use crate::{
     PlayWorker, TrackConfig,
-    effects::supports_playback_rate,
     worker::{ServiceClass, TrackPriority},
 };
 
@@ -63,6 +64,7 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Resource {
+    render_publisher: Option<RenderPublisher>,
     #[field(get, deref = false)]
     src: Arc<str>,
     #[field(get = event_bus)]
@@ -89,11 +91,7 @@ enum PlaybackRate {
 
 impl PlaybackRate {
     fn for_warp(controls: Arc<StretchControls>) -> Self {
-        if supports_playback_rate() {
-            Self::Warp(controls)
-        } else {
-            Self::Fixed
-        }
+        Self::Warp(controls)
     }
 
     fn apply(&self, requested: f32) -> f32 {
@@ -166,7 +164,7 @@ impl Resource {
     }
 
     async fn open<S, B>(
-        config: ResourceConfig<S, B>,
+        mut config: ResourceConfig<S, B>,
         observer: Option<Box<dyn AudioObserver>>,
     ) -> DecodeResult<Self>
     where
@@ -178,7 +176,8 @@ impl Resource {
         let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
             detail: "ResourceConfig requires an explicit PlayWorker",
         })?;
-        let stretch = Arc::clone(&config.stretch);
+        config.resolve_output_geometry()?;
+        let warp = config.warp.clone();
         let engine_load = config.engine_load.clone();
         // Capture the per-track cancel before `build_*_config` consumes `config`
         // (it is cloned by identity into both the inner stream and the Audio).
@@ -188,7 +187,7 @@ impl Resource {
                 let audio_config = config.build_file_config(&worker, observer);
                 let track = TrackConfig::for_audio(audio_config)
                     .maybe_engine_load(engine_load)
-                    .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
+                    .warp(warp.clone())
                     .build();
                 Self::from_stream_audio(track, src, &worker).await?
             }
@@ -196,7 +195,7 @@ impl Resource {
                 let audio_config = config.build_hls_config(&worker, observer)?;
                 let track = TrackConfig::for_audio(audio_config)
                     .maybe_engine_load(engine_load)
-                    .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
+                    .warp(warp)
                     .build();
                 Self::from_stream_audio(track, src, &worker).await?
             }
@@ -225,6 +224,7 @@ impl Resource {
             src,
             bus,
             priority: None,
+            render_publisher: None,
             playback_rate: PlaybackRate::Fixed,
             reader: ReaderOwner(CancelGuard(None), inner),
         };
@@ -253,21 +253,35 @@ impl Resource {
         let warp_controls = Arc::clone(config.warp().stretch());
         let audio = worker.open(config).await?;
         let priority = audio.priority();
+        let render_publisher = audio.publisher();
         let mut resource = Self::from_reader(audio, Some(src))
             .with_playback_rate(PlaybackRate::for_warp(warp_controls));
         if let Err(error) = resource.preload().await {
             warn!(src = %resource.src, %error, "resource preload failed");
         }
         resource.priority = Some(priority);
+        resource.render_publisher = Some(render_publisher);
         Ok(resource)
+    }
+
+    pub(crate) fn clear_render(&self) {
+        if let Some(publisher) = &self.render_publisher {
+            publisher.clear();
+        }
+    }
+
+    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
+        self.render_publisher.as_ref().map(RenderPublisher::reader)
     }
 
     pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
         self.playback_rate.apply(rate)
     }
 
-    pub(crate) fn playback_rate(&self) -> f32 {
-        (&self.playback_rate).into()
+    pub(crate) fn publish_render(&self, context: &RenderContext, frontier: PresentationFrontier) {
+        if let Some(publisher) = &self.render_publisher {
+            publisher.publish(context, frontier);
+        }
     }
 
     pub(crate) fn set_service_class(&self, class: ServiceClass) {
@@ -389,6 +403,9 @@ mod tests {
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
+    use kithara_warp::{
+        PresentationFrontier, RenderContext, SessionEpoch, SessionFrame, Warp, WarpConfig,
+    };
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
@@ -515,6 +532,7 @@ mod tests {
             Ok(ReadOutcome::Frames {
                 count: NonZeroUsize::new(samples).expect("non-zero stereo sample count"),
                 position: self.position_duration(),
+                source_span: None,
             })
         }
         fn read_planar<'a>(
@@ -531,6 +549,7 @@ mod tests {
             Ok(ReadOutcome::Frames {
                 count: frames,
                 position: self.position_duration(),
+                source_span: None,
             })
         }
 
@@ -548,17 +567,11 @@ mod tests {
         }
     }
 
-    fn warped_player_resource(
-        pools: &PoolRegion<TestPools>,
-        controls: &Arc<StretchControls>,
-        src: &str,
-    ) -> Box<PlayerResource> {
+    fn player_resource(pools: &PoolRegion<TestPools>, src: &str) -> Box<PlayerResource> {
         let total_frames = usize::try_from(Consts::SAMPLE_RATE).expect("sample rate fits usize");
-        let resource = Resource::from_reader(EofReader::with_frames(total_frames), None)
-            .with_playback_rate(PlaybackRate::for_warp(Arc::clone(controls)));
+        let resource = Resource::from_reader(EofReader::with_frames(total_frames), None);
         PlayerResource::new(resource, Arc::from(src), pools)
-            .map(Box::new)
-            .unwrap_or_else(|error| panic!("test player resource: {error}"))
+            .map_or_else(|error| panic!("test player resource: {error}"), Box::new)
     }
 
     fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {
@@ -604,31 +617,8 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn playback_rate_reports_only_a_real_warp_control() {
-        let fixed = Resource::from_reader(EofReader::default(), None);
-        assert_eq!(fixed.apply_playback_rate(1.5), 1.0);
-
-        let controls = StretchControls::new(1.0);
-        let warped = Resource::from_reader(EofReader::default(), None)
-            .with_playback_rate(PlaybackRate::for_warp(Arc::clone(&controls)));
-        if supports_playback_rate() {
-            assert_eq!(warped.apply_playback_rate(1.5), 1.5);
-            assert!((controls.speed() - 1.5).abs() < f32::EPSILON);
-            controls.set_speed(1.25);
-            assert_eq!(warped.playback_rate(), 1.25);
-        } else {
-            assert_eq!(warped.apply_playback_rate(1.5), 1.0);
-            assert!((controls.speed() - 1.0).abs() < f32::EPSILON);
-            controls.set_speed(1.25);
-            assert_eq!(warped.playback_rate(), 1.0);
-        }
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn loading_next_warp_resource_preserves_shared_target_and_effective_capability() {
-        let controls = StretchControls::new(1.0);
+    fn loading_next_fixed_resource_preserves_effective_unity() {
         let pools = pools();
-        let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
         let (inputs, mut control) = slot_channels(SharedEq::new(0));
         let shape = StreamShape {
             sample_rate: NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
@@ -650,7 +640,7 @@ mod tests {
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: warped_player_resource(&pools, &controls, &first),
+                resource: player_resource(&pools, &first),
                 item_id: first_id,
             })
             .expect("load first track");
@@ -665,7 +655,6 @@ mod tests {
         process_block(&mut processor, &mut extra);
         let _ = rate_notifications(&mut control);
 
-        controls.set_speed(1.5);
         let first_position = processor
             .track(first_id)
             .expect("first track loaded")
@@ -678,25 +667,22 @@ mod tests {
             - first_position;
         let block_frames = u32::try_from(Consts::BLOCK_FRAMES).expect("block size fits u32");
         let expected_advance =
-            f64::from(block_frames) * f64::from(effective_rate) / f64::from(Consts::SAMPLE_RATE);
-        assert!((first_advance - expected_advance).abs() < f64::EPSILON);
-        assert_eq!(
-            processor.playback().rate.load(Ordering::Relaxed),
-            effective_rate
+            Duration::from_secs_f64(f64::from(block_frames) / f64::from(Consts::SAMPLE_RATE))
+                .as_secs_f64();
+        assert!(
+            (first_advance - expected_advance).abs() < f64::from(f32::EPSILON),
+            "target intent is not applied DSP progress for the identity test reader"
         );
+        assert_eq!(processor.playback().rate.load(Ordering::Relaxed), 1.0);
         let notifications = rate_notifications(&mut control);
-        if supports_playback_rate() {
-            assert_eq!(notifications, [1.5]);
-        } else {
-            assert!(notifications.is_empty());
-        }
+        assert!(notifications.is_empty());
 
         let next: Arc<str> = Arc::from("next");
         let next_id = TrackId::allocate();
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: warped_player_resource(&pools, &controls, &next),
+                resource: player_resource(&pools, &next),
                 item_id: next_id,
             })
             .expect("load next track");
@@ -704,15 +690,9 @@ mod tests {
             .cmd_tx
             .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(next_id)))
             .expect("fade in next track");
-        assert_eq!(controls.speed(), 1.5);
-
         process_block(&mut processor, &mut extra);
 
-        assert_eq!(controls.speed(), 1.5);
-        assert_eq!(
-            processor.playback().rate.load(Ordering::Relaxed),
-            effective_rate
-        );
+        assert_eq!(processor.playback().rate.load(Ordering::Relaxed), 1.0);
         assert_eq!(
             processor
                 .track(next_id)
@@ -787,5 +767,36 @@ mod tests {
 
         assert!(!track.is_cancelled());
         assert_eq!(state.load(Ordering::SeqCst), DropState::BEFORE_CANCEL);
+    }
+
+    #[kithara::test(native)]
+    fn seek_withdraws_the_resident_warp_context() {
+        let warp = Warp::new((), &WarpConfig::builder().build());
+        let publisher = warp.publisher();
+        let reader = publisher.reader();
+        let mut resource = Resource::from_reader(EofReader::with_frames(1), None);
+        resource.render_publisher = Some(publisher.clone());
+        let mut resource = PlayerResource::new(resource, Arc::from("seek"), &pools())
+            .unwrap_or_else(|error| panic!("test player resource: {error}"));
+        let context = RenderContext::new(
+            SessionFrame::new(0)..SessionFrame::new(1),
+            NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture context is valid");
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(1)
+                .output(SessionFrame::new(0))
+                .build(),
+        );
+        assert!(reader.load().is_some());
+
+        resource.reset_for_seek();
+
+        assert!(reader.load().is_none());
     }
 }

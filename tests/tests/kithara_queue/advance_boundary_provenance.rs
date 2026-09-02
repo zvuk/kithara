@@ -15,6 +15,7 @@ use kithara::{
         effects::eq::generate_log_spaced_bands, player::PlayerControl,
     },
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    warp::WarpConfig,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -994,7 +995,11 @@ fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> Off
     OfflinePlayerOptions::builder()
         .crossfade_duration(CROSSFADE_SECS)
         .eq_layout(generate_log_spaced_bands(10))
-        .timestretch(Arc::clone(timestretch))
+        .warp(
+            WarpConfig::builder()
+                .stretch(Arc::clone(timestretch))
+                .build(),
+        )
         .build()
 }
 

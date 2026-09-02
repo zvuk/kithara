@@ -21,8 +21,10 @@ features.
 Decoder, playback, Warp, and analyzer crates consume these values without
 creating aliases or duplicate decoded-signal types.
 
-`segment_index` and `variant_index` are opaque provenance values supplied by a
-decoder; this crate does not interpret them or own protocol policy.
+`segment_index`, `variant_index`, and `render_revision` are opaque provenance
+values supplied by producers; this crate stores but does not interpret them or
+own decoder, protocol, or Warp policy. Keeping the revision with the samples
+preserves causality through buffering signal processors.
 
 ## Stable Value Shapes
 

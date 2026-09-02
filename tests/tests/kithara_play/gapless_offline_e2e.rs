@@ -1142,6 +1142,7 @@ impl SyntheticPcmReader {
             |count| ReadOutcome::Frames {
                 count,
                 position: self.position(),
+                source_span: None,
             },
         )
     }

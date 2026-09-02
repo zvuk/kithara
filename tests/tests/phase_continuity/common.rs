@@ -164,7 +164,9 @@ where
     let mut retries = 0usize;
     loop {
         match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, position }) => return Some((count.get(), position)),
+            Ok(ReadOutcome::Frames {
+                count, position, ..
+            }) => return Some((count.get(), position)),
             Ok(ReadOutcome::Pending { .. }) => {
                 retries += 1;
                 assert!(

@@ -1,7 +1,7 @@
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{AudioCodec, ByteMap, ReaderInput};
-use kithara_test_utils::kithara;
+use kithara_test_macros as kithara;
 
 use super::{
     parsing::{Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
@@ -71,6 +71,7 @@ where
         EnsureCursor::Ready
     }
 
+    #[kithara::measure]
     fn fill_cursor(&mut self) -> DecodeResult<FillStatus> {
         let cursor = self
             .cursor
@@ -158,6 +159,7 @@ where
         self.track_info.duration
     }
 
+    #[kithara::measure]
     #[kithara::probe]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         loop {

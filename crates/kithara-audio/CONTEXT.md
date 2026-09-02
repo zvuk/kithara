@@ -5,54 +5,72 @@ inventory; `Cargo.toml` owns the feature list.
 
 ## Threads and transports
 
-Four contexts touch one track.
+Four contexts touch one track. **Consumer thread** — `Audio<S>` (`AudioRead` +
+`AudioSession` + `AudioControl`, umbrella `AudioReader`), normally the host audio
+callback: never allocates, frees, or locks. **Playback worker** — one shared OS
+thread and generic scheduler owned by `kithara_play::PlayWorker`.
+`kithara-play` owns task registration, `DecoderNode`, final producer admission,
+and the RAII lease; `Audio<S>` retains only a restricted wake capability. This
+crate ends at the still-concrete `AudioSource` plus `PreparedAudioLane` seam and
+contains no playback scheduler, Warp renderer, or playback effects. **Off-RT
+rebuild** — `RebuildPort::submit` → `spawn_blocking_on`
+on the tokio handle captured during audio preparation. **Downloader** — owned
+by `kithara-stream`; this crate never spawns it and never reconstructs HLS/file
+protocol policy.
 
-- **Consumer** — `Audio<S>`, normally the host audio callback: never allocates,
-  frees, or locks.
-- **Playback worker** — one shared OS thread and scheduler owned by
-  `kithara_play::PlayWorker`, which also owns `DecoderNode` and final producer
-  admission. This crate ends at the prepared-lane seam below.
-  `kithara-analysis` runs its own single-node runner and shares none of it.
-- **Off-RT rebuild** — `spawn_blocking_on` the tokio handle captured at
-  preparation.
-- **Downloader** — owned by `kithara-stream`; never spawned here, and its
-  HLS/file protocol policy is never rebuilt here.
+### Musical-coordinate ownership
 
-### Cross-crate ownership
+`kithara-warp` is the canonical owner of beat maps, session coordinates, and
+the synchronization protocol. This crate publishes decoded signal facts only;
+`kithara-analysis` publishes analysis facts. Neither crate defines Warp
+coordinates nor converts between parallel map representations. The R7 audio seam
+does not advance a `WarpMap`, report runtime map progress, or acknowledge
+rendered/presented synchronization.
 
-Do not re-derive these; each is owned by the named crate's `CONTEXT.md`.
+`kithara-signal` is the canonical owner of decoded-signal values
+(`AudioSpec`, `AudioChunkInfo`, `AudioChunk`) and pure sample/time math;
+`kithara-bufpool` owns `PoolRegion` and `SampleBuffer`. This crate consumes the
+injected `u8` and `f32` capabilities while preparing a track, then retains only
+checked sample guards in the cursor and gapless blender. Startup allocation is
+owned by the composition-root pool config, not by an audio pre-warm phase. This
+crate owns the runtime `AudioReader`, `AudioSource`, and observer protocols that
+transport those values. It does not mirror their fields or re-export them
+through a decoder-specific compatibility layer.
 
-- [`kithara-warp`](../kithara-warp/CONTEXT.md) owns beat maps, session
-  coordinates, and the synchronization protocol. This crate publishes decoded
-  signal facts only: it never advances a `WarpMap`, reports map progress, or
-  acknowledges rendered/presented synchronization.
-- [`kithara-signal`](../kithara-signal/CONTEXT.md) owns decoded-signal values and
-  pure sample/time math; [`kithara-stream`](../kithara-stream/CONTEXT.md) owns
-  encoded/container media types; [`kithara-bufpool`](../kithara-bufpool/CONTEXT.md)
-  owns pooled sample storage. This crate only transports those values: it mirrors
-  none of their fields and re-exports none of them through a decoder-specific
-  compatibility layer. Startup allocation belongs to the composition-root pool
-  config, not to an audio pre-warm phase.
-- [`kithara-play`](../kithara-play/CONTEXT.md) owns playback cancellation,
-  scheduling policy, and playback effects with their reset/drain policy; audio
-  sources observe only their scoped cancellation and wake contracts.
+Transport (`runtime/ports.rs`): generic SPSC `ringbuf::HeapRb` plus a one-slot
+overflow (`Outlet`/`Inlet`). The playback-facing `ProducerPort` uses the same
+bounded ring but deliberately bypasses that overflow.
 
-### Ring transport
-
-- **Backpressure.** A tick whose SPSC ring and one-slot overflow are both full
-  returns *without* ticking the FSM — every internal transition, seeks included,
-  pauses until the consumer drains.
-- **Wake.** The produce core never enters the kernel; a ring push only arms a
-  coalesced atomic. The scheduler shell delivers the pending `ThreadWake` after a
-  node visit and before reporting or removing the slot, and an unregistered or
-  cancelled node still gets one final shell-side flush, so EOF and failure output
-  cannot strand a blocked reader. The consumer snapshots `ThreadWake` before
-  re-checking the ring; a signal between snapshot and park advances the gate
-  sequence, so the park returns immediately while keeping its timed backstop. A
-  seek-epoch drain coalesces every discarded entry into one wake.
-- **Trash ring.** The RT consumer must never `free`, so spent pooled
-  `AudioChunk`s go to a second ring drained off-RT. Its extra capacity absorbs a
-  full forward-ring seek drain, making the RT push infallible.
+- **Generic outlet overflow.** `Outlet::try_push` first flushes an older parked
+  item, then parks the new item when the ring is full; it returns `Err` only
+  while both the ring and overflow slot remain saturated.
+- **Final playback backpressure.** `DecoderNode` checks
+  `ProducerPort::can_push_direct` before processing the source and returns
+  `TickResult::Backpressured` while the final ring is full.
+  `ProducerPort::push_direct` then admits the item under that reserved-capacity
+  invariant; it never parks final playback output in the generic overflow slot.
+- **Wake.** A producer→reader ring push arms a coalesced atomic wake;
+  empty-to-non-empty also enqueues `on_data_available`. The produce core never
+  calls `ThreadWake::wake` or enters the kernel. The scheduler shell delivers
+  the pending `ThreadWake` after a node visit and before reporting or removing
+  the slot. An unregistered or cancelled node gets one final shell-side flush,
+  so EOF and failure output cannot strand a blocked reader. The consumer
+  snapshots `ThreadWake` before re-checking `try_pop`; a signal between the
+  snapshot and park advances the gate sequence, so `wait_timeout` returns
+  immediately while retaining its timed backstop. Consumer→worker wakes are an
+  explicit capability: `ConsumerWakeMode::RealtimeDeferred` (the production
+  default) only arms a coalesced atomic level after a successful ring pop. While
+  final-ring backpressure is present, the scheduler polls that level at the
+  playback worker's bounded interval and keeps its ordinary timeout as the
+  liveness backstop. `ImmediateOffRt` signals the `ThreadGate` immediately from
+  a consumer known to run off the real-time thread. A seek-epoch drain coalesces
+  all discarded entries into one wake after the drain rather than signaling per
+  item.
+- **Trash ring.** The RT consumer must never `free`, so spent pooled `AudioChunk`s
+  go to a second ring drained by the play-owned `DecoderNode::recycle` on the
+  worker. Capacity
+  `audio_buffer_chunks + 2` absorbs a full forward-ring seek drain, making the RT
+  push infallible.
 - **Off-RT deferral.** Signals the forbid-blocking core must not make are armed
   on-core and flushed by the shell: `prepare_deferred` runs before the play-owned
   effect service and resolves source format/state plus build completions;
@@ -64,23 +82,32 @@ Do not re-derive these; each is owned by the named crate's `CONTEXT.md`.
 ### Preload gate
 
 `PreloadGate` is the one-time startup signal releasing the async consumer's
-`preload().await`; its own docs own the lock-free mechanism. Not local to it: the
-play-owned `DecoderNode` opens the gate at *every* preload terminal site —
-chunk threshold with an empty overflow slot, EOF, `Failed`, cancellation — from
-its cached runtime epoch, and re-arms it on seek so a post-seek wait blocks until
-that epoch refills.
+`preload().await`. The worker is a plain OS thread and must never run a
+cross-thread task `wake()`: it does a lock-free `signal_epoch(epoch)` (`Release`
+stores of `ready_epoch` then `ready`) and the awaiter polls with `Acquire`,
+re-arming its own runtime timer (`POLL_INTERVAL` = 2 ms) while closed.
+The play-owned `DecoderNode` opens the gate at every preload terminal site —
+preload-chunk threshold after direct final-ring admission, EOF, `Failed`,
+`on_cancel` — from its cached runtime epoch, and `rearm()`s it in
+`sync_seek_epoch` (`Audio::seek` rearms consumer-side) so a post-seek wait blocks
+until that epoch refills.
 
-### Consumer wake capability
-
-`block_on_underrun` is the independent empty-read policy; `ConsumerWakeMode`
-names the consumer's thread capability. Two consequences live in neither type:
-
-- Both event routes stamp a monotonic `seq`, but the deferred ring's FIFO is not
-  a cross-route delivery order: an inline `ImmediateOffRt` reader event may reach
-  subscribers before an earlier-`seq` deferred event still parked in the ring.
-- A blocking read parks its caller, so that consumer needs a dedicated thread or
-  `spawn_blocking` — never the audio callback, and never a tokio runtime thread
-  whose tasks feed the ring. On wasm32 reads never block.
+**`block_on_underrun`.** The bool remains the independent empty-read policy;
+`ConsumerWakeMode` names the consumer's thread capability: how a successful
+drain wakes the worker, and how reader-born events reach the bus — a
+`RealtimeDeferred` read enqueues them on the `DeferredBus` ring for the
+scheduler shell (its only flusher), while an `ImmediateOffRt` read publishes
+them inline before returning, because its thread may take the
+`broadcast::send` lock. Both routes stamp a monotonic `seq`, but the ring's
+FIFO is not a cross-route delivery order: an inline reader event may reach
+subscribers before an earlier-`seq` deferred event still parked in the ring.
+With
+`AudioConfig::block_on_underrun(true)` a `read()` on an empty ring PARKS the
+caller until the worker produces and the effective wake mode is always
+`ImmediateOffRt`, regardless of the explicitly configured mode. The consumer
+must therefore live on a dedicated thread or `spawn_blocking`, never the audio
+callback or a tokio runtime thread whose tasks feed the ring. On wasm32 reads
+never block.
 
 ## Ownership map
 
@@ -156,15 +183,21 @@ and `Failed` clear it. Pinned by the `playing_for_state` tests in
 
 Recreation is two-phase and never builds a decoder on the produce core. On-core,
 `RebuildPort::prepare` `probe_seek`s to the recreate offset and stores a pending
-job — only one may be pending at a time; the shell then spawns it off-RT, where
-it constructs a complete `DecoderGeneration` so that installation only moves one.
-The worker consumes only a completion matching the current `BuildId`; a late one
-is retired as stale. A matching replacement first aborts any exact incoming
-transition, because that transition's landing and prepared blend belong to the
-generation being replaced. A caught factory panic becomes
-`RecreateOutcome::SoftFailed` and fails the track with
-`TrackFailure::RecreateFailed`; only `ErrorClass::Interrupted` maps to
-`NeedsSourceWait` and parks.
+job — only one may be pending at a time. `finish_deferred` → `RebuildPort::submit`
+spawns it (`spawn_blocking_on`); the job builds the decoder, optionally seeks it
+to its landing time, primes an incoming generation up to the existing bounded
+step limit, pushes a `DecoderBuildComplete` onto the replacement or incoming
+completion queue (capacity 4 each), then wakes the worker. Shell-side
+`prepare_deferred` drains the completion queues, retires stale completions, and caches the
+replacement matching the current `BuildId`; `RebuildingDecoder` only takes that
+cached replacement. A matching replacement first aborts any exact incoming
+transition: its landing and prepared blend belong to the generation being
+replaced, and a late incoming completion is retired as stale. Installation is a
+`replace_active` plus a retire. A caught
+factory panic becomes
+`RecreateOutcome::SoftFailed`, failing the track with
+`TrackFailure::RecreateFailed`; `NeedsSourceWait` parks (`classify` maps only
+`ErrorClass::Interrupted` here).
 
 ### Recreate policy
 
@@ -290,23 +323,30 @@ decode and stays owned for shell retirement.
 
 ## Construction reads
 
-The initial decoder is built **exactly once**, with no retry loop and no
-readiness gate, and its read goes through the **blocking** off-RT `Stream::read`
-adapter. Each `OpenedReader` carries its own `ConstructionGate`, shared only with
-that reader's `SharedStream` clone, so a rebuild cannot switch an active decoder
-reader into blocking mode (`decoder_readers_have_isolated_construction_gates`).
-Builders arm that gate around each off-RT factory call and disarm it after a
-normal return, join error, or caught panic.
-
-The gate selects the read mode and nothing else. `SharedStream`'s `Seek` is the
-blocking adapter in **both** phases, because a decoder seeks past residual
-lateness in steady state too, where a probe seek could only report not-ready to a
-caller that can do nothing but ask again; staying off that path is
-`OffsetReader`'s own choice, made by naming `probe_seek`. Blocking lets a
-slow-but-arriving prefix wait off the RT worker up to the stream's blocking-read
-budget instead of erroring on the first not-ready probe. A construction byte that
-never arrives surfaces the **stream layer's** typed terminal verbatim: this layer
-mints no construction error type and no synthetic timeout.
+`Audio::prepare` builds the initial decoder **exactly once**
+(`create_initial_decoder`, one `spawn_blocking`), with no retry loop and no
+readiness gate. The construction read goes through the **blocking** off-RT
+`Stream::read` adapter: every `OpenedReader` carries its own `ConstructionGate`,
+shared only with that reader's `SharedStream` clone. The initial builder and
+`RebuildPort` arm their reader-local gate around each off-RT factory call and
+exact seek, then disarm it before the bounded initial incoming PCM prime. The
+prime uses steady-state non-blocking reads and stops at the existing join-frame
+budget. They disarm the gate after a normal return, join error, or caught panic.
+A rebuild therefore cannot switch an active decoder reader into blocking mode.
+Steady-state reads
+use non-blocking `Stream::probe_read`; on-core seeks use `probe_seek` (position
+math only, no `prime_seek_range` spin on the forbid path). The gate selects the
+read mode and nothing else: `SharedStream`'s `Seek` is the blocking adapter in
+both phases, because a decoder seeks past residual lateness in steady state as
+well, and a probe seek there only reports not-ready to a caller that can do
+nothing but ask again. Staying off the blocking path is `OffsetReader`'s own
+choice, made by naming `probe_seek` — not a consequence of a disarmed gate.
+Blocking makes a
+slow-but-arriving prefix wait, off the RT worker, up to the stream's blocking-read
+budget rather than error on the first not-ready probe. A construction-range byte
+that never arrives surfaces the **stream layer's** typed terminal verbatim; the
+audio layer mints no construction error type and there is no synthetic
+`TimedOut`.
 
 A `VariantChange`/`SeekPending` at construction is **not** a rebuild trigger: the
 variant is settled before the build, construction always probes at offset 0, and

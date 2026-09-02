@@ -99,7 +99,7 @@ impl GaplessBlender {
     }
 
     pub(crate) fn join_frame_count(&self) -> u64 {
-        u64::from(join_frames(self.active.spec()))
+        join_frame_count(self.active.spec())
     }
 
     pub(crate) fn process_active(&mut self, mut chunk: AudioChunk) -> AudioChunk {
@@ -142,6 +142,10 @@ fn join_frames(spec: AudioSpec) -> u16 {
     )
     .unwrap_or(u16::MAX)
     .max(Consts::MIN_JOIN_FRAMES)
+}
+
+pub(crate) fn join_frame_count(spec: AudioSpec) -> u64 {
+    u64::from(join_frames(spec))
 }
 
 fn join_samples(spec: AudioSpec) -> usize {

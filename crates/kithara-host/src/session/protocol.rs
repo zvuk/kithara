@@ -2,7 +2,7 @@ use firewheel::FirewheelCtx;
 use kithara_platform::sync::mpsc;
 pub(crate) use kithara_play::{
     AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
-    SessionSampleRate,
+    SessionSampleRate, StreamShape,
 };
 use kithara_play::{PlayError, player::PlayerMember};
 use kithara_warp::{

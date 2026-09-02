@@ -61,7 +61,6 @@ struct ContinuityReport {
 #[derive(Clone, Copy, Debug)]
 struct CochleaMetric {
     silent_buckets: usize,
-    onsets: usize,
     clipped_samples: usize,
     true_peak_over_0dbtp: bool,
     leading_silence_ms: f64,
@@ -259,10 +258,36 @@ fn primary_continuity_report(switched: &[f32], controls: &[&[f32]]) -> Continuit
     ContinuityReport { channels, failures }
 }
 
-/// The metric plus the onset times behind its count. A bare count says a switch
-/// grew an onset but not where, and "where" is the whole diagnosis: at the
-/// splice it is the join, spread through the tail it is the destination decoder
-/// started mid-stream.
+fn content_aligned_windows<'a>(
+    switched: &'a [f32],
+    source: &'a [f32],
+    destination: &'a [f32],
+    destination_lag: isize,
+) -> (&'a [f32], &'a [f32], &'a [f32]) {
+    assert_eq!(switched.len(), source.len());
+    assert_eq!(switched.len(), destination.len());
+    let channels = usize::from(CHANNELS);
+    let frames = switched.len() / channels;
+    let offset = destination_lag.unsigned_abs();
+    let (common_start, common_end, destination_start) = if destination_lag >= 0 {
+        (offset, frames, 0)
+    } else {
+        (0, frames.saturating_sub(offset), offset)
+    };
+    assert!(
+        common_start < common_end,
+        "codec-origin overlap must contain audio: frames={frames}, lag={destination_lag}",
+    );
+    let destination_end = destination_start + common_end - common_start;
+    let sample_range = |start: usize, end: usize| start * channels..end * channels;
+    (
+        &switched[sample_range(common_start, common_end)],
+        &source[sample_range(common_start, common_end)],
+        &destination[sample_range(destination_start, destination_end)],
+    )
+}
+
+/// The invariant metric plus onset times retained as control diagnostics.
 fn measure_cochlea(samples: &[f32]) -> (CochleaMetric, Vec<f64>) {
     let audio = ProbeAudio {
         samples: samples.to_vec(),
@@ -278,7 +303,6 @@ fn measure_cochlea(samples: &[f32]) -> (CochleaMetric, Vec<f64>) {
         .count();
     let metric = CochleaMetric {
         silent_buckets,
-        onsets: report.onsets.count,
         clipped_samples: report.clipping.clipped_samples,
         true_peak_over_0dbtp: report.clipping.true_peak_over_0dbtp,
         leading_silence_ms: report.silence.leading_ms,
@@ -287,26 +311,22 @@ fn measure_cochlea(samples: &[f32]) -> (CochleaMetric, Vec<f64>) {
     (metric, report.onsets.times_ms.clone())
 }
 
+/// Compare invariant Cochlea fields. Granular onset count is not invariant
+/// across an intentional codec morph; the aligned frame oracle above owns
+/// switch-local clicks and residual discontinuities.
 fn cochlea_failures(
     switched: &[f32],
     source: CochleaMetric,
     destination: CochleaMetric,
 ) -> Vec<String> {
-    let (switched, switched_onsets_ms) = measure_cochlea(switched);
+    let (switched, _) = measure_cochlea(switched);
     let silent_limit = source.silent_buckets.max(destination.silent_buckets);
-    let onset_limit = source.onsets.max(destination.onsets);
     let clipped_limit = source.clipped_samples.max(destination.clipped_samples);
     let mut failures = Vec::new();
     if switched.silent_buckets > silent_limit {
         failures.push(format!(
             "Cochlea found extra silent buckets: switched={}, source={}, destination={}",
             switched.silent_buckets, source.silent_buckets, destination.silent_buckets,
-        ));
-    }
-    if switched.onsets > onset_limit {
-        failures.push(format!(
-            "Cochlea found extra onsets: switched={}, source={}, destination={}, switched_onsets_ms={switched_onsets_ms:?}",
-            switched.onsets, source.onsets, destination.onsets,
         ));
     }
     if switched.clipped_samples > clipped_limit {
@@ -437,11 +457,14 @@ fn sine_omega() -> f32 {
 }
 
 #[kithara::test]
-#[case::positive_rising(0.4, 17)]
-#[case::negative_falling(-0.4, 42)]
+#[case::positive_rising(0.4, 17, 0)]
+#[case::negative_falling(-0.4, 42, 0)]
+#[case::positive_codec_lag(0.4, 17, 1_024)]
+#[case::negative_codec_lag(-0.4, 42, -1_024)]
 fn quality_switch_oracle_rejects_an_injected_single_sample_click(
     #[case] click_delta: f32,
     #[case] phase_offset: usize,
+    #[case] destination_lag: isize,
 ) {
     let frames = usize::try_from(SAMPLE_RATE)
         .expect("fixture sample rate fits usize")
@@ -458,13 +481,22 @@ fn quality_switch_oracle_rejects_an_injected_single_sample_click(
         clicked[click_frame * usize::from(CHANNELS) + channel] += click_delta;
     }
 
-    let report = primary_continuity_report(&clicked, &[&control]);
+    let mut destination = control.clone();
+    let lag_samples = destination_lag.unsigned_abs() * usize::from(CHANNELS);
+    if destination_lag >= 0 {
+        destination.rotate_left(lag_samples);
+    } else {
+        destination.rotate_right(lag_samples);
+    }
+    let (clicked, control, destination) =
+        content_aligned_windows(&clicked, &control, &destination, destination_lag);
+    let report = primary_continuity_report(clicked, &[control, destination]);
     assert!(
         report.channels.iter().all(|channel| {
             channel.excess.peak_step > channel.step_limit
                 || channel.excess.peak_residual > channel.residual_limit
         }),
-        "the production oracle must reject a calibrated {click_delta:+.1} one-sample click on every channel: {}",
+        "the production oracle must reject a calibrated {click_delta:+.1} one-sample click with destination lag {destination_lag} on every channel: {}",
         format_channels(&report.channels),
     );
 }
@@ -604,13 +636,14 @@ async fn manual_quality_switches_match_time_aligned_no_switch_pcm(#[case] backen
             transition.label, switched.capture_frame, source_control.render.capture_frame,
         );
 
-        let primary = primary_continuity_report(
+        let (switched_samples, source_samples, destination_samples) = content_aligned_windows(
             &switched.samples,
-            &[
-                &source_control.render.samples,
-                &destination_control.render.samples,
-            ],
+            &source_control.render.samples,
+            &destination_control.render.samples,
+            control_lag_frames(transition),
         );
+        let primary =
+            primary_continuity_report(switched_samples, &[source_samples, destination_samples]);
         let cochlea = cochlea_failures(
             &switched.samples,
             source_control.cochlea,

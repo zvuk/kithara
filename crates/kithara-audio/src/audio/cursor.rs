@@ -11,10 +11,11 @@ use super::{
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
 };
+use crate::SourceSpan;
 
 #[derive(Clone, Copy)]
 pub(super) struct CursorRead {
-    pub(super) last_output_meta: Option<AudioChunkInfo>,
+    pub(super) first_output_meta: Option<AudioChunkInfo>,
     pub(super) outcome: ReadOutcome,
 }
 
@@ -56,6 +57,7 @@ impl ChunkCursor {
     fn copy_into(
         &mut self,
         chunk: &AudioChunk,
+        source_span: Option<SourceSpan>,
         output: &mut [f32],
         playhead: &dyn PlayheadWrite,
     ) -> Result<CopyOutcome, DecodeError> {
@@ -66,6 +68,8 @@ impl ChunkCursor {
             return Ok(CopyOutcome {
                 samples: 0,
                 finished: true,
+                output_frames: 0,
+                source_span: None,
             });
         }
 
@@ -76,6 +80,8 @@ impl ChunkCursor {
             return Ok(CopyOutcome {
                 samples: 0,
                 finished: false,
+                output_frames: 0,
+                source_span: None,
             });
         }
 
@@ -85,12 +91,19 @@ impl ChunkCursor {
         let consumed_total = consumed + take_frames;
         self.current_chunk_consumed_frames = consumed_total;
         let finished = take_frames == remaining_frames;
+        let source_span = source_span
+            .and_then(|span| source_subspan(span, consumed, consumed_total, total_frames));
         if finished {
             playhead.advance(&chunk_position(&chunk.meta));
         } else {
             playhead.advance_partial(interpolated_position(chunk.meta, consumed_total));
         }
-        Ok(CopyOutcome { finished, samples })
+        Ok(CopyOutcome {
+            finished,
+            output_frames: take_frames,
+            samples,
+            source_span,
+        })
     }
 
     #[kithara::measure]
@@ -117,16 +130,42 @@ impl ChunkCursor {
         }
 
         let mut written = 0;
-        let mut last_output_meta = None;
+        let mut first_output_meta = None;
+        let mut source_span = None;
+        let mut source_output_frames = 0_u64;
         while written < buf.len() {
             hang_tick!();
 
             if let Some(chunk) = ring.current_chunk.as_ref() {
-                let copied = self.copy_into(chunk, &mut buf[written..], playhead)?;
+                let chunk_source_span = ring.current_source_span;
+                if written > 0
+                    && !source_spans_coalesce(
+                        source_span,
+                        source_output_frames,
+                        chunk_source_span,
+                        u64::from(chunk.meta.frames),
+                    )
+                {
+                    break;
+                }
+                let copied =
+                    self.copy_into(chunk, chunk_source_span, &mut buf[written..], playhead)?;
                 if copied.samples > 0 {
                     hang_reset!();
-                    last_output_meta = Some(chunk.meta);
+                    first_output_meta.get_or_insert(chunk.meta);
                     written += copied.samples;
+                    if let Some(next) = copied.source_span {
+                        source_span = source_span.map_or(Some(next), |current| {
+                            SourceSpan::new(current.start(), next.end(), current.sample_rate())
+                                .map(|span| span.with_render_revision(current.render_revision()))
+                        });
+                        source_output_frames = source_output_frames
+                            .checked_add(copied.output_frames)
+                            .ok_or(DecodeError::SampleCountOverflow {
+                                frames: source_output_frames,
+                                channels: 1,
+                            })?;
+                    }
                 }
                 if copied.finished {
                     ring.recycle_current();
@@ -161,8 +200,12 @@ impl ChunkCursor {
                     .is_none_or(|duration| position <= duration)
             );
             return Ok(CursorRead {
-                last_output_meta,
-                outcome: ReadOutcome::Frames { count, position },
+                first_output_meta,
+                outcome: ReadOutcome::Frames {
+                    count,
+                    position,
+                    source_span,
+                },
             });
         }
 
@@ -205,7 +248,12 @@ impl ChunkCursor {
         let result = self.read(ring, events, playhead, recv, &mut interleaved[..]);
         let result = match result {
             Ok(mut read) => {
-                if let ReadOutcome::Frames { count, position } = read.outcome {
+                if let ReadOutcome::Frames {
+                    count,
+                    position,
+                    source_span,
+                } = read.outcome
+                {
                     let actual_frames = count.get() / channels;
                     debug_assert!(actual_frames <= frames);
                     let input = InterleavedView::new(
@@ -219,7 +267,11 @@ impl ChunkCursor {
                             position,
                             reason: PendingReason::Buffering,
                         },
-                        |count| ReadOutcome::Frames { position, count },
+                        |count| ReadOutcome::Frames {
+                            position,
+                            count,
+                            source_span,
+                        },
                     );
                 }
                 Ok(read)
@@ -233,7 +285,64 @@ impl ChunkCursor {
 
 struct CopyOutcome {
     finished: bool,
+    output_frames: u64,
     samples: usize,
+    source_span: Option<SourceSpan>,
+}
+
+fn source_spans_coalesce(
+    current: Option<SourceSpan>,
+    current_output_frames: u64,
+    next: Option<SourceSpan>,
+    next_output_frames: u64,
+) -> bool {
+    let (Some(current), Some(next)) = (current, next) else {
+        return current.is_none() && next.is_none();
+    };
+    if current.end() != next.start()
+        || current.sample_rate() != next.sample_rate()
+        || current.render_revision() != next.render_revision()
+        || current_output_frames == 0
+        || next_output_frames == 0
+    {
+        return false;
+    }
+    let Some(current_source_frames) = current.end().checked_sub(current.start()) else {
+        return false;
+    };
+    let Some(next_source_frames) = next.end().checked_sub(next.start()) else {
+        return false;
+    };
+    u128::from(current_source_frames)
+        .checked_mul(u128::from(next_output_frames))
+        .zip(u128::from(next_source_frames).checked_mul(u128::from(current_output_frames)))
+        .is_some_and(|(current_slope, next_slope)| current_slope == next_slope)
+}
+
+fn source_subspan(
+    span: SourceSpan,
+    output_start: u64,
+    output_end: u64,
+    output_frames: u64,
+) -> Option<SourceSpan> {
+    if output_frames == 0 || output_start > output_end || output_end > output_frames {
+        return None;
+    }
+    let source_frames = span.end().checked_sub(span.start())?;
+    let source_at = |output_frame: u64| {
+        let offset = u128::from(source_frames)
+            .checked_mul(u128::from(output_frame))?
+            .checked_div(u128::from(output_frames))?;
+        span.start().checked_add(u64::try_from(offset).ok()?)
+    };
+    let start = source_at(output_start)?;
+    let end = if output_end == output_frames {
+        span.end()
+    } else {
+        source_at(output_end)?
+    };
+    SourceSpan::new(start, end, span.sample_rate())
+        .map(|subspan| subspan.with_render_revision(span.render_revision()))
 }
 
 fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
@@ -258,7 +367,7 @@ fn pending(playhead: &dyn PlayheadWrite, reason: PendingReason) -> CursorRead {
             reason,
             position: playhead.position(),
         },
-        last_output_meta: None,
+        first_output_meta: None,
     }
 }
 
@@ -267,7 +376,7 @@ fn eof(playhead: &dyn PlayheadWrite) -> CursorRead {
         outcome: ReadOutcome::Eof {
             position: playhead.position(),
         },
-        last_output_meta: None,
+        first_output_meta: None,
     }
 }
 
@@ -282,7 +391,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ConsumerWakeMode,
+        ConsumerWakeMode, SourceEnd,
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
         test_pools::{Pools, pools, sample_buffer},
     };
@@ -332,12 +441,171 @@ mod tests {
                 &mut buf,
             )
             .expect("partial read succeeds");
-        let ReadOutcome::Frames { count, position } = read.outcome else {
+        let ReadOutcome::Frames {
+            count,
+            position,
+            source_span,
+        } = read.outcome
+        else {
             panic!("expected frames from partial resampled chunk");
         };
         assert_eq!(count.get(), 200);
         assert_eq!(position, duration);
+        assert_eq!(source_span, None);
         assert_eq!(cursor.current_chunk_consumed_frames, 100);
+    }
+
+    #[kithara::test]
+    fn render_revision_splits_identical_empty_source_spans() {
+        let rate = NonZeroU32::new(48_000).expect("test rate");
+        let first = SourceSpan::new(100, 100, rate)
+            .expect("ordered test span")
+            .with_render_revision(7);
+        let same_revision = SourceSpan::new(100, 100, rate)
+            .expect("ordered test span")
+            .with_render_revision(7);
+        let next_revision = SourceSpan::new(100, 100, rate)
+            .expect("ordered test span")
+            .with_render_revision(8);
+
+        assert!(source_spans_coalesce(
+            Some(first),
+            64,
+            Some(same_revision),
+            64
+        ));
+        assert!(!source_spans_coalesce(
+            Some(first),
+            64,
+            Some(next_revision),
+            64
+        ));
+    }
+
+    #[kithara::test]
+    fn reads_preserve_each_rendered_source_span() {
+        let pools = pools();
+        let rate = NonZeroU32::new(48_000).expect("test rate");
+        let first_revision = 7;
+        let second_revision = 8;
+        let spec = AudioSpec::new(1, rate);
+        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
+        let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
+        let mut ring = RingConsumer::new(RingParts {
+            trash_tx,
+            audio_rx: data_rx,
+            reader_wake: Arc::new(ThreadWake::default()),
+            epoch: Arc::new(AtomicU64::new(0)),
+            block_on_underrun: false,
+            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
+        });
+        ring.preloaded = true;
+        let mut first = timed_chunk(&pools, spec, 3, Duration::ZERO, Duration::from_millis(3));
+        first.meta.frame_offset = 100;
+        first.meta.render_revision = first_revision;
+        let mut second = timed_chunk(
+            &pools,
+            spec,
+            2,
+            Duration::from_millis(3),
+            Duration::from_millis(5),
+        );
+        second.meta.frame_offset = 106;
+        second.meta.render_revision = first_revision;
+        let mut changed = timed_chunk(
+            &pools,
+            spec,
+            2,
+            Duration::from_millis(5),
+            Duration::from_millis(7),
+        );
+        changed.meta.frame_offset = 110;
+        changed.meta.render_revision = second_revision;
+        data_tx
+            .try_push(Fetch::rendered(first, 0, SourceEnd::new(106, rate)))
+            .expect("first rendered chunk reaches ring");
+        data_tx
+            .try_push(Fetch::rendered(second, 0, SourceEnd::new(110, rate)))
+            .expect("second rendered chunk reaches ring");
+        data_tx
+            .try_push(Fetch::rendered(changed, 0, SourceEnd::new(114, rate)))
+            .expect("changed-revision rendered chunk reaches ring");
+
+        let playhead = PlayheadState::new();
+        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
+        let mut events = AudioEvents::test();
+        let mut output = [0.0; 8];
+        let first_read = cursor
+            .read(
+                &mut ring,
+                &mut events,
+                &playhead,
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut output,
+            )
+            .expect("first read succeeds");
+        let ReadOutcome::Frames {
+            count, source_span, ..
+        } = first_read.outcome
+        else {
+            panic!("expected first rendered frames");
+        };
+        assert_eq!(
+            count.get(),
+            5,
+            "equal-revision Fetch spans must coalesce and a new render revision must split"
+        );
+        assert_eq!(
+            source_span,
+            SourceSpan::new(100, 110, rate).map(|span| span.with_render_revision(first_revision))
+        );
+
+        let second_read = cursor
+            .read(
+                &mut ring,
+                &mut events,
+                &playhead,
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut output[..1],
+            )
+            .expect("partial changed-slope read succeeds");
+        let ReadOutcome::Frames { source_span, .. } = second_read.outcome else {
+            panic!("expected partial changed-revision frames");
+        };
+        assert_eq!(
+            source_span,
+            SourceSpan::new(110, 112, rate).map(|span| span.with_render_revision(second_revision))
+        );
+
+        let final_read = cursor
+            .read(
+                &mut ring,
+                &mut events,
+                &playhead,
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut output,
+            )
+            .expect("final changed-slope read succeeds");
+        let ReadOutcome::Frames { source_span, .. } = final_read.outcome else {
+            panic!("expected final rendered frames");
+        };
+        assert_eq!(
+            source_span,
+            SourceSpan::new(112, 114, rate).map(|span| span.with_render_revision(second_revision)),
+            "a full changed-revision read must land exactly at SourceEnd"
+        );
     }
 
     #[kithara::test]

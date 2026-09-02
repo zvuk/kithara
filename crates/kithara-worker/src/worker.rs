@@ -105,7 +105,8 @@ mod tests {
                 .with_owned_pool(RayonConfig::new(NonZeroUsize::MIN, "owned-compute-test")),
         );
         assert!(!worker.inner.compute.pool().owned_is_initialized());
-        let dispatcher = worker.dispatcher(DispatcherConfig::new("owned-pool-test"));
+        let dispatcher =
+            worker.dispatcher(DispatcherConfig::builder().name("owned-pool-test").build());
         let pending = dispatcher
             .reserve(TaskConfig::new())
             .expect("task reservation");
@@ -160,7 +161,11 @@ mod tests {
             .recv_timeout(Instant::now() + Duration::from_secs(2))
             .expect("pool thread must be occupied");
         let worker = Worker::new(WorkerConfig::new().with_pool(pool));
-        let dispatcher = worker.dispatcher(DispatcherConfig::new("accepted-payload-test"));
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::builder()
+                .name("accepted-payload-test")
+                .build(),
+        );
         let pending = dispatcher
             .reserve(TaskConfig::new())
             .expect("task reservation");
@@ -190,7 +195,8 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn disabled_compute_is_unavailable_and_budgets_saturate_without_queueing() {
         let disabled = Worker::new(WorkerConfig::new());
-        let disabled_dispatcher = disabled.dispatcher(DispatcherConfig::new("disabled-test"));
+        let disabled_dispatcher =
+            disabled.dispatcher(DispatcherConfig::builder().name("disabled-test").build());
         let disabled_task = disabled_dispatcher
             .reserve(TaskConfig::new())
             .expect("disabled task reservation");
@@ -212,7 +218,11 @@ mod tests {
                 .with_pool(pool)
                 .with_max_compute_tasks(NonZeroUsize::MIN),
         );
-        let dispatcher = worker.dispatcher(DispatcherConfig::new("compute-budget-test"));
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::builder()
+                .name("compute-budget-test")
+                .build(),
+        );
         let first = dispatcher
             .reserve(TaskConfig::new().with_max_compute_tasks(NonZeroUsize::MIN))
             .expect("first task reservation");
@@ -270,7 +280,11 @@ mod tests {
             NonZeroUsize::MIN,
             "cancelled-compute-test",
         )));
-        let dispatcher = worker.dispatcher(DispatcherConfig::new("cancelled-compute-test"));
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::builder()
+                .name("cancelled-compute-test")
+                .build(),
+        );
         let pending = dispatcher
             .reserve(TaskConfig::new())
             .expect("task reservation");
@@ -296,7 +310,11 @@ mod tests {
                 .with_cancel(parent_token.clone())
                 .with_owned_pool(RayonConfig::new(NonZeroUsize::MIN, "cancel-compute-test")),
         );
-        let dispatcher = worker.dispatcher(DispatcherConfig::new("cancel-lineage-test"));
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::builder()
+                .name("cancel-lineage-test")
+                .build(),
+        );
         let pending = dispatcher
             .reserve(TaskConfig::new())
             .expect("task reservation");
@@ -352,7 +370,8 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn final_worker_drop_cancels_derived_dispatchers_and_tasks() {
         let worker = Worker::new(WorkerConfig::new());
-        let dispatcher = worker.dispatcher(DispatcherConfig::new("worker-drop-test"));
+        let dispatcher =
+            worker.dispatcher(DispatcherConfig::builder().name("worker-drop-test").build());
         let pending = dispatcher
             .reserve(TaskConfig::new())
             .expect("task reservation");

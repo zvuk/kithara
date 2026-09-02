@@ -41,10 +41,10 @@ enum TrackCommandScenario {
 const MAX_BLOCK_FRAMES: u32 = 1024;
 
 fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {
-    StreamShape {
+    StreamShape::new(
+        NonZeroU32::new(MAX_BLOCK_FRAMES).expect("BUG: non-zero"),
         sample_rate,
-        max_block_frames: NonZeroU32::new(MAX_BLOCK_FRAMES).expect("BUG: non-zero"),
-    }
+    )
 }
 
 fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
@@ -135,16 +135,6 @@ fn processor_seek_without_tracks_does_not_panic() {
             seconds: 30.0,
             seek_epoch: 1,
         })
-        .ok();
-    processor.drain_commands();
-}
-
-#[kithara::test]
-fn processor_set_playback_rate_without_tracks_does_not_panic() {
-    let (mut processor, mut control) = make_processor();
-    control
-        .cmd_tx
-        .try_push(PlayerCmd::SetPlaybackRate(2.0))
         .ok();
     processor.drain_commands();
 }

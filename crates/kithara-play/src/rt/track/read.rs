@@ -1,6 +1,8 @@
 use std::ops::Range;
 
 use kithara_platform::sync::Arc;
+use kithara_test_macros as kithara;
+use kithara_warp::{PresentationFrontier, RenderContext};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
@@ -49,15 +51,48 @@ pub enum TrackReadOutcome {
 }
 
 impl PlayerTrack {
-    /// Advance the media clock by `frames` of mixed output.
-    ///
-    /// The mix output runs on the output clock; one output frame carries the
-    /// resource's current effective rate in media frames.
-    fn advance_media_clock(&mut self, frames: usize) {
-        let output_frames: f64 = AsPrimitive::as_(frames);
-        let playback_rate = self.playback_rate();
+    pub(crate) fn render(
+        &mut self,
+        context: Option<&RenderContext>,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        sink: &mut RtSink<'_>,
+    ) -> TrackReadOutcome {
+        let Some(context) = context else {
+            self.resource.clear_render();
+            return self.read_with_context(None, scratch_bufs, mix_bufs, range, sink);
+        };
+        if context.sample_rate().get() != self.sample_rate {
+            self.resource.clear_render();
+            self.handle_failed_end(sink.notifications);
+            return TrackReadOutcome::Failed;
+        }
+        let Some(context) = context.for_output_range(range.clone()) else {
+            self.resource.clear_render();
+            self.handle_failed_end(sink.notifications);
+            return TrackReadOutcome::Failed;
+        };
+        if let Some(source) = self.resource.presentation_source_end(context.sample_rate()) {
+            self.resource
+                .publish_render(&context, presentation_frontier(&context, source.frame()));
+        } else {
+            self.resource.clear_render();
+        }
+        self.read_with_context(Some(&context), scratch_bufs, mix_bufs, range, sink)
+    }
+
+    /// Advance the media clock by source time represented by consumed scratch.
+    fn advance_media_clock(&mut self, media_seconds: f64, output_frames: usize) {
         self.served_media_frames =
-            output_frames.mul_add(f64::from(playback_rate), self.served_media_frames);
+            f64::from(self.sample_rate.max(1)).mul_add(media_seconds, self.served_media_frames);
+        if output_frames > 0 {
+            let output_frames: f64 = AsPrimitive::as_(output_frames);
+            let rate = media_seconds * f64::from(self.sample_rate.max(1)) / output_frames;
+            if rate.is_finite() && rate >= 0.0 {
+                self.effective_rate = AsPrimitive::as_(rate);
+            }
+        }
     }
 
     fn check_notifications(
@@ -101,7 +136,6 @@ impl PlayerTrack {
             return outcome;
         };
 
-        self.advance_media_clock(frames);
         self.observed_duration = duration;
         self.update_observed_eof(frames_until_eof);
         let position = self.position();
@@ -181,7 +215,6 @@ impl PlayerTrack {
         let published_seek_epoch = sink.seek_epoch;
         let notification_tx = sink.notifications;
         let PartialRead { frames, duration } = partial;
-        self.advance_media_clock(frames);
         let position = self.position();
         self.observed_duration = if position > 0.0 { position } else { duration };
         let duration = self.observed_duration;
@@ -247,11 +280,23 @@ impl PlayerTrack {
         range: Range<usize>,
         sink: &mut RtSink<'_>,
     ) -> TrackReadOutcome {
+        self.read_with_context(None, scratch_bufs, mix_bufs, range, sink)
+    }
+
+    #[kithara::measure]
+    fn read_with_context(
+        &mut self,
+        context: Option<&RenderContext>,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        sink: &mut RtSink<'_>,
+    ) -> TrackReadOutcome {
         if self.state == TrackState::Finished {
             return TrackReadOutcome::Eof;
         }
 
-        let read_outcome = self.read_resource(scratch_bufs, range.clone(), sink.metrics);
+        let read_outcome = self.read_resource(context, scratch_bufs, range.clone(), sink.metrics);
         match read_outcome {
             TrackReadOutcome::Full { .. } => self.handle_full_read(
                 scratch_bufs,
@@ -284,6 +329,7 @@ impl PlayerTrack {
 
     fn read_resource(
         &mut self,
+        context: Option<&RenderContext>,
         scratch_bufs: &mut [&mut [f32]],
         range: Range<usize>,
         metrics: &RtMetrics,
@@ -295,7 +341,10 @@ impl PlayerTrack {
             &mut scratch_right[0][range.clone()],
         ];
 
-        match resource.read(&mut scratch_window, 0..range.len(), metrics) {
+        let read =
+            resource.read_with_context(context, &mut scratch_window, 0..range.len(), metrics);
+
+        let outcome = match read {
             ReadOutcome::Full { frames } => TrackReadOutcome::Full {
                 frames,
                 duration: resource.duration(),
@@ -308,7 +357,16 @@ impl PlayerTrack {
             },
             ReadOutcome::Eof => TrackReadOutcome::Eof,
             ReadOutcome::Failed => TrackReadOutcome::Failed,
-        }
+        };
+        let consumed_media_seconds = resource.consumed_media_seconds();
+        let output_frames = match outcome {
+            TrackReadOutcome::Full { frames, .. } | TrackReadOutcome::Partial { frames, .. } => {
+                frames
+            }
+            TrackReadOutcome::Eof | TrackReadOutcome::Failed => 0,
+        };
+        self.advance_media_clock(consumed_media_seconds, output_frames);
+        outcome
     }
 
     fn update_after_mix(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
@@ -339,5 +397,41 @@ impl PlayerTrack {
             current => current,
         };
         self.set_state(new_state);
+    }
+}
+
+fn presentation_frontier(context: &RenderContext, source: u64) -> PresentationFrontier {
+    PresentationFrontier::builder()
+        .source(source)
+        .output(context.output_frames().start)
+        .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_test_utils::kithara;
+    use kithara_warp::{RenderContext, SessionEpoch, SessionFrame};
+
+    use super::presentation_frontier;
+
+    #[kithara::test]
+    fn publication_uses_the_derived_subrange_start() {
+        let context = RenderContext::new(
+            SessionFrame::new(1_000)..SessionFrame::new(1_200),
+            NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture context is valid")
+        .for_output_range(40..80)
+        .expect("fixture subrange is valid");
+
+        let frontier = presentation_frontier(&context, 8_000);
+
+        assert_eq!(frontier.source(), 8_000);
+        assert_eq!(frontier.output(), SessionFrame::new(1_040));
     }
 }

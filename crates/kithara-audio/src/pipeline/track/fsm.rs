@@ -4,6 +4,7 @@ use kithara_decode::DecodeError;
 use kithara_events::AudioEvent;
 use kithara_signal::AudioChunk;
 use kithara_stream::{SourcePhase, StreamType};
+use kithara_test_macros as kithara;
 use tracing::warn;
 
 use super::{
@@ -180,6 +181,7 @@ fn emit_failure_log(failure: &TrackFailure) {
     }
 }
 
+#[kithara::measure]
 pub(crate) fn dispatch<T: StreamType>(src: &mut StreamAudioSource<T>) -> TrackStep<AudioChunk> {
     if !matches!(src.state, CurrentFsm::RebuildingDecoder(_))
         && let Some(target) = preempt_target(&src.seek_engine, &src.state, src.seek_obs.as_ref())

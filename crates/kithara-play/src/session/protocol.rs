@@ -1,4 +1,6 @@
 mod wire {
+    use std::num::NonZeroUsize;
+
     use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
@@ -7,6 +9,7 @@ mod wire {
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::{MixTapWriter, SlotControl},
         effects::eq::EqBandConfig,
+        rt::StreamShape,
     };
 
     pub type PlayerId = u64;
@@ -50,6 +53,17 @@ mod wire {
         TransportFrameExhausted,
         #[error("session transport revision is exhausted")]
         TransportRevisionExhausted,
+        #[error(
+            "session output requires {required_frames} response frames for block {max_block_frames} and quantum {render_quantum_frames}, exceeding budget {budget_frames}"
+        )]
+        ResponseBudgetExceeded {
+            max_block_frames: u32,
+            render_quantum_frames: usize,
+            required_frames: usize,
+            budget_frames: usize,
+        },
+        #[error("session output response geometry overflowed")]
+        ResponseGeometryOverflow,
         #[error(transparent)]
         Sync(#[from] SyncError),
         #[error(transparent)]
@@ -72,6 +86,8 @@ mod wire {
         StartPlayer {
             master_volume: f32,
             player_id: PlayerId,
+            render_quantum_frames: NonZeroUsize,
+            response_budget_frames: NonZeroUsize,
             sample_rate: u32,
         },
         StopPlayer {
@@ -124,6 +140,7 @@ mod wire {
             reason: String,
         },
         QuerySampleRate,
+        QueryStreamShape,
         Tick,
     }
 
@@ -151,6 +168,7 @@ mod wire {
         SessionTransport(SessionTransportSnapshot),
         SlotAllocated(AllocatedSlot),
         SampleRate(SessionSampleRate),
+        StreamShape(StreamShape),
         Err(SessionError),
     }
 
@@ -198,6 +216,8 @@ mod wire {
 }
 
 mod handle {
+    use std::num::NonZeroUsize;
+
     use kithara_audio::ConsumerWakeMode;
     use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
@@ -210,7 +230,7 @@ mod handle {
     #[cfg(any(test, feature = "probe"))]
     use super::wire::PlayerLevel;
     use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionSampleRate};
-    use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError};
+    use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError, rt::StreamShape};
 
     /// Handle used by resident players to reach their session owner.
     ///
@@ -340,6 +360,15 @@ mod handle {
             }
         }
 
+        pub(crate) fn stream_shape(&self) -> Result<StreamShape, PlayError> {
+            match self.exec_ok(Cmd::QueryStreamShape)? {
+                Reply::StreamShape(shape) => Ok(shape),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session stream-shape query".into(),
+                )),
+            }
+        }
+
         pub fn register_player(
             &self,
             grid_id: BeatGridId,
@@ -421,10 +450,14 @@ mod handle {
             player_id: PlayerId,
             sample_rate: u32,
             master_volume: f32,
+            render_quantum_frames: NonZeroUsize,
+            response_budget_frames: NonZeroUsize,
         ) -> Result<(), PlayError> {
             self.exec_ok(Cmd::StartPlayer {
                 master_volume,
                 player_id,
+                render_quantum_frames,
+                response_budget_frames,
                 sample_rate,
             })
             .map(|_| ())

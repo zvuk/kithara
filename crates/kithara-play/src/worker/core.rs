@@ -39,6 +39,7 @@ impl<S> PlayWorker<S> {
     #[must_use]
     pub fn new(config: PlayWorkerConfig<S>) -> Self {
         let PlayWorkerConfig {
+            backpressure_poll_interval,
             cancel,
             capacity,
             fairness_yield_interval,
@@ -58,17 +59,18 @@ impl<S> PlayWorker<S> {
             (Worker::new(worker_config), None)
         };
         let id = WORKER_ID.fetch_add(1, Ordering::Relaxed);
-        let mut dispatcher_config = DispatcherConfig::new(format!("kithara-play-worker-{id}"))
-            .with_capacity(capacity)
-            .with_fairness_yield_interval(fairness_yield_interval)
-            .with_idle_timeout(idle_timeout)
-            .with_observer(PlaybackObserver::default())
-            .with_slow_tick_threshold(slow_tick_threshold)
-            .with_task_burst(task_burst)
-            .with_wait_timeout(wait_timeout);
-        if let Some(cancel) = dispatcher_cancel {
-            dispatcher_config = dispatcher_config.with_cancel(cancel);
-        }
+        let dispatcher_config = DispatcherConfig::builder()
+            .name(format!("kithara-play-worker-{id}"))
+            .backpressure_poll_interval(backpressure_poll_interval)
+            .capacity(capacity)
+            .fairness_yield_interval(fairness_yield_interval)
+            .idle_timeout(idle_timeout)
+            .observer(PlaybackObserver::default())
+            .slow_tick_threshold(slow_tick_threshold)
+            .task_burst(task_burst)
+            .wait_timeout(wait_timeout)
+            .maybe_cancel(dispatcher_cancel)
+            .build();
         let dispatcher = base.dispatcher(dispatcher_config);
         Self(Arc::new(WorkerOwner {
             dispatcher,
@@ -81,6 +83,13 @@ impl<S> PlayWorker<S> {
     #[must_use]
     pub fn pools(&self) -> &PoolRegion<S> {
         &self.0.pools
+    }
+
+    delegate::delegate! {
+        to self.0.dispatcher.wake_handle() {
+            pub(crate) fn flush_deferred(&self);
+            pub(crate) fn wake(&self);
+        }
     }
 }
 
@@ -105,26 +114,34 @@ where
         B: Default + ResamplerBackend,
         C: Into<TrackConfig<T, B>>,
     {
+        let config = config.into();
+        let audio_buffer_chunks = config.resolved_audio_buffer_chunks();
         let TrackConfig {
             audio,
             effects,
             engine_load,
             warp,
-        } = config.into();
+        } = config;
         let task_cancel = audio.cancel().cloned();
         let wake = Wake::new(self.0.dispatcher.wake_handle());
-        let prepared =
-            Audio::<Stream<T>>::prepare(audio, Arc::new(wake), self.pools().clone()).await?;
+        let prepared = Audio::<Stream<T>>::prepare(
+            audio,
+            audio_buffer_chunks,
+            Arc::new(wake),
+            self.pools().clone(),
+        )
+        .await?;
         let drain = EffectDrain::new(effects.len(), self.pools())?;
         let prepared = prepared.map(|audio, source| {
             let spec = audio.spec();
             let warp = Warp::new(audio, &warp);
             let source = WarpSource::new(
                 source,
-                warp.renderer(spec, self.pools().clone()),
+                warp.quantum_renderer(spec, self.pools().clone()),
                 effects,
                 drain,
                 spec,
+                self.pools().clone(),
             );
             (warp, source)
         });

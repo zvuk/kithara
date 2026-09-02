@@ -9,6 +9,7 @@ use kithara_platform::{
     time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
 };
+use kithara_warp::RenderSnapshot;
 use portable_atomic::AtomicF32;
 use ringbuf::traits::{Consumer, Producer};
 use tracing::{debug, info};
@@ -19,7 +20,8 @@ use crate::{
     bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SharedEq, SlotControl},
     effects::eq::EqBandConfig,
     error::PlayError,
-    session::{PlayerId, SessionBinding, SessionHandle, SessionSampleRate},
+    rt::StreamShape,
+    session::{PlayerId, SessionBinding, SessionHandle},
 };
 
 type SlotHandle = SlotControl;
@@ -90,6 +92,10 @@ impl<S> EngineImpl<S> {
         self.session.consumer_wake_mode()
     }
 
+    pub(crate) fn stream_shape(&self) -> Result<StreamShape, PlayError> {
+        self.session.stream_shape()
+    }
+
     pub(crate) fn drain_slot_trash(&self, slot: SlotId) -> bool {
         self.slots.lock().get_mut(slot).is_some_and(|handle| {
             Self::drain_slot_trash_handle(handle);
@@ -101,6 +107,9 @@ impl<S> EngineImpl<S> {
         while let Some(track) = handle.trash_rx.try_pop() {
             if let Some(seek) = track.seek_handle() {
                 handle.unbind_seek(track.item_id(), &seek);
+            }
+            if let Some(render) = track.render_reader() {
+                handle.unbind_render(track.item_id(), &render);
             }
         }
     }
@@ -156,9 +165,9 @@ impl<S> EngineImpl<S> {
                 // A resource crossing to the audio thread leaves its seek handle behind: beginning
                 // a seek takes locks, so it stays on this side. Bind only after the command is
                 // accepted; the exact resource generation is released when it returns as trash.
-                let seek = match &cmd {
+                let bindings = match &cmd {
                     PlayerCmd::LoadTrack { resource, item_id } => {
-                        resource.seek_handle().map(|handle| (*item_id, handle))
+                        Some((*item_id, resource.seek_handle(), resource.render_reader()))
                     }
                     _ => None,
                 };
@@ -167,9 +176,14 @@ impl<S> EngineImpl<S> {
                     .try_push(cmd)
                     .map_err(|_| PlayError::SlotChannelFull { slot });
                 if result.is_ok()
-                    && let Some((item_id, seek)) = seek
+                    && let Some((item_id, seek, render)) = bindings
                 {
-                    handle.bind_seek(item_id, seek);
+                    if let Some(seek) = seek {
+                        handle.bind_seek(item_id, seek);
+                    }
+                    if let Some(render) = render {
+                        handle.bind_render(item_id, render);
+                    }
                 }
                 result
             }
@@ -216,6 +230,8 @@ impl<S> EngineImpl<S> {
             pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
             #[call(playback)]
             pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
+            #[call(render_snapshot)]
+            pub(crate) fn slot_render_snapshot(&self, slot: SlotId) -> Option<RenderSnapshot>;
         }
     }
 
@@ -304,8 +320,8 @@ impl<S> EngineImpl<S> {
             return self.config.sample_rate;
         }
         self.session
-            .sample_rate()
-            .map_or(self.config.sample_rate, SessionSampleRate::output)
+            .stream_shape()
+            .map_or(self.config.sample_rate, |shape| shape.sample_rate.get())
     }
 
     pub fn master_volume(&self) -> f32 {
@@ -356,8 +372,13 @@ impl<S> EngineImpl<S> {
 
         let player_id = self.ensure_player_id()?;
         let master_volume = self.master_volume.load(Ordering::Relaxed);
-        self.session
-            .start_player(player_id, self.config.sample_rate, master_volume)?;
+        self.session.start_player(
+            player_id,
+            self.config.sample_rate,
+            master_volume,
+            self.config.render_quantum_frames,
+            self.config.response_budget_frames,
+        )?;
 
         self.running.store(true, Ordering::Release);
 

@@ -698,7 +698,9 @@ mod tests {
             pools,
             NonZeroUsize::MIN,
             Duration::from_secs(u64::from(chunk_seconds().get())),
-            DispatcherConfig::new("analysis-persistence-controller-test"),
+            DispatcherConfig::builder()
+                .name("analysis-persistence-controller-test")
+                .build(),
             TaskConfig::new(),
         ))
         .expect("persistence fixture starts")

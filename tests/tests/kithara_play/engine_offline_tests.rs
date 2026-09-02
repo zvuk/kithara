@@ -1,6 +1,8 @@
 //! An injected offline session dispatcher replaces the cpal output stream, so
 //! this half asks nothing of the machine and belongs in the ordinary gate
 //! rather than a lane.
+use std::num::NonZeroUsize;
+
 use kithara::{
     events::EventBus,
     play::{EngineConfig, EngineImpl},
@@ -16,6 +18,12 @@ fn engine(max_slots: usize) -> EngineImpl<TestPools> {
         EngineConfig::builder()
             .grid_id(BeatGridId::allocate().expect("offline engine grid id"))
             .max_slots(max_slots)
+            .response_budget_frames(
+                NonZeroUsize::new(448).expect("fixture response budget is non-zero"),
+            )
+            .render_quantum_frames(
+                NonZeroUsize::new(32).expect("fixture render quantum is non-zero"),
+            )
             .pools(pools())
             .session(OfflineSession::arc_auto())
             .build(),

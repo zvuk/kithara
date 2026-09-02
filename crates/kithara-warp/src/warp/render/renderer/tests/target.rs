@@ -6,21 +6,22 @@ use kithara_signal::AudioSpec;
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
+use super::{StretchControls, WarpConfig, spec};
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use super::{
-    Consts, chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer, sine,
-};
-use super::{StretchControls, WarpRenderer, spec};
+use super::{chunk, chunk_at, render_serviced, renderer, sine};
 use crate::test_pools::pools_with_budget as test_pools;
 
-/// Swapping the backend mid-stream keeps the stream flowing and pitch-locked.
+/// Backend selection changes only at an explicit renderer lifecycle boundary.
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
-#[case::bungee_to_signalsmith(StretchKind::Bungee, StretchKind::Signalsmith)]
-#[case::signalsmith_to_bungee(StretchKind::Signalsmith, StretchKind::Bungee)]
-fn live_backend_swap_continues_and_keeps_pitch(
+#[case::bungee_to_signalsmith_active(StretchKind::Bungee, StretchKind::Signalsmith, 0.5)]
+#[case::signalsmith_to_bungee_active(StretchKind::Signalsmith, StretchKind::Bungee, 0.5)]
+#[case::bungee_to_signalsmith_unity(StretchKind::Bungee, StretchKind::Signalsmith, 1.0)]
+#[case::signalsmith_to_bungee_unity(StretchKind::Signalsmith, StretchKind::Bungee, 1.0)]
+fn backend_change_waits_for_reset(
     #[case] initial: StretchKind,
     #[case] replacement: StretchKind,
+    #[case] swap_speed: f32,
 ) {
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
@@ -28,32 +29,21 @@ fn live_backend_swap_continues_and_keeps_pitch(
     let mut fx = renderer(Arc::clone(&controls));
     let pools = fx.pools.clone();
     let block = sine(4096);
-    let mut out: Vec<f32> = Vec::new();
-    for i in 0..24 {
-        if i == 6 {
-            controls.set_backend(replacement);
-            fx.prepare(spec());
-        }
-        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
-            out.extend_from_slice(&c.samples);
-        }
-    }
-    while let Some(c) = flush_serviced(&mut fx) {
-        out.extend_from_slice(&c.samples);
-    }
-    let mono: Vec<f32> = out
-        .iter()
-        .step_by(usize::from(Consts::CH))
-        .copied()
-        .collect();
-    assert!(
-        mono.len() >= Consts::N,
-        "not enough output after swap for the FFT window"
-    );
-    assert!(
-        dominant_bin(&mono).abs_diff(expected_bin(Consts::F0)) <= 3,
-        "pitch preserved after live backend swap"
-    );
+    let _ = render_serviced(&mut fx, chunk(&pools, &block));
+    controls.set_speed(swap_speed);
+    let _ = render_serviced(&mut fx, chunk_at(&pools, &block, 4096));
+    let admitted = fx.source_frames_admitted;
+
+    controls.set_backend(replacement);
+    fx.prepare(spec());
+
+    assert_eq!(fx.current_kind, initial);
+    assert!(fx.active);
+    assert_eq!(fx.source_frames_admitted, admitted);
+
+    fx.reset();
+    fx.prepare(spec());
+    assert_eq!(fx.current_kind, replacement);
 }
 
 #[kithara::test]
@@ -74,7 +64,8 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
             let controls = StretchControls::new(0.5);
             controls.set_keylock(true);
             controls.set_backend(backend);
-            let target = WarpRenderer::new(controls, target_spec, pools.clone());
+            let config = WarpConfig::builder().stretch(controls).build();
+            let target = crate::Warp::new((), &config).renderer(target_spec, pools.clone());
             assert!(target.engine.is_some());
             pools.stats().allocated_bytes
         })
@@ -86,7 +77,8 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut fx = WarpRenderer::new(controls, initial, pools.clone());
+    let config = WarpConfig::builder().stretch(controls).build();
+    let mut fx = crate::Warp::new((), &config).renderer(initial, pools.clone());
     assert!(fx.engine.is_some());
     assert!(fx.pending_source.is_some());
     assert!(fx.scratch.is_some());
@@ -110,7 +102,8 @@ fn failed_target_rebuild_is_not_retried_without_a_new_revision(#[case] backend: 
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut fx = WarpRenderer::new(controls, spec(), pools.clone());
+    let config = WarpConfig::builder().stretch(controls).build();
+    let mut fx = crate::Warp::new((), &config).renderer(spec(), pools.clone());
     assert!(fx.engine.is_none());
 
     fx.rebuild_pending = true;

@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use bungee_sys::InputChunk;
 use kithara_bufpool::HasPool;
 use kithara_signal::{AudioSpec, FrameCount, PlanarBuffer, SignalError};
+use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
 use super::ffi::{AnalysisInput, NativeStretcher};
@@ -80,79 +81,7 @@ impl InputBuffer {
         })
     }
 
-    pub(super) fn analyse(
-        &mut self,
-        native: &mut NativeStretcher,
-        valid: bool,
-        end_of_input: bool,
-    ) -> Result<(), ElasticError> {
-        self.analysis.as_samples_mut().fill(0.0);
-        if !valid {
-            return native.analyse(AnalysisInput {
-                samples: self.analysis.as_samples(),
-                channel_stride: self.analysis.stride().get(),
-                mute_head: 0,
-                mute_tail: 0,
-            });
-        }
-
-        let requested_frames = self.requested_frames()?;
-        if requested_frames > self.analysis.stride().get() {
-            return Err(ElasticError::EnginePreparation(
-                "Bungee requested an oversized input grain",
-            ));
-        }
-        let available_begin = self.requested.begin.max(self.begin);
-        let available_end = self.requested.end.min(self.end).max(available_begin);
-        let copied = usize::try_from(
-            available_end
-                .checked_sub(available_begin)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        )
-        .map_err(|_| ElasticError::SampleCountOverflow)?;
-        if copied > 0 {
-            let source_begin = usize::try_from(
-                available_begin
-                    .checked_sub(self.begin)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            )
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-            let destination_begin = usize::try_from(
-                available_begin
-                    .checked_sub(self.requested.begin)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            )
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-            let channels = usize::from(self.audio.spec().channels);
-            for channel in 0..channels {
-                let source = &self.audio.channel(channel).map_err(signal_error)?
-                    [source_begin..source_begin + copied];
-                self.analysis.channel_mut(channel).map_err(signal_error)?
-                    [destination_begin..destination_begin + copied]
-                    .copy_from_slice(source);
-            }
-        }
-        let mute_head =
-            usize::try_from((i64::from(self.begin) - i64::from(self.requested.begin)).max(0))
-                .map_err(|_| ElasticError::SampleCountOverflow)?
-                .min(requested_frames);
-        let mute_tail =
-            usize::try_from((i64::from(self.requested.end) - i64::from(self.end)).max(0))
-                .map_err(|_| ElasticError::SampleCountOverflow)?
-                .min(requested_frames);
-        if mute_tail > 0 && mute_head < requested_frames && !end_of_input {
-            return Err(ElasticError::EnginePreparation(
-                "Bungee requested unavailable future input",
-            ));
-        }
-        native.analyse(AnalysisInput {
-            mute_head,
-            mute_tail,
-            samples: self.analysis.as_samples(),
-            channel_stride: self.analysis.stride().get(),
-        })
-    }
-
+    #[kithara::measure]
     pub(super) fn append(
         &mut self,
         source: Option<&[f32]>,
@@ -261,6 +190,84 @@ impl InputBuffer {
             .ok_or(ElasticError::EnginePreparation(
                 "Bungee reported an input window outside its processing center",
             ))
+    }
+
+    #[kithara::measure]
+    pub(super) fn analyse(
+        &mut self,
+        native: &mut NativeStretcher,
+        valid: bool,
+        end_of_input: bool,
+    ) -> Result<(), ElasticError> {
+        kithara::measure_block!("bungee::analysis::clear", {
+            self.analysis.as_samples_mut().fill(0.0);
+        });
+        if !valid {
+            return native.analyse(AnalysisInput {
+                samples: self.analysis.as_samples(),
+                channel_stride: self.analysis.stride().get(),
+                mute_head: 0,
+                mute_tail: 0,
+            });
+        }
+
+        let requested_frames = self.requested_frames()?;
+        if requested_frames > self.analysis.stride().get() {
+            return Err(ElasticError::EnginePreparation(
+                "Bungee requested an oversized input grain",
+            ));
+        }
+        let available_begin = self.requested.begin.max(self.begin);
+        let available_end = self.requested.end.min(self.end).max(available_begin);
+        let copied = usize::try_from(
+            available_end
+                .checked_sub(available_begin)
+                .ok_or(ElasticError::SampleCountOverflow)?,
+        )
+        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        if copied > 0 {
+            let source_begin = usize::try_from(
+                available_begin
+                    .checked_sub(self.begin)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            )
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+            let destination_begin = usize::try_from(
+                available_begin
+                    .checked_sub(self.requested.begin)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            )
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+            let channels = usize::from(self.audio.spec().channels);
+            kithara::measure_block!("bungee::analysis::copy", {
+                for channel in 0..channels {
+                    let source = &self.audio.channel(channel).map_err(signal_error)?
+                        [source_begin..source_begin + copied];
+                    self.analysis.channel_mut(channel).map_err(signal_error)?
+                        [destination_begin..destination_begin + copied]
+                        .copy_from_slice(source);
+                }
+            });
+        }
+        let mute_head =
+            usize::try_from((i64::from(self.begin) - i64::from(self.requested.begin)).max(0))
+                .map_err(|_| ElasticError::SampleCountOverflow)?
+                .min(requested_frames);
+        let mute_tail =
+            usize::try_from((i64::from(self.requested.end) - i64::from(self.end)).max(0))
+                .map_err(|_| ElasticError::SampleCountOverflow)?
+                .min(requested_frames);
+        if mute_tail > 0 && mute_head < requested_frames && !end_of_input {
+            return Err(ElasticError::EnginePreparation(
+                "Bungee requested unavailable future input",
+            ));
+        }
+        native.analyse(AnalysisInput {
+            samples: self.analysis.as_samples(),
+            channel_stride: self.analysis.stride().get(),
+            mute_head,
+            mute_tail,
+        })
     }
 
     pub(super) fn set_position(&mut self, position: i32) {

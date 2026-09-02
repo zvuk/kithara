@@ -1,10 +1,10 @@
-use kithara::{decode::DecoderBackend, platform::time::Duration, stream::AudioCodec};
+use kithara::{decode::DecoderBackend, platform::time::Duration};
 use kithara_integration_tests::{TestServerHelper, fixture_protocol::PackagedSignal};
 use num_traits::ToPrimitive;
 
 use super::{
-    AAC_HIGH, AAC_LOW, BLOCK_FRAMES, CHANNELS, FLAC, Transition, fixture_with_signal,
-    observation_frames, render_no_switch_control, render_switch,
+    AAC_HIGH, AAC_LOW, BLOCK_FRAMES, CHANNELS, FLAC, Transition, control_lag_frames,
+    fixture_with_signal, observation_frames, render_no_switch_control, render_switch,
 };
 
 const SWEEP_START_HZ: f64 = 80.0;
@@ -30,19 +30,6 @@ const PROVENANCE_TRANSITIONS: [Transition; 6] = [
 struct LagCorrelation {
     lag_frames: isize,
     correlation: f64,
-}
-
-fn control_lag_frames(transition: Transition) -> isize {
-    let content_origin = |variant| {
-        let codec = if variant == FLAC {
-            AudioCodec::Flac
-        } else {
-            AudioCodec::AacLc
-        };
-        isize::try_from(AudioCodec::encoder_priming_frames(codec))
-            .expect("fixture codec origin fits signed lag coordinates")
-    };
-    content_origin(transition.from) - content_origin(transition.to)
 }
 
 fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) -> LagCorrelation {

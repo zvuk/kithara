@@ -79,5 +79,11 @@ collect, or pre-warm contract.
 empty guard from the same core. Long-lived storage can therefore publish one
 generation and continue without retaining the schema facade.
 
+`BufferRing<B>` adds FIFO indices to an owning fixed-size buffer without
+moving retained values or acquiring another allocation. The caller obtains and
+sizes pooled storage before entering a checked processing path, then recovers
+the same owner with `into_inner`; the ring itself neither grows storage nor
+depends on a pool.
+
 `stats()` reports the shared region budget. `pool_stats::<K>()` reports reuse for
 one registered generic slot; built-in hot-path keys compile out counter updates.

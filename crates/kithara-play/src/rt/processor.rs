@@ -5,17 +5,21 @@ use firewheel::{
     StreamInfo,
     dsp::fade::FadeCurve,
     event::ProcEvents,
-    node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
+    node::{
+        AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStore, ProcStreamCtx,
+        ProcessStatus,
+    },
 };
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_test_utils::kithara;
+use kithara_test_macros as kithara;
+use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapCons, HeapProd, traits::Producer};
 use smallvec::SmallVec;
 
-use super::track::PlayerTrack;
+use super::{context::read_render_context, track::PlayerTrack};
 use crate::{
     bridge::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
@@ -27,6 +31,13 @@ use crate::{
 pub(crate) enum CrossfadeCurve {
     #[default]
     EqualPower,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ContextRequirement {
+    #[default]
+    Standalone,
+    Session,
 }
 
 const fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
@@ -72,16 +83,28 @@ pub struct PlayerNodeProcessor {
     pub(super) tracks: TrackSlots<{ Self::MAX_TRACKS }>,
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) prefetch_duration: f32,
-    trash_tx: HeapProd<PlayerTrack>,
     /// Last effective rate successfully delivered to the control thread.
     last_notified_rate: f32,
+    trash_tx: HeapProd<PlayerTrack>,
+    context_requirement: ContextRequirement,
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct StreamShape {
     pub max_block_frames: NonZeroU32,
     pub sample_rate: NonZeroU32,
+}
+
+impl StreamShape {
+    #[must_use]
+    pub const fn new(max_block_frames: NonZeroU32, sample_rate: NonZeroU32) -> Self {
+        Self {
+            max_block_frames,
+            sample_rate,
+        }
+    }
 }
 
 impl PlayerNodeProcessor {
@@ -94,6 +117,18 @@ impl PlayerNodeProcessor {
     /// Create a new processor with the given command receiver and shared state.
     #[must_use]
     pub fn new<S>(inputs: NodeInputs, shape: StreamShape, pools: &PoolRegion<S>) -> Self
+    where
+        S: HasPool<f32>,
+    {
+        Self::with_context_requirement(inputs, shape, pools, ContextRequirement::Standalone)
+    }
+
+    pub(super) fn with_context_requirement<S>(
+        inputs: NodeInputs,
+        shape: StreamShape,
+        pools: &PoolRegion<S>,
+        context_requirement: ContextRequirement,
+    ) -> Self
     where
         S: HasPool<f32>,
     {
@@ -110,6 +145,7 @@ impl PlayerNodeProcessor {
             prefetch_duration: 0.0,
             tracks: TrackSlots::default(),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
+            context_requirement,
         }
     }
 
@@ -181,6 +217,47 @@ impl PlayerNodeProcessor {
         }
     }
 
+    pub fn render_audio(
+        &mut self,
+        buffers: &mut ProcBuffers,
+        frames: usize,
+        is_playing: bool,
+    ) -> (bool, Option<(f64, f64)>) {
+        self.render_with_context(None, buffers, frames, is_playing)
+    }
+
+    fn render_with_context(
+        &mut self,
+        context: Option<&RenderContext>,
+        buffers: &mut ProcBuffers,
+        frames: usize,
+        is_playing: bool,
+    ) -> (bool, Option<(f64, f64)>) {
+        self.render.render_audio(
+            context,
+            RenderTargets {
+                tracks: &mut self.tracks,
+                notification_tx: &mut self.notif_tx,
+                metrics: self.playback.metrics(),
+                seek_epoch: self.playback.seek_epoch.load(Ordering::SeqCst),
+            },
+            buffers,
+            frames,
+            is_playing,
+        )
+    }
+
+    fn render_context<'a>(
+        &self,
+        store: &'a ProcStore,
+        info: &ProcInfo,
+    ) -> Result<Option<&'a RenderContext>, &'static str> {
+        match self.context_requirement {
+            ContextRequirement::Standalone => Ok(None),
+            ContextRequirement::Session => read_render_context(store, info).map(Some),
+        }
+    }
+
     fn leading_effective_rate(&self) -> Option<f32> {
         self.tracks
             .iter()
@@ -206,25 +283,6 @@ impl PlayerNodeProcessor {
             0.0
         };
         self.publish_effective_rate(rate);
-    }
-
-    pub fn render_audio(
-        &mut self,
-        buffers: &mut ProcBuffers,
-        frames: usize,
-        is_playing: bool,
-    ) -> (bool, Option<(f64, f64)>) {
-        self.render.render_audio(
-            RenderTargets {
-                tracks: &mut self.tracks,
-                notification_tx: &mut self.notif_tx,
-                metrics: self.playback.metrics(),
-                seek_epoch: self.playback.seek_epoch.load(Ordering::SeqCst),
-            },
-            buffers,
-            frames,
-            is_playing,
-        )
     }
 
     fn retire(&mut self, track: PlayerTrack) {
@@ -326,13 +384,14 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         self.render.resize(stream_info.max_block_frames.get().as_());
     }
 
+    #[kithara::measure]
     #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
         info: &ProcInfo,
         mut buffers: ProcBuffers,
         _events: &mut ProcEvents,
-        _extra: &mut ProcExtra,
+        extra: &mut ProcExtra,
     ) -> ProcessStatus {
         self.playback.process_count.fetch_add(1, Ordering::Relaxed);
 
@@ -342,8 +401,16 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         let is_playing = self.playback.playing.load(Ordering::SeqCst);
 
+        let context = match self.render_context(&extra.store, info) {
+            Ok(context) => context,
+            Err(reason) => {
+                let _ = extra.logger.try_error(reason);
+                return ProcessStatus::ClearAllOutputs;
+            }
+        };
+
         let (playback_started, leading_outcome_pos_dur) =
-            self.render_audio(&mut buffers, info.frames, is_playing);
+            self.render_with_context(context, &mut buffers, info.frames, is_playing);
 
         self.update_position_duration(leading_outcome_pos_dur);
         self.refresh_effective_rate();
@@ -358,6 +425,13 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
 #[cfg(test)]
 mod tests {
+    use firewheel::{
+        clock::InstantSamples,
+        mask::{ConnectedMask, ConstantMask, SilenceMask},
+        node::{ProcStore, StreamStatus},
+    };
+    use kithara_platform::time::Duration;
+    use kithara_warp::{RenderContext, SessionEpoch, SessionFrame, TransportRevision};
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
@@ -373,6 +447,73 @@ mod tests {
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
         };
         (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
+    }
+
+    fn session_processor() -> PlayerNodeProcessor {
+        let (inputs, _control) = slot_channels(SharedEq::new(0));
+        let shape = StreamShape {
+            sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
+            max_block_frames: NonZeroU32::new(512).expect("static block size"),
+        };
+        PlayerNodeProcessor::with_context_requirement(
+            inputs,
+            shape,
+            &pools(),
+            ContextRequirement::Session,
+        )
+    }
+
+    fn proc_info() -> ProcInfo {
+        ProcInfo {
+            sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
+            frames: 512,
+            in_silence_mask: SilenceMask::default(),
+            out_silence_mask: SilenceMask::default(),
+            in_constant_mask: ConstantMask::default(),
+            out_constant_mask: ConstantMask::default(),
+            in_connected_mask: ConnectedMask::default(),
+            out_connected_mask: ConnectedMask::default(),
+            prev_output_was_silent: true,
+            sample_rate_recip: f64::from(44_100).recip(),
+            clock_samples: InstantSamples(0),
+            duration_since_stream_start: Duration::ZERO,
+            stream_status: StreamStatus::empty(),
+            dropped_frames: 0,
+        }
+    }
+
+    #[kithara::test]
+    fn session_processors_read_the_same_host_context() {
+        let mut store = ProcStore::with_capacity(1);
+        super::super::install_render_context(&mut store)
+            .expect("invariant: fixture installs one context slot");
+        super::super::publish_render_context(
+            &mut store,
+            RenderContext::new(
+                SessionFrame::new(0)..SessionFrame::new(512),
+                NonZeroU32::new(44_100).expect("static sample rate"),
+                None,
+                SessionEpoch::new(3),
+                Some(TransportRevision::first()),
+            )
+            .expect("invariant: fixture context is valid"),
+        )
+        .expect("invariant: fixture context slot exists");
+        let info = proc_info();
+        let left = session_processor();
+        let right = session_processor();
+        let left = left
+            .render_context(&store, &info)
+            .expect("session context")
+            .expect("required context");
+        let right = right
+            .render_context(&store, &info)
+            .expect("session context")
+            .expect("required context");
+
+        assert!(std::ptr::eq(left, right));
+        assert_eq!(left.session_epoch(), SessionEpoch::new(3));
+        assert_eq!(left.transport_revision(), Some(TransportRevision::first()));
     }
 
     #[kithara::test]

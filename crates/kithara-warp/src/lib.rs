@@ -8,7 +8,7 @@ mod coordinate;
 mod segment;
 mod sync;
 mod temporal;
-#[cfg(test)]
+#[cfg(all(test, feature = "render"))]
 pub(crate) use kithara_bufpool::testing as test_pools;
 mod warp;
 
@@ -40,7 +40,10 @@ pub use sync::{
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 pub use temporal::StretchKind;
-pub use temporal::{ActiveRegion, GridSegment, RegionPlan, RegionPlanError, StretchControls};
+pub use temporal::{
+    ActiveRegion, GridSegment, RegionPlan, RegionPlanError, RenderContext, RenderPublisher,
+    RenderReader, RenderSnapshot, StretchControls,
+};
 #[cfg(feature = "render")]
 pub use warp::WarpRenderer;
-pub use warp::{Warp, WarpConfig, WarpCursor, WarpMap, supports_playback_rate};
+pub use warp::{Warp, WarpConfig, WarpCursor, WarpMap};

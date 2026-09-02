@@ -56,7 +56,7 @@ where
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
         self.runtime
-            .with_open(|runtime| runtime.prepare_config(config))
+            .with_open_result(|runtime| runtime.prepare_config(config))
     }
 
     /// Plant a completed resource into an existing player slot.

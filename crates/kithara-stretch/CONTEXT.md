@@ -60,9 +60,10 @@ reserved before the checked render call, and an engine that needs planar scratch
 the `PoolRegion<S>` supplied in `ElasticConfig<S>`; no engine owns a default or global pool. Bungee keeps
 that channel-major scratch in `kithara_signal::PlanarBuffer` instead of a backend-local buffer type.
 
-`flush(out)` writes the next buffered-tail portion into caller-owned storage sized from
-`terminal_chunk_frames` and returns its frame count together with whether that portion completed
-the drain. EOF repeats the call until completion; a completed drain stays empty until new input.
+`flush(out)` writes the next buffered-tail portion into non-empty caller-owned storage containing
+only complete interleaved frames and returns its frame count together with whether that portion
+completed the drain. The caller normally supplies one render quantum and repeats the call until
+completion; a completed drain stays empty until new input.
 An active drain reports completion on its final non-empty portion, so the caller can publish the
 released source frontier with those samples. This streaming contract lets a
 rate-dependent tail span several fixed-size chunks without loss. At a steady rate `r`, the complete
@@ -89,6 +90,10 @@ expose `kithara_signal::AudioSpec`; native adapters use it only to shape canonic
   first advances finite requests to the exact source end, clips output by native request timestamps,
   then clears the four-grain pipeline with invalid requests. `flush` therefore returns real terminal
   audio across one or more chunks instead of dropping roughly one latency of the track.
+- Once one exact rate has rendered for a complete output-latency window, Bungee bounds EOF with the
+  integer `ElasticRequest` ratio and the common settled-tail formula. Before that point its real
+  history-dependent native timestamps remain authoritative. Repeated floating-point native hops
+  therefore cannot add a frame to a settled tail or replace a transitional tail with a formula.
 - Bungee preparation fails when the injected region budget cannot cover its planar scratch or
   native stretcher construction fails; the audio adapter warns once and marks the engine unavailable.
 - Bungee priming drains old resident state, stages history, lookahead and warm source in the
@@ -101,9 +106,8 @@ expose `kithara_signal::AudioSpec`; native adapters use it only to shape canonic
   rebuilding it; its Rust-side input/output storage remains the buffers reserved from the injected
   pool at prepare.
 - Bungee reports its unity latency only after its pipeline is warm, and runtime latency moves with
-  the rate. Preparation measures the unity reference on the resident, shape-sized core, resets that
-  same core in place, and separately declares a safe fixed terminal chunk from the native maximum
-  input-grain span; no probe engine or extra pool allocation is retained. An unprimed stream converts
+  the rate. Preparation measures the unity reference on the resident, shape-sized core and resets
+  that same core in place; no probe engine or extra pool allocation is retained. An unprimed stream converts
   the larger native processing center into the measured source/output latency split while its cold
   pipeline fills. Once output starts, rate changes slew that center toward the new mapping with grain
   positions clamped to the configured rate envelope. Positions therefore remain strictly monotone,

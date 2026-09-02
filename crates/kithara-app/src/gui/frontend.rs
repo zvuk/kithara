@@ -179,7 +179,9 @@ impl GuiFrontend {
             config.worker.pools().clone(),
             NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
             Duration::from_secs(u64::from(config.analysis_chunk_seconds.get())),
-            DispatcherConfig::new("kithara-analysis-persistence"),
+            DispatcherConfig::builder()
+                .name("kithara-analysis-persistence")
+                .build(),
             TaskConfig::new(),
         ))?;
 

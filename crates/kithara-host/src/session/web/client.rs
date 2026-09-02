@@ -1,9 +1,9 @@
-use std::{cell::Cell, num::NonZeroU32};
+use std::cell::Cell;
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, Mutex, mpsc};
-use kithara_play::{GroupState, player::PlayerMember};
+use kithara_play::{GroupState, StreamShape, player::PlayerMember};
 
 use super::bridge::{init_bridge_state, reset_bridge_state, start_stream_web_audio};
 use crate::{
@@ -107,7 +107,7 @@ thread_local! {
 pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root: GroupState<PlayerMember>,
     root_view: RootView,
-    sample_rate: NonZeroU32,
+    requested_shape: StreamShape,
 ) -> Result<(Arc<dyn HostDispatcher<S>>, WebSessionState<S>), PlayError> {
     WASM_SESSION_ACTIVE.with(|active| {
         if active.replace(true) {
@@ -118,7 +118,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     let state = Arc::new(Mutex::new(Some(SessionState::new(
         root,
         root_view,
-        sample_rate,
+        requested_shape,
         start_stream_web_audio,
     ))));
     init_bridge_state();

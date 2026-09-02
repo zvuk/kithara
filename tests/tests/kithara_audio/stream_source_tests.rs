@@ -133,15 +133,20 @@ async fn basic_decode_to_eof() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
+#[kithara::test(
+    tokio,
+    flash(false),
+    timeout(Duration::from_secs(15)),
+    hang_timeout_secs(5)
+)]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
     case(StretchKind::Bungee)
 )]
 async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: StretchKind) {
-    const PRELOAD_CHUNKS: usize = 32;
-    const RING_CHUNKS: usize = 48;
+    const PRELOAD_CHUNKS: usize = 64;
+    const RING_CHUNKS: usize = 64;
     const SOURCE_RATE: u32 = 44_100;
     const TARGET_RATE: u32 = 48_000;
 
@@ -201,15 +206,16 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
     let decoded_frontier = audio.decoded_frontier();
     assert!(
         decoded_frontier.saturating_sub(committed) > Duration::from_millis(250),
-        "fixture needs admitted PCM well ahead of the consumer"
+        "fixture needs admitted PCM well ahead of the consumer: committed={committed:?}, decoded_frontier={decoded_frontier:?}"
     );
 
     audio.set_host_sample_rate(target_rate);
     let (mut audio, _queued) = wait_for_chunk(audio, Duration::from_secs(2)).await;
     let committed_at_route = audio.position();
+    let decoded_at_route = audio.decoded_frontier();
     assert!(
-        audio.decoded_frontier().saturating_sub(committed_at_route) > Duration::from_millis(250),
-        "route must be selected while admitted PCM remains ahead of the consumer"
+        decoded_at_route.saturating_sub(committed_at_route) > Duration::from_millis(250),
+        "route must be selected while admitted PCM remains ahead of the consumer: committed={committed_at_route:?}, decoded_frontier={decoded_at_route:?}",
     );
 
     loop {

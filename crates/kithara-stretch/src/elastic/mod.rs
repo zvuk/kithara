@@ -2,7 +2,9 @@ mod capabilities;
 pub use capabilities::ElasticCapabilities;
 
 mod config;
-pub use config::{ElasticConfig, ElasticSpanConfig};
+pub use config::{
+    BungeeConfig, ElasticBackendConfig, ElasticConfig, ElasticSpanConfig, SignalsmithConfig,
+};
 
 mod drain;
 pub use drain::ElasticDrain;

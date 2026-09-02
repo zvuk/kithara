@@ -132,6 +132,7 @@ impl ChunkReader {
         ReadOutcome::Frames {
             count: std::num::NonZeroUsize::new(frames).expect("chunk is non-empty"),
             position: self.position(),
+            source_span: None,
         }
     }
 }
@@ -232,6 +233,7 @@ impl AudioRead for PositionReader {
         Ok(ReadOutcome::Frames {
             count: std::num::NonZeroUsize::new(avail).unwrap(),
             position: self.position(),
+            source_span: None,
         })
     }
 
@@ -256,6 +258,7 @@ impl AudioRead for PositionReader {
         Ok(ReadOutcome::Frames {
             count: std::num::NonZeroUsize::new(avail).unwrap(),
             position: self.position(),
+            source_span: None,
         })
     }
 
@@ -318,23 +321,30 @@ async fn read_returns_constant_samples_full() {
 }
 
 #[kithara::test]
-fn full_read_refills_before_the_next_callback_drains_scratch() {
+#[case::industry(128)]
+#[case::large(512)]
+fn full_read_keeps_exactly_one_callback_prefetched(#[case] callback_frames: usize) {
     let emitted = Arc::new(AtomicU64::new(0));
     let reader = ChunkReader::new(Arc::clone(&emitted));
     let resource = Resource::from_reader(reader, None);
     let mut player = PlayerResource::new(resource, Arc::from("chunked"), &pools())
         .expect("player resource fits the test pool budget");
-    let mut left = vec![0.0f32; 512];
-    let mut right = vec![0.0f32; 512];
+    let mut left = vec![0.0f32; callback_frames];
+    let mut right = vec![0.0f32; callback_frames];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
 
-    let result = player.read(&mut output, 0..512, &RtMetrics::default());
+    let result = player.read(&mut output, 0..callback_frames, &RtMetrics::default());
 
-    assert_eq!(result, BlockReadOutcome::Full { frames: 512 });
+    assert_eq!(
+        result,
+        BlockReadOutcome::Full {
+            frames: callback_frames
+        }
+    );
     assert_eq!(
         emitted.load(Ordering::Relaxed),
-        2 * ChunkReader::CHUNK_FRAMES as u64,
-        "a successful callback must refill while one callback is still buffered",
+        2 * u64::try_from(callback_frames).expect("fixture callback fits u64"),
+        "a successful callback consumes one block and prefetches exactly one block",
     );
 }
 

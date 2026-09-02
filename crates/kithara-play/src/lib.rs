@@ -51,7 +51,7 @@ pub use kithara_warp::{
 };
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
 pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};
-pub use rt::PlayerNode;
+pub use rt::{PlayerNode, StreamShape};
 pub use sync::GroupState;
 pub use worker::{
     EngineLoad, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig, RegisteredAudio, ServiceClass,

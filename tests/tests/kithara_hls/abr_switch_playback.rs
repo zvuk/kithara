@@ -1,6 +1,9 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome},
+    audio::{
+        AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode,
+        ReadOutcome,
+    },
     decode::DecoderBackend,
     events::{AbrEvent, AbrReason, Event, EventBus, EventReceiver},
     file::{File, FileConfig},
@@ -81,6 +84,7 @@ async fn open_packaged_hls_audio(
     store: AssetStore<TestPools>,
     abr: AbrMode,
     bus: Option<EventBus>,
+    wake_mode: ConsumerWakeMode,
 ) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     let cancel = CancelToken::never();
     let downloader = Downloader::new(
@@ -105,6 +109,7 @@ async fn open_packaged_hls_audio(
 
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .maybe_events(bus)
+        .consumer_wake_mode(wake_mode)
         .build();
 
     let mut audio = worker
@@ -243,6 +248,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         store.clone(),
         packaged_switch_abr_mode(),
         Some(bus.clone()),
+        ConsumerWakeMode::ImmediateOffRt,
     )
     .await;
     let abr = progress_audio
@@ -264,7 +270,9 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     while Instant::now() < deadline {
         let _ = progress_audio.preload();
         let read: usize = match progress_audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, position }) => {
+            Ok(ReadOutcome::Frames {
+                count, position, ..
+            }) => {
                 if !switch_seen {
                     let pace = position.saturating_sub(consumed);
                     spawn_blocking(move || paced_backoff(pace))
@@ -399,6 +407,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         store,
         packaged_switch_abr_mode(),
         None,
+        ConsumerWakeMode::RealtimeDeferred,
     )
     .await;
     let mut resource = resource_from_reader(decode_audio);
@@ -868,7 +877,11 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .build();
 
     let mut audio = worker
-        .open(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
+        .open(
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+                .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+                .build(),
+        )
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -993,7 +1006,9 @@ fn read_manual_cross_codec_phase(
         }
 
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, position }) => {
+            Ok(ReadOutcome::Frames {
+                count, position, ..
+            }) => {
                 let count = u64::try_from(count.get())
                     .unwrap_or_else(|error| panic!("read count does not fit u64: {error}"));
                 if manual_applied {

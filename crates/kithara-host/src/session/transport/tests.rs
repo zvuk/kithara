@@ -12,9 +12,11 @@ use firewheel::{
     },
 };
 use kithara_platform::time::Duration;
+use kithara_play::rt::{install_render_context, read_render_context};
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    Beat, BeatGridId, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition, SessionFrame,
+    Beat, BeatGridId, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition, SessionEpoch,
+    SessionFrame,
 };
 use triple_buffer::{Output, triple_buffer};
 
@@ -82,7 +84,8 @@ fn proc_extra() -> (ProcExtra, Output<TransportObservation>) {
     );
     let initial = TransportObservation::new(None, None, session_grid);
     let (observation_input, observation_output) = triple_buffer(&initial);
-    let mut store = ProcStore::with_capacity(2);
+    let mut store = ProcStore::with_capacity(3);
+    assert!(install_render_context(&mut store).is_ok());
     assert!(
         store
             .insert(TransportCommitState::new(session_grid))
@@ -154,7 +157,7 @@ fn process_result(
     second: Option<NodeEventType>,
 ) -> Result<(), TransportProcessError> {
     with_events(first, second, |events| {
-        process_transport(info, events, &mut extra.store)
+        process_transport(info, events, &mut extra.store).map(|_| ())
     })
 }
 
@@ -202,6 +205,89 @@ fn active_harness() -> (
         Some(TransportCommitResult::Applied(TransportRevision::first()))
     );
     (processor, extra, output, active)
+}
+
+#[kithara::test]
+fn transport_frame_carries_the_exact_processed_musical_context() {
+    let (_processor, mut extra, _output, active) = active_harness();
+    let frame = with_events(None, None, |events| {
+        process_transport(&proc_info_at(block_frame(1)), events, &mut extra.store)
+    })
+    .expect("invariant: the next contiguous transport block is valid");
+    let beats = frame
+        .session_beats
+        .expect("invariant: the active playing transport has a beat range");
+
+    assert_eq!(frame.session_epoch, SessionEpoch::new(0));
+    assert_eq!(frame.transport_revision, Some(active.revision()));
+    assert!((f64::from(beats.start) - 0.02).abs() <= f64::EPSILON);
+    assert!((f64::from(beats.end) - 0.04).abs() <= f64::EPSILON);
+}
+
+#[kithara::test]
+fn pre_process_publishes_the_exact_render_context() {
+    let (_processor, extra, _output, active) = active_harness();
+    let info = proc_info_at(0);
+    let context = read_render_context(&extra.store, &info)
+        .expect("invariant: the pre-process node published this exact block");
+
+    assert_eq!(
+        context.output_frames(),
+        &(SessionFrame::new(0)..SessionFrame::new(block_frame(1)))
+    );
+    assert_eq!(context.sample_rate(), sample_rate());
+    assert_eq!(context.session_epoch(), SessionEpoch::new(0));
+    assert_eq!(context.transport_revision(), Some(active.revision()));
+    let beats = context
+        .session_beats()
+        .expect("invariant: active transport carries a musical range");
+    assert!(f64::from(beats.start).abs() <= f64::EPSILON);
+    assert!((f64::from(beats.end) - 0.02).abs() <= f64::EPSILON);
+}
+
+#[kithara::test]
+fn inactive_transport_is_a_valid_render_context() {
+    let (mut extra, _output) = proc_extra();
+    let info = proc_info_at(0);
+    process_node(
+        &mut SessionTransportProcessor,
+        &info,
+        &mut extra,
+        None,
+        None,
+    );
+
+    let context = read_render_context(&extra.store, &info)
+        .expect("invariant: inactive transport still publishes the session axis");
+    assert_eq!(context.session_epoch(), SessionEpoch::new(0));
+    assert_eq!(context.transport_revision(), None);
+    assert_eq!(context.session_beats(), None);
+}
+
+#[kithara::test]
+fn stale_subblock_cannot_reuse_the_full_render_context() {
+    let (_processor, extra, _output, _active) = active_harness();
+    let mut subblock = proc_info_at(0);
+    subblock.frames /= 2;
+
+    assert_eq!(
+        read_render_context(&extra.store, &subblock),
+        Err("render context does not match the player process block")
+    );
+}
+
+#[kithara::test]
+fn invalid_transport_block_replaces_the_previous_render_context() {
+    let (mut processor, mut extra, _output, _active) = active_harness();
+    let info = proc_info_at(0);
+    assert!(read_render_context(&extra.store, &info).is_ok());
+
+    process_node(&mut processor, &info, &mut extra, None, None);
+
+    assert_eq!(
+        read_render_context(&extra.store, &info),
+        Err("render context is invalid")
+    );
 }
 
 #[kithara::test]
@@ -276,6 +362,10 @@ fn route_restart_advances_session_epoch_and_grid_revision() {
         store: &mut extra.store,
         logger: &mut extra.logger,
     });
+    assert_eq!(
+        read_render_context(&extra.store, &proc_info_at(0)),
+        Err("render context is invalid")
+    );
     let boundary = observation(&mut output);
     assert_eq!(boundary.snapshot(), None);
     let boundary_generation = boundary.session_grid();

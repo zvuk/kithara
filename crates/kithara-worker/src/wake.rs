@@ -5,6 +5,7 @@ use kithara_platform::{
     },
     time::Duration,
 };
+use kithara_test_macros as kithara;
 
 /// Cloneable immediate and deferred scheduler wake capability.
 #[derive(Clone, Default)]
@@ -18,10 +19,18 @@ impl Wake {
         self.inner.deferred.store(true, Ordering::Release);
     }
 
+    /// Turn a pending deferred signal into an immediate scheduler wake.
+    pub fn flush_deferred(&self) {
+        if self.take_deferred() {
+            self.wake();
+        }
+    }
+
     fn take_deferred(&self) -> bool {
         self.inner.deferred.swap(false, Ordering::Acquire)
     }
 
+    #[kithara::measure]
     pub(crate) fn wait_timeout(&self, timeout: Duration) -> bool {
         if self.take_deferred() {
             return true;
@@ -68,6 +77,17 @@ mod tests {
         let wake = Wake::default();
         wake.defer();
         wake.defer();
+
+        assert!(wake.wait_timeout(Duration::ZERO));
+        assert!(!wake.wait_timeout(Duration::ZERO));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn off_rt_flush_signals_a_deferred_wake() {
+        let wake = Wake::default();
+
+        wake.defer();
+        wake.flush_deferred();
 
         assert!(wake.wait_timeout(Duration::ZERO));
         assert!(!wake.wait_timeout(Duration::ZERO));

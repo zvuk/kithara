@@ -11,16 +11,19 @@ categories = ["multimedia::audio"]
 
 [features]
 default = ["stretch-signalsmith"]
+perf = ["dep:hotpath", "hotpath/hotpath"]
 stretch-signalsmith = ["dep:signalsmith-stretch"]
 stretch-bungee = ["dep:bungee-sys"]
 
 [dependencies]
 kithara-signal = { workspace = true }
+kithara-test-macros = { workspace = true }
 
 bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
+hotpath = { workspace = true, optional = true }
 num-traits = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }

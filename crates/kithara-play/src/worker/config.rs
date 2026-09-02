@@ -8,6 +8,8 @@ use kithara_worker::Worker;
 struct Consts;
 
 impl Consts {
+    const ACTIVE_WAIT_TIMEOUT: Duration = Duration::from_millis(1);
+    const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_micros(250);
     const CAPACITY: NonZeroUsize = match NonZeroUsize::new(16) {
         Some(value) => value,
         None => unreachable!(),
@@ -31,6 +33,10 @@ pub struct PlayWorkerConfig<S> {
     #[builder(start_fn)]
     #[field(get)]
     pub(crate) pools: PoolRegion<S>,
+    /// Poll interval for the RT-safe deferred wake while the final ring is full.
+    #[builder(default = Consts::BACKPRESSURE_POLL_INTERVAL)]
+    #[field(get, copy)]
+    pub(crate) backpressure_poll_interval: Duration,
     /// Parent cancellation token for this playback dispatcher lifetime.
     pub(crate) cancel: Option<CancelToken>,
     /// Optional base worker shared with other domain workers.
@@ -56,7 +62,26 @@ pub struct PlayWorkerConfig<S> {
     #[field(get, copy)]
     pub(crate) task_burst: NonZeroU32,
     /// Park duration while live playback tasks are waiting.
-    #[builder(default = Duration::from_millis(10))]
+    #[builder(default = Consts::ACTIVE_WAIT_TIMEOUT)]
     #[field(get, copy)]
     pub(crate) wait_timeout: Duration,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::test_pools::pools;
+
+    #[kithara::test]
+    fn playback_worker_uses_live_audio_wait_budgets() {
+        let config = PlayWorkerConfig::builder(pools()).build();
+
+        assert_eq!(
+            config.backpressure_poll_interval,
+            Duration::from_micros(250)
+        );
+        assert_eq!(config.wait_timeout, Duration::from_millis(1));
+    }
 }

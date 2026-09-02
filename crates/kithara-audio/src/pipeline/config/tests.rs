@@ -53,4 +53,21 @@ mod native {
         assert!(default.observer.is_none());
         assert!(config.observer.is_some());
     }
+
+    #[kithara::test]
+    fn audio_buffer_chunks_distinguishes_omitted_from_explicit() {
+        let omitted = AudioConfig::<kithara_file::File<TestPools>, NoResamplerBackend>::for_stream(
+            file_config(),
+        )
+        .build();
+        let explicit =
+            AudioConfig::<kithara_file::File<TestPools>, NoResamplerBackend>::for_stream(
+                file_config(),
+            )
+            .audio_buffer_chunks(2)
+            .build();
+
+        assert_eq!(omitted.audio_buffer_chunks(), None);
+        assert_eq!(explicit.audio_buffer_chunks(), Some(2));
+    }
 }

@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use kithara::{
     self,
     audio::ConsumerWakeMode,
@@ -29,11 +31,21 @@ fn slot_id(value: u64) -> SlotId {
     SlotId::new(value)
 }
 
+fn response_budget() -> NonZeroUsize {
+    NonZeroUsize::new(448).expect("fixture response budget is non-zero")
+}
+
+fn render_quantum() -> NonZeroUsize {
+    NonZeroUsize::new(32).expect("fixture render quantum is non-zero")
+}
+
 fn make_engine() -> EngineImpl<TestPools> {
     EngineImpl::new(
         EngineConfig::builder()
             .grid_id(BeatGridId::allocate().expect("fixture grid id"))
             .session(Arc::new(FixtureSession))
+            .response_budget_frames(response_budget())
+            .render_quantum_frames(render_quantum())
             .pools(pools())
             .build(),
         EventBus::default(),
@@ -78,6 +90,8 @@ fn engine_config_builder() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
         .session(Arc::new(FixtureSession))
+        .response_budget_frames(response_budget())
+        .render_quantum_frames(render_quantum())
         .max_slots(8)
         .sample_rate(48000)
         .channels(1)
@@ -136,6 +150,8 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
         .session(Arc::new(FixtureSession))
+        .response_budget_frames(response_budget())
+        .render_quantum_frames(render_quantum())
         .sample_rate(48000)
         .pools(pools())
         .build();

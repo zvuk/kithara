@@ -5,7 +5,7 @@ use std::{io::Read, num::NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ConsumerWakeMode, ReadOutcome},
     decode::DecoderBackend,
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
@@ -361,6 +361,7 @@ async fn open_packaged_hls_audio(
     worker: PlayWorker<TestPools>,
     _codec: AudioCodec,
     backend: DecoderBackend,
+    wake_mode: ConsumerWakeMode,
 ) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     let hls = HlsConfig::for_url(url.clone())
         .store(store)
@@ -372,6 +373,7 @@ async fn open_packaged_hls_audio(
                 .backend(backend)
                 .build(),
         )
+        .consumer_wake_mode(wake_mode)
         .build();
     let mut audio = worker
         .open(config)
@@ -882,8 +884,15 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     let region = pools();
     let store = asset_store(&temp_dir, false, &region);
 
-    let mut progress_audio =
-        open_packaged_hls_audio(&url, store.clone(), play_worker(&region), codec, backend).await;
+    let mut progress_audio = open_packaged_hls_audio(
+        &url,
+        store.clone(),
+        play_worker(&region),
+        codec,
+        backend,
+        ConsumerWakeMode::ImmediateOffRt,
+    )
+    .await;
     let mut progress_rx = progress_audio.event_bus().subscribe();
     let mut progress_probe = PlaybackProgressProbe::default();
     let mut total_samples = 0u64;
@@ -946,8 +955,15 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         progress_probe.progress_events
     );
 
-    let decode_audio =
-        open_packaged_hls_audio(&url, store, play_worker(&region), codec, backend).await;
+    let decode_audio = open_packaged_hls_audio(
+        &url,
+        store,
+        play_worker(&region),
+        codec,
+        backend,
+        ConsumerWakeMode::RealtimeDeferred,
+    )
+    .await;
     let mut resource = resource_from_reader(decode_audio);
     time::timeout(Consts::READ_TIMEOUT, resource.preload())
         .await

@@ -1,4 +1,3 @@
-use kithara_platform::sync::Arc;
 #[cfg(feature = "render")]
 use {
     kithara_bufpool::{HasPool, PoolRegion},
@@ -8,8 +7,7 @@ use {
 use super::WarpConfig;
 #[cfg(feature = "render")]
 use super::WarpRenderer;
-use crate::StretchControls;
-
+use crate::RenderPublisher;
 /// Resident warp actuator around one decoded-audio source.
 ///
 /// The wrapper remains present in identity and future synchronized modes. It
@@ -19,10 +17,11 @@ use crate::StretchControls;
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct Warp<S> {
-    #[field(get, deref = false)]
-    stretch: Arc<StretchControls>,
     #[field(get, get_mut)]
     source: S,
+    #[field(get)]
+    config: WarpConfig,
+    publisher: RenderPublisher,
 }
 
 impl<S> Warp<S> {
@@ -31,8 +30,15 @@ impl<S> Warp<S> {
     pub fn new(source: S, config: &WarpConfig) -> Self {
         Self {
             source,
-            stretch: Arc::clone(config.stretch()),
+            config: config.clone(),
+            publisher: RenderPublisher::default(),
         }
+    }
+
+    /// Returns the callback-side publisher paired with this resident Warp.
+    #[must_use]
+    pub fn publisher(&self) -> RenderPublisher {
+        self.publisher.clone()
     }
 
     /// Creates the worker-side renderer paired with this Warp facade.
@@ -42,15 +48,28 @@ impl<S> Warp<S> {
     where
         P: HasPool<f32>,
     {
-        WarpRenderer::new(Arc::clone(&self.stretch), spec, pools)
+        WarpRenderer::new(&self.config, self.publisher.reader(), spec, pools)
+    }
+
+    /// Creates the bounded worker-side renderer paired with this Warp facade.
+    #[cfg(feature = "render")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn quantum_renderer<P>(&self, spec: AudioSpec, pools: PoolRegion<P>) -> WarpRenderer<P>
+    where
+        P: HasPool<f32>,
+    {
+        WarpRenderer::new_quantum(&self.config, self.publisher.reader(), spec, pools)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::StretchControls;
     #[kithara::test]
     fn source_access_delegates_to_the_resident_value() {
         let config = WarpConfig::builder().build();
@@ -67,7 +86,7 @@ mod tests {
         let config = WarpConfig::builder().stretch(Arc::clone(&stretch)).build();
         let warp = Warp::new((), &config);
 
-        warp.stretch().set_speed(1.25);
+        warp.config().stretch().set_speed(1.25);
 
         assert!((stretch.speed() - 1.25).abs() < f32::EPSILON);
     }

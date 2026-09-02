@@ -24,6 +24,8 @@ pub struct AudioChunkInfo {
     pub frames: u32,
     /// Decoder generation, incremented on decoder recreation.
     pub epoch: u64,
+    /// Opaque producer render revision represented by this chunk. Zero is the initial revision.
+    pub render_revision: u64,
     /// Absolute frame offset from the start of the track.
     pub frame_offset: u64,
     /// Source bytes that produced this chunk, or zero when unknown.
@@ -46,6 +48,7 @@ impl Default for AudioChunkInfo {
             variant_index: None,
             frames: 0,
             epoch: 0,
+            render_revision: 0,
             frame_offset: 0,
             source_bytes: 0,
         }
@@ -100,13 +103,13 @@ mod tests {
         )
     }
 
-    fn chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
+    fn chunk(pools: &Pools, spec: AudioSpec, samples: &[f32]) -> AudioChunk {
         AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 ..Default::default()
             },
-            sample_buffer(pools, &samples),
+            sample_buffer(pools, samples),
         )
     }
 
@@ -120,19 +123,13 @@ mod tests {
     #[kithara::test]
     fn chunk_reports_complete_frames() {
         let pools = pools();
-        assert_eq!(
-            chunk(&pools, audio_spec(2, 44_100), vec![0.0; 6]).frames(),
-            3
-        );
+        assert_eq!(chunk(&pools, audio_spec(2, 44_100), &[0.0; 6]).frames(), 3);
     }
 
     #[kithara::test]
     fn zero_channels_report_no_frames() {
         let pools = pools();
-        assert_eq!(
-            chunk(&pools, audio_spec(0, 44_100), vec![0.0; 4]).frames(),
-            0
-        );
+        assert_eq!(chunk(&pools, audio_spec(0, 44_100), &[0.0; 4]).frames(), 0);
     }
 
     #[kithara::test]

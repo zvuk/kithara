@@ -1,9 +1,9 @@
-use std::ops::RangeInclusive;
+use std::{num::NonZeroU32, ops::RangeInclusive};
 
 use kithara::{
     audio::ConsumerWakeMode,
     bufpool::HasPool,
-    host::testing::GraphSession,
+    host::{HostConfig, testing::GraphSession},
     platform::{
         sync::{
             Arc, Mutex,
@@ -13,7 +13,7 @@ use kithara::{
         thread::{JoinHandle, spawn_named},
         time::{Duration, Instant},
     },
-    play::{Cmd, MixTapWriter, PlayError, Reply, SessionDispatcher},
+    play::{Cmd, MixTapWriter, PlayError, Reply, SessionDispatcher, StreamShape},
 };
 use ringbuf::{
     HeapCons, HeapRb,
@@ -36,16 +36,8 @@ const GAIN_FLOOR_SECS: f64 = 0.9;
 /// delivery lag, and progress emits quantize position in ~100 ms steps.
 const ENDPOINT_SLACK_SECS: f64 = 0.5;
 
-/// Expected playback-position gain (seconds) when a test sleeps
-/// `window_secs` of virtual time while the auto-render worker advances.
-///
-/// Nominal cadence is one [`OFFLINE_BLOCK_FRAMES`] block per
-/// [`OFFLINE_PARK_MS`] park at the session's default output rate —
-/// ~1.16x the virtual clock. The ceiling is that cadence over the window
-/// plus [`ENDPOINT_SLACK_SECS`]: the probe measures the render through
-/// asynchronous endpoints, not the render loop itself, so a legitimate
-/// outcome can exceed the pure-window nominal by the endpoint slack. A
-/// broken cadence (extra blocks per park) overshoots the ceiling anyway.
+/// Expected playback-position gain while auto-render advances at its
+/// block-scaled reference cadence.
 #[must_use]
 pub fn offline_gain_window(window_secs: f64) -> RangeInclusive<f64> {
     let default_rate = GraphSession::<OfflineBackend, TestPools>::DEFAULT_SAMPLE_RATE;
@@ -81,14 +73,14 @@ where
     /// thread never calls [`render`](Self::render).
     #[must_use]
     pub fn new() -> Self {
-        Self::spawn(true, OFFLINE_BLOCK_FRAMES)
+        Self::spawn(true, default_output_block_frames())
     }
 
     /// Manual mode: the worker only dispatches commands; the audio
     /// graph advances only when [`render`](Self::render) is called.
     #[must_use]
     pub fn new_manual() -> Self {
-        Self::new_manual_with_block_frames(OFFLINE_BLOCK_FRAMES)
+        Self::new_manual_with_block_frames(default_output_block_frames())
     }
 
     /// Manual mode with the audio callback size used by the scenario.
@@ -138,9 +130,9 @@ where
         Ok(MixTapProbe { drops, pcm: pcm_rx })
     }
 
-    /// Synchronously drive one render iteration. Returns
-    /// stereo-interleaved samples, or an empty `Vec` if the firewheel
-    /// context has not been initialised yet (no player started).
+    /// Synchronously render exactly `frames` frames, split into callbacks no
+    /// larger than the session's declared output block. Returns stereo-interleaved
+    /// samples, or an empty `Vec` if no player has started the firewheel context.
     /// `no_block`: sync command-reply bridge to the dedicated offline render thread; flash coordinates the bridged wait.
     #[kithara::allow_block]
     pub fn render(&self, frames: usize) -> Vec<f32> {
@@ -243,9 +235,15 @@ fn offline_session_thread<S>(
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let mut state = GraphSession::<OfflineBackend, S>::new(move |ctx, sample_rate| {
-        start_stream_offline(ctx, sample_rate, block_frames)
-    });
+    let requested_shape = StreamShape::new(
+        NonZeroU32::new(block_frames).expect("offline block size was validated as non-zero"),
+        NonZeroU32::new(GraphSession::<OfflineBackend, S>::DEFAULT_SAMPLE_RATE)
+            .expect("offline sample rate is non-zero"),
+    );
+    let mut state = GraphSession::<OfflineBackend, S>::with_stream_shape(
+        requested_shape,
+        move |ctx, sample_rate| start_stream_offline(ctx, sample_rate, block_frames),
+    );
     if auto_render {
         run_auto(
             &mut state,
@@ -253,13 +251,18 @@ fn offline_session_thread<S>(
             usize::try_from(block_frames).expect("offline block size fits usize"),
         );
     } else {
-        run_manual(&mut state, cmd_rx);
+        run_manual(
+            &mut state,
+            cmd_rx,
+            usize::try_from(block_frames).expect("offline block size fits usize"),
+        );
     }
 }
 
 fn run_manual<S>(
     state: &mut GraphSession<OfflineBackend, S>,
     cmd_rx: &mpsc::Receiver<OfflineMsg<S>>,
+    block_frames: usize,
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
@@ -270,7 +273,7 @@ fn run_manual<S>(
                 let _ = reply_tx.send(reply);
             }
             OfflineMsg::Render { frames, reply_tx } => {
-                let block = render_block(state, frames);
+                let block = render_frames(state, frames, block_frames);
                 let _ = reply_tx.send(block);
             }
             OfflineMsg::Shutdown => break,
@@ -285,20 +288,21 @@ fn run_auto<S>(
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    let render_period = auto_render_period(block_frames);
     loop {
         // Block on the next command, but no longer than one render budget: a
         // command (or `Shutdown`) wakes us at once through the engine-aware
         // channel, while the timeout drives the periodic auto-render so playback
         // advances even when the test thread never sends anything. There is no
         // `park_timeout` to lose a cross-thread wake against.
-        let deadline = Instant::now() + Duration::from_millis(OFFLINE_PARK_MS);
+        let deadline = Instant::now() + render_period;
         match cmd_rx.recv_timeout(deadline) {
             Ok(OfflineMsg::Cmd { cmd, reply_tx }) => {
                 let reply = state.exec(cmd);
                 let _ = reply_tx.send(reply);
             }
             Ok(OfflineMsg::Render { frames, reply_tx }) => {
-                let block = render_block(state, frames);
+                let block = render_frames(state, frames, block_frames);
                 let _ = reply_tx.send(block);
             }
             Ok(OfflineMsg::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -307,6 +311,39 @@ fn run_auto<S>(
             }
         }
     }
+}
+
+fn auto_render_period(block_frames: usize) -> Duration {
+    let block_frames = f64::from(
+        u32::try_from(block_frames).expect("offline callback block size originated as u32"),
+    );
+    let reference_frames = f64::from(
+        u32::try_from(OFFLINE_BLOCK_FRAMES).expect("offline reference block size fits u32"),
+    );
+    Duration::from_millis(OFFLINE_PARK_MS).mul_f64(block_frames / reference_frames)
+}
+
+fn default_output_block_frames() -> usize {
+    usize::try_from(HostConfig::builder().build().output_block_frames().get())
+        .expect("offline block size fits usize")
+}
+
+fn render_frames<S>(
+    state: &mut GraphSession<OfflineBackend, S>,
+    frames: usize,
+    block_frames: usize,
+) -> Vec<f32>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let mut output = Vec::new();
+    let mut remaining = frames;
+    while remaining > 0 {
+        let frames = remaining.min(block_frames);
+        output.extend(render_block(state, frames));
+        remaining -= frames;
+    }
+    output
 }
 
 fn render_block<S>(state: &mut GraphSession<OfflineBackend, S>, frames: usize) -> Vec<f32>
@@ -336,6 +373,22 @@ mod tests {
         assert_eq!(
             session.consumer_wake_mode(),
             ConsumerWakeMode::RealtimeDeferred
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn default_offline_session_uses_host_callback_geometry() {
+        let session = OfflineSession::<TestPools>::new();
+        let Reply::StreamShape(shape) = session
+            .exec(Cmd::QueryStreamShape)
+            .expect("offline session answers the stream-shape query")
+        else {
+            panic!("offline session answers with its stream shape");
+        };
+
+        assert_eq!(
+            shape.max_block_frames,
+            HostConfig::builder().build().output_block_frames()
         );
     }
 

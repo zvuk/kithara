@@ -15,7 +15,7 @@ pub(crate) mod native;
 pub(crate) mod web;
 
 pub(crate) use protocol::{
-    Cmd, HostCmd, HostDispatcher, HostReply, Reply, SessionError, SessionSampleRate,
+    Cmd, HostCmd, HostDispatcher, HostReply, Reply, SessionError, SessionSampleRate, StreamShape,
 };
 pub(crate) use state::RootView;
 #[cfg(target_arch = "wasm32")]

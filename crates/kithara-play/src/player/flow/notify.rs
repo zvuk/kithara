@@ -243,6 +243,7 @@ where
     S: HasPool<f32>,
 {
     pub fn process_notifications(&self) {
+        self.core.worker.flush_deferred();
         Notifier::new(self).process_notifications();
     }
 
@@ -358,6 +359,7 @@ mod tests {
             index: 1,
             duration_seconds: 60.0,
         });
+        drop(phase);
     }
 
     fn stop_notification(

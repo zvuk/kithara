@@ -3,7 +3,8 @@
 use kithara::{platform::time::Duration, warp::SyncIntent};
 use kithara_integration_tests::{
     cochlea::{
-        CochleaReport, continuity_failures, synchronization_failures, time_stretch_failures,
+        AlignedPcm, CochleaReport, align_command_runs, continuity_failures,
+        first_sustained_delta as sustained_delta, synchronization_failures, time_stretch_failures,
     },
     kithara,
 };
@@ -19,12 +20,6 @@ struct CommandRun {
     command_index: usize,
     failures: Vec<String>,
     samples: Vec<f32>,
-}
-
-struct AlignedRun {
-    candidate: Vec<f32>,
-    command_index: usize,
-    control: Vec<f32>,
 }
 
 async fn tempo_retarget_run(block_frames: usize, warm_blocks: usize, retarget: bool) -> CommandRun {
@@ -87,81 +82,14 @@ async fn running_sync_run(block_frames: usize, issue_sync: bool) -> CommandRun {
     }
 }
 
-fn frame_deltas<'a>(candidate: &'a [f32], control: &'a [f32]) -> impl Iterator<Item = f32> + 'a {
-    candidate
-        .chunks_exact(usize::from(CHANNELS))
-        .zip(control.chunks_exact(usize::from(CHANNELS)))
-        .map(|(candidate, control)| {
-            candidate
-                .iter()
-                .zip(control)
-                .map(|(candidate, control)| (candidate - control).abs())
-                .fold(0.0_f32, f32::max)
-        })
-}
-
-fn align_runs(candidate: &CommandRun, control: &CommandRun) -> AlignedRun {
-    const ALIGNMENT_FRAMES: usize = 4_096;
-    const SAMPLE_STRIDE: usize = 8;
-
-    let prefix = ALIGNMENT_FRAMES
-        .min(candidate.command_index)
-        .min(control.command_index);
-    assert!(prefix > 0, "alignment needs pre-command PCM");
-    let candidate_limit = candidate.command_index - prefix;
-    let mut anchor = (f64::NEG_INFINITY, 0);
-    for start in (0..=candidate_limit).step_by(SAMPLE_STRIDE) {
-        let energy = (0..prefix)
-            .step_by(SAMPLE_STRIDE)
-            .map(|frame| {
-                let sample = candidate.samples[(start + frame) * usize::from(CHANNELS)];
-                let sample = f64::from(sample);
-                sample * sample
-            })
-            .sum::<f64>();
-        if energy >= anchor.0 {
-            anchor = (energy, start);
-        }
-    }
-    let candidate_anchor = anchor.1;
-    let min_lag = -i64::try_from(candidate_anchor).expect("alignment anchor fits i64");
-    let max_lag = i64::try_from(control.command_index - prefix).expect("command index fits i64")
-        - i64::try_from(candidate_anchor).expect("alignment anchor fits i64");
-    let mut best = (f64::INFINITY, i64::MAX, 0_i64);
-    for lag in min_lag..=max_lag {
-        let control_anchor = usize::try_from(
-            i64::try_from(candidate_anchor).expect("alignment anchor fits i64") + lag,
-        )
-        .expect("control alignment anchor fits usize");
-        let squared = (0..prefix)
-            .step_by(SAMPLE_STRIDE)
-            .map(|frame| {
-                let candidate =
-                    candidate.samples[(candidate_anchor + frame) * usize::from(CHANNELS)];
-                let control = control.samples[(control_anchor + frame) * usize::from(CHANNELS)];
-                let delta = f64::from(candidate - control);
-                delta * delta
-            })
-            .sum::<f64>();
-        if squared < best.0 || (squared == best.0 && lag.abs() < best.1) {
-            best = (squared, lag.abs(), lag);
-        }
-    }
-    let lag = best.2;
-    let candidate_start = usize::try_from((-lag).max(0)).expect("alignment lag fits usize");
-    let control_start = usize::try_from(lag.max(0)).expect("alignment lag fits usize");
-    let candidate_frames = candidate.samples.len() / usize::from(CHANNELS) - candidate_start;
-    let control_frames = control.samples.len() / usize::from(CHANNELS) - control_start;
-    let frames = candidate_frames.min(control_frames);
-    AlignedRun {
-        candidate: candidate.samples[candidate_start * usize::from(CHANNELS)
-            ..(candidate_start + frames) * usize::from(CHANNELS)]
-            .to_vec(),
-        command_index: candidate.command_index - candidate_start,
-        control: control.samples[control_start * usize::from(CHANNELS)
-            ..(control_start + frames) * usize::from(CHANNELS)]
-            .to_vec(),
-    }
+fn align_runs(candidate: &CommandRun, control: &CommandRun) -> AlignedPcm {
+    align_command_runs(
+        &candidate.samples,
+        candidate.command_index,
+        &control.samples,
+        control.command_index,
+        CHANNELS,
+    )
 }
 
 fn first_sustained_delta(
@@ -169,24 +97,7 @@ fn first_sustained_delta(
     control: &[f32],
     range: std::ops::Range<usize>,
 ) -> Option<usize> {
-    const DELTA_THRESHOLD: f32 = 0.002;
-    const SUSTAINED_FRAMES: usize = 32;
-
-    let mut run = 0;
-    for (frame, delta) in frame_deltas(candidate, control).enumerate() {
-        if !range.contains(&frame) {
-            continue;
-        }
-        if delta > DELTA_THRESHOLD {
-            run += 1;
-            if run == SUSTAINED_FRAMES {
-                return Some(frame + 1 - SUSTAINED_FRAMES);
-            }
-        } else {
-            run = 0;
-        }
-    }
-    None
+    sustained_delta(candidate, control, CHANNELS, range, 0.002, 32)
 }
 
 fn append_run_failures(label: &str, run: &CommandRun, failures: &mut Vec<String>) {
@@ -221,7 +132,7 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms() {
             if let Some(frame) = first_sustained_delta(
                 &aligned.candidate,
                 &aligned.control,
-                0..aligned.command_index,
+                0..aligned.command_frame,
             ) {
                 failures.push(format!(
                     "candidate diverged before retarget at frame {frame}"
@@ -230,10 +141,10 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms() {
             let transition = first_sustained_delta(
                 &aligned.candidate,
                 &aligned.control,
-                aligned.command_index..aligned.candidate.len() / usize::from(CHANNELS),
+                aligned.command_frame..aligned.candidate.len() / usize::from(CHANNELS),
             );
             let latency_budget = TWENTY_MS_FRAMES.min(block_frames * 2);
-            match transition.map(|frame| frame - aligned.command_index) {
+            match transition.map(|frame| frame - aligned.command_frame) {
                 Some(frames) if frames <= latency_budget => {}
                 Some(frames) => failures.push(format!(
                     "retarget changed PCM after {frames} frames; budget is {latency_budget}"
@@ -271,16 +182,16 @@ async fn running_sync_command_changes_audible_pcm_within_one_block() {
         if let Some(frame) = first_sustained_delta(
             &aligned.candidate,
             &aligned.control,
-            0..aligned.command_index,
+            0..aligned.command_frame,
         ) {
             failures.push(format!("candidate diverged before SYNC at frame {frame}"));
         }
         let transition = first_sustained_delta(
             &aligned.candidate,
             &aligned.control,
-            aligned.command_index..aligned.candidate.len() / usize::from(CHANNELS),
+            aligned.command_frame..aligned.candidate.len() / usize::from(CHANNELS),
         );
-        match transition.map(|frame| frame - aligned.command_index) {
+        match transition.map(|frame| frame - aligned.command_frame) {
             Some(frames) if frames <= block_frames => {}
             Some(frames) => failures.push(format!(
                 "running SYNC changed PCM after {frames} frames; budget is {block_frames}"

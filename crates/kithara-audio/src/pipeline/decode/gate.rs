@@ -3,6 +3,7 @@ use std::ops::Range;
 use kithara_decode::DecoderFactory;
 use kithara_platform::sync::Arc;
 use kithara_stream::{DeferredWake, ReaderInput, SeekControl, SourcePhase, StreamType};
+use kithara_test_macros as kithara;
 use tracing::trace;
 
 use crate::pipeline::{
@@ -53,6 +54,7 @@ impl ReadinessGate {
         }
     }
 
+    #[kithara::measure]
     pub(crate) fn source_is_ready<T: StreamType>(&self, stream: &SharedStream<T>) -> bool {
         self.source_ready_for_range(stream, chunk_lookahead_range(stream, stream.position()))
     }

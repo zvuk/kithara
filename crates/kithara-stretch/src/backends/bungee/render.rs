@@ -1,5 +1,4 @@
-#[cfg(test)]
-use kithara_test_utils::kithara;
+use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
 use super::{buffer::signal_error, stream::StreamCore};
@@ -299,6 +298,7 @@ impl StreamCore {
         Ok(())
     }
 
+    #[kithara::measure]
     pub(super) fn synthesise(
         &mut self,
         valid: bool,

@@ -70,6 +70,7 @@ impl Dispatcher {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let wake = Wake::default();
         let DispatcherConfig {
+            backpressure_poll_interval,
             cancel: domain_cancel,
             capacity,
             fairness_yield_interval,
@@ -81,6 +82,7 @@ impl Dispatcher {
             wait_timeout,
         } = config;
         let budgets = SchedulerBudgets {
+            backpressure_poll_interval,
             idle_timeout,
             slow_tick_threshold,
             wait_timeout,

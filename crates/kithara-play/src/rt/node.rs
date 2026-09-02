@@ -10,7 +10,7 @@ use firewheel::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::{Arc, Mutex};
 
-use super::processor::{PlayerNodeProcessor, StreamShape};
+use super::processor::{ContextRequirement, PlayerNodeProcessor, StreamShape};
 use crate::bridge::{NodeInputs, SharedEq, slot_channels};
 
 /// A player source node that outputs mixed audio from loaded tracks.
@@ -29,6 +29,9 @@ pub struct PlayerNode<S> {
     /// Typed pool facade for scratch buffer allocation.
     #[diff(skip)]
     pools: PoolRegion<S>,
+
+    #[diff(skip)]
+    context_requirement: ContextRequirement,
 }
 
 /// A runtime parameter patch for [`PlayerNode`].
@@ -61,6 +64,7 @@ impl<S> Clone for PlayerNode<S> {
             active: self.active,
             inputs: Arc::clone(&self.inputs),
             pools: self.pools.clone(),
+            context_requirement: self.context_requirement,
         }
     }
 }
@@ -72,7 +76,17 @@ impl<S> PlayerNode<S> {
             pools,
             active: true,
             inputs: Arc::new(Mutex::new(Some(inputs))),
+            context_requirement: ContextRequirement::Standalone,
         }
+    }
+
+    /// Requires the Host-written render context when constructing this node's
+    /// processor. Standalone nodes retain their context-free contract.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_session_context(mut self) -> Self {
+        self.context_requirement = ContextRequirement::Session;
+        self
     }
 }
 
@@ -98,7 +112,12 @@ where
             .lock()
             .take()
             .unwrap_or_else(|| slot_channels(SharedEq::new(0)).0);
-        PlayerNodeProcessor::new(inputs, shape, &self.pools)
+        PlayerNodeProcessor::with_context_requirement(
+            inputs,
+            shape,
+            &self.pools,
+            self.context_requirement,
+        )
     }
 
     fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {

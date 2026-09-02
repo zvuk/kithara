@@ -27,8 +27,6 @@ pub enum PlayerCmd {
     SetFadeDuration(f32),
     /// Update the prefetch lead time.
     SetPrefetchDuration(f32),
-    /// Update the requested playback-rate target for all active tracks.
-    SetPlaybackRate(f32),
 }
 
 impl fmt::Debug for PlayerCmd {
@@ -56,7 +54,6 @@ impl fmt::Debug for PlayerCmd {
             Self::SetPaused(p) => f.debug_tuple("SetPaused").field(p).finish(),
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
             Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),
-            Self::SetPlaybackRate(r) => f.debug_tuple("SetPlaybackRate").field(r).finish(),
         }
     }
 }

@@ -198,8 +198,12 @@ impl StreamCore {
                 ));
             }
         }
-        Err(ElasticError::EnginePreparation(
-            "Bungee terminal output exceeded its fixed grain bound",
-        ))
+        if drained > 0 {
+            Ok(ElasticDrain::new(drained, false))
+        } else {
+            Err(ElasticError::EnginePreparation(
+                "Bungee terminal output exceeded its fixed grain bound",
+            ))
+        }
     }
 }

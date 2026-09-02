@@ -45,9 +45,10 @@ contracts for the later actuator integration.
 ## Configuration
 
 `WarpConfig` is built with `bon`, uses `fieldwork` for read access, and carries
-the shared `StretchControls` owned by the resident identity `Warp<S>` and
-consumed by its native renderer. The identity renderer deliberately ignores
-temporal intent while preserving the same stage contract. Every renderer
+the shared `StretchControls` plus the non-zero render quantum in frames. The
+resident `Warp<S>` passes that one config to its renderer; milliseconds are
+derived diagnostics, not configuration. The identity renderer deliberately
+ignores temporal intent while preserving the same stage contract. Every
 receives the caller's configured `PoolRegion<S>`; it never creates a pool region. Source
 ownership, cancellation, and worker resources remain in their canonical
 configs and are not duplicated here.

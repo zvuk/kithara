@@ -11,6 +11,7 @@ mod error;
 mod key;
 mod pool;
 mod region;
+mod ring;
 mod schema;
 #[cfg(feature = "test-utils")]
 pub mod testing;
@@ -22,4 +23,5 @@ pub use error::PoolError;
 pub use key::{PoolAlias, PoolKey, PoolKeyWithLen, StringKey, VecKey};
 pub use pool::PoolStats;
 pub use region::{PoolRegion, RegionStats};
+pub use ring::BufferRing;
 pub use schema::HasPool;

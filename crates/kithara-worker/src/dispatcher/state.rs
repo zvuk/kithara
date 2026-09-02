@@ -86,6 +86,7 @@ impl Drop for Slot {
 
 #[derive(Clone, Copy)]
 pub(super) struct SchedulerBudgets {
+    pub(super) backpressure_poll_interval: Duration,
     pub(super) idle_timeout: Duration,
     pub(super) slow_tick_threshold: Duration,
     pub(super) wait_timeout: Duration,

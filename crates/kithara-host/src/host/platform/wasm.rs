@@ -144,12 +144,12 @@ where
     pub fn new(config: HostConfig) -> Result<Self, PlayError> {
         let SessionRoot {
             id,
-            sample_rate,
+            requested_shape,
             group,
             view,
         } = Self::session_root(config)?;
         let (dispatcher, web_state) =
-            crate::session::web::spawn::<S>(group, view.clone(), sample_rate)?;
+            crate::session::web::spawn::<S>(group, view.clone(), requested_shape)?;
         Ok(Self::owner(
             id,
             view,

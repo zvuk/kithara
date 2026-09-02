@@ -166,8 +166,12 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn no_sample_exceeds_ceiling_over_varied_input() {
         let mut lim = limiter(48_000, 50.0);
-        let mut left: Vec<f32> = (0..512).map(|i| (i as f32 * 0.13).sin() * 3.0).collect();
-        let mut right: Vec<f32> = (0..512).map(|i| (i as f32 * 0.07).cos() * 2.5).collect();
+        let mut left: Vec<f32> = (0_u16..512)
+            .map(|i| (f32::from(i) * 0.13).sin() * 3.0)
+            .collect();
+        let mut right: Vec<f32> = (0_u16..512)
+            .map(|i| (f32::from(i) * 0.07).cos() * 2.5)
+            .collect();
         {
             let mut chans: [&mut [f32]; 2] = [&mut left, &mut right];
             lim.process_planar(&mut chans);

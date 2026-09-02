@@ -48,6 +48,7 @@ impl Consts {
 }
 
 #[cfg(target_os = "linux")]
+#[hotpath::measure]
 fn physical_memory() -> Option<usize> {
     std::fs::read_to_string("/proc/self/smaps_rollup")
         .ok()?
@@ -61,6 +62,7 @@ fn physical_memory() -> Option<usize> {
 }
 
 #[cfg(not(target_os = "linux"))]
+#[hotpath::measure]
 fn physical_memory() -> Option<usize> {
     memory_stats().map(|stats| stats.physical_mem)
 }
@@ -120,6 +122,7 @@ impl Drain {
 /// so `auto` is offered the same codec boundary to cross that it is offered in
 /// production, and a codec switch reallocates decoder state. Only the length is
 /// ours.
+#[hotpath::measure]
 fn ladder_url(server: &TestServerHelper) -> Url {
     server.asset("hls-rss/master.m3u8")
 }
@@ -130,6 +133,7 @@ fn ladder_url(server: &TestServerHelper) -> Url {
 /// drain itself rather than any wall-clock span: the whole track comes out in
 /// a few seconds. That is why the samples are indexed by read below and not by
 /// elapsed time.
+#[hotpath::measure]
 fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
     let mut buf = vec![0f32; Consts::READ_FRAMES];
     let mut samples = Vec::new();

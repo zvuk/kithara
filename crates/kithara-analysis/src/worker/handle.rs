@@ -110,17 +110,17 @@ impl AnalysisWorker {
                 ));
             (Worker::new(worker_config), None)
         };
-        let mut dispatcher_config = DispatcherConfig::new("kithara-analysis")
-            .with_capacity(capacity)
-            .with_fairness_yield_interval(fairness_yield_interval)
-            .with_idle_timeout(idle_timeout)
-            .with_observer(AnalysisObserver::default())
-            .with_slow_tick_threshold(slow_tick_threshold)
-            .with_task_burst(task_burst)
-            .with_wait_timeout(wait_timeout);
-        if let Some(cancel) = dispatcher_cancel {
-            dispatcher_config = dispatcher_config.with_cancel(cancel);
-        }
+        let dispatcher_config = DispatcherConfig::builder()
+            .name("kithara-analysis")
+            .capacity(capacity)
+            .fairness_yield_interval(fairness_yield_interval)
+            .idle_timeout(idle_timeout)
+            .observer(AnalysisObserver::default())
+            .slow_tick_threshold(slow_tick_threshold)
+            .task_burst(task_burst)
+            .wait_timeout(wait_timeout)
+            .maybe_cancel(dispatcher_cancel)
+            .build();
         let dispatcher = base.dispatcher(dispatcher_config);
         let _ = builder.take_detector();
         let fingerprint = builder.fingerprint();

@@ -12,10 +12,11 @@ use super::{
     ThreadWake, WakeSignal, connect, cursor::ChunkCursor, event::ReaderOutputWake,
     park::receive_is_nonblocking,
 };
+use crate::{SourceEnd, SourceSpan};
 
 enum FetchOutcome {
     Continue,
-    Return(Option<AudioChunk>),
+    Return(Option<(AudioChunk, Option<SourceSpan>)>),
 }
 
 pub(super) enum RecvOutcome {
@@ -37,6 +38,7 @@ pub(super) struct RingConsumer {
     pub(super) phase: ConsumerPhase,
     pub(super) validator: EpochValidator,
     pub(super) current_chunk: Option<AudioChunk>,
+    pub(super) current_source_span: Option<SourceSpan>,
     pub(super) preloaded: bool,
     _epoch: Arc<AtomicU64>,
     reader_wake: Arc<ThreadWake>,
@@ -68,6 +70,7 @@ impl RingConsumer {
             validator: EpochValidator::default(),
             phase: ConsumerPhase::Buffering,
             current_chunk: None,
+            current_source_span: None,
             trash_tx: parts.trash_tx,
             reader_wake: parts.reader_wake,
             _epoch: parts.epoch,
@@ -131,11 +134,12 @@ impl RingConsumer {
     }
 
     pub(super) fn fill(&mut self, cursor: &mut ChunkCursor, ctx: RecvCtx<'_>) -> bool {
-        let Some(chunk) = self.recv_valid_chunk(ctx) else {
+        let Some((chunk, source_span)) = self.recv_valid_chunk(ctx) else {
             return false;
         };
         cursor.begin_chunk(&chunk);
         self.current_chunk = Some(chunk);
+        self.current_source_span = source_span;
         self.promote_playing();
         true
     }
@@ -159,7 +163,12 @@ impl RingConsumer {
                 };
                 FetchOutcome::Return(None)
             }
-            Fetch::Data { data, .. } => FetchOutcome::Return(Some(data)),
+            Fetch::Data {
+                data, source_end, ..
+            } => {
+                let source_span = source_span(&data, source_end);
+                FetchOutcome::Return(Some((data, source_span)))
+            }
         }
     }
 
@@ -221,7 +230,10 @@ impl RingConsumer {
     }
 
     #[kithara::hang_watchdog]
-    pub(super) fn recv_valid_chunk(&mut self, ctx: RecvCtx<'_>) -> Option<AudioChunk> {
+    pub(super) fn recv_valid_chunk(
+        &mut self,
+        ctx: RecvCtx<'_>,
+    ) -> Option<(AudioChunk, Option<SourceSpan>)> {
         if self.phase.is_terminal() {
             return None;
         }
@@ -250,6 +262,7 @@ impl RingConsumer {
     }
 
     pub(super) fn recycle_current(&mut self) {
+        self.current_source_span = None;
         if let Some(chunk) = self.current_chunk.take() {
             self.discard(chunk);
         }
@@ -267,21 +280,39 @@ impl RingConsumer {
             "PCM ring preserved a fetch from a future seek epoch"
         );
         match fetch {
-            Fetch::Data { data, .. } => {
+            Fetch::Data {
+                data, source_end, ..
+            } => {
+                self.current_source_span = source_span(&data, source_end);
                 cursor.begin_chunk(&data);
                 self.current_chunk = Some(data);
                 self.phase = ConsumerPhase::Playing;
             }
             Fetch::NaturalEof { .. } => {
+                self.current_source_span = None;
                 self.phase = ConsumerPhase::AtEof;
             }
             Fetch::Failure { .. } => {
+                self.current_source_span = None;
                 self.phase = ConsumerPhase::Failed {
                     source: FailureSource::ProducerAfterSeek,
                 };
             }
         }
     }
+}
+
+fn source_span(data: &AudioChunk, source_end: Option<SourceEnd>) -> Option<SourceSpan> {
+    let source_end = source_end?;
+    if source_end.sample_rate() != data.meta.spec.sample_rate {
+        return None;
+    }
+    let span = SourceSpan::new(
+        data.meta.frame_offset,
+        source_end.frame(),
+        source_end.sample_rate(),
+    )?;
+    Some(span.with_render_revision(data.meta.render_revision))
 }
 
 pub(super) fn create_channels(
@@ -392,7 +423,9 @@ mod tests {
         }
 
         fn recv(&mut self) -> Option<AudioChunk> {
-            self.ring.recv_valid_chunk(empty_ctx())
+            self.ring
+                .recv_valid_chunk(empty_ctx())
+                .map(|(chunk, _source_span)| chunk)
         }
 
         fn chunk(&self, samples: &[f32]) -> AudioChunk {

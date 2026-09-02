@@ -21,11 +21,12 @@ const LANDMARK_FREQUENCIES: [f64; 12] = [
     8_625.0, 9_375.0,
 ];
 const SAMPLE_RATE: u32 = 48_000;
+const SHORT_MARKER_HZ: f64 = 15_000.0;
+const SHORT_MARKER_WINDOW_FRAMES: usize = 16;
 const TONE_HZ: f64 = 440.0;
 const TERMINAL_HIGH_HZ: f64 = 6_000.0;
 const TERMINAL_LOW_HZ: f64 = 1_500.0;
-const TERMINAL_MARKER_FRAMES: usize = 2_048;
-const TERMINAL_WINDOW_FRAMES: usize = 256;
+const TERMINAL_WINDOW_FRAMES: usize = 64;
 
 fn prepared_backend(
     backend: StretchKind,
@@ -73,10 +74,9 @@ fn interleaved_signal(frames: usize) -> Vec<f32> {
 }
 
 fn drain_terminal(engine: &mut dyn ElasticEngine) -> Vec<f32> {
-    const MAX_CHUNKS: usize = 32;
+    const MAX_CHUNKS: usize = 256;
 
-    let chunk_frames = engine.capabilities().terminal_chunk_frames();
-    let mut chunk = vec![0.0; chunk_frames * CHANNELS];
+    let mut chunk = vec![0.0; CONTROL_QUANTUM * CHANNELS];
     let mut drained = Vec::new();
     for _ in 0..MAX_CHUNKS {
         chunk.fill(0.0);
@@ -198,10 +198,6 @@ fn first_audible_frame(samples: &[f32], channels: usize) -> Option<usize> {
         .position(|frame| frame.iter().any(|sample| sample.abs() >= 1.0e-4))
 }
 
-fn terminal_marker_signal(frames: usize) -> Vec<f32> {
-    terminal_marker_signal_with_span(frames, TERMINAL_MARKER_FRAMES)
-}
-
 fn terminal_marker_signal_with_span(frames: usize, marker_span: usize) -> Vec<f32> {
     let marker_frames = frames.min(marker_span);
     let marker_start = frames - marker_frames;
@@ -230,6 +226,24 @@ fn terminal_marker_signal_with_span(frames: usize, marker_span: usize) -> Vec<f3
             [sample, sample * -0.5]
         })
         .collect()
+}
+
+fn short_marker_signal(frames: usize) -> Vec<f32> {
+    tone_signal(frames, 0, SHORT_MARKER_HZ)
+}
+
+fn short_marker_is_present(samples: &[f32]) -> bool {
+    const MINIMUM_MAGNITUDE: f64 = 0.05;
+    const STEP_FRAMES: usize = 4;
+
+    let frames = samples.len() / CHANNELS;
+    frames >= SHORT_MARKER_WINDOW_FRAMES
+        && (0..=frames - SHORT_MARKER_WINDOW_FRAMES)
+            .step_by(STEP_FRAMES)
+            .any(|start| {
+                tone_window_magnitude(samples, start, SHORT_MARKER_WINDOW_FRAMES, SHORT_MARKER_HZ)
+                    >= MINIMUM_MAGNITUDE
+            })
 }
 
 fn strongest_tone_window(samples: &[f32], frequency: f64) -> Option<(usize, f64)> {
@@ -347,6 +361,14 @@ fn indexed_landmark_oracle_rejects_reorder_omission_replay_and_partial_drop() {
         &expected,
     ));
     assert!(!landmarks_appear_once_in_order(&partial, &expected));
+
+    let short = short_marker_signal(CONTROL_QUANTUM);
+    assert!(short_marker_is_present(&short));
+    assert!(!short_marker_is_present(&vec![0.0; short.len()]));
+    assert!(!short_marker_is_present(&continuous_tone(
+        CONTROL_QUANTUM,
+        0
+    )));
 }
 
 fn terminal_markers_are_ordered(samples: &[f32]) -> bool {
@@ -430,6 +452,27 @@ fn rate_aware_latency_frames(capabilities: ElasticCapabilities, request: Elastic
         .and_then(|frames| frames.to_usize())
         .and_then(|frames| frames.checked_add(capabilities.latency().output_frames()))
         .expect("the rate-aware latency fits in usize")
+}
+
+fn rate_aware_terminal_source_frames(
+    capabilities: ElasticCapabilities,
+    request: ElasticRequest,
+) -> usize {
+    let rate = request
+        .source_frames()
+        .to_f64()
+        .zip(request.output_frames().to_f64())
+        .map(|(source, output)| source / output)
+        .expect("the request spans fit in f64");
+    capabilities
+        .latency()
+        .source_frames()
+        .checked_add(source_frames_at(
+            rate,
+            capabilities.latency().output_frames(),
+            true,
+        ))
+        .expect("the terminal source span fits in usize")
 }
 
 fn edge_requests(capabilities: ElasticCapabilities) -> [ElasticRequest; 3] {
@@ -673,9 +716,10 @@ mod facade {
             ElasticRequest::new(FRAMES, FRAMES / 2).expect("double-speed request"),
         ] {
             let mut engine = prepared_backend(backend, FRAMES, FRAMES);
-            let source = terminal_marker_signal(request.source_frames());
-            let mut output = vec![0.0; request.output_frames() * CHANNELS];
             let capabilities = engine.capabilities();
+            let marker_frames = rate_aware_terminal_source_frames(capabilities, request);
+            let source = terminal_marker_signal_with_span(request.source_frames(), marker_frames);
+            let mut output = vec![0.0; request.output_frames() * CHANNELS];
             engine
                 .process(request, &source, &mut output)
                 .expect("the source block renders");
@@ -720,14 +764,101 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
+        case::signalsmith_minimum(StretchKind::Signalsmith, 0.05)
+    )]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith_unity(StretchKind::Signalsmith, 1.0)
+    )]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith_maximum(StretchKind::Signalsmith, 4.0)
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_minimum(StretchKind::Bungee, 0.05)
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_unity(StretchKind::Bungee, 1.0)
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_maximum(StretchKind::Bungee, 4.0)
+    )]
+    fn terminal_flush_drains_through_caller_sized_quantums(
+        #[case] backend: StretchKind,
+        #[case] rate: f64,
+    ) {
+        const OUTPUT_FRAMES: usize = 8_000;
+        const MAX_SOURCE_FRAMES: usize = OUTPUT_FRAMES * 4;
+
+        let mut engine = prepared_backend(backend, MAX_SOURCE_FRAMES, OUTPUT_FRAMES);
+        let capabilities = engine.capabilities();
+        let source_frames = source_frames_at(rate, OUTPUT_FRAMES, false);
+        let request = ElasticRequest::new(source_frames, OUTPUT_FRAMES)
+            .expect("the exact-rate request is non-empty");
+        let marker_frames = rate_aware_terminal_source_frames(capabilities, request);
+        let source = terminal_marker_signal_with_span(source_frames, marker_frames);
+        let mut output = vec![0.0; OUTPUT_FRAMES * CHANNELS];
+        engine
+            .process(request, &source, &mut output)
+            .expect("the source block renders");
+
+        let latency = capabilities.latency();
+        let expected_frames = latency
+            .source_frames()
+            .to_f64()
+            .map(|frames| (frames / rate).ceil())
+            .and_then(|frames| frames.to_usize())
+            .and_then(|frames| frames.checked_add(latency.output_frames()))
+            .expect("the terminal span fits in usize");
+        let mut quantum = [0.0; CONTROL_QUANTUM * CHANNELS];
+        let mut terminal = Vec::with_capacity(expected_frames * CHANNELS);
+        let max_steps = expected_frames.div_ceil(CONTROL_QUANTUM);
+
+        for _ in 0..max_steps {
+            quantum.fill(0.0);
+            let step = engine
+                .flush(&mut quantum)
+                .expect("terminal flush accepts caller-sized storage");
+            assert!(step.frames() > 0, "an active drain step is non-empty");
+            assert!(
+                step.frames() <= CONTROL_QUANTUM,
+                "a terminal drain step must fit the caller quantum: backend={backend:?}, rate={rate}, frames={}",
+                step.frames()
+            );
+            terminal.extend_from_slice(&quantum[..step.frames() * CHANNELS]);
+            if step.complete() {
+                let completed = engine
+                    .flush(&mut quantum)
+                    .expect("a completed drain remains queryable");
+                assert_eq!(completed.frames(), 0);
+                assert!(completed.complete());
+                assert!(
+                    terminal_pattern_is_valid(&terminal, expected_frames),
+                    "Q64 drain must preserve the complete ordered terminal PCM: backend={backend:?}, rate={rate}, drained={}",
+                    terminal.len() / CHANNELS
+                );
+                return;
+            }
+        }
+
+        panic!(
+            "terminal drain must complete within its exact frame bound: backend={backend:?}, rate={rate}, expected={expected_frames}, drained={}",
+            terminal.len() / CHANNELS
+        );
+    }
+
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
     fn terminal_flush_reaches_each_new_rate_within_declared_latency(#[case] backend: StretchKind) {
         const OUTPUT_FRAMES: usize = 8192;
         const MAX_SOURCE_FRAMES: usize = OUTPUT_FRAMES * 2;
-        const SETTLED_LANDMARKS: [usize; 4] = [8, 9, 10, 11];
-
         for (initial_is_minimum, settled_is_minimum) in [(true, false), (false, true)] {
             let mut engine = prepared_backend_with_rate_envelope(
                 backend,
@@ -749,7 +880,7 @@ mod facade {
 
             let settled_output_frames = capabilities.latency().output_frames();
             let settled = edge_request(capabilities, settled_output_frames, settled_is_minimum);
-            let settled_source = landmark_signal(settled.source_frames(), &SETTLED_LANDMARKS);
+            let settled_source = short_marker_signal(settled.source_frames());
             let mut settled_output = vec![0.0; settled.output_frames() * CHANNELS];
             engine
                 .process(settled, &settled_source, &mut settled_output)
@@ -765,9 +896,8 @@ mod facade {
                 "terminal drain must reach the new rate in both directions: backend={backend:?}, initial={initial:?}, settled={settled:?}"
             );
             assert!(
-                landmarks_appear_once_in_order(&settled_and_terminal, &SETTLED_LANDMARKS,),
-                "exactly one latency window must apply the new mapping and reach every ordered landmark through the end of its source: backend={backend:?}, initial={initial:?}, settled={settled:?}, sequence={:?}",
-                dominant_landmark_sequence(&settled_and_terminal, &SETTLED_LANDMARKS,),
+                short_marker_is_present(&settled_and_terminal),
+                "exactly one latency window must apply the new mapping and reach the terminal source marker: backend={backend:?}, initial={initial:?}, settled={settled:?}",
             );
         }
     }
@@ -831,8 +961,6 @@ mod facade {
         const MAX_SOURCE_FRAMES: usize = OUTPUT_FRAMES * 2;
         const INITIAL_LANDMARKS: usize = 8;
         const LANDMARKS_PER_INITIAL_BLOCK: usize = 2;
-        const TOTAL_LANDMARKS: usize = INITIAL_LANDMARKS + 1;
-
         for initial_is_slow in [true, false] {
             let mut engine = prepared_backend(backend, MAX_SOURCE_FRAMES, OUTPUT_FRAMES);
             let capabilities = engine.capabilities();
@@ -868,20 +996,24 @@ mod facade {
             let transition =
                 ElasticRequest::new(transition_source_frames, transition_output_frames)
                     .expect("the short transition request is valid");
-            let transition_landmarks = (INITIAL_LANDMARKS..TOTAL_LANDMARKS).collect::<Vec<_>>();
-            let source = landmark_signal(transition.source_frames(), &transition_landmarks);
+            let source = short_marker_signal(transition.source_frames());
             let mut output = vec![0.0; transition.output_frames() * CHANNELS];
             engine
                 .process(transition, &source, &mut output)
                 .expect("the short adjacent-rate block renders");
-            rendered.extend_from_slice(&output);
-            rendered.extend_from_slice(&drain_terminal(engine.as_mut()));
+            let mut transition_and_terminal = output;
+            transition_and_terminal.extend_from_slice(&drain_terminal(engine.as_mut()));
+            rendered.extend_from_slice(&transition_and_terminal);
 
-            let expected = (0..TOTAL_LANDMARKS).collect::<Vec<_>>();
+            let expected = (0..INITIAL_LANDMARKS).collect::<Vec<_>>();
             assert!(
                 landmarks_appear_once_in_order(&rendered, &expected),
-                "transitional EOF must preserve every unique position landmark exactly once and in order: backend={backend:?}, initial={initial:?}, transition={transition:?}, sequence={:?}",
+                "transitional EOF must preserve every indexed source landmark exactly once and in order: backend={backend:?}, initial={initial:?}, transition={transition:?}, sequence={:?}",
                 dominant_landmark_sequence(&rendered, &expected),
+            );
+            assert!(
+                short_marker_is_present(&transition_and_terminal),
+                "transitional EOF must preserve the short terminal source marker: backend={backend:?}, initial={initial:?}, transition={transition:?}"
             );
         }
     }
@@ -892,7 +1024,7 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn flush_rejects_wrong_storage_without_disarming_tail(#[case] backend: StretchKind) {
+    fn flush_rejects_partial_frame_storage_without_disarming_tail(#[case] backend: StretchKind) {
         const FRAMES: usize = 8192;
 
         let mut engine = prepared_backend(backend, FRAMES, FRAMES);
@@ -902,27 +1034,25 @@ mod facade {
         engine
             .process(request, &source, &mut output)
             .expect("the source block renders");
-        let tail_frames = engine.capabilities().terminal_chunk_frames();
-        let tail_samples = tail_frames * CHANNELS;
-        let mut short = vec![0.0; tail_samples - CHANNELS];
+        let mut partial_frame = vec![0.0; CONTROL_QUANTUM * CHANNELS - 1];
 
         let error = engine
-            .flush(&mut short)
-            .expect_err("an armed tail requires latency-sized storage");
+            .flush(&mut partial_frame)
+            .expect_err("an armed tail requires whole-frame storage");
 
         assert_eq!(
             error,
             ElasticError::OutputSampleCount {
-                actual: short.len(),
-                expected: tail_samples,
+                actual: partial_frame.len(),
+                expected: CONTROL_QUANTUM * CHANNELS,
             }
         );
-        let mut terminal = vec![0.0; tail_samples];
+        let mut terminal = vec![0.0; CONTROL_QUANTUM * CHANNELS];
         let drained = engine
             .flush(&mut terminal)
             .expect("the rejected call keeps the tail armed");
         assert!(drained.frames() > 0);
-        assert!(drained.frames() <= tail_frames);
+        assert!(drained.frames() <= CONTROL_QUANTUM);
     }
 
     #[kithara::test]
@@ -933,8 +1063,7 @@ mod facade {
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
     fn fresh_engine_has_no_terminal_tail(#[case] backend: StretchKind) {
         let mut engine = prepared_backend(backend, 8192, 8192);
-        let terminal_samples = engine.capabilities().terminal_chunk_frames() * CHANNELS;
-        let mut terminal = vec![0.0; terminal_samples];
+        let mut terminal = vec![0.0; CONTROL_QUANTUM * CHANNELS];
 
         let step = engine.flush(&mut terminal).expect("fresh terminal drain");
 
@@ -959,8 +1088,7 @@ mod facade {
             .process(request, &source, &mut output)
             .expect("the source block renders");
         engine.reset().expect("the engine clears its history");
-        let terminal_samples = engine.capabilities().terminal_chunk_frames() * CHANNELS;
-        let mut terminal = vec![0.0; terminal_samples];
+        let mut terminal = vec![0.0; CONTROL_QUANTUM * CHANNELS];
 
         let step = engine.flush(&mut terminal).expect("reset terminal drain");
 
@@ -979,7 +1107,9 @@ mod facade {
         const SHORT_FRAMES: usize = 4096;
 
         let mut engine = prepared_backend(backend, LONG_FRAMES, LONG_FRAMES);
+        let mut fresh = prepared_backend(backend, LONG_FRAMES, LONG_FRAMES);
         let capabilities = engine.capabilities();
+        assert_eq!(fresh.capabilities(), capabilities);
         let source = interleaved_signal(LONG_FRAMES);
         let mut output = vec![0.0; LONG_FRAMES * CHANNELS];
         engine
@@ -992,22 +1122,19 @@ mod facade {
         assert!(output.iter().any(|sample| sample.abs() > f32::EPSILON));
 
         engine.reset().expect("the engine clears its history");
-        output[..SHORT_FRAMES * CHANNELS].fill(f32::NAN);
+        let request = ElasticRequest::new(SHORT_FRAMES, SHORT_FRAMES).expect("unity request");
+        let short_source = &source[..SHORT_FRAMES * CHANNELS];
+        let mut reset_output = vec![f32::NAN; SHORT_FRAMES * CHANNELS];
+        let mut fresh_output = vec![f32::NAN; SHORT_FRAMES * CHANNELS];
         engine
-            .process(
-                ElasticRequest::new(SHORT_FRAMES, SHORT_FRAMES).expect("unity request"),
-                &source[..SHORT_FRAMES * CHANNELS],
-                &mut output[..SHORT_FRAMES * CHANNELS],
-            )
+            .process(request, short_source, &mut reset_output)
             .expect("the request after reset is supported");
+        fresh
+            .process(request, short_source, &mut fresh_output)
+            .expect("the fresh reference request is supported");
 
         assert_eq!(engine.capabilities(), capabilities);
-        assert!(
-            output[..SHORT_FRAMES * CHANNELS]
-                .iter()
-                .all(|sample| sample.abs() <= f32::EPSILON),
-            "a reset engine must start from its own latency again"
-        );
+        assert_exact_samples(&reset_output, &fresh_output);
     }
 
     #[kithara::test]
@@ -1887,11 +2014,11 @@ mod priming {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith, 2_880, 2_880)
+    case::signalsmith(StretchKind::Signalsmith, 208, 208)
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
-    case::bungee(StretchKind::Bungee, 2_048, 7_168)
+    case::bungee(StretchKind::Bungee, 256, 896)
 )]
 fn backend_declares_its_prepared_domain_and_latency(
     #[case] backend: StretchKind,

@@ -10,6 +10,7 @@ keywords = ["concurrency", "scheduler", "worker"]
 categories = ["concurrency"]
 
 [features]
+perf = ["dep:hotpath", "hotpath/hotpath"]
 probe = ["dep:kithara-test-utils", "dep:tracing"]
 
 [dependencies]
@@ -17,8 +18,10 @@ kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"], optional = true }
 
+bon = { workspace = true }
 delegate = { workspace = true }
 fieldwork = { workspace = true }
+hotpath = { workspace = true, optional = true }
 
 thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }

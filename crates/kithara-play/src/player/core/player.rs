@@ -67,6 +67,8 @@ impl<S> PlayerImpl<S> {
             .grid_id(config.grid_id)
             .max_slots(config.max_slots)
             .sample_rate(config.sample_rate.get())
+            .response_budget_frames(config.response_budget_frames)
+            .render_quantum_frames(config.warp.render_quantum_frames())
             .pools(pools)
             .maybe_session(config.session.clone())
             .cancel(cancel.clone())
@@ -78,14 +80,15 @@ impl<S> PlayerImpl<S> {
         }
 
         // Seed the single speed source with the configured default rate.
-        config.timestretch.set_speed(config.default_rate);
+        config.warp.stretch().set_speed(config.default_rate);
         let params = PlayerParams::from(&config);
         let core = PlayerCore {
             engine,
             worker: config.worker,
             engine_load: Arc::new(EngineLoad::default()),
             params,
-            timestretch: config.timestretch,
+            warp: config.warp,
+            response_budget_frames: config.response_budget_frames,
             gapless_mode: config.gapless_mode,
             block_on_underrun: config.block_on_underrun,
             status: Mutex::default(),

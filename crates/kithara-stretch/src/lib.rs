@@ -15,9 +15,9 @@ mod backends;
 
 mod elastic;
 pub use elastic::{
-    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticDrain, ElasticEngine, ElasticError,
-    ElasticLatency, ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanConfig,
-    ElasticSpanPlan, ElasticSpanRequest,
+    BungeeConfig, ElasticBackendConfig, ElasticCapabilities, ElasticConfig, ElasticCursor,
+    ElasticDrain, ElasticEngine, ElasticError, ElasticLatency, ElasticRateEnvelope, ElasticRequest,
+    ElasticSpan, ElasticSpanConfig, ElasticSpanPlan, ElasticSpanRequest, SignalsmithConfig,
 };
 #[cfg(test)]
 pub(crate) use kithara_bufpool::testing as test_pools;

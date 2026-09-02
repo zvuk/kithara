@@ -16,11 +16,12 @@ use crate::pipeline::{
     seek::skip::{apply as apply_skip, apply_frames},
 };
 
-struct Consts;
-
-impl Consts {
-    const PRIME_STEPS_PER_PASS: usize = 8;
-}
+/// Maximum decoder pulls attempted by one incoming-prime call.
+///
+/// The same bound applies to the off-core initial prime and each remaining
+/// shell-side pass, keeping every call finite without making output-ring depth
+/// responsible for codec startup latency.
+pub(crate) const INCOMING_PRIME_STEPS: usize = 8;
 
 pub(crate) enum IncomingDecode {
     Preparing {
@@ -365,7 +366,7 @@ impl super::core::ActiveDecode {
             PromotionReadiness::NeedIncoming => {}
         }
         let mut outcome = IncomingPrime::Pending;
-        for _ in 0..Consts::PRIME_STEPS_PER_PASS {
+        for _ in 0..INCOMING_PRIME_STEPS {
             outcome = match generation.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
                     let epoch = generation.installed_at_seek_epoch();
@@ -472,7 +473,12 @@ fn promotion_readiness(
     if !blender.is_steady() {
         return PromotionReadiness::NeedIncoming;
     }
-    let Some((incoming_first, incoming_end, incoming_spec)) = generation.staged_span() else {
+    let staged = if outgoing_frontier == OutgoingFrontier::Unavailable {
+        generation.staged_head_span()
+    } else {
+        generation.staged_span()
+    };
+    let Some((incoming_first, incoming_end, incoming_spec)) = staged else {
         return PromotionReadiness::NeedIncoming;
     };
     let incoming_rate = incoming_spec.sample_rate.get();

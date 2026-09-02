@@ -96,6 +96,8 @@ struct FailingSource {
     seek_obs: Arc<dyn SeekObserve>,
 }
 
+type NodeFixture<S, P> = (DecoderNode<S>, P, Arc<PreloadGate>);
+
 impl Default for FailingSource {
     fn default() -> Self {
         Self {
@@ -120,11 +122,7 @@ fn make_node<S>(
     source: S,
     ringbuf_capacity: usize,
     preload_chunks: usize,
-) -> (
-    DecoderNode<S>,
-    impl FnMut() -> Option<Fetch<AudioChunk>> + Send + 'static,
-    Arc<PreloadGate>,
-)
+) -> NodeFixture<S, impl FnMut() -> Option<Fetch<AudioChunk>> + Send + 'static>
 where
     S: AudioSource<Chunk = AudioChunk>,
 {
@@ -140,7 +138,6 @@ where
         emit: Arc::new(DeferredBus::<Event>::new(EventBus::new(8), 8)),
         playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
         preload_gate: Arc::clone(&preload_gate),
-        retired_chunk: None,
         runtime: DecoderRuntime {
             seek_epoch,
             ..Default::default()
@@ -186,9 +183,11 @@ impl PlaybackScheduler {
     fn start(name: String, cancel: CancelToken, capacity: std::num::NonZeroUsize) -> Self {
         let worker = Worker::new(WorkerConfig::new().with_cancel(cancel));
         let dispatcher = worker.dispatcher(
-            DispatcherConfig::new(name)
-                .with_capacity(capacity)
-                .with_observer(crate::worker::scheduler::PlaybackObserver::default()),
+            DispatcherConfig::builder()
+                .name(name)
+                .capacity(capacity)
+                .observer(crate::worker::scheduler::PlaybackObserver::default())
+                .build(),
         );
         Self {
             dispatcher,
@@ -196,7 +195,7 @@ impl PlaybackScheduler {
         }
     }
 
-    fn unregister(&self, task: TaskHandle) {
+    fn unregister(task: TaskHandle) {
         drop(task);
     }
 
@@ -274,7 +273,7 @@ fn worker_skips_not_ready_tracks() {
 }
 
 #[kithara::test]
-fn worker_overflow_on_full_ringbuf() {
+fn worker_resumes_after_consumer_frees_ring_capacity() {
     let pools = pools();
     let handle = test_scheduler();
     let (node, mut pop, _) = make_node(MockSource::new(pools.clone(), 5), 1, 1);
@@ -283,7 +282,10 @@ fn worker_overflow_on_full_ringbuf() {
     thread_sleep(Duration::from_millis(50));
     assert!(pop().is_some(), "should have at least one chunk");
     thread_sleep(Duration::from_millis(50));
-    assert!(pop().is_some(), "overflow slot should have been flushed");
+    assert!(
+        pop().is_some(),
+        "producer should resume after capacity returns"
+    );
 }
 
 #[kithara::test]
@@ -384,7 +386,7 @@ fn worker_unregister_removes_track() {
     let id = register(&handle, node);
 
     assert!(wait_for_chunks(&mut pop, 2, Duration::from_secs(5)) >= 2);
-    handle.unregister(id);
+    PlaybackScheduler::unregister(id);
     thread_sleep(Duration::from_millis(50));
     while pop().is_some() {}
     thread_sleep(Duration::from_millis(50));
@@ -403,7 +405,7 @@ fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
     assert_eq!(wait_for_chunks(&mut pop_a, 1, Duration::from_secs(1)), 1);
     assert_eq!(wait_for_chunks(&mut pop_b, 1, Duration::from_secs(1)), 1);
 
-    handle.unregister(id_a);
+    PlaybackScheduler::unregister(id_a);
     let (node_c, _, _) = make_node(MockSource::new(pools.clone(), 1), 1, 1);
     let id_c = handle
         .register(node_c)
@@ -417,8 +419,8 @@ fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
         "unregistering one task must not stop its sibling"
     );
 
-    handle.unregister(id_b);
-    handle.unregister(id_c);
+    PlaybackScheduler::unregister(id_b);
+    PlaybackScheduler::unregister(id_c);
 }
 
 #[kithara::test]

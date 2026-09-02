@@ -8,7 +8,7 @@ use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
-use kithara_warp::Warp;
+use kithara_warp::{RenderPublisher, Warp};
 use kithara_worker::{TaskControl, TaskHandle};
 
 use super::{PlayWorker, scheduler::ServiceClass};
@@ -65,6 +65,10 @@ impl<T, S> RegisteredAudio<T, S> {
 
     pub(crate) fn priority(&self) -> TrackPriority {
         self._lease.priority()
+    }
+
+    pub(crate) fn publisher(&self) -> RenderPublisher {
+        self.warp.publisher()
     }
 }
 

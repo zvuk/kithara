@@ -9,5 +9,4 @@ pub use contract::AudioEffect;
 #[cfg(any(test, feature = "mock"))]
 pub use contract::AudioEffectMock;
 pub(crate) use drain::{EffectDrain, EffectDrainStep};
-pub(crate) use kithara_warp::supports_playback_rate;
 pub use limiter::{LimiterError, PeakLimiter};

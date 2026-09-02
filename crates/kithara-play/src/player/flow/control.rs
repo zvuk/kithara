@@ -1,15 +1,31 @@
 use kithara_events::RouteDescription;
+use kithara_test_macros as kithara;
+use kithara_warp::RenderSnapshot;
 
 use super::super::core::PlayerRuntime;
 use crate::{
     api::{RouteChangeReason, SessionEvent, SlotId},
-    bridge::PlayerCmd,
     effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
 };
 
 impl<S> PlayerRuntime<S> {
+    #[kithara::probe(
+        request_revision,
+        target_rate_bits,
+        session_epoch = u64::from(snapshot.context().session_epoch()),
+        presentation_frame = i64::from(snapshot.context().output_frames().end)
+    )]
+    fn rate_requested(
+        &self,
+        request_revision: u64,
+        target_rate_bits: u32,
+        snapshot: &RenderSnapshot,
+    ) {
+        self.core.worker.wake();
+    }
+
     /// Ensure we have an active slot, allocating one if needed.
     pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
         if let Some(id) = self.slot() {
@@ -67,9 +83,10 @@ impl<S> PlayerRuntime<S> {
     /// not a resume. The new value takes effect on the next `play()`.
     pub fn set_default_rate(&self, rate: f32) {
         let target = self.core.params.set_default_rate(rate);
-        self.core.timestretch.set_speed(target);
         if self.phase_kind() == PlayerPhaseKind::Playing {
             self.set_rate(target);
+        } else {
+            self.core.warp.stretch().set_speed(target);
         }
     }
 
@@ -114,9 +131,22 @@ impl<S> PlayerRuntime<S> {
     /// Set the requested rate target, clamped to
     /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
-        self.core.timestretch.set_speed(rate);
-        let target = self.core.timestretch.speed();
-        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(target));
+        let snapshot = self
+            .slot()
+            .and_then(|slot| self.core.engine.slot_render_snapshot(slot));
+
+        let revision = self.core.warp.stretch().set_speed(rate);
+
+        if let Some(snapshot) = snapshot {
+            self.rate_requested(
+                revision,
+                rate.max(kithara_warp::StretchControls::MIN_SPEED).to_bits(),
+                &snapshot,
+            );
+            return;
+        }
+
+        self.core.worker.wake();
     }
 
     /// Set volume, clamped to `0.0..=1.0`.

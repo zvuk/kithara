@@ -153,16 +153,20 @@ impl LoadGeneration {
 pub struct TransportRevision(NonZeroU64);
 
 impl TransportRevision {
-    /// Returns the next committed revision, or `None` on exhaustion.
-    #[must_use]
-    pub fn checked_next(self) -> Option<Self> {
-        checked_next_revision(self.0).map(Self)
+    pub(crate) const fn from_raw(value: NonZeroU64) -> Self {
+        Self(value)
     }
 
     /// Returns the first committed transport revision.
     #[must_use]
     pub const fn first() -> Self {
         Self(NonZeroU64::MIN)
+    }
+
+    /// Returns the next committed revision, or `None` on exhaustion.
+    #[must_use]
+    pub fn checked_next(self) -> Option<Self> {
+        checked_next_revision(self.0).map(Self)
     }
 }
 

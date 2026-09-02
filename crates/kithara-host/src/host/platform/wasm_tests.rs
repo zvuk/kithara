@@ -101,7 +101,7 @@ impl HostDispatcher<TestPools> for Dispatcher {
 fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<RefCell<usize>>) {
     let SessionRoot {
         id: host_id,
-        sample_rate,
+        requested_shape,
         group: mut root,
         view: root_view,
     } = Host::<TestPools>::session_root(HostConfig::builder().build())
@@ -114,7 +114,7 @@ fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<
             operations: Box::new([TopologyOperation::Attach {
                 member: SyncMember::Group {
                     alignment: None,
-                    group: Box::new(fixture_member(resident_id, sample_rate)),
+                    group: Box::new(fixture_member(resident_id, requested_shape.sample_rate)),
                 },
             }]),
         })

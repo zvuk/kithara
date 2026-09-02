@@ -1,13 +1,24 @@
-#[cfg(not(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-)))]
-mod identity;
 #[cfg(all(
-    test,
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
+mod active;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+mod exact;
+mod identity;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+mod pending;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+mod plan;
 mod region_tests;
 #[cfg(all(
     not(target_arch = "wasm32"),
@@ -19,11 +30,6 @@ mod renderer;
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 mod renderer_lifecycle;
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
-mod renderer_render;
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")

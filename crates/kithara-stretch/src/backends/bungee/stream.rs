@@ -39,7 +39,11 @@ impl StreamCore {
     where
         S: HasPool<f32>,
     {
-        let native = NativeStretcher::new(config.sample_rate(), config.channels())?;
+        let native = NativeStretcher::new(
+            config.sample_rate(),
+            config.channels(),
+            *config.backends().bungee(),
+        )?;
         let max_input_frames = native.max_input_frames()?;
         let source_latency_frames = max_input_frames / 2;
         Ok(Self {

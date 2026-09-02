@@ -590,7 +590,9 @@ mod tests {
             pools.clone(),
             NonZeroUsize::MIN,
             Duration::from_secs(Consts::CHUNK_FRAMES),
-            DispatcherConfig::new("analysis-persistence-test"),
+            DispatcherConfig::builder()
+                .name("analysis-persistence-test")
+                .build(),
             TaskConfig::new(),
         ))
         .expect("persistence actor starts");

@@ -357,8 +357,9 @@ async fn local_track_plays_end_to_end(
     let _ = drain_latest_position(&mut rx);
 
     // The `time::sleep` is in the BODY, so the macro virtualizes it; over 2
-    // virtual seconds the offline render worker (one 512-frame block per
-    // 10ms virtual park) advances ~2.3s of audio. BOTH endpoints are
+    // virtual seconds the offline render worker (one callback per scaled
+    // virtual park, equivalent to 512 frames per 10ms) advances ~2.3s of
+    // audio. BOTH endpoints are
     // event-sourced on the same `PlaybackProgress` cadence — `start_pos`
     // blocks for the next progress event (parking the virtual clock so the
     // render worker is live), `end_pos` drains the latest progress buffered

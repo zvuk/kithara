@@ -157,6 +157,19 @@ fn variant_codec(variant: usize) -> AudioCodecKind {
     }
 }
 
+fn control_lag_frames(transition: Transition) -> isize {
+    let content_origin = |variant| {
+        let codec = if variant == FLAC {
+            AudioCodec::Flac
+        } else {
+            AudioCodec::AacLc
+        };
+        isize::try_from(AudioCodec::encoder_priming_frames(codec))
+            .expect("fixture codec origin fits signed lag coordinates")
+    };
+    content_origin(transition.from) - content_origin(transition.to)
+}
+
 fn decoder_backend_kind(backend: DecoderBackend) -> DecoderBackendKind {
     match backend {
         DecoderBackend::Symphonia => DecoderBackendKind::Symphonia,
@@ -410,7 +423,6 @@ async fn render_switch(
         "{} fixed observation window length",
         transition.label,
     );
-
     let applied_frame = applied_frame.unwrap_or_else(|| {
         panic!(
             "{} did not apply inside the observation window: current={:?}, frames={}",

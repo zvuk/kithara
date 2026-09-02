@@ -8,7 +8,9 @@ use firewheel::{
         NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
+use kithara_play::rt::{install_render_context, invalidate_render_context, publish_render_context};
 use kithara_test_utils::kithara::rtsan_forbid_blocking;
+use kithara_warp::{RenderContext, SessionFrame};
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
@@ -16,7 +18,8 @@ use super::{
         SessionGridGeneration, TransportCommitEvent, TransportCommitStamp, TransportObservation,
     },
     process::{
-        TransportCommitState, TransportObservationInput, process_transport, restart_transport,
+        TransportCommitState, TransportFrame, TransportObservationInput, process_transport,
+        restart_transport,
     },
 };
 use crate::api::TransportRevision;
@@ -30,6 +33,7 @@ pub(crate) fn install<B: AudioBackend>(
     let store = ctx
         .proc_store_mut()
         .ok_or("session transport store is unavailable while the stream is running")?;
+    install_render_context(store)?;
     store
         .insert(TransportCommitState::new(session_grid))
         .map_err(|_| "session transport state store slot already exists")?;
@@ -115,6 +119,17 @@ impl AudioNode for SessionTransportNode {
 pub(crate) struct SessionTransportProcessor;
 
 impl AudioNodeProcessor for SessionTransportProcessor {
+    fn stream_stopped(&mut self, context: &mut ProcStreamCtx) {
+        if invalidate_render_context(context.store).is_err() {
+            let _ = context
+                .logger
+                .try_error("render context store slot is missing");
+        }
+        if let Err(error) = restart_transport(context.store) {
+            let _ = context.logger.try_error(error.message());
+        }
+    }
+
     #[rtsan_forbid_blocking]
     fn process(
         &mut self,
@@ -123,15 +138,35 @@ impl AudioNodeProcessor for SessionTransportProcessor {
         events: &mut ProcEvents,
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        if let Err(error) = process_transport(info, events, &mut extra.store) {
-            let _ = extra.logger.try_error(error.message());
+        let processed = process_transport(info, events, &mut extra.store);
+        let context = processed
+            .as_ref()
+            .ok()
+            .and_then(|transport| build(info, transport));
+        let invalid = context.is_none();
+        let replaced = match context {
+            Some(context) => publish_render_context(&mut extra.store, context),
+            None => invalidate_render_context(&mut extra.store),
+        };
+        if let Err(error) = replaced {
+            let _ = extra.logger.try_error(error);
+        } else if invalid {
+            let message = processed
+                .err()
+                .map_or("render context is invalid", |error| error.message());
+            let _ = extra.logger.try_error(message);
         }
         ProcessStatus::ClearAllOutputs
     }
+}
 
-    fn stream_stopped(&mut self, context: &mut ProcStreamCtx) {
-        if let Err(error) = restart_transport(context.store) {
-            let _ = context.logger.try_error(error.message());
-        }
-    }
+fn build(info: &ProcInfo, transport: &TransportFrame) -> Option<RenderContext> {
+    let output_frames = info.clock_samples_range();
+    RenderContext::new(
+        SessionFrame::new(output_frames.start.0)..SessionFrame::new(output_frames.end.0),
+        info.sample_rate,
+        transport.session_beats.clone(),
+        transport.session_epoch,
+        transport.transport_revision,
+    )
 }

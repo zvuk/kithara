@@ -173,6 +173,7 @@ impl AudioRead for TestPcmReader {
         Ok(ReadOutcome::Frames {
             count,
             position: new_position,
+            source_span: None,
         })
     }
 
@@ -217,6 +218,7 @@ impl AudioRead for TestPcmReader {
         Ok(ReadOutcome::Frames {
             count,
             position: new_position,
+            source_span: None,
         })
     }
 
@@ -460,6 +462,7 @@ impl AudioRead for MisreportedDurationReader {
         Ok(ReadOutcome::Frames {
             count: NonZeroUsize::new(frames).expect("BUG: frames > 0"),
             position: self.position(),
+            source_span: None,
         })
     }
 
@@ -486,6 +489,7 @@ impl AudioRead for MisreportedDurationReader {
         Ok(ReadOutcome::Frames {
             count: NonZeroUsize::new(frames).expect("BUG: frames > 0"),
             position: self.position(),
+            source_span: None,
         })
     }
 

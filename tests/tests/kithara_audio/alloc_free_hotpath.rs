@@ -43,10 +43,16 @@ fn warp_renderer(
 }
 
 fn make_chunk(pools: &Pools, frames: usize, channels: u16) -> AudioChunk {
-    make_chunk_at(pools, frames, channels, 44100)
+    make_chunk_at(pools, frames, channels, 44100, 0)
 }
 
-fn make_chunk_at(pools: &Pools, frames: usize, channels: u16, sample_rate: u32) -> AudioChunk {
+fn make_chunk_at(
+    pools: &Pools,
+    frames: usize,
+    channels: u16,
+    sample_rate: u32,
+    frame_offset: u64,
+) -> AudioChunk {
     let samples = frames * channels as usize;
     let mut pcm = pools
         .get_with_len::<f32>(samples)
@@ -59,8 +65,18 @@ fn make_chunk_at(pools: &Pools, frames: usize, channels: u16, sample_rate: u32) 
         let val = (i as f32) * 0.001;
         *s = val;
     }
+    let spec = AudioSpec::new(channels, NonZeroU32::new(sample_rate).expect("test rate"));
+    let frame_count = u64::try_from(frames).unwrap_or_else(|error| panic!("test frames: {error}"));
     let meta = AudioChunkInfo {
-        spec: AudioSpec::new(channels, NonZeroU32::new(sample_rate).expect("test rate")),
+        frame_offset,
+        timestamp: spec
+            .duration_for(frame_offset)
+            .unwrap_or_else(|error| panic!("test timestamp: {error}")),
+        end_timestamp: spec
+            .duration_for(frame_offset + frame_count)
+            .unwrap_or_else(|error| panic!("test duration: {error}")),
+        frames: u32::try_from(frames).unwrap_or_else(|error| panic!("test frames: {error}")),
+        spec,
         ..Default::default()
     };
     AudioChunk::new(meta, pcm)
@@ -272,8 +288,14 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kin
         controls.set_backend(kind);
         let mut effect = warp_renderer(controls, spec, pools.clone());
         effect.prepare(spec);
-        let first = make_chunk(&pools, FRAMES, 2);
-        let second = make_chunk(&pools, FRAMES, 2);
+        let first = make_chunk_at(&pools, FRAMES, 2, spec.sample_rate.get(), 0);
+        let second = make_chunk_at(
+            &pools,
+            FRAMES,
+            2,
+            spec.sample_rate.get(),
+            u64::try_from(FRAMES).unwrap_or_else(|error| panic!("test frame offset: {error}")),
+        );
         (effect, first, second)
     });
 

@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
@@ -74,6 +74,10 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
             .exec(Cmd::StartPlayer {
                 master_volume: 1.0,
                 player_id,
+                render_quantum_frames: NonZeroUsize::new(64)
+                    .expect("fixture render quantum is non-zero"),
+                response_budget_frames: NonZeroUsize::new(639)
+                    .expect("fixture response budget is non-zero"),
                 sample_rate: SAMPLE_RATE,
             })
             .expect("start player command"),

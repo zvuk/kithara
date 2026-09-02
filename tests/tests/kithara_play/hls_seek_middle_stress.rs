@@ -2,13 +2,17 @@
 
 use kithara::{
     decode::DecoderBackend,
+    events::TrackId,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{Resource, ResourceConfig, ResourceSrc},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
+    PackagedTestServer,
+    fixture_protocol::DelayRule,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    temp_dir,
     waits::render_until_position,
 };
 
@@ -82,10 +86,15 @@ async fn hls_seek_middle_repeated_seeks_stress(
         ))
         .build(),
     );
+    let mut player = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        Consts::SAMPLE_RATE,
+    );
 
     let cfg: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .downloader(downloader.clone())
             .discriminator("t0")
             .store(store)
@@ -95,15 +104,24 @@ async fn hls_seek_middle_repeated_seeks_stress(
                     .build(),
             )
             .build();
+    let cfg = player
+        .player()
+        .prepare_config(cfg)
+        .expect("offline player remains open");
 
     let resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 
-    let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
-    player.load_and_fadein(resource, "t0");
+    player.with_player(|player| {
+        player.insert(resource, TrackId::allocate(), None);
+        player
+            .select_item(0, true)
+            .expect("select HLS seek fixture");
+    });
 
-    let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
+    let warmup_target =
+        player.player().position_seconds().unwrap_or(0.0) + Consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
         &mut player,
         blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS),
@@ -120,8 +138,11 @@ async fn hls_seek_middle_repeated_seeks_stress(
 
     for iter in 0..iterations {
         let target = Consts::SEEK_TARGETS[(iter as usize) % Consts::SEEK_TARGETS.len()];
-        let pos_before = player.position();
-        player.seek(target, u64::from(1 + iter));
+        let pos_before = player.player().position_seconds().unwrap_or(0.0);
+        player
+            .player()
+            .seek_seconds(target)
+            .expect("seek active HLS fixture");
         let post_target = target + Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS;
         render_until_position(
             &mut player,
@@ -131,7 +152,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
             post_seek_wall_ms,
         )
         .await;
-        let pos_after = player.position();
+        let pos_after = player.player().position_seconds().unwrap_or(0.0);
         let advance = pos_after - target;
         if advance < Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS {
             hangs.push(format!(

@@ -7,7 +7,7 @@ use kithara::{
     events::{ResamplerKind, TrackId},
     platform::sync::Arc,
     play::{PlaybackResamplerBackend, ResourceSrc},
-    warp::StretchControls,
+    warp::{StretchControls, WarpConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper,
@@ -169,7 +169,11 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     timestretch.set_backend(StretchKind::Signalsmith);
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
-            .timestretch(Arc::clone(&timestretch))
+            .warp(
+                WarpConfig::builder()
+                    .stretch(Arc::clone(&timestretch))
+                    .build(),
+            )
             .build(),
         HOST_SAMPLE_RATE,
     );

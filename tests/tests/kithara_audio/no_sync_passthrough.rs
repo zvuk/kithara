@@ -40,7 +40,7 @@ const BLOCK_FRAMES: usize = 512;
 const SOURCE_SECONDS: usize = 6;
 const WARMUP_BLOCKS: usize = 32;
 const CAPTURE_BLOCKS: usize = 96;
-const LOAD_INTERVAL_BLOCKS: usize = 8;
+const LOAD_INTERVAL_FRAMES: usize = BLOCK_FRAMES * 8;
 const LOAD_BURST: Duration = Duration::from_millis(18);
 const ACTIVE_SPEED: f32 = 0.8;
 const TONE_HZ: f64 = 440.0;
@@ -140,13 +140,13 @@ impl LoadProbe {
 }
 
 struct BurstLoadEffect {
-    blocks: usize,
+    frames: usize,
     probe: Arc<LoadProbe>,
 }
 
 impl BurstLoadEffect {
     fn new(probe: Arc<LoadProbe>) -> Self {
-        Self { blocks: 0, probe }
+        Self { frames: 0, probe }
     }
 }
 
@@ -160,8 +160,9 @@ impl AudioEffect for BurstLoadEffect {
     }
 
     fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        self.blocks = self.blocks.saturating_add(1);
-        if self.blocks.is_multiple_of(LOAD_INTERVAL_BLOCKS) {
+        self.frames = self.frames.saturating_add(chunk.frames());
+        if self.frames >= LOAD_INTERVAL_FRAMES {
+            self.frames -= LOAD_INTERVAL_FRAMES;
             self.probe.observe_burst();
             let deadline = Instant::now() + LOAD_BURST;
             while Instant::now() < deadline {
@@ -172,7 +173,7 @@ impl AudioEffect for BurstLoadEffect {
     }
 
     fn reset(&mut self) {
-        self.blocks = 0;
+        self.frames = 0;
     }
 }
 
@@ -466,7 +467,7 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
-            .timestretch(Arc::clone(&stretch))
+            .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
             .build(),
         SAMPLE_RATE,
     );

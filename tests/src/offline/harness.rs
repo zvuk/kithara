@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     decode::GaplessMode,
@@ -12,7 +12,7 @@ use kithara::{
         effects::eq::EqBandConfig,
         player::{PlayerControl, PlayerControlSource},
     },
-    warp::StretchControls,
+    warp::WarpConfig,
 };
 
 use super::OfflineSession;
@@ -39,12 +39,19 @@ pub struct OfflinePlayerOptions {
     /// panic instead of inserted silence.
     #[builder(default)]
     block_on_underrun: bool,
-    timestretch: Option<Arc<StretchControls>>,
+    warp: Option<WarpConfig>,
+    output_block_frames: Option<NonZeroU32>,
+    response_budget_frames: Option<NonZeroUsize>,
 }
 
 impl OfflinePlayerHarness {
     pub fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
-        let session = Arc::new(OfflineSession::new_manual());
+        let session = Arc::new(match options.output_block_frames {
+            Some(output_block_frames) => OfflineSession::new_manual_with_block_frames(
+                usize::try_from(output_block_frames.get()).expect("offline block size fits usize"),
+            ),
+            None => OfflineSession::new_manual(),
+        });
         let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>;
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
@@ -58,7 +65,8 @@ impl OfflinePlayerHarness {
             .session(Arc::clone(&session_dispatcher))
             .worker(worker)
             .maybe_eq_layout(options.eq_layout)
-            .maybe_timestretch(options.timestretch)
+            .maybe_warp(options.warp)
+            .maybe_response_budget_frames(options.response_budget_frames)
             .build();
 
         let player = PlayerImpl::new(player_config);

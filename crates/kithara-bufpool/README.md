@@ -75,6 +75,8 @@ fn build() -> Result<(), PoolError> {
 
 <tr><td><code>ByteBuffer</code> / <code>SampleBuffer</code></td><td>Checked RAII guards returned to their typed pool on drop</td></tr>
 
+<tr><td><code>BufferRing&lt;B&gt;</code></td><td>Allocation-free FIFO indices over an owning fixed-size buffer</td></tr>
+
 <tr><td><code>VecKey</code> / <code>StringKey</code></td><td>Safe registered storage shapes for crate-owned aliases</td></tr>
 
 <tr><td><code>PooledVec</code> / <code>PooledString</code></td><td>Checked guards for registered vector and UTF-8 storage</td></tr>

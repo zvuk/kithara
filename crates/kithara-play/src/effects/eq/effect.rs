@@ -116,13 +116,13 @@ mod tests {
         }
     }
 
-    fn test_chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
+    fn test_chunk(pools: &Pools, spec: AudioSpec, samples: &[f32]) -> AudioChunk {
         AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 ..Default::default()
             },
-            sample_buffer(pools, &samples),
+            sample_buffer(pools, samples),
         )
     }
 
@@ -151,7 +151,7 @@ mod tests {
         let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
 
         let warmup = vec![0.0f32; 4096];
-        let _ = eq.process(test_chunk(&pools, spec, warmup));
+        let _ = eq.process(test_chunk(&pools, spec, &warmup));
 
         let num_frames: u16 = 44100;
         let samples: Vec<f32> = (0..num_frames)
@@ -161,7 +161,7 @@ mod tests {
         let input_rms: f32 =
             (samples.iter().map(|s| s * s).sum::<f32>() / f32::from(num_frames)).sqrt();
 
-        let chunk = test_chunk(&pools, spec, samples);
+        let chunk = test_chunk(&pools, spec, &samples);
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 
@@ -213,7 +213,7 @@ mod tests {
         eq.set_gain(0, GainDb::MAX);
         let spec = EqFixture::spec(2, 44100);
         let samples = vec![0.5f32; 256];
-        let chunk = test_chunk(&pools, spec, samples);
+        let chunk = test_chunk(&pools, spec, &samples);
         let _ = eq.process(chunk);
 
         eq.reset();
@@ -371,7 +371,7 @@ mod tests {
         let warmup: Vec<f32> = (0u16..4096)
             .map(|i| (2.0 * PI * 1000.0 * f32::from(i) / 44100.0).sin())
             .collect();
-        let chunk = test_chunk(&pools, spec, warmup);
+        let chunk = test_chunk(&pools, spec, &warmup);
         let _ = eq.process(chunk);
 
         eq.set_gain(0, GainDb::MAX);
@@ -379,7 +379,7 @@ mod tests {
         let signal: Vec<f32> = (0u16..4096)
             .map(|i| (2.0 * PI * 1000.0 * f32::from(i + 4096) / 44100.0).sin())
             .collect();
-        let chunk = test_chunk(&pools, spec, signal);
+        let chunk = test_chunk(&pools, spec, &signal);
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 
@@ -411,7 +411,7 @@ mod tests {
         }
 
         let samples = vec![0.5f32; sample_len];
-        let chunk = test_chunk(&pools, spec, samples);
+        let chunk = test_chunk(&pools, spec, &samples);
         let result = eq.process(chunk);
         assert!(result.is_some());
         assert_eq!(result.unwrap().samples.len(), sample_len);
@@ -443,7 +443,7 @@ mod tests {
             }
 
             let samples: Vec<f32> = (0u16..1024).map(|i| (f32::from(i) * 0.1).sin()).collect();
-            let chunk = test_chunk(&pools, spec, samples);
+            let chunk = test_chunk(&pools, spec, &samples);
             let output = eq.process(chunk).unwrap();
             for (i, &s) in output.samples.iter().enumerate() {
                 assert!(s.is_finite(), "round {round} sample {i}: got {s}");
@@ -464,7 +464,7 @@ mod tests {
         samples[10] = f32::NAN;
         samples[20] = f32::INFINITY;
         samples[30] = f32::NEG_INFINITY;
-        let chunk = test_chunk(&pools, spec, samples);
+        let chunk = test_chunk(&pools, spec, &samples);
         let output = eq.process(chunk).unwrap();
 
         for (i, &s) in output.samples.iter().enumerate() {
@@ -493,7 +493,7 @@ mod tests {
             eq.set_gain(2, gain);
 
             let samples: Vec<f32> = (0u16..512).map(|i| (f32::from(i) * 0.3).sin()).collect();
-            let chunk = test_chunk(&pools, spec, samples);
+            let chunk = test_chunk(&pools, spec, &samples);
             let output = eq.process(chunk).unwrap();
             for &s in &output.samples[..] {
                 assert!(s.is_finite());
@@ -632,7 +632,7 @@ mod tests {
     fn converge_smoother(pools: &Pools, eq: &mut EqEffect, spec: AudioSpec) {
         let frames = (spec.sample_rate.get() as usize) / 5;
         let samples = vec![0.0f32; frames * spec.channels as usize];
-        let chunk = test_chunk(&pools, spec, samples);
+        let chunk = test_chunk(pools, spec, &samples);
         let _ = eq.process(chunk);
     }
 
@@ -651,7 +651,7 @@ mod tests {
         let input_rms: f32 =
             (samples.iter().map(|s| s * s).sum::<f32>() / num_frames as f32).sqrt();
 
-        let chunk = test_chunk(&pools, spec, samples);
+        let chunk = test_chunk(pools, spec, &samples);
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 

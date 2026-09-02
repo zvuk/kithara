@@ -7,7 +7,7 @@ use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
 };
-use kithara_play::{GroupState, player::PlayerMember};
+use kithara_play::{GroupState, StreamShape, player::PlayerMember};
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
@@ -87,12 +87,12 @@ fn engine_thread<B: AudioBackend, S>(
     cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
     root: GroupState<PlayerMember>,
     root_view: RootView,
-    sample_rate: NonZeroU32,
+    requested_shape: StreamShape,
     start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let mut state = SessionState::<B, S>::new(root, root_view, sample_rate, start_stream_fn);
+    let mut state = SessionState::<B, S>::new(root, root_view, requested_shape, start_stream_fn);
     debug!("[KITHARA-ROUTE] native session worker started");
     while let Ok(HostCmdMsg { cmd, reply_tx }) = cmd_rx.recv() {
         if matches!(&cmd, HostCmd::Shutdown) {
@@ -112,7 +112,7 @@ fn spawn_session_client<B, S>(
     thread_name: &'static str,
     root: GroupState<PlayerMember>,
     root_view: RootView,
-    sample_rate: NonZeroU32,
+    requested_shape: StreamShape,
     start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 ) -> Arc<SessionClient<S>>
 where
@@ -121,7 +121,7 @@ where
 {
     let (cmd_tx, cmd_rx) = mpsc::channel::<HostCmdMsg<S>>();
     spawn_named(thread_name, move || {
-        engine_thread::<B, S>(cmd_rx, root, root_view, sample_rate, start_stream_fn);
+        engine_thread::<B, S>(cmd_rx, root, root_view, requested_shape, start_stream_fn);
     });
     Arc::new(SessionClient {
         cmd_tx: Mutex::new(cmd_tx),
@@ -131,11 +131,13 @@ where
 fn start_stream_cpal(
     ctx: &mut FirewheelCtx<firewheel::cpal::CpalBackend>,
     sample_rate: u32,
+    output_block_frames: NonZeroU32,
 ) -> Result<(), String> {
     debug!(sample_rate, "[KITHARA-ROUTE] starting cpal stream");
     let config = firewheel::cpal::CpalConfig {
         output: firewheel::cpal::CpalOutputConfig {
-            desired_sample_rate: Some(sample_rate),
+            desired_sample_rate: NonZeroU32::new(sample_rate).map(NonZeroU32::get),
+            desired_block_frames: Some(output_block_frames.get()),
             ..Default::default()
         },
         ..Default::default()
@@ -159,13 +161,14 @@ fn start_stream_cpal(
 pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root: GroupState<PlayerMember>,
     root_view: RootView,
-    sample_rate: NonZeroU32,
+    requested_shape: StreamShape,
 ) -> Arc<dyn HostDispatcher<S>> {
+    let output_block_frames = requested_shape.max_block_frames;
     spawn_session_client::<firewheel::cpal::CpalBackend, S>(
         "kithara-engine",
         root,
         root_view,
-        sample_rate,
-        start_stream_cpal,
+        requested_shape,
+        move |ctx, sample_rate| start_stream_cpal(ctx, sample_rate, output_block_frames),
     )
 }

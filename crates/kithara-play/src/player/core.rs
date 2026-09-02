@@ -1,11 +1,13 @@
 mod lifecycle;
 mod player;
 
+use std::num::NonZeroUsize;
+
 use delegate::delegate;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::GaplessMode;
 use kithara_platform::sync::{Arc, Mutex};
-use kithara_warp::StretchControls;
+use kithara_warp::WarpConfig;
 use tracing::debug;
 
 use self::lifecycle::{CloseAdmission, PlayerLifecycle};
@@ -32,7 +34,8 @@ pub(crate) struct PlayerCore<S> {
     /// Constructed once and kept address-stable for the player's lifetime.
     pub(crate) engine_load: Arc<EngineLoad>,
 
-    pub(crate) timestretch: Arc<StretchControls>,
+    pub(crate) warp: WarpConfig,
+    pub(crate) response_budget_frames: NonZeroUsize,
     /// Undelivered resources unregister before the worker owner drops.
     pub(crate) items: ItemQueue,
     /// Host lifecycle explicitly detaches the engine session lane before the
@@ -238,14 +241,14 @@ mod tests {
     use kithara_events::{Envelope, Event};
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
-    use kithara_warp::StretchControls;
+    use kithara_warp::{StretchControls, WarpConfig};
 
     use super::*;
     use crate::{
         PlayWorkerConfig,
         bridge::PlayerCmd,
         effects::eq::generate_log_spaced_bands,
-        player::{PlayerConfig, PlayerMember},
+        player::PlayerConfig,
         resource::{ResourceConfig, ResourceSrc},
         session::testing,
         test_pools::{TestPools, pools},
@@ -370,7 +373,9 @@ mod tests {
         );
         let mut config = resource_config("https://example.com/song.mp3");
 
-        config = player.prepare_config(config);
+        config = player
+            .prepare_config(config)
+            .expect("bound player reads its session stream shape");
 
         assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
         assert!(
@@ -383,7 +388,9 @@ mod tests {
     fn prepare_config_per_track_cancel_is_child_of_player_master() {
         let player = player();
         let mut rc = resource_config("https://example.com/song.mp3");
-        rc = player.prepare_config(rc);
+        rc = player
+            .prepare_config(rc)
+            .expect("bound player reads its session stream shape");
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
         let observer = track_cancel.child();
@@ -407,7 +414,9 @@ mod tests {
                 .build(),
         );
         let mut rc = resource_config("https://example.com/song.mp3");
-        rc = player.prepare_config(rc);
+        rc = player
+            .prepare_config(rc)
+            .expect("bound player reads its session stream shape");
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
         let observer = track_cancel.child();
@@ -510,7 +519,11 @@ mod tests {
             .gapless_mode(GaplessMode::MediaOnly)
             .max_slots(2)
             .sample_rate(NonZeroU32::new(44_100).expect("invariant: sample rate is non-zero"))
-            .timestretch(StretchControls::new(1.0))
+            .warp(
+                WarpConfig::builder()
+                    .stretch(StretchControls::new(1.0))
+                    .build(),
+            )
             .build();
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
@@ -555,7 +568,7 @@ mod tests {
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
         player.set_default_rate(0.75);
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
-        assert!((player.core.timestretch.speed() - 0.75).abs() < f32::EPSILON);
+        assert!((player.core.warp.stretch().speed() - 0.75).abs() < f32::EPSILON);
         assert_eq!(player.rate(), 0.0);
     }
 
@@ -602,7 +615,7 @@ mod tests {
         let player = player();
         player.set_rate(2.0);
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
-        assert!((player.core.timestretch.speed() - 2.0).abs() < f32::EPSILON);
+        assert!((player.core.warp.stretch().speed() - 2.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
@@ -613,11 +626,11 @@ mod tests {
                 .session(testing::test_session())
                 .build(),
         );
-        let ptr_before = Arc::as_ptr(&player.core.timestretch);
+        let ptr_before = Arc::as_ptr(player.core.warp.stretch());
         player.play();
         player.pause();
         player.play();
-        let ptr_after = Arc::as_ptr(&player.core.timestretch);
+        let ptr_after = Arc::as_ptr(player.core.warp.stretch());
         assert_eq!(
             ptr_before, ptr_after,
             "timestretch controls must stay address-stable across transitions"

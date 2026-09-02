@@ -129,6 +129,7 @@ where
     /// `&Frame<'_>`) so the caller can release the demuxer borrow before
     /// invoking this — needed because `Frame<'_>` borrows into the
     /// demuxer state and would conflict with `&mut self` here.
+    #[kithara::measure]
     #[kithara::probe(timestamp, frames)]
     fn build_chunk(
         &mut self,
@@ -168,6 +169,7 @@ where
             variant_index: self.demuxer.current_variant_index(),
             spec: live_spec,
             epoch: self.epoch,
+            render_revision: 0,
         };
         AudioChunk::new(meta, buf)
     }
@@ -193,6 +195,7 @@ where
         Ok(DecoderChunkOutcome::Chunk(chunk))
     }
 
+    #[kithara::measure]
     fn emit_chunk_signal(&mut self, outcome: &DecoderChunkOutcome) {
         let signal = match outcome {
             DecoderChunkOutcome::Chunk(_) => ReaderChunkSignal::Chunk,

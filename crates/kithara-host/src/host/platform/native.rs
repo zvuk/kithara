@@ -43,11 +43,11 @@ where
     pub fn new(config: HostConfig) -> Result<Self, PlayError> {
         let SessionRoot {
             id,
-            sample_rate,
+            requested_shape,
             group,
             view,
         } = Self::session_root(config)?;
-        let dispatcher = crate::session::native::spawn::<S>(group, view.clone(), sample_rate);
+        let dispatcher = crate::session::native::spawn::<S>(group, view.clone(), requested_shape);
         Ok(Self::owner(id, view, dispatcher, Platform::owner()))
     }
 

@@ -1,3 +1,9 @@
+#![cfg(all(
+    test,
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+
 use std::num::NonZero;
 
 use kithara_platform::sync::Arc;
@@ -5,13 +11,10 @@ use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
-use super::WarpRenderer as GenericWarpRenderer;
 use crate::{
-    GridSegment, RegionPlan, RegionPlanError, StretchControls,
-    test_pools::{Pools, TestPools, pools, sample_buffer},
+    GridSegment, RegionPlan, RegionPlanError, StretchControls, WarpConfig,
+    test_pools::{Pools, pools, sample_buffer},
 };
-
-type WarpRenderer = GenericWarpRenderer<TestPools>;
 
 const SR: u32 = 44_100;
 const CH: usize = 2;
@@ -104,7 +107,8 @@ fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[
     controls.set_keylock(true);
     controls.set_backend(backend);
     controls.set_region_plan(plan.map(Arc::new));
-    let mut fx = WarpRenderer::new(controls, spec(), pools.clone());
+    let config = WarpConfig::builder().stretch(controls).build();
+    let mut fx = crate::Warp::new((), &config).renderer(spec(), pools.clone());
     let mut out = Vec::new();
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {

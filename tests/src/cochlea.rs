@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use cochlea_features::{
     Audio, ProbeOpts, SegmentOpts, TempoOpts, estimate_tempo, probe, segment_timeline,
 };
@@ -11,6 +13,132 @@ const MARKER_CLUSTER_MS: usize = 100;
 const SECONDS_PER_MINUTE: f64 = 60.0;
 const TEMPO_TOLERANCE_BPM: f64 = 0.5;
 const WINDOW_MS: f64 = 5.0;
+
+/// Two independently rendered PCM runs aligned by their pre-command signal.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct AlignedPcm {
+    pub candidate: Vec<f32>,
+    pub command_frame: usize,
+    pub control: Vec<f32>,
+}
+
+/// Align independently rendered runs without using any post-command samples.
+#[must_use]
+pub fn align_command_runs(
+    candidate: &[f32],
+    candidate_command_frame: usize,
+    control: &[f32],
+    control_command_frame: usize,
+    channels: u16,
+) -> AlignedPcm {
+    const ALIGNMENT_FRAMES: usize = 4_096;
+    const SAMPLE_STRIDE: usize = 8;
+
+    let channels = usize::from(channels);
+    assert!(channels > 0, "alignment needs at least one channel");
+    assert!(
+        candidate.len().is_multiple_of(channels),
+        "candidate contains incomplete frames"
+    );
+    assert!(
+        control.len().is_multiple_of(channels),
+        "control contains incomplete frames"
+    );
+    let prefix = ALIGNMENT_FRAMES
+        .min(candidate_command_frame.div_ceil(2))
+        .min(control_command_frame.div_ceil(2));
+    assert!(prefix > 0, "alignment needs pre-command PCM");
+    let candidate_limit = candidate_command_frame - prefix;
+    let mut anchor = (f64::NEG_INFINITY, 0);
+    for start in (0..=candidate_limit).step_by(SAMPLE_STRIDE) {
+        let energy = (0..prefix)
+            .step_by(SAMPLE_STRIDE)
+            .map(|frame| {
+                let sample = f64::from(candidate[(start + frame) * channels]);
+                sample * sample
+            })
+            .sum::<f64>();
+        if energy >= anchor.0 {
+            anchor = (energy, start);
+        }
+    }
+    let candidate_anchor = anchor.1;
+    let min_lag = -i64::try_from(candidate_anchor).expect("alignment anchor fits i64");
+    let max_lag = i64::try_from(control_command_frame - prefix).expect("command frame fits i64")
+        - i64::try_from(candidate_anchor).expect("alignment anchor fits i64");
+    let mut best = (f64::INFINITY, i64::MAX, 0_i64);
+    for lag in min_lag..=max_lag {
+        let control_anchor = usize::try_from(
+            i64::try_from(candidate_anchor).expect("alignment anchor fits i64") + lag,
+        )
+        .expect("control alignment anchor fits usize");
+        let squared = (0..prefix)
+            .step_by(SAMPLE_STRIDE)
+            .map(|frame| {
+                let candidate = candidate[(candidate_anchor + frame) * channels];
+                let control = control[(control_anchor + frame) * channels];
+                let delta = f64::from(candidate - control);
+                delta * delta
+            })
+            .sum::<f64>();
+        if squared < best.0 || (squared == best.0 && lag.abs() < best.1) {
+            best = (squared, lag.abs(), lag);
+        }
+    }
+    let lag = best.2;
+    let candidate_start = usize::try_from((-lag).max(0)).expect("alignment lag fits usize");
+    let control_start = usize::try_from(lag.max(0)).expect("alignment lag fits usize");
+    let candidate_frames = candidate.len() / channels - candidate_start;
+    let control_frames = control.len() / channels - control_start;
+    let frames = candidate_frames.min(control_frames);
+    AlignedPcm {
+        candidate: candidate[candidate_start * channels..(candidate_start + frames) * channels]
+            .to_vec(),
+        command_frame: candidate_command_frame - candidate_start,
+        control: control[control_start * channels..(control_start + frames) * channels].to_vec(),
+    }
+}
+
+/// Return the first frame where two runs differ for a sustained frame span.
+#[must_use]
+pub fn first_sustained_delta(
+    candidate: &[f32],
+    control: &[f32],
+    channels: u16,
+    range: Range<usize>,
+    threshold: f32,
+    sustained_frames: usize,
+) -> Option<usize> {
+    let channels = usize::from(channels);
+    assert!(channels > 0, "delta detection needs at least one channel");
+    assert!(sustained_frames > 0, "delta detection needs a frame span");
+    let deltas = candidate
+        .chunks_exact(channels)
+        .zip(control.chunks_exact(channels))
+        .map(|(candidate, control)| {
+            candidate
+                .iter()
+                .zip(control)
+                .map(|(candidate, control)| (candidate - control).abs())
+                .fold(0.0_f32, f32::max)
+        });
+    let mut run = 0;
+    for (frame, delta) in deltas.enumerate() {
+        if !range.contains(&frame) {
+            continue;
+        }
+        if delta > threshold {
+            run += 1;
+            if run == sustained_frames {
+                return Some(frame + 1 - sustained_frames);
+            }
+        } else {
+            run = 0;
+        }
+    }
+    None
+}
 
 /// Select a percentile from test-oracle samples after sorting them in place.
 #[must_use]
@@ -411,5 +539,57 @@ mod tests {
         );
         assert_eq!(actual.sample_peak_dbfs, expected.loudness.sample_peak_dbfs);
         assert_eq!(actual.true_peak_dbtp, expected.loudness.true_peak_dbtp);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn sustained_delta_requires_the_complete_span_and_reports_its_first_frame() {
+        const CHANNELS: u16 = 2;
+        const FRAMES: usize = 512;
+        const THRESHOLD: f32 = 0.002;
+        const SUSTAINED: usize = 32;
+
+        let control = vec![0.0; FRAMES * usize::from(CHANNELS)];
+        assert_eq!(
+            first_sustained_delta(
+                &control,
+                &control,
+                CHANNELS,
+                0..FRAMES,
+                THRESHOLD,
+                SUSTAINED
+            ),
+            None
+        );
+
+        let mut candidate = control.clone();
+        let onset = 442;
+        let short_end = onset + SUSTAINED - 1;
+        candidate[onset * usize::from(CHANNELS)..short_end * usize::from(CHANNELS)].fill(0.5);
+        assert_eq!(
+            first_sustained_delta(
+                &candidate,
+                &control,
+                CHANNELS,
+                0..FRAMES,
+                THRESHOLD,
+                SUSTAINED,
+            ),
+            None
+        );
+
+        candidate[short_end * usize::from(CHANNELS)..(short_end + 1) * usize::from(CHANNELS)]
+            .fill(0.5);
+        assert_eq!(
+            first_sustained_delta(
+                &candidate,
+                &control,
+                CHANNELS,
+                0..FRAMES,
+                THRESHOLD,
+                SUSTAINED,
+            ),
+            Some(onset)
+        );
+        assert!(onset > 441, "frame 442 is outside a 441-frame budget");
     }
 }

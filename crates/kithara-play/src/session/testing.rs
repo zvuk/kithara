@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::{Arc, Mutex};
@@ -7,6 +10,7 @@ use super::{AllocatedSlot, Cmd, Reply, SessionDispatcher, SessionSampleRate};
 use crate::{
     PlayError, SessionDuckingMode, SharedEq, SlotId,
     bridge::{NodeInputs, slot_channels},
+    rt::StreamShape,
 };
 
 struct TestSession {
@@ -28,6 +32,10 @@ impl<S> SessionDispatcher<S> for TestSession {
                 Reply::SlotAllocated(AllocatedSlot::new(control, slot))
             }
             Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
+            Cmd::QueryStreamShape => Reply::StreamShape(StreamShape {
+                max_block_frames: NonZeroU32::new(128).expect("fixture block size is non-zero"),
+                sample_rate: NonZeroU32::new(44_100).expect("fixture sample rate is non-zero"),
+            }),
             Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
             _ => Reply::Ok,
         };

@@ -18,6 +18,7 @@ mod fixture;
 mod flash;
 mod hang_watchdog;
 mod measure;
+mod measure_block;
 mod mock;
 mod no_block;
 mod probe;
@@ -56,6 +57,13 @@ pub fn hang_watchdog(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn measure(attr: TokenStream, item: TokenStream) -> TokenStream {
     measure::expand(attr, item)
+}
+
+/// `kithara::measure_block!(label, expression)` - permanent block measurement
+/// gated by the caller's `perf` feature.
+#[proc_macro]
+pub fn measure_block(input: TokenStream) -> TokenStream {
+    measure_block::expand(input)
 }
 
 /// `#[kithara::fixture]` — rstest-fixture replacement.

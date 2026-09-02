@@ -109,7 +109,11 @@ where
                 .with_max_compute_tasks(compute_tasks)
                 .with_owned_pool(RayonConfig::new(compute_tasks, "analysis-node-test")),
         );
-        let dispatcher = worker.dispatcher(DispatcherConfig::new("analysis-node-test"));
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::builder()
+                .name("analysis-node-test")
+                .build(),
+        );
         let pending = dispatcher
             .reserve(TaskConfig::new().with_max_compute_tasks(compute_tasks))
             .expect("test analysis task is reserved");

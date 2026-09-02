@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
+use kithara_test_macros as kithara;
 use ringbuf::traits::{Consumer, Producer};
 use smallvec::SmallVec;
 
@@ -17,12 +18,6 @@ impl PlayerNodeProcessor {
         self.crossfade.duration = duration;
         for (_, track) in self.tracks.iter_mut() {
             track.update_fade_duration(duration, self.sample_rate);
-        }
-    }
-
-    fn apply_playback_rate(&mut self, rate: f32) {
-        for (_, track) in self.tracks.iter_mut() {
-            track.set_playback_rate(rate);
         }
     }
 
@@ -78,6 +73,7 @@ impl PlayerNodeProcessor {
     }
 
     /// Drain all pending commands from the channel.
+    #[kithara::measure]
     pub fn drain_commands(&mut self) {
         while let Some(cmd) = self.cmd_rx.try_pop() {
             match cmd {
@@ -110,9 +106,6 @@ impl PlayerNodeProcessor {
                 }
                 PlayerCmd::SetPrefetchDuration(duration) => {
                     self.apply_prefetch_duration(duration);
-                }
-                PlayerCmd::SetPlaybackRate(rate) => {
-                    self.apply_playback_rate(rate);
                 }
             }
         }

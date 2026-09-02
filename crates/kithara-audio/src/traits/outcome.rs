@@ -3,6 +3,8 @@ use std::num::NonZeroUsize;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioChunk;
 
+use crate::SourceSpan;
+
 /// Reason a [`ReadOutcome::Pending`] / [`ChunkOutcome::Pending`] was
 /// returned — i.e. why the reader did not advance this call. Each
 /// variant maps to a distinct caller action; there is no overlap and
@@ -39,6 +41,8 @@ pub enum ReadOutcome {
     Frames {
         count: NonZeroUsize,
         position: Duration,
+        /// Exact decoded-source interval represented by these frames.
+        source_span: Option<SourceSpan>,
     },
     /// Reader is alive but produced no frames this call. See
     /// [`PendingReason`] for the precise cause and required caller

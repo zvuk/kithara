@@ -13,22 +13,11 @@ pub struct ElasticCapabilities {
     latency: ElasticLatency,
     #[field(skip)]
     shape: ElasticShape,
-    /// Fixed caller-owned storage span for one terminal-drain chunk.
-    #[field(get, copy)]
-    terminal_chunk_frames: usize,
 }
 
 impl ElasticCapabilities {
-    pub(crate) fn new(
-        shape: ElasticShape,
-        latency: ElasticLatency,
-        terminal_chunk_frames: usize,
-    ) -> Self {
-        Self {
-            latency,
-            shape,
-            terminal_chunk_frames,
-        }
+    pub(crate) fn new(shape: ElasticShape, latency: ElasticLatency) -> Self {
+        Self { latency, shape }
     }
 
     /// Interleaved sample count of a frame span at the prepared channel count.
@@ -36,6 +25,22 @@ impl ElasticCapabilities {
         frames
             .checked_mul(self.channels())
             .ok_or(ElasticError::SampleCountOverflow)
+    }
+
+    /// Validate caller-owned interleaved storage and return its frame capacity.
+    pub(crate) fn output_capacity(self, output_samples: usize) -> Result<usize, ElasticError> {
+        if output_samples == 0 {
+            return Err(ElasticError::EmptyOutput);
+        }
+        let channels = self.channels();
+        if !output_samples.is_multiple_of(channels) {
+            let expected = self.samples(output_samples.div_ceil(channels))?;
+            return Err(ElasticError::OutputSampleCount {
+                actual: output_samples,
+                expected,
+            });
+        }
+        Ok(output_samples / channels)
     }
 
     /// Every engine accepts the same requests: inside the prepared block
@@ -175,7 +180,7 @@ mod tests {
             .max_output_frames(64)
             .build()
             .expect("valid elastic config");
-        let capabilities = ElasticCapabilities::new(config.shape(), ElasticLatency::new(1, 1), 64);
+        let capabilities = ElasticCapabilities::new(config.shape(), ElasticLatency::new(1, 1));
         let request = ElasticRequest::new(32, 1).expect("non-empty request");
 
         let result = capabilities.validate(request, 64, 2);

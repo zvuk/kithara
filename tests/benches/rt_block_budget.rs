@@ -63,10 +63,10 @@ fn spec() -> AudioSpec {
 fn processor() -> (PlayerNodeProcessor, SlotControl, Pools) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let pools = pools();
-    let shape = StreamShape {
-        sample_rate: non_zero(Consts::SAMPLE_RATE, "sample rate"),
-        max_block_frames: non_zero(Consts::BLOCK_FRAMES, "block frames"),
-    };
+    let shape = StreamShape::new(
+        non_zero(Consts::BLOCK_FRAMES, "block frames"),
+        non_zero(Consts::SAMPLE_RATE, "sample rate"),
+    );
     (
         PlayerNodeProcessor::new(inputs, shape, &pools),
         control,

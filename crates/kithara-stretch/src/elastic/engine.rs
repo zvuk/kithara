@@ -20,18 +20,17 @@ pub trait ElasticEngine: Send + 'static {
 
     /// Writes the next portion of terminal buffered audio into caller-owned storage.
     ///
-    /// The caller supplies storage for
-    /// `capabilities().terminal_chunk_frames() * channels` samples and repeats
+    /// The caller chooses the non-empty whole-frame storage capacity and repeats
     /// until the returned [`ElasticDrain`] is complete. Every incomplete step
-    /// writes a non-empty contiguous tail portion; an active drain reports
-    /// completion together with its final non-empty portion. Fresh, reset and
-    /// already-completed engines return an empty completed step until
-    /// [`prime`](Self::prime) or [`process`](Self::process).
+    /// writes a non-empty contiguous tail portion no larger than that capacity;
+    /// an active drain reports completion together with its final non-empty
+    /// portion. Fresh, reset and already-completed engines return an empty
+    /// completed step until [`prime`](Self::prime) or [`process`](Self::process).
     ///
     /// # Errors
-    /// While a drain is active, returns [`ElasticError`] when `output` does not
-    /// match the engine's declared terminal span or when sizing that span
-    /// overflows. An inactive drain returns an empty completed step without
+    /// While a drain is active, returns [`ElasticError`] when `output` is empty,
+    /// does not contain a whole number of interleaved frames, or when sizing a
+    /// span overflows. An inactive drain returns an empty completed step without
     /// accessing `output`.
     fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError>;
 

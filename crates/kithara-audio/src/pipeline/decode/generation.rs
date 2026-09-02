@@ -238,6 +238,13 @@ impl DecoderGeneration {
         Some((start, end, spec))
     }
 
+    pub(crate) fn staged_head_span(&self) -> Option<(u64, u64, AudioSpec)> {
+        let first = self.staged.front()?;
+        let spec = first.spec();
+        let (start, end) = chunk_range(first, spec)?;
+        Some((start, end, spec))
+    }
+
     pub(crate) fn staged_covers(&self, spec: AudioSpec, start: u64, frames: u64) -> bool {
         let Some(end) = start.checked_add(frames) else {
             return false;

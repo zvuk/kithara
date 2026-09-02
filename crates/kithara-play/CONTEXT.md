@@ -35,50 +35,111 @@ asks it via `resource_headers` - never a second policy source of truth.
 the cache, wildcard and ordering precedence, and header merge order.
 
 ## Per-track producer chain
-`PlayWorker::open` is the sole supported production composition path, and no
-workspace production code can build a second playback scheduling path:
-`PlayWorker` derives its dispatcher from `kithara-worker`, while `kithara-audio`
-exposes only the prepared source and wake contracts. One chain, one final
-output path:
-`decoded source -> WarpRenderer -> custom effects -> final output ring`. The Warp
-wrapper is resident even with synchronization off, so passthrough never selects a
-second implementation. Sync is not yet wired end to end; final-ring admission is
-rendered readiness, not proof that a device callback presented those frames.
+`PlayWorker::open` is the sole supported production composition path in this
+workspace. It asks
+`kithara-audio` for `PreparedAudio` plus a still-concrete `AudioSource`, wraps the
+reader as resident identity `Warp<Audio<Stream<T>>>`, creates its synchronous
+`WarpRenderer`, builds the post-Warp track effects, and wraps the source in
+`WarpSource`.
+`DecoderNode` then owns final output admission, preload completion, decoded
+frontier publication, terminal event publication, and per-track load
+measurement before the task is registered on the shared worker.
 
-At true source EOF `WarpSource` drains the Warp tail through the effect chain
-before `EffectDrain` flushes the effects, preserving multi-pull tails.
-`DecoderNode` then publishes the decode-epoch-tagged `AudioEvent::EndOfStream`.
-**That raw event is not a user-visible end of playback.**
-`PlayerEvent::ItemDidPlayToEnd` is the sole path to FFI `DidReachEnd`, and only
-after the player fences the terminal marker against the live seek epoch (see Seek
-Ownership). Seek and source-discontinuity revision changes reset the chain before
-new-generation audio is admitted. Every play-owned DSP stage guards its **input**
-with `sanitize_sample` (an output-only guard would leak the bypass and silence
-fast paths); `IsolatorEq` also flushes denormal IIR state only once both input
-and output fall below `f32::MIN_POSITIVE`, so unity and bypass stay bit-exact
-(`a_decaying_tail_never_leaks_denormals`).
+`PlayWorker` derives a dedicated dispatcher from `kithara-worker` and supplies
+the play-owned node and observer. `kithara-audio` exposes only the prepared
+source and wake contracts. No workspace production code can construct a second
+playback scheduling path.
+
+There is one chain and one final output path:
+
+`decoded source -> WarpRenderer -> custom effects -> final output ring`
+
+`DecoderNode` admits each produced chunk or terminal marker directly into the
+bounded final ring. A full ring returns `TickResult::Backpressured` before
+another source step; final playback output is never parked in the generic
+`Outlet` overflow slot.
+
+The Warp wrapper is resident even when synchronization is off, so passthrough
+does not select a second implementation. R7 does not yet evaluate `WarpMap`,
+advance a runtime map cursor, apply non-identity alignment, or call
+`SyncGroup::acknowledge`; final-ring admission is rendered readiness, not proof
+that a device callback presented those frames.
+
+`WarpRenderer::prepare` services format/backend changes and retired engine
+state between checked ticks. `AudioEffect::service_deferred` then prepares
+post-Warp effects. With an elastic backend, live input is split into the
+configured render quantum; controls are sampled
+for each quantum and `WarpSource` advances only its matching source span. The
+identity/no-backend renderer preserves whole-chunk passthrough. The elastic
+quantum bounds live control response and source processing even when the
+decoder yields a larger chunk. It does not bound terminal output: at true source
+EOF, `WarpSource` drains the Warp tail according to the backend tail contract
+before `EffectDrain` flushes the effects themselves, preserving multi-pull tails before
+`DecoderNode` publishes the decode-epoch-tagged diagnostic
+`AudioEvent::EndOfStream`. That raw event is not a user-visible playback-end
+signal: `PlayerEvent::ItemDidPlayToEnd` is the sole path to FFI `DidReachEnd`
+after the player fences the terminal marker against the live seek epoch. Seek
+or source-discontinuity revision changes reset the chain before new-generation
+decoded audio is admitted.
+
+`sanitize_sample` from `kithara-signal` runs at the input of play-owned DSP
+stages that accept untrusted samples. `IsolatorEq` flushes denormal IIR state to
+exact zero only after both input and output fall below `f32::MIN_POSITIVE`;
+finite unity/bypass samples remain bit-exact.
 
 ## Tempo & Key-Lock
-`kithara_warp::StretchControls` (one `Arc` per deck, in
-`PlayerConfig.timestretch`) owns the requested playback target, is seeded before
-a track loads, and threads unchanged into the resident `Warp<S>`. `Queue`
-delegates the target to the player; key-lock and backend are set on the same
-handle. There is no second cached target.
 
-**Target and effective rate are different surfaces and cannot silently diverge.**
-The leading track publishes the deck's effective rate through `PlaybackShared`;
-`Player::rate()` and `PlayerEvent::RateChanged` expose only that, so a fixed or
-backendless resource reports `1.0`, and a paused deck or one with no leading
-track reports `0.0`.
+`kithara_warp::StretchControls` (one `Arc` per deck, in `PlayerConfig.warp`)
+owns the requested playback target. `prepare_config` carries the complete
+`WarpConfig` into `ResourceConfig`; `Resource` puts the same config in
+`TrackConfig::warp`, and resident `Warp<S>` keeps it beside the reader while
+its `kithara-warp::WarpRenderer` reads the controls at the configured render
+quantum in frames. It always carries `speed` + `region_plan`; with a native backend
+compiled by `kithara-play` (`stretch-signalsmith` / `stretch-bungee`) it also
+carries `keylock` and `backend`. `Queue` delegates the target to the player;
+key-lock and backend are set directly on the same handle.
 
-`WarpRenderer` runs at `ratio = 1/speed`; key-lock off (the constructed default)
-gives `pitch = speed`, vinyl-style. Speed, key-lock, and backend apply live
-mid-track with no reload, and each `PlayerTrack` re-reads the rate its resource
-applies every render block, so a runtime change moves its media clock as well as
-its DSP. **Without a backend - every wasm build - the same Warp slot stays in the
-chain as an exact identity renderer**: output stays at 1.0. A `kithara-warp`
-region boundary preserves backend history and is not a source discontinuity, and
-stretch changes output frame count, never `AudioSpec.sample_rate`.
+Backend kind is configuration, not a live musical control. A change requested
+while the resident engine still holds source is applied at the next
+reset/discontinuity, spec change, or failed-engine rebuild; it never discards a
+live backend tail.
+
+The canonical controls are seeded before a track is loaded; the native
+`WarpRenderer` does not cache a second requested target. A `PlayerTrack` advances
+its media clock from the reader-position delta represented by frames actually
+consumed from its feeder scratch. Read-ahead and an un-applied rate target
+therefore cannot move near-end or handover triggers ahead of presented media.
+The leading track publishes the deck's effective rate through `PlaybackShared`.
+`Player::rate()` and `PlayerEvent::RateChanged` expose only that effective
+value: fixed/no-backend resources report `1.0`, while a paused deck or a deck
+without a leading track reports `0.0`. Target controls and the effective
+observation therefore cannot silently diverge in the public surface.
+With a backend compiled in, `WarpRenderer` runs at `ratio = 1/speed`, and:
+
+- **key-lock off** (the constructed default): `pitch = speed` - speed shifts pitch, vinyl-style.
+- **key-lock on**: `pitch = 1.0` - speed preserves pitch.
+
+Before the first active stretch, exact speed 1.0 with no region plan can use
+zero-copy passthrough. Once an active stretch has been created, later exact 1.0
+stays in the resident engine and does not return to passthrough or reset/drain
+its buffered history. Engine reset/rebuild boundaries are seek, source
+discontinuity, and spec/backend lifecycle; terminal EOF tail drain is separate.
+Without a backend - including every wasm build - the same Warp slot remains in
+the producer chain as an exact identity renderer; no speed DSP is inserted and
+decoded-audio output stays pinned to 1.0. With a native backend, speed and
+key-lock controls are read for each live render quantum. A requested backend
+kind becomes current only at a reset, spec-change, or failed-engine rebuild
+boundary, so changing it never discards buffered source history.
+
+Fixed-ratio sample-rate conversion is a separate stage: Apple fused builds use the codec-embedded
+placement, other builds the standalone decode-adapter resampler.
+
+`RegionPlan` lives in `kithara-warp`. Its sorted, non-overlapping segments are
+expressed in source-frame space; the renderer splits chunks at region
+boundaries and combines `1/speed` with each segment's finite positive ratio.
+A region boundary preserves backend history and is not a source
+discontinuity. Stretch changes output frame count, not `AudioSpec.sample_rate`,
+and carries source-time metadata forward.
 
 ## Engine Load
 `PlayerCore` creates one address-stable `EngineLoad` meter and passes the same
@@ -237,26 +298,48 @@ and delivered by the shell, never on the forbid path.
 
 ## Session Actuator
 `kithara-play` owns the lower object-safe `SessionDispatcher` protocol used by
-one Player; `kithara-host` owns every concrete native or web session, the
-Firewheel graph, and the root synchronization group; `kithara-warp` owns musical
-coordinates and the `BeatGrid`, `WarpMap`, and `SyncGroup` protocols. **No concrete
-production session constructor lives in this crate.** A Player
-is constructed unbound and receives an opaque one-shot `SessionBinding` only
-through `Host::insert`; decorators may only delegate it to their resident Player.
-`TrackBinding` captures an owner-published `BeatGridSnapshot`; it neither creates
-a grid identity nor converts analysis facts into a second representation.
+one Player. `kithara-host` owns every concrete native/web session, the existing
+`kithara-engine` thread, the Firewheel graph, and the root synchronization
+group. A Player is constructed as an unbound instance and receives an opaque,
+one-shot `SessionBinding` only through `Host::insert`; decorators may only
+delegate the binding to their resident Player. Native insertion transfers the
+whole resident player. Wasm insertion transfers its `GroupState` and current
+desired level to the main-thread Host, which becomes their canonical
+owner, while the Worker Host retains the runtime and JS-bound resources. There
+is no standalone concrete production session constructor in this crate.
 
-`SessionDispatcher::consumer_wake_mode` is a **required** object-safe capability,
-not a trait default, so a wrapper cannot silently erase an off-RT capability by
-omission. `ConfigPrep` copies it into `ResourceConfig::consumer_wake_mode`,
-*unconditionally overwriting whatever the builder carried*, so a player-managed
-resource has no second source of wake policy; the builder setter exists only for
-direct `Resource` readers that never pass through a player
-(`prepare_config_overwrites_a_builder_declared_wake_mode` and siblings). The
-Host's `TransportCommitState` is the sole owner of when the session
-beat-to-frame relation changes: a stream restart drops the transport snapshot
-because the frame axis restarted, and the first block on the new axis reanchors
-the preserved beat before publishing another.
+`kithara-warp` owns musical coordinates plus the `BeatGrid`, `WarpMap`, and
+`SyncGroup` protocols; `kithara-play` owns one Player instance and
+`kithara-host` owns the live session that composes Players. `TrackBinding` captures an
+owner-published `BeatGridSnapshot`; it neither creates a grid identity nor
+converts analysis facts into a second representation. R7 session state may
+transact pure group operations, but the producer chain does not yet consume a
+`WarpMap` or acknowledge rendered/presented application.
+
+`SessionDispatcher::consumer_wake_mode` is the session's required, object-safe
+consumer capability. Real-time session implementations explicitly return
+`RealtimeDeferred`, which lets the audio callback arm a coalesced atomic worker
+level without a syscall;
+off-RT sessions return `ImmediateOffRt`, and dispatcher wrappers must forward
+their inner capability. Requiring the method keeps wrappers from silently
+erasing an off-RT capability through a trait default. `ConfigPrep` copies the
+capability through an internal, builder-skipped `ResourceConfig` field into
+`AudioConfig`; an unbound direct `Resource` resolves the absent session
+capability to `ImmediateOffRt`, giving it immediate worker wakes and inline
+reader-event delivery. There is no public resource setter and therefore no
+second source of session wake policy. A real-time read arms the coalesced worker
+level; later reads coalesce until the worker consumes it. While a final ring is
+backpressured, the dispatcher polls that level at the playback worker's bounded
+interval; its ordinary timeout remains only a liveness backstop.
+
+### Host transport anchor
+
+The Host's `TransportCommitState` is the only owner of when the session beat-to-frame
+relation changes. Every applied transport commit creates one `SessionAnchor`
+at that exact render boundary and stores it in `SessionTransportSnapshot`. A
+stream restart removes the snapshot because the session frame axis restarted;
+the first block on the new axis reanchors the preserved beat before publishing
+another snapshot.
 
 ## Session Mixing
 **Session-input gain has two distinct owners.** Each `EngineImpl` owns its
@@ -345,4 +428,3 @@ arriving resource down the reselecting-current path, never to be enqueued.
 ## Testing And Integration
 The offline render backend for deterministic engine and player tests lives in
 `kithara-integration-tests::offline`, not here.
-

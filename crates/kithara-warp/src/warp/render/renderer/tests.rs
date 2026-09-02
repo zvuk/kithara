@@ -5,7 +5,10 @@ use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use realfft::RealFftPlanner;
 
 use super::{StretchControls, WarpRenderer as GenericWarpRenderer};
-use crate::test_pools::{Pools, TestPools, pools, sample_buffer};
+use crate::{
+    RenderPublisher, Warp, WarpConfig,
+    test_pools::{Pools, TestPools, pools, sample_buffer},
+};
 
 type WarpRenderer = GenericWarpRenderer<TestPools>;
 
@@ -61,6 +64,21 @@ fn chunk(pools: &Pools, samples: &[f32]) -> AudioChunk {
     )
 }
 
+fn chunk_at(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
+    let mut chunk = chunk(pools, samples);
+    let frame_end = frame_offset
+        .checked_add(u64::try_from(chunk.frames()).expect("test frame count fits"))
+        .expect("test frame end fits");
+    chunk.meta.frame_offset = frame_offset;
+    chunk.meta.timestamp = spec()
+        .duration_for(frame_offset)
+        .expect("test timestamp fits");
+    chunk.meta.end_timestamp = spec()
+        .duration_for(frame_end)
+        .expect("test end timestamp fits");
+    chunk
+}
+
 /// Index of the strongest spectral bin (skipping DC) of a mono window
 /// taken from the middle of `mono`.
 fn dominant_bin(mono: &[f32]) -> usize {
@@ -92,7 +110,20 @@ fn spec() -> AudioSpec {
 }
 
 fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
-    WarpRenderer::new(controls, spec(), pools())
+    renderer_with_publisher(controls).1
+}
+
+fn renderer_with_publisher(controls: Arc<StretchControls>) -> (RenderPublisher, WarpRenderer) {
+    let config = WarpConfig::builder()
+        .stretch(controls)
+        .render_quantum_frames(
+            NonZero::new(WarpRenderer::DIRECT_OUTPUT_FRAME_LIMIT)
+                .expect("renderer output limit is non-zero"),
+        )
+        .build();
+    let warp = Warp::new((), &config);
+    let publisher = warp.publisher();
+    (publisher, warp.renderer(spec(), pools()))
 }
 
 fn render_serviced(fx: &mut WarpRenderer, input: AudioChunk) -> Option<AudioChunk> {

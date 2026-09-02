@@ -20,7 +20,7 @@ use kithara::{
     queue::Queue,
 };
 
-use crate::offline::OfflinePlayer;
+use crate::offline::{OfflinePlayer, OfflinePlayerHarness};
 
 /// Poll cadence for [`wait_until`] and the queue-polling waits. This is the only
 /// timer `sleep` in the suite: a virtual tick that advances the flash clock so
@@ -393,8 +393,34 @@ pub async fn wait_thread_count_quiesced(deadline: Duration) -> usize {
 /// `until_position = pre_pos + target_advance` for warmup and
 /// `until_position = seek_target + min_advance` for post-seek to discriminate a
 /// seek jump from render-driven progress.
+pub trait PositionRenderer {
+    fn position(&self) -> f64;
+    fn render(&mut self, frames: usize);
+}
+
+impl PositionRenderer for OfflinePlayer {
+    fn position(&self) -> f64 {
+        Self::position(self)
+    }
+
+    fn render(&mut self, frames: usize) {
+        let _ = Self::render(self, frames);
+    }
+}
+
+impl PositionRenderer for OfflinePlayerHarness {
+    fn position(&self) -> f64 {
+        self.player().position_seconds().unwrap_or(0.0)
+    }
+
+    fn render(&mut self, frames: usize) {
+        let _ = Self::render(self, frames);
+        let _ = self.tick_and_drain();
+    }
+}
+
 pub async fn render_until_position(
-    player: &mut OfflinePlayer,
+    player: &mut impl PositionRenderer,
     max_blocks: u32,
     until_position: f64,
     block_frames: usize,
@@ -414,7 +440,7 @@ pub async fn render_until_position(
     loop {
         let this = max_blocks.saturating_sub(rendered).clamp(1, BATCH);
         for _ in 0..this {
-            let _ = player.render(block_frames);
+            player.render(block_frames);
         }
         rendered = rendered.saturating_add(this);
         let position = player.position();
