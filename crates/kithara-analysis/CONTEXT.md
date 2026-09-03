@@ -211,7 +211,9 @@ compile-time no-op and `is_empty()` is the runtime signal.
 `beat-nn` and `beat-dsp` are detector backends above `analysis-beat`, and each
 implies it. Neither implies the other; all four combinations are valid.
 
-- `beat-nn` is `BeatThis`, a neural network with 9.3 MB of ONNX weights.
+- `beat-nn` is `BeatThis`, a neural network. It needs a model: `beat-nn-small`
+  (10.1 MB), `beat-nn-full` (79 MB) or `beat-nn-full-int8` (22.6 MB), and a
+  build carrying `beat-nn` without one does not compile.
 - `beat-dsp` is `SpectralBeats`, signal processing: no model bytes, no network
   runtime, compiles for `wasm32`, and reports beats but never downbeats.
 - Carrying both selects `BeatThis`.
@@ -222,7 +224,9 @@ The backends are not expected to agree; on the crate's own fixture they track
 different metrical levels. `backend::SELECTED_DETECTOR` is the single
 expression of which one a build uses, and the fingerprint tag derives from it,
 so a grid is never served from cache to a build that would not have produced
-it.
+it. The neural backend's tag names the model as well, so the three
+`beat-nn-*` features are distinct to the cache: a grid the small model made is
+not served to a build carrying a full one.
 
 ## Waveform
 

@@ -80,13 +80,13 @@ where
         self.beat.prepare_detection(&self.pools, trailing)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn beat_intake(&self) -> Intake {
-        self.beat.intake()
-    }
-
-    pub(crate) fn apply_detection(&mut self, output: beat::DetectionOutput) {
-        self.beat.apply_detection(output);
+    delegate::delegate! {
+        to self.beat {
+            pub(crate) fn apply_detection(&mut self, output: beat::DetectionOutput);
+            #[cfg(not(target_arch = "wasm32"))]
+            #[call(intake)]
+            pub(crate) fn beat_intake(&self) -> Intake;
+        }
     }
 
     pub(crate) fn push(

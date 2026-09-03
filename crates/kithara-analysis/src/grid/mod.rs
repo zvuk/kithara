@@ -9,7 +9,7 @@ mod scratch;
 pub(crate) use core::GRID_SEMANTICS_TAG;
 pub(crate) use core::GridParams;
 pub(super) use core::build_grid_with;
-pub(super) use octave::fold as fold_octave;
 
 pub(crate) use extend::extend_over;
+pub(super) use octave::fold as fold_octave;
 pub(super) use scratch::GridBuffers;

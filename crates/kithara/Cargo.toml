@@ -156,6 +156,9 @@ stretch-bungee = [
 # NN beat/downbeat detector (kithara-beat, embedded small model) in the
 # analysis registry.
 beat-nn = ["analysis", "kithara-analysis/beat-nn"]
+beat-nn-small = ["analysis", "kithara-analysis/beat-nn-small"]
+beat-nn-full = ["analysis", "kithara-analysis/beat-nn-full"]
+beat-nn-full-int8 = ["analysis", "kithara-analysis/beat-nn-full-int8"]
 # Signal-processing beat detector, no model bytes. Independent of `beat-nn`;
 # a build carrying both uses the network.
 beat-dsp = ["analysis", "kithara-analysis/beat-dsp"]

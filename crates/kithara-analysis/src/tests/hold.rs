@@ -235,9 +235,10 @@ fn lost(analysis: &TrackAnalysis) -> u64 {
 /// none of which reached a full window.
 #[kithara::test]
 fn a_track_the_reader_outruns_the_detector_on_reaches_its_end() {
-    let analysis = read_whole(Track::seconds(pools(), 266.06)).unwrap_or_else(|Livelock { ticks }| {
-        panic!("the pass waits on a detector that has nothing to read, after {ticks} ticks")
-    });
+    let analysis =
+        read_whole(Track::seconds(pools(), 266.06)).unwrap_or_else(|Livelock { ticks }| {
+            panic!("the pass waits on a detector that has nothing to read, after {ticks} ticks")
+        });
     assert!(
         analysis.is_complete(),
         "the track must be covered: {:?}",

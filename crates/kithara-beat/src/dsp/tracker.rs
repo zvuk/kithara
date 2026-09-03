@@ -181,14 +181,13 @@ mod tests {
                 .collect()
         };
 
-        let reused = SpectralBeats::new(region.clone())
-            .expect("a fresh region has room for the window");
+        let reused =
+            SpectralBeats::new(region.clone()).expect("a fresh region has room for the window");
         let first = marks(&reused, &pcm);
         let _ = marks(&reused, &clicks::track(12.0, 0.4));
         let again = marks(&reused, &pcm);
         let fresh = marks(
-            &SpectralBeats::new(region.clone())
-                .expect("a fresh region has room for the window"),
+            &SpectralBeats::new(region.clone()).expect("a fresh region has room for the window"),
             &pcm,
         );
 

@@ -31,16 +31,16 @@ where
     decode(curve, periods, pools).map(|(beats, _)| beats)
 }
 
-
-/// Fills a pooled buffer from `values` in the order they arrive.
-fn collected<S, I>(pools: &PoolRegion<S>, values: I) -> Result<SampleBuffer, PoolError>
+/// Fills a pooled buffer of `len` from `values`, in the order they arrive.
+fn collected<S, I>(pools: &PoolRegion<S>, len: usize, values: I) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,
     I: IntoIterator<Item = f32>,
 {
-    let staged: Vec<f32> = values.into_iter().collect();
-    let mut out = pools.get::<f32>();
-    out.try_extend_from_slice(&staged)?;
+    let mut out = pools.get_with_len::<f32>(len)?;
+    for (slot, value) in out.iter_mut().zip(values) {
+        *slot = value;
+    }
     Ok(out)
 }
 
@@ -189,7 +189,9 @@ where
         flat.fill(Consts::EPSILON);
         return Ok(flat);
     }
-    collected(pools, 
+    collected(
+        pools,
+        curve.len(),
         curve
             .iter()
             .map(|value| (Consts::OBSERVED_CEILING * value / peak).max(Consts::EPSILON)),
@@ -219,22 +221,30 @@ where
     let sigma = frames::sigma();
     let support = (Consts::SUPPORT * sigma).ceil();
     let peak = Consts::DENSITY_SCALE / (frames::SIGMA_SECONDS * std::f32::consts::TAU.sqrt());
-    let interval = collected(pools, (0..states).map(|state| {
-        let gap = (state + 1).to_f32().unwrap_or(0.0) - period;
-        if gap.abs() > support {
-            0.0
-        } else {
-            peak * (-gap * gap / (2.0 * sigma * sigma)).exp()
-        }
-    }))?;
+    let interval = collected(
+        pools,
+        states,
+        (0..states).map(|state| {
+            let gap = (state + 1).to_f32().unwrap_or(0.0) - period;
+            if gap.abs() > support {
+                0.0
+            } else {
+                peak * (-gap * gap / (2.0 * sigma * sigma)).exp()
+            }
+        }),
+    )?;
     let mut remaining = 1.0f32;
-    collected(pools, interval.iter().map(|&density| {
-        let leave = if remaining > 0.0 {
-            density / remaining
-        } else {
-            1.0
-        };
-        remaining -= density;
-        leave.clamp(0.0, 1.0)
-    }))
+    collected(
+        pools,
+        states,
+        interval.iter().map(|&density| {
+            let leave = if remaining > 0.0 {
+                density / remaining
+            } else {
+                1.0
+            };
+            remaining -= density;
+            leave.clamp(0.0, 1.0)
+        }),
+    )
 }

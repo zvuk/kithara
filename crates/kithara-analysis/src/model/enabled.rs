@@ -85,6 +85,18 @@ mod tests {
         );
     }
 
+    /// Three builds carry three models behind one backend, so the model has to
+    /// reach the fingerprint for a grid to stay with the build that made it.
+    #[cfg(feature = "beat-nn")]
+    #[kithara::test(native, flash(false))]
+    fn the_tag_names_the_model_the_network_carries() {
+        let tag = tag_for(BeatDetectorKind::NnBeatThis, &config());
+        assert!(
+            tag.contains(kithara_beat::BEAT_MODEL_TAG),
+            "the fingerprint must name the model that ran: {tag}"
+        );
+    }
+
     #[cfg(all(feature = "beat-nn", feature = "beat-dsp"))]
     #[kithara::test(native, flash(false))]
     fn a_build_carrying_both_uses_the_network() {

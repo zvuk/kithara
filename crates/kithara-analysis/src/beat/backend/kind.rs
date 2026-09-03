@@ -1,3 +1,15 @@
+#[cfg(all(
+    feature = "beat-nn",
+    not(any(
+        feature = "beat-nn-small",
+        feature = "beat-nn-full",
+        feature = "beat-nn-full-int8"
+    ))
+))]
+compile_error!(
+    "the neural backend needs a model: beat-nn-small, beat-nn-full or beat-nn-full-int8"
+);
+
 #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
 #[display("{self:?}")]
 pub(crate) enum BeatDetectorKind {
@@ -20,7 +32,7 @@ impl BeatDetectorKind {
     pub(crate) const fn model_tag(self) -> &'static str {
         match self {
             #[cfg(feature = "beat-nn")]
-            Self::NnBeatThis => "beat_this_small_v1",
+            Self::NnBeatThis => kithara_beat::BEAT_MODEL_TAG,
             #[cfg(feature = "beat-dsp")]
             Self::DspSpectral => "spectral_flux_comb_v1",
         }

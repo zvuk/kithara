@@ -320,7 +320,14 @@ where
         self.published_at = analyzers.covered_frames();
         self.tx.send(Some(progress)).ok();
     }
+}
 
+/// Choosing where to read next, and ending a run that has read its own.
+impl<B, S> AnalysisTask<B, S>
+where
+    B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     fn reschedule(&mut self, window: Option<u64>) -> TickResult {
         self.retire();
         let Some(at) = self.choose(window) else {

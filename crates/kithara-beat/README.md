@@ -45,10 +45,20 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
 
 ## Features
 
-- `embed-small-model` — exposes `MEL_MODEL_BYTES` / `BEAT_MODEL_BYTES`
-  (`include_bytes!` of `models/mel_spectrogram.onnx`, 264 KB, and
-  `models/beat_this_small.onnx`, 10.1 MB) so FFI/mobile builds need no asset
-  plumbing. Off by default.
+- `embed-small-model`, `embed-full-model`, `embed-full-int8-model` — exactly one
+  of these exposes `MEL_MODEL_BYTES` / `BEAT_MODEL_BYTES` / `BEAT_MODEL_TAG`
+  (`include_bytes!` of `models/mel_spectrogram.onnx`, 264 KB, and the chosen
+  beat model) so FFI/mobile builds need no asset plumbing. Off by default.
+
+  | feature | model | size | mean octave-folded error over 40 tracks |
+  |---|---|---|---|
+  | `embed-small-model` | `small1` | 10.1 MB | 1.72 BPM |
+  | `embed-full-model` | `final0` | 79 MB | 0.38 BPM |
+  | `embed-full-int8-model` | `final0`, int8 | 22.6 MB | 0.35 BPM |
+
+  Only the small and mel models are in git. `scripts/fetch-beat-models.sh`
+  fetches the full one and prints how to quantize it; the build names the file
+  it wants when it is missing.
 
 ## Integration
 

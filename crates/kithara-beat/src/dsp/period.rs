@@ -34,16 +34,16 @@ impl Consts {
     const SEARCH_MIN_INDEX: usize = 24;
 }
 
-
-/// Fills a pooled buffer from `values` in the order they arrive.
-fn collected<S, I>(pools: &PoolRegion<S>, values: I) -> Result<SampleBuffer, PoolError>
+/// Fills a pooled buffer of `len` from `values`, in the order they arrive.
+fn collected<S, I>(pools: &PoolRegion<S>, len: usize, values: I) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,
     I: IntoIterator<Item = f32>,
 {
-    let staged: Vec<f32> = values.into_iter().collect();
-    let mut out = pools.get::<f32>();
-    out.try_extend_from_slice(&staged)?;
+    let mut out = pools.get_with_len::<f32>(len)?;
+    for (slot, value) in out.iter_mut().zip(values) {
+        *slot = value;
+    }
     Ok(out)
 }
 
@@ -60,7 +60,7 @@ where
     if curve.len() < ACF_FRAME {
         return Ok(pools.get::<f32>());
     }
-    let mut onsets = collected(pools, curve.iter().copied())?;
+    let mut onsets = collected(pools, curve.len(), curve.iter().copied())?;
     adaptive_threshold(&mut onsets, Consts::SMOOTH_HALF, pools)?;
 
     let weights = rayleigh_weights(pools)?;
@@ -84,9 +84,11 @@ where
         }
         start += ACF_STEP;
     }
+    let hypotheses = track(&saliences, &weights, pools)?;
     collected(
         pools,
-        track(&saliences, &weights, pools)?
+        hypotheses.len(),
+        hypotheses
             .into_iter()
             .map(|hypothesis| hypothesis.map_or(0.0, lag_of)),
     )
@@ -101,7 +103,11 @@ where
 
 /// Subtract a centred moving average, edges replicated, and half-wave
 /// rectify: the strongest peaks survive, slow trends do not.
-fn adaptive_threshold<S>(values: &mut [f32], half: usize, pools: &PoolRegion<S>) -> Result<(), PoolError>
+fn adaptive_threshold<S>(
+    values: &mut [f32],
+    half: usize,
+    pools: &PoolRegion<S>,
+) -> Result<(), PoolError>
 where
     S: HasPool<f32>,
 {
@@ -110,13 +116,17 @@ where
     }
     let last = values.len() - 1;
     let count = (2 * half + 1).to_f32().unwrap_or(1.0);
-    let smoothed = collected(pools, (0..values.len()).map(|at| {
-        (at.saturating_sub(half)..=(at + half).min(last))
-            .map(|index| values[index])
-            .sum::<f32>()
-            + values[0] * half.saturating_sub(at).to_f32().unwrap_or(0.0)
-            + values[last] * (at + half).saturating_sub(last).to_f32().unwrap_or(0.0)
-    }))?;
+    let smoothed = collected(
+        pools,
+        values.len(),
+        (0..values.len()).map(|at| {
+            (at.saturating_sub(half)..=(at + half).min(last))
+                .map(|index| values[index])
+                .sum::<f32>()
+                + values[0] * half.saturating_sub(at).to_f32().unwrap_or(0.0)
+                + values[last] * (at + half).saturating_sub(last).to_f32().unwrap_or(0.0)
+        }),
+    )?;
     for (value, mean) in values.iter_mut().zip(smoothed.iter()) {
         *value = (*value - mean / count).max(0.0);
     }
@@ -137,6 +147,7 @@ where
     let variance = 2.0 * Consts::TRANSITION_SIGMA * Consts::TRANSITION_SIGMA;
     let mut costs = collected(
         pools,
+        lags,
         saliences
             .first()
             .map(|row| {
@@ -229,10 +240,14 @@ where
     S: HasPool<f32>,
 {
     let variance = Consts::RAYLEIGH_LAG * Consts::RAYLEIGH_LAG;
-    collected(pools, (0..Consts::HYPOTHESES).map(|index| {
-        let lag = lag_of(index);
-        lag / variance * (-lag * lag / (2.0 * variance)).exp()
-    }))
+    collected(
+        pools,
+        Consts::HYPOTHESES,
+        (0..Consts::HYPOTHESES).map(|index| {
+            let lag = lag_of(index);
+            lag / variance * (-lag * lag / (2.0 * variance)).exp()
+        }),
+    )
 }
 
 #[cfg(test)]

@@ -91,7 +91,6 @@ where
         }
         Ok(curve)
     }
-
 }
 
 impl Frames {
@@ -144,8 +143,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::pools;
-    use crate::dsp::{clicks, frames};
+    use crate::{
+        dsp::{clicks, frames},
+        test_pools::pools,
+    };
 
     fn peaks(curve: &[f32]) -> Vec<usize> {
         let ceiling = curve.iter().copied().fold(0.0f32, f32::max);
@@ -159,7 +160,10 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn clicks_raise_peaks_where_the_clicks_are() {
         let pcm = clicks::track(4.0, 0.5);
-        let curve = Novelty::new(pools()).expect("a fresh region has room for the window").curve(&pcm).expect("the curve fits the region");
+        let curve = Novelty::new(pools())
+            .expect("a fresh region has room for the window")
+            .curve(&pcm)
+            .expect("the curve fits the region");
 
         let found: Vec<f32> = peaks(&curve)
             .into_iter()
@@ -187,7 +191,9 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn silence_is_flat() {
-        let curve = Novelty::new(pools()).expect("a fresh region has room for the window").curve(&clicks::silence(4.0))
+        let curve = Novelty::new(pools())
+            .expect("a fresh region has room for the window")
+            .curve(&clicks::silence(4.0))
             .expect("the curve fits the region");
         assert!(!curve.is_empty(), "silence still yields a curve");
         assert!(

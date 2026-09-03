@@ -42,6 +42,7 @@ use crate::AnalysisProgress;
 const CHUNK_FRAMES: u64 = 8820;
 
 struct Track {
+    pools: crate::test_pools::Pools,
     pcm: Vec<f32>,
     frames: u64,
     at: u64,
@@ -50,7 +51,7 @@ struct Track {
 }
 
 impl Track {
-    fn open(path: &str) -> Self {
+    fn open(pools: crate::test_pools::Pools, path: &str) -> Self {
         let bytes = std::fs::read(path).expect("probe pcm");
         let pcm: Vec<f32> = bytes
             .chunks_exact(4)
@@ -58,6 +59,7 @@ impl Track {
             .collect();
         let frames = (pcm.len() / usize::from(CH)).to_u64().unwrap_or(0);
         Self {
+            pools,
             pcm,
             frames,
             at: 0,
@@ -97,7 +99,11 @@ impl AudioRead for Track {
         self.at = at + frames;
         let from = (at * u64::from(CH)).to_usize().unwrap_or(0);
         let len = (frames * u64::from(CH)).to_usize().unwrap_or(0);
-        Ok(ChunkOutcome::Chunk(part(&self.pcm[from..from + len], at)))
+        Ok(ChunkOutcome::Chunk(part(
+            &self.pools,
+            &self.pcm[from..from + len],
+            at,
+        )))
     }
 
     fn position(&self) -> Duration {
@@ -137,8 +143,8 @@ impl AudioControl for Track {
     }
 }
 
-fn part(samples: &[f32], at: u64) -> AudioChunk {
-    chunk(samples, at)
+fn part(pools: &crate::test_pools::Pools, samples: &[f32], at: u64) -> AudioChunk {
+    chunk(pools, samples, at)
 }
 
 #[kithara::test(native, flash(false))]
@@ -146,7 +152,8 @@ fn a_real_track_reaches_its_end_whole() {
     let Ok(path) = std::env::var("KITHARA_PROBE_PCM") else {
         return;
     };
-    let track = Track::open(&path);
+    let pools = crate::test_pools::pools();
+    let track = Track::open(pools.clone(), &path);
     let frames = track.frames;
     let rate = spec().sample_rate;
 
@@ -165,7 +172,7 @@ fn a_real_track_reaches_its_end_whole() {
     .expect("node accepts the job");
 
     let mut node = NodeHarness::with_settings(
-        AnalyzerBuilder::<RubatoBackend>::new(kithara_bufpool::SamplePool::default())
+        AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
             .with_waveform(64)
             .with_beat(),
         receiver,

@@ -474,10 +474,7 @@ fn finish_into<B>(
 where
     B: ResamplerBackend,
 {
-    match stream {
-        Some(stream) => finish_stream(stream, out),
-        None => Ok(()),
-    }
+    stream.map_or(Ok(()), |stream| finish_stream(stream, out))
 }
 
 fn pad(out: &mut SampleBuffer, expected: usize) -> Result<(), PoolError> {

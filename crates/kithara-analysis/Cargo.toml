@@ -13,7 +13,12 @@ categories = ["multimedia::audio"]
 default = ["symphonia", "client-reqwest", "tls-rustls"]
 analysis-beat = []
 analysis-waveform = ["dep:realfft"]
-beat-nn = ["analysis-beat", "dep:kithara-beat", "kithara-beat/embed-small-model"]
+# `beat-nn` is the neural backend; one of the three below picks the model it
+# embeds, and the choice is named in the analysis fingerprint.
+beat-nn = ["analysis-beat", "dep:kithara-beat", "kithara-beat/nn"]
+beat-nn-small = ["beat-nn", "kithara-beat/embed-small-model"]
+beat-nn-full = ["beat-nn", "kithara-beat/embed-full-model"]
+beat-nn-full-int8 = ["beat-nn", "kithara-beat/embed-full-int8-model"]
 beat-dsp = ["analysis-beat", "dep:kithara-beat", "kithara-beat/dsp"]
 mock = ["dep:unimock"]
 probe = ["kithara-worker/probe"]

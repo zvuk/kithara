@@ -74,7 +74,6 @@ impl Schedule {
         widest.map(FrameRange::start)
     }
 
-
     fn untouched(
         &self,
         coverage: &Coverage,
