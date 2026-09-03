@@ -18,8 +18,8 @@ use crate::{
     progress::{BeatMarkResume, BeatResume, RawBeatsResume},
 };
 
-/// Detector windows of backlog the pass holds before it turns audio down.
-const BUDGET_WINDOWS: usize = 4;
+/// Runs the pass holds before it turns audio down.
+const BUDGET_RUNS: usize = 4;
 
 #[derive(Clone, Copy)]
 struct WindowMeta {
@@ -106,10 +106,12 @@ where
         let overlap_frames = frames_for_seconds(detector_rate, overlap_seconds);
         let ready_frames = window_frames.saturating_add(overlap_frames);
         let hop_frames = window_frames.saturating_sub(overlap_frames).max(1);
-        // Four detector windows of backlog, in at most four runs. Held audio
-        // past the budget then always includes a run the detector can read,
-        // which is what frees room for the audio the pass waits to take.
-        let budget = ready_frames.saturating_mul(BUDGET_WINDOWS);
+        // A run has a window to read once it holds a hop in front of that
+        // window and the window with its overlap; four runs short of that are
+        // the budget, so a full hold always has one to read.
+        let budget = hop_frames
+            .saturating_add(ready_frames)
+            .saturating_mul(BUDGET_RUNS);
 
         Self {
             params,
@@ -119,7 +121,7 @@ where
                 .max(1),
             ready_frames,
             window_frames,
-            runs: Runs::new(config, source_rate, budget, BUDGET_WINDOWS),
+            runs: Runs::new(config, source_rate, budget, BUDGET_RUNS),
             windows: BTreeMap::new(),
             short: BTreeSet::new(),
             failure: None,
@@ -1172,5 +1174,51 @@ mod tests {
                 "marker must keep its absolute source frame: want {want}, got {got}"
             );
         }
+    }
+
+    #[kithara::test]
+    fn a_hold_the_detector_cannot_read_still_takes_the_audio_that_completes_a_window() {
+        // 3 s windows at 2 s hops are ready 4 s past a window's start. A run
+        // opening 1 s past a hop boundary holds 1 s in front of its first
+        // window and 3 s of it: 4 s the detector cannot read. Four of them
+        // hold four windows' worth with nothing to read.
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(Consts::SRC)
+            .detector_window_seconds(3)
+            .detector_overlap_seconds(1)
+            .detector_min_window_seconds(1)
+            .build();
+        let second = usize::try_from(Consts::SRC).unwrap_or(1);
+        let mut analyzer = analyzer(Consts::SRC, config);
+        let mut detector = detector(|_| empty_raw());
+        for run in 0..4u64 {
+            let at = (1 + 10 * run) * u64::from(Consts::SRC);
+            let took = analyzer.push_interleaved(
+                &stereo(4 * second, |_| 0.25),
+                2,
+                at,
+                true,
+                &mut detector,
+            );
+            assert!(took, "a run of its own is taken while there is room");
+        }
+        assert!(
+            analyzer.prepare_detection(false).is_none(),
+            "the scenario holds nothing the detector can read"
+        );
+
+        // This second fills the window of the run at 11 s.
+        let took = analyzer.push_interleaved(
+            &stereo(second, |_| 0.25),
+            2,
+            15 * u64::from(Consts::SRC),
+            false,
+            &mut detector,
+        );
+        assert!(
+            took,
+            "audio that completes a window must be taken, or the detector never frees room"
+        );
     }
 }

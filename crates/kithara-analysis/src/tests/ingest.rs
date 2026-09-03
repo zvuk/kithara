@@ -12,7 +12,7 @@ use crate::{
     test_pools::{Pools, TestPools, pools},
 };
 
-/// One-second windows at a tenth of the source rate: four seconds of source
+/// One-second windows at a tenth of the source rate: eight seconds of source
 /// fill the hold, so what follows is turned down rather than taken.
 fn builder(pools: &Pools) -> AnalyzerBuilder<RubatoBackend, TestPools> {
     AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())

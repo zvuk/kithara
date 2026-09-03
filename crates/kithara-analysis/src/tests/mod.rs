@@ -1,5 +1,7 @@
 mod fixtures;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+mod hold;
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod ingest;
 mod node;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]

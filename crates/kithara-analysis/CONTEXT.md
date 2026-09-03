@@ -163,17 +163,18 @@ A run reaching `detector_min_window_seconds` is detected immediately, then
 re-detected when its full window fills. Once the extent is known, the artifact is
 spread across it at its own tempo while retaining detected marker positions. Run
 mono comes from sample guards acquired through `TrackAnalyzers`; the logical run
-set retains at most four detector windows while every physical allocation still
-competes under the region-wide hard byte budget, in at most four runs. A run
-releases everything ahead of the window it still waits on, and a run that has fed
-no window releases nothing, since the audio in front of its first window belongs
-to a window starting before it. The hold therefore follows the detection backlog
-rather than the track length. Audio past the budget is turned down rather than
-given up: it stays outside the beat coverage, and the pass reads it again once
-the detector frees room. The run cap is what makes that terminate, since a hold
-at its budget then always holds a run long enough for the detector to read. Audio
-the pass did not read for itself extends a run it already has and does not open
-one. Downmix and grid-cleanup scratch stay as
+set holds at most four runs while every physical allocation still competes under
+the region-wide hard byte budget, and its mono budget is four of what a run can
+hold with nothing for the detector to read: a hop in front of its first window
+and a window short of ready behind it. A run releases everything ahead of the
+window it still waits on, and a run that has fed no window releases nothing,
+since the audio in front of its first window belongs to a window starting before
+it. The hold therefore follows the detection backlog rather than the track
+length. Audio past the budget is turned down rather than given up: it stays
+outside the beat coverage, and the pass reads it again once the detector frees
+room. That terminates because a hold at its budget always holds a window the
+detector can read. Audio the pass did not read for itself extends a run it
+already has and does not open one. Downmix and grid-cleanup scratch stay as
 guards for the pass lifetime; no lower component constructs or stores another
 pool facade.
 
