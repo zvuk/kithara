@@ -1,7 +1,7 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 
-use super::{frames, period::ACF_STEP};
+use super::{buffer::collected, frames, period::ACF_STEP};
 struct Consts;
 
 impl Consts {
@@ -31,19 +31,6 @@ where
     decode(curve, periods, pools).map(|(beats, _)| beats)
 }
 
-/// Fills a pooled buffer of `len` from `values`, in the order they arrive.
-fn collected<S, I>(pools: &PoolRegion<S>, len: usize, values: I) -> Result<SampleBuffer, PoolError>
-where
-    S: HasPool<f32>,
-    I: IntoIterator<Item = f32>,
-{
-    let mut out = pools.get_with_len::<f32>(len)?;
-    for (slot, value) in out.iter_mut().zip(values) {
-        *slot = value;
-    }
-    Ok(out)
-}
-
 fn decode<S>(
     curve: &[f32],
     periods: &[f32],
@@ -69,9 +56,9 @@ where
     }
 
     let observation = normalise(curve, pools)?;
-    let hazards: Vec<SampleBuffer> = periods
+    let hazards: Vec<(SampleBuffer, SampleBuffer)> = periods
         .iter()
-        .map(|&p| hazard(p, states, pools))
+        .map(|&p| log_hazard(p, states, pools))
         .collect::<Result<_, _>>()?;
     // The path starts as if a beat fell just before the first frame.
     let mut previous = pools.get_with_len::<f32>(states)?;
@@ -81,33 +68,28 @@ where
     }
     let mut current = pools.get_with_len::<f32>(states)?;
     current.fill(f32::NEG_INFINITY);
-    let mut back = vec![0u16; curve.len() * states];
+    let mut back = vec![0u16; curve.len()];
 
     for frame in 0..curve.len() {
-        let hazard = &hazards[estimate_for(frame, hazards.len())];
+        let (fire, stay) = &hazards[estimate_for(frame, hazards.len())];
         let (from, score) = previous
             .iter()
             .enumerate()
-            .map(|(state, value)| (state, value + hazard[state].ln()))
+            .map(|(state, value)| (state, value + fire[state]))
             .fold((0usize, f32::NEG_INFINITY), |best, next| {
                 if next.1 > best.1 { next } else { best }
             });
-        current[0] = score + log_observation(observation[frame], 0);
-        back[frame * states] = u16::try_from(from).unwrap_or(0);
+        current[0] = score + observation[frame].ln();
+        back[frame] = u16::try_from(from).unwrap_or(0);
+        let missed = (1.0 - observation[frame]).ln();
         for state in 1..states {
-            let stay = (1.0 - hazard[state - 1]).ln();
-            current[state] =
-                previous[state - 1] + stay + log_observation(observation[frame], state);
-            back[frame * states + state] = u16::try_from(state - 1).unwrap_or(0);
+            current[state] = previous[state - 1] + stay[state - 1] + missed;
         }
         std::mem::swap(&mut previous, &mut current);
     }
 
     let optimum = previous.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    Ok((
-        backtrack(&previous, &back, states, curve.len(), pools)?,
-        optimum,
-    ))
+    Ok((backtrack(&previous, &back, curve.len(), pools)?, optimum))
 }
 
 #[cfg(test)]
@@ -137,21 +119,15 @@ where
     Ok((beats, optimum, hazards, normalise(curve, pools)?, states))
 }
 
-#[cfg(test)]
-pub(super) fn estimate_of(frame: usize, estimates: usize) -> usize {
-    estimate_for(frame, estimates)
-}
-
 /// The estimate measured over the window opening at step `k` applies during
 /// step `k + 1`.
-fn estimate_for(frame: usize, estimates: usize) -> usize {
+pub(super) fn estimate_for(frame: usize, estimates: usize) -> usize {
     (frame / ACF_STEP).saturating_sub(1).min(estimates - 1)
 }
 
 fn backtrack<S>(
     last: &[f32],
     back: &[u16],
-    states: usize,
     frames: usize,
     pools: &PoolRegion<S>,
 ) -> Result<SampleBuffer, PoolError>
@@ -171,8 +147,10 @@ where
         if state == 0 {
             out[found] = frame.to_f32().unwrap_or(0.0);
             found += 1;
+            state = back[frame].into();
+        } else {
+            state -= 1;
         }
-        state = back[frame * states + state].into();
     }
     out.truncate(found);
     out.reverse();
@@ -198,12 +176,25 @@ where
     )
 }
 
-fn log_observation(value: f32, state: usize) -> f32 {
-    if state == 0 {
-        value.ln()
-    } else {
-        (1.0 - value).ln()
-    }
+/// A hazard in the log domain: per state, the chance the interval ends here
+/// and the chance it runs on. An estimate holds for `ACF_STEP` frames, so the
+/// decoder reads these and never takes a logarithm in its loop.
+fn log_hazard<S>(
+    period: f32,
+    states: usize,
+    pools: &PoolRegion<S>,
+) -> Result<(SampleBuffer, SampleBuffer), PoolError>
+where
+    S: HasPool<f32>,
+{
+    let hazard = hazard(period, states, pools)?;
+    let fire = collected(pools, states, hazard.iter().map(|chance| chance.ln()))?;
+    let stay = collected(
+        pools,
+        states,
+        hazard.iter().map(|chance| (1.0 - chance).ln()),
+    )?;
+    Ok((fire, stay))
 }
 
 /// Per-state chance the interval ends here, from a Gaussian interval density

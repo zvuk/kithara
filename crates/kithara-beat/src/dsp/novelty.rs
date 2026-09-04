@@ -58,7 +58,7 @@ where
         }
         let frames = (mono.len() - FRAME) / Consts::STRIDE + 2;
         let mut coarse = self.pools.get_with_len::<f32>(frames)?;
-        let bins = self.fft.make_output_vec().len();
+        let bins = self.fft.complex_len();
         let mut work = Frames {
             input: self.pools.get_with_len::<f32>(FRAME)?,
             magnitude: self.pools.get_with_len::<f32>(bins)?,

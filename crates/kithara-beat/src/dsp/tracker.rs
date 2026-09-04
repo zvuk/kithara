@@ -248,7 +248,7 @@ mod optimality {
         let mut total = 0.0f64;
         let mut state = 0usize;
         for frame in 0..observations.len() {
-            let hazard = &hazards[decode::estimate_of(frame, hazards.len())];
+            let hazard = &hazards[decode::estimate_for(frame, hazards.len())];
             if beats.binary_search(&frame).is_ok() {
                 total += f64::from(hazard[state].max(1e-6).ln());
                 state = 0;
