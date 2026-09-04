@@ -326,6 +326,13 @@ where
         }
     }
 
+    /// What stopped the pass, if anything did. Audio offered after that is
+    /// turned down and no window is prepared, so the failure stands until the
+    /// slot acts on it.
+    pub(crate) fn failure(&self) -> Option<&BeatDetectError> {
+        self.failure.as_ref()
+    }
+
     pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>) {
         let mut writer = Writer::new(out);
         self.runs.write_resume(&mut writer);

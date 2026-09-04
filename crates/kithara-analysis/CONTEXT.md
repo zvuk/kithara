@@ -62,7 +62,13 @@ reader onto the same one, and a range on another axis is refused rather than
 redefining what a frame number means. Analyzers are built lazily by whichever
 range arrives first, so a pass that covers nothing allocates nothing. A checked
 scratch-allocation failure ends that pass and closes its result channel without
-publishing a value.
+publishing a value. A failure inside one slot closes that slot alone: the
+waveform slot drops itself when a buffer cannot grow, and the beat slot drops
+itself when a detection, a resample, or a window copy fails, releasing the
+audio it held. Either logs the cause once, and the pass reads on to the end
+with that artifact absent from what it publishes. The beat slot in particular
+must never keep the pass waiting on a detector it cannot feed: what it holds is
+the only thing standing between the reader and the rest of the track.
 
 `Coverage` is the canonical record of which source ranges a pass has observed,
 kept as sorted, disjoint, non-adjacent runs; `TrackAnalyzers` owns it and every

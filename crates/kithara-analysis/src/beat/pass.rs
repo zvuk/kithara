@@ -4,7 +4,7 @@ use tracing::warn;
 
 use super::{
     analyzer::{BeatAnalyzer, BeatPassConfig, DetectOutput, DetectRequest},
-    detector::BeatDetector,
+    detector::{BeatDetectError, BeatDetector},
     grid::extend_over,
     runs::Intake,
 };
@@ -38,6 +38,7 @@ where
         to self.analyzer {
             pub(crate) fn coverage(&self) -> &Coverage;
             pub(crate) fn intake(&self) -> Intake;
+            pub(crate) fn failure(&self) -> Option<&BeatDetectError>;
             pub(crate) fn apply_detection(&mut self, output: DetectOutput);
             pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>);
         }

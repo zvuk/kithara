@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::Arc;
 use kithara_resampler::ResamplerBackend;
+use tracing::warn;
 
 use crate::{
     BeatArtifact, BlobError,
@@ -167,9 +168,21 @@ where
         let Some(analyzer) = &mut self.0 else {
             return false;
         };
-        match detector {
+        let took = match detector {
             Some(detector) => analyzer.push(pools, pcm, channels, at, opens, detector.as_ref()),
             None => analyzer.push_deferred(pools, pcm, channels, at, opens),
+        };
+        self.close_if_failed();
+        took
+    }
+
+    /// A pass that failed holds audio the pass would wait on and turns down
+    /// the rest. Closing the slot releases what it holds, so the pass reads on
+    /// without a beat grid rather than waiting on a detector it cannot feed.
+    fn close_if_failed(&mut self) {
+        if let Some(error) = self.0.as_ref().and_then(BeatPass::failure) {
+            warn!(?error, "beat analysis failed; the pass reads on without it");
+            self.0 = None;
         }
     }
 
@@ -192,13 +205,16 @@ where
     where
         S: HasPool<f32>,
     {
-        self.0.as_mut()?.prepare_detection(pools, trailing)
+        let request = self.0.as_mut()?.prepare_detection(pools, trailing);
+        self.close_if_failed();
+        request
     }
 
     pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
         if let Some(analyzer) = &mut self.0 {
             analyzer.apply_detection(output);
         }
+        self.close_if_failed();
     }
 
     pub(crate) fn write_resume(&mut self) -> Option<Vec<u8>> {
