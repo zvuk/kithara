@@ -18,6 +18,9 @@ pub(super) struct Track {
     chunk_frames: u64,
     pcm: Vec<f32>,
     frames: u64,
+    /// What the source says it holds. An mp3 claims its frame count, padding
+    /// included, and delivers less.
+    claimed: u64,
     at: u64,
     bus: EventBus,
     metadata: TrackMetadata,
@@ -34,6 +37,7 @@ impl Track {
             chunk_frames,
             pcm,
             frames,
+            claimed: frames,
             at: 0,
             bus: EventBus::default(),
             metadata: TrackMetadata::default(),
@@ -47,6 +51,20 @@ impl Track {
         Self::new(pools, spec, chunk_frames, pcm)
     }
 
+    /// Silence that claims `claimed` seconds and delivers `seconds` of it.
+    pub(super) fn claiming(
+        pools: Pools,
+        spec: AudioSpec,
+        chunk_frames: u64,
+        seconds: f64,
+        claimed: f64,
+    ) -> Self {
+        let rate = f64::from(spec.sample_rate.get());
+        let mut track = Self::silence(pools, spec, chunk_frames, seconds);
+        track.claimed = (claimed * rate).round().to_u64().unwrap_or(0);
+        track
+    }
+
     pub(super) fn frames(&self) -> u64 {
         self.frames
     }
@@ -58,7 +76,7 @@ impl Track {
 
 impl AudioSession for Track {
     fn duration(&self) -> Option<Duration> {
-        Some(self.duration_for(self.frames))
+        Some(self.duration_for(self.claimed))
     }
 
     fn event_bus(&self) -> &EventBus {

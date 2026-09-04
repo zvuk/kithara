@@ -18,10 +18,11 @@ use kithara_test_utils::kithara;
 
 use super::{
     AnalysisService,
-    entry::Stage,
+    entry::{Stage, complete_for},
     fixtures::{
-        analysis, app_config, axis, fingerprint, grid, memory_store, other_axis, persistence,
-        progress, queue, revision_held, revision_of, snapshot, test_pools, track, wav_track,
+        analysis, app_config, axis, fingerprint, grid, memory_store, mp3_track, other_axis,
+        persistence, progress, queue, revision_held, revision_of, snapshot, test_pools, track,
+        wav_track,
     },
     run::{Activity, Run},
     service::{Owner, resource_config_from_source},
@@ -761,5 +762,39 @@ async fn an_invalid_layout_yields_no_analysis() {
     assert!(revision_held(&rx).is_none(), "the deck shows nothing");
     assert!(rx.changed().await.is_err(), "and nothing will come");
     assert!(owner.entries.is_empty());
+    cancel.cancel();
+}
+
+/// An mp3 claims its frame count, encoder padding included, and decodes to
+/// less. The track ends where its source ends: a pass that read all of it
+/// completes the track, and nothing asks for it again.
+#[kithara::test(native, tokio, flash(false))]
+async fn a_track_shorter_than_its_header_claims_is_completed() {
+    let directory = tempfile::tempdir().expect("temporary track dir");
+    let url = mp3_track(directory.path());
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (_host, queue) = queue();
+    let (track_id, source) = track(&queue, 1, &url);
+
+    let rx = owner.subscribe(queue, track_id, source, axis());
+    settle(&mut owner).await;
+
+    let held = rx.borrow().clone().expect("the deck holds the final value");
+    let analysis = held.analysis();
+    assert_eq!(
+        analysis.extent(),
+        Some(analysis.coverage().frontier()),
+        "the extent is where the source ended, whatever its header claimed"
+    );
+    assert!(
+        analysis.is_complete(),
+        "the track is covered: {:?}",
+        analysis.missing()
+    );
+    assert!(
+        complete_for(&held, owner.runner.fingerprint()),
+        "nothing is left for another pass"
+    );
     cancel.cancel();
 }

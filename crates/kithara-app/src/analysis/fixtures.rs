@@ -183,6 +183,19 @@ pub(crate) fn persistence(cancel: &CancelToken, pools: Pools) -> AnalysisPersist
     .expect("persistence fixture starts")
 }
 
+/// A two-second 440 Hz tone as an MPEG audio file, as a `file://` URL the app
+/// opens like any library track. Its header carries the encoder's frame
+/// count, padding included; the decoder delivers less.
+pub(crate) fn mp3_track(directory: &Path) -> String {
+    let path = directory.join("track.mp3");
+    std::fs::write(
+        &path,
+        kithara_test_fixtures::assets::sine_mp3_a440_2s().bytes(),
+    )
+    .expect("fixture track is written");
+    format!("file://{}", path.display())
+}
+
 /// A PCM WAV of `seconds` of a 440 Hz tone at the fixture axis, as a
 /// `file://` URL the app opens like any library track.
 pub(crate) fn wav_track(directory: &Path, seconds: u32) -> String {

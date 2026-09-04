@@ -1140,10 +1140,21 @@ fn final_publication_waits_for_trailing_detection() {
         .recv_timeout(Instant::now() + Duration::from_secs(2))
         .expect("EOF starts the short trailing window");
     assert_eq!(node.tick(), TickResult::Backpressured);
-    assert!(
-        results.borrow().is_none(),
-        "nothing final is published early"
-    );
+    {
+        let read = results.borrow_and_update();
+        let progress = read
+            .as_ref()
+            .expect("what the pass read is published when the reading ends");
+        assert!(
+            progress.analysis().is_complete(),
+            "the end of reading publishes the whole coverage: {:?}",
+            progress.analysis().missing()
+        );
+        assert!(
+            !progress.analysis().is_settled() && progress.is_resumable(),
+            "a pass still detecting is not settled: a restart resumes the detection"
+        );
+    }
     assert!(
         matches!(results.has_changed(), Ok(false)),
         "the final sender remains alive while detection runs"
@@ -1151,11 +1162,14 @@ fn final_publication_waits_for_trailing_detection() {
 
     release.send(()).expect("release trailing detection");
     drive_until(&mut node, || results.has_changed().is_err());
+    let read = results.borrow_and_update();
+    let progress = read.as_ref().expect("the final publication");
     assert!(
-        results
-            .borrow_and_update()
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.analysis().beat().is_some()),
+        progress.analysis().is_settled(),
+        "the final publication is the settled one"
+    );
+    assert!(
+        progress.analysis().beat().is_some(),
         "the trailing result rides the final publication"
     );
 }

@@ -15,16 +15,16 @@ use super::{
     super::{
         analyzer::AnalyzerBuilder,
         producer::ring,
-        worker::{AnalysisTask, Job},
+        worker::{AnalysisTask, AnalysisWorker, AnalysisWorkerConfig, Job},
     },
     fixtures::beat_detector,
     track::Track,
 };
 use crate::{
-    AnalysisProgress, BeatAnalysisConfig, TrackAnalysis,
+    AnalysisProgress, BeatAnalysisConfig, BeatSnapshot, BeatState, TrackAnalysis,
     beat::GridParams,
     slots::beat::detect,
-    test_pools::{Pools, pools},
+    test_pools::{Pools, TestPools, pools},
 };
 
 struct Consts;
@@ -57,6 +57,22 @@ struct Livelock {
     ticks: u64,
 }
 
+fn builder(pools: Pools) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
+    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
+        .with_waveform(Consts::BUCKETS)
+        .with_beat_config(
+            BeatAnalysisConfig::builder()
+                .resampler_backend(NoResamplerBackend)
+                .target_rate(Consts::RATE)
+                .build(),
+        )
+        .with_beat_detector(beat_detector(), GridParams::default())
+}
+
+fn chunk_seconds() -> NonZeroU32 {
+    NonZeroU32::new(Consts::CHUNK_SECONDS).expect("non-zero")
+}
+
 /// Reads the track through the scheduler with the detector as the slow
 /// consumer: it reads what the pass holds only once the reader waits on it.
 fn read_whole(track: Track) -> Result<TrackAnalysis, Livelock> {
@@ -71,15 +87,17 @@ fn read_whole_with(
     track: Track,
     on_full: &mut dyn FnMut(&Pools),
 ) -> Result<TrackAnalysis, Livelock> {
-    let mut builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
-        .with_waveform(Consts::BUCKETS)
-        .with_beat_config(
-            BeatAnalysisConfig::builder()
-                .resampler_backend(NoResamplerBackend)
-                .target_rate(Consts::RATE)
-                .build(),
-        )
-        .with_beat_detector(beat_detector(), GridParams::default());
+    run(pools, track, on_full, &mut |_| false).map(|progress| progress.analysis().clone())
+}
+
+/// Drives the pass until it is done, or until `stop` accepts a publication.
+fn run(
+    pools: Pools,
+    track: Track,
+    on_full: &mut dyn FnMut(&Pools),
+    stop: &mut dyn FnMut(&AnalysisProgress) -> bool,
+) -> Result<AnalysisProgress, Livelock> {
+    let mut builder = builder(pools.clone());
     let mut detector = builder.take_detector().expect("a detector is configured");
     let (tx, results) = watch::channel::<Option<AnalysisProgress>>(None);
     let (_writer, ingest) = ring::open_for(rate());
@@ -96,7 +114,7 @@ fn read_whole_with(
     let mut task = AnalysisTask::new(
         job,
         &builder,
-        NonZeroU32::new(Consts::CHUNK_SECONDS).expect("non-zero"),
+        chunk_seconds(),
         NonZeroUsize::new(8).expect("non-zero"),
         NonZeroU32::new(5).expect("non-zero"),
     )
@@ -105,6 +123,7 @@ fn read_whole_with(
     let mut ticks = 0;
     let mut waited = 0;
     let mut filled = false;
+    let mut results = results;
     loop {
         if task.is_ending() {
             while let Some(request) = task.prepare_detection() {
@@ -113,7 +132,16 @@ fn read_whole_with(
         }
         ticks += 1;
         assert!(ticks < Consts::TICK_LIMIT, "the pass reads without end");
-        match task.tick(&builder, None) {
+        let result = task.tick(&builder, None);
+        if matches!(results.has_changed(), Ok(true))
+            && results
+                .borrow_and_update()
+                .as_ref()
+                .is_some_and(|progress| stop(progress))
+        {
+            break;
+        }
+        match result {
             TickResult::Done => break,
             TickResult::Backpressured => {
                 if !filled {
@@ -133,12 +161,11 @@ fn read_whole_with(
             _ => waited = 0,
         }
     }
-    let analysis = results
+    let progress = results
         .borrow()
-        .as_ref()
-        .map(|progress| progress.analysis().clone())
+        .clone()
         .expect("the pass publishes what it covered");
-    Ok(analysis)
+    Ok(progress)
 }
 
 /// Takes the pool down to less than a detector window and more than a chunk:
@@ -223,4 +250,90 @@ fn a_pass_that_cannot_feed_its_detector_reads_on() {
         analysis.waveform().is_some(),
         "the waveform does not depend on the detector"
     );
+}
+
+/// An mp3 claims its frame count, encoder padding included, and decodes to
+/// less. Where the source ends is where the track ends: nothing it never had
+/// is missing from a pass that read all of it.
+#[kithara::test]
+fn a_source_that_ends_before_its_claimed_length_is_complete() {
+    let track = Track::claiming(pools(), spec(), Consts::CHUNK_FRAMES, 40.0, 40.5);
+    let delivered = track.frames();
+    let analysis = read_whole(track).unwrap_or_else(|Livelock { ticks }| {
+        panic!("the pass waits on a detector that has nothing to read, after {ticks} ticks")
+    });
+    assert_eq!(
+        analysis.extent(),
+        Some(delivered),
+        "the extent is where the source ended, whatever it claimed"
+    );
+    assert!(
+        analysis.is_complete(),
+        "the track must be covered: {:?}",
+        analysis.missing()
+    );
+    assert!(analysis.is_settled());
+    assert_eq!(lost(&analysis), 0, "the beat pass took the whole track");
+    assert_eq!(
+        analysis.beat().map(BeatSnapshot::state),
+        Some(BeatState::Final),
+        "a grid over the whole track is final"
+    );
+}
+
+fn claiming(pools: Pools) -> Track {
+    Track::claiming(pools, spec(), Consts::CHUNK_FRAMES, 40.0, 40.5)
+}
+
+/// A checkpoint taken after the source proved where it ends carries that
+/// extent, whatever the source claimed. Reopened, the source claims what it
+/// always claimed; the claim is no reason to refuse the checkpoint, and the
+/// resume finishes the track.
+#[kithara::test(tokio)]
+async fn a_checkpoint_past_the_end_resumes_on_a_source_claiming_more() {
+    let pools = pools();
+    let delivered = claiming(pools.clone()).frames();
+    let checkpoint = run(
+        pools.clone(),
+        claiming(pools.clone()),
+        &mut |_| {},
+        &mut |progress| progress.is_resumable() && progress.analysis().extent() == Some(delivered),
+    )
+    .unwrap_or_else(|Livelock { ticks }| {
+        panic!("the pass waits on its detector after {ticks} ticks")
+    });
+    assert!(
+        checkpoint.is_resumable() && checkpoint.analysis().extent() == Some(delivered),
+        "a checkpoint is published once the source proved where it ends: {:?}",
+        checkpoint.analysis().extent()
+    );
+    assert!(
+        !checkpoint.analysis().is_complete(),
+        "a checkpoint with the front of the track still to read: {:?}",
+        checkpoint.analysis().missing()
+    );
+
+    let master = CancelToken::root();
+    let worker = AnalysisWorker::new(
+        AnalysisWorkerConfig::for_builder(builder(pools.clone()))
+            .cancel(master.clone())
+            .chunk_seconds(chunk_seconds())
+            .build(),
+    );
+    let (mut rx, _producer, pass) = worker
+        .open_resume(checkpoint.clone())
+        .expect("a checkpoint past the end is a valid resume");
+    worker
+        .start_resume(pass, Box::new(claiming(pools)))
+        .expect("the reopened source's claim is no reason to refuse the checkpoint");
+
+    while rx.changed().await.is_ok() {}
+    let held = rx.borrow().clone().expect("the resume publishes");
+    assert!(
+        held.analysis().is_complete(),
+        "the resume finished the track: {:?}",
+        held.analysis().missing()
+    );
+    assert_eq!(held.analysis().extent(), Some(delivered));
+    assert!(held.analysis().revision() > checkpoint.analysis().revision());
 }
