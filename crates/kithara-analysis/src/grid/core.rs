@@ -85,11 +85,21 @@ where
     S: HasPool<f32>,
 {
     let mut buffers = GridBuffers::new(pools);
-    let grid = build_grid_with(raw, sample_rate, params, &mut buffers)?;
-    Ok(super::octave::fold(grid))
+    build_grid_with(raw, sample_rate, params, &mut buffers)
 }
 
+/// A published grid is counted at the rate it is played, so the octave fold
+/// is part of building one.
 pub(crate) fn build_grid_with(
+    raw: &RawBeats,
+    sample_rate: u32,
+    params: &GridParams,
+    buffers: &mut GridBuffers,
+) -> Result<BeatArtifact, PoolError> {
+    assemble(raw, sample_rate, params, buffers).map(super::octave::fold)
+}
+
+fn assemble(
     raw: &RawBeats,
     sample_rate: u32,
     params: &GridParams,

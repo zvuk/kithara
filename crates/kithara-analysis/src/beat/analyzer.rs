@@ -7,7 +7,7 @@ use num_traits::cast::ToPrimitive;
 
 use super::{
     detector::{BeatDetectError, BeatDetector, BeatMark, RawBeats},
-    grid::{GridBuffers, GridParams, build_grid_with, fold_octave},
+    grid::{GridBuffers, GridParams, build_grid_with},
     runs::{Intake, Runs},
 };
 use crate::{
@@ -192,9 +192,7 @@ where
         normalize_marks(&mut raw.beats);
         normalize_marks(&mut raw.downbeats);
 
-        build_grid_with(&raw, self.source_rate, &self.params, &mut self.grid)
-            .map(fold_octave)
-            .map_err(Into::into)
+        build_grid_with(&raw, self.source_rate, &self.params, &mut self.grid).map_err(Into::into)
     }
 
     pub(crate) fn push_interleaved<S>(
