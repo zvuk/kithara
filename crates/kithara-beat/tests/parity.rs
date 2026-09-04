@@ -8,52 +8,16 @@
 //! pregenerated reference.
 mod common;
 
-use std::path::{Path, PathBuf};
-
-use common::{Score, f_measure, load_golden};
+use common::{WINDOW, f_measure, fixture, load_golden, load_pcm_fixture, report};
 use kithara_beat::{BEAT_MODEL_BYTES, BeatThis, MEL_MODEL_BYTES};
 use kithara_bufpool::testing::pools;
 use kithara_test_utils::kithara;
 
-const WINDOW: f64 = 0.070;
 const SMALL_MIN_F: f64 = 0.99;
-
-fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn load_pcm_fixture() -> Vec<f32> {
-    let path = fixture("beat_test_mono_22050.f32le");
-    let bytes = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("failed to read PCM fixture {}: {e}", path.display()));
-    assert_eq!(
-        bytes.len() % 4,
-        0,
-        "raw f32le fixture length must be a multiple of 4"
-    );
-    bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .collect()
-}
-
-fn report(kind: &str, s: &Score) {
-    eprintln!(
-        "{kind}: F={:.4} matched {}/{} (ref {}) max_diff={:.1}ms mean_diff={:.1}ms",
-        s.f_measure,
-        s.matched,
-        s.n_est,
-        s.n_ref,
-        s.max_matched_diff * 1000.0,
-        s.mean_matched_diff * 1000.0,
-    );
-}
 
 #[kithara::test(native, flash(false))]
 fn python_parity_small_model() {
-    let pcm = load_pcm_fixture();
+    let pcm = load_pcm_fixture("beat_test_mono_22050.f32le");
     let bt = BeatThis::builder()
         .mel_model(MEL_MODEL_BYTES)
         .beat_model(BEAT_MODEL_BYTES)

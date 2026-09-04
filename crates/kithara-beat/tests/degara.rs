@@ -15,15 +15,12 @@
 //! `kithara-analysis`.
 mod common;
 
-use std::path::{Path, PathBuf};
-
-use common::{Score, f_measure, load_golden};
+use common::{WINDOW, f_measure, fixture, load_golden, load_pcm_fixture, report};
 use kithara_beat::SpectralBeats;
 use kithara_bufpool::testing::pools;
 use kithara_test_utils::kithara;
 use num_traits::cast::ToPrimitive;
 
-const WINDOW: f64 = 0.070;
 const MIN_F: f64 = 0.85;
 
 /// Tempo ratios that mean the grid is on a metrical level of its own, and how
@@ -47,22 +44,6 @@ struct Window {
     at: f64,
     until: f64,
     beats: Vec<f32>,
-}
-
-fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn load_pcm_fixture(name: &str) -> Vec<f32> {
-    let path = fixture(name);
-    let bytes = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("failed to read PCM fixture {}: {e}", path.display()));
-    bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .collect()
 }
 
 fn seconds(frames: usize) -> f64 {
@@ -132,18 +113,6 @@ fn windows(pcm: &[f32], from: usize) -> Vec<Window> {
     out
 }
 
-fn report(s: &Score) {
-    eprintln!(
-        "beats: F={:.4} matched {}/{} (ref {}) max_diff={:.1}ms mean_diff={:.1}ms",
-        s.f_measure,
-        s.matched,
-        s.n_est,
-        s.n_ref,
-        s.max_matched_diff * 1000.0,
-        s.mean_matched_diff * 1000.0,
-    );
-}
-
 fn shown(value: Option<f64>, digits: usize) -> String {
     value.map_or_else(|| "-".to_owned(), |value| format!("{value:.digits$}"))
 }
@@ -195,7 +164,7 @@ fn parity(pcm: &str, name: &str, from_seconds: usize) {
     let reference = between(&golden.beats, seconds(from_seconds * Pass::RATE), covered);
 
     let score = f_measure(&reference, &detected, WINDOW);
-    report(&score);
+    report("beats", &score);
     let offender = offender(&windows, &golden.beats);
 
     if let Some((at, level, multiple)) = offender {

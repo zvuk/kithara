@@ -1,3 +1,4 @@
+mod buffer;
 #[cfg(test)]
 mod clicks;
 mod decode;

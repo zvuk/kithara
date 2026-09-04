@@ -1,6 +1,8 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 
+use super::buffer::collected;
+
 /// Periodicity window, 512 detection-function frames (5.94 s).
 pub(crate) const ACF_FRAME: usize = 512;
 /// One beat-period estimate every 128 frames (1.49 s), a 75% overlap.
@@ -34,19 +36,6 @@ impl Consts {
     const SEARCH_MIN_INDEX: usize = 24;
 }
 
-/// Fills a pooled buffer of `len` from `values`, in the order they arrive.
-fn collected<S, I>(pools: &PoolRegion<S>, len: usize, values: I) -> Result<SampleBuffer, PoolError>
-where
-    S: HasPool<f32>,
-    I: IntoIterator<Item = f32>,
-{
-    let mut out = pools.get_with_len::<f32>(len)?;
-    for (slot, value) in out.iter_mut().zip(values) {
-        *slot = value;
-    }
-    Ok(out)
-}
-
 fn lag_of(hypothesis: usize) -> f32 {
     (hypothesis + 1).to_f32().unwrap_or(0.0)
 }
@@ -64,8 +53,8 @@ where
     adaptive_threshold(&mut onsets, Consts::SMOOTH_HALF, pools)?;
 
     let weights = rayleigh_weights(pools)?;
-    let mut window = zeroed(pools, ACF_FRAME)?;
-    let mut autocorrelation = zeroed(pools, ACF_FRAME)?;
+    let mut window = pools.get_with_len::<f32>(ACF_FRAME)?;
+    let mut autocorrelation = pools.get_with_len::<f32>(ACF_FRAME)?;
     let mut saliences: Vec<SampleBuffer> = Vec::new();
     // The last window is filled out with zeros, and the first window that
     // needs that is the last.
@@ -92,13 +81,6 @@ where
             .into_iter()
             .map(|hypothesis| hypothesis.map_or(0.0, lag_of)),
     )
-}
-
-fn zeroed<S>(pools: &PoolRegion<S>, len: usize) -> Result<SampleBuffer, PoolError>
-where
-    S: HasPool<f32>,
-{
-    pools.get_with_len::<f32>(len)
 }
 
 /// Subtract a centred moving average, edges replicated, and half-wave
@@ -222,7 +204,7 @@ fn comb<S>(
 where
     S: HasPool<f32>,
 {
-    let mut out = zeroed(pools, Consts::HYPOTHESES)?;
+    let mut out = pools.get_with_len::<f32>(Consts::HYPOTHESES)?;
     for harmonic in 1..=Consts::COMB_HARMONICS {
         let width = (2 * harmonic - 1).to_f32().unwrap_or(1.0);
         for offset in 0..(2 * harmonic - 1) {

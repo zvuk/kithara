@@ -42,35 +42,28 @@ WINDOWED = [
 ]
 
 
-def record(source: str, golden: str) -> None:
-    pcm = np.fromfile(HERE / source, dtype="<f4")
-    resampled = es.Resample(
-        inputSampleRate=SOURCE_RATE, outputSampleRate=ESSENTIA_RATE
-    )(pcm)
-    ticks = es.BeatTrackerDegara(minTempo=MIN_TEMPO, maxTempo=MAX_TEMPO)(resampled)
-
-    (HERE / golden).write_text(
-        json.dumps(
-            {
-                "beats": [round(float(t), 6) for t in ticks],
-                "downbeats": [],
-            },
-            indent=2,
-        )
-        + "\n"
-    )
-    gaps = np.diff(ticks)
-    print(
-        f"{golden}: {len(ticks)} beats over {len(pcm) / SOURCE_RATE:.2f} s, "
-        f"median {60 / float(np.median(gaps)):.2f} BPM"
-    )
-
-
 def ticks_of(slice_22050: np.ndarray) -> np.ndarray:
     resampled = es.Resample(
         inputSampleRate=SOURCE_RATE, outputSampleRate=ESSENTIA_RATE
     )(slice_22050)
     return es.BeatTrackerDegara(minTempo=MIN_TEMPO, maxTempo=MAX_TEMPO)(resampled)
+
+
+def write_golden(golden: str, beats: list[float], note: str) -> None:
+    (HERE / golden).write_text(
+        json.dumps({"beats": beats, "downbeats": []}, indent=2) + "\n"
+    )
+    gaps = np.diff(beats)
+    print(
+        f"{golden}: {len(beats)} beats {note}, "
+        f"median {60 / float(np.median(gaps)):.2f} BPM"
+    )
+
+
+def record(source: str, golden: str) -> None:
+    pcm = np.fromfile(HERE / source, dtype="<f4")
+    beats = [round(float(t), 6) for t in ticks_of(pcm)]
+    write_golden(golden, beats, f"over {len(pcm) / SOURCE_RATE:.2f} s")
 
 
 def record_windowed(source: str, golden: str, from_seconds: int) -> None:
@@ -91,14 +84,7 @@ def record_windowed(source: str, golden: str, from_seconds: int) -> None:
             break
         at += KEPT_SECONDS * SOURCE_RATE
 
-    (HERE / golden).write_text(
-        json.dumps({"beats": beats, "downbeats": []}, indent=2) + "\n"
-    )
-    gaps = np.diff(beats)
-    print(
-        f"{golden}: {len(beats)} beats from {from_seconds} s, "
-        f"median {60 / float(np.median(gaps)):.2f} BPM"
-    )
+    write_golden(golden, beats, f"from {from_seconds} s")
 
 
 def main() -> None:
