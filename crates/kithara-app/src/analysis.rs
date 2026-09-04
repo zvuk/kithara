@@ -168,7 +168,14 @@ impl AnalysisController {
         if let Some(target) = &run.target {
             self.cache.put(target.clone(), progress.clone());
         }
-        publish_if_current(state, run.track_id, progress.analysis().clone());
+        let shown = publish_if_current(state, run.track_id, progress.analysis().clone());
+        debug!(
+            track_id = ?run.track_id,
+            revision = progress.analysis().revision(),
+            complete = progress.analysis().is_complete(),
+            shown,
+            "analysis: final published"
+        );
 
         let (Some(target), Some(persistence)) = (run.target, self.persistence.clone()) else {
             return;
@@ -223,6 +230,7 @@ impl AnalysisController {
                 && run.track_id != id
             {
                 let preempted = run.track_id;
+                debug!(?preempted, current = ?id, "analysis: run preempted by the current track");
                 self.runner.clear();
                 self.pending.retain(|t| *t != preempted);
                 self.pending.push_back(preempted);
@@ -295,16 +303,27 @@ impl AnalysisController {
             return;
         }
         run.shown_revision = Some(analysis.revision());
+        let revision = analysis.revision();
+        let complete = analysis.is_complete();
         let target = run.target.clone();
         let track_id = run.track_id;
 
+        let mut queued = false;
         if let Some(target) = target {
             self.cache.put(target.clone(), progress.clone());
             if let Some(persistence) = &self.persistence {
-                let _ = persistence.try_store(target, progress.clone());
+                queued = persistence.try_store(target, progress.clone());
             }
         }
-        publish_if_current(state, track_id, progress.into());
+        let shown = publish_if_current(state, track_id, progress.into());
+        debug!(
+            ?track_id,
+            revision,
+            complete,
+            shown,
+            queued,
+            "analysis: intermediate published"
+        );
     }
 
     /// Start the next analysis worth running, if none is in flight: serve
@@ -361,6 +380,15 @@ impl AnalysisController {
         let mut resume = None;
         let decode = match plan_analysis(target.as_ref(), &mut self.cache, rate) {
             Plan::Serve { progress, refill } => {
+                debug!(
+                    ?track_id,
+                    is_current,
+                    refill,
+                    resumable = progress.is_resumable(),
+                    complete = progress.analysis().is_complete(),
+                    revision = progress.analysis().revision(),
+                    "analysis: cached snapshot served"
+                );
                 if is_current {
                     state.lock().set_analysis(Some(progress.analysis().clone()));
                     served = true;
@@ -370,7 +398,10 @@ impl AnalysisController {
                 }
                 refill
             }
-            Plan::Decode => true,
+            Plan::Decode => {
+                debug!(?track_id, is_current, "analysis: no cached snapshot; decoding");
+                true
+            }
         };
         if !decode {
             return None;
