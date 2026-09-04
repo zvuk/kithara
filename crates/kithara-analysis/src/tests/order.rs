@@ -5,7 +5,7 @@ use super::{
     super::analyzer::AnalyzerBuilder,
     fixtures::{Artifacts, CH, SR, artifacts, assert_agrees, beat_detector, chunk, sine, spec},
 };
-use crate::{beat::GridParams, test_pools::pools};
+use crate::{analyzer::Extent, beat::GridParams, test_pools::pools};
 
 const BUCKETS: usize = 64;
 
@@ -15,16 +15,18 @@ fn analyse(samples: &[f32], blocks: &[(u64, usize, usize)]) -> Artifacts {
         .with_waveform(BUCKETS)
         .with_beat_detector(beat_detector(), GridParams::default());
     let mut beat = builder.take_detector();
+    let mut extent = Extent::default();
     let mut analyzers = builder
         .build(spec().sample_rate, "order-harness".into(), 0)
         .expect("analysis buffers fit the test region");
 
     for (at, from, to) in blocks {
         let part = samples.get(*from..*to).unwrap_or_default();
-        analyzers.push(&chunk(&pools, part, *at), beat.as_mut());
+        analyzers.push(&chunk(&pools, part, *at), &mut extent, beat.as_mut());
     }
 
-    artifacts(&analyzers.snapshot(beat.as_mut(), true))
+    let frames = u64::try_from(samples.len() / usize::from(CH)).unwrap_or(0);
+    artifacts(&analyzers.snapshot(beat.as_mut(), true, Some(frames)))
 }
 
 fn blocks(frames: usize, count: usize) -> Vec<(u64, usize, usize)> {

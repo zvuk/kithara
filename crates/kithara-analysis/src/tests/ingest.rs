@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     BeatAnalysisConfig,
-    analyzer::Ingest,
+    analyzer::{Extent, Ingest},
     beat::GridParams,
     test_pools::{Pools, TestPools, pools},
 };
@@ -35,6 +35,7 @@ fn a_range_the_beat_pass_turned_down_is_told_apart_from_one_it_has() {
     let pools = pools();
     let mut builder = builder(&pools);
     let mut detector = builder.take_detector();
+    let mut extent = Extent::default();
     let mut pass = builder
         .build(spec().sample_rate, "ingest-harness".into(), 0)
         .expect("analysis buffers fit the test region");
@@ -43,21 +44,24 @@ fn a_range_the_beat_pass_turned_down_is_told_apart_from_one_it_has() {
     // behind, so the hold fills. Offering a range twice tells the outcomes
     // apart, since the second offer is new to nobody.
     let read = |at: u64, seconds: usize| chunk(&pools, &sine_from(at, seconds * second), at);
-    assert_eq!(pass.push(&read(0, 2), detector.as_mut()), Ingest::Accepted);
-    assert_eq!(pass.push(&read(0, 2), None), Ingest::Covered);
+    assert_eq!(
+        pass.push(&read(0, 2), &mut extent, detector.as_mut()),
+        Ingest::Accepted
+    );
+    assert_eq!(pass.push(&read(0, 2), &mut extent, None), Ingest::Covered);
 
     let mut at = 2 * step;
     loop {
         assert!(at < 60 * step, "the hold is bounded");
-        pass.push(&read(at, 1), None);
-        if pass.push(&read(at, 1), None) == Ingest::Deferred {
+        pass.push(&read(at, 1), &mut extent, None);
+        if pass.push(&read(at, 1), &mut extent, None) == Ingest::Deferred {
             break;
         }
         at = at.saturating_add(step);
     }
 
     assert_eq!(
-        pass.push(&read(0, 2), None),
+        pass.push(&read(0, 2), &mut extent, None),
         Ingest::Covered,
         "a range every consumer has stays covered"
     );

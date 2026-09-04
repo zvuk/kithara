@@ -6,7 +6,7 @@ use kithara_signal::AudioChunk;
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
 
-use super::{AnalysisFingerprint, AnalysisToken, TrackAnalysis};
+use super::{AnalysisFingerprint, AnalysisToken, Extent, TrackAnalysis};
 use crate::{
     AnalysisProgress, BeatSnapshot, BeatState, BlobError,
     beat::Intake,
@@ -37,10 +37,8 @@ where
     pub(super) waveform: waveform::Slot,
     pub(super) coverage: Coverage,
     pub(super) fingerprint: AnalysisFingerprint,
-    pub(super) extent: Option<u64>,
     pub(super) revision: u64,
     pub(super) settled: bool,
-    pub(super) ended: bool,
     pub(super) source_sample_rate: NonZeroU32,
     pub(super) token: AnalysisToken,
     pub(super) pools: PoolRegion<S>,
@@ -60,11 +58,6 @@ where
     /// detector frees room, so it trails what the pass has seen.
     pub(crate) fn analysed(&self) -> &Coverage {
         self.beat.coverage(&self.coverage)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn plan_extent(&mut self, frames: u64) {
-        self.extent = Some(self.extent.map_or(frames, |held| held.max(frames)));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -92,6 +85,7 @@ where
     pub(crate) fn push(
         &mut self,
         chunk: &AudioChunk,
+        extent: &mut Extent,
         detector: Option<&mut beat::Detector>,
     ) -> Ingest {
         let rate = chunk.spec().sample_rate;
@@ -106,20 +100,28 @@ where
 
         let channels = usize::from(chunk.spec().channels.max(1));
         let range = FrameRange::from(&chunk.meta);
-        self.ingest(&chunk.samples[..], channels, range, true, detector)
+        self.ingest(&chunk.samples[..], channels, range, true, extent, detector)
     }
 
     pub(crate) fn push_mono(
         &mut self,
         mono: &[f32],
         at: u64,
+        extent: &mut Extent,
         detector: Option<&mut beat::Detector>,
     ) -> Ingest {
         let frames = mono.len().to_u64().unwrap_or(0);
         // Audio the pass did not read for itself extends what the beat pass
         // holds; a run of its own is backlog the pass did not plan for and
         // would have to be read again anyway.
-        self.ingest(mono, 1, FrameRange::new(at, frames), false, detector)
+        self.ingest(
+            mono,
+            1,
+            FrameRange::new(at, frames),
+            false,
+            extent,
+            detector,
+        )
     }
 
     fn ingest(
@@ -128,20 +130,19 @@ where
         channels: usize,
         range: FrameRange,
         opens: bool,
+        extent: &mut Extent,
         detector: Option<&mut beat::Detector>,
     ) -> Ingest {
-        if self.ended && self.extent.is_some_and(|extent| range.end() > extent) {
+        if extent.refuses(range) {
             warn!(
                 start = range.start(),
                 end = range.end(),
-                extent = self.extent,
-                "analysis: range lies beyond the source extent; dropped"
+                extent = ?extent.frames(),
+                "analysis: range lies past the end the source proved; dropped"
             );
             return Ingest::OutOfExtent;
         }
-        if self.extent.is_some_and(|extent| range.end() > extent) {
-            self.extent = Some(range.end());
-        }
+        extent.show(range);
         // The beat pass trails the rest, so a range the pass has already seen
         // can still be what the beat pass is waiting to be offered again.
         let seen = self.coverage.contains(range);
@@ -178,30 +179,20 @@ where
         &mut self,
         detector: Option<&mut beat::Detector>,
         ending: bool,
+        extent: Option<u64>,
     ) -> TrackAnalysis {
-        if ending {
-            // The frontier is the extent only for a pass that grew from the
-            // start; one that planned against a longer source keeps that
-            // length, so the tail it never reached stays missing.
-            let frontier = self.coverage.frontier();
-            self.extent = Some(
-                self.extent
-                    .map_or(frontier, |planned| planned.max(frontier)),
-            );
-            self.ended = true;
-        }
         self.revision = self.revision.saturating_add(1);
 
-        let waveform = waveform::snapshot(&mut self.waveform, self.extent);
-        let state = self.beat_state();
-        let beat = Slot::snapshot(&mut self.beat, &self.pools, detector, ending, self.extent)
+        let waveform = waveform::snapshot(&mut self.waveform, extent);
+        let state = self.beat_state(extent);
+        let beat = Slot::snapshot(&mut self.beat, &self.pools, detector, ending, extent)
             .map(|(grid, unanalysed)| BeatSnapshot::new(grid, state, unanalysed));
 
         TrackAnalysis::builder()
             .token(self.token.clone())
             .revision(self.revision)
             .source_sample_rate(self.source_sample_rate)
-            .maybe_extent(self.extent)
+            .maybe_extent(extent)
             .coverage(self.coverage.clone())
             .fingerprint(self.fingerprint.clone())
             .settled(self.settled)
@@ -215,8 +206,9 @@ where
         detector: Option<&mut beat::Detector>,
         ending: bool,
         chunk_frames: NonZeroU64,
+        extent: Option<u64>,
     ) -> AnalysisProgress {
-        let analysis = self.snapshot(detector, ending);
+        let analysis = self.snapshot(detector, ending, extent);
         let resume = if analysis.is_settled() {
             None
         } else {
@@ -238,7 +230,6 @@ where
         chunk_frames: NonZeroU64,
     ) -> Result<(), BlobError> {
         if analysis.is_settled()
-            || analysis.extent().is_none()
             || analysis.source_sample_rate() != self.source_sample_rate
             || analysis.token() != &self.token
             || analysis.fingerprint() != &self.fingerprint
@@ -249,17 +240,16 @@ where
         waveform::restore(&mut self.waveform, &self.pools, resume.waveform)?;
         self.beat.restore(&self.pools, resume.beat)?;
         self.coverage = analysis.coverage().clone();
-        self.extent = analysis.extent();
         self.settled = false;
-        self.ended = false;
         Ok(())
     }
 
-    fn beat_state(&self) -> BeatState {
-        let covered = self
-            .extent
-            .is_some_and(|extent| self.analysed().contains(FrameRange::new(0, extent)));
-        if covered {
+    /// A grid is final once the pass is over and the beat pass took the
+    /// whole extent: what an earlier revision holds can still change.
+    fn beat_state(&self, extent: Option<u64>) -> BeatState {
+        let covered =
+            extent.is_some_and(|extent| self.analysed().contains(FrameRange::new(0, extent)));
+        if self.settled && covered {
             BeatState::Final
         } else {
             BeatState::Provisional
