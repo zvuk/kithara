@@ -236,7 +236,14 @@ where
         }
     }
 
+    /// Idle buffers stay charged while they wait to be reused. A reservation
+    /// that does not fit takes them back first: a live request is never
+    /// refused for memory the pool merely retains.
     fn reserve(&self, amount: usize) -> Result<crate::budget::Reservation<'_>, PoolError> {
+        if let Ok(reservation) = self.budgets.reserve(amount) {
+            return Ok(reservation);
+        }
+        self.reclaim();
         self.budgets
             .reserve(amount)
             .map_err(|failure| match failure {
@@ -251,6 +258,23 @@ where
                     max_bytes: snapshot.limit,
                 },
             })
+    }
+
+    /// Drops every idle buffer and releases its charge.
+    fn reclaim(&self) {
+        let release = |value: B| {
+            let bytes = Self::byte_size(&value).unwrap_or(usize::MAX);
+            drop(value);
+            self.budgets.release(bytes);
+        };
+        if let Some(cold) = &self.cold {
+            while let Some(value) = cold.pop() {
+                release(value);
+            }
+        }
+        for shard in &self.shards {
+            shard.drain(release);
+        }
     }
 
     fn shard_index() -> usize {
@@ -269,19 +293,6 @@ where
     B: Storage,
 {
     fn drop(&mut self) {
-        if let Some(cold) = &self.cold {
-            while let Some(value) = cold.pop() {
-                let bytes = Self::byte_size(&value).unwrap_or(usize::MAX);
-                drop(value);
-                self.budgets.release(bytes);
-            }
-        }
-        for shard in &self.shards {
-            shard.drain(|value| {
-                let bytes = Self::byte_size(&value).unwrap_or(usize::MAX);
-                drop(value);
-                self.budgets.release(bytes);
-            });
-        }
+        self.reclaim();
     }
 }

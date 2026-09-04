@@ -359,3 +359,28 @@ fn generic_keys_report_reuse_and_rejected_returns() {
     assert_eq!(stats.alloc_misses, 1);
     assert_eq!(stats.put_drops, 1);
 }
+
+/// A buffer one thread has dropped sits in that thread's shard, charged to the
+/// budget until something reuses it. Another thread cannot reach it and asks
+/// for memory of its own: the pool must give idle capacity back before it
+/// refuses a live request, or a few large transient reads on a handful of
+/// threads leave the whole region refusing everyone.
+#[kithara::test]
+fn idle_capacity_on_other_shards_does_not_refuse_a_live_request() {
+    const MIB: usize = 1024 * 1024;
+    let pools = pools(4 * MIB);
+
+    for turn in 0..64 {
+        let outcome = thread::scope(|scope| {
+            scope
+                .spawn(|| pools.get_with_len::<u8>(MIB).map(drop))
+                .join()
+                .unwrap_or_else(|_| panic!("turn {turn} panicked"))
+        });
+        assert!(
+            outcome.is_ok(),
+            "turn {turn} was refused while every earlier buffer had been dropped: {outcome:?}"
+        );
+    }
+    assert!(pools.stats().allocated_bytes <= 4 * MIB);
+}

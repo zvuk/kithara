@@ -58,7 +58,12 @@ Accounting measures `Vec` capacity multiplied by element size and `String`
 capacity in bytes. It deliberately does not claim to measure RSS, allocator
 metadata, or the temporary old-plus-new allocation during transactional growth.
 Every retained or checked-out pooled allocation remains charged until trimming
-or dropping returns bytes.
+or dropping returns bytes. A retained buffer is charged only while nothing
+needs its bytes: a reservation that does not fit under either counter first
+drops every idle buffer in the region's cold queue and shards, then tries
+once more. A live request is refused only for memory that is checked out, so
+transient large reads on a few threads cannot leave the region refusing
+everyone while their buffers sit idle in shards the caller cannot reach.
 
 Growth chooses one amortized target, clamped to the capacity currently available
 under both counters, and makes one reservation/allocation attempt. This keeps
