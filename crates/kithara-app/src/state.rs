@@ -480,12 +480,13 @@ struct HeldAnalysis {
 }
 
 impl HeldAnalysis {
-    /// Observe the track the queue holds now and show what it has.
+    /// Observe the track the deck shows now and mirror what it has.
     async fn follow(&mut self, state: &Mutex<UiState>) {
-        let held = self
-            .queue
-            .current_index()
-            .and_then(|index| state.lock().tracks.get(index).map(|track| track.id));
+        let held = {
+            let st = state.lock();
+            st.current_track_index
+                .and_then(|index| st.tracks.get(index).map(|track| track.id))
+        };
         let track = held.and_then(|id| self.queue.track_source(id).map(|source| (id, source)));
         self.rx = match (track, self.axis()) {
             (Some((id, source)), Some(axis)) => {
@@ -686,8 +687,8 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        UiState, bpm_info_from_state, codec_label, covered, frames_to_fractions, listen,
-        unready_ranges,
+        HeldAnalysis, UiState, bpm_info_from_state, codec_label, covered, frames_to_fractions,
+        listen, unready_ranges,
     };
     use crate::{
         analysis::{AnalysisHandle, handle::Request},
@@ -751,6 +752,56 @@ mod tests {
     }
 
     use crate::waveform::TrackAnalysis;
+
+    /// A deck shows a track before anything plays; that is the track it
+    /// observes, and the track the deck moves to is the next one it observes.
+    #[kithara::test(native, tokio)]
+    async fn a_deck_observes_the_track_it_shows_before_playback_and_follows_it() {
+        let (_host, queue) = queue();
+        let first_id = TrackId::from(1);
+        let second_id = TrackId::from(2);
+        queue
+            .append_with_id(first_id, "file:///tmp/track-1.mp3".to_owned())
+            .expect("append test track");
+        queue
+            .append_with_id(second_id, "file:///tmp/track-2.mp3".to_owned())
+            .expect("append test track");
+        assert!(!queue.is_playing());
+        let state = Arc::new(Mutex::new(UiState::new(&queue)));
+        assert_eq!(state.lock().current_track_index, Some(0));
+        let (analysis, mut requests) = AnalysisHandle::channel();
+        let mut held = HeldAnalysis {
+            queue: queue.clone(),
+            analysis,
+            rx: None,
+        };
+
+        let follow = task::spawn({
+            let state = Arc::clone(&state);
+            async move {
+                held.follow(&state).await;
+                held
+            }
+        });
+        let _first = answer_subscribe(&mut requests, first_id).await;
+        let mut held = follow.await.expect("follow completes");
+        assert!(held.rx.is_some(), "the deck holds a receiver for its track");
+
+        state.lock().current_track_index = Some(1);
+        let follow = task::spawn({
+            let state = Arc::clone(&state);
+            async move {
+                held.follow(&state).await;
+                held
+            }
+        });
+        let _second = answer_subscribe(&mut requests, second_id).await;
+        let held = follow.await.expect("follow completes");
+        assert!(
+            held.rx.is_some(),
+            "and re-subscribes to the track it moved to"
+        );
+    }
 
     #[kithara::test(native, tokio)]
     async fn a_current_track_change_resubscribes_the_deck_and_mirrors_the_revisions() {
