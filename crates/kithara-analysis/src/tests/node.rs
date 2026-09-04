@@ -813,8 +813,15 @@ fn matches_direct_waveform_analyzer_over_chunked_stream() {
 
     let reader = Box::new(FakeReader::chunked(&pools, &samples, 4));
     let out = stages(reader, builder, &CancelToken::root());
-    assert_eq!(out.len(), 1, "waveform-only emits once");
-    let got = out[0]
+    let [.., before_last, last] = out.as_slice() else {
+        panic!("the end of reading publishes, then the settled final: {out:?}");
+    };
+    assert!(
+        !before_last.is_settled(),
+        "the publication at the end of reading is not the settled one"
+    );
+    assert!(last.is_settled(), "the final publication is settled");
+    let got = last
         .waveform()
         .cloned()
         .expect("waveform analyzer fills its slot");
@@ -1332,7 +1339,10 @@ fn pending_is_tolerated_mid_stream() {
         2,
     ));
     let out = stages(reader, builder, &CancelToken::root());
-    assert!(out.len() == 1 && out[0].waveform().is_some());
+    assert!(
+        out.last().is_some_and(|last| last.waveform().is_some()),
+        "the final publication carries the waveform: {out:?}"
+    );
 }
 
 /// A build that carries no beat detector still runs the pass: the spec requires
