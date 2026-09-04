@@ -4,6 +4,8 @@ use std::{
     process::Command,
 };
 
+use sha2::{Digest, Sha256};
+
 /// Where a fetched model lands, so a rebuild does not fetch it again.
 const CACHE_ENV: &str = "KITHARA_BEAT_MODEL_CACHE";
 const FULL_FILE: &str = "beat_this_full.onnx";
@@ -92,34 +94,14 @@ fn fetch(cache: &Path, path: &Path, url: &str) -> bool {
 }
 
 fn verify(path: &Path, expected: &str) -> bool {
-    let tool = if Command::new("sha256sum").arg("--version").output().is_ok() {
-        "sha256sum"
-    } else {
-        "shasum"
-    };
-    let mut command = Command::new(tool);
-    if tool == "shasum" {
-        command.args(["-a", "256"]);
-    }
-    let output = match command.arg(path).output() {
-        Ok(output) if output.status.success() => output,
-        Ok(output) => {
-            println!(
-                "cargo::error={tool} failed on {}: {output:?}",
-                path.display()
-            );
-            return false;
-        }
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
         Err(err) => {
-            println!("cargo::error=cannot run {tool}: {err}");
+            println!("cargo::error=cannot read {}: {err}", path.display());
             return false;
         }
     };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let Some(actual) = text.split_whitespace().next() else {
-        println!("cargo::error={tool} printed nothing for {}", path.display());
-        return false;
-    };
+    let actual = hex::encode(Sha256::digest(&bytes));
     if actual != expected {
         println!(
             "cargo::error={} hashes to {actual}, expected {expected}",
