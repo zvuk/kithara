@@ -15,7 +15,7 @@ use kithara::{
     },
     queue::QueueEvent,
 };
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{
     config::AppConfig,
@@ -750,6 +750,58 @@ mod tests {
             TaskConfig::new(),
         ))
         .expect("persistence fixture starts")
+    }
+
+    /// A stored snapshot that covers only part of the track carries both
+    /// artifacts and no resume, so it looks finished to a check that counts
+    /// artifacts. It is not: the track is analysed to the end, not to where
+    /// an earlier pass happened to stop.
+    #[kithara::test(native, flash(false))]
+    fn an_incomplete_stored_analysis_is_finished_rather_than_served_as_final() {
+        let mut cache = cache();
+        let target = target("partial");
+        let mut coverage = Coverage::default();
+        coverage.insert(FrameRange::new(0, 400));
+        let partial = TrackAnalysis::builder()
+            .token("test-track".into())
+            .revision(3)
+            .source_sample_rate(sample_rate())
+            .extent(1_000)
+            .settled(true)
+            .coverage(coverage)
+            .fingerprint(fingerprint())
+            .waveform(one_bucket_wave())
+            .build();
+        assert!(!partial.is_complete());
+        cache.put(target.clone(), progress(partial));
+
+        let plan = plan_analysis(Some(&target), &mut cache, sample_rate());
+        assert!(
+            matches!(plan, Plan::Serve { refill: true, .. } | Plan::Decode),
+            "a partial snapshot is served as far as it goes and then finished"
+        );
+    }
+
+    /// The run publishes for the track it was opened on. Which track the
+    /// player reports as current is playback state; it does not decide whether
+    /// a deck holding the analysed track gets to see the revision.
+    #[kithara::test(native, flash(false))]
+    async fn every_revision_reaches_the_deck_that_holds_the_track() {
+        let held = TrackId(7);
+        let playing = TrackId(8);
+        let state = state_with_current(&[held, playing], 1);
+        let (mut controller, tx) = controller_with_run(held, target("held"), None);
+
+        tx.send(Some(progress(revision_of(1)))).expect("run publishes");
+        controller.publish_intermediate(&state);
+        tx.send(Some(progress(revision_of(2)))).expect("run publishes");
+        controller.publish_intermediate(&state);
+
+        assert_eq!(
+            shown_revision(&state),
+            Some(2),
+            "the deck holding the track sees the latest revision"
+        );
     }
 
     #[kithara::test(native, flash(false))]
