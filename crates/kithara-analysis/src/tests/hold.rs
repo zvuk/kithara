@@ -323,9 +323,7 @@ async fn a_checkpoint_past_the_end_resumes_on_a_source_claiming_more() {
     let (mut rx, _producer, pass) = worker
         .open_resume(checkpoint.clone())
         .expect("a checkpoint past the end is a valid resume");
-    worker
-        .start_resume(pass, Box::new(claiming(pools)))
-        .expect("the reopened source's claim is no reason to refuse the checkpoint");
+    worker.start(pass, Box::new(claiming(pools)));
 
     while rx.changed().await.is_ok() {}
     let held = rx.borrow().clone().expect("the resume publishes");

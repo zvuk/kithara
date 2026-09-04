@@ -19,7 +19,6 @@ use crate::{
     AnalysisFileError, AnalysisProgress,
     analyzer::{AnalysisFingerprint, AnalysisToken},
     producer::{AnalysisProducer, ring},
-    worker::schedule::extent_frames,
 };
 
 pub struct AnalysisWorker {
@@ -271,59 +270,10 @@ impl AnalysisWorker {
         Ok((rx, producer, pass))
     }
 
-    /// Start an already-open pass with its fallback reader.
+    /// Start an already-open pass, fresh or resumed, with its fallback
+    /// reader. A resumed pass re-proves what the reader claims past the
+    /// checkpoint's extent the way a fresh pass proves it.
     pub fn start(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
-        if pass.resume.is_some() {
-            warn!("analysis resume pass requires extent validation");
-            return;
-        }
-        self.submit_pass(pass, reader);
-    }
-
-    /// Start a resume pass only after its opened reader confirms the persisted
-    /// source extent.
-    ///
-    /// # Errors
-    ///
-    /// Rejects a fresh pass, an unknown reader duration, or an extent that no
-    /// longer matches the validated checkpoint.
-    pub fn start_resume(
-        &self,
-        pass: AnalysisPass,
-        reader: Box<dyn AudioReader>,
-    ) -> Result<(), AnalysisFileError> {
-        let progress = pass.resume.as_ref().ok_or(AnalysisFileError::Config)?;
-        let extent = progress
-            .analysis()
-            .extent()
-            .ok_or(AnalysisFileError::UnknownExtent)?;
-        if extent_frames(reader.duration(), pass.rate) != Some(extent) {
-            return Err(AnalysisFileError::Config);
-        }
-        self.submit_pass(pass, reader);
-        Ok(())
-    }
-
-    fn submit(&self, job: Job) {
-        self.tasks.lock().retain(|task| {
-            !matches!(
-                task.completion.try_recv(),
-                Err(mpsc::TryRecvError::Disconnected)
-            )
-        });
-        let (completion, completed) = mpsc::channel();
-        match (self.start_job)(job, completion) {
-            Ok(handle) => self.tasks.lock().push(ActiveTask {
-                completion: completed,
-                _handle: handle,
-            }),
-            Err(error) => {
-                warn!(?error, "analysis job was not admitted");
-            }
-        }
-    }
-
-    fn submit_pass(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
         let AnalysisPass {
             cancel,
             ingest,
@@ -343,6 +293,25 @@ impl AnalysisWorker {
             tx,
             resume,
         });
+    }
+
+    fn submit(&self, job: Job) {
+        self.tasks.lock().retain(|task| {
+            !matches!(
+                task.completion.try_recv(),
+                Err(mpsc::TryRecvError::Disconnected)
+            )
+        });
+        let (completion, completed) = mpsc::channel();
+        match (self.start_job)(job, completion) {
+            Ok(handle) => self.tasks.lock().push(ActiveTask {
+                completion: completed,
+                _handle: handle,
+            }),
+            Err(error) => {
+                warn!(?error, "analysis job was not admitted");
+            }
+        }
     }
 }
 

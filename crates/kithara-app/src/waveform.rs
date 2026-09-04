@@ -137,8 +137,8 @@ impl TrackAnalysisRunner {
     ///
     /// # Errors
     ///
-    /// Returns an archive error when the checkpoint or source extent no longer
-    /// matches the current analyzer configuration.
+    /// Returns an archive error when the checkpoint no longer matches the
+    /// current analyzer configuration.
     pub fn resume<D>(
         &mut self,
         config: AppResourceConfig,
@@ -154,7 +154,7 @@ impl TrackAnalysisRunner {
         let (rx, producer, pass) = self.worker.open_resume(progress)?;
         let run = pass.cancel_token().clone();
         deliver(producer);
-        let task = task::spawn(run_resume_analysis(
+        let task = task::spawn(run_analysis(
             Arc::clone(&self.worker),
             config,
             run.clone(),
@@ -184,21 +184,6 @@ async fn run_analysis(
         return;
     };
     worker.start(pass, reader);
-}
-
-async fn run_resume_analysis(
-    worker: Arc<AnalysisWorker>,
-    config: AppResourceConfig,
-    cancel: CancelToken,
-    rate: NonZeroU32,
-    pass: AnalysisPass,
-) {
-    let Some(reader) = open_reader(config, &cancel, rate).await else {
-        return;
-    };
-    if let Err(error) = worker.start_resume(pass, reader) {
-        warn!(%error, "analysis: resume checkpoint rejected by source");
-    }
 }
 
 /// Open the resource under the run's cancel scope (so preemption and app
