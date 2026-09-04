@@ -26,7 +26,6 @@ pub(crate) enum Ingest {
     /// detector frees room.
     Deferred,
     ForeignRate,
-    OutOfExtent,
 }
 
 pub(crate) struct TrackAnalyzers<B, S>
@@ -133,15 +132,6 @@ where
         extent: &mut Extent,
         detector: Option<&mut beat::Detector>,
     ) -> Ingest {
-        if extent.refuses(range) {
-            warn!(
-                start = range.start(),
-                end = range.end(),
-                extent = ?extent.frames(),
-                "analysis: range lies past the end the source proved; dropped"
-            );
-            return Ingest::OutOfExtent;
-        }
         extent.show(range);
         // The beat pass trails the rest, so a range the pass has already seen
         // can still be what the beat pass is waiting to be offered again.
@@ -184,7 +174,7 @@ where
         self.revision = self.revision.saturating_add(1);
 
         let waveform = waveform::snapshot(&mut self.waveform, extent);
-        let state = self.beat_state(extent);
+        let state = self.beat_state();
         let beat = Slot::snapshot(&mut self.beat, &self.pools, detector, ending, extent)
             .map(|(grid, unanalysed)| BeatSnapshot::new(grid, state, unanalysed));
 
@@ -244,12 +234,16 @@ where
         Ok(())
     }
 
-    /// A grid is final once the pass is over and the beat pass took the
-    /// whole extent: what an earlier revision holds can still change.
-    fn beat_state(&self, extent: Option<u64>) -> BeatState {
-        let covered =
-            extent.is_some_and(|extent| self.analysed().contains(FrameRange::new(0, extent)));
-        if self.settled && covered {
+    /// A grid is final once the pass is over and the beat pass took every
+    /// range the pass covered: what an earlier revision holds can still change.
+    fn beat_state(&self) -> BeatState {
+        let analysed = self.analysed();
+        let taken = self
+            .coverage
+            .runs()
+            .iter()
+            .all(|run| analysed.contains(*run));
+        if self.settled && taken {
             BeatState::Final
         } else {
             BeatState::Provisional

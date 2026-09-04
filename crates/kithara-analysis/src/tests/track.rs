@@ -21,6 +21,9 @@ pub(super) struct Track {
     /// What the source says it holds. An mp3 claims its frame count, padding
     /// included, and delivers less.
     claimed: u64,
+    /// The first frame the source can deliver: an encoder's priming and the
+    /// decoder's delay leave nothing to read in front of it.
+    first: u64,
     at: u64,
     bus: EventBus,
     metadata: TrackMetadata,
@@ -38,6 +41,7 @@ impl Track {
             pcm,
             frames,
             claimed: frames,
+            first: 0,
             at: 0,
             bus: EventBus::default(),
             metadata: TrackMetadata::default(),
@@ -62,6 +66,20 @@ impl Track {
         let rate = f64::from(spec.sample_rate.get());
         let mut track = Self::silence(pools, spec, chunk_frames, seconds);
         track.claimed = (claimed * rate).round().to_u64().unwrap_or(0);
+        track
+    }
+
+    /// Silence whose first `priming` frames cannot be delivered.
+    pub(super) fn priming(
+        pools: Pools,
+        spec: AudioSpec,
+        chunk_frames: u64,
+        seconds: f64,
+        priming: u64,
+    ) -> Self {
+        let mut track = Self::silence(pools, spec, chunk_frames, seconds);
+        track.first = priming;
+        track.at = priming;
         track
     }
 
@@ -141,10 +159,10 @@ impl AudioControl for Track {
                 duration: self.duration_for(self.frames),
             });
         }
-        self.at = target;
+        self.at = target.max(self.first);
         Ok(SeekOutcome::Landed {
             target: position,
-            landed_at: self.duration_for(target),
+            landed_at: self.duration_for(self.at),
         })
     }
 }

@@ -107,8 +107,7 @@ impl TrackAnalysis {
         &self.fingerprint
     }
 
-    /// Whether the whole known extent sits in one covered run. This is the
-    /// same predicate the beat artifact uses to call itself final.
+    /// Whether the whole known extent sits in one covered run.
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.extent

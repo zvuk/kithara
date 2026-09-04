@@ -32,11 +32,6 @@ impl Extent {
         Some(known.max(self.delivered))
     }
 
-    /// Whether the source proved it ends before `range` does.
-    pub(crate) fn refuses(&self, range: FrameRange) -> bool {
-        self.proved.is_some_and(|proved| range.end() > proved)
-    }
-
     /// The reader's stated length, measured on the pass axis.
     pub(crate) fn report(&mut self, duration: Option<Duration>, rate: NonZeroU32) {
         self.claimed = self.claimed.max(frames_for(duration, rate));
@@ -152,8 +147,6 @@ mod tests {
         extent.show(FrameRange::new(88_000, 1000));
 
         extent.unreachable(88_500);
-        assert!(extent.refuses(FrameRange::new(88_000, 1000)));
-        assert!(!extent.refuses(FrameRange::new(88_000, 500)));
         assert_eq!(
             extent.frames(),
             Some(89_000),

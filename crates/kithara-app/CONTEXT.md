@@ -215,12 +215,13 @@ identity, and `is_same` compares key *and* store.
 memory then disk for that axis, and returns its receiver; a source with no resource or a rejected key gets a
 closed receiver. `warm(queue, track_ids, axis)` puts a library list in line behind
 every held entry without reading the cache and leaves a held entry's requester alone; the seed is read when the
-pass opens. Readiness has one rule, `complete_for`: the extent is covered and every artifact the
-configuration's fingerprint expects is present. An entry that is not complete is scheduled; a resumable seed
-resumes, any other opens a fresh pass above the revision the entry holds, so revisions stay monotonic per token
-across passes. A checkpoint the runner rejects is no seed: the pass opens fresh. An entry is done (`Stage::Ended`
-on that axis) only when its pass closed on a complete or a settled value; a close without a value or on an
-unsettled one leaves it `Idle`, and the next subscribe or warm schedules it again. `Queued` means in line; with
+pass opens. Readiness has one rule, `settled_for`: the pass is settled and every artifact the configuration's
+fingerprint expects is present. A gap the source cannot deliver, the head an encoder's priming leaves in front
+of a track, stays in `missing()` for drawing and keeps nothing from being done. An entry that is not settled is
+scheduled; a resumable seed resumes, any other opens a fresh pass above the revision the entry holds, so
+revisions stay monotonic per token across passes. A checkpoint the runner rejects is no seed: the pass opens
+fresh. An entry is done (`Stage::Ended` on that axis) only when its pass closed on a settled value; a close
+without a value or on an unsettled one leaves it `Idle`, and the next subscribe or warm schedules it again. `Queued` means in line; with
 no analyzer compiled in nothing is queued. The player's current track takes no part in this path.
 
 The runner serves held entries (a live receiver) before warm ones, each in request order. A subscribe whose

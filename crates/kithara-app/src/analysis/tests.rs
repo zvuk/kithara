@@ -18,11 +18,11 @@ use kithara_test_utils::kithara;
 
 use super::{
     AnalysisService,
-    entry::{Stage, complete_for},
+    entry::{Stage, settled_for},
     fixtures::{
-        analysis, app_config, axis, fingerprint, grid, memory_store, mp3_track, other_axis,
-        persistence, progress, queue, revision_held, revision_of, snapshot, test_pools, track,
-        wav_track,
+        analysis, app_config, axis, fingerprint, grid, memory_store, mp3_track, mp3_track_48k,
+        other_axis, persistence, progress, queue, revision_held, revision_of, snapshot, test_pools,
+        track, wav_track,
     },
     run::{Activity, Run},
     service::{Owner, resource_config_from_source},
@@ -89,48 +89,32 @@ fn take_over_run(
     tx
 }
 
-/// A stored snapshot that covers only part of the track carries both
-/// artifacts and no resume, so it looks finished to a check that counts
-/// artifacts. It is not: the track is analysed to the end, not to where
-/// an earlier pass happened to stop.
-#[kithara::test(native, tokio, flash(false))]
-async fn an_incomplete_stored_analysis_is_finished_rather_than_served_as_final() {
-    let directory = tempfile::tempdir().expect("temporary track dir");
-    let url = wav_track(directory.path(), 2);
+/// A settled snapshot with a gap left in it carries every artifact and no
+/// resume: the source gave all it could, and the gap is drawn, not analysed
+/// again.
+#[kithara::test(native, tokio)]
+async fn a_settled_hit_with_a_gap_is_served_without_a_pass() {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, &url);
-    let partial = snapshot(
+    let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
+    let settled = snapshot(
         "test-track".into(),
         3,
         400,
         owner.runner.fingerprint().clone(),
         Some(grid()),
     );
-    assert!(!partial.is_complete());
+    assert!(!settled.is_complete(), "a gap is left in the track");
     owner
         .cache
-        .put(target_of(&owner, &source), progress(partial));
+        .put(target_of(&owner, &source), progress(settled));
 
     let rx = owner.subscribe(queue, track_id, source, axis());
 
-    assert_eq!(
-        revision_held(&rx),
-        Some(3),
-        "the partial snapshot is served as far as it goes"
-    );
-    assert_eq!(
-        running_track(&owner),
-        Some(track_id),
-        "and a pass finishes it"
-    );
-    settle(&mut owner).await;
-    let held = rx.borrow().clone().expect("the deck holds the final value");
-    assert!(
-        held.analysis().is_complete(),
-        "the finished value reaches the deck"
-    );
+    assert_eq!(revision_held(&rx), Some(3), "the hit is served as final");
+    assert!(owner.active.is_none(), "nothing is left to analyse");
+    assert!(owner.pending.is_empty());
     cancel.cancel();
 }
 
@@ -697,26 +681,25 @@ async fn settle(owner: &mut Owner) {
     }
 }
 
-/// A fresh pass finishing a partial snapshot publishes above the revision
-/// the deck already holds, so its final revision is never mistaken for
-/// the partial one.
+/// A fresh pass refilling a snapshot that lacks an artifact publishes above
+/// the revision the deck already holds, so its final revision is never
+/// mistaken for the seeded one.
 #[kithara::test(native, tokio, flash(false))]
 async fn a_fresh_pass_publishes_above_the_seeded_revision() {
     let directory = tempfile::tempdir().expect("temporary track dir");
     let url = wav_track(directory.path(), 2);
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
+    let fingerprint = owner.runner.fingerprint().clone();
+    assert!(
+        fingerprint.beat().is_some(),
+        "fixture needs an artifact to omit"
+    );
     let (_host, queue) = queue();
     let (track_id, source) = track(&queue, 1, &url);
     let target = target_of(&owner, &source);
-    let partial = snapshot(
-        token_for(target.key()),
-        3,
-        400,
-        owner.runner.fingerprint().clone(),
-        Some(grid()),
-    );
-    owner.cache.put(target, progress(partial));
+    let wanting = snapshot(token_for(target.key()), 3, 1_000, fingerprint, None);
+    owner.cache.put(target, progress(wanting));
 
     let rx = owner.subscribe(queue, track_id, source, axis());
     assert_eq!(revision_held(&rx), Some(3));
@@ -771,13 +754,24 @@ async fn an_invalid_layout_yields_no_analysis() {
 #[kithara::test(native, tokio, flash(false))]
 async fn a_track_shorter_than_its_header_claims_is_completed() {
     let directory = tempfile::tempdir().expect("temporary track dir");
-    let url = mp3_track(directory.path());
+    a_pass_covers_the_whole_track(&mp3_track(directory.path())).await;
+}
+
+/// The same kind of track decoded onto the app axis through the resampler:
+/// the frame axis is one and the same whichever path labels it.
+#[kithara::test(native, tokio, flash(false))]
+async fn a_resampled_track_is_covered_from_its_first_frame() {
+    let directory = tempfile::tempdir().expect("temporary track dir");
+    a_pass_covers_the_whole_track(&mp3_track_48k(directory.path())).await;
+}
+
+async fn a_pass_covers_the_whole_track(url: &str) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, &url);
+    let (track_id, source) = track(&queue, 1, url);
 
-    let rx = owner.subscribe(queue, track_id, source, axis());
+    let rx = owner.subscribe(queue.clone(), track_id, source.clone(), axis());
     settle(&mut owner).await;
 
     let held = rx.borrow().clone().expect("the deck holds the final value");
@@ -788,13 +782,27 @@ async fn a_track_shorter_than_its_header_claims_is_completed() {
         "the extent is where the source ended, whatever its header claimed"
     );
     assert!(
-        analysis.is_complete(),
-        "the track is covered: {:?}",
+        analysis.is_settled(),
+        "the pass took everything the source gives"
+    );
+    let unreachable: u64 = analysis.missing().iter().map(|range| range.frames()).sum();
+    assert!(
+        unreachable <= HEAD_TOLERANCE_FRAMES,
+        "only the priming the decoder cannot deliver is missing: {:?}",
         analysis.missing()
     );
     assert!(
-        complete_for(&held, owner.runner.fingerprint()),
+        settled_for(&held, owner.runner.fingerprint()),
         "nothing is left for another pass"
+    );
+    let _again = owner.subscribe(queue, track_id, source, axis());
+    assert!(
+        owner.active.is_none(),
+        "a track the source gave in full is not analysed again"
     );
     cancel.cancel();
 }
+
+/// What an mp3 decoder leaves undeliverable in front of a track: the encoder's
+/// priming plus its own delay, under two packets.
+const HEAD_TOLERANCE_FRAMES: u64 = 2 * 1152;

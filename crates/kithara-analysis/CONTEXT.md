@@ -56,7 +56,7 @@ detection, so a consumer holds the whole coverage while the detector works;
 and once more after it. That last publication is the settled one and the one
 the watch closes on; the one before it is resumable, and a restart resumes the
 detection rather than the reading. `BeatState` is `Final` only on a settled
-publication whose whole extent the beat pass took.
+publication in which the beat pass took every range the pass covered.
 
 Identity is an opaque `AnalysisToken` the caller opens the pass with; this crate
 echoes it and never interprets it. `AnalysisFingerprint` carries the beat tag and
@@ -101,7 +101,8 @@ again and one nothing is waiting for is not.
   frontier, or a seek answered `PastEof`. The extent is the claim bounded by the
   proof, so an encoder's frame count is where the track ends until the decoder
   ends sooner, and a range the pass gave up on short of an unproven claim stays
-  missing. `ingest` drops a range only past a proven end. A resumed pass restores
+  missing. Audio the pass was given lies inside the extent whatever the source
+  proved after it, so `ingest` takes every range on the pass axis. A resumed pass restores
   the checkpoint's extent as its claim and re-proves whatever the reopened
   reader claims above it the way a fresh pass does; a checkpoint is never
   refused for what its source claims.

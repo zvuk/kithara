@@ -292,18 +292,6 @@ mod tests {
         analyzers.push(&chunk(&pools, 8192, 0), &mut extent, None);
         let covered = analyzers.snapshot(None, false, None).coverage().clone();
 
-        // Past the end the source proved at end of stream.
-        extent.unreachable(8192);
-        assert_eq!(
-            analyzers.push(&chunk(&pools, 8192, 8192), &mut extent, None),
-            Ingest::OutOfExtent
-        );
-        assert_eq!(
-            analyzers.snapshot(None, false, None).coverage(),
-            &covered,
-            "a rejected range must not move the coverage"
-        );
-
         // A rate the pass was not opened with.
         let foreign = AudioChunk::new(
             AudioChunkInfo {

@@ -196,6 +196,19 @@ pub(crate) fn mp3_track(directory: &Path) -> String {
     format!("file://{}", path.display())
 }
 
+/// A twelve-second 120 BPM pulse track as a 48 kHz MPEG audio file, as a
+/// `file://` URL the app opens like any library track; on the fixture axis
+/// it decodes through the resampler.
+pub(crate) fn mp3_track_48k(directory: &Path) -> String {
+    let path = directory.join("track-48k.mp3");
+    std::fs::write(
+        &path,
+        kithara_test_fixtures::assets::rhythm_mp3_deck_a_120bpm_48k().bytes(),
+    )
+    .expect("fixture track is written");
+    format!("file://{}", path.display())
+}
+
 /// A PCM WAV of `seconds` of a 440 Hz tone at the fixture axis, as a
 /// `file://` URL the app opens like any library track.
 pub(crate) fn wav_track(directory: &Path, seconds: u32) -> String {

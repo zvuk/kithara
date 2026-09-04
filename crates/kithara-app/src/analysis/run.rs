@@ -11,7 +11,7 @@ use kithara::{
 use tracing::{debug, warn};
 
 use super::{
-    entry::{Stage, complete_for},
+    entry::{Stage, settled_for},
     service::Owner,
 };
 use crate::{
@@ -33,7 +33,7 @@ pub(super) struct Run {
 }
 
 impl Owner {
-    /// Open a pass for the entry unless the cache already completes it. A
+    /// Open a pass for the entry unless the value it holds is settled. A
     /// resumable seed resumes; a rejected checkpoint is no seed, so the pass
     /// opens fresh above the revision the entry holds.
     pub(super) fn open_run(&mut self, index: usize, axis: NonZeroU32) -> Option<Run> {
@@ -45,7 +45,7 @@ impl Owner {
         let seed = entry.value_for(axis);
         if seed
             .as_ref()
-            .is_some_and(|progress| complete_for(progress, fingerprint))
+            .is_some_and(|progress| settled_for(progress, fingerprint))
         {
             entry.set_stage(Stage::Ended(axis));
             entry.release();
@@ -153,9 +153,9 @@ impl Owner {
             return;
         };
         let progress = run.rx.borrow().clone();
-        let ran_its_course = progress.as_ref().is_some_and(|progress| {
-            progress.analysis().is_settled() || complete_for(progress, self.runner.fingerprint())
-        });
+        let ran_its_course = progress
+            .as_ref()
+            .is_some_and(|progress| progress.analysis().is_settled());
         let entry = &mut self.entries[run.entry];
         let track_id = entry.track_id();
         if run.requeue {

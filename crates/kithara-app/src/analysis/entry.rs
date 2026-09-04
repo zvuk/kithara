@@ -37,8 +37,7 @@ pub(crate) enum Stage {
     Idle,
     Queued,
     Running,
-    /// A pass on this axis ran its course: it closed on a complete or a
-    /// settled value.
+    /// A pass on this axis ran its course: it closed on a settled value.
     Ended(NonZeroU32),
 }
 
@@ -115,11 +114,11 @@ impl Entry {
     }
 }
 
-/// Whether `progress` needs no pass: the extent is covered and every artifact
+/// Whether `progress` needs no pass: the pass is settled and every artifact
 /// the configuration produces is present.
-pub(crate) fn complete_for(progress: &AnalysisProgress, fingerprint: &AnalysisFingerprint) -> bool {
+pub(crate) fn settled_for(progress: &AnalysisProgress, fingerprint: &AnalysisFingerprint) -> bool {
     let analysis = progress.analysis();
     let waveform = fingerprint.waveform().is_none() || analysis.waveform().is_some();
     let beat = fingerprint.beat().is_none() || analysis.beat().is_some();
-    analysis.is_complete() && waveform && beat
+    analysis.is_settled() && waveform && beat
 }

@@ -14,7 +14,7 @@ use kithara::{
 use tracing::{debug, warn};
 
 use super::{
-    entry::{Entry, Stage, complete_for},
+    entry::{Entry, Stage, settled_for},
     handle::{AnalysisHandle, Request},
     run::Activity,
 };
@@ -222,7 +222,7 @@ impl Owner {
         }
     }
 
-    /// Put the entry in line unless it is complete on `axis` or a pass on
+    /// Put the entry in line unless it is settled on `axis` or a pass on
     /// that axis already ran its course. A held entry ends a background pass.
     fn schedule(&mut self, index: usize, axis: NonZeroU32) {
         if !self.runner.is_active() {
@@ -234,9 +234,9 @@ impl Owner {
         let held = entry.is_held();
         if entry
             .value_for(axis)
-            .is_some_and(|progress| complete_for(&progress, fingerprint))
+            .is_some_and(|progress| settled_for(&progress, fingerprint))
         {
-            debug!(?track_id, held, "analysis: complete; nothing to schedule");
+            debug!(?track_id, held, "analysis: settled; nothing to schedule");
             return;
         }
         match entry.stage() {

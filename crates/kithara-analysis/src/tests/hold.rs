@@ -23,6 +23,7 @@ use super::{
 use crate::{
     AnalysisProgress, BeatAnalysisConfig, BeatSnapshot, BeatState, TrackAnalysis,
     beat::GridParams,
+    coverage::FrameRange,
     slots::beat::detect,
     test_pools::{Pools, TestPools, pools},
 };
@@ -334,4 +335,34 @@ async fn a_checkpoint_past_the_end_resumes_on_a_source_claiming_more() {
     );
     assert_eq!(held.analysis().extent(), Some(delivered));
     assert!(held.analysis().revision() > checkpoint.analysis().revision());
+}
+
+/// An encoder's priming and the decoder's delay leave frames in front of a
+/// track that no read can deliver. A pass that took everything the source
+/// gives is done: settled, with a final grid, and the head reported missing
+/// for what it is.
+#[kithara::test]
+fn a_source_that_cannot_deliver_its_head_is_settled_with_a_final_grid() {
+    const PRIMING: u64 = 1105;
+    let analysis = read_whole(Track::priming(
+        pools(),
+        spec(),
+        Consts::CHUNK_FRAMES,
+        40.0,
+        PRIMING,
+    ))
+    .unwrap_or_else(|Livelock { ticks }| {
+        panic!("the pass waits on a detector that has nothing to read, after {ticks} ticks")
+    });
+    assert!(analysis.is_settled(), "nothing reachable is left");
+    assert_eq!(
+        analysis.missing(),
+        vec![FrameRange::new(0, PRIMING)],
+        "the head the source cannot deliver is the only gap"
+    );
+    assert_eq!(
+        analysis.beat().map(BeatSnapshot::state),
+        Some(BeatState::Final),
+        "the grid over everything the source gives is final"
+    );
 }
