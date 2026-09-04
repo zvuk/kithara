@@ -4679,6 +4679,7 @@ dependencies = [
  "kithara-assets",
  "kithara-encode",
  "kithara-record",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
