@@ -8,6 +8,15 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
+- One owner of track analysis in `kithara-app`. `AnalysisService` holds the
+  runner, the cache, the persistence client, and one `watch` value per analysed
+  resource; a deck subscribes for the track it shows and mirrors every
+  revision by `(token, revision)`. Readiness is completeness alone: a stored
+  snapshot that is not complete for the active fingerprint is served as far as
+  it goes and then finished. Left: the reported deck scenario on the release
+  build with the full model, and the size of the resume blob a checkpoint
+  carries.
+
 - Harness and document revision. `AGENTS.md` routes instead of restating, and
   the `style` namespace now budgets documents with `doc_size`, blocks drift with
   `doc_staleness`, and holds every crate README to one shape with `readme_shape`:

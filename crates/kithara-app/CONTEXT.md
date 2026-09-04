@@ -211,32 +211,43 @@ cell arriving beside the wave narrows it rather than taking it away.
 split settles on; `AppUi::window_min` takes the larger of the two layouts' and `frontend::window_settings` hands
 it to `iced` as `min_size`.
 
-## Track analysis cache
+## Track analysis
 
 Progressive source analysis derives the coloured waveform and an optional beat grid / BPM estimate from decoded
-ranges, so each deck's `StateController` owns one `AnalysisController` and one in-memory
-`TrackAnalysisCache`. The GUI frontend creates one app-wide `AnalysisPersistence` actor and clones its handle
-into every controller. The actor serializes a bounded stream of writes through `AssetStore`; controllers never
-write analysis resources themselves. Two identity spaces are kept separate on purpose:
+ranges. `AnalysisService` is the one owner of analysis values in the app: it holds the `TrackAnalysisRunner`
+(one pass in flight), the two-tier `TrackAnalysisCache`, the `AnalysisPersistence` client, and one entry per
+analysed resource. The GUI frontend creates the service and the persistence actor once and hands a cloneable
+`AnalysisHandle` to every deck `StateController`. Requests reach the service through one channel; values leave
+it through one `watch` channel per entry. Nothing else writes an analysis value. Two identity spaces stay
+separate:
 
-- **`TrackId`** (session-scoped, from `kithara-events` via the queue) — stale guard for an in-flight run and the
-  "still current" check at publish. Never persisted.
+- **`TrackId`** (session-scoped, from `kithara-events` via the queue) names the track a request is about and
+  where a pass hands its producer (`attach_observer`). Never persisted.
 - **`AnalysisTarget`** (the track's `AssetStore` plus the `ResourceKey` derived by `ResourceConfig::asset_key`)
-  — cross-session cache identity. `is_same` compares key *and* store, so one key in two stores is two entries.
+  is the entry and cache identity. `is_same` compares key *and* store, so one key in two stores is two entries.
 
-`plan_analysis` returns `Serve` for a memory or disk hit and `Decode` for a genuine miss. A resumable or
-configuration-incomplete hit is served immediately and then refilled from its missing ranges; only a current
-track without a served result clears the visible analysis. `pump` starts no second run while the controller is
-active and clears the pending queue when the runner has no analyzers. `on_track_changed` puts the current track
-first and preempts a different running pass. The old pass stays in `Running` until its result channel closes,
-then its last checkpoint is cached and published if still current. The controller enters `Committing` and does
-not start the next pass until durable persistence acknowledges that checkpoint. Intermediate checkpoints update
-memory and the current deck immediately and are offered to persistence without blocking; a full queue may drop
-only that intermediate write.
+`subscribe(queue, track_id, source, axis)` resolves the target, seeds the entry from memory then disk for that
+axis, and returns the entry's receiver; a source with no resource or a layout that rejects the key gets a
+closed receiver holding nothing. `warm(queue, track_ids, axis)` puts a library list in line behind every held
+entry. Readiness has one rule, `complete_for`: the extent is covered and every artifact the configuration's
+fingerprint expects is present. An entry that is not complete is scheduled; a resumable seed resumes, any other
+starts a fresh pass. An entry stays scheduled until it is complete or until a pass on that axis runs its own
+course; after that it keeps its last value and is left alone. Which track a player reports as current is
+playback state and takes no part in this path.
 
-`pending_order` is current-track-first, then list order. A track whose source yields no `ResourceConfig` is
-skipped, and so is a source whose layout rejects the derived key. The `Option<AnalysisTarget>` seam means an
-unkeyable run is decoded only while its track is current and is never cached or persisted.
+The runner serves held entries (a live receiver) before warm ones, each in request order. A subscribe whose
+entry is not the running one ends a background pass (`runner.clear()`) and puts it back in line; a pass for a
+held entry is never ended by another held entry, which waits. Every request names the engine rate axis; a pass
+measured on another axis is ended and its entry put back in line. A deck subscribes for the track it shows,
+`UiState::current_track_index`, whether or not that track plays; it re-subscribes on
+`QueueEvent::CurrentTrackChanged`, `EngineEvent::Started`, and `SessionEvent::RouteChanged`, and warms on
+`TrackAdded` / `TrackRemoved`.
+
+Every revision a pass publishes goes to the entry's sender, `cache.put`, and `persistence.try_store`; a full
+persistence queue drops only that intermediate write. When the pass's channel closes, its last value is
+cached and sent, and the service awaits `persistence.store` before the runner takes the next entry. The deck
+listener mirrors its receiver into `UiState::analysis` whenever the `(token, revision)` differs from what is
+shown, and `DeckCache::refresh_wave` redraws on the same pair.
 
 The memory tier is bounded by `Consts::MAX_MEM_ENTRIES` (64) in insertion order; evicted entries are still
 served from disk. An analysis with neither waveform nor beat grid is memoized in neither tier. Disk reads probe
