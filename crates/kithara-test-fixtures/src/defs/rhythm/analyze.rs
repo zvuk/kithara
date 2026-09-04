@@ -40,6 +40,7 @@ pub(super) fn beat(wav: &[u8]) -> BeatArtifact {
         Box::new(reader),
         AnalysisToken::from("rhythm-fixture"),
         rate,
+        0,
     );
     let progress = block_on(async {
         while results.changed().await.is_ok() {}
