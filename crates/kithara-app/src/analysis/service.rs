@@ -338,6 +338,9 @@ impl Owner {
         let deliver = move |producer| queue.attach_observer(track_id, producer);
         let config = entry.config().clone();
         let resumed = seed.as_ref().is_some_and(AnalysisProgress::is_resumable);
+        let revision = seed
+            .as_ref()
+            .map_or(0, |progress| progress.analysis().revision());
         let rx = match seed.filter(AnalysisProgress::is_resumable) {
             Some(progress) => match self.runner.resume(config, progress, deliver) {
                 Ok(rx) => rx,
@@ -347,9 +350,13 @@ impl Owner {
                     return None;
                 }
             },
-            None => self
-                .runner
-                .analyze(config, token_for(entry.target().key()), axis, deliver),
+            None => self.runner.analyze(
+                config,
+                token_for(entry.target().key()),
+                axis,
+                revision,
+                deliver,
+            ),
         };
         debug!(
             ?track_id,
@@ -478,8 +485,8 @@ mod tests {
 
     use ::kithara::{
         analysis::{
-            AnalysisFile, AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot,
-            BeatState, Coverage, FrameRange, Waveform,
+            AnalysisFile, AnalysisFingerprint, AnalysisProgress, AnalysisToken, BeatArtifact,
+            BeatSnapshot, BeatState, Coverage, FrameRange, Waveform,
         },
         assets::{
             AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, ReadSide, StorageBackend,
@@ -491,7 +498,7 @@ mod tests {
         platform::{
             CancelToken,
             sync::Arc,
-            time::Duration,
+            time::{Duration, timeout},
             tokio::{runtime::Handle, sync::watch},
         },
         play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
@@ -500,6 +507,7 @@ mod tests {
         worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
     };
     use kithara_test_utils::kithara;
+    use num_traits::cast::AsPrimitive;
 
     use super::{Activity, AnalysisService, Owner, Run, resource_config_from_source};
     use crate::{
@@ -509,7 +517,9 @@ mod tests {
             self, AppHost, AppPools, AppQueue, AppQueueControl, AppStore, AppTrackSource,
             AppWorker, Pools,
         },
-        wave_cache::{AnalysisPersistence, AnalysisTarget, persistence::AnalysisPersistenceConfig},
+        wave_cache::{
+            AnalysisPersistence, AnalysisTarget, persistence::AnalysisPersistenceConfig, token_for,
+        },
         waveform::TrackAnalysis,
     };
 
@@ -557,6 +567,7 @@ mod tests {
 
     /// A settled snapshot covering `[0, covered)` of a 1000-frame track.
     fn snapshot(
+        token: AnalysisToken,
         revision: u64,
         covered: u64,
         fingerprint: AnalysisFingerprint,
@@ -565,7 +576,7 @@ mod tests {
         let mut coverage = Coverage::default();
         coverage.insert(FrameRange::new(0, covered));
         TrackAnalysis::builder()
-            .token("test-track".into())
+            .token(token)
             .revision(revision)
             .source_sample_rate(axis())
             .extent(1_000)
@@ -578,11 +589,11 @@ mod tests {
     }
 
     fn analysis() -> TrackAnalysis {
-        snapshot(1, 1_000, fingerprint(), None)
+        snapshot("test-track".into(), 1, 1_000, fingerprint(), None)
     }
 
     fn revision_of(revision: u64) -> TrackAnalysis {
-        snapshot(revision, 1_000, fingerprint(), None)
+        snapshot("test-track".into(), revision, 1_000, fingerprint(), None)
     }
 
     fn revision_held(rx: &watch::Receiver<Option<AnalysisProgress>>) -> Option<u64> {
@@ -719,11 +730,19 @@ mod tests {
     /// an earlier pass happened to stop.
     #[kithara::test(native, tokio)]
     async fn an_incomplete_stored_analysis_is_finished_rather_than_served_as_final() {
+        let directory = tempfile::tempdir().expect("temporary track dir");
+        let url = wav_track(directory.path(), 2);
         let cancel = CancelToken::root();
         let mut owner = owner(&cancel);
         let (_host, queue) = queue();
-        let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
-        let partial = snapshot(3, 400, owner.runner.fingerprint().clone(), Some(grid()));
+        let (track_id, source) = track(&queue, 1, &url);
+        let partial = snapshot(
+            "test-track".into(),
+            3,
+            400,
+            owner.runner.fingerprint().clone(),
+            Some(grid()),
+        );
         assert!(!partial.is_complete());
         owner
             .cache
@@ -740,6 +759,12 @@ mod tests {
             running_track(&owner),
             Some(track_id),
             "and a pass finishes it"
+        );
+        settle(&mut owner).await;
+        let held = rx.borrow().clone().expect("the deck holds the final value");
+        assert!(
+            held.analysis().is_complete(),
+            "the finished value reaches the deck"
         );
         cancel.cancel();
     }
@@ -759,7 +784,7 @@ mod tests {
         let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
         owner.cache.put(
             target_of(&owner, &source),
-            progress(snapshot(7, 1_000, fingerprint, None)),
+            progress(snapshot("test-track".into(), 7, 1_000, fingerprint, None)),
         );
 
         let rx = owner.subscribe(queue, track_id, source, axis());
@@ -797,7 +822,13 @@ mod tests {
         let mut owner = owner(&cancel);
         let (_host, queue) = queue();
         let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
-        let complete = snapshot(5, 1_000, owner.runner.fingerprint().clone(), Some(grid()));
+        let complete = snapshot(
+            "test-track".into(),
+            5,
+            1_000,
+            owner.runner.fingerprint().clone(),
+            Some(grid()),
+        );
         owner
             .cache
             .put(target_of(&owner, &source), progress(complete));
@@ -1033,6 +1064,80 @@ mod tests {
         assert_eq!(held, None);
         assert!(!cached, "a run that closes with no value caches nothing");
         assert_eq!(stage, Stage::Ended(axis()), "and is not retried on its own");
+    }
+
+    /// A PCM WAV of `seconds` of a 440 Hz tone at the fixture axis, as a
+    /// `file://` URL the app opens like any library track.
+    fn wav_track(directory: &std::path::Path, seconds: u32) -> String {
+        let path = directory.join("track.wav");
+        let rate = axis().get();
+        let frames = rate * seconds;
+        let data_len = frames * 4;
+        let mut bytes = Vec::with_capacity(44 + data_len as usize);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&rate.to_le_bytes());
+        bytes.extend_from_slice(&(rate * 4).to_le_bytes());
+        bytes.extend_from_slice(&4u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        let step = std::f64::consts::TAU * 440.0 / f64::from(rate);
+        for frame in 0..frames {
+            let sample: i16 = ((f64::from(frame) * step).sin() * 16_000.0).as_();
+            bytes.extend_from_slice(&sample.to_le_bytes());
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        std::fs::write(&path, bytes).expect("fixture track is written");
+        format!("file://{}", path.display())
+    }
+
+    /// Drive the owner until the runner is idle again.
+    async fn settle(owner: &mut Owner) {
+        while owner.active.is_some() {
+            timeout(Duration::from_secs(2), owner.drive())
+                .await
+                .expect("the pass progresses");
+        }
+    }
+
+    /// A fresh pass finishing a partial snapshot publishes above the revision
+    /// the deck already holds, so its final revision is never mistaken for
+    /// the partial one.
+    #[kithara::test(native, tokio)]
+    async fn a_fresh_pass_publishes_above_the_seeded_revision() {
+        let directory = tempfile::tempdir().expect("temporary track dir");
+        let url = wav_track(directory.path(), 2);
+        let cancel = CancelToken::root();
+        let mut owner = owner(&cancel);
+        let (_host, queue) = queue();
+        let (track_id, source) = track(&queue, 1, &url);
+        let target = target_of(&owner, &source);
+        let partial = snapshot(
+            token_for(target.key()),
+            3,
+            400,
+            owner.runner.fingerprint().clone(),
+            Some(grid()),
+        );
+        owner.cache.put(target, progress(partial));
+
+        let rx = owner.subscribe(queue, track_id, source, axis());
+        assert_eq!(revision_held(&rx), Some(3));
+        settle(&mut owner).await;
+
+        let held = rx.borrow().clone().expect("the deck holds the final value");
+        assert!(held.analysis().is_complete(), "the pass finished the track");
+        assert!(
+            held.analysis().revision() > 3,
+            "the final revision outranks the seeded one: {}",
+            held.analysis().revision()
+        );
+        cancel.cancel();
     }
 
     #[derive(Debug)]
