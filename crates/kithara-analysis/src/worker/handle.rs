@@ -49,6 +49,7 @@ struct ActiveTask {
 /// the pass's fallback reader, then hand this value back to [`AnalysisWorker::start`].
 pub struct AnalysisPass {
     token: AnalysisToken,
+    revision: u64,
     cancel: CancelToken,
     rate: NonZeroU32,
     resume: Option<AnalysisProgress>,
@@ -172,8 +173,9 @@ impl AnalysisWorker {
         reader: Box<dyn AudioReader>,
         token: AnalysisToken,
         rate: NonZeroU32,
+        revision: u64,
     ) -> (watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer) {
-        let (rx, producer, pass) = self.open(token, rate);
+        let (rx, producer, pass) = self.open(token, rate, revision);
         self.start(pass, reader);
         (rx, producer)
     }
@@ -191,12 +193,14 @@ impl AnalysisWorker {
     }
 
     /// Open a pass and its bounded playback producer without waiting for the
-    /// fallback reader to open or preload.
+    /// fallback reader to open or preload. `revision` is the one the caller
+    /// already holds for `token`; every publication outranks it.
     #[must_use]
     pub fn open(
         &self,
         token: AnalysisToken,
         rate: NonZeroU32,
+        revision: u64,
     ) -> (
         watch::Receiver<Option<AnalysisProgress>>,
         AnalysisProducer,
@@ -210,6 +214,7 @@ impl AnalysisWorker {
             ingest,
             rate,
             token,
+            revision,
             tx,
             resume: None,
         };
@@ -250,6 +255,7 @@ impl AnalysisWorker {
         }
 
         let token = analysis.token().clone();
+        let revision = analysis.revision();
         let (tx, rx) = watch::channel(Some(progress.clone()));
         let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
@@ -258,6 +264,7 @@ impl AnalysisWorker {
             ingest,
             rate,
             token,
+            revision,
             tx,
             resume: Some(progress),
         };
@@ -322,6 +329,7 @@ impl AnalysisWorker {
             ingest,
             rate,
             token,
+            revision,
             tx,
             resume,
         } = pass;
@@ -331,6 +339,7 @@ impl AnalysisWorker {
             ingest,
             rate,
             token,
+            revision,
             tx,
             resume,
         });

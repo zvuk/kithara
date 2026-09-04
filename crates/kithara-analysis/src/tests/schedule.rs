@@ -282,6 +282,7 @@ where
         let (writer, ingest) = ring::open_for(rate);
         jobs.send(Job {
             token: Consts::TOKEN.into(),
+            revision: 0,
             reader: Box::new(source),
             tx,
             rate,

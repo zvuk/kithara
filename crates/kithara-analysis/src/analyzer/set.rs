@@ -58,10 +58,13 @@ where
         }
     }
 
+    /// `revision` is the one the caller already holds for `token`; every
+    /// publication of this pass outranks it.
     pub(crate) fn build(
         &self,
         rate: NonZeroU32,
         token: AnalysisToken,
+        revision: u64,
     ) -> Result<TrackAnalyzers<B, S>, PoolError> {
         Ok(TrackAnalyzers {
             beat: Config::build(&self.beat, rate, &self.pools),
@@ -69,7 +72,7 @@ where
             coverage: Coverage::default(),
             fingerprint: self.fingerprint(),
             extent: None,
-            revision: 0,
+            revision,
             settled: false,
             ended: false,
             source_sample_rate: rate,
@@ -89,7 +92,11 @@ where
         }
         let resume = progress.decode_resume()?.ok_or(BlobError::Corrupt)?;
         let mut analyzers = self
-            .build(analysis.source_sample_rate(), analysis.token().clone())
+            .build(
+                analysis.source_sample_rate(),
+                analysis.token().clone(),
+                analysis.revision(),
+            )
             .map_err(|_| BlobError::Corrupt)?;
         analyzers.restore(analysis, resume, chunk_frames)?;
         Ok(analyzers)
@@ -237,7 +244,7 @@ mod tests {
     ) -> TrackAnalyzers<NoResamplerBackend, TestPools> {
         AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
             .with_waveform(buckets)
-            .build(spec().sample_rate, "track-a".into())
+            .build(spec().sample_rate, "track-a".into(), 0)
             .expect("waveform buffers fit the test region")
     }
 
@@ -260,7 +267,7 @@ mod tests {
             .with_beat_detector(beat_detector(), GridParams::default());
         let mut detector = builder.take_detector();
         let mut analyzers = builder
-            .build(spec().sample_rate, "track-a".into())
+            .build(spec().sample_rate, "track-a".into(), 0)
             .expect("analysis buffers fit the test region");
         analyzers.push(&chunk(&pools, 8192, 0), detector.as_mut());
 
@@ -325,7 +332,7 @@ mod tests {
         let axis = NonZeroU32::new(48_000).expect("test rate is non-zero");
         let mut analyzers = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
-            .build(axis, "track-a".into())
+            .build(axis, "track-a".into(), 0)
             .expect("analysis buffers fit the test region");
 
         assert_eq!(
@@ -424,16 +431,30 @@ mod tests {
         );
     }
 
+    /// A pass opened while its caller already holds a revision for the token
+    /// publishes above it, so revisions stay monotonic per token across passes.
+    #[kithara::test(native, flash(false))]
+    fn a_pass_opened_above_a_held_revision_publishes_above_it() {
+        let pools = pools();
+        let mut analyzers = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
+            .with_waveform(8)
+            .build(spec().sample_rate, "track-a".into(), 3)
+            .expect("waveform buffers fit the test region");
+        analyzers.push(&chunk(&pools, 8192, 0), None);
+
+        assert_eq!(analyzers.snapshot(None, false).revision(), 4);
+    }
+
     #[kithara::test(native, flash(false))]
     fn a_snapshot_carries_the_token_its_pass_was_opened_with() {
         let pools = pools();
         let mut first = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
-            .build(spec().sample_rate, "track-a".into())
+            .build(spec().sample_rate, "track-a".into(), 0)
             .expect("analysis buffers fit the test region");
         let mut second = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
-            .build(spec().sample_rate, "track-b".into())
+            .build(spec().sample_rate, "track-b".into(), 0)
             .expect("analysis buffers fit the test region");
         first.push(&chunk(&pools, 8192, 0), None);
         second.push(&chunk(&pools, 8192, 0), None);
@@ -448,7 +469,7 @@ mod tests {
             AnalyzerBuilder::<RubatoBackend, _>::new(pools())
                 .with_waveform(buckets)
                 .with_beat()
-                .build(spec().sample_rate, "track-a".into())
+                .build(spec().sample_rate, "track-a".into(), 0)
                 .expect("analysis buffers fit the test region")
                 .snapshot(None, false)
                 .fingerprint()
@@ -477,7 +498,7 @@ mod tests {
             .with_beat_detector(beat_detector(), GridParams::default());
         let mut detector = builder.take_detector();
         let mut analyzers = builder
-            .build(spec().sample_rate, "track-a".into())
+            .build(spec().sample_rate, "track-a".into(), 0)
             .expect("analysis buffers fit the test region");
         analyzers.push(&chunk(&pools, 8192, 0), detector.as_mut());
 

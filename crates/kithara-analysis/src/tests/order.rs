@@ -16,7 +16,7 @@ fn analyse(samples: &[f32], blocks: &[(u64, usize, usize)]) -> Artifacts {
         .with_beat_detector(beat_detector(), GridParams::default());
     let mut beat = builder.take_detector();
     let mut analyzers = builder
-        .build(spec().sample_rate, "order-harness".into())
+        .build(spec().sample_rate, "order-harness".into(), 0)
         .expect("analysis buffers fit the test region");
 
     for (at, from, to) in blocks {

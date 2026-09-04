@@ -24,6 +24,7 @@ pub(crate) struct Job {
     pub(crate) ingest: ring::Reader,
     pub(crate) rate: NonZeroU32,
     pub(crate) token: AnalysisToken,
+    pub(crate) revision: u64,
     pub(crate) tx: watch::Sender<Option<AnalysisProgress>>,
     pub(crate) resume: Option<AnalysisProgress>,
 }
@@ -58,6 +59,7 @@ where
     scratch: Option<SampleBuffer>,
     rate: NonZeroU32,
     token: AnalysisToken,
+    revision: u64,
     tx: watch::Sender<Option<AnalysisProgress>>,
     phase: TaskPhase,
     beat_dirty: bool,
@@ -113,6 +115,7 @@ where
             schedule: Schedule::default(),
             scratch: None,
             token: job.token,
+            revision: job.revision,
             tx: job.tx,
         })
     }
@@ -173,8 +176,13 @@ where
         match self.reader.next_chunk() {
             Ok(ChunkOutcome::Chunk(chunk)) => {
                 let range = FrameRange::from(&chunk.meta);
-                let Ok(analyzers) = open(&mut self.analyzers, builder, self.rate, &self.token)
-                else {
+                let Ok(analyzers) = open(
+                    &mut self.analyzers,
+                    builder,
+                    self.rate,
+                    &self.token,
+                    self.revision,
+                ) else {
                     self.phase = TaskPhase::Done;
                     return TickResult::Progress;
                 };
@@ -228,7 +236,13 @@ where
         let scratch = self
             .scratch
             .get_or_insert_with(|| builder.pools().get::<f32>());
-        let analyzers = open(&mut self.analyzers, builder, self.rate, &self.token)?;
+        let analyzers = open(
+            &mut self.analyzers,
+            builder,
+            self.rate,
+            &self.token,
+            self.revision,
+        )?;
         let mut detector = detector;
         let mut folded = false;
 
@@ -485,6 +499,7 @@ fn open<'a, B, S>(
     builder: &AnalyzerBuilder<B, S>,
     rate: NonZeroU32,
     token: &AnalysisToken,
+    revision: u64,
 ) -> Result<&'a mut TrackAnalyzers<B, S>, PoolError>
 where
     B: ResamplerBackend,
@@ -493,9 +508,11 @@ where
     if let Some(analyzers) = slot {
         Ok(analyzers)
     } else {
-        let analyzers = builder.build(rate, token.clone()).inspect_err(|error| {
-            warn!(?error, "analysis: analyzer buffer initialization failed");
-        })?;
+        let analyzers = builder
+            .build(rate, token.clone(), revision)
+            .inspect_err(|error| {
+                warn!(?error, "analysis: analyzer buffer initialization failed");
+            })?;
         Ok(slot.insert(analyzers))
     }
 }

@@ -125,7 +125,7 @@ fn archived_partial_resumes_without_decoding_completed_chunks() {
     let seed = [0, 2 * CHUNK_FRAMES];
     let (builder, mut detector) = configured(pools.clone());
     let mut partial = builder
-        .build(rate(), "resume-track".into())
+        .build(rate(), "resume-track".into(), 0)
         .expect("analysis buffers fit the test region");
     partial.plan_extent(EXTENT);
     for at in seed {
@@ -171,7 +171,7 @@ fn archived_partial_resumes_without_decoding_completed_chunks() {
 
     let (builder, mut detector) = configured(pools.clone());
     let mut uninterrupted = builder
-        .build(rate(), "resume-track".into())
+        .build(rate(), "resume-track".into(), 0)
         .expect("analysis buffers fit the test region");
     uninterrupted.plan_extent(EXTENT);
     for at in seed.into_iter().chain(requested) {

@@ -89,6 +89,7 @@ fn read_whole_with(
         ingest,
         rate: rate(),
         token: "hold".into(),
+        revision: 0,
         tx,
         resume: None,
     };

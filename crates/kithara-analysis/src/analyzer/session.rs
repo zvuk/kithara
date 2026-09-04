@@ -250,7 +250,6 @@ where
         self.beat.restore(&self.pools, resume.beat)?;
         self.coverage = analysis.coverage().clone();
         self.extent = analysis.extent();
-        self.revision = analysis.revision();
         self.settled = false;
         self.ended = false;
         Ok(())

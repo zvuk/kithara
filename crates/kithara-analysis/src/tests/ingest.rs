@@ -36,7 +36,7 @@ fn a_range_the_beat_pass_turned_down_is_told_apart_from_one_it_has() {
     let mut builder = builder(&pools);
     let mut detector = builder.take_detector();
     let mut pass = builder
-        .build(spec().sample_rate, "ingest-harness".into())
+        .build(spec().sample_rate, "ingest-harness".into(), 0)
         .expect("analysis buffers fit the test region");
 
     // The first second is read; the rest arrives with the detector left

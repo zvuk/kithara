@@ -47,7 +47,9 @@ covered frames, so sparse out-of-order coverage keeps its source position.
 
 A pass publishes many times. `TrackAnalyzers::snapshot` leaves the pass able to
 accept further ranges and bumps a strictly increasing revision, so a consumer
-discards anything that does not outrank what it holds. `AnalysisTask` publishes
+discards anything that does not outrank what it holds. `AnalysisWorker::open`
+takes the revision the caller already holds for the token and the pass publishes
+above it, so revisions stay monotonic per token across passes. `AnalysisTask` publishes
 every `PUBLISH_SECONDS` of newly covered source and once more at end of stream,
 keyed to decoded frames rather than wall-clock time. Only that last publication
 pins the extent, to the covered frontier. `BeatState` is `Final` only once the
