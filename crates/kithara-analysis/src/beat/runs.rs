@@ -296,9 +296,8 @@ where
             let skip = self.detector_frames(cursor.saturating_sub(run.start));
             append(&mut out, run.mono.get(skip..).unwrap_or_default())?;
             cursor = run.end;
-            // The run the arriving audio continues keeps its resampler. Closing
-            // one and opening another leaves a step at the seam, and an onset
-            // detector reads a step as a beat.
+            // The run the arriving audio continues keeps its resampler, so the
+            // seam carries no step for an onset detector to read as a beat.
             stream = run.stream.take();
             if stream.is_none() {
                 pad(&mut out, self.detector_frames(cursor.saturating_sub(base)))?;
