@@ -691,7 +691,7 @@ mod tests {
         listen, unready_ranges,
     };
     use crate::{
-        analysis::{AnalysisHandle, handle::Request},
+        analysis::{AnalysisHandle, Request},
         pools::{self, AppHost, AppQueue, AppQueueControl, AppWorker},
     };
 
