@@ -11,8 +11,14 @@ the change that lands the work, and keep it short.
 - One owner of track analysis in `kithara-app`: `AnalysisService` holds the
   runner, the cache, the persistence client, and one `watch` value per
   analysed resource; a deck observes the track it shows and mirrors every
-  revision. Readiness is completeness alone. Left: the reported deck scenario
-  on the release build with the full model, and the size of the resume blob.
+  revision. Readiness is completeness alone. A pass has one extent, the
+  source's claim bounded by what it proved, and publishes once more when the
+  reading ends, ahead of the trailing detection; a resumed pass starts like
+  a fresh one. Left: the reported deck scenario on the release build with the
+  full model, the size of the resume blob, and the mp3 first packet that
+  `ComposedDecoder` labels short of its PTS after the codec's internal trim,
+  which leaves a hole no pass can fill
+  (`a_track_shorter_than_its_header_claims_is_completed` pins it red).
 
 - Harness and document revision. `AGENTS.md` routes instead of restating; the
   `style` namespace budgets documents with `doc_size`, blocks drift with

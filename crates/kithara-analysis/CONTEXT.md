@@ -50,10 +50,13 @@ accept further ranges and bumps a strictly increasing revision, so a consumer
 discards anything that does not outrank what it holds. `AnalysisWorker::open`
 takes the revision the caller already holds for the token and the pass publishes
 above it, so revisions stay monotonic per token across passes. `AnalysisTask` publishes
-every `PUBLISH_SECONDS` of newly covered source and once more at end of stream,
-keyed to decoded frames rather than wall-clock time. Only that last publication
-pins the extent, to the covered frontier. `BeatState` is `Final` only once the
-whole known extent is one covered run.
+every `PUBLISH_SECONDS` of newly covered source, keyed to decoded frames rather
+than wall-clock time; once more when the reading ends, before the trailing
+detection, so a consumer holds the whole coverage while the detector works;
+and once more after it. That last publication is the settled one and the one
+the watch closes on; the one before it is resumable, and a restart resumes the
+detection rather than the reading. `BeatState` is `Final` only on a settled
+publication whose whole extent the beat pass took.
 
 Identity is an opaque `AnalysisToken` the caller opens the pass with; this crate
 echoes it and never interprets it. `AnalysisFingerprint` carries the beat tag and
@@ -90,13 +93,18 @@ the beat pass's own coverage while that pass has room, and against what the pass
 has merely seen while it does not, so a range the beat pass turned down is read
 again and one nothing is waiting for is not.
 
-- **Two extents.** The pass publishes the covered frontier at end of stream, or
-  the length the schedule planned against when that is longer, so a range given
-  up on past the last covered frame is still reported missing. The schedule works
-  from the reader's stated length, bounded by what that reader proved: end of
-  stream or a seek answered `PastEof`. That figure is never written into the
-  pass, because `TrackAnalyzers::ingest` refuses a range reaching past the extent
-  it holds and an under-reported duration would refuse the source's own tail.
+- **One extent.** A pass has one `Extent`, owned by `AnalysisTask` and handed
+  to every consumer: the schedule, `TrackAnalyzers::ingest`, each snapshot. The
+  claim is the largest length the source stated or showed: the reader's
+  duration, re-read every tick, or a decoded range reaching past the claim. The
+  proof is the smallest length the source proved: end of stream at the reader's
+  frontier, or a seek answered `PastEof`. The extent is the claim bounded by the
+  proof, so an encoder's frame count is where the track ends until the decoder
+  ends sooner, and a range the pass gave up on short of an unproven claim stays
+  missing. `ingest` drops a range only past a proven end. A resumed pass restores
+  the checkpoint's extent as its claim and re-proves whatever the reopened
+  reader claims above it the way a fresh pass does; a checkpoint is never
+  refused for what its source claims.
 - **Run bounds.** A run decodes one schedule chunk before another position is
   chosen. While the beat pass can only continue a run it already has, the run is
   instead unbounded and aimed at the front of the widest gap, so it continues a
