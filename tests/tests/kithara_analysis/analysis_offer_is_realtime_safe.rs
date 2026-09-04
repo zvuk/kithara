@@ -55,7 +55,7 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates() {
         .build(),
     );
     let (_analysis, mut producer) =
-        worker.analyze(stalled_reader(spec(rate)), "rt-track".into(), rate);
+        worker.analyze(stalled_reader(spec(rate)), "rt-track".into(), rate, 0);
 
     // Allocated before the realtime region opens, the way a decoded chunk is.
     let pcm = vec![0.25_f32; SAMPLES];

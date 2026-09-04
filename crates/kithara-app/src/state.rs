@@ -781,15 +781,17 @@ mod tests {
 
         queue.remove(track_id).expect("remove test track");
 
-        time::timeout(Duration::from_secs(2), tx.closed())
-            .await
-            .expect("the deck drops the receiver of a track its queue lost");
         for _ in 0..2_000 {
-            if state.lock().analysis.is_none() {
+            if tx.receiver_count() == 0 && state.lock().analysis.is_none() {
                 break;
             }
             task::yield_now().await;
         }
+        assert_eq!(
+            tx.receiver_count(),
+            0,
+            "the deck drops the receiver of a track its queue lost"
+        );
         let st = state.lock();
         assert_eq!(st.current_track_index, None);
         assert!(st.analysis.is_none(), "nothing is shown for no track");
@@ -836,8 +838,9 @@ mod tests {
             .await
             .expect("the deck asks for the track it moved to");
         assert_eq!(asked, second_id, "the deck asks for the track it moved to");
-        assert!(
-            first.is_closed(),
+        assert_eq!(
+            first.receiver_count(),
+            0,
             "and holds no receiver for the one it left while it waits"
         );
         drop(reply);
