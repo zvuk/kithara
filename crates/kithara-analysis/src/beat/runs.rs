@@ -102,15 +102,32 @@ where
     fn admits(&self, range: FrameRange, opens: bool) -> bool {
         match self.intake() {
             Intake::Full => false,
-            Intake::Continuing => self.touches(range),
-            Intake::Anywhere => opens || self.touches(range),
+            // A run opened in front of one the pass holds reads through to it,
+            // so it costs a run only until the two meet. The reader crosses
+            // one such stretch at a time, and the hold budget covers that run.
+            Intake::Continuing => {
+                self.meets(range)
+                    || (opens && self.runs.len() <= self.max_runs && self.reaches(range))
+            }
+            Intake::Anywhere => opens || self.meets(range),
         }
     }
 
-    fn touches(&self, range: FrameRange) -> bool {
+    fn meets(&self, range: FrameRange) -> bool {
         self.runs
             .iter()
             .any(|run| run.start <= range.end() && range.start() <= run.end)
+    }
+
+    /// Whether reading on from `range` arrives at audio the pass has taken.
+    /// What a run holds begins where the detector has read to, and that moves;
+    /// what the pass took does not, so this asks there. `range` is one the pass
+    /// has yet to take, so the first region past it has nothing taken in front.
+    fn reaches(&self, range: FrameRange) -> bool {
+        self.taken
+            .runs()
+            .iter()
+            .any(|region| region.start() >= range.end())
     }
 
     /// The next stretch of `[from, until)` the pass has not taken.
@@ -173,76 +190,6 @@ where
             let mono = &mut run.mono;
             finish_into(mono, stream)?;
             pad(mono, expected)?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_resume(&self, writer: &mut Writer<'_>) {
-        // A run the detector has read to its end holds nothing but the
-        // resampler continuing it, which the blob does not carry.
-        let live = || self.runs.iter().filter(|run| run.start < run.end);
-        writer.write_len(live().count());
-        for run in live() {
-            writer.write_u64(run.start);
-            writer.write_u64(run.end);
-            // A live resampler still holds this run's tail. The blob carries the
-            // span the run declares, so the part still inside reads as silence
-            // rather than costing the live run its resampler.
-            write_padded(
-                writer,
-                &run.mono,
-                self.detector_frames(run.end.saturating_sub(run.start)),
-            );
-        }
-        writer.write_len(self.taken.runs().len());
-        for run in self.taken.runs() {
-            writer.write_u64(run.start());
-            writer.write_u64(run.end());
-        }
-    }
-
-    pub(super) fn restore<S>(
-        &mut self,
-        pools: &PoolRegion<S>,
-        runs: Vec<BeatRunResume>,
-        taken: Vec<(u64, u64)>,
-    ) -> Result<(), BlobError>
-    where
-        S: HasPool<f32>,
-    {
-        let mut restored: Vec<Run<B>> = Vec::with_capacity(runs.len());
-        for run in runs {
-            let expected = self.detector_frames(run.end.saturating_sub(run.start));
-            if run.mono.len() != expected {
-                return Err(BlobError::Corrupt);
-            }
-            let samples = run.mono.into_vec();
-            let mut mono = pools
-                .get_with_len::<f32>(samples.len())
-                .map_err(|_| BlobError::Corrupt)?;
-            mono.copy_from_slice(&samples);
-            restored.push(Run {
-                start: run.start,
-                end: run.end,
-                mono,
-                stream: None,
-            });
-        }
-        let mut coverage = Coverage::default();
-        for (from, to) in taken {
-            coverage.insert(FrameRange::new(from, to.saturating_sub(from)));
-        }
-        if restored
-            .iter()
-            .any(|run| !coverage.contains(FrameRange::new(run.start, run.end - run.start)))
-        {
-            return Err(BlobError::Corrupt);
-        }
-
-        self.runs = restored;
-        self.taken = coverage;
-        if self.held() > self.budget || self.runs.len() > self.max_runs {
-            return Err(BlobError::Corrupt);
         }
         Ok(())
     }
@@ -445,6 +392,82 @@ where
             .pools(pools.clone())
             .build();
         MonoStream::new(config).map_err(resample_error)
+    }
+}
+
+/// What a run set writes into a resume blob, and what it reads back.
+impl<B> Runs<B>
+where
+    B: ResamplerBackend,
+{
+    pub(super) fn write_resume(&self, writer: &mut Writer<'_>) {
+        // A run the detector has read to its end holds nothing but the
+        // resampler continuing it, which the blob does not carry.
+        let live = || self.runs.iter().filter(|run| run.start < run.end);
+        writer.write_len(live().count());
+        for run in live() {
+            writer.write_u64(run.start);
+            writer.write_u64(run.end);
+            // A live resampler still holds this run's tail. The blob carries the
+            // span the run declares, so the part still inside reads as silence
+            // rather than costing the live run its resampler.
+            write_padded(
+                writer,
+                &run.mono,
+                self.detector_frames(run.end.saturating_sub(run.start)),
+            );
+        }
+        writer.write_len(self.taken.runs().len());
+        for run in self.taken.runs() {
+            writer.write_u64(run.start());
+            writer.write_u64(run.end());
+        }
+    }
+
+    pub(super) fn restore<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        runs: Vec<BeatRunResume>,
+        taken: Vec<(u64, u64)>,
+    ) -> Result<(), BlobError>
+    where
+        S: HasPool<f32>,
+    {
+        let mut restored: Vec<Run<B>> = Vec::with_capacity(runs.len());
+        for run in runs {
+            let expected = self.detector_frames(run.end.saturating_sub(run.start));
+            if run.mono.len() != expected {
+                return Err(BlobError::Corrupt);
+            }
+            let samples = run.mono.into_vec();
+            let mut mono = pools
+                .get_with_len::<f32>(samples.len())
+                .map_err(|_| BlobError::Corrupt)?;
+            mono.copy_from_slice(&samples);
+            restored.push(Run {
+                start: run.start,
+                end: run.end,
+                mono,
+                stream: None,
+            });
+        }
+        let mut coverage = Coverage::default();
+        for (from, to) in taken {
+            coverage.insert(FrameRange::new(from, to.saturating_sub(from)));
+        }
+        if restored
+            .iter()
+            .any(|run| !coverage.contains(FrameRange::new(run.start, run.end - run.start)))
+        {
+            return Err(BlobError::Corrupt);
+        }
+
+        self.runs = restored;
+        self.taken = coverage;
+        if self.held() > self.budget || self.runs.len() > self.max_runs.saturating_add(1) {
+            return Err(BlobError::Corrupt);
+        }
+        Ok(())
     }
 }
 
@@ -834,6 +857,72 @@ mod tests {
                 "released at {opens_at}, the audio behind it moved"
             );
         }
+    }
+
+    /// Two runs at the cap, and the one bounding the leading gap has fed the
+    /// detector, so its held audio starts past where it began.
+    fn capped_with_a_released_front() -> TestRuns {
+        let mut set = budgeted(48_000, usize::MAX, 2);
+        set.push(&ramp(9600, 100_000), 100_000, true);
+        set.push(&ramp(4800, 300_000), 300_000, true);
+        set.flush();
+        let advance = set.offset_in_run(100_000, 104_000);
+        set.release(|base| base + advance);
+        set
+    }
+
+    #[kithara::test]
+    fn one_run_reaches_for_another_and_the_rest_wait() {
+        let mut set = capped_with_a_released_front();
+        assert_eq!(set.intake(), Intake::Continuing, "the cap is reached");
+        let front = set.spans().next().map(|(start, _)| start).expect("one run");
+        assert!(front > 100_000, "the release must move the run's start");
+
+        assert!(
+            set.push(&ramp(4800, 0), 0, true),
+            "audio reading through to the run in front of it is taken"
+        );
+        assert_eq!(set.spans().count(), 3, "the run under way is the third");
+        assert!(
+            !set.push(&ramp(4800, 200_000), 200_000, true),
+            "a second stretch waits until the one under way arrives"
+        );
+        assert_eq!(set.spans().count(), 3, "{:?}", layout(&set));
+    }
+
+    #[kithara::test]
+    fn audio_the_pass_did_not_read_waits_for_the_run_it_belongs_to() {
+        let mut set = capped_with_a_released_front();
+
+        assert!(
+            !set.push(&ramp(4800, 0), 0, false),
+            "a producer's range does not open the run that reads a gap through"
+        );
+        assert_eq!(set.spans().count(), 2, "{:?}", layout(&set));
+    }
+
+    #[kithara::test]
+    fn audio_in_front_of_a_released_run_costs_it_nothing() {
+        let mut set = runs(48_000);
+        set.push(&ramp(96_000, 32_000), 32_000, true);
+        set.flush();
+        let advance = set.offset_in_run(32_000, 60_000);
+        set.release(|base| base + advance);
+        let (started_at, held) = set
+            .spans()
+            .next()
+            .map(|(start, mono)| (start, mono.to_vec()))
+            .expect("one run");
+        assert!(started_at > 32_000, "the release must move the run's start");
+
+        set.push(&ramp(32_000, 0), 0, true);
+
+        assert!(
+            set.spans()
+                .any(|(start, mono)| start == started_at && mono == held),
+            "the run kept its audio: {:?}",
+            layout(&set)
+        );
     }
 
     #[kithara::test]

@@ -18,7 +18,8 @@ use crate::{
     progress::{BeatMarkResume, BeatResume, RawBeatsResume},
 };
 
-/// Runs the pass holds before it turns audio down.
+/// Runs the pass opens on its own before it turns audio down. It holds one
+/// more while it reads a stretch through to a run standing in front of it.
 const BUDGET_RUNS: usize = 4;
 
 #[derive(Clone, Copy)]
@@ -107,11 +108,11 @@ where
         let ready_frames = window_frames.saturating_add(overlap_frames);
         let hop_frames = window_frames.saturating_sub(overlap_frames).max(1);
         // A run has a window to read once it holds a hop in front of that
-        // window and the window with its overlap; four runs short of that are
-        // the budget, so a full hold always has one to read.
+        // window and the window with its overlap; every run the pass may hold,
+        // short of that, is the budget, so a full hold always has one to read.
         let budget = hop_frames
             .saturating_add(ready_frames)
-            .saturating_mul(BUDGET_RUNS);
+            .saturating_mul(BUDGET_RUNS.saturating_add(1));
 
         Self {
             params,

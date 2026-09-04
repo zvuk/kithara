@@ -250,3 +250,21 @@ fn a_track_the_reader_outruns_the_detector_on_reaches_its_end() {
         "the beat pass must take the whole track"
     );
 }
+
+/// The start of a track is the last place the schedule visits, because it
+/// aims at the middle of what is uncovered. A pass that may only continue a
+/// run it already holds has no answer for a gap with nothing in front of it,
+/// and must not call that gap done.
+#[kithara::test]
+fn a_gap_at_the_start_is_taken_rather_than_declared_covered() {
+    let analysis =
+        read_whole(Track::seconds(pools(), 407.2)).unwrap_or_else(|Livelock { ticks }| {
+            panic!("the pass waits on a detector that has nothing to read, after {ticks} ticks")
+        });
+    assert_eq!(
+        lost(&analysis),
+        0,
+        "the start of the track must be taken: {:?}",
+        analysis.beat().map(|beat| beat.unanalysed().to_vec())
+    );
+}
