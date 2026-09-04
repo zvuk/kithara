@@ -1,7 +1,7 @@
 use kithara_bufpool::{HasPool, PoolRegion};
 
 use super::{
-    super::{BeatDetectError, BeatDetector, BeatMark, RawBeats},
+    super::detector::{BeatDetectError, BeatDetector, BeatMark, RawBeats},
     BeatDetectorKind,
 };
 
@@ -14,9 +14,9 @@ where
 {
     match kind {
         #[cfg(feature = "beat-nn")]
-        BeatDetectorKind::NnBeatThis => Ok(Box::new(super::nn::Detector::new(pools)?)),
+        BeatDetectorKind::NnBeatThis => Ok(Box::new(super::nn::detector(pools)?)),
         #[cfg(feature = "beat-dsp")]
-        BeatDetectorKind::DspSpectral => Ok(Box::new(super::dsp::Detector::new(pools)?)),
+        BeatDetectorKind::DspSpectral => Ok(Box::new(super::dsp::detector(pools)?)),
     }
 }
 

@@ -2,33 +2,22 @@ use kithara_beat::SpectralBeats;
 use kithara_bufpool::{HasPool, PoolRegion};
 
 use super::{
-    super::{BeatDetectError, BeatDetector, RawBeats},
+    super::detector::{BeatDetectError, BeatDetector, RawBeats},
     build::marks,
 };
 
-pub(super) struct Detector<S>
+pub(super) fn detector<S>(pools: &PoolRegion<S>) -> Result<SpectralBeats<S>, BeatDetectError>
 where
     S: HasPool<f32>,
 {
-    inner: SpectralBeats<S>,
+    Ok(SpectralBeats::new(pools.clone())?)
 }
 
-impl<S> Detector<S>
-where
-    S: HasPool<f32>,
-{
-    pub(super) fn new(pools: &PoolRegion<S>) -> Result<Self, BeatDetectError> {
-        Ok(Self {
-            inner: SpectralBeats::new(pools.clone())?,
-        })
-    }
-}
-
-impl<S> BeatDetector for Detector<S>
+impl<S> BeatDetector for SpectralBeats<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     fn detect(&self, mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
-        Ok(marks(self.inner.analyze(mono_window)?))
+        Ok(marks(self.analyze(mono_window)?))
     }
 }

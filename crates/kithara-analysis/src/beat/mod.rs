@@ -1,4 +1,6 @@
 mod analyzer;
+#[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
+mod backend;
 mod detector;
 #[path = "../grid/mod.rs"]
 mod grid;
@@ -6,9 +8,9 @@ mod pass;
 mod runs;
 
 pub(crate) use analyzer::{BeatPassConfig, DetectOutput, DetectRequest};
-pub(crate) use detector::BeatDetector;
 #[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
-pub(crate) use detector::backend::{BeatDetectorKind, SELECTED_DETECTOR, build_detector};
+pub(crate) use backend::{BeatDetectorKind, SELECTED_DETECTOR, build_detector};
+pub(crate) use detector::BeatDetector;
 #[cfg(test)]
 pub(crate) use detector::{BeatDetectError, BeatDetectorMock, BeatMark, RawBeats};
 #[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
