@@ -151,6 +151,21 @@ impl<T> Sender<T> {
         old
     }
 
+    /// Borrow the latest value.
+    #[must_use]
+    pub fn borrow(&self) -> Ref<'_, T> {
+        Ref {
+            guard: self.shared.state.lock(),
+        }
+    }
+
+    /// Live receivers: every handle on the shared state that is not a sender.
+    #[must_use]
+    pub fn receiver_count(&self) -> usize {
+        let senders = *self.shared.senders.lock();
+        Arc::strong_count(&self.shared).saturating_sub(senders)
+    }
+
     /// Create a new receiver that starts from the sender's current value.
     #[must_use]
     pub fn subscribe(&self) -> Receiver<T> {
@@ -464,11 +479,26 @@ mod tests {
         assert_eq!(waiter.await.expect("task joined"), 2);
     }
 
+    /// `receiver_count` follows subscribe and drop, and ignores sender clones.
+    #[kithara::test(tokio, multi_thread)]
+    async fn receiver_count_follows_live_receivers() {
+        flash::reset();
+        let (tx, rx) = channel(0u32);
+        assert_eq!(tx.receiver_count(), 1);
+        let second = tx.subscribe();
+        let another_sender = tx.clone();
+        assert_eq!(tx.receiver_count(), 2, "a sender clone is not a receiver");
+        drop(rx);
+        drop(second);
+        assert_eq!(another_sender.receiver_count(), 0);
+    }
+
     #[kithara::test(tokio, multi_thread)]
     async fn sender_subscribe_wait_for_and_send_replace_cover_required_surface() {
         flash::reset();
         let (tx, mut rx) = channel(false);
         assert!(!tx.send_replace(true));
+        assert!(*tx.borrow(), "the sender reads what it holds");
         rx.wait_for(|value| *value).await.expect("value delivered");
         assert!(*rx.borrow());
 

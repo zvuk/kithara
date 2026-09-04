@@ -1,17 +1,23 @@
-#[cfg(test)]
 use std::num::NonZeroU32;
 
 #[cfg(test)]
 use kithara::analysis::Coverage;
 use kithara::{
     abr::AbrHandle,
-    analysis::FrameRange,
-    events::{AbrMode, BpmInfo, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
+    analysis::{AnalysisProgress, FrameRange},
+    events::{
+        AbrMode, BpmInfo, DjEvent, EngineEvent, Envelope, Event, EventReceiver, MediaTime,
+        PlayerEvent, SessionEvent, SlotId, TrackId, VariantInfo,
+    },
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
         time::Duration,
-        tokio::task,
+        tokio::{
+            self,
+            sync::{broadcast::error::RecvError, watch},
+            task,
+        },
     },
     play::{StretchControls, effects::eq::GainDb},
     prelude::EngineLoadSnapshot,
@@ -19,11 +25,9 @@ use kithara::{
     stream::AudioCodec,
 };
 use num_traits::{ToPrimitive, cast::AsPrimitive};
+use tracing::warn;
 
-use crate::{
-    config::AppConfig, pools::AppQueueControl, wave_cache::AnalysisPersistence,
-    waveform::TrackAnalysis,
-};
+use crate::{analysis::AnalysisHandle, pools::AppQueueControl, waveform::TrackAnalysis};
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -240,24 +244,24 @@ impl StateController {
     ///
     /// `cancel` must be a child of the deck master, so the listener task
     /// stops with its deck or the whole app.
-    /// `config` supplies the shared stores for per-track source analysis.
+    /// `analysis` is the app-wide analysis owner the deck observes.
     /// `timestretch` is the per-deck handle shared with the player.
     pub(crate) fn new(
         queue: AppQueueControl,
         timestretch: Arc<StretchControls>,
-        config: AppConfig,
         cancel: CancelToken,
-        persistence: AnalysisPersistence,
+        analysis: AnalysisHandle,
     ) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
 
-        spawn_listener(
+        let rx = queue.subscribe();
+        task::spawn(listen(
             queue.clone(),
             Arc::clone(&state),
-            config,
             cancel.clone(),
-            persistence,
-        );
+            rx,
+            analysis,
+        ));
 
         Self {
             queue,
@@ -423,22 +427,125 @@ impl Drop for StateController {
     }
 }
 
-fn spawn_listener(
+/// Mirror queue events into [`UiState`] and the analysis of the track the
+/// queue holds into `UiState::analysis`.
+pub(crate) async fn listen(
     queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
-    config: AppConfig,
     cancel: CancelToken,
-    persistence: AnalysisPersistence,
+    mut rx: EventReceiver,
+    analysis: AnalysisHandle,
 ) {
-    let rx = queue.subscribe();
-    task::spawn(crate::analysis::listen(
-        queue,
-        state,
-        config,
-        cancel,
-        rx,
-        persistence,
-    ));
+    let mut held = HeldAnalysis {
+        queue: queue.clone(),
+        analysis,
+        rx: None,
+    };
+    held.follow(&state).await;
+    held.warm(&state).await;
+
+    loop {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => break,
+            open = held.changed() => held.mirror(&state, open),
+            event = rx.recv() => match event {
+                Ok(Envelope { event, .. }) => {
+                    apply_event(&event, &queue, &state);
+                    match event {
+                        Event::Queue(QueueEvent::CurrentTrackChanged { .. })
+                        | Event::Engine(EngineEvent::Started)
+                        | Event::Session(SessionEvent::RouteChanged { .. }) => {
+                            held.follow(&state).await;
+                        }
+                        Event::Queue(QueueEvent::TrackAdded { .. } | QueueEvent::TrackRemoved { .. }) => {
+                            held.warm(&state).await;
+                        }
+                        _ => {}
+                    }
+                }
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
+            },
+        }
+    }
+}
+
+/// The deck's view of the analysis owner: a receiver for the track its
+/// queue holds.
+struct HeldAnalysis {
+    queue: AppQueueControl,
+    analysis: AnalysisHandle,
+    rx: Option<watch::Receiver<Option<AnalysisProgress>>>,
+}
+
+impl HeldAnalysis {
+    /// Observe the track the queue holds now and show what it has.
+    async fn follow(&mut self, state: &Mutex<UiState>) {
+        let held = self
+            .queue
+            .current_index()
+            .and_then(|index| state.lock().tracks.get(index).map(|track| track.id));
+        let track = held.and_then(|id| self.queue.track_source(id).map(|source| (id, source)));
+        self.rx = match (track, self.axis()) {
+            (Some((id, source)), Some(axis)) => {
+                self.analysis
+                    .subscribe(self.queue.clone(), id, source, axis)
+                    .await
+            }
+            _ => None,
+        };
+        self.mirror(state, true);
+    }
+
+    async fn warm(&self, state: &Mutex<UiState>) {
+        let ids: Vec<TrackId> = state.lock().tracks.iter().map(|track| track.id).collect();
+        if let Some(axis) = self.axis() {
+            self.analysis.warm(self.queue.clone(), ids, axis).await;
+        }
+    }
+
+    fn axis(&self) -> Option<NonZeroU32> {
+        let axis = NonZeroU32::new(self.queue.sample_rate());
+        if axis.is_none() {
+            warn!("analysis: the engine reports no sample rate; the deck observes nothing");
+        }
+        axis
+    }
+
+    /// Resolves on the next revision; `false` once the owner is gone.
+    async fn changed(&mut self) -> bool {
+        match &mut self.rx {
+            Some(rx) => rx.changed().await.is_ok(),
+            None => std::future::pending().await,
+        }
+    }
+
+    /// Show the held revision when it differs from the one on screen. A
+    /// receiver whose owner is gone is shown one last time and dropped.
+    fn mirror(&mut self, state: &Mutex<UiState>, open: bool) {
+        let next = self
+            .rx
+            .as_ref()
+            .and_then(|rx| rx.borrow().as_ref().map(|p| p.analysis().clone()));
+        if !open {
+            self.rx = None;
+        }
+        let mut st = state.lock();
+        if !same_revision(st.analysis.as_ref(), next.as_ref()) {
+            st.set_analysis(next);
+        }
+    }
+}
+
+fn same_revision(shown: Option<&TrackAnalysis>, next: Option<&TrackAnalysis>) -> bool {
+    match (shown, next) {
+        (None, None) => true,
+        (Some(shown), Some(next)) => {
+            shown.token() == next.token() && shown.revision() == next.revision()
+        }
+        _ => false,
+    }
 }
 
 /// Push the desired EQ gains down to the engine. Calls for bands with no
@@ -561,12 +668,126 @@ fn variant_short_label(v: &VariantInfo) -> String {
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::analysis::{BeatArtifact, BeatSnapshot, BeatState};
+    use ::kithara::{
+        analysis::{AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState},
+        events::TrackId,
+        host::HostConfig,
+        platform::{
+            CancelToken,
+            sync::{Arc, Mutex},
+            tokio::{
+                sync::{mpsc, watch},
+                task,
+            },
+        },
+        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
+        queue::{QueueConfig, QueueEvent},
+    };
     use kithara_test_utils::kithara;
 
     use super::{
-        UiState, bpm_info_from_state, codec_label, covered, frames_to_fractions, unready_ranges,
+        UiState, bpm_info_from_state, codec_label, covered, frames_to_fractions, listen,
+        unready_ranges,
     };
+    use crate::{
+        analysis::{AnalysisHandle, handle::Request},
+        pools::{self, AppHost, AppQueue, AppQueueControl, AppWorker},
+    };
+
+    fn queue() -> (AppHost, AppQueueControl) {
+        let pools = pools::build().expect("valid app pool policy");
+        let worker = AppWorker::new(PlayWorkerConfig::builder(pools).build());
+        let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker)
+                .sample_rate(host.requested_sample_rate())
+                .build(),
+        );
+        let queue = AppQueue::new(QueueConfig::builder().player(player).build());
+        let queue = host.insert(queue).expect("host accepts queue");
+        let control = queue.control().clone();
+        (host, control)
+    }
+
+    fn progress(revision: u64) -> AnalysisProgress {
+        let mut analysis = covered(&[(0, 1_000)], Some(1_000));
+        analysis = TrackAnalysis::builder()
+            .token(analysis.token().clone())
+            .revision(revision)
+            .source_sample_rate(analysis.source_sample_rate())
+            .maybe_extent(analysis.extent())
+            .settled(true)
+            .coverage(analysis.coverage().clone())
+            .build();
+        AnalysisProgress::try_from(analysis).expect("settled fixture is valid progress")
+    }
+
+    /// Play the analysis owner for one subscribe: hand the deck a channel.
+    async fn answer_subscribe(
+        requests: &mut mpsc::Receiver<Request>,
+        expected: TrackId,
+    ) -> watch::Sender<Option<AnalysisProgress>> {
+        let Some(Request::Subscribe {
+            track_id, reply, ..
+        }) = requests.recv().await
+        else {
+            panic!("the deck subscribes");
+        };
+        assert_eq!(track_id, expected, "for the track its queue holds");
+        let (tx, rx) = watch::channel(None);
+        assert!(reply.send(rx).is_ok(), "the deck waits for the reply");
+        tx
+    }
+
+    async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
+        for _ in 0..2_000 {
+            if state.lock().analysis.as_ref().map(TrackAnalysis::revision) == Some(revision) {
+                return;
+            }
+            task::yield_now().await;
+        }
+        panic!("revision {revision} never reached the deck");
+    }
+
+    use crate::waveform::TrackAnalysis;
+
+    #[kithara::test(native, tokio)]
+    async fn a_current_track_change_resubscribes_the_deck_and_mirrors_the_revisions() {
+        let (_host, queue) = queue();
+        let track_id = TrackId::from(1);
+        queue
+            .append_with_id(track_id, "file:///tmp/track-1.mp3".to_owned())
+            .expect("append test track");
+        let state = Arc::new(Mutex::new(UiState::new(&queue)));
+        let (analysis, mut requests) = AnalysisHandle::channel();
+        let cancel = CancelToken::root();
+        task::spawn(listen(
+            queue.clone(),
+            Arc::clone(&state),
+            cancel.clone(),
+            queue.subscribe(),
+            analysis,
+        ));
+
+        let first = answer_subscribe(&mut requests, track_id).await;
+        let Some(Request::Warm { track_ids, .. }) = requests.recv().await else {
+            panic!("the deck warms its library");
+        };
+        assert_eq!(track_ids, vec![track_id]);
+        first.send_replace(Some(progress(1)));
+        wait_for_revision(&state, 1).await;
+
+        queue
+            .bus()
+            .publish(QueueEvent::CurrentTrackChanged { id: Some(track_id) });
+        let second = answer_subscribe(&mut requests, track_id).await;
+        second.send_replace(Some(progress(2)));
+        wait_for_revision(&state, 2).await;
+
+        drop(first);
+        cancel.cancel();
+    }
 
     fn beat(beats: Vec<(u64, Option<f32>)>) -> BeatSnapshot {
         BeatSnapshot::new(
