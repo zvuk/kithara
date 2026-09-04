@@ -7,19 +7,15 @@ use kithara_audio::{
 };
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
-#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-use kithara_platform::sync::Arc;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
-#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-use unimock::{MockFn, Unimock, matching};
 
 use crate::test_pools::{Pools, sample_buffer};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::{
     analyzer::TrackAnalysis,
-    beat::{BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
+    beat::{BeatDetectError, BeatDetector, BeatMark, RawBeats},
     blob::to_bytes,
     waveform::bucket::Waveform,
 };
@@ -30,18 +26,25 @@ pub(super) const MARKER_TOLERANCE: u64 = 64;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 pub(super) type Artifacts = (Waveform, Vec<u64>);
 
+/// One beat a quarter of the way into every window. The pass hands its
+/// detector to a worker thread, and a mock has to go back to the thread that
+/// made it.
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+struct OneBeatPerWindow;
+
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+impl BeatDetector for OneBeatPerWindow {
+    fn detect(&self, _mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
+        Ok(RawBeats {
+            beats: vec![BeatMark::at(0.25)],
+            downbeats: vec![BeatMark::at(0.25)],
+        })
+    }
+}
+
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 pub(super) fn beat_detector() -> Box<dyn BeatDetector> {
-    Box::new(Unimock::new(
-        BeatDetectorMock
-            .each_call(matching!(_))
-            .answers_arc(Arc::new(|_, _| {
-                Ok(RawBeats {
-                    beats: vec![BeatMark::at(0.25)],
-                    downbeats: vec![BeatMark::at(0.25)],
-                })
-            })),
-    ))
+    Box::new(OneBeatPerWindow)
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
