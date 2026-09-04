@@ -91,8 +91,10 @@ again and one nothing is waiting for is not.
   it holds and an under-reported duration would refuse the source's own tail.
 - **Run bounds.** A run decodes one schedule chunk before another position is
   chosen. While the beat pass can only continue a run it already has, the run is
-  instead unbounded and aimed where covered audio ends, so it continues one
-  rather than opening an island the beat pass would turn down. It ends at
+  instead unbounded and aimed at the front of the widest gap, so it continues a
+  run rather than opening an island the beat pass would turn down. A gap at the
+  start of the track has nothing in front of it and is continued from behind:
+  read through, it arrives at the covered audio that closes it. A run ends at
   covered audio or the extent. It starts from the first decoded chunk, not `landed_at`: a seek is
   begun rather than completed when it answers, so the decoder resumes at its own
   boundary.
@@ -163,20 +165,21 @@ A run reaching `detector_min_window_seconds` is detected immediately, then
 re-detected when its full window fills. Once the extent is known, the artifact is
 spread across it at its own tempo while retaining detected marker positions. Run
 mono comes from sample guards acquired through `TrackAnalyzers`; the logical run
-set holds at most four runs while every physical allocation still competes under
-the region-wide hard byte budget, and its mono budget is four of what a run can
-hold with nothing for the detector to read: a hop in front of its first window
-and a window short of ready behind it. A run releases everything ahead of the
-window it still waits on, and a run that has fed no window releases nothing,
-since the audio in front of its first window belongs to a window starting before
-it. The hold therefore follows the detection backlog rather than the track
+set opens at most four runs of its own, and holds one more while it reads a
+stretch through to a run standing in front of it, while every physical
+allocation still competes under the region-wide hard byte budget. Its mono
+budget is five of what a run can hold with nothing for the detector to read: a
+hop in front of its first window and a window short of ready behind it. A run
+releases everything ahead of the window it still waits on, and a run that has
+fed no window releases nothing, since the audio in front of its first window
+belongs to a window starting before it. The hold therefore follows the detection backlog rather than the track
 length. Audio past the budget is turned down rather than given up: it stays
 outside the beat coverage, and the pass reads it again once the detector frees
 room. That terminates because a hold at its budget always holds a window the
-detector can read. Audio the pass did not read for itself extends a run it
-already has and does not open one. Downmix and grid-cleanup scratch stay as
-guards for the pass lifetime; no lower component constructs or stores another
-pool facade.
+detector can read: every run it may carry, short of a window, is the budget.
+Audio the pass did not read for itself extends a run it already has and does not
+open one. Downmix and grid-cleanup scratch stay as guards for the pass lifetime;
+no lower component constructs or stores another pool facade.
 
 `AnalysisWorker` owns one `kithara-worker` dispatcher and admits every pass as a
 separate `AnalysisNode<B, S>` task (absent on wasm32). `AnalysisWorkerConfig`
