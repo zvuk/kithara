@@ -135,15 +135,19 @@ impl Owner {
         axis: NonZeroU32,
     ) -> watch::Receiver<Option<AnalysisProgress>> {
         self.axis = Some(axis);
-        let Some(index) = self.entry_for(queue, track_id, source, axis) else {
+        let Some((index, config)) = self.entry_for(&queue, track_id, source) else {
             return watch::channel(None).1;
         };
+        self.entries[index].point_at(config, queue, track_id);
+        self.seed(index, axis);
         let rx = self.entries[index].subscribe();
         self.schedule(index, axis);
         self.pump();
         rx
     }
 
+    /// Put a library list in line behind every held entry; the cache is read
+    /// when each pass is about to open.
     pub(super) fn warm(
         &mut self,
         queue: &AppQueueControl,
@@ -155,22 +159,25 @@ impl Owner {
             let Some(source) = queue.track_source(track_id) else {
                 continue;
             };
-            if let Some(index) = self.entry_for(queue.clone(), track_id, source, axis) {
-                self.schedule(index, axis);
+            let Some((index, config)) = self.entry_for(queue, track_id, source) else {
+                continue;
+            };
+            if !self.entries[index].is_held() {
+                self.entries[index].point_at(config, queue.clone(), track_id);
             }
+            self.schedule(index, axis);
         }
         self.pump();
     }
 
-    /// The entry for `source`, created on first sight and seeded from the
-    /// cache for `axis`.
+    /// The entry for `source` and the resource it resolves to; the entry is
+    /// created on first sight.
     fn entry_for(
         &mut self,
-        queue: AppQueueControl,
+        queue: &AppQueueControl,
         track_id: TrackId,
         source: AppTrackSource,
-        axis: NonZeroU32,
-    ) -> Option<usize> {
+    ) -> Option<(usize, AppResourceConfig)> {
         let Some(config) = resource_config_from_source(source, &self.config) else {
             debug!(
                 ?track_id,
@@ -189,20 +196,23 @@ impl Owner {
             .entries
             .iter()
             .position(|entry| entry.target().is_same(&target));
-        let index = if let Some(index) = known {
-            self.entries[index].point_at(config, queue, track_id);
-            index
-        } else {
+        let index = known.unwrap_or_else(|| {
             self.entries
-                .push(Entry::new(target, config, queue, track_id));
+                .push(Entry::new(target, config.clone(), queue.clone(), track_id));
             self.entries.len() - 1
-        };
+        });
+        Some((index, config))
+    }
+
+    /// Offer the cached value for `axis` to an entry holding none.
+    pub(super) fn seed(&mut self, index: usize, axis: NonZeroU32) {
         let entry = &self.entries[index];
-        if entry.value_for(axis).is_none()
-            && let Some(progress) = self.cache.get(entry.target(), axis)
-        {
+        if entry.value_for(axis).is_some() {
+            return;
+        }
+        if let Some(progress) = self.cache.get(entry.target(), axis) {
             debug!(
-                ?track_id,
+                track_id = ?entry.track_id(),
                 revision = progress.analysis().revision(),
                 complete = progress.analysis().is_complete(),
                 resumable = progress.is_resumable(),
@@ -210,12 +220,14 @@ impl Owner {
             );
             entry.offer(progress);
         }
-        Some(index)
     }
 
     /// Put the entry in line unless it is complete on `axis` or a pass on
     /// that axis already ran its course. A held entry ends a background pass.
     fn schedule(&mut self, index: usize, axis: NonZeroU32) {
+        if !self.runner.is_active() {
+            return;
+        }
         let fingerprint = self.runner.fingerprint();
         let entry = &mut self.entries[index];
         let track_id = entry.track_id();
@@ -285,22 +297,21 @@ impl Owner {
     /// the rest in request order.
     pub(super) fn pump(&mut self) {
         self.retire_stale_axis();
+        let Some(axis) = self.axis else {
+            return;
+        };
         if self.active.is_some() {
             return;
         }
-        if !self.runner.is_active() {
-            self.pending.clear();
-            return;
-        }
         while let Some(index) = self.next_pending() {
-            if let Some(run) = self.open_run(index) {
+            if let Some(run) = self.open_run(index, axis) {
                 self.active = Some(Activity::Running(run));
                 return;
             }
         }
     }
 
-    pub(super) fn next_pending(&mut self) -> Option<usize> {
+    fn next_pending(&mut self) -> Option<usize> {
         let position = self
             .pending
             .iter()

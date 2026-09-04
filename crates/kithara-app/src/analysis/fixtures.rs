@@ -24,12 +24,10 @@ use kithara::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::Entry;
 use crate::{
     config::AppConfig,
     pools::{self, AppHost, AppQueue, AppQueueControl, AppStore, AppTrackSource, AppWorker, Pools},
-    sources::build_resource_config,
-    wave_cache::{AnalysisPersistence, AnalysisTarget, persistence::AnalysisPersistenceConfig},
+    wave_cache::{AnalysisPersistence, persistence::AnalysisPersistenceConfig},
     waveform::TrackAnalysis,
 };
 
@@ -205,22 +203,4 @@ pub(crate) fn wav_track(directory: &Path, seconds: u32) -> String {
     }
     std::fs::write(&path, bytes).expect("fixture track is written");
     format!("file://{}", path.display())
-}
-
-/// The entry the owner would create for `source` under `config`.
-pub(crate) fn entry(
-    config: &AppConfig,
-    queue: AppQueueControl,
-    track_id: TrackId,
-    source: AppTrackSource,
-) -> Entry {
-    let config = match source {
-        AppTrackSource::Config(cfg) => *cfg,
-        AppTrackSource::Uri(url) => {
-            build_resource_config(&url, config).expect("source yields a resource")
-        }
-        _ => panic!("fixture source has no resource"),
-    };
-    let target = AnalysisTarget::for_config(&config).expect("source has an analysis target");
-    Entry::new(target, config, queue, track_id)
 }

@@ -1,7 +1,8 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    analysis::AnalysisProgress,
+    analysis::{AnalysisProducer, AnalysisProgress},
+    events::TrackId,
     platform::tokio::{
         sync::watch,
         task::{self, JoinHandle},
@@ -13,7 +14,10 @@ use super::{
     entry::{Stage, complete_for},
     service::Owner,
 };
-use crate::wave_cache::{AnalysisPersistenceError, token_for};
+use crate::{
+    pools::AppQueueControl,
+    wave_cache::{AnalysisPersistenceError, token_for},
+};
 
 pub(super) enum Activity {
     Running(Run),
@@ -29,8 +33,11 @@ pub(super) struct Run {
 }
 
 impl Owner {
-    pub(super) fn open_run(&mut self, index: usize) -> Option<Run> {
-        let axis = self.axis?;
+    /// Open a pass for the entry unless the cache already completes it. A
+    /// resumable seed resumes; a rejected checkpoint is no seed, so the pass
+    /// opens fresh above the revision the entry holds.
+    pub(super) fn open_run(&mut self, index: usize, axis: NonZeroU32) -> Option<Run> {
+        self.seed(index, axis);
         let fingerprint = self.runner.fingerprint();
         let entry = &mut self.entries[index];
         let track_id = entry.track_id();
@@ -41,36 +48,38 @@ impl Owner {
             .is_some_and(|progress| complete_for(progress, fingerprint))
         {
             entry.set_stage(Stage::Ended(axis));
+            entry.release();
             return None;
         }
         let queue = entry.queue().clone();
-        let deliver = move |producer| queue.attach_observer(track_id, producer);
         let config = entry.config().clone();
-        let resumed = seed.as_ref().is_some_and(AnalysisProgress::is_resumable);
         let revision = seed
             .as_ref()
             .map_or(0, |progress| progress.analysis().revision());
-        let rx = match seed.filter(AnalysisProgress::is_resumable) {
-            Some(progress) => match self.runner.resume(config, progress, deliver) {
-                Ok(rx) => rx,
-                Err(error) => {
-                    warn!(%error, ?track_id, "analysis: cached checkpoint rejected");
-                    entry.set_stage(Stage::Ended(axis));
-                    return None;
-                }
-            },
-            None => self.runner.analyze(
+        let resumed = seed
+            .filter(AnalysisProgress::is_resumable)
+            .and_then(|progress| {
+                self.runner
+                    .resume(config.clone(), progress, deliver(&queue, track_id))
+                    .inspect_err(|error| {
+                        warn!(%error, ?track_id, "analysis: cached checkpoint rejected");
+                    })
+                    .ok()
+            });
+        let fresh = resumed.is_none();
+        let rx = resumed.unwrap_or_else(|| {
+            self.runner.analyze(
                 config,
                 token_for(entry.target().key()),
                 axis,
                 revision,
-                deliver,
-            ),
-        };
+                deliver(&queue, track_id),
+            )
+        });
         debug!(
             ?track_id,
             held,
-            resumed,
+            fresh,
             axis = axis.get(),
             "analysis: pass opened"
         );
@@ -136,30 +145,40 @@ impl Owner {
     }
 
     /// The pass closed: keep its last value everywhere and commit it before
-    /// the runner takes the next entry.
+    /// the runner takes the next entry. The entry is done only when the pass
+    /// ran its course; a close with nothing settled leaves it for the next
+    /// request.
     pub(super) fn finish_run(&mut self) {
         let Some(Activity::Running(run)) = self.active.take() else {
             return;
         };
+        let progress = run.rx.borrow().clone();
+        let ran_its_course = progress.as_ref().is_some_and(|progress| {
+            progress.analysis().is_settled() || complete_for(progress, self.runner.fingerprint())
+        });
         let entry = &mut self.entries[run.entry];
         let track_id = entry.track_id();
         if run.requeue {
             entry.set_stage(Stage::Queued);
             self.pending.push_back(run.entry);
-        } else {
+        } else if ran_its_course {
             entry.set_stage(Stage::Ended(run.axis));
+        } else {
+            entry.set_stage(Stage::Idle);
         }
-        let Some(progress) = run.rx.borrow().clone() else {
+        let Some(progress) = progress else {
             debug!(
                 ?track_id,
                 requeued = run.requeue,
                 "analysis: pass closed without a value"
             );
+            entry.release();
             return;
         };
         let target = entry.target().clone();
         self.cache.put(target.clone(), progress.clone());
         let sent = entry.offer(progress.clone());
+        entry.release();
         debug!(
             ?track_id,
             revision = progress.analysis().revision(),
@@ -173,4 +192,11 @@ impl Owner {
         let commit = task::spawn(async move { persistence.store(target, progress).await });
         self.active = Some(Activity::Committing(commit));
     }
+}
+
+/// Where a pass hands its producer: the playback path of the track it was
+/// opened for.
+fn deliver(queue: &AppQueueControl, track_id: TrackId) -> impl FnOnce(AnalysisProducer) {
+    let queue = queue.clone();
+    move |producer| queue.attach_observer(track_id, producer)
 }

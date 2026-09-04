@@ -18,7 +18,7 @@ pub(crate) struct Entry {
     #[field(get)]
     target: AnalysisTarget,
     /// Where the next pass opens its reader and hands its producer: the
-    /// latest requester, so the producer waits where that track loads.
+    /// requester that holds the entry, else the latest one.
     #[field(get)]
     config: AppResourceConfig,
     #[field(get)]
@@ -37,7 +37,8 @@ pub(crate) enum Stage {
     Idle,
     Queued,
     Running,
-    /// A pass on this axis ran to its own end; the value stays as it is.
+    /// A pass on this axis ran its course: it closed on a complete or a
+    /// settled value.
     Ended(NonZeroU32),
 }
 
@@ -90,6 +91,13 @@ impl Entry {
             .as_ref()
             .filter(|progress| progress.analysis().source_sample_rate() == axis)
             .cloned()
+    }
+
+    /// Drop the value unless a deck holds it; the cache tiers keep it.
+    pub(crate) fn release(&self) {
+        if !self.is_held() {
+            self.tx.send_replace(None);
+        }
     }
 
     /// Publish `progress` unless it is the revision already held.
