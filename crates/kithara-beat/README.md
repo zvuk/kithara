@@ -56,9 +56,10 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
   | `embed-full-model` | `final0` | 79 MB | 0.38 BPM |
   | `embed-full-int8-model` | `final0`, int8 | 22.6 MB | 0.35 BPM |
 
-  Only the small and mel models are in git. `scripts/fetch-beat-models.sh`
-  fetches the full one and prints how to quantize it; the build names the file
-  it wants when it is missing.
+  The tree carries the small and mel models. The build fetches the full one
+  into `$TMPDIR/kithara-beat-models`, or wherever `KITHARA_BEAT_MODEL_CACHE`
+  points, and checks it against a pinned SHA-256. The int8 model is quantized
+  from the full one: the build prints the command when it is missing.
 
 ## Integration
 

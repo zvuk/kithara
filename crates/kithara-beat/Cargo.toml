@@ -20,7 +20,7 @@ default = []
 nn = ["dep:rten", "dep:rten-tensor"]
 dsp = ["dep:kithara-platform", "dep:realfft"]
 # One of these embeds a model and names it in the analysis fingerprint. The
-# full models are not in git; `scripts/fetch-beat-models.sh` puts them in place.
+# full models live in the build cache; `build.rs` fetches and checks them.
 embed-small-model = ["nn"]
 embed-full-model = ["nn"]
 embed-full-int8-model = ["nn"]

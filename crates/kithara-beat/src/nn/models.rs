@@ -19,11 +19,11 @@ pub const BEAT_MODEL_BYTES: &[u8] = include_bytes!("../../models/beat_this_small
 pub const BEAT_MODEL_TAG: &str = "beat_this_small_v1";
 
 #[cfg(feature = "embed-full-model")]
-pub const BEAT_MODEL_BYTES: &[u8] = include_bytes!("../../models/beat_this_full.onnx");
+pub const BEAT_MODEL_BYTES: &[u8] = include_bytes!(env!("KITHARA_BEAT_MODEL"));
 #[cfg(feature = "embed-full-model")]
 pub const BEAT_MODEL_TAG: &str = "beat_this_full_v1";
 
 #[cfg(feature = "embed-full-int8-model")]
-pub const BEAT_MODEL_BYTES: &[u8] = include_bytes!("../../models/beat_this_full_int8.onnx");
+pub const BEAT_MODEL_BYTES: &[u8] = include_bytes!(env!("KITHARA_BEAT_MODEL"));
 #[cfg(feature = "embed-full-int8-model")]
 pub const BEAT_MODEL_TAG: &str = "beat_this_full_int8_v1";

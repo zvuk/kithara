@@ -123,6 +123,6 @@ release-artifacts/
 # Machine profile of a CI host, provisioned per machine
 .config/ci-host.toml
 
-# Beat models too large for git; crates/kithara-beat/scripts/fetch-beat-models.sh fetches them.
+# Beat models the build keeps in its own cache; the tree holds the small ones.
 crates/kithara-beat/models/beat_this_full.onnx
 crates/kithara-beat/models/beat_this_full_int8.onnx
