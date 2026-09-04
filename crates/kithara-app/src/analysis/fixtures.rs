@@ -14,8 +14,13 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Mutex,
         time::Duration,
-        tokio::{runtime::Handle, sync::watch},
+        tokio::{
+            runtime::Handle,
+            sync::{mpsc, oneshot, watch},
+            task,
+        },
     },
     play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::QueueConfig,
@@ -24,10 +29,13 @@ use kithara::{
 };
 use num_traits::cast::AsPrimitive;
 
+use super::{Entry, Request};
 use crate::{
     config::AppConfig,
     pools::{self, AppHost, AppQueue, AppQueueControl, AppStore, AppTrackSource, AppWorker, Pools},
-    wave_cache::{AnalysisPersistence, persistence::AnalysisPersistenceConfig},
+    sources::build_resource_config,
+    state::UiState,
+    wave_cache::{AnalysisPersistence, AnalysisTarget, persistence::AnalysisPersistenceConfig},
     waveform::TrackAnalysis,
 };
 
@@ -203,4 +211,60 @@ pub(crate) fn wav_track(directory: &Path, seconds: u32) -> String {
     }
     std::fs::write(&path, bytes).expect("fixture track is written");
     format!("file://{}", path.display())
+}
+
+/// The next subscribe a deck sends: its track and where the owner replies.
+/// Warm requests on the way are left unanswered, as the owner leaves them.
+pub(crate) async fn next_subscribe(
+    requests: &mut mpsc::Receiver<Request>,
+) -> (
+    TrackId,
+    oneshot::Sender<watch::Receiver<Option<AnalysisProgress>>>,
+) {
+    loop {
+        match requests.recv().await {
+            Some(Request::Subscribe {
+                track_id, reply, ..
+            }) => return (track_id, reply),
+            Some(Request::Warm { .. }) => {}
+            None => panic!("the deck subscribes"),
+        }
+    }
+}
+
+/// Play the analysis owner for one subscribe: hand the deck a channel.
+pub(crate) async fn answer_subscribe(
+    requests: &mut mpsc::Receiver<Request>,
+    expected: TrackId,
+) -> watch::Sender<Option<AnalysisProgress>> {
+    let (track_id, reply) = next_subscribe(requests).await;
+    assert_eq!(track_id, expected, "for the track its queue holds");
+    let (tx, rx) = watch::channel(None);
+    assert!(reply.send(rx).is_ok(), "the deck waits for the reply");
+    tx
+}
+
+pub(crate) async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
+    for _ in 0..2_000 {
+        if state.lock().analysis.as_ref().map(TrackAnalysis::revision) == Some(revision) {
+            return;
+        }
+        task::yield_now().await;
+    }
+    panic!("revision {revision} never reached the deck");
+}
+
+/// The entry the owner creates for `source` under `config`.
+pub(crate) fn entry(
+    config: &AppConfig,
+    queue: AppQueueControl,
+    track_id: TrackId,
+    source: AppTrackSource,
+) -> Entry {
+    let AppTrackSource::Uri(url) = source else {
+        panic!("fixture tracks are appended by URL");
+    };
+    let config = build_resource_config(&url, config).expect("source yields a resource");
+    let target = AnalysisTarget::for_config(&config).expect("source has an analysis target");
+    Entry::new(target, config, queue, track_id)
 }

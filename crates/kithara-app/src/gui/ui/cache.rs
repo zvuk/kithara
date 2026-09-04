@@ -416,10 +416,56 @@ fn waveform_buckets(wave: &Waveform) -> impl Iterator<Item = WaveBucket> + '_ {
 mod tests {
     use std::num::NonZeroU32;
 
+    use ::kithara::platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        tokio::task,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{state::AbrVariant, waveform::TrackAnalysis};
+    use crate::{
+        analysis::{AnalysisHandle, fixtures},
+        state::{AbrVariant, listen},
+        waveform::TrackAnalysis,
+    };
+
+    /// The whole path a revision travels: the owner's entry, the deck
+    /// listener, `UiState::analysis`, the host's per-deck cache.
+    #[kithara::test(native, tokio)]
+    async fn a_revision_offered_to_an_entry_redraws_the_deck_waveform() {
+        let cancel = CancelToken::root();
+        let (_host, queue) = fixtures::queue();
+        let (track_id, source) = fixtures::track(&queue, 1, "file:///tmp/track-1.mp3");
+        let config = fixtures::app_config(&cancel, fixtures::memory_store());
+        let entry = fixtures::entry(&config, queue.clone(), track_id, source);
+        let state = Arc::new(Mutex::new(UiState::new(&queue)));
+        let (analysis, mut requests) = AnalysisHandle::channel();
+        task::spawn(listen(
+            queue.clone(),
+            Arc::clone(&state),
+            cancel.clone(),
+            queue.subscribe(),
+            analysis,
+        ));
+        let (asked, reply) = fixtures::next_subscribe(&mut requests).await;
+        assert_eq!(asked, track_id);
+        assert!(reply.send(entry.subscribe()).is_ok());
+        let mut cache = DeckCache::default();
+        cache.refresh_wave(state.lock().analysis.as_ref());
+        let before = cache.wave_revision;
+
+        let published = fixtures::snapshot("track".into(), 1, 1_000, fixtures::fingerprint(), None);
+        assert!(entry.offer(fixtures::progress(published)));
+        fixtures::wait_for_revision(&state, 1).await;
+
+        cache.refresh_wave(state.lock().analysis.as_ref());
+        assert_ne!(
+            cache.wave_revision, before,
+            "the deck draws the revision the entry published"
+        );
+        cancel.cancel();
+    }
 
     /// Version 1 plus one bucket of three band heights (0.5 = 0x3F000000).
     fn wave_of(height: u8) -> Waveform {

@@ -63,7 +63,7 @@ pub struct UiState {
 }
 
 impl UiState {
-    fn new(queue: &AppQueueControl) -> Self {
+    pub(crate) fn new(queue: &AppQueueControl) -> Self {
         let tracks = queue.tracks();
         let current_track_index = tracks.first().map(|_| 0usize);
         let track_name = tracks.first().map(|e| e.name.clone()).unwrap_or_default();
@@ -459,12 +459,18 @@ pub(crate) async fn listen(
                             held.follow(&state).await;
                         }
                         Event::Queue(QueueEvent::TrackAdded { .. } | QueueEvent::TrackRemoved { .. }) => {
+                            held.follow(&state).await;
                             held.warm(&state).await;
                         }
                         _ => {}
                     }
                 }
-                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Lagged(missed)) => {
+                    warn!(missed, "queue events lagged; the deck resyncs from its queue");
+                    apply_list(&queue, &state);
+                    held.follow(&state).await;
+                    held.warm(&state).await;
+                }
                 Err(RecvError::Closed) => break,
             },
         }
@@ -488,6 +494,7 @@ impl HeldAnalysis {
                 .and_then(|index| st.tracks.get(index).map(|track| track.id))
         };
         let track = held.and_then(|id| self.queue.track_source(id).map(|source| (id, source)));
+        self.rx = None;
         self.rx = match (track, self.axis()) {
             (Some((id, source)), Some(axis)) => {
                 self.analysis
@@ -595,18 +602,31 @@ pub(crate) fn apply_event(event: &Event, queue: &AppQueueControl, state: &Mutex<
             QueueEvent::TrackAdded { .. }
             | QueueEvent::TrackRemoved { .. }
             | QueueEvent::TrackStatusChanged { .. },
-        ) => {
-            let tracks = queue.tracks();
-            let mut st = state.lock();
-            st.tracks = tracks;
-            if let Some(idx) = st.current_track_index
-                && let Some(track) = st.tracks.get(idx)
-            {
-                st.track_name = track.name.clone();
-            }
-        }
+        ) => apply_list(queue, state),
         _ => {}
     }
+}
+
+/// Mirror the queue's list and keep the shown index naming a track.
+fn apply_list(queue: &AppQueueControl, state: &Mutex<UiState>) {
+    let tracks = queue.tracks();
+    let current = queue.current_index();
+    let mut st = state.lock();
+    st.tracks = tracks;
+    st.current_track_index = shown_index(current, st.current_track_index, st.tracks.len());
+    st.track_name = st
+        .current_track_index
+        .and_then(|idx| st.tracks.get(idx).map(|track| track.name.clone()))
+        .unwrap_or_default();
+}
+
+/// The track a deck shows: the player's current item; without one, the
+/// track it showed while the list still has it, else the first.
+fn shown_index(current: Option<usize>, shown: Option<usize>, len: usize) -> Option<usize> {
+    current
+        .or(shown)
+        .filter(|&index| index < len)
+        .or_else(|| (len > 0).then_some(0))
 }
 
 /// One rung of the ABR ladder as the UI names it: the short label a control
@@ -671,45 +691,29 @@ fn variant_short_label(v: &VariantInfo) -> String {
 mod tests {
     use ::kithara::{
         analysis::{AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState},
-        events::TrackId,
-        host::HostConfig,
+        events::PlayerEvent,
         platform::{
             CancelToken,
             sync::{Arc, Mutex},
-            tokio::{
-                sync::{mpsc, watch},
-                task,
-            },
+            time::{self, Duration},
+            tokio::{sync::mpsc, task},
         },
-        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
-        queue::{QueueConfig, QueueEvent},
+        queue::QueueEvent,
     };
     use kithara_test_utils::kithara;
 
     use super::{
-        HeldAnalysis, UiState, bpm_info_from_state, codec_label, covered, frames_to_fractions,
-        listen, unready_ranges,
+        UiState, bpm_info_from_state, codec_label, covered, frames_to_fractions, listen,
+        unready_ranges,
     };
     use crate::{
-        analysis::{AnalysisHandle, Request},
-        pools::{self, AppHost, AppQueue, AppQueueControl, AppWorker},
+        analysis::{
+            AnalysisHandle, Request,
+            fixtures::{answer_subscribe, next_subscribe, queue, track, wait_for_revision},
+        },
+        pools::AppQueueControl,
+        waveform::TrackAnalysis,
     };
-
-    fn queue() -> (AppHost, AppQueueControl) {
-        let pools = pools::build().expect("valid app pool policy");
-        let worker = AppWorker::new(PlayWorkerConfig::builder(pools).build());
-        let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .worker(worker)
-                .sample_rate(host.requested_sample_rate())
-                .build(),
-        );
-        let queue = AppQueue::new(QueueConfig::builder().player(player).build());
-        let queue = host.insert(queue).expect("host accepts queue");
-        let control = queue.control().clone();
-        (host, control)
-    }
 
     fn progress(revision: u64) -> AnalysisProgress {
         let mut analysis = covered(&[(0, 1_000)], Some(1_000));
@@ -724,94 +728,12 @@ mod tests {
         AnalysisProgress::try_from(analysis).expect("settled fixture is valid progress")
     }
 
-    /// Play the analysis owner for one subscribe: hand the deck a channel.
-    async fn answer_subscribe(
-        requests: &mut mpsc::Receiver<Request>,
-        expected: TrackId,
-    ) -> watch::Sender<Option<AnalysisProgress>> {
-        let Some(Request::Subscribe {
-            track_id, reply, ..
-        }) = requests.recv().await
-        else {
-            panic!("the deck subscribes");
-        };
-        assert_eq!(track_id, expected, "for the track its queue holds");
-        let (tx, rx) = watch::channel(None);
-        assert!(reply.send(rx).is_ok(), "the deck waits for the reply");
-        tx
-    }
-
-    async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
-        for _ in 0..2_000 {
-            if state.lock().analysis.as_ref().map(TrackAnalysis::revision) == Some(revision) {
-                return;
-            }
-            task::yield_now().await;
-        }
-        panic!("revision {revision} never reached the deck");
-    }
-
-    use crate::waveform::TrackAnalysis;
-
-    /// A deck shows a track before anything plays; that is the track it
-    /// observes, and the track the deck moves to is the next one it observes.
-    #[kithara::test(native, tokio)]
-    async fn a_deck_observes_the_track_it_shows_before_playback_and_follows_it() {
-        let (_host, queue) = queue();
-        let first_id = TrackId::from(1);
-        let second_id = TrackId::from(2);
-        queue
-            .append_with_id(first_id, "file:///tmp/track-1.mp3".to_owned())
-            .expect("append test track");
-        queue
-            .append_with_id(second_id, "file:///tmp/track-2.mp3".to_owned())
-            .expect("append test track");
-        assert!(!queue.is_playing());
-        let state = Arc::new(Mutex::new(UiState::new(&queue)));
-        assert_eq!(state.lock().current_track_index, Some(0));
-        let (analysis, mut requests) = AnalysisHandle::channel();
-        let mut held = HeldAnalysis {
-            queue: queue.clone(),
-            analysis,
-            rx: None,
-        };
-
-        let follow = task::spawn({
-            let state = Arc::clone(&state);
-            async move {
-                held.follow(&state).await;
-                held
-            }
-        });
-        let _first = answer_subscribe(&mut requests, first_id).await;
-        let mut held = follow.await.expect("follow completes");
-        assert!(held.rx.is_some(), "the deck holds a receiver for its track");
-
-        state.lock().current_track_index = Some(1);
-        let follow = task::spawn({
-            let state = Arc::clone(&state);
-            async move {
-                held.follow(&state).await;
-                held
-            }
-        });
-        let _second = answer_subscribe(&mut requests, second_id).await;
-        let held = follow.await.expect("follow completes");
-        assert!(
-            held.rx.is_some(),
-            "and re-subscribes to the track it moved to"
-        );
-    }
-
-    #[kithara::test(native, tokio)]
-    async fn a_current_track_change_resubscribes_the_deck_and_mirrors_the_revisions() {
-        let (_host, queue) = queue();
-        let track_id = TrackId::from(1);
-        queue
-            .append_with_id(track_id, "file:///tmp/track-1.mp3".to_owned())
-            .expect("append test track");
-        let state = Arc::new(Mutex::new(UiState::new(&queue)));
-        let (analysis, mut requests) = AnalysisHandle::channel();
+    /// A deck listening to `queue`, with the test playing the analysis owner.
+    fn deck(
+        queue: &AppQueueControl,
+    ) -> (Arc<Mutex<UiState>>, mpsc::Receiver<Request>, CancelToken) {
+        let state = Arc::new(Mutex::new(UiState::new(queue)));
+        let (analysis, requests) = AnalysisHandle::channel();
         let cancel = CancelToken::root();
         task::spawn(listen(
             queue.clone(),
@@ -820,6 +742,65 @@ mod tests {
             queue.subscribe(),
             analysis,
         ));
+        (state, requests, cancel)
+    }
+
+    /// A deck built on an empty queue shows the first track that arrives and
+    /// observes it before anything plays.
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_deck_observes_a_track_added_to_its_empty_queue() {
+        let (_host, queue) = queue();
+        let (state, mut requests, cancel) = deck(&queue);
+        assert_eq!(state.lock().current_track_index, None);
+
+        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let tx = time::timeout(
+            Duration::from_secs(2),
+            answer_subscribe(&mut requests, track_id),
+        )
+        .await
+        .expect("the deck subscribes for the track its queue gained");
+
+        assert_eq!(state.lock().current_track_index, Some(0));
+        assert!(!queue.is_playing());
+        tx.send_replace(Some(progress(1)));
+        wait_for_revision(&state, 1).await;
+        cancel.cancel();
+    }
+
+    /// The index a deck shows keeps naming a track across removals, and names
+    /// none once the list is empty; the deck lets go of what it observed.
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_deck_lets_go_of_a_removed_track() {
+        let (_host, queue) = queue();
+        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (state, mut requests, cancel) = deck(&queue);
+        let tx = answer_subscribe(&mut requests, track_id).await;
+        tx.send_replace(Some(progress(1)));
+        wait_for_revision(&state, 1).await;
+
+        queue.remove(track_id).expect("remove test track");
+
+        time::timeout(Duration::from_secs(2), tx.closed())
+            .await
+            .expect("the deck drops the receiver of a track its queue lost");
+        for _ in 0..2_000 {
+            if state.lock().analysis.is_none() {
+                break;
+            }
+            task::yield_now().await;
+        }
+        let st = state.lock();
+        assert_eq!(st.current_track_index, None);
+        assert!(st.analysis.is_none(), "nothing is shown for no track");
+        cancel.cancel();
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn a_current_track_change_resubscribes_the_deck_and_mirrors_the_revisions() {
+        let (_host, queue) = queue();
+        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (state, mut requests, cancel) = deck(&queue);
 
         let first = answer_subscribe(&mut requests, track_id).await;
         let Some(Request::Warm { track_ids, .. }) = requests.recv().await else {
@@ -836,6 +817,61 @@ mod tests {
         second.send_replace(Some(progress(2)));
         wait_for_revision(&state, 2).await;
 
+        drop(first);
+        cancel.cancel();
+    }
+
+    /// While the deck asks for its next track it holds no receiver, so the
+    /// owner sees the track it left as unheld and can preempt for the new one.
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_deck_lets_go_of_its_track_before_asking_for_the_next() {
+        let (_host, queue) = queue();
+        let (first_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (second_id, _) = track(&queue, 2, "file:///tmp/track-2.mp3");
+        let (_state, mut requests, cancel) = deck(&queue);
+        let first = answer_subscribe(&mut requests, first_id).await;
+
+        queue.remove(first_id).expect("remove test track");
+        let (asked, reply) = time::timeout(Duration::from_secs(2), next_subscribe(&mut requests))
+            .await
+            .expect("the deck asks for the track it moved to");
+        assert_eq!(asked, second_id, "the deck asks for the track it moved to");
+        assert!(
+            first.is_closed(),
+            "and holds no receiver for the one it left while it waits"
+        );
+        drop(reply);
+        cancel.cancel();
+    }
+
+    /// A lagged bus is a resync: the deck reads the queue's list and current
+    /// track again and observes the track it shows.
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_lagged_deck_resyncs_from_its_queue() {
+        let (_host, queue) = queue();
+        let (first_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (state, mut requests, cancel) = deck(&queue);
+        let (_, reply) = next_subscribe(&mut requests).await;
+        let (_second_id, _) = track(&queue, 2, "file:///tmp/track-2.mp3");
+        for _ in 0..=::kithara::events::DEFAULT_EVENT_BUS_CAPACITY {
+            queue
+                .bus()
+                .publish(PlayerEvent::VolumeChanged { volume: 0.5 });
+        }
+        let (first, first_rx) = ::kithara::platform::tokio::sync::watch::channel(None);
+        assert!(reply.send(first_rx).is_ok(), "the deck waits for the reply");
+
+        let again = time::timeout(
+            Duration::from_secs(2),
+            answer_subscribe(&mut requests, first_id),
+        )
+        .await
+        .expect("the deck observes its track again after the lag");
+        let st = state.lock();
+        assert_eq!(st.tracks.len(), 2, "the list is read from the queue");
+        assert_eq!(st.current_track_index, Some(0));
+        drop(st);
+        drop(again);
         drop(first);
         cancel.cancel();
     }
