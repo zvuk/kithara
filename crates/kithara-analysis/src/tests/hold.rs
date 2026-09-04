@@ -2,22 +2,13 @@
 //! may, and the detector reads what is held only once the reader has nothing
 //! left to do.
 
-use std::{
-    iter,
-    num::{NonZeroU32, NonZeroUsize},
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_audio::{
-    AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, ReadOutcome, SeekOutcome,
-};
-use kithara_decode::TrackMetadata;
-use kithara_events::EventBus;
-use kithara_platform::{CancelToken, time::Duration, tokio::sync::watch};
+use kithara_platform::{CancelToken, tokio::sync::watch};
 use kithara_resampler::NoResamplerBackend;
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
 use kithara_worker::TickResult;
-use num_traits::cast::ToPrimitive;
 
 use super::{
     super::{
@@ -26,6 +17,7 @@ use super::{
         worker::{AnalysisTask, Job},
     },
     fixtures::beat_detector,
+    track::Track,
 };
 use crate::{
     AnalysisProgress, BeatAnalysisConfig, TrackAnalysis, beat::GridParams, slots::beat::detect,
@@ -51,105 +43,6 @@ fn rate() -> NonZeroU32 {
 
 fn spec() -> AudioSpec {
     AudioSpec::new(1, rate())
-}
-
-fn duration_for(frames: u64) -> Duration {
-    spec().duration_for(frames).expect("representable")
-}
-
-/// A silent track of a given length that answers every seek exactly.
-struct Track {
-    pools: crate::test_pools::Pools,
-    frames: u64,
-    at: u64,
-    bus: EventBus,
-    metadata: TrackMetadata,
-}
-
-impl Track {
-    fn seconds(pools: crate::test_pools::Pools, seconds: f64) -> Self {
-        let frames = (seconds * f64::from(Consts::RATE)).round();
-        Self {
-            pools,
-            frames: frames.to_u64().unwrap_or(0),
-            at: 0,
-            bus: EventBus::default(),
-            metadata: TrackMetadata::default(),
-        }
-    }
-}
-
-impl AudioSession for Track {
-    fn duration(&self) -> Option<Duration> {
-        Some(duration_for(self.frames))
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-}
-
-impl AudioRead for Track {
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
-        if self.at >= self.frames {
-            return Ok(ChunkOutcome::Eof {
-                position: self.position(),
-            });
-        }
-        let at = self.at;
-        let frames = Consts::CHUNK_FRAMES.min(self.frames - at);
-        self.at = at + frames;
-        let samples = iter::repeat_n(0.0_f32, frames.to_usize().unwrap_or(0));
-        Ok(ChunkOutcome::Chunk(AudioChunk::new(
-            AudioChunkInfo {
-                spec: spec(),
-                frames: u32::try_from(frames).unwrap_or(0),
-                frame_offset: at,
-                ..Default::default()
-            },
-            crate::test_pools::sample_buffer(&self.pools, &samples.collect::<Vec<_>>()),
-        )))
-    }
-
-    fn position(&self) -> Duration {
-        duration_for(self.at)
-    }
-
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        unreachable!("analysis pulls chunks")
-    }
-
-    fn read_planar<'a>(
-        &mut self,
-        _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
-        unreachable!("analysis pulls chunks")
-    }
-
-    fn spec(&self) -> AudioSpec {
-        spec()
-    }
-}
-
-impl AudioControl for Track {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let target = spec().frame_at(position).unwrap_or(0);
-        if target >= self.frames {
-            return Ok(SeekOutcome::PastEof {
-                target: position,
-                duration: duration_for(self.frames),
-            });
-        }
-        self.at = target;
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: duration_for(target),
-        })
-    }
 }
 
 /// The pass waited on the detector while the detector had nothing to read.
@@ -235,10 +128,15 @@ fn lost(analysis: &TrackAnalysis) -> u64 {
 /// none of which reached a full window.
 #[kithara::test]
 fn a_track_the_reader_outruns_the_detector_on_reaches_its_end() {
-    let analysis =
-        read_whole(Track::seconds(pools(), 266.06)).unwrap_or_else(|Livelock { ticks }| {
-            panic!("the pass waits on a detector that has nothing to read, after {ticks} ticks")
-        });
+    let analysis = read_whole(Track::silence(
+        pools(),
+        spec(),
+        Consts::CHUNK_FRAMES,
+        266.06,
+    ))
+    .unwrap_or_else(|Livelock { ticks }| {
+        panic!("the pass waits on a detector that has nothing to read, after {ticks} ticks")
+    });
     assert!(
         analysis.is_complete(),
         "the track must be covered: {:?}",
@@ -257,8 +155,8 @@ fn a_track_the_reader_outruns_the_detector_on_reaches_its_end() {
 /// and must not call that gap done.
 #[kithara::test]
 fn a_gap_at_the_start_is_taken_rather_than_declared_covered() {
-    let analysis =
-        read_whole(Track::seconds(pools(), 407.2)).unwrap_or_else(|Livelock { ticks }| {
+    let analysis = read_whole(Track::silence(pools(), spec(), Consts::CHUNK_FRAMES, 407.2))
+        .unwrap_or_else(|Livelock { ticks }| {
             panic!("the pass waits on a detector that has nothing to read, after {ticks} ticks")
         });
     assert_eq!(

@@ -15,11 +15,6 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_audio::{
-    AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, ReadOutcome, SeekOutcome,
-};
-use kithara_decode::TrackMetadata;
-use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
     sync::mpsc,
@@ -27,125 +22,19 @@ use kithara_platform::{
     tokio::sync::watch,
 };
 use kithara_resampler::rubato::RubatoBackend;
-use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_test_utils::kithara;
 use kithara_worker::TickResult;
 use num_traits::cast::ToPrimitive;
 
 use super::{
     super::{analyzer::AnalyzerBuilder, producer::ring, worker::Job},
-    fixtures::{CH, SR, chunk, spec},
+    fixtures::{SR, spec},
     node::NodeHarness,
+    track::Track,
 };
 use crate::AnalysisProgress;
 
 const CHUNK_FRAMES: u64 = 8820;
-
-struct Track {
-    pools: crate::test_pools::Pools,
-    pcm: Vec<f32>,
-    frames: u64,
-    at: u64,
-    bus: EventBus,
-    metadata: TrackMetadata,
-}
-
-impl Track {
-    fn open(pools: crate::test_pools::Pools, path: &str) -> Self {
-        let bytes = std::fs::read(path).expect("probe pcm");
-        let pcm: Vec<f32> = bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-            .collect();
-        let frames = (pcm.len() / usize::from(CH)).to_u64().unwrap_or(0);
-        Self {
-            pools,
-            pcm,
-            frames,
-            at: 0,
-            bus: EventBus::default(),
-            metadata: TrackMetadata::default(),
-        }
-    }
-
-    fn duration_for(&self, frames: u64) -> Duration {
-        spec().duration_for(frames).expect("representable")
-    }
-}
-
-impl AudioSession for Track {
-    fn duration(&self) -> Option<Duration> {
-        Some(self.duration_for(self.frames))
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-}
-
-impl AudioRead for Track {
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
-        if self.at >= self.frames {
-            return Ok(ChunkOutcome::Eof {
-                position: self.position(),
-            });
-        }
-        let at = self.at;
-        let frames = CHUNK_FRAMES.min(self.frames - at);
-        self.at = at + frames;
-        let from = (at * u64::from(CH)).to_usize().unwrap_or(0);
-        let len = (frames * u64::from(CH)).to_usize().unwrap_or(0);
-        Ok(ChunkOutcome::Chunk(part(
-            &self.pools,
-            &self.pcm[from..from + len],
-            at,
-        )))
-    }
-
-    fn position(&self) -> Duration {
-        self.duration_for(self.at)
-    }
-
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        unreachable!("analysis pulls chunks")
-    }
-
-    fn read_planar<'a>(
-        &mut self,
-        _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
-        unreachable!("analysis pulls chunks")
-    }
-
-    fn spec(&self) -> AudioSpec {
-        spec()
-    }
-}
-
-impl AudioControl for Track {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let target = spec().frame_at(position).unwrap_or(0);
-        if target >= self.frames {
-            return Ok(SeekOutcome::PastEof {
-                target: position,
-                duration: self.duration_for(self.frames),
-            });
-        }
-        self.at = target;
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: self.duration_for(target),
-        })
-    }
-}
-
-fn part(pools: &crate::test_pools::Pools, samples: &[f32], at: u64) -> AudioChunk {
-    chunk(pools, samples, at)
-}
 
 #[kithara::test(native, flash(false))]
 fn a_real_track_reaches_its_end_whole() {
@@ -153,8 +42,13 @@ fn a_real_track_reaches_its_end_whole() {
         return;
     };
     let pools = crate::test_pools::pools();
-    let track = Track::open(pools.clone(), &path);
-    let frames = track.frames;
+    let bytes = std::fs::read(&path).expect("probe pcm");
+    let pcm: Vec<f32> = bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    let track = Track::new(pools.clone(), spec(), CHUNK_FRAMES, pcm);
+    let frames = track.frames();
     let rate = spec().sample_rate;
 
     let (jobs, receiver) = mpsc::channel();
