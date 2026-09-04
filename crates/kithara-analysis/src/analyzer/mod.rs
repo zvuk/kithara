@@ -1,10 +1,12 @@
 mod config;
+mod extent;
 mod session;
 mod set;
 #[cfg(feature = "analysis-waveform")]
 mod waveform;
 
 pub use config::BeatAnalysisConfig;
+pub(crate) use extent::Extent;
 pub(crate) use session::{Ingest, TrackAnalyzers};
 pub use set::AnalyzerBuilder;
 #[cfg(feature = "analysis-waveform")]
