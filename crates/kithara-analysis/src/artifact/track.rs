@@ -114,10 +114,10 @@ impl TrackAnalysis {
             .is_some_and(|extent| self.coverage.contains(FrameRange::new(0, extent)))
     }
 
-    /// Whether the pass ended with nothing left it could reach. A complete
-    /// pass is one of these, and so is one whose only gaps are ranges the
-    /// source refused - what encoder priming leaves in front of a track. A
-    /// pass its reader cut short is not.
+    /// Whether the pass ran out of positions the source can deliver. A gap
+    /// that stays is one no read could fill: a seek that lands elsewhere, a
+    /// head the decoder cannot deliver. A pass its reader cut short is not
+    /// settled.
     #[must_use]
     pub const fn is_settled(&self) -> bool {
         self.settled

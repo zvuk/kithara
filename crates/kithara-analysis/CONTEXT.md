@@ -319,8 +319,9 @@ boundaries.
 - Restore requires the active analyzer fingerprint. The validated header then
   supplies the stored axis, extent, and chunk frames; the application must use
   `AnalysisFileSpec::matches_chunk_duration` to reject a coherent file created
-  under another configured duration, and validate axis/extent once current
-  source metadata is available.
+  under another configured duration, and validate the axis once current
+  source metadata is available. The extent is restored as the claim of the
+  resumed pass and re-proved by its reader.
 
 ## Guardrails
 

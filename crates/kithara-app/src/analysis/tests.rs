@@ -752,9 +752,9 @@ async fn an_invalid_layout_yields_no_analysis() {
 /// less. The track ends where its source ends: a pass that read all of it
 /// completes the track, and nothing asks for it again.
 #[kithara::test(native, tokio, flash(false))]
-async fn a_track_shorter_than_its_header_claims_is_completed() {
+async fn a_track_shorter_than_its_header_claims_is_done() {
     let directory = tempfile::tempdir().expect("temporary track dir");
-    a_pass_covers_the_whole_track(&mp3_track(directory.path())).await;
+    the_source_gave_everything_it_can(&mp3_track(directory.path())).await;
 }
 
 /// The same kind of track decoded onto the app axis through the resampler:
@@ -762,10 +762,10 @@ async fn a_track_shorter_than_its_header_claims_is_completed() {
 #[kithara::test(native, tokio, flash(false))]
 async fn a_resampled_track_is_covered_from_its_first_frame() {
     let directory = tempfile::tempdir().expect("temporary track dir");
-    a_pass_covers_the_whole_track(&mp3_track_48k(directory.path())).await;
+    the_source_gave_everything_it_can(&mp3_track_48k(directory.path())).await;
 }
 
-async fn a_pass_covers_the_whole_track(url: &str) {
+async fn the_source_gave_everything_it_can(url: &str) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (_host, queue) = queue();
@@ -785,11 +785,15 @@ async fn a_pass_covers_the_whole_track(url: &str) {
         analysis.is_settled(),
         "the pass took everything the source gives"
     );
-    let unreachable: u64 = analysis.missing().iter().map(|range| range.frames()).sum();
+    let missing = analysis.missing();
+    let only_the_head = match missing.as_slice() {
+        [] => true,
+        [head] => head.start() == 0 && head.frames() <= HEAD_TOLERANCE_FRAMES,
+        _ => false,
+    };
     assert!(
-        unreachable <= HEAD_TOLERANCE_FRAMES,
-        "only the priming the decoder cannot deliver is missing: {:?}",
-        analysis.missing()
+        only_the_head,
+        "only the priming the decoder cannot deliver is missing: {missing:?}"
     );
     assert!(
         settled_for(&held, owner.runner.fingerprint()),
