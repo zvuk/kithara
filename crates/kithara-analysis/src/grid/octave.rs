@@ -4,7 +4,8 @@ struct Consts;
 
 impl Consts {
     const MAX_BPM: f64 = 180.0;
-    const MIN_BPM: f64 = 70.0;
+    /// Dub and ambient are played and counted in the low sixties.
+    const MIN_BPM: f64 = 60.0;
     const STEPS: i32 = 3;
 }
 
