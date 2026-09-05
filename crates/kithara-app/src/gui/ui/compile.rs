@@ -39,12 +39,11 @@ pub(crate) struct AppUi {
 }
 
 impl AppUi {
-    pub(crate) fn new(package: Rc<Package>) -> Result<Self, UiDocError> {
-        let doc = UiConfig::default();
+    pub(crate) fn new(package: Rc<Package>, doc: &UiConfig) -> Result<Self, UiDocError> {
         let view = ViewState::default();
         Ok(Self {
-            single: compile_screen(&package, DeckLayout::Single, &doc, &view)?,
-            dual: compile_screen(&package, DeckLayout::Dual, &doc, &view)?,
+            single: compile_screen(&package, DeckLayout::Single, doc, &view)?,
+            dual: compile_screen(&package, DeckLayout::Dual, doc, &view)?,
             cache: ViewCache::default(),
             clock: Clock::default(),
             package,

@@ -67,6 +67,8 @@ Dual-track EWMA — fast (2 s half-life) and slow (10 s half-life); estimate = `
 
 `AbrSettings::initial_throughput_bps` (default `Some(2_000_000)`) is applied to the estimator at controller construction so the first tick can pick a sensible variant before a real sample lands. ≈2 Mbps covers Wi-Fi and most 4G; constrained networks down-switch after the first real sample. It is a transient prior — real EWMA weight replaces it through the `min(fast, slow)` consensus. Set it to `None` for the cold-start path: `decide()` returns `NoEstimate` and the peer stays on its initial variant until samples accumulate.
 
+`AbrSettingsPatch` is the second entry point: a configuration document types into it and `apply` writes past the builder, so a document can compose a setting the builder would have refused. One thing it cannot express — `initial_throughput_bps` and `max_bandwidth_bps` are already `Option<u64>`, so a document sets a value but cannot blank one: `initial_throughput_bps: null` reads as "leave it alone", not as the cold-start path above. The cold start stays a builder-only choice.
+
 `AbrSettings` is the facade configuration for the controller: it carries both algorithm parameters and injected resources such as the optional parent `CancelToken`. It is `#[non_exhaustive]` and built with `AbrSettings::builder()…build()` (`Default` goes through the builder); `initial_throughput_bps(Some(value))` sets the seed and `initial_throughput_bps(None)` explicitly disables it.
 
 ## Ownership

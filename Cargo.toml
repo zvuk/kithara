@@ -20,6 +20,7 @@ members = [
     "crates/kithara-file",
     "crates/kithara-hls",
     "crates/kithara-host",
+    "crates/kithara-macros",
     "crates/kithara-mpa",
     "crates/kithara-net",
     "crates/kithara-output",
@@ -59,6 +60,7 @@ default-members = [
     "crates/kithara-file",
     "crates/kithara-hls",
     "crates/kithara-host",
+    "crates/kithara-macros",
     "crates/kithara-mpa",
     "crates/kithara-net",
     "crates/kithara-output",
@@ -219,6 +221,7 @@ kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default-features = false }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha4", default-features = false }
+kithara-macros = { path = "crates/kithara-macros", version = "0.0.1-alpha4" }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha4" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha4", default-features = false }
 kithara-output = { path = "crates/kithara-output", version = "0.0.1-alpha4" }
@@ -315,6 +318,7 @@ gloo-timers = { version = "0.4", features = ["futures"] }
 hex = "0.4"
 hls_m3u8 = "0.7.0"
 hotpath = "0.19.1"
+humantime-serde = "1.1.1"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
 
 # UI frameworks

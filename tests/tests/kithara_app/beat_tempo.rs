@@ -13,7 +13,7 @@ use kithara::{
     prelude::{ResourceConfig, ResourceSrc},
 };
 use kithara_app::{
-    pools::{AppPools, AppStore, build},
+    pools::{AppPools, AppStore, PoolsSection, build},
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
 use num_traits::ToPrimitive;
@@ -61,7 +61,7 @@ fn records() -> Vec<(String, f64)> {
 }
 
 async fn analyse(path: &str) -> TrackAnalysis {
-    let pools = build().expect("app pools");
+    let pools = build(&PoolsSection::default()).expect("app pools");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let src = ResourceSrc::parse(path)
         .unwrap_or_else(|error| panic!("{path} must name a source: {error}"));

@@ -15,7 +15,7 @@ fn drm_headers(auth: &str) -> Headers {
 fn stage_client() -> HttpClient {
     HttpClient::new(
         NetOptions::builder().is_insecure(true).build(),
-        pools::build().expect("valid app pool policy"),
+        pools::build(&pools::PoolsSection::default()).expect("valid app pool policy"),
         ::kithara::platform::CancelToken::never(),
     )
 }

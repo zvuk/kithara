@@ -10,7 +10,9 @@ keywords = ["audio", "streaming", "hls", "io", "seek"]
 categories = ["multimedia::audio", "asynchronous"]
 
 [package.metadata.cargo-machete]
-ignored = ["unimock"]
+# `serde` is reached only through `#[derive(Patch)]`, whose expansion names
+# `::serde::Deserialize`; no source line in this crate spells the crate out.
+ignored = ["serde", "unimock"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
@@ -27,6 +29,7 @@ tls-native = ["kithara-net/tls-native", "kithara-events/tls-native", "kithara-ab
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
 kithara-events = { workspace = true, features = ["abr", "downloader"] }
+kithara-macros = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
@@ -39,6 +42,8 @@ delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 futures = { workspace = true }
+humantime-serde = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 thunderdome = { workspace = true }
 tracing = { workspace = true }
@@ -62,6 +67,7 @@ kithara-stream = { path = ".", default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 dashmap = { workspace = true }
+serde_yaml_ng = { workspace = true }
 tempfile = { workspace = true }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

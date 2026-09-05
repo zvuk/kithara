@@ -589,7 +589,7 @@ mod tests {
     }
 
     async fn round_trip(backend: StorageBackend) {
-        let pools = pools::build().expect("valid app pool policy");
+        let pools = pools::build(&pools::PoolsSection::default()).expect("valid app pool policy");
         let store = AppStore::builder(pools.clone()).backend(backend).build();
         let resource = AppResourceConfig::for_src(
             ResourceSrc::parse("https://analysis.test.invalid/persistence.mp3")

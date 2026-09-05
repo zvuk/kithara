@@ -4,11 +4,13 @@
 use std::env;
 use std::{num::NonZeroUsize, path::PathBuf};
 
-use bon::bon;
+use bon::Builder;
 use dashmap::DashMap;
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
 use kithara_events::EventBus;
+use kithara_macros::Patch;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
+use serde::{Deserialize, Deserializer};
 
 use super::{
     OnInvalidatedFn,
@@ -66,40 +68,132 @@ impl Default for StorageBackend {
     }
 }
 
-#[bon]
+/// Wire shape a configuration document spells `backend` in: `{kind: memory}`
+/// or `{kind: disk, root: /tmp/kithara}`. `StorageBackend::Memory` is a unit
+/// variant, so a derived `#[serde(tag = "kind")]` on `StorageBackend` itself
+/// would check `deny_unknown_fields` against that variant's own (empty) field
+/// list and silently drop a stray `root` next to `kind: memory`. Spelling
+/// `Memory {}` on the real type would fix that but churns every call site
+/// that writes `StorageBackend::Memory`. This mirror type carries the
+/// `deny_unknown_fields` check instead, and `StorageBackend` stays untouched.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum BackendDoc {
+    Memory {},
+    Disk { root: PathBuf },
+}
+
+impl<'de> Deserialize<'de> for StorageBackend {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match BackendDoc::deserialize(deserializer)? {
+            BackendDoc::Memory {} => Self::Memory,
+            BackendDoc::Disk { root } => Self::Disk { root },
+        })
+    }
+}
+
+/// Everything an [`AssetStore`] opens with: the tunables a configuration
+/// document may name and the wiring a caller hands over.
+///
+/// [`AssetStoreConfigPatch`] is what a document may say about it.
+#[derive(Builder, Patch)]
+#[builder(
+    start_fn = for_pools,
+    finish_fn = into_config,
+    builder_type(name = AssetStoreBuilder, vis = "pub"),
+    state_mod(vis = "pub")
+)]
+#[non_exhaustive]
+pub struct AssetStoreConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    /// Buffer-pool facade every layer of the store shares.
+    #[builder(start_fn)]
+    #[patch(skip)]
+    pub pools: PoolRegion<S>,
+    /// Master cancel token for the store subtree.
+    #[patch(skip)]
+    pub cancel: Option<CancelToken>,
+    /// Event bus the eviction and lease layers publish on.
+    #[patch(skip)]
+    pub event_bus: Option<EventBus>,
+    /// Shared index-flush hub. Created per store when absent.
+    #[patch(skip)]
+    pub flush_hub: Option<Arc<FlushHub>>,
+    /// Resource-key layout registry. Empty when absent.
+    #[patch(skip)]
+    pub layouts: Option<AssetLayoutRegistry>,
+    /// Where resources live. Unset resolves to a disk root under a fresh
+    /// temp directory, which is a different place on every launch.
+    pub backend: Option<StorageBackend>,
+    /// Resources the in-memory cache retains before it evicts the
+    /// least-recently-used one. Applies to both backends.
+    pub cache_capacity: Option<NonZeroUsize>,
+    /// Assets the eviction policy keeps before it drops the coldest one.
+    pub max_assets: Option<usize>,
+    /// Bytes the eviction policy keeps before it drops the coldest asset.
+    pub max_bytes: Option<u64>,
+    /// Resources one in-memory asset holds. **Memory backend only** — the disk
+    /// backend never reads it, so naming it beside `backend: disk` (or beside
+    /// no backend at all, which resolves to disk) configures nothing.
+    pub mem_resource_capacity: Option<usize>,
+    /// Bytes read, transformed, and written per pass when a resource is
+    /// processed on commit. Unset leaves the processing layer's own default.
+    pub processing_chunk_size: Option<usize>,
+    /// Recheck cadence for a reader blocked on the processing readiness gate.
+    /// Unset leaves the processing layer's own default.
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    pub processing_gate_poll_interval: Option<Duration>,
+    /// Bytes a fresh segment's temp file is reserved at. **Disk backend
+    /// only** — the memory backend has no temp file to reserve. Unset leaves
+    /// the disk backend's own default.
+    pub segment_reservation: Option<u64>,
+}
+
+impl<S, State> AssetStoreBuilder<S, State>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+    State: asset_store_builder::IsComplete,
+{
+    /// Open the store this configuration describes.
+    #[must_use]
+    pub fn build(self) -> AssetStore<S> {
+        AssetStore::open(self.into_config())
+    }
+}
+
 impl<S> AssetStore<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    /// Start describing a store over `pools`.
+    pub fn builder(pools: PoolRegion<S>) -> AssetStoreBuilder<S> {
+        AssetStoreConfig::for_pools(pools)
+    }
+
     /// Open a ready-to-use asset store.
-    #[builder(
-        start_fn = builder,
-        builder_type(name = AssetStoreBuilder, vis = "pub"),
-        finish_fn = build
-    )]
     #[must_use]
-    pub fn open(
-        #[builder(start_fn)] pools: PoolRegion<S>,
-        backend: Option<StorageBackend>,
-        cache_capacity: Option<NonZeroUsize>,
-        cancel: Option<CancelToken>,
-        event_bus: Option<EventBus>,
-        flush_hub: Option<Arc<FlushHub>>,
-        layouts: Option<AssetLayoutRegistry>,
-        max_assets: Option<usize>,
-        max_bytes: Option<u64>,
-        mem_resource_capacity: Option<usize>,
-        /// Bytes read, transformed, and written per pass when a resource is
-        /// processed on commit. Unset leaves the processing layer's own
-        /// default.
-        processing_chunk_size: Option<usize>,
-        /// Recheck cadence for a reader blocked on the processing readiness
-        /// gate. Unset leaves the processing layer's own default.
-        processing_gate_poll_interval: Option<Duration>,
-        /// Bytes a fresh segment's temp file is reserved at. Unset leaves the
-        /// disk backend's own default.
-        segment_reservation: Option<u64>,
-    ) -> Self {
+    pub fn open(config: AssetStoreConfig<S>) -> Self {
+        let AssetStoreConfig {
+            pools,
+            backend,
+            cache_capacity,
+            cancel,
+            event_bus,
+            flush_hub,
+            layouts,
+            max_assets,
+            max_bytes,
+            mem_resource_capacity,
+            processing_chunk_size,
+            processing_gate_poll_interval,
+            segment_reservation,
+        } = config;
+
         let availability = AvailabilityIndex::new();
         // The pending-resource index is a consumer-driven sibling of `availability`:
         // no observer / decorator threading, just a shared field. Each
@@ -948,6 +1042,101 @@ mod tests {
             store.final_len(&key_b),
             None,
             "final_len(key_b) must be None after delete_asset"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_document_sets_the_cache_capacity_and_leaves_the_rest() {
+        let settings: AssetStoreConfigPatch =
+            serde_yaml_ng::from_str("cache_capacity: 32\n").expect("the document types");
+
+        assert_eq!(
+            settings.cache_capacity,
+            Some(NonZeroUsize::new(32).expect("nonzero"))
+        );
+        assert_eq!(settings.max_bytes, None, "a silent knob stays unset");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_document_reads_the_processing_gate_poll_interval_as_humantime() {
+        let settings: AssetStoreConfigPatch =
+            serde_yaml_ng::from_str("processing_gate_poll_interval: 250ms\n")
+                .expect("the document types");
+
+        assert_eq!(
+            settings.processing_gate_poll_interval,
+            Some(Duration::from_millis(250))
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_document_types_a_memory_backend() {
+        let settings: AssetStoreConfigPatch =
+            serde_yaml_ng::from_str("backend:\n  kind: memory\n").expect("the document types");
+
+        assert_eq!(settings.backend, Some(StorageBackend::Memory));
+    }
+
+    /// Pins ruling 108: `StorageBackend::Memory` is a unit variant, so
+    /// `deny_unknown_fields` only bites if the mirror type actually spells it
+    /// `Memory {}` rather than deriving on `StorageBackend` directly.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_memory_backend_with_a_stray_root_is_refused_and_names_it() {
+        let error = serde_yaml_ng::from_str::<StorageBackend>("kind: memory\nroot: /tmp/x\n")
+            .expect_err("a memory backend has no root to accept");
+
+        assert!(error.to_string().contains("root"), "{error}");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_disk_backend_types_its_root() {
+        let backend: StorageBackend =
+            serde_yaml_ng::from_str("kind: disk\nroot: /tmp/x\n").expect("a valid disk backend");
+
+        assert_eq!(
+            backend,
+            StorageBackend::Disk {
+                root: PathBuf::from("/tmp/x")
+            }
+        );
+    }
+
+    /// The plumbing end to end: a document's `cache_capacity` reaches the
+    /// builder through `maybe_cache_capacity` and the store enforces it, not
+    /// just the settings struct that reports it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn a_store_built_from_the_documents_settings_enforces_the_capacity_it_named() {
+        let settings: AssetStoreConfigPatch =
+            serde_yaml_ng::from_str("cache_capacity: 1\n").expect("the document types");
+
+        let store = AssetStore::builder(crate::test_pools::pools())
+            .backend(StorageBackend::Memory)
+            .maybe_cache_capacity(settings.cache_capacity)
+            .build();
+
+        let keys: Vec<ResourceKey> = (0..2)
+            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
+            .collect();
+        for key in &keys {
+            write_commit(store.acquire_resource(key, None).unwrap(), b"data");
+        }
+
+        assert!(
+            store.open_resource(&keys[0], None).is_err(),
+            "the document's cache_capacity of 1 must evict the first \
+             resource once a second one lands"
+        );
+        assert!(
+            store.open_resource(&keys[1], None).is_ok(),
+            "the resource that fits the capacity must still open -- without \
+             this the eviction assertion above would also pass if opening \
+             failed for some unrelated reason"
         );
     }
 }

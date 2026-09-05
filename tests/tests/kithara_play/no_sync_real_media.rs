@@ -888,10 +888,10 @@ async fn prepare_deck(
                 PlayWorkerConfig::builder(pool_region.clone()).build(),
             ))
             .bus(bus)
+            .crossfade_duration(0.0)
             .sample_rate(
                 NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero"),
             )
-            .crossfade_duration(0.0)
             .warp(WarpConfig::builder().stretch(Arc::clone(&controls)).build())
             .build(),
     );
@@ -932,8 +932,8 @@ async fn prepare_deck(
         }))
         .store(memory_asset_store())
         .worker(player.worker().clone())
-        .initial_abr_mode(AbrMode::manual(0))
         .host_sample_rate(NonZeroU32::new(case.host_rate).expect("host rate is non-zero"))
+        .initial_abr_mode(AbrMode::manual(0))
         .events(EventBus::new(16_384))
         .discriminator(format!("{}-deck-{deck_index}-reference", case.label))
         .build();

@@ -1,6 +1,8 @@
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_signal::{AudioSpec, SampleCount};
-use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticError, StretchKind, build_engine};
+use kithara_stretch::{
+    ElasticBackendConfig, ElasticConfig, ElasticEngine, ElasticError, StretchKind, build_engine,
+};
 use tracing::warn;
 
 use super::renderer::WarpRenderer;
@@ -18,12 +20,13 @@ where
 {
     pub(super) fn prepare_target(
         kind: StretchKind,
+        backends: ElasticBackendConfig,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
         reusable_pending: Option<SampleBuffer>,
         reusable_scratch: Option<SampleBuffer>,
     ) -> PreparedTarget {
-        let result = Self::config_for(kind, spec, pools)
+        let result = Self::config_for(kind, backends, spec, pools)
             .and_then(build_engine)
             .and_then(|engine| {
                 let channels = usize::from(spec.channels.max(1));
@@ -60,11 +63,13 @@ where
 
     fn config_for(
         backend: StretchKind,
+        backends: ElasticBackendConfig,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
     ) -> Result<ElasticConfig<S>, ElasticError> {
         ElasticConfig::builder()
             .backend(backend)
+            .backends(backends)
             .sample_rate(spec.sample_rate.get())
             .channels(usize::from(spec.channels.max(1)))
             .pools(pools.clone())
@@ -140,8 +145,14 @@ where
             let reusable_pending = self.pending_source.take();
             let reusable_scratch = self.scratch.take();
             drop(self.engine.take());
-            let target =
-                Self::prepare_target(kind, spec, &self.pools, reusable_pending, reusable_scratch);
+            let target = Self::prepare_target(
+                kind,
+                self.backends,
+                spec,
+                &self.pools,
+                reusable_pending,
+                reusable_scratch,
+            );
             self.engine = target.engine;
             self.pending_source = target.pending_source;
             self.scratch = target.scratch;

@@ -9,6 +9,7 @@ use ::kithara::ui::{
     module::{ButtonStyle, IconName, MeasureAxis, TextAlign, TextStyle, ViewSet, WaveStyle},
     render::{Clock, ReadValue, Reads, tree},
     size::{Dim, SizeSpec, control_size},
+    source::UiConfig,
     view,
 };
 use kithara_test_utils::kithara;
@@ -1423,7 +1424,10 @@ fn each_deck_picks_its_own_stream_quality() {
 fn the_shipped_package_compiles_from_disk() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
     let package = Package::load(Some(&root)).expect("the shipped package must load from disk");
-    drop(AppUi::new(package).expect("the shipped package must compile from disk"));
+    drop(
+        AppUi::new(package, &UiConfig::default())
+            .expect("the shipped package must compile from disk"),
+    );
 }
 
 /// A path the screen does not answer on is named, rather than left to be
@@ -1453,7 +1457,10 @@ fn a_path_the_screen_does_not_answer_on_is_named() {
 fn a_package_path_that_was_never_laid_out_leaves_the_built_in_documents_drawing() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui-that-was-never-laid-out");
     let package = Package::load(Some(&root)).expect("a package nobody laid out must load");
-    drop(AppUi::new(package).expect("a package nobody laid out must leave the build drawing"));
+    drop(
+        AppUi::new(package, &UiConfig::default())
+            .expect("a package nobody laid out must leave the build drawing"),
+    );
 }
 
 /// A package dresses the pages it ships: the skin its manifest names is the

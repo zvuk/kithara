@@ -46,4 +46,4 @@ pub use temporal::{
 };
 #[cfg(feature = "render")]
 pub use warp::WarpRenderer;
-pub use warp::{Warp, WarpConfig, WarpCursor, WarpMap, supports_playback_rate};
+pub use warp::{Warp, WarpConfig, WarpConfigPatch, WarpCursor, WarpMap, supports_playback_rate};

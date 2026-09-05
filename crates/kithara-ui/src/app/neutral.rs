@@ -4,7 +4,7 @@ use crate::{
     error::UiDocError,
     registry::EndpointRegistry,
     render::{Reads, Skin, UiEvent, custom::CustomKinds},
-    source::SourceResolver,
+    source::{SourceResolver, UiConfig},
     text::TextDoc,
     view::ViewState,
 };
@@ -67,6 +67,12 @@ pub struct Config<'a> {
     /// compiled against, so a kind nothing registered is refused there rather
     /// than mounted as a blank box.
     pub kinds: Option<&'a CustomKinds>,
+    /// The configuration this host compiles its document against. Absent
+    /// defaults to [`UiConfig::default`]. `custom_kinds` on the value here is
+    /// ignored either way: [`Ui::new`](super::Ui::new) always overwrites it
+    /// from [`Self::kinds`], because registering an extension kind is code's
+    /// business, not a passed configuration's.
+    pub settings: Option<&'a UiConfig>,
     /// Smallest window the document is laid out for, in logical points.
     /// Ignored by a host that does not own a window.
     pub min_size: Option<(u32, u32)>,

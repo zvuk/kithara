@@ -14,12 +14,14 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 test-utils = []
 
 [dependencies]
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 
 bon = { workspace = true }
 crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -34,6 +36,9 @@ hotpath = { workspace = true, optional = true }
 kithara-bufpool = { path = ".", default-features = false, features = ["test-utils"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true

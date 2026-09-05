@@ -86,6 +86,41 @@ stretch changes output frame count, never `AudioSpec.sample_rate`.
 `PreparedAudioLane` carries it, so there is no second route for load to reach a
 node.
 
+## Configuration document
+
+`PlayerConfig<S>` is this crate's one player configuration — tunables and
+per-call wiring together — and `#[derive(Patch)]` generates `PlayerConfigPatch`,
+what a document's `player:` section may say: `gapless_mode`,
+`crossfade_duration`, `default_rate`, `max_slots`. The last is the engine's:
+`PlayerConfig` owns it and hands it to `EngineConfig::builder`, so there is one
+value behind both and `EngineConfig` needs no patch of its own.
+
+Skipped, and therefore refused by name rather than dropped:
+`auto_advance_enabled` and `prefetch_duration` (`Queue::new` overwrites both
+unconditionally — the queue is their owner), `block_on_underrun` (only the
+offline harness sets it; a real-time host callback can never block),
+`eq_layout` (always a generator output; `Deck::build` derives it from
+`AppConfig::eq_bands`, and a custom layout arrives at runtime through
+`PlayerImpl::set_eq_layout`), and `sample_rate` (the Host owns the output rate
+and refuses a player whose rate disagrees — see Engine Lifecycle below;
+`Deck::build` reads it back off `Host::requested_sample_rate`, and the document
+names it once, as `app.sample_rate`).
+
+`ResourceConfig<S, B>` is where a document's HLS, file, and audio values wait for
+the track that will use them. It carries them as patches — `HlsConfigPatch`,
+`FileConfigPatch`, `AudioConfigPatch` — not as built configurations: an
+`HlsConfig` needs a URL and a store and a `FileConfig` needs a source, so neither
+can exist before a track does. `resource/build.rs` builds the real configuration
+for the track and applies the patch onto it, so a knob either crate adds later
+needs no edit here. The one value the file branch overwrites afterwards is
+`extension`: the per-call `hint` and the extension derived from the source both
+name this very track, so either outranks a document's blanket `file.extension`.
+
+There is no `resource:` document section — `Document`'s `deny_unknown_fields`
+refuses one, pinned by `a_resource_section_is_rejected`. The three patches arrive
+from `kithara-app`'s top-level `audio:`, `hls:` and `file:` sections, and
+`sources::build_resource_config` is the only construction site a document reaches.
+
 ## Live Equalizer Layout
 `PlayerImpl::set_eq_layout` replaces a running player's master EQ, and **the
 session graph is the actuator**: it builds the replacement on the control thread,

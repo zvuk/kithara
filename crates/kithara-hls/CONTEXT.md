@@ -23,6 +23,23 @@ global or per-component fallback pool — do not add one. `Hls::create` wraps th
 master `cancel` token in a `CancelScope` (see `config.rs`); dropping `HlsSource`
 cancels the scope and tears the peer down.
 
+## Configuration document
+
+`HlsConfig<S>` is this crate's one configuration struct — tunables and per-call
+wiring together — and `#[derive(Patch)]` generates `HlsConfigPatch` beside it,
+what a document's `hls:` section may say. Eight knobs travel: `size_probe_method`,
+`download_batch_size`, `acquire_attempt_budget`, the three ephemeral-cache bounds,
+`event_channel_capacity`, and `look_ahead_bytes`.
+
+`net_options` is the one tunable deliberately skipped, so `hls.net_options` is
+refused by name rather than parsed and dropped. An embedder holding a configuration
+document already spells those options somewhere — `kithara-app` spells them in its
+own top-level `net:` section — and two spellings of one value, one of them dead, is
+what a document exists to prevent. The rest of the skipped fields are per-resource
+identity (`url`, `base_url`, `discriminator`, `headers`, `initial_abr_mode`) or a
+live handle only code can hand over (`store`, `pools`, `keys`, `bus`, `cancel`,
+`downloader`).
+
 ## Sessions and Variant Switching
 
 One authoritative **active** session plus at most one **incoming** session for a

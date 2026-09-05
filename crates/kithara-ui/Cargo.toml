@@ -43,6 +43,7 @@ vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:parley", "dep:trac
 
 [dependencies]
 kithara-bufpool = { workspace = true, optional = true }
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
@@ -98,6 +99,7 @@ iced_tiny_skia = { workspace = true }
 iced_wgpu = { workspace = true }
 png = { workspace = true }
 ron = { workspace = true }
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true

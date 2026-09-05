@@ -23,7 +23,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_app::{
-    pools::{AppPools, AppResourceConfig, AppStore, AppWorker, build},
+    pools::{AppPools, AppResourceConfig, AppStore, AppWorker, PoolsSection, build},
     waveform::TrackAnalysisRunner,
 };
 use kithara_integration_tests::TestHttpServer;
@@ -84,7 +84,7 @@ async fn waveform_and_player_share_one_get() {
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.wav");
 
-    let pools = build().expect("valid app pool policy");
+    let pools = build(&PoolsSection::default()).expect("valid app pool policy");
     let store = AppStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .build();

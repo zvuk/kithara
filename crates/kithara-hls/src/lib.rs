@@ -17,7 +17,7 @@ mod stream;
 pub(crate) use kithara_bufpool::testing as test_pools;
 mod variant;
 
-pub use config::{HlsConfig, KeyOptions, SizeProbeMethod};
+pub use config::{HlsConfig, HlsConfigPatch, KeyOptions, SizeProbeMethod};
 pub use error::{HlsError, HlsResult};
 pub use ids::VariantIndex;
 pub use kithara_abr::AbrMode;

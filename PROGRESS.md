@@ -8,32 +8,38 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
-- Harness and document revision. `AGENTS.md` routes instead of restating, and
-  the `style` namespace now budgets documents with `doc_size`, blocks drift with
-  `doc_staleness`, and holds every crate README to one shape with `readme_shape`:
-  a header that stays inside the package, badges keyed to `publish` and to the
-  manifest's license, a `# <package name>` title, then `Usage` / `Key Types` /
-  `Features` / `Integration` and nothing else. All three queues are at zero, and
-  the rewrites turned up claims the sources contradict - a wrong feature list, a
-  file that no longer exists, an inverted description of a known leak, an MPL-2.0
-  crate wearing the MIT badge, two crates naming a dead owner, and a logo no
-  published crate page could load.
+- Configuration document for `kithara-app`. `app.yaml` plus an optional overlay,
+  merged and env-expanded before typing; every section carries the owning crate's
+  own patch type, so a value is spelled once. `#[derive(Patch)]` in the
+  new `kithara-macros` generates every patch and its `apply`; `struct-patch` and
+  every hand-written patch struct are gone. The output rate is named once,
+  under `app`. Secrets stay `$KITHARA_...` references and one resolving nowhere
+  stops startup. Merged with `production/main`: `broadcast`, `player.warp`, and
+  the stretch backends' preparation geometry under `player.warp.backends` are
+  sections now, and `app.crossfade_seconds` is gone in favour of
+  `player.crossfade_duration`. The two configs that grew thread budgets since
+  carry the derive too: `play_worker` names the one playback worker's budgets and
+  `dispatcher` names every app-owned dispatcher's, minus the thread name each
+  construction site keeps.
+- Harness and document revision. `AGENTS.md` routes instead of restating, and the
+  `style` namespace budgets documents with `doc_size`, blocks drift with
+  `doc_staleness`, and holds every README to `readme_shape`.
 
 ## Next
 
-- Work the comment queue down by hand. `--fix` is exhausted for comments - a
-  second run on a clean tree changes nothing - so all 668 are decisions: 497
-  comments carrying prose outside a doc comment, 105 doc blocks past a dozen
-  lines, 50 oversized inline comments, 16 dense functions. A body comment has no
-  mechanical destination.
+- Wire the last section end to end: the three integration harnesses still build
+  pools from `PoolsSection::default()`, not from the document they load.
+- Work the comment queue down by hand. `--fix` is exhausted - a second run on a
+  clean tree changes nothing - so all 668 are decisions: 497 prose comments outside
+  a doc comment, 105 long doc blocks, 50 oversized inline comments, 16 dense
+  functions. A body comment has no mechanical home.
 - 439 ordering findings are still mechanical: `struct_field_order` 160,
   `trait_item_order` 188, `struct_init_order` 91. One `just lint style --fix`
   clears them, but it rewrites declarations across every crate, so it wants its
   own change.
 - Wire `just lint style` to a gate. Nothing runs it today - not the commit hook,
-  not a CI lane - which is why the ratchet drifted unseen. A warm run is 58 s:
-  too much for every commit, nothing for a lane. The lane catalog owns that
-  change, so it does not belong in this one.
+  not a CI lane - so the ratchet drifted unseen. A warm run is 58 s: too much per
+  commit, nothing for a lane, and the lane catalog owns it.
 
 ## Blocked
 

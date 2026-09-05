@@ -1,5 +1,5 @@
 use kithara_bufpool::{
-    OverallBudget, PoolAlias, PoolConfig, PoolRegion, StringKey, VecKey, pool_schema,
+    OverallBudget, PoolAlias, PoolConfig, PoolError, PoolRegion, StringKey, VecKey, pool_schema,
 };
 
 use super::{
@@ -52,9 +52,26 @@ impl DrawBuffers {
     ///
     /// # Panics
     ///
-    /// Panics if the internally generated schema configuration is invalid.
+    /// Panics if the internally generated schema configuration is invalid. Only
+    /// [`DrawPoolLimits::default`] was ever handed to this until a configuration
+    /// document could name one; a caller building from document-supplied values
+    /// should use [`Self::try_new`] instead, which reports the same failure
+    /// rather than aborting.
     #[must_use]
     pub fn new(limits: DrawPoolLimits) -> Self {
+        match Self::try_new(limits) {
+            Ok(buffers) => buffers,
+            Err(error) => panic!("valid draw buffer configuration failed: {error}"),
+        }
+    }
+
+    /// Builds the registered draw-buffer family under one shared hard budget.
+    ///
+    /// # Errors
+    /// Returns the [`PoolError`] the generated schema configuration failed
+    /// with -- reachable once `limits` comes from a configuration document
+    /// rather than only ever [`DrawPoolLimits::default`].
+    pub fn try_new(limits: DrawPoolLimits) -> Result<Self, PoolError> {
         let max_buffers = limits.max_buffers.max(1);
         let config = |max_retained_capacity| {
             PoolConfig::builder()
@@ -66,12 +83,8 @@ impl DrawBuffers {
             .commands(config(limits.command_capacity))
             .paths(config(limits.path_capacity))
             .text(config(limits.text_capacity))
-            .build();
-        let region = match region {
-            Ok(region) => region,
-            Err(error) => panic!("valid draw buffer configuration failed: {error}"),
-        };
-        Self { region, limits }
+            .build()?;
+        Ok(Self { region, limits })
     }
 
     /// Starts an empty command list backed by this buffer family.

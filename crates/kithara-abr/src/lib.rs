@@ -28,7 +28,7 @@ pub use estimator::{Estimator, ThroughputEstimator};
 pub use handle::AbrHandle;
 pub use state::{AbrError, AbrPublisher, AbrState, AbrView};
 pub use types::{
-    AbrDecision, AbrMode, AbrPeerId, AbrProgressSnapshot, AbrReason, AbrSettings, AbrTicket,
-    BandwidthSource, BoundsError, PendingAbrClaim, PendingAbrDecision, VariantDuration,
+    AbrDecision, AbrMode, AbrPeerId, AbrProgressSnapshot, AbrReason, AbrSettings, AbrSettingsPatch,
+    AbrTicket, BandwidthSource, BoundsError, PendingAbrClaim, PendingAbrDecision, VariantDuration,
     VariantIndex, VariantInfo,
 };

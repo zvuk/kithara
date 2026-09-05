@@ -26,10 +26,16 @@ pub struct EngineConfig<S> {
     pub(crate) session: Option<Arc<dyn SessionDispatcher<S>>>,
     /// Typed pool facade for audio-thread scratch buffers.
     pub(crate) pools: PoolRegion<S>,
-    /// EQ band layout per player. Default: 10-band log-spaced.
+    /// EQ band layout per player. Default: 10-band log-spaced. Not a
+    /// document key: every construction site in the workspace derives this
+    /// from a generator (`generate_log_spaced_bands`), and a custom layout
+    /// is installed at runtime through `PlayerImpl::set_eq_layout` rather
+    /// than through config.
     #[builder(default = generate_log_spaced_bands(10))]
     pub(crate) eq_layout: Vec<EqBandConfig>,
-    /// Number of output channels. Default: 2 (stereo).
+    /// Number of output channels. Default: 2 (stereo). Not a document key:
+    /// the only reader is a startup log line, so a document value would
+    /// change nothing the engine actually does.
     #[builder(default = 2)]
     pub(crate) channels: u16,
     /// Initial output sample rate supplied by the owning player session.
@@ -57,11 +63,31 @@ impl<S> Clone for EngineConfig<S> {
 impl<S> fmt::Debug for EngineConfig<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EngineConfig")
-            .field("eq_layout", &self.eq_layout)
-            .field("channels", &self.channels)
             .field("sample_rate", &self.sample_rate)
             .field("max_slots", &self.max_slots)
+            .field("channels", &self.channels)
             .field("pools", &self.pools)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::{BeatGridId, EngineConfig, NonZeroU32};
+    use crate::test_pools::{TestPools, pools};
+
+    #[kithara::test]
+    fn defaults_match_the_documented_values() {
+        let config: EngineConfig<TestPools> = EngineConfig::builder()
+            .grid_id(BeatGridId::allocate().expect("a grid identity"))
+            .pools(pools())
+            .sample_rate(NonZeroU32::new(48_000).expect("48000 is not zero"))
+            .build();
+
+        assert_eq!(config.channels, 2);
+        assert_eq!(config.max_slots, 4);
+        assert_eq!(config.eq_layout.len(), 10);
     }
 }

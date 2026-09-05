@@ -59,7 +59,9 @@ pub(crate) fn app_track_source(
         .worker(config.worker.clone())
         .keys(keys)
         .maybe_headers(headers)
-        .size_probe_method(config.size_probe_method)
+        .audio(config.audio.clone())
+        .hls(config.hls.clone())
+        .file(config.file.clone())
         .store(store)
         .decoder(decoder)
         .initial_abr_mode(abr);

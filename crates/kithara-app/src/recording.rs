@@ -114,7 +114,8 @@ mod tests {
 
     #[kithara::test]
     fn recording_core_commits_a_readable_wav_to_memory_assets() {
-        let pool = pools::build().unwrap_or_else(|error| panic!("app pools: {error}"));
+        let pool = pools::build(&pools::PoolsSection::default())
+            .unwrap_or_else(|error| panic!("app pools: {error}"));
         let store = AssetStore::builder(pool)
             .backend(StorageBackend::Memory)
             .build();

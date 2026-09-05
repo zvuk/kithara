@@ -229,6 +229,7 @@ impl<S> PlayerRuntime<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
     #[cfg(not(target_arch = "wasm32"))]
     use std::sync::mpsc::{RecvTimeoutError, channel};
 
@@ -245,7 +246,7 @@ mod tests {
         PlayWorkerConfig,
         bridge::PlayerCmd,
         effects::eq::generate_log_spaced_bands,
-        player::{PlayerConfig, PlayerControlSource},
+        player::{PlayerConfig, PlayerConfigPatch, PlayerControlSource},
         resource::{ResourceConfig, ResourceSrc},
         session::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate, testing},
         test_pools::{TestPools, pools},
@@ -398,6 +399,32 @@ mod tests {
         );
     }
 
+    /// A document naming `player.gapless_mode` must reach the same prepared
+    /// decoder config as the Rust-level builder above -- riding the full
+    /// chain (`PlayerConfig` -> `PlayerCore` -> `AudioDecoderConfig`) rather
+    /// than stopping at the configuration the patch writes into.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test]
+    fn a_document_named_gapless_mode_reaches_the_prepared_decoder() {
+        let patch: PlayerConfigPatch = serde_yaml_ng::from_str("gapless_mode:\n  mode: disabled\n")
+            .expect("the document types");
+        let mut config = PlayerConfig::builder()
+            .worker(worker())
+            .session(testing::test_session())
+            .sample_rate(NonZeroU32::new(44_100).expect("44100 is not zero"))
+            .build();
+        config.apply(patch);
+
+        let player = PlayerImpl::new(config);
+        let mut config = resource_config("https://example.com/song.mp3");
+
+        config = player
+            .prepare_config(config)
+            .expect("test session answers stream-shape queries");
+
+        assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
+    }
+
     #[kithara::test]
     fn prepare_config_per_track_cancel_is_child_of_player_master() {
         let player = player();
@@ -531,8 +558,8 @@ mod tests {
             .crossfade_duration(2.0)
             .prefetch_duration(5.0)
             .default_rate(0.5)
-            .eq_layout(generate_log_spaced_bands(5))
             .gapless_mode(GaplessMode::MediaOnly)
+            .eq_layout(generate_log_spaced_bands(5))
             .max_slots(2)
             .warp(
                 WarpConfig::builder()
@@ -542,6 +569,25 @@ mod tests {
             .build();
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
+    }
+
+    /// `PlayerConfig::sample_rate` is the single place the value lives before
+    /// the `EngineConfig` it configures exists. This pins that the value the
+    /// player reports back out is the exact one the engine runs with, so the
+    /// rate the owning Host hands down cannot land somewhere the engine never
+    /// reads.
+    #[kithara::test]
+    fn a_configured_sample_rate_reaches_the_engine_it_prepares() {
+        let sample_rate = NonZeroU32::new(48_000).expect("invariant: sample rate is non-zero");
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker())
+                .session(testing::test_session())
+                .sample_rate(sample_rate)
+                .build(),
+        );
+
+        assert_eq!(player.sample_rate(), sample_rate.get());
     }
 
     #[kithara::test]
@@ -566,10 +612,10 @@ mod tests {
             .sample_rate(testing::TEST_SAMPLE_RATE)
             .worker(worker())
             .session(testing::test_session())
-            .max_slots(8)
             .default_rate(0.5)
             .crossfade_duration(2.5)
             .prefetch_duration(7.0)
+            .max_slots(8)
             .eq_layout(generate_log_spaced_bands(5))
             .build();
         assert_eq!(config.max_slots, 8);

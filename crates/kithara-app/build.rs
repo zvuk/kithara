@@ -1,20 +1,18 @@
-//! Bake `app.yaml` (+ workspace `.env`) into compile-time defaults
-//! exposed via `kithara_app::baked`. Secrets referenced by
-//! `*_env: $KITHARA_...` are emitted as `obfstr!("<value>")` so the
-//! literal does not appear as a plain run of bytes in `strings`
-//! output; non-secret inline values are emitted verbatim.
+//! Embed `app.yaml` verbatim and, beside it, the values its `$KITHARA_...`
+//! references resolved to at build time. The application parses the same text
+//! at startup, so the build decides nothing about what a field means.
 //!
-//! Env resolution order for a given key:
-//! 1. Real process env (preserves explicit `KEY=foo cargo build`).
-//! 2. Workspace `<root>/.env` file (parsed locally — never mutated
-//!    into the build process env).
-//! 3. Nothing — the provider's secret silently degrades: the cipher key
-//!    becomes an empty string, headers referencing the variable are
-//!    omitted. The binary still compiles, but the key server will
-//!    reject the request. Lanes that build against a real key server
-//!    set `KITHARA_DRM_REQUIRE` (any non-empty value): an upfront pass
-//!    then validates every env reference in `app.yaml` and fails the
-//!    build listing all missing variables.
+//! Reference resolution order for a given name, at run time:
+//! 1. The process environment.
+//! 2. This table, emitted as `crate::baked::baked_env`.
+//! 3. Nothing — the application refuses to start and names what is unset.
+//!
+//! Values read from an environment reference are emitted as `obfstr!("…")` so
+//! a shipped secret is not a plain run of bytes in `strings` output.
+//!
+//! Lanes that build against a real key server set `KITHARA_DRM_REQUIRE` (any
+//! non-empty value): an upfront pass then validates every reference in
+//! `app.yaml` and fails the build listing all missing variables.
 //!
 //! `app.yaml` and an existing `.env` are both `rerun-if-changed`.
 
@@ -25,146 +23,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-
-use serde::Deserialize;
-
-#[derive(Deserialize)]
-struct AppConfig {
-    assets: Assets,
-    drm: Drm,
-    network: Network,
-    playback: Playback,
-    playlist: Playlist,
-}
-
-#[derive(Deserialize)]
-struct Assets {
-    cache_identity: Vec<CacheIdentityRule>,
-}
-
-#[derive(Deserialize)]
-struct CacheIdentityRule {
-    domains: Vec<String>,
-    query_parameters: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct Playback {
-    crossfade_seconds: f32,
-}
-
-#[derive(Deserialize)]
-struct Network {
-    /// HLS size-estimation probe method. `"head"` (RFC default) or
-    /// `"range_get"` for upstreams that reject `HEAD` (e.g. zvuk
-    /// stage `/drm/`). See [`kithara::hls::SizeProbeMethod`].
-    #[serde(default = "default_size_probe_method")]
-    size_probe_method: String,
-    /// `Accept-Encoding` algorithms the HTTP client offers. Mapped to
-    /// the `kithara::net::Compression` bitflags. Empty list ships as
-    /// `Compression::empty()` (Accept-Encoding negotiation disabled).
-    #[serde(default = "default_compression")]
-    compression: Vec<String>,
-    should_accept_invalid_certs: bool,
-}
-
-fn default_size_probe_method() -> String {
-    "head".to_owned()
-}
-
-fn default_compression() -> Vec<String> {
-    vec!["gzip", "deflate", "brotli", "zstd"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect()
-}
-
-#[derive(Deserialize)]
-struct Playlist {
-    tracks: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct Drm {
-    providers: Vec<DrmProvider>,
-}
-
-#[derive(Deserialize)]
-struct DrmProvider {
-    /// Extra HTTP headers attached to every request matched by this
-    /// provider (playlist, segments, key fetches). Values starting
-    /// with `$` are env references and wrapped with `obfstr!()`;
-    /// everything else is shipped as a literal. Use this for
-    /// `X-Auth-Token`, `User-Agent`, `X-SP-ZV`, and any other
-    /// per-provider header.
-    #[serde(default)]
-    headers: std::collections::BTreeMap<String, String>,
-    /// Env reference of the form `$KITHARA_...`; resolved at build
-    /// time and wrapped with `obfstr!()`.
-    cipher_env: Option<String>,
-    /// Inline non-secret cipher key (ships verbatim in the binary).
-    cipher_key: Option<String>,
-    /// Per-provider X-Encrypted-Key salt shape. Defaults to the iOS
-    /// prod format (8-char lowercase hex). Override per provider when
-    /// the upstream WAF expects a different alphabet/length — zvq.me
-    /// staging is captured against a 16-char alphanumeric salt.
-    #[serde(default)]
-    seed: SeedSpec,
-    name: String,
-    domains: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct SeedSpec {
-    /// `hex` (0-9 a-f) or `alphanumeric` (a-z A-Z 0-9).
-    alphabet: String,
-    /// Output salt length in characters.
-    length: usize,
-}
-
-impl Default for SeedSpec {
-    fn default() -> Self {
-        Self {
-            length: 8,
-            alphabet: "hex".into(),
-        }
-    }
-}
-
-impl SeedSpec {
-    fn emit_let_seed(&self, provider_name: &str) -> String {
-        match self.alphabet.to_ascii_lowercase().as_str() {
-            "hex" => {
-                assert!(
-                    self.length.is_multiple_of(2),
-                    "provider `{}` seed.length must be even for alphabet=hex (got {})",
-                    provider_name,
-                    self.length,
-                );
-                let bytes = self.length / 2;
-                format!(
-                    "            let mut seed_bytes = [0u8; {bytes}];\n\
-                     ::rand::rng().fill_bytes(&mut seed_bytes);\n\
-                     let seed: String = seed_bytes.iter().map(|b| format!(\"{{b:02x}}\")).collect();\n"
-                )
-            }
-            "alphanumeric" => {
-                let length = self.length;
-                format!(
-                    "            let seed: String = ::rand::rng()\n\
-                                 .sample_iter(::rand::distr::Alphanumeric)\n\
-                                 .take({length})\n\
-                                 .map(char::from)\n\
-                                 .collect();\n"
-                )
-            }
-            other => panic!(
-                "provider `{}` seed.alphabet `{other}` not supported (expected `hex` or `alphanumeric`)",
-                provider_name
-            ),
-        }
-    }
-}
 
 fn main() {
     let manifest_dir =
@@ -181,13 +39,15 @@ fn main() {
 
     let yaml_src = fs::read_to_string(&app_yaml_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", app_yaml_path.display()));
-    let app: AppConfig = serde_yaml_ng::from_str(&yaml_src)
+
+    let document: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml_src)
         .unwrap_or_else(|e| panic!("parse {}: {e}", app_yaml_path.display()));
 
     let env_map = load_env(&dotenv_path);
     println!("cargo:rerun-if-env-changed=KITHARA_DRM_REQUIRE");
 
-    let env_refs = collect_env_refs(&app.drm.providers);
+    let mut env_refs = Vec::new();
+    collect_refs(&document, "", &mut env_refs);
     for (_, name) in &env_refs {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -209,16 +69,98 @@ fn main() {
     }
 
     let mut code = String::new();
-    emit_scalars(&mut code, &app);
-    emit_tracks(&mut code, &app.playlist.tracks);
-    emit_asset_layouts(&mut code, &app.assets.cache_identity);
-    emit_drm_policy(&mut code, &app.drm.providers, &env_map);
+    emit_document(&mut code, &yaml_src);
+    emit_env_table(&mut code, &env_refs, &env_map);
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
     let out_path = out_dir.join("app_config_baked.rs");
     fs::write(&out_path, code).unwrap_or_else(|e| panic!("write {}: {e}", out_path.display()));
 
     emit_ui_documents(&manifest_dir, &out_dir);
+}
+
+/// Every `$VAR` / `${VAR}` reference in the document, labelled by where it sits.
+/// Untyped on purpose: a section added to the schema needs no change here.
+fn collect_refs(value: &serde_yaml_ng::Value, path: &str, refs: &mut Vec<(String, String)>) {
+    match value {
+        serde_yaml_ng::Value::String(text) => {
+            if let Some(name) = text.strip_prefix('$').filter(|_| !text.contains("${")) {
+                refs.push((path.to_string(), name.to_string()));
+                return;
+            }
+            let mut rest = text.as_str();
+            while let Some(start) = rest.find("${") {
+                let tail = &rest[start + 2..];
+                let Some(end) = tail.find('}') else { break };
+                refs.push((path.to_string(), tail[..end].to_string()));
+                rest = &tail[end + 1..];
+            }
+        }
+        serde_yaml_ng::Value::Sequence(items) => {
+            for (index, item) in items.iter().enumerate() {
+                collect_refs(item, &format!("{path}[{index}]"), refs);
+            }
+        }
+        serde_yaml_ng::Value::Mapping(entries) => {
+            for (key, entry) in entries {
+                let key = key.as_str().unwrap_or("?");
+                let child = if path.is_empty() {
+                    key.to_string()
+                } else {
+                    format!("{path}.{key}")
+                };
+                collect_refs(entry, &child, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Embed the document verbatim. The application parses this same text at
+/// startup, so the build no longer decides what any field means.
+fn emit_document(code: &mut String, yaml_src: &str) {
+    writeln!(
+        code,
+        "pub(crate) const BAKED_DOCUMENT: &str = {yaml_src:?};"
+    )
+    .expect("write to String never fails");
+}
+
+/// Emit the second place a reference is resolved from. The table carries only
+/// the names this build found a value for and answers `None` to everything
+/// else, so a name it had nothing for reaches the startup unresolved and is
+/// named there. Values are wrapped with `obfstr!()` so a shipped secret is not
+/// a plain run of bytes in `strings` output.
+fn emit_env_table(code: &mut String, refs: &[(String, String)], env_map: &HashMap<String, String>) {
+    let mut names: Vec<&String> = refs.iter().map(|(_, name)| name).collect();
+    names.sort_unstable();
+    names.dedup();
+    let resolved: Vec<(&String, &String)> = names
+        .into_iter()
+        .filter_map(|name| Some((name, env_map.get(name).filter(|value| !value.is_empty())?)))
+        .collect();
+
+    // A build that resolved nothing -- every lane without credentials -- has no
+    // table to match against, and a `match` left with one wildcard arm is not a
+    // table either.
+    if resolved.is_empty() {
+        code.push_str(
+            "#[must_use]\npub(crate) fn baked_env(_name: &str) -> Option<String> {\n    None\n}\n",
+        );
+        return;
+    }
+
+    code.push_str(
+        "#[must_use]\npub(crate) fn baked_env(name: &str) -> Option<String> {\n    match name {\n",
+    );
+    for (name, value) in resolved {
+        writeln!(
+            code,
+            "        {name:?} => Some(::obfstr::obfstr!({value:?}).to_string()),"
+        )
+        .expect("write to String never fails");
+    }
+    code.push_str("        _ => None,\n    }\n}\n");
 }
 
 /// Embed this application's own UI folder, read from the folder itself.
@@ -272,299 +214,6 @@ fn collect_documents(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
             .to_owned();
         out.push((named, read));
     }
-}
-
-fn emit_scalars(code: &mut String, app: &AppConfig) {
-    writeln!(
-        code,
-        "pub const BAKED_CROSSFADE_SECONDS: f32 = {:?};",
-        app.playback.crossfade_seconds
-    )
-    .expect("write to String never fails");
-    writeln!(
-        code,
-        "pub const BAKED_SHOULD_ACCEPT_INVALID_CERTS: bool = {};",
-        app.network.should_accept_invalid_certs
-    )
-    .expect("write to String never fails");
-    writeln!(
-        code,
-        "pub const BAKED_COMPRESSION: ::kithara::net::Compression = {};",
-        compression_expr(&app.network.compression)
-    )
-    .expect("write to String never fails");
-    writeln!(
-        code,
-        "pub const BAKED_SIZE_PROBE_METHOD: ::kithara::hls::SizeProbeMethod = {};",
-        size_probe_method_expr(&app.network.size_probe_method)
-    )
-    .expect("write to String never fails");
-}
-
-fn size_probe_method_expr(method: &str) -> &'static str {
-    match method.to_ascii_lowercase().as_str() {
-        "head" => "::kithara::hls::SizeProbeMethod::Head",
-        "range_get" | "range-get" => "::kithara::hls::SizeProbeMethod::RangeGet",
-        other => {
-            panic!("unknown network.size_probe_method `{other}` (expected `head` or `range_get`)")
-        }
-    }
-}
-
-fn compression_expr(algos: &[String]) -> String {
-    let parts: Vec<&'static str> = algos
-        .iter()
-        .map(|name| match name.to_ascii_lowercase().as_str() {
-            "gzip" => "::kithara::net::Compression::GZIP",
-            "deflate" => "::kithara::net::Compression::DEFLATE",
-            "brotli" | "br" => "::kithara::net::Compression::BROTLI",
-            "zstd" => "::kithara::net::Compression::ZSTD",
-            other => panic!("unknown compression algorithm `{other}` in network.compression"),
-        })
-        .collect();
-    parts.split_first().map_or_else(
-        || "::kithara::net::Compression::empty()".to_string(),
-        |(head, tail)| {
-            tail.iter().fold((*head).to_string(), |acc, next| {
-                format!("{acc}.union({next})")
-            })
-        },
-    )
-}
-
-fn emit_tracks(code: &mut String, tracks: &[String]) {
-    code.push_str("pub const BAKED_TRACKS: &[&str] = &[\n");
-    for track in tracks {
-        writeln!(code, "    {track:?},").expect("write to String never fails");
-    }
-    code.push_str("];\n");
-}
-
-fn emit_asset_layouts(code: &mut String, rules: &[CacheIdentityRule]) {
-    code.push_str(
-        "#[must_use]\n\
-         pub fn build_baked_asset_layouts() -> ::kithara::assets::AssetLayoutRegistry {\n\
-         use ::kithara::assets::{AssetLayout, AssetLayoutRegistry};\n\
-         use ::kithara::play::policy::{QueryIdentityLayout, QueryIdentityRule};\n\
-         use ::kithara::platform::sync::Arc;\n\
-         let layout = Arc::new(QueryIdentityLayout::new([\n",
-    );
-    for rule in rules {
-        let domains = rule
-            .domains
-            .iter()
-            .map(|domain| format!("{domain:?}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let query_parameters = rule
-            .query_parameters
-            .iter()
-            .map(|parameter| format!("{parameter:?}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        writeln!(
-            code,
-            "        QueryIdentityRule::new([{domains}], [{query_parameters}]),"
-        )
-        .expect("write to String never fails");
-    }
-    code.push_str(
-        "    ])) as Arc<dyn AssetLayout>;\n\
-         AssetLayoutRegistry::default()\n\
-             .with::<::kithara::file::File<crate::pools::AppPools>>(Arc::clone(&layout))\n\
-             .with::<::kithara::hls::Hls<crate::pools::AppPools>>(layout)\n\
-         }\n",
-    );
-}
-
-fn emit_drm_policy(
-    code: &mut String,
-    providers: &[DrmProvider],
-    env_map: &HashMap<String, String>,
-) {
-    // Each provider emits its own `KeyRequestFactory` closure that
-    // rebuilds the X-Encrypted-Key salt on EVERY key request, using
-    // the alphabet/length declared per-provider in `app.yaml`. iOS
-    // `HLSAes128Service.AES128ResourceLoader` ships an 8-char
-    // lowercase-hex salt for zvuk.com WAF, while zvq.me staging
-    // accepts a 16-char alphanumeric salt — both formats coexist via
-    // [`SeedSpec`].
-    code.push_str(
-        "#[must_use]\n\
-         pub fn build_baked_drm_policy() -> ::kithara::play::policy::DomainKeyPolicy {\n\
-         use ::std::collections::HashMap;\n\
-         use ::kithara::platform::sync::Arc;\n\
-         use ::kithara::play::policy::{DomainKeyPolicy, DomainKeyRule};\n\
-         use ::kithara::drm::{KeyRequest, KeyRequestFactory, KeyProcessor, UniqueBinaryCipher};\n\
-         use ::bytes::Bytes;\n\
-         use ::rand::prelude::*;\n\
-         let mut rules = Vec::new();\n",
-    );
-    for provider in providers {
-        emit_provider(code, provider, env_map);
-    }
-    code.push_str("    DomainKeyPolicy::new(rules)\n}\n");
-}
-
-fn emit_provider(code: &mut String, p: &DrmProvider, env_map: &HashMap<String, String>) {
-    let cipher_expr = resolve_secret(
-        p.cipher_key.as_deref(),
-        p.cipher_env.as_deref(),
-        env_map,
-        &format!("provider `{}` cipher", p.name),
-    );
-    let domains = p
-        .domains
-        .iter()
-        .map(|d| format!("{d:?}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut extra_inserts = String::new();
-    for (name, value) in &p.headers {
-        if name.as_str() == "X-Encrypted-Key" {
-            panic!(
-                "provider `{}` headers must not set `X-Encrypted-Key` — it is generated per request from the cipher_key",
-                p.name
-            );
-        }
-        let label = format!("provider `{}` header `{name}`", p.name);
-        let Some(value_expr) = render_template(value, env_map, &label) else {
-            continue;
-        };
-        writeln!(
-            extra_inserts,
-            "        base_headers.insert({name:?}.to_string(), ({value_expr}).to_string());"
-        )
-        .expect("write to String never fails");
-    }
-    let seed_let = p.seed.emit_let_seed(&p.name);
-    writeln!(
-        code,
-        r#"    {{
-        let cipher_key: Arc<str> = Arc::from(({cipher_expr}).to_string());
-        let factory: KeyRequestFactory = Arc::new(move || {{
-{seed_let}            let secret = format!("{{}}{{}}", cipher_key, seed);
-            let cipher = UniqueBinaryCipher::new(&secret);
-            let mut headers = HashMap::new();
-            headers.insert("X-Encrypted-Key".to_string(), seed);
-            let processor: KeyProcessor = Arc::new(move |key: Bytes| Ok(cipher.decrypt(&key)));
-            KeyRequest::new(headers, processor)
-        }});
-        let mut base_headers = HashMap::new();
-{extra_inserts}        rules.push(
-            DomainKeyRule::for_domains([{domains}], factory)
-                .headers(base_headers)
-                .build()
-        );
-    }}"#
-    )
-    .expect("write to String never fails");
-}
-
-/// Strip the leading `$` of an env reference (`$KITHARA_FOO`) and
-/// return the bare name. `None` if the value is not a reference.
-fn parse_env_ref(value: &str) -> Option<&str> {
-    value.strip_prefix('$')
-}
-
-/// Every env reference in the DRM provider config as `(label, name)`
-/// pairs: cipher references plus whole-string `$VAR` and embedded
-/// `${VAR}` header placeholders. One walk serves both the
-/// `rerun-if-env-changed` directives and the `KITHARA_DRM_REQUIRE`
-/// validation pass.
-fn collect_env_refs(providers: &[DrmProvider]) -> Vec<(String, String)> {
-    let mut refs = Vec::new();
-    for p in providers {
-        if let Some(name) = p.cipher_env.as_deref().and_then(parse_env_ref) {
-            refs.push((format!("provider `{}` cipher", p.name), name.to_string()));
-        }
-        for (header, value) in &p.headers {
-            let label = format!("provider `{}` header `{header}`", p.name);
-            if let Some(name) = parse_env_ref(value) {
-                refs.push((label, name.to_string()));
-                continue;
-            }
-            let mut rest = value.as_str();
-            while let Some(start) = rest.find("${") {
-                let tail = &rest[start + 2..];
-                let Some(end) = tail.find('}') else { break };
-                refs.push((label.clone(), tail[..end].to_string()));
-                rest = &tail[end + 1..];
-            }
-        }
-    }
-    refs
-}
-
-/// Required secret: must come from either `inline` (non-secret literal)
-/// or `env_ref` (`$KITHARA_...` looked up in `env_map` and wrapped with
-/// `obfstr!()`). Panics if both or neither are set.
-fn resolve_secret(
-    inline: Option<&str>,
-    env_ref: Option<&str>,
-    env_map: &HashMap<String, String>,
-    label: &str,
-) -> String {
-    match (inline, env_ref) {
-        (Some(_), Some(_)) => {
-            panic!("{label}: both inline and env reference set — pick one");
-        }
-        (Some(v), None) => literal_expr(v, false),
-        (None, Some(reference)) => {
-            let name = parse_env_ref(reference).unwrap_or_else(|| {
-                panic!("{label}: env reference must start with `$` (got `{reference}`)")
-            });
-            env_map
-                .get(name)
-                .filter(|v| !v.is_empty())
-                .map_or_else(|| literal_expr("", false), |v| literal_expr(v, true))
-        }
-        (None, None) => panic!("{label}: neither inline value nor env reference provided"),
-    }
-}
-
-/// Optional secret: returns an `Option<String>` expression. Same
-fn literal_expr(value: &str, obfuscate: bool) -> String {
-    if obfuscate {
-        format!("::obfstr::obfstr!({value:?})")
-    } else {
-        format!("{value:?}")
-    }
-}
-
-/// Render a header value that may contain `${KITHARA_VAR}` substring
-/// placeholders, or be exactly `$KITHARA_VAR` (whole-string shorthand).
-/// Literal values pass through unchanged. Env-resolved values are
-/// wrapped with `obfstr!()`. `None` means the value referenced a
-/// missing env var — the caller should drop the header entirely.
-fn render_template(value: &str, env_map: &HashMap<String, String>, label: &str) -> Option<String> {
-    if !value.contains("${") {
-        if let Some(name) = parse_env_ref(value) {
-            return env_map
-                .get(name)
-                .filter(|v| !v.is_empty())
-                .map(|v| literal_expr(v, true));
-        }
-        return Some(literal_expr(value, false));
-    }
-    let mut fmt_str = String::new();
-    let mut args: Vec<String> = Vec::new();
-    let mut rest = value;
-    while let Some(start) = rest.find("${") {
-        let (before, tail) = rest.split_at(start);
-        fmt_str.push_str(&before.replace('{', "{{").replace('}', "}}"));
-        let tail = &tail[2..];
-        let end = tail
-            .find('}')
-            .unwrap_or_else(|| panic!("{label}: unterminated `${{...` in `{value}`"));
-        let name = &tail[..end];
-        let v = env_map.get(name).filter(|v| !v.is_empty())?;
-        fmt_str.push_str("{}");
-        args.push(literal_expr(v, true));
-        rest = &tail[end + 1..];
-    }
-    fmt_str.push_str(&rest.replace('{', "{{").replace('}', "}}"));
-    Some(format!("format!({fmt_str:?}, {})", args.join(", ")))
 }
 
 fn load_env(path: &PathBuf) -> HashMap<String, String> {

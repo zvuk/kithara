@@ -3,6 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{DownloaderEvent, Event},
+    file::FileConfigPatch,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -136,9 +137,11 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
         ),
     )
     .expect("create product offline queue");
+    let mut file = FileConfigPatch::default();
+    file.look_ahead_bytes = Some(LOOK_AHEAD_BYTES);
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader)
-        .look_ahead_bytes(LOOK_AHEAD_BYTES)
+        .file(file)
         .store(store)
         .build();
 

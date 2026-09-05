@@ -2,6 +2,7 @@ use std::{num::NonZeroUsize, ops::RangeInclusive};
 
 use bon::{Builder, bon};
 use kithara_bufpool::PoolRegion;
+use kithara_macros::Patch;
 use num_traits::ToPrimitive;
 
 use super::{ElasticError, ElasticRateEnvelope};
@@ -18,7 +19,9 @@ impl Consts {
 }
 
 /// Signalsmith preparation geometry.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, fieldwork::Fieldwork)]
+///
+/// [`SignalsmithConfigPatch`] is what a configuration document may say about it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
@@ -44,7 +47,9 @@ impl SignalsmithConfig {
 }
 
 /// Bungee native synthesis geometry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Builder, fieldwork::Fieldwork)]
+///
+/// [`BungeeConfigPatch`] is what a configuration document may say about it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
@@ -61,14 +66,19 @@ impl Default for BungeeConfig {
 }
 
 /// Per-backend preparation parameters carried by the common elastic facade.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, fieldwork::Fieldwork)]
+///
+/// [`ElasticBackendConfigPatch`] is what a configuration document may say
+/// about it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
 pub struct ElasticBackendConfig {
     #[builder(default)]
+    #[patch(nested)]
     bungee: BungeeConfig,
     #[builder(default)]
+    #[patch(nested)]
     signalsmith: SignalsmithConfig,
 }
 

@@ -330,7 +330,7 @@ mod tests {
     use std::{io, path::PathBuf};
 
     use super::*;
-    use crate::config::HlsConfig;
+    use crate::config::DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
 
     fn tmp_claimed() -> AssetsError {
         AssetsError::Storage(StorageError::TmpClaimed(PathBuf::from("seg.m4s.tmp")))
@@ -340,7 +340,7 @@ mod tests {
         AssetsError::Io(io::Error::from(io::ErrorKind::IsADirectory))
     }
 
-    const BUDGET: u8 = HlsConfig::<crate::test_pools::TestPools>::DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
+    const BUDGET: u8 = DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
 
     /// The holder of a claimed tmp always settles and releases it, so this
     /// retry resolves on its own however long it takes.

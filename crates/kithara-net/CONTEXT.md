@@ -147,6 +147,16 @@ the cookie store.
 `HttpClient::with_observer` rebuilds `NetOptions` by struct update, so a new option is carried over by construction —
 a field-by-field rebuild would silently reset any knob it forgot.
 
+`NetOptionsPatch` and `RetryPolicyPatch` are what a configuration document may say about those options. They are
+`Deserialize` only: a patch reaching this crate has already had its references resolved, so nothing serializes one back
+out. Every field is optional and a patch writes only the fields it names, leaving the builder's value standing
+everywhere else; `retry_policy` is itself a patch, so a document naming one retry field keeps the other two.
+`observer` is not in the patch at all — an owner is wiring, not configuration. Durations are `humantime` strings
+(`250ms`, `2s`), enums are snake_case names, and an unknown key is refused by name rather than ignored.
+
+`Compression` reads from a document as the list of `CompressionAlgorithm` names it spells, so the flags stay this
+crate's own spelling of the setting; an empty list is `Compression::empty()` — negotiation off.
+
 Retryability is decided from the typed `NetError` discriminant, never by substring matching: `Timeout`, `Network`, and
 `Status` with 5xx / 429 / 408 are `Transient`; everything else — including `Decode`, `Cancelled`, and `RetryExhausted` —
 is `Fatal`. Error bodies kept in `NetError::Status` are truncated to 200 chars.

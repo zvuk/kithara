@@ -10,11 +10,15 @@ use crate::{
 
 const NN_MODEL_TAG: &str = "beat_this_small_v1";
 
-pub(crate) fn detector<S>(pools: &PoolRegion<S>) -> Option<Arc<dyn crate::beat::BeatDetector>>
+pub(crate) fn detector<S, B>(
+    pools: &PoolRegion<S>,
+    config: &BeatAnalysisConfig<B>,
+) -> Option<Arc<dyn crate::beat::BeatDetector>>
 where
     S: HasPool<f32> + Send + Sync + 'static,
+    B: ResamplerBackend,
 {
-    match build_detector(BeatDetectorKind::default(), pools) {
+    match build_detector(BeatDetectorKind::default(), pools, config.beat()) {
         Ok(detector) => Some(Arc::from(detector)),
         Err(e) => {
             warn!(?e, "beat detector init failed; beat analysis disabled");

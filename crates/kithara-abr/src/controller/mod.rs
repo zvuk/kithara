@@ -20,4 +20,4 @@ mod peer;
 mod throttle;
 mod tick;
 
-pub use core::{AbrController, AbrPeerId, AbrSettings};
+pub use core::{AbrController, AbrPeerId, AbrSettings, AbrSettingsPatch};

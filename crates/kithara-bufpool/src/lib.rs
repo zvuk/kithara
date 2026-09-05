@@ -18,7 +18,7 @@ pub mod testing;
 
 pub use budget::{OverallBudget, Percent};
 pub use buffer::{ByteBuffer, PooledString, PooledVec, SampleBuffer};
-pub use config::PoolConfig;
+pub use config::{PoolConfig, PoolConfigPatch};
 pub use error::PoolError;
 pub use key::{PoolAlias, PoolKey, PoolKeyWithLen, StringKey, VecKey};
 pub use pool::PoolStats;

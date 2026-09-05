@@ -539,7 +539,7 @@ mod tests {
             time::Duration,
             tokio::{runtime::Handle, sync::watch},
         },
-        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
+        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
         prelude::ResourceSrc,
         queue::QueueConfig,
         stream::dl::{Downloader, DownloaderConfig},
@@ -569,7 +569,7 @@ mod tests {
     }
 
     fn test_pools() -> Pools {
-        pools::build().expect("valid app pool policy")
+        pools::build(&pools::PoolsSection::default()).expect("valid app pool policy")
     }
 
     fn sample_rate() -> NonZeroU32 {
@@ -825,6 +825,7 @@ mod tests {
         let pools = test_pools();
         let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         crate::config::AppConfig::builder()
+            .drm(crate::config::AppDrm::new(DomainKeyPolicy::new(Vec::new())))
             .downloader(Downloader::new(
                 DownloaderConfig::for_client(HttpClient::new(
                     NetOptions::builder().build(),

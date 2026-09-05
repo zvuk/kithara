@@ -2,6 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use kithara_bufpool::PoolRegion;
+use kithara_macros::Patch;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_worker::Worker;
 
@@ -25,21 +26,27 @@ impl Consts {
 }
 
 /// Configuration for one shared playback worker.
-#[derive(Builder, fieldwork::Fieldwork)]
+#[derive(Builder, fieldwork::Fieldwork, Patch)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PlayWorkerConfig<S> {
     /// Typed pool facade shared by every Player and resource registered with the worker.
     #[builder(start_fn)]
     #[field(get)]
+    #[patch(skip)]
     pub(crate) pools: PoolRegion<S>,
     /// Poll interval for RT-safe deferred wakes while the final ring is full.
     #[builder(default = Consts::BACKPRESSURE_POLL_INTERVAL)]
     #[field(get, copy)]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub(crate) backpressure_poll_interval: Duration,
-    /// Parent cancellation token for this playback dispatcher lifetime.
+    /// Parent cancellation token for this playback dispatcher lifetime. Not a
+    /// document key: the caller owns the token tree.
+    #[patch(skip)]
     pub(crate) cancel: Option<CancelToken>,
-    /// Optional base worker shared with other domain workers.
+    /// Optional base worker shared with other domain workers. Not a document
+    /// key: a live worker is an object only code can hand over.
+    #[patch(skip)]
     pub(crate) worker: Option<Worker>,
     /// Maximum number of simultaneously registered track render chains.
     #[builder(default = Consts::CAPACITY)]
@@ -52,10 +59,12 @@ pub struct PlayWorkerConfig<S> {
     /// Park duration when no playback task expects progress.
     #[builder(default = Duration::from_millis(100))]
     #[field(get, copy)]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub(crate) idle_timeout: Duration,
     /// Threshold for reporting a slow playback tick.
     #[builder(default = Duration::from_millis(10))]
     #[field(get, copy)]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub(crate) slow_tick_threshold: Duration,
     /// Maximum consecutive ticks for one track visit.
     #[builder(default = Consts::TASK_BURST)]
@@ -64,10 +73,11 @@ pub struct PlayWorkerConfig<S> {
     /// Park duration while live playback tasks are waiting.
     #[builder(default = Consts::ACTIVE_WAIT_TIMEOUT)]
     #[field(get, copy)]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub(crate) wait_timeout: Duration,
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
 
@@ -83,5 +93,40 @@ mod tests {
             Duration::from_micros(250)
         );
         assert_eq!(config.wait_timeout, Duration::from_millis(1));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_budget_reaches_the_built_playback_worker_config() {
+        let patch: PlayWorkerConfigPatch =
+            serde_yaml_ng::from_str("wait_timeout: 4ms\ncapacity: 3\n")
+                .expect("a valid playback-worker document");
+        let mut config = PlayWorkerConfig::builder(pools()).build();
+
+        config.apply(patch);
+
+        assert_eq!(config.wait_timeout, Duration::from_millis(4));
+        assert_eq!(config.capacity.get(), 3);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_key_the_document_did_not_name_keeps_the_crate_default() {
+        let patch: PlayWorkerConfigPatch =
+            serde_yaml_ng::from_str("capacity: 3\n").expect("a valid playback-worker document");
+        let mut config = PlayWorkerConfig::builder(pools()).build();
+
+        config.apply(patch);
+
+        assert_eq!(
+            config.backpressure_poll_interval,
+            Duration::from_micros(250)
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn the_shared_pools_are_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<PlayWorkerConfigPatch>("pools: shared\n")
+            .expect_err("a document cannot name a live pool facade");
+
+        assert!(error.to_string().contains("pools"), "{error}");
     }
 }

@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount};
-use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
+use kithara_stretch::{ElasticBackendConfig, ElasticEngine, ElasticError, StretchKind};
 use kithara_test_macros as kithara;
 use tracing::warn;
 
@@ -41,6 +41,7 @@ pub struct WarpRenderer<S> {
     pub(super) pools: PoolRegion<S>,
     pub(super) spec: AudioSpec,
     /// Maximum output frames between samples of live temporal controls.
+    pub(super) backends: ElasticBackendConfig,
     pub(super) render_quantum_frames: Option<NonZeroUsize>,
     /// Source span and live speed selected by the scheduler for the next render.
     pub(super) prepared_quantum: Option<PreparedQuantum>,
@@ -99,7 +100,8 @@ where
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
         let plan = controls.region_plan();
-        let target = Self::prepare_target(current_kind, spec, &pools, None, None);
+        let backends = config.backends();
+        let target = Self::prepare_target(current_kind, backends, spec, &pools, None, None);
         Self {
             context,
             committed: None,
@@ -109,6 +111,7 @@ where
             controls,
             pools,
             spec,
+            backends,
             render_quantum_frames: config.render_quantum_frames(),
             prepared_quantum: None,
             applied_pitch: f64::NAN,

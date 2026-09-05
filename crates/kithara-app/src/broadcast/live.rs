@@ -102,7 +102,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::pools;
+    use crate::{document::Document, pools};
 
     struct SampleRateSession {
         outputs: Mutex<Option<OutputGroup>>,
@@ -138,7 +138,7 @@ mod tests {
     fn config(shutdown: &CancelToken) -> AppBroadcastConfig {
         AppBroadcastConfig::builder(
             Worker::new(WorkerConfig::new()),
-            pools::build().expect("test pools"),
+            pools::build(&pools::PoolsSection::default()).expect("test pools"),
         )
         .cancel(shutdown.child())
         .build()
@@ -160,7 +160,7 @@ mod tests {
         let shutdown = CancelToken::root();
         let configured = AppBroadcastConfig::builder(
             Worker::new(WorkerConfig::new()),
-            pools::build().expect("test pools"),
+            pools::build(&pools::PoolsSection::default()).expect("test pools"),
         )
         .cancel(shutdown.child())
         .bit_rate(192_000)
@@ -213,5 +213,31 @@ mod tests {
 
         assert!(!Backend::is_live(&stream));
         shutdown.cancel();
+    }
+
+    /// A document that names `broadcast: {bit_rate: ...}` must parse under
+    /// the real configuration document schema, and the patch it carries must
+    /// reach a `BroadcastConfig` without disturbing fields the document left
+    /// unnamed.
+    #[kithara::test(native, flash(false))]
+    fn the_broadcast_section_parses_and_reaches_the_config() {
+        let document: Document = serde_yaml_ng::from_str("broadcast:\n  bit_rate: 256000\n")
+            .expect("the document types");
+        let shutdown = CancelToken::root();
+        let mut config = AppBroadcastConfig::builder(
+            Worker::new(WorkerConfig::new()),
+            pools::build(&pools::PoolsSection::default()).expect("test pools"),
+        )
+        .cancel(shutdown.child())
+        .channels(4)
+        .build();
+
+        config.apply(document.broadcast);
+
+        assert_eq!(config.bit_rate, 256_000);
+        assert_eq!(
+            config.channels, 4,
+            "a document naming only bit_rate must not reset the seeded channel count"
+        );
     }
 }

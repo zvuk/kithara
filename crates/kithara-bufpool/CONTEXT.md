@@ -97,3 +97,25 @@ unchanged, and `into_inner` returns the original pool guard to its owner.
 
 `stats()` reports the shared region budget. `pool_stats::<K>()` reports reuse for
 one registered generic slot; built-in hot-path keys compile out counter updates.
+
+## Configuration document entry point
+
+`PoolConfigPatch` is the second way into `PoolConfig`: a configuration document
+types into it and `apply` writes only the fields the document names, leaving
+the rest of the built policy standing. Every field is patchable — this config
+holds only numbers and a `Percent`, no live handle a document could not name.
+
+There is no patch type for a region. `pool_schema!` generates a region type per
+consumer, so no shared type exists to derive on; the section naming a
+particular application's pools belongs beside that application's schema
+invocation: the region's byte budget, then one field per pool it declares.
+
+`Percent` carries a hand-written `Deserialize` that refuses a value above 100
+at parse time and names it. That is deliberate duplication of the check in
+`BuildContext::pool_limit`, which stays: `Percent`'s field is public, so code can
+still construct an invalid share, and `pool_limit` is the backstop for that
+path. The document refuses earlier and points at the offending key instead of
+surfacing a late `PoolError::InvalidConfig` from region construction. `Percent`
+is not a `ranged!` type: that macro's generated body is float-only, and its
+`From` clamps an out-of-range value rather than refusing it — the opposite of
+what a document must do.

@@ -24,7 +24,7 @@ attribution.
 ```rust
 use kithara_beat::{BeatThis, RawBeats};
 
-let mut bt = BeatThis::builder()
+let bt = BeatThis::builder()
     .mel_model(mel_bytes)
     .beat_model(beat_bytes)
     .pools(pools.clone())

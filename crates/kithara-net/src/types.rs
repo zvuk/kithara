@@ -2,7 +2,9 @@ use std::{cmp::min, collections::HashMap, fmt};
 
 use bitflags::bitflags;
 use bon::Builder;
+use kithara_macros::Patch;
 use kithara_platform::time::Duration;
+use serde::{Deserialize, Deserializer};
 
 use crate::{
     error::{NetError, Retryability},
@@ -18,6 +20,45 @@ bitflags! {
         const DEFLATE = 1 << 1;
         const BROTLI  = 1 << 2;
         const ZSTD    = 1 << 3;
+    }
+}
+
+/// One `Accept-Encoding` algorithm. Named rather than spelled as bit flags,
+/// because a document reads as a list of names.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CompressionAlgorithm {
+    Gzip,
+    Deflate,
+    #[serde(alias = "br")]
+    Brotli,
+    Zstd,
+}
+
+impl From<CompressionAlgorithm> for Compression {
+    fn from(algorithm: CompressionAlgorithm) -> Self {
+        match algorithm {
+            CompressionAlgorithm::Gzip => Self::GZIP,
+            CompressionAlgorithm::Deflate => Self::DEFLATE,
+            CompressionAlgorithm::Brotli => Self::BROTLI,
+            CompressionAlgorithm::Zstd => Self::ZSTD,
+        }
+    }
+}
+
+/// Read as the list of algorithm names a document spells, so the flags stay an
+/// implementation detail of this crate. An empty list is [`Compression::empty`]
+/// -- negotiation off.
+impl<'de> Deserialize<'de> for Compression {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<CompressionAlgorithm>::deserialize(deserializer).map(|algorithms| {
+            algorithms
+                .into_iter()
+                .fold(Self::empty(), |flags, algorithm| {
+                    flags.union(algorithm.into())
+                })
+        })
     }
 }
 
@@ -55,7 +96,8 @@ pub(crate) fn accept_encoding_value(compression: Compression) -> String {
 /// iOS `URLSession`; Android selects a different preset. Inert under the
 /// `client-reqwest` backend and on wasm32 (no emulation; the browser fetch
 /// already carries a real fingerprint).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ImpersonatePreset {
     #[default]
@@ -108,12 +150,14 @@ impl fmt::Display for RangeSpec {
     }
 }
 
-#[derive(Clone, Debug, Builder)]
+#[derive(Clone, Copy, Debug, Builder, Eq, PartialEq, Patch)]
 #[non_exhaustive]
 pub struct RetryPolicy {
     #[builder(default = Duration::from_millis(100))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub base_delay: Duration,
     #[builder(default = Duration::from_secs(5))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub max_delay: Duration,
     #[builder(default = 3)]
     pub max_retries: u32,
@@ -148,12 +192,13 @@ impl RetryPolicy {
     }
 }
 
-#[derive(Clone, Debug, Builder)]
+#[derive(Clone, Debug, Builder, Patch)]
 #[non_exhaustive]
 pub struct NetOptions {
     /// Codings advertised and decoded for whole-body native requests.
     /// Defaults to all four; byte-addressed requests always use `identity`.
     #[builder(default = Compression::all())]
+    #[patch(attribute(serde(default)))]
     pub compression: Compression,
     /// Maximum allowed inactivity between consecutive read operations.
     /// Maps to [`reqwest::ClientBuilder::read_timeout`] (documented as
@@ -172,6 +217,7 @@ pub struct NetOptions {
     /// contract is "wait for the segment, regardless of connection
     /// speed", and a 10s cap raced real fixtures.
     #[builder(default = Duration::from_secs(30))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub inactivity_timeout: Duration,
     /// How long a pooled connection may sit idle before it is dropped.
     /// Governs the same pool as [`Self::pool_max_idle_per_host`]: the count
@@ -181,14 +227,17 @@ pub struct NetOptions {
     /// sockets open. Ignored by the Apple backend, whose `URLSession`
     /// configuration exposes no idle-pool timeout.
     #[builder(default = Duration::from_secs(5))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub pool_idle_timeout: Duration,
     /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
     /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
     /// backend and on wasm32 (no emulation there).
     #[builder(default)]
     pub impersonate: ImpersonatePreset,
+    #[patch(skip)]
     pub observer: Option<Observer>,
     #[builder(default)]
+    #[patch(nested)]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
     /// **Security risk** — use only for local development and test servers.
@@ -484,20 +533,6 @@ mod tests {
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn test_retry_policy_clone() {
-        let policy1 = RetryPolicy::builder()
-            .max_retries(5)
-            .base_delay(Duration::from_millis(100))
-            .max_delay(Duration::from_secs(2))
-            .build();
-        let policy2 = policy1.clone();
-
-        assert_eq!(policy1.max_retries, policy2.max_retries);
-        assert_eq!(policy1.base_delay, policy2.base_delay);
-        assert_eq!(policy1.max_delay, policy2.max_delay);
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::start_equals_end(10, Some(10), "bytes=10-10")]
     #[case::start_greater_than_end(20, Some(10), "bytes=20-10")]
     #[case::max_values(u64::MAX, Some(u64::MAX), &format!("bytes={}-{}", u64::MAX, u64::MAX))]
@@ -572,5 +607,91 @@ mod tests {
         assert_eq!(headers.get("Content-Type"), Some("application/json"));
         assert_eq!(headers.get("content-type"), Some("text/plain"));
         assert_ne!(headers.get("Content-Type"), headers.get("content-type"));
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod settings_tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
+    use super::{Compression, Duration, NetOptions, NetOptionsPatch, RetryPolicy};
+
+    #[kithara::test(native, flash(false))]
+    fn a_patch_writes_only_the_fields_it_names() {
+        let settings: NetOptionsPatch =
+            serde_yaml_ng::from_str("inactivity_timeout: 90s\npool_idle_timeout: 250ms\n")
+                .expect("the document types");
+        let mut options = NetOptions::builder().body_queue_capacity(7).build();
+
+        options.apply(settings);
+
+        assert_eq!(options.inactivity_timeout, Duration::from_secs(90));
+        assert_eq!(options.pool_idle_timeout, Duration::from_millis(250));
+        assert_eq!(
+            options.body_queue_capacity, 7,
+            "a silent field must keep the value it already had"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_nested_retry_patch_reaches_the_inner_field() {
+        let settings: NetOptionsPatch =
+            serde_yaml_ng::from_str("retry_policy:\n  max_retries: 7\n  base_delay: 250ms\n")
+                .expect("the document types");
+        let mut options = NetOptions::builder()
+            .retry_policy(
+                RetryPolicy::builder()
+                    .max_delay(Duration::from_secs(11))
+                    .build(),
+            )
+            .build();
+
+        options.apply(settings);
+
+        assert_eq!(options.retry_policy.max_retries, 7);
+        assert_eq!(options.retry_policy.base_delay, Duration::from_millis(250));
+        assert_eq!(
+            options.retry_policy.max_delay,
+            Duration::from_secs(11),
+            "a silent inner field must keep the value it already had"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_field_is_rejected_and_named() {
+        let error = serde_yaml_ng::from_str::<NetOptionsPatch>("inactivity_timeout_ms: 1s\n")
+            .expect_err("a typo must not be silently ignored");
+
+        assert!(
+            format!("{error}").contains("inactivity_timeout_ms"),
+            "{error}"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn compression_is_read_as_the_list_of_names_a_document_spells() {
+        let settings: NetOptionsPatch =
+            serde_yaml_ng::from_str("compression: [gzip, deflate]\n").expect("the document types");
+        let mut options = NetOptions::builder().build();
+
+        options.apply(settings);
+
+        assert_eq!(
+            options.compression,
+            Compression::GZIP.union(Compression::DEFLATE)
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_empty_compression_list_disables_negotiation() {
+        let settings: NetOptionsPatch =
+            serde_yaml_ng::from_str("compression: []\n").expect("the document types");
+        let mut options = NetOptions::builder().build();
+
+        options.apply(settings);
+
+        assert_eq!(options.compression, Compression::empty());
     }
 }

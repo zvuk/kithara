@@ -8,6 +8,11 @@ repository.workspace = true
 description = "Live HLS packaging: ADTS framing, segment rotation, and playlist window"
 publish = false
 
+[package.metadata.cargo-machete]
+# `serde` is reached only through `#[derive(Patch)]`, whose expansion names
+# `::serde::Deserialize`; no source line in this crate spells the crate out.
+ignored = ["serde"]
+
 [features]
 default = ["client-reqwest", "tls-rustls"]
 # HTTP backend forwarding. This crate speaks no HTTP, but it takes its access
@@ -22,6 +27,7 @@ tls-rustls = ["kithara-encode/tls-rustls"]
 [dependencies]
 kithara-bufpool = { workspace = true }
 kithara-encode = { workspace = true }
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stream = { workspace = true }
@@ -29,6 +35,8 @@ kithara-worker = { workspace = true }
 
 bon = { workspace = true }
 bytes = { workspace = true }
+humantime-serde = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -49,6 +57,7 @@ kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-test-utils = { workspace = true }
 
 hls_m3u8 = { workspace = true }
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true

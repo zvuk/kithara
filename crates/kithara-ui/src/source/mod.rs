@@ -1,4 +1,6 @@
-pub use config::{DrawPoolLimits, Limits, SCREEN_CACHE, UiConfig};
+pub use config::{
+    DrawPoolLimits, DrawPoolLimitsPatch, Limits, LimitsPatch, SCREEN_CACHE, UiConfig, UiConfigPatch,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use file::FileResolver;
 pub use mem::MemResolver;

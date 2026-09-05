@@ -1,7 +1,16 @@
 use bon::Builder;
+use serde::Deserialize;
 
 /// How gapless PCM trimming is applied on top of decoder-reported [`GaplessInfo`].
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+///
+/// Adjacently tagged (`mode` + `params`) rather than internally tagged:
+/// serde cannot honour `deny_unknown_fields` on an internally tagged enum
+/// (the tag field itself reads as unknown, which silently disables the
+/// check for every variant), and a typo in a document key must be refused,
+/// not ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize)]
+#[serde(tag = "mode", content = "params", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub enum GaplessMode {
     /// Passthrough PCM: no [`GaplessTrimmer`] (decoder-reported [`GaplessInfo`] is ignored).
@@ -25,8 +34,9 @@ pub enum GaplessMode {
 /// musically relevant levels. Lower the value (e.g. `40.0`) to trim
 /// louder "near-silence" too — at the cost of false positives on
 /// quiet music.
-#[derive(Debug, Clone, Copy, PartialEq, Builder)]
+#[derive(Debug, Clone, Copy, PartialEq, Builder, Deserialize)]
 #[builder(const, state_mod(vis = "pub"))]
+#[serde(default, deny_unknown_fields)]
 pub struct SilenceTrimParams {
     /// When true, also trim trailing silence at EOF using the same
     /// threshold. Disabled by default because tail content is more
@@ -123,5 +133,60 @@ mod tests {
         assert_eq!(p.min_trim_frames, 256);
         assert_eq!(p.scan_window_frames, 4096);
         assert!(!p.trim_trailing);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod document_tests {
+    use kithara_test_utils::kithara;
+
+    use super::GaplessMode;
+
+    #[kithara::test(native, flash(false))]
+    fn a_silence_trim_mode_types_from_its_parameters() {
+        let mode: GaplessMode =
+            serde_yaml_ng::from_str("mode: silence_trim\nparams:\n  threshold_db: 60.0\n")
+                .expect("the document types");
+
+        match mode {
+            GaplessMode::SilenceTrim(params) => {
+                assert!((params.threshold_db - 60.0).abs() < f32::EPSILON);
+                assert_eq!(
+                    params.min_trim_frames, 256,
+                    "an unnamed parameter keeps its default"
+                );
+            }
+            other => panic!("expected silence_trim, got {other:?}"),
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_unit_mode_types_from_its_tag_alone() {
+        let mode: GaplessMode =
+            serde_yaml_ng::from_str("mode: media_only\n").expect("the document types");
+
+        assert_eq!(mode, GaplessMode::MediaOnly);
+    }
+
+    /// `deny_unknown_fields` is inert on an internally tagged enum (the tag
+    /// field itself reads as unknown, per Ruling 153), which is why
+    /// `GaplessMode` is adjacently tagged instead. Prove the refusal holds
+    /// on the outer `mode`/`params` object, not just assume it from the
+    /// container attribute being present.
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_sibling_key_is_rejected_on_a_unit_variant() {
+        let error = serde_yaml_ng::from_str::<GaplessMode>("mode: media_only\nvolume: 1\n")
+            .expect_err("a typo must not be silently ignored");
+
+        assert!(error.to_string().contains("volume"), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_params_key_is_rejected_on_the_silence_trim_variant() {
+        let error =
+            serde_yaml_ng::from_str::<GaplessMode>("mode: silence_trim\nparams:\n  gain: 1.0\n")
+                .expect_err("a typo inside params must not be silently ignored");
+
+        assert!(error.to_string().contains("gain"), "{error}");
     }
 }

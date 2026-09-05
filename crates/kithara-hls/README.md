@@ -42,7 +42,7 @@ let stream = Stream::<Hls<AppPools>>::new(config).await?;
 // `stream` implements Read + Seek; pass it into kithara-decode / kithara-audio.
 ```
 
-`HlsConfig<S>` is a [`bon`](https://crates.io/crates/bon) builder. Start with `HlsConfig::for_url(url)`, set the required shared asset store with `.store(store)` and its matching region with `.pools(pools)`, then call `.build()`. Both values use the same schema `S`; cloned regions retain one shared hard budget. The same chain accepts non-default settings such as `look_ahead_bytes`, key options, downloader, cache discriminator, cancel token, and event bus.
+`HlsConfig<S>` is a [`bon`](https://crates.io/crates/bon) builder. Start with `HlsConfig::for_url(url)`, set the required shared asset store with `.store(store)` and its matching region with `.pools(pools)`, then call `.build()`. Both values use the same schema `S`; cloned regions retain one shared hard budget. The same chain accepts key options, downloader, cache discriminator, cancel token, and event bus, plus the streaming knobs that do not depend on `S` — `net_options`, `size_probe_method`, `download_batch_size`, `acquire_attempt_budget`, the ephemeral-cache bounds, `event_channel_capacity`, and `look_ahead_bytes` — as setters of their own.
 
 ## Key Types
 

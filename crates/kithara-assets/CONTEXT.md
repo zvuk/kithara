@@ -338,3 +338,34 @@ it coordinates cache mutation, with no rollback and no cross-process locking.
   displacement frees bytes, and dormant for durable disk backings, where displaced
   bytes survive — the disk path wires no hook at all. There is no public callback and
   no builder field; the router reaches the cache only through the ephemeral path.
+
+## Configuration document
+
+`AssetStoreConfig<S>` is this crate's one configuration struct — the eight
+tunables and the five handles a caller must supply together — and
+`AssetStore::open` takes it whole. `AssetStore::builder(pools)` is bon's builder
+over that struct; its `build()` opens the store, `into_config()` stops one step
+short and returns the configuration, which is how `kithara-app` applies a
+document patch before opening.
+
+`#[derive(Patch)]` generates `AssetStoreConfigPatch`, what a document's
+`assets.store:` section may say: `backend`, `cache_capacity`, `max_assets`,
+`max_bytes`, `mem_resource_capacity`, `processing_chunk_size`,
+`processing_gate_poll_interval`, `segment_reservation`. Two of them are
+backend-specific and inert on the other backend, exactly as they are on the
+builder: `mem_resource_capacity` is read only on the memory branch, and
+`segment_reservation` reaches only `DiskStoreSetup`. `pools`, `cancel`,
+`event_bus`, `flush_hub` and `layouts` are skipped — each is a live value only
+code can hand over — so naming one is refused rather than dropped.
+
+An unset `backend` falls back to a fresh uniquely-named temp directory per call
+(`fresh_temp_root`), which would relocate an application's on-disk cache every
+launch. A caller that wants a stable default when the document is silent
+resolves the `Option<StorageBackend>` itself; `kithara-app` does that in
+`Config::assets_store`.
+
+`StorageBackend` carries a hand-written `Deserialize`, not a derive. `Memory` is
+a unit variant and serde checks `deny_unknown_fields` against a variant's own
+field list, so a derived `#[serde(tag = "kind", deny_unknown_fields)]` would let
+`{kind: memory, root: /x}` parse and silently drop `root`. The private
+`BackendDoc` mirror in `store/builder.rs` carries the check instead.

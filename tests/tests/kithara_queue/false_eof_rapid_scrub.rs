@@ -17,9 +17,9 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
-    baked,
-    config::AppConfig,
-    pools::{AppPools, build as app_pools},
+    config::{AppConfig, AppDrm},
+    document::Config,
+    pools::{AppPools, PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineQueue};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
@@ -63,7 +63,7 @@ struct Ctx {
 }
 
 async fn build_ctx() -> Ctx {
-    let pools = app_pools().expect("build app pool region");
+    let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
@@ -71,11 +71,12 @@ async fn build_ctx() -> Ctx {
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
+    let document = Config::load(None, None).expect("the shipped configuration loads");
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
         .flush_hub(flush_hub)
-        .layouts(baked::build_baked_asset_layouts())
+        .layouts(document.asset_layouts())
         .build();
     let worker = PlayWorker::new(
         PlayWorkerConfig::builder(pools)
@@ -84,6 +85,11 @@ async fn build_ctx() -> Ctx {
     );
     let session_pools = worker.pools().clone();
     let config = AppConfig::builder()
+        .drm(AppDrm::new(
+            document
+                .drm_policy()
+                .expect("the shipped providers are valid"),
+        ))
         .downloader(downloader)
         .shutdown(shutdown)
         .worker(worker.clone())

@@ -325,7 +325,7 @@ impl RawHttp {
             refetch,
             resource,
             self.options.inactivity_timeout,
-            self.options.retry_policy.clone(),
+            self.options.retry_policy,
             self.cancel.clone(),
             self.options.observer.clone(),
         );
@@ -377,7 +377,7 @@ impl HttpClient {
         };
         let net = Arc::new(RetryNet::new(
             raw,
-            options.retry_policy.clone(),
+            options.retry_policy,
             cancel.clone(),
             options.observer.clone(),
         ));
@@ -405,7 +405,7 @@ impl HttpClient {
         };
         let net = Arc::new(RetryNet::new(
             raw,
-            options.retry_policy.clone(),
+            options.retry_policy,
             self.cancel.clone(),
             options.observer.clone(),
         ));

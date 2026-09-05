@@ -201,7 +201,6 @@ where
     #[kithara::measure(label = "audio.prepare")]
     pub async fn prepare<B, S>(
         config: AudioConfig<T, B>,
-        audio_buffer_chunks: usize,
         wake: Arc<dyn WorkerWake>,
         pools: PoolRegion<S>,
     ) -> Result<PreparedAudio<Self, impl crate::AudioSource<Chunk = AudioChunk>>, DecodeError>
@@ -211,14 +210,14 @@ where
     {
         let AudioConfig {
             hint,
-            host_sample_rate: config_host_sr,
             media_info: user_media_info,
-            audio_buffer_chunks: _,
             observer,
             decoder,
             preload_chunks,
+            host_sample_rate: config_host_sr,
             block_on_underrun,
             consumer_wake_mode,
+            audio_buffer_chunks,
             stream: stream_config,
             bus: config_bus,
             cancel: config_cancel,
@@ -266,7 +265,7 @@ where
         let wake_stream = shared_stream.clone();
         let preload_gate = Arc::new(super::PreloadGate::default());
         let (port, ring) = prepare_pcm_ring(
-            audio_buffer_chunks,
+            audio_buffer_chunks.max(preload_chunks.get()),
             &emit,
             &epoch,
             block_on_underrun,
@@ -343,6 +342,8 @@ fn current_runtime_handle() -> Result<RuntimeHandle, DecodeError> {
     })
 }
 
+/// The output ring is never shallower than the preload gate wants: a ring that
+/// cannot hold the chunks preload waits for never signals readiness.
 fn prepare_pcm_ring(
     audio_buffer_chunks: usize,
     emit: &Arc<kithara_events::DeferredBus<Event>>,

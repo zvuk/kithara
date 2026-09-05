@@ -1,12 +1,13 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
-use kithara_audio::{AudioDecoderConfig, ConsumerWakeMode};
+use kithara_audio::{AudioConfigPatch, AudioDecoderConfig, ConsumerWakeMode};
 use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
-use kithara_hls::{KeyOptions, SizeProbeMethod};
+use kithara_file::FileConfigPatch;
+use kithara_hls::{HlsConfigPatch, KeyOptions};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
@@ -16,10 +17,13 @@ use url::Url;
 use super::{ResourceSrc, resampler::PlaybackResamplerBackend};
 use crate::{EngineLoad, PlayWorker};
 
-/// Default number of preload chunks.
-const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
-
 /// Unified configuration for opening an audio resource.
+///
+/// Holds the per-call wiring and per-stream input this resource is opened
+/// with, the runtime-owned audio capabilities a player overwrites, and what a
+/// configuration document says about each of the three configurations this
+/// resource builds — carried as patches, because none of those configurations
+/// can exist before the track does.
 #[derive(Builder)]
 #[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
@@ -42,12 +46,51 @@ where
     /// Encryption key handling configuration.
     #[builder(default)]
     pub(crate) keys: KeyOptions,
-    /// Number of chunks to buffer before signaling preload readiness.
-    #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
-    pub(crate) preload_chunks: NonZeroUsize,
-    /// Optional output-ring depth in producer chunks.
-    /// When omitted, the audio pipeline keeps its platform default.
-    pub(crate) audio_buffer_chunks: Option<NonZeroUsize>,
+    /// What a configuration document says about the [`HlsConfig`] this
+    /// resource builds, carried as a patch because that configuration cannot
+    /// exist before the track's URL and store do. A document's live spelling
+    /// is its own top-level `hls:` section.
+    ///
+    /// [`HlsConfig`]: kithara_hls::HlsConfig
+    #[builder(default)]
+    pub(crate) hls: HlsConfigPatch,
+    /// What a configuration document says about the [`FileConfig`] this
+    /// resource builds, carried as a patch for the same reason [`Self::hls`]
+    /// is. A document's live spelling is its own top-level `file:` section.
+    ///
+    /// [`FileConfig`]: kithara_file::FileConfig
+    #[builder(default)]
+    pub(crate) file: FileConfigPatch,
+    /// What a configuration document says about the [`AudioConfig`] this
+    /// resource builds, carried as a patch for the same reason [`Self::hls`]
+    /// is. A document's live spelling is its own top-level `audio:` section.
+    ///
+    /// [`AudioConfig`]: kithara_audio::AudioConfig
+    #[builder(default)]
+    pub(crate) audio: AudioConfigPatch,
+    /// Session-owned audio-consumer wake capability. Player preparation fills
+    /// this field; `None` identifies a direct resource consumed off RT. Not a
+    /// document key: the session owns it.
+    #[builder(skip)]
+    pub(crate) consumer_wake_mode: Option<ConsumerWakeMode>,
+    /// Whether audio-thread reads block on a producer-ring underrun. Only an
+    /// offline harness or a player's own policy sets this, so it is not a
+    /// document key.
+    #[builder(default)]
+    pub(crate) block_on_underrun: bool,
+    /// Rate the audio host actually opened, handed to the built audio
+    /// pipeline. The player overwrites it from its engine, so it is not a
+    /// document key.
+    pub(crate) host_sample_rate: Option<NonZeroU32>,
+    /// Requested peak-bitrate ceiling in bits per second, held for an ABR
+    /// reader that does not exist yet. `resource/build.rs` forwards this to
+    /// neither branch, so no value here changes variant selection today, and
+    /// the one caller of [`ResourceConfig::preferred_peak_bitrate`] is a test
+    /// asserting the value survives `Loader::build_config`. Not a document key
+    /// for exactly that reason: a document knob the binary ignores is worse
+    /// than no knob. Make it one when the ABR wiring lands.
+    #[builder(default = 0.0)]
+    pub(crate) preferred_peak_bitrate: f64,
     /// Unified event bus for streaming, decode, and audio events.
     #[builder(name = events)]
     pub(crate) bus: Option<EventBus>,
@@ -64,39 +107,20 @@ where
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
     /// Additional HTTP headers to include in all network requests.
     pub(crate) headers: Option<Headers>,
-    /// Optional format hint (file extension like "mp3", "wav").
+    /// Optional format hint (file extension like "mp3", "wav"). Per-call input
+    /// read twice: the file branch maps it into `FileConfig::extension`,
+    /// and both branches pass it to the decoder as a format hint.
     pub(crate) hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
     pub(crate) hls_base_url: Option<Url>,
-    /// Target sample rate of the audio host (for resampling).
-    pub(crate) host_sample_rate: Option<NonZeroU32>,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    pub(crate) look_ahead_bytes: Option<u64>,
-    /// Resident Warp resources and live temporal controls.
+    /// Resident Warp resources and live temporal controls. Not a document
+    /// key: a player-managed resource has this overwritten with the player's
+    /// own `warp`, which is where a document's `player.warp:` section lands.
     #[builder(default = WarpConfig::builder().build())]
     pub(crate) warp: WarpConfig,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker<S>>,
-    /// Session-owned audio-consumer wake capability. Player preparation fills
-    /// this field; `None` identifies a direct resource consumed off RT.
-    #[builder(skip)]
-    pub(crate) consumer_wake_mode: Option<ConsumerWakeMode>,
-    /// Make audio-thread reads block on a producer-ring underrun instead of
-    /// zero-filling. `PlayerImpl::prepare_config` copies the player's policy
-    /// here; a direct reader off the real-time thread may opt in itself.
-    /// Never set on a resource consumed by a real-time callback.
-    #[builder(default)]
-    pub(crate) block_on_underrun: bool,
-    /// Method used by HLS size estimation to probe segment lengths.
-    /// Default is [`SizeProbeMethod::Head`]; switch to
-    /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
-    /// `HEAD` (zvuk stage `/drm/`).
-    #[builder(default)]
-    pub(crate) size_probe_method: SizeProbeMethod,
-    /// Maximum peak bitrate in bits per second for ABR variant selection.
-    #[builder(default = 0.0)]
-    pub(crate) preferred_peak_bitrate: f64,
 }
 
 impl<S, B> Clone for ResourceConfig<S, B>
@@ -111,8 +135,13 @@ where
             store: self.store.clone(),
             decoder: self.decoder.clone(),
             keys: self.keys.clone(),
-            preload_chunks: self.preload_chunks,
-            audio_buffer_chunks: self.audio_buffer_chunks,
+            hls: self.hls.clone(),
+            file: self.file.clone(),
+            audio: self.audio.clone(),
+            consumer_wake_mode: self.consumer_wake_mode,
+            block_on_underrun: self.block_on_underrun,
+            host_sample_rate: self.host_sample_rate,
+            preferred_peak_bitrate: self.preferred_peak_bitrate,
             bus: self.bus.clone(),
             cancel: self.cancel.clone(),
             discriminator: self.discriminator.clone(),
@@ -121,24 +150,21 @@ where
             headers: self.headers.clone(),
             hint: self.hint.clone(),
             hls_base_url: self.hls_base_url.clone(),
-            host_sample_rate: self.host_sample_rate,
-            look_ahead_bytes: self.look_ahead_bytes,
             warp: self.warp.clone(),
             worker: self.worker.clone(),
-            consumer_wake_mode: self.consumer_wake_mode,
-            block_on_underrun: self.block_on_underrun,
-            size_probe_method: self.size_probe_method,
-            preferred_peak_bitrate: self.preferred_peak_bitrate,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{num::NonZeroUsize, path::Path};
 
     use kithara_assets::AssetStore;
-    use kithara_audio::{DecoderResamplerSettings, ResamplerBackend, ResamplerOptions};
+    use kithara_audio::{
+        AudioConfigPatch, ConsumerWakeMode, DecoderResamplerSettings, ResamplerBackend,
+        ResamplerOptions,
+    };
     use kithara_decode::DecodeError;
     use kithara_test_utils::kithara;
 
@@ -147,6 +173,12 @@ mod tests {
         PlayWorkerConfig,
         test_pools::{TestPools, pools},
     };
+
+    fn preload_chunks(count: usize) -> AudioConfigPatch {
+        let mut patch = AudioConfigPatch::default();
+        patch.preload_chunks = NonZeroUsize::new(count);
+        patch
+    }
 
     fn store() -> AssetStore<TestPools> {
         AssetStore::builder(pools()).build()
@@ -357,29 +389,18 @@ mod tests {
                 .events(EventBus::new(32))
                 .hint("mp3")
                 .discriminator("test")
-                .preload_chunks(NonZeroUsize::new(5).expect("BUG: 5 > 0"))
+                .audio(preload_chunks(5))
                 .build();
         assert!(config.bus.is_some());
         assert_eq!(config.hint.as_deref(), Some("mp3"));
         assert_eq!(config.discriminator.as_deref(), Some("test"));
-        assert_eq!(config.preload_chunks.get(), 5);
+        assert_eq!(config.audio.preload_chunks, NonZeroUsize::new(5));
     }
 
     #[kithara::test]
     fn config_bitrate_fields_default_zero() {
         let config = test_config("https://example.com/live.m3u8").unwrap();
         assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
-    }
-
-    #[kithara::test]
-    fn config_bitrate_propagates_to_hls_abr() {
-        let worker = worker();
-        let config: ResourceConfig<TestPools> =
-            ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
-                .store(store())
-                .preferred_peak_bitrate(512_000.0)
-                .build();
-        let _audio_config = config.build_hls_config(&worker, None).unwrap();
     }
 
     #[kithara::test]
@@ -415,6 +436,34 @@ mod tests {
             audio_config.hint(),
             None,
             "URL without file extension must produce hint=None"
+        );
+    }
+
+    /// The defaults a resource opened without a document carries: its own
+    /// runtime-owned audio capabilities, and three empty patches that leave
+    /// each built configuration on its crate's own defaults.
+    #[kithara::test]
+    fn defaults_match_the_documented_values() {
+        let config = test_config("https://example.com/song.mp3").expect("valid config");
+
+        assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
+        assert_eq!(
+            config.consumer_wake_mode, None,
+            "a direct resource carries no session wake policy"
+        );
+        assert!(!config.block_on_underrun);
+        assert!(config.host_sample_rate.is_none());
+        assert!(
+            config.hls.download_batch_size.is_none(),
+            "an unnamed HLS key must leave kithara-hls's own default standing"
+        );
+        assert!(
+            config.file.reader_event_capacity.is_none(),
+            "an unnamed file key must leave kithara-file's own default standing"
+        );
+        assert!(
+            config.audio.preload_chunks.is_none(),
+            "an unnamed audio key must leave kithara-audio's own default standing"
         );
     }
 

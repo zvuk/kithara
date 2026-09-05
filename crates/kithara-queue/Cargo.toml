@@ -9,6 +9,11 @@ description = "Queue/playlist orchestration: gapless, crossfade-aware."
 keywords = ["audio", "player", "playlist", "gapless", "dj"]
 categories = ["multimedia::audio"]
 
+[package.metadata.cargo-machete]
+# `serde` is reached only through `#[derive(Patch)]`, whose expansion names
+# `::serde::Deserialize`; no source line in this crate spells the crate out.
+ignored = ["serde"]
+
 [features]
 default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
@@ -35,6 +40,7 @@ kithara-assets = { workspace = true, default-features = false }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-events = { workspace = true }
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
@@ -43,6 +49,7 @@ bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -53,6 +60,9 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-platform = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true

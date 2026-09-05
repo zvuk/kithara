@@ -5,7 +5,7 @@ mod set;
 #[cfg(feature = "analysis-waveform")]
 mod waveform;
 
-pub use config::BeatAnalysisConfig;
+pub use config::{BeatAnalysisConfig, BeatAnalysisConfigPatch};
 #[cfg(feature = "analysis-beat")]
 pub(crate) use nn::detector as default_beat_detector;
 pub(crate) use session::{Ingest, TrackAnalyzers};

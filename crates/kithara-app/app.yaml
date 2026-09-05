@@ -1,23 +1,30 @@
-# Compile-time defaults for kithara-app. Baked into the binary by
-# `build.rs` (see same crate) and surfaced via `kithara_app::baked::*`.
-# Edits here trigger a full rebuild of the crate.
+# The configuration kithara-app ships with. `build.rs` embeds this text
+# verbatim; the application parses it at startup, and a `kithara.yaml` beside
+# the executable is laid over it without a rebuild. Only what differs from the
+# crate's own defaults belongs here.
 #
 # Secrets MUST NOT be inlined here — use `$KITHARA_...` env references
 # instead and put the value in the workspace `.env` (gitignored) or
-# the build shell. Inline values are fine for non-secrets that ship in
-# every client (e.g. the staging cipher key).
+# the build shell. A reference resolves from the process environment first and
+# from the table `build.rs` baked behind it second; a reference that resolves
+# nowhere stops startup rather than degrading silently.
 #
 # `build.rs` wraps every value read from an env reference with
 # `obfstr!()` so it does not appear as a plain run of bytes in
 # `strings` output.
 
-playback:
-  crossfade_seconds: 5.0
-
-network:
-  should_accept_invalid_certs: true
-  compression: [gzip, deflate]
+hls:
   size_probe_method: range_get
+
+net:
+  compression: [gzip, deflate]
+  is_insecure: true
+
+# `kithara-play`'s own crate default is 1.0; this app has shipped with a
+# longer 5-second crossfade since before this section existed, so it is
+# named explicitly here to keep that behavior.
+player:
+  crossfade_duration: 5.0
 
 # Remote media identity used by the shared AssetStore. Rules are ordered and
 # use exact hosts, `*.domain` subdomains, or `*`. Only listed query parameters
@@ -53,17 +60,17 @@ playlist:
 # key URL lives on a bare host but media is served from subdomains (e.g.
 # `zvuk.com/keyserver/...` plus `cdn-hls-slicer.zvuk.com/...`).
 #
-# Each provider must define exactly one of `cipher_key` (inline
-# non-secret literal) or `cipher_env` (`$KITHARA_...` env reference).
+# Each provider declares one `cipher_key`, whose value may be a
+# `$KITHARA_...` env reference or an inline non-secret literal.
 # Everything else goes through `headers` — values starting with `$`
-# are env references (obfuscated like `cipher_env`); literal values
+# are env references (obfuscated like `cipher_key`); literal values
 # pass through unchanged. `X-Encrypted-Key` is reserved (generated
 # per request from the cipher_key).
 drm:
   providers:
     - name: zvuk-prod
       domains: [zvuk.com, "*.zvuk.com"]
-      cipher_env: $KITHARA_DRM_PROD_KEY
+      cipher_key: $KITHARA_DRM_PROD_KEY
       # iOS `HLSAes128Service.AES128ResourceLoader` ships
       # `randomString(of: 8)` — 8-char lowercase hex. The zvuk.com WAF
       # validates alphabet + length; deviation triggers HTTP 418.

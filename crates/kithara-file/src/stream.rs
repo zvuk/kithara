@@ -293,13 +293,13 @@ where
             bus,
             discriminator,
             downloader,
+            headers,
+            pools,
+            store,
             event_channel_capacity,
             extension,
-            headers,
             look_ahead_bytes,
-            pools,
             reader_event_capacity,
-            store,
             ..
         } = config;
         let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pools));

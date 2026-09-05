@@ -99,8 +99,8 @@ fn empty_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
     PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .sample_rate(session_rate())
             .crossfade_duration(0.0)
+            .sample_rate(session_rate())
             .session(dispatcher)
             .build(),
     )

@@ -96,9 +96,8 @@ where
     ) -> Result<Self, RunError> {
         let size = PhysicalSize::new(size.0, size.1);
         let state = MasonryState::default();
-        let doc = UiConfig::builder()
-            .custom_kinds(config.kinds.map(CustomKinds::names).unwrap_or_default())
-            .build();
+        let mut doc = config.settings.cloned().unwrap_or_default();
+        doc.custom_kinds = config.kinds.map(CustomKinds::names).unwrap_or_default();
         let clock = Clock::default();
         let view = ViewState::default();
         let ui = compile_document(&app, &config, &doc, &view)?;

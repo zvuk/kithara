@@ -11,6 +11,7 @@ use std::{
 };
 
 use dashmap::DashSet;
+use kithara_macros::Patch;
 #[cfg(test)]
 use kithara_platform::thread;
 use kithara_platform::{
@@ -50,15 +51,17 @@ pub(crate) trait Flushable: Send + Sync {
 }
 
 /// Tunables for [`FlushHub`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Patch)]
 pub struct FlushPolicy {
     /// Coalesce window: when the worker sees a signal, it sleeps this
     /// long before draining dirty sources, so a burst of mutations
     /// produces a single flush. Ignored when `force_every_n_ops` is
     /// reached.
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub debounce: Duration,
     /// Cancel-token poll interval. The worker wakes from `cv.wait_for`
     /// at least this often to check for shutdown.
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub poll_interval: Duration,
     /// Cap on coalescing: if `signal()` is called this many times
     /// without a flush, the worker bypasses `debounce` and flushes
@@ -326,6 +329,25 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    #[kithara::test(timeout(Duration::from_secs(2)))]
+    fn a_patch_writes_only_the_field_it_names() {
+        let settings: FlushPolicyPatch =
+            serde_yaml_ng::from_str("force_every_n_ops: 512\n").expect("the document types");
+        let mut policy = FlushPolicy::default();
+        // Seeded away from the default of 50ms, so the assertion below can tell
+        // "left alone" from "reset to the default".
+        policy.debounce = Duration::from_millis(250);
+
+        policy.apply(settings);
+
+        assert_eq!(policy.force_every_n_ops.get(), 512);
+        assert_eq!(
+            policy.debounce,
+            Duration::from_millis(250),
+            "a silent field must keep the value it already had"
+        );
+    }
 
     /// Counts `flush()` and `flush_durable()` invocations separately.
     /// Used to validate hub invariants without depending on real disk

@@ -28,6 +28,10 @@ expanded dependency, so the manifest records this single scanner exception.
 - Backend geometry defaults preserve each native engine's quality preset: Signalsmith derives its
   block and interval from the sample rate, and Bungee uses zero synthesis-hop adjustment. Supplying
   one custom Signalsmith dimension requires supplying both.
+- `ElasticBackendConfigPatch` is what a configuration document may say about that geometry; it
+  reaches this crate through `WarpConfig`, which is the only production owner of an
+  `ElasticConfig`. Nothing else in this crate is document-settable: every other value on
+  `ElasticConfig` is measured from the stream the engine is being prepared for.
 - `build_engine(config)` dispatches the config-owned selector to `Box<dyn ElasticEngine>`.
 - Every backend must implement priming; callers may still render a fresh unprimed stream. Nothing
   above an adapter names a concrete DSP library.

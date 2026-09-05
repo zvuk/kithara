@@ -5,10 +5,12 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::PoolRegion;
+use serde::Deserialize;
 
 use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode};
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum ResamplerQuality {
     Fast,
     Normal,
@@ -24,8 +26,9 @@ pub struct RatioGlide {
     pub target_ratio: f64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Builder)]
+#[derive(Clone, Copy, Debug, PartialEq, Builder, Deserialize)]
 #[builder(const, state_mod(vis = "pub"))]
+#[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ResamplerOptions {
     #[builder(default = 8.0)]
@@ -346,5 +349,40 @@ mod tests {
         assert_eq!(config.clone().settings.pools.stats(), pools.stats());
         assert!(format!("{config:?}").contains("ResamplerConfig"));
         assert!(config.validate().is_ok());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod document_tests {
+    use kithara_test_utils::kithara;
+
+    use crate::{ResamplerOptions, ResamplerQuality};
+
+    #[kithara::test(native, flash(false))]
+    fn a_quality_document_key_types_to_the_named_variant() {
+        let quality: ResamplerQuality =
+            serde_yaml_ng::from_str("high\n").expect("the document types");
+
+        assert_eq!(quality, ResamplerQuality::High);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_partial_options_document_leaves_the_rest_at_default() {
+        let options: ResamplerOptions =
+            serde_yaml_ng::from_str("chunk_size: 1024\n").expect("the document types");
+
+        assert_eq!(options.chunk_size, 1_024);
+        assert!(
+            (options.max_ratio_adjustment - 8.0).abs() < f64::EPSILON,
+            "an unnamed parameter keeps its default"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_options_field_is_rejected_and_named() {
+        let error = serde_yaml_ng::from_str::<ResamplerOptions>("resample_ratio: 2.0\n")
+            .expect_err("a typo must not be silently ignored");
+
+        assert!(error.to_string().contains("resample_ratio"), "{error}");
     }
 }

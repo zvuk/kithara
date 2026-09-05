@@ -17,6 +17,7 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 probe = ["dep:tracing", "kithara-test-utils/probe"]
 
 [dependencies]
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
@@ -25,6 +26,9 @@ bon = { workspace = true }
 delegate = { workspace = true }
 fieldwork = { workspace = true }
 hotpath = { workspace = true, optional = true }
+
+humantime-serde = { workspace = true }
+serde = { workspace = true }
 
 thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }
@@ -37,6 +41,9 @@ kithara-test-utils = { workspace = true, features = ["client-reqwest", "hang", "
 
 criterion = { workspace = true }
 tracing = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true

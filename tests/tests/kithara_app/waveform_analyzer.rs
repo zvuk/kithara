@@ -13,7 +13,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
 };
 use kithara_app::{
-    pools::{AppPools, AppResourceConfig, AppStore, AppWorker, Pools, build},
+    pools::{AppPools, AppResourceConfig, AppStore, AppWorker, Pools, PoolsSection, build},
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
 use kithara_integration_tests::TestServerHelper;
@@ -63,7 +63,7 @@ async fn run_analysis(
 async fn runner_silent_wav_yields_all_zero_envelope() {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::WAV_SILENCE_1S);
-    let pools = build().expect("app pools");
+    let pools = build(&PoolsSection::default()).expect("app pools");
     let config = ResourceConfig::<AppPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
@@ -98,7 +98,7 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
 async fn runner_returns_nothing_when_cancelled_upfront() {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::WAV_SILENCE_1S);
-    let pools = build().expect("app pools");
+    let pools = build(&PoolsSection::default()).expect("app pools");
     let config = ResourceConfig::<AppPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )

@@ -154,7 +154,6 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
         event_bus: None,
     };
     let audio = AudioConfig::<MemStream, RubatoBackend>::for_stream(stream)
-        .host_sample_rate(source_rate)
         .media_info(
             MediaInfo::builder()
                 .channels(2)
@@ -163,6 +162,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
                 .sample_rate(SOURCE_RATE)
                 .build(),
         )
+        .host_sample_rate(source_rate)
         .preload_chunks(NonZeroUsize::new(PRELOAD_CHUNKS).expect("preload count is non-zero"))
         .audio_buffer_chunks(RING_CHUNKS)
         .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)

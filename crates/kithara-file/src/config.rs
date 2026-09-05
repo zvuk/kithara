@@ -4,6 +4,7 @@ use bon::Builder;
 use kithara_assets::AssetStore;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::EventBus;
+use kithara_macros::Patch;
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::dl::Downloader;
@@ -21,7 +22,7 @@ pub enum FileSrc {
 /// Configuration for file streaming.
 ///
 /// Used with `Stream::<File<S>>::new(config)`.
-#[derive(Builder)]
+#[derive(Builder, Patch)]
 #[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
 pub struct FileConfig<S>
@@ -30,26 +31,32 @@ where
 {
     /// File source (remote URL or local path).
     #[builder(start_fn)]
+    #[patch(skip)]
     pub src: FileSrc,
     /// Shared asset store used by local and remote sources.
+    #[patch(skip)]
     pub store: AssetStore<S>,
     /// Buffer-pool facade shared with storage and fallback transport.
+    #[patch(skip)]
     pub pools: PoolRegion<S>,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
+    #[patch(skip)]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
+    #[patch(skip)]
     pub cancel: Option<CancelToken>,
     /// Optional cache discriminator.
+    #[patch(skip)]
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
+    #[patch(skip)]
     pub downloader: Option<Downloader>,
+    /// Additional HTTP headers to include in all requests.
+    #[patch(skip)]
+    pub headers: Option<Headers>,
     /// Explicit source-extension hint used before the URL-path extension.
     pub extension: Option<String>,
-    /// Additional HTTP headers to include in all requests.
-    pub headers: Option<Headers>,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    pub look_ahead_bytes: Option<u64>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
@@ -65,7 +72,10 @@ where
     /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
     /// enough not to busy-spin a tokio worker.
     #[builder(default = Duration::from_millis(10))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub tmp_claim_poll_interval: Duration,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    pub look_ahead_bytes: Option<u64>,
 }
 
 impl<S> Clone for FileConfig<S>
@@ -81,12 +91,12 @@ where
             cancel: self.cancel.clone(),
             discriminator: self.discriminator.clone(),
             downloader: self.downloader.clone(),
-            extension: self.extension.clone(),
             headers: self.headers.clone(),
-            look_ahead_bytes: self.look_ahead_bytes,
+            extension: self.extension.clone(),
             event_channel_capacity: self.event_channel_capacity,
             reader_event_capacity: self.reader_event_capacity,
             tmp_claim_poll_interval: self.tmp_claim_poll_interval,
+            look_ahead_bytes: self.look_ahead_bytes,
         }
     }
 }
@@ -101,14 +111,14 @@ where
             .field("bus", &self.bus)
             .field("cancel", &self.cancel)
             .field("headers", &self.headers)
-            .field("look_ahead_bytes", &self.look_ahead_bytes)
-            .field("extension", &self.extension)
             .field("discriminator", &self.discriminator)
             .field("pools", &self.pools)
             .field("store", &self.store)
+            .field("extension", &self.extension)
             .field("event_channel_capacity", &self.event_channel_capacity)
             .field("reader_event_capacity", &self.reader_event_capacity)
             .field("tmp_claim_poll_interval", &self.tmp_claim_poll_interval)
+            .field("look_ahead_bytes", &self.look_ahead_bytes)
             .finish_non_exhaustive()
     }
 }
@@ -261,5 +271,83 @@ mod tests {
 
         assert!(config.bus.is_some());
         assert!(cloned.bus.is_some());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod document_tests {
+    use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_test_utils::kithara;
+
+    use super::{Duration, FileConfig, FileConfigPatch, FileSrc, Url};
+    use crate::test_pools::{TestPools, pools};
+
+    fn config() -> FileConfig<TestPools> {
+        FileConfig::for_src(FileSrc::Remote(
+            Url::parse("http://example.com/audio.mp3").expect("a literal URL parses"),
+        ))
+        .store(
+            AssetStore::builder(pools())
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .pools(pools())
+        .build()
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_sets_the_reader_capacity_and_leaves_the_poll_interval() {
+        let patch: FileConfigPatch =
+            serde_yaml_ng::from_str("reader_event_capacity: 512\n").expect("the document types");
+        // Seeded off the crate default so a merge that reset every unnamed
+        // field could not pass this by coincidence.
+        let mut config = config();
+        config.tmp_claim_poll_interval = Duration::from_millis(77);
+
+        config.apply(patch);
+
+        assert_eq!(config.reader_event_capacity, 512);
+        assert_eq!(
+            config.tmp_claim_poll_interval,
+            Duration::from_millis(77),
+            "a key the document does not name must keep its seeded value"
+        );
+    }
+
+    /// `reader_event_capacity_bytes` contains a real field name, which is
+    /// what makes the assertion meaningful: serde's "expected one of" list
+    /// names the real key, so a `contains` on the real name alone would pass
+    /// vacuously.
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_field_is_rejected_and_named() {
+        let error =
+            serde_yaml_ng::from_str::<FileConfigPatch>("reader_event_capacity_bytes: 512\n")
+                .expect_err("a typo must not be silently ignored");
+
+        assert!(
+            error.to_string().contains("reader_event_capacity_bytes"),
+            "{error}"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_reads_the_poll_interval_from_humantime_text() {
+        let patch: FileConfigPatch =
+            serde_yaml_ng::from_str("tmp_claim_poll_interval: 25ms\n").expect("the document types");
+        let mut config = config();
+
+        config.apply(patch);
+
+        assert_eq!(config.tmp_claim_poll_interval, Duration::from_millis(25));
+    }
+
+    /// The per-call wiring is not reachable from a document: naming it is
+    /// refused rather than parsed and dropped.
+    #[kithara::test(native, flash(false))]
+    fn the_per_call_wiring_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<FileConfigPatch>("discriminator: deck-0\n")
+            .expect_err("per-call wiring is handed over in code, not named in a document");
+
+        assert!(error.to_string().contains("discriminator"), "{error}");
     }
 }

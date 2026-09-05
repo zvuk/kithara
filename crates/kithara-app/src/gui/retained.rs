@@ -87,6 +87,10 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
     let package = Rc::clone(&app.state.ui.package);
     let endpoints = endpoints::Registry::default();
     let (size, min_size) = (window_size(), window_min(app.state.ui.window_min()));
+    // Cloned into a local rather than borrowed from `app.state.config.ui`
+    // directly: `app` itself is moved into the call below, and a reference
+    // into one of its fields cannot outlive that move.
+    let settings = app.state.config.ui.clone();
     kithara::ui::app::run(
         app,
         Config::builder()
@@ -95,6 +99,7 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
             .text(package.text())
             .decorations(false)
             .min_size(min_size)
+            .settings(&settings)
             .title("Kithara - DJ Studio")
             .build(),
         size,

@@ -141,6 +141,31 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
   `Content-Range`, a mismatched interval, an unknown `*` representation total, or an unknown-size
   bounded full response fails before any byte is written.
 
+## Configuration document entry point
+
+`FileConfig<S>` is the one configuration struct this crate has: the tunables and the per-call
+wiring live in it together. `#[derive(Patch)]` generates `FileConfigPatch` beside it, and `apply`
+writes only the fields the document names, leaving the rest of `FileConfig` standing.
+`extension: Option<String>` and `look_ahead_bytes: Option<u64>` are already optional on the
+config, so a document names a plain value under `extension` / `look_ahead_bytes`, not
+`Some(value)`. `tmp_claim_poll_interval` is read through
+`serde(with = "humantime_serde::option")`, so a document writes `25ms` rather than a raw
+millisecond count.
+
+`kithara-app`'s `file:` section is that document's spelling. It types into `FileConfigPatch`,
+`main` hands it to `AppConfig::file`, and every track is opened with that value:
+`kithara_play::ResourceConfig` carries the patch — no `FileConfig` can exist before a track does —
+and `kithara-play/src/resource/build.rs` applies it to the `FileConfig` it builds. The one field
+the document does not have the last word on is `extension`: the file branch resolves it as the
+per-call format hint, then the extension derived from the source path, then whatever the document
+named — the two ahead of it identify the track being opened, which is more specific than a
+crate-wide default.
+
+`src`, `discriminator`, and `headers` are per-stream input, not crate-wide policy: they name what
+is being fetched and how, not a tunable default. `store`, `pools`, `bus`, `cancel`, and `downloader`
+are live handles or `S`-typed values a document has no way to name, the same reasoning
+`kithara-hls::HlsConfig` applies to its own wiring fields.
+
 Cache identity: naming is owned by the layout registered for the `File` marker in the shared
 `AssetStore`. The stream binds `AssetSource::Remote { url, discriminator }` through
 `store.scope::<File>()` and mints one `AssetResource::Source`; its extension comes from the

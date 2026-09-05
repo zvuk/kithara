@@ -28,6 +28,7 @@ fdk-aac = ["kithara-audio/fdk-aac"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 
@@ -64,6 +65,9 @@ kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 unimock = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true

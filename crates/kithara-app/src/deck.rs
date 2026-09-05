@@ -99,27 +99,26 @@ impl Deck {
     pub fn build(id: DeckId, config: &AppConfig, host: &mut AppHost) -> Result<Self, PlayError> {
         let cancel = config.shutdown.child();
         let timestretch = StretchControls::new(1.0);
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .cancel(cancel.clone())
-                .crossfade_duration(config.crossfade_seconds)
-                .eq_layout(generate_log_spaced_bands(config.eq_bands))
-                .sample_rate(host.requested_sample_rate())
-                .warp(
-                    WarpConfig::builder()
-                        .stretch(Arc::clone(&timestretch))
-                        .build(),
-                )
-                .worker(config.worker.clone())
-                .build(),
-        );
-        let queue = AppQueue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(config.store.clone())
-                .cancel(cancel.clone())
-                .build(),
-        );
+        let mut player_config = PlayerConfig::builder()
+            .cancel(cancel.clone())
+            .eq_layout(generate_log_spaced_bands(config.eq_bands))
+            .sample_rate(host.requested_sample_rate())
+            .warp(
+                WarpConfig::builder()
+                    .stretch(Arc::clone(&timestretch))
+                    .build(),
+            )
+            .worker(config.worker.clone())
+            .build();
+        player_config.apply(config.player.clone());
+        let player = PlayerImpl::new(player_config);
+        let mut queue_config = QueueConfig::builder()
+            .player(player)
+            .store(config.store.clone())
+            .cancel(cancel.clone())
+            .build();
+        queue_config.apply(config.queue.clone());
+        let queue = AppQueue::new(queue_config);
         let queue = host.insert(queue)?;
 
         Ok(Self {
@@ -357,7 +356,10 @@ mod tests {
 
     fn worker() -> AppWorker {
         AppWorker::new(
-            PlayWorkerConfig::builder(pools::build().expect("valid app pool policy")).build(),
+            PlayWorkerConfig::builder(
+                pools::build(&pools::PoolsSection::default()).expect("valid app pool policy"),
+            )
+            .build(),
         )
     }
 

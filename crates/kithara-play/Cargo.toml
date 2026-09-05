@@ -92,6 +92,7 @@ kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
+kithara-macros = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
@@ -114,6 +115,7 @@ fieldwork = { workspace = true }
 firewheel = { workspace = true }
 firewheel-core = { workspace = true }
 hex = { workspace = true }
+humantime-serde = { workspace = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
 
@@ -143,6 +145,9 @@ kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "prob
 
 bytes = { workspace = true }
 unimock = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true

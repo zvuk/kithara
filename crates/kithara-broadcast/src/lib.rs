@@ -11,7 +11,7 @@ mod server;
 mod service;
 mod window;
 
-pub use config::BroadcastConfig;
+pub use config::{BroadcastConfig, BroadcastConfigPatch};
 pub use error::{BroadcastError, BroadcastResult};
 pub use segment::{Segment, Segmenter};
 #[cfg(not(target_arch = "wasm32"))]

@@ -170,19 +170,21 @@ impl GuiFrontend {
     /// state is handed over exactly once by construction.
     pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
         let config = self.config.clone();
-        let ui = AppUi::new(Package::load(config.ui_package.as_deref())?)?;
+        let ui = AppUi::new(Package::load(config.ui_package.as_deref())?, &config.ui)?;
         let base_worker = config
             .base_worker
             .clone()
             .ok_or("GUI analysis persistence requires the app base worker")?;
+        let mut dispatcher = DispatcherConfig::builder()
+            .name("kithara-analysis-persistence")
+            .build();
+        dispatcher.apply(config.dispatcher.clone());
         let persistence = AnalysisPersistence::new(AnalysisPersistenceConfig::new(
             base_worker,
             config.worker.pools().clone(),
             NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
             Duration::from_secs(u64::from(config.analysis_chunk_seconds.get())),
-            DispatcherConfig::builder()
-                .name("kithara-analysis-persistence")
-                .build(),
+            dispatcher,
             TaskConfig::new(),
         ))?;
 

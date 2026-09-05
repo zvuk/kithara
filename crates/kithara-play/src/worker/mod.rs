@@ -9,7 +9,7 @@ mod track;
 
 pub use core::PlayWorker;
 
-pub use config::PlayWorkerConfig;
+pub use config::{PlayWorkerConfig, PlayWorkerConfigPatch};
 pub use load::{EngineLoad, EngineLoadSnapshot};
 pub(crate) use node::DecoderNode;
 pub use reader::RegisteredAudio;

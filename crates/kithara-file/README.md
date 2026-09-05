@@ -50,7 +50,7 @@ let local = FileConfig::for_src(FileSrc::Local(path))
 let stream = Stream::<File<AppPools>>::new(local).await?;
 ```
 
-`FileConfig<S>` is a [`bon`](https://crates.io/crates/bon) builder. Start with `FileConfig::for_src(src)`, set the required shared asset store with `.store(store)` and its matching region with `.pools(pools)`, then call `.build()`. Both values use the same schema `S`; cloned regions retain one shared hard budget. The same chain accepts non-default settings such as event channel capacity, downloader, cache discriminator, extension hint, and cancel token.
+`FileConfig<S>` is a [`bon`](https://crates.io/crates/bon) builder. Start with `FileConfig::for_src(src)`, set the required shared asset store with `.store(store)` and its matching region with `.pools(pools)`, then call `.build()`. Both values use the same schema `S`; cloned regions retain one shared hard budget. The same chain accepts non-default wiring such as downloader, cache discriminator, and cancel token, plus the streaming knobs — extension hint, event and reader channel capacities, tmp-claim poll interval, look-ahead cap — as setters of their own.
 
 ## Key Types
 

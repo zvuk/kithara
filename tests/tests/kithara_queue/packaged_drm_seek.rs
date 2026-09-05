@@ -11,14 +11,13 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
     queue::{Queue, QueueConfig, QueueControl, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
-    baked,
-    config::AppConfig,
-    pools::{AppPools, build as app_pools},
+    config::{AppConfig, AppDrm},
+    pools::{AppPools, PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64,
@@ -138,7 +137,7 @@ async fn drive_queue_ticks(queue: QueueControl<AppPools>) {
 }
 
 async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
-    let pools = app_pools().expect("build app pool region");
+    let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
@@ -150,7 +149,6 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
         .flush_hub(flush_hub)
-        .layouts(baked::build_baked_asset_layouts())
         .build();
     let worker = PlayWorker::new(
         PlayWorkerConfig::builder(pools)
@@ -159,6 +157,8 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     );
     let session_pools = worker.pools().clone();
     let config = AppConfig::builder()
+        // The fixture serves its own AES-128 keys; no provider claims 127.0.0.1.
+        .drm(AppDrm::new(DomainKeyPolicy::new(Vec::new())))
         .downloader(downloader)
         .shutdown(shutdown)
         .worker(worker.clone())

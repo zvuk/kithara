@@ -2,13 +2,14 @@
 compile_error!("Enable at least one frontend feature: `gui` or `lib-only`");
 
 mod analysis;
-pub mod baked;
+mod baked;
 #[cfg(feature = "gui")]
 mod broadcast;
 pub mod catalog;
 pub mod config;
 pub mod crossfade;
 pub mod deck;
+pub mod document;
 pub mod mix;
 pub mod pools;
 pub mod recording;

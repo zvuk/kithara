@@ -3,7 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event},
-    hls::AbrMode,
+    hls::{AbrMode, HlsConfigPatch},
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
@@ -26,6 +26,12 @@ use kithara_integration_tests::{
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_fixtures::hls::long_plain;
+
+fn hls_look_ahead(bytes: u64) -> HlsConfigPatch {
+    let mut patch = HlsConfigPatch::default();
+    patch.look_ahead_bytes = Some(bytes);
+    patch
+}
 
 /// Playback failing to resume once connectivity returns does not reproduce in
 /// the core: with connectivity restored the engine resumes on its own. This
@@ -211,7 +217,7 @@ async fn resumes_after_outage(
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid HLS URL"))
         .downloader(downloader)
         .initial_abr_mode(AbrMode::manual(0))
-        .look_ahead_bytes(look_ahead_bytes)
+        .hls(hls_look_ahead(look_ahead_bytes))
         .store(store)
         .build();
 

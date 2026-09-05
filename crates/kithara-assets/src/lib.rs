@@ -26,7 +26,7 @@ pub use index::pending_resource::{
     PendingResourceCleanupError, ResourceAttachment, ResourceLease, WriterEpoch, WriterHandle,
     WriterOutcome,
 };
-pub use index::persistence::{FlushHub, FlushPolicy};
+pub use index::persistence::{FlushHub, FlushPolicy, FlushPolicyPatch};
 #[cfg(test)]
 pub(crate) use kithara_bufpool::testing as test_pools;
 pub use layout::{
@@ -38,5 +38,6 @@ pub use resource::{
     RequestIdentity, WriteSide,
 };
 pub use store::{
-    AssetReader, AssetStore, AssetStoreBuilder, AssetWriter, ResourceAcquisition, StorageBackend,
+    AssetReader, AssetStore, AssetStoreBuilder, AssetStoreConfig, AssetStoreConfigPatch,
+    AssetWriter, ResourceAcquisition, StorageBackend,
 };

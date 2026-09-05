@@ -3,7 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event, QueueEvent, TrackId},
-    hls::AbrMode,
+    hls::{AbrMode, HlsConfigPatch},
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
@@ -26,6 +26,12 @@ use kithara_integration_tests::{
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+
+fn hls_look_ahead(bytes: u64) -> HlsConfigPatch {
+    let mut patch = HlsConfigPatch::default();
+    patch.look_ahead_bytes = Some(bytes);
+    patch
+}
 
 /// The ladder the blip lands on. One variant, since playback pins variant 0
 /// below, and 72 s of it: the downloader must still need further segments
@@ -137,7 +143,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
             )
             .downloader(downloader.clone())
             .initial_abr_mode(AbrMode::manual(0))
-            .look_ahead_bytes(LOOK_AHEAD_BYTES)
+            .hls(hls_look_ahead(LOOK_AHEAD_BYTES))
             .store(store.clone())
             .build(),
         )))

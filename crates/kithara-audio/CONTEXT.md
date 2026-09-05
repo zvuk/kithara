@@ -315,6 +315,20 @@ a concurrent play-then-seek is applied by the post-construction seek path — so
 `VariantChange` here is a stream-layer state bug. Pinned by
 `tests/tests/kithara_hls/probe_not_ready_at_creation.rs`.
 
+## Configuration document
+
+`AudioConfig<T, B>` is this crate's one configuration struct — tunables and
+per-call wiring together — and `#[derive(Patch)]` generates `AudioConfigPatch`
+beside it, what a document's `audio:` section may say. Two knobs travel:
+`preload_chunks` and `audio_buffer_chunks`.
+
+`host_sample_rate`, `block_on_underrun` and `consumer_wake_mode` are skipped, so
+naming one is refused rather than silently overwritten: every player-managed
+resource writes all three from the host's measured capability, and a document
+value would lose to the first host that disagrees. `kithara-play`'s
+`ResourceConfig` carries the patch rather than a built `AudioConfig`, because no
+`AudioConfig` can exist before a track does.
+
 ## Prepared producer seam
 
 `Audio::prepare` returns the reader plus a still-concrete decoded source and

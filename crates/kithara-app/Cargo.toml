@@ -53,6 +53,7 @@ stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 [dependencies]
 kithara = { workspace = true, default-features = false, features = ["analysis", "file", "hls", "queue", "resample-rubato", "worker"] }
 kithara-assets = { workspace = true }
+kithara-macros = { workspace = true }
 kithara-record = { workspace = true }
 kithara-test-utils = { workspace = true }
 
@@ -74,10 +75,13 @@ bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }
 derive_more = { workspace = true }
+humantime-serde = { workspace = true }
 iced = { workspace = true, optional = true }
 num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }
+serde = { workspace = true }
+serde_yaml_ng = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -102,7 +106,6 @@ kithara = { workspace = true, default-features = false, features = ["fdk-aac"] }
 kithara = { workspace = true, default-features = false, features = ["apple", "client-wreq"] }
 
 [build-dependencies]
-serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
 [dev-dependencies]

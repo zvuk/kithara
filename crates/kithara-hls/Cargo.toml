@@ -48,6 +48,7 @@ kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true, features = ["drm", "hls"] }
+kithara-macros = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
@@ -64,6 +65,7 @@ derive_more = { workspace = true }
 fieldwork = { workspace = true }
 futures = { workspace = true }
 hls_m3u8 = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
@@ -96,6 +98,7 @@ wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
+serde_yaml_ng = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [lints]
