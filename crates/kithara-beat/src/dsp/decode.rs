@@ -1,22 +1,11 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 
-use super::{buffer::collected, frames, period::ACF_STEP};
-struct Consts;
-
-impl Consts {
-    /// Height scale of the interval density: the Gaussian claims about 0.43
-    /// of each state's transition mass, keeping every beat transition soft.
-    const DENSITY_SCALE: f32 = 0.005;
-    const EPSILON: f32 = 1e-6;
-    /// Observations top out below one, so a skipped peak stays payable.
-    const OBSERVED_CEILING: f32 = 0.99;
-    /// How far past the longest period the state space reaches, in standard
-    /// deviations: the longest wait the decoder can express.
-    const STATE_MARGIN: f32 = 3.0;
-    /// The interval density's support, in standard deviations.
-    const SUPPORT: f32 = 4.0;
-}
+use super::{
+    buffer::collected,
+    consts::{DecodeConsts, FramesConsts, PeriodConsts},
+    frames,
+};
 
 /// Beat positions in frames, by Viterbi over a hidden Markov model whose
 /// state counts the frames since the last beat. State 0 is the beat.
@@ -47,7 +36,7 @@ where
     else {
         return Ok((pools.get::<f32>(), f32::NEG_INFINITY));
     };
-    let states = (longest + Consts::STATE_MARGIN * frames::sigma())
+    let states = (longest + DecodeConsts::STATE_MARGIN * frames::sigma())
         .floor()
         .to_usize()
         .unwrap_or(0);
@@ -108,7 +97,7 @@ where
         .filter(|period| *period > 0.0)
         .max_by(f32::total_cmp)
         .unwrap_or(0.0);
-    let states = (longest + Consts::STATE_MARGIN * frames::sigma())
+    let states = (longest + DecodeConsts::STATE_MARGIN * frames::sigma())
         .floor()
         .to_usize()
         .unwrap_or(0);
@@ -122,7 +111,9 @@ where
 /// The estimate measured over the window opening at step `k` applies during
 /// step `k + 1`.
 pub(super) fn estimate_for(frame: usize, estimates: usize) -> usize {
-    (frame / ACF_STEP).saturating_sub(1).min(estimates - 1)
+    (frame / PeriodConsts::ACF_STEP)
+        .saturating_sub(1)
+        .min(estimates - 1)
 }
 
 fn backtrack<S>(
@@ -164,15 +155,15 @@ where
     let peak = curve.iter().copied().fold(0.0f32, f32::max);
     if peak <= 0.0 {
         let mut flat = pools.get_with_len::<f32>(curve.len())?;
-        flat.fill(Consts::EPSILON);
+        flat.fill(DecodeConsts::EPSILON);
         return Ok(flat);
     }
     collected(
         pools,
         curve.len(),
-        curve
-            .iter()
-            .map(|value| (Consts::OBSERVED_CEILING * value / peak).max(Consts::EPSILON)),
+        curve.iter().map(|value| {
+            (DecodeConsts::OBSERVED_CEILING * value / peak).max(DecodeConsts::EPSILON)
+        }),
     )
 }
 
@@ -206,12 +197,13 @@ where
 {
     if period <= 0.0 {
         let mut flat = pools.get_with_len::<f32>(states)?;
-        flat.fill(Consts::EPSILON);
+        flat.fill(DecodeConsts::EPSILON);
         return Ok(flat);
     }
     let sigma = frames::sigma();
-    let support = (Consts::SUPPORT * sigma).ceil();
-    let peak = Consts::DENSITY_SCALE / (frames::SIGMA_SECONDS * std::f32::consts::TAU.sqrt());
+    let support = (DecodeConsts::SUPPORT * sigma).ceil();
+    let peak =
+        DecodeConsts::DENSITY_SCALE / (FramesConsts::SIGMA_SECONDS * std::f32::consts::TAU.sqrt());
     let interval = collected(
         pools,
         states,

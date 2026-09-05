@@ -3,18 +3,9 @@ use kithara_platform::sync::Arc;
 use num_traits::cast::ToPrimitive;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 
-use super::frames::{FRAME, HOP};
+use super::consts::{FramesConsts, NoveltyConsts};
 
-struct Consts;
-
-impl Consts {
-    const HANN_A0: f32 = 0.5;
-    /// Analysis stride, 23.2 ms: the rate the difference is actually
-    /// measured at.
-    const STRIDE: usize = 2 * HOP;
-}
-
-/// Complex spectral difference, one value per [`HOP`].
+/// Complex spectral difference, one value per [`FramesConsts::HOP`].
 pub(crate) struct Novelty<S>
 where
     S: HasPool<f32>,
@@ -40,7 +31,7 @@ where
     S: HasPool<f32>,
 {
     pub(crate) fn new(pools: PoolRegion<S>) -> Result<Self, PoolError> {
-        let fft = RealFftPlanner::<f32>::new().plan_fft_forward(FRAME);
+        let fft = RealFftPlanner::<f32>::new().plan_fft_forward(FramesConsts::FRAME);
         Ok(Self {
             hann: hann_window(&pools)?,
             fft,
@@ -48,19 +39,20 @@ where
         })
     }
 
-    /// The difference is measured every [`Consts::STRIDE`] samples and interpolated
-    /// onto the [`HOP`] grid, the resolution the reference reaches the same
-    /// way. The last window is filled out with zeros, and the first window
-    /// that needs that is the last.
+    /// The difference is measured every [`NoveltyConsts::STRIDE`]
+    /// samples and interpolated onto the [`FramesConsts::HOP`] grid,
+    /// the resolution the reference reaches the same way. The last window
+    /// is filled out with zeros, and the first window that needs that is
+    /// the last.
     pub(crate) fn curve(&self, mono: &[f32]) -> Result<SampleBuffer, PoolError> {
-        if mono.len() < FRAME {
+        if mono.len() < FramesConsts::FRAME {
             return Ok(self.pools.get::<f32>());
         }
-        let frames = (mono.len() - FRAME) / Consts::STRIDE + 2;
+        let frames = (mono.len() - FramesConsts::FRAME) / NoveltyConsts::STRIDE + 2;
         let mut coarse = self.pools.get_with_len::<f32>(frames)?;
         let bins = self.fft.complex_len();
         let mut work = Frames {
-            input: self.pools.get_with_len::<f32>(FRAME)?,
+            input: self.pools.get_with_len::<f32>(FramesConsts::FRAME)?,
             magnitude: self.pools.get_with_len::<f32>(bins)?,
             phase: self.pools.get_with_len::<f32>(bins)?,
             phase_step: self.pools.get_with_len::<f32>(bins)?,
@@ -68,8 +60,8 @@ where
             scratch: self.fft.make_scratch_vec(),
         };
         for (index, slot) in coarse.iter_mut().enumerate() {
-            let at = index * Consts::STRIDE;
-            let end = (at + FRAME).min(mono.len());
+            let at = index * NoveltyConsts::STRIDE;
+            let end = (at + FramesConsts::FRAME).min(mono.len());
             let (signal, padding) = work.input.split_at_mut(end - at);
             signal
                 .iter_mut()
@@ -78,9 +70,9 @@ where
             padding.fill(0.0);
             *slot = work.difference(&self.fft);
         }
-        let mut curve = self
-            .pools
-            .get_with_len::<f32>((coarse.len() - 1) * (Consts::STRIDE / HOP) + 1)?;
+        let mut curve = self.pools.get_with_len::<f32>(
+            (coarse.len() - 1) * (NoveltyConsts::STRIDE / FramesConsts::HOP) + 1,
+        )?;
         for (index, slot) in curve.iter_mut().enumerate() {
             let (whole, half) = (index / 2, index % 2 == 1);
             *slot = if half {
@@ -128,12 +120,12 @@ fn hann_window<S>(pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,
 {
-    let mut hann = pools.get_with_len::<f32>(FRAME)?;
-    let denom = (FRAME - 1).to_f32().unwrap_or(1.0);
+    let mut hann = pools.get_with_len::<f32>(FramesConsts::FRAME)?;
+    let denom = (FramesConsts::FRAME - 1).to_f32().unwrap_or(1.0);
     let scale = std::f32::consts::TAU / denom;
     for (n, sample) in hann.iter_mut().enumerate() {
         let phase = scale * n.to_f32().unwrap_or(0.0);
-        *sample = Consts::HANN_A0.mul_add(-phase.cos(), Consts::HANN_A0);
+        *sample = NoveltyConsts::HANN_A0.mul_add(-phase.cos(), NoveltyConsts::HANN_A0);
     }
     Ok(hann)
 }
@@ -171,7 +163,7 @@ mod tests {
             .collect();
         // The click at zero lands on the first frame, where a peak has no
         // left neighbour to stand above.
-        let first_observable = FRAME.to_f32().unwrap_or(0.0) / frames::RATE;
+        let first_observable = FramesConsts::FRAME.to_f32().unwrap_or(0.0) / FramesConsts::RATE;
         let expected: Vec<f32> = clicks::positions(4.0, 0.5)
             .into_iter()
             .filter(|at| *at >= first_observable)

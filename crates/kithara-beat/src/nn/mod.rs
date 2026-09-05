@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod consts;
 mod inference;
 mod mel;
 #[cfg(any(

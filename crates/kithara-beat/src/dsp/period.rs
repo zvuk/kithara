@@ -1,77 +1,44 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 
-use super::buffer::collected;
-
-/// Periodicity window, 512 detection-function frames (5.94 s).
-pub(crate) const ACF_FRAME: usize = 512;
-/// One beat-period estimate every 128 frames (1.49 s), a 75% overlap.
-pub(crate) const ACF_STEP: usize = 128;
-struct Consts;
-
-impl Consts {
-    /// Tracked-period band, 28..=108 lags (47.9..184.6 BPM): estimates only
-    /// move inside it, so a hypothesis outside can win a single frame but
-    /// never the path.
-    const BAND: std::ops::RangeInclusive<usize> = 27..=107;
-    /// Comb elements each hypothesis is scored over.
-    const COMB_HARMONICS: usize = 4;
-    /// Hypothesis `i` is a period of `i + 1` lags; one per possible lag up
-    /// to the estimate spacing.
-    const HYPOTHESES: usize = ACF_STEP;
-    /// Widest comb element reaches 3 lags below its harmonic, and the top
-    /// hypothesis is where its widest element still reads inside the window.
-    const PERIOD_INDEX: std::ops::RangeInclusive<usize> = (Self::COMB_HARMONICS - 1)
-        ..=((ACF_FRAME - (Self::COMB_HARMONICS - 1)) / Self::COMB_HARMONICS - 1);
-    /// Rayleigh mode in lags: a 120 BPM preference at the detection rate.
-    const RAYLEIGH_LAG: f32 = 43.0;
-    /// Adaptive-threshold half window, 0.1 s of detection frames.
-    const SMOOTH_HALF: usize = 8;
-    /// Between-estimate spread of the period, in lags.
-    const TRANSITION_SIGMA: f32 = 8.0;
-    /// The Gaussian transition's support, in lags.
-    const TRANSITION_SUPPORT: f32 = 32.0;
-    /// Hypotheses below 25 lags sit above 208 BPM and are outside the
-    /// searched tempo range.
-    const SEARCH_MIN_INDEX: usize = 24;
-}
+use super::{buffer::collected, consts::PeriodConsts};
 
 fn lag_of(hypothesis: usize) -> f32 {
     (hypothesis + 1).to_f32().unwrap_or(0.0)
 }
 
-/// Beat period in whole frames, one per [`ACF_STEP`]. Empty when the curve
-/// is shorter than one periodicity window.
+/// Beat period in whole frames, one per [`PeriodConsts::ACF_STEP`].
+/// Empty when the curve is shorter than one periodicity window.
 pub(crate) fn periods<S>(curve: &[f32], pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,
 {
-    if curve.len() < ACF_FRAME {
+    if curve.len() < PeriodConsts::ACF_FRAME {
         return Ok(pools.get::<f32>());
     }
     let mut onsets = collected(pools, curve.len(), curve.iter().copied())?;
-    adaptive_threshold(&mut onsets, Consts::SMOOTH_HALF, pools)?;
+    adaptive_threshold(&mut onsets, PeriodConsts::SMOOTH_HALF, pools)?;
 
     let weights = rayleigh_weights(pools)?;
-    let mut window = pools.get_with_len::<f32>(ACF_FRAME)?;
-    let mut autocorrelation = pools.get_with_len::<f32>(ACF_FRAME)?;
+    let mut window = pools.get_with_len::<f32>(PeriodConsts::ACF_FRAME)?;
+    let mut autocorrelation = pools.get_with_len::<f32>(PeriodConsts::ACF_FRAME)?;
     let mut saliences: Vec<SampleBuffer> = Vec::new();
     // The last window is filled out with zeros, and the first window that
     // needs that is the last.
     let mut start = 0;
     loop {
-        let end = (start + ACF_FRAME).min(onsets.len());
+        let end = (start + PeriodConsts::ACF_FRAME).min(onsets.len());
         window.fill(0.0);
         window[..end - start].copy_from_slice(&onsets[start..end]);
         correlate(&window, &mut autocorrelation);
         let mut salience = comb(&autocorrelation, &weights, pools)?;
-        adaptive_threshold(&mut salience, Consts::SMOOTH_HALF, pools)?;
-        salience[..Consts::SEARCH_MIN_INDEX].fill(0.0);
+        adaptive_threshold(&mut salience, PeriodConsts::SMOOTH_HALF, pools)?;
+        salience[..PeriodConsts::SEARCH_MIN_INDEX].fill(0.0);
         saliences.push(salience);
-        if start + ACF_FRAME > onsets.len() {
+        if start + PeriodConsts::ACF_FRAME > onsets.len() {
             break;
         }
-        start += ACF_STEP;
+        start += PeriodConsts::ACF_STEP;
     }
     let hypotheses = track(&saliences, &weights, pools)?;
     collected(
@@ -125,8 +92,8 @@ fn track<S>(
 where
     S: HasPool<f32>,
 {
-    let lags = Consts::HYPOTHESES;
-    let variance = 2.0 * Consts::TRANSITION_SIGMA * Consts::TRANSITION_SIGMA;
+    let lags = PeriodConsts::HYPOTHESES;
+    let variance = 2.0 * PeriodConsts::TRANSITION_SIGMA * PeriodConsts::TRANSITION_SIGMA;
     let mut costs = collected(
         pools,
         lags,
@@ -145,11 +112,11 @@ where
     for (step, row) in saliences.iter().enumerate().skip(1) {
         let mut next = pools.get_with_len::<f32>(lags)?;
         next.fill(f32::NEG_INFINITY);
-        for index in Consts::BAND {
+        for index in PeriodConsts::BAND {
             let mut best = (0usize, f32::NEG_INFINITY);
-            for from in Consts::BAND {
+            for from in PeriodConsts::BAND {
                 let gap = index.to_f32().unwrap_or(0.0) - from.to_f32().unwrap_or(0.0);
-                if gap.abs() > Consts::TRANSITION_SUPPORT {
+                if gap.abs() > PeriodConsts::TRANSITION_SUPPORT {
                     continue;
                 }
                 let score = costs[from] - gap * gap / variance;
@@ -204,11 +171,11 @@ fn comb<S>(
 where
     S: HasPool<f32>,
 {
-    let mut out = pools.get_with_len::<f32>(Consts::HYPOTHESES)?;
-    for harmonic in 1..=Consts::COMB_HARMONICS {
+    let mut out = pools.get_with_len::<f32>(PeriodConsts::HYPOTHESES)?;
+    for harmonic in 1..=PeriodConsts::COMB_HARMONICS {
         let width = (2 * harmonic - 1).to_f32().unwrap_or(1.0);
         for offset in 0..(2 * harmonic - 1) {
-            for index in Consts::PERIOD_INDEX {
+            for index in PeriodConsts::PERIOD_INDEX {
                 let at = (index + 1) * harmonic - harmonic + offset;
                 out[index] += weights[index] * autocorrelation[at] / width;
             }
@@ -221,11 +188,11 @@ fn rayleigh_weights<S>(pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,
 {
-    let variance = Consts::RAYLEIGH_LAG * Consts::RAYLEIGH_LAG;
+    let variance = PeriodConsts::RAYLEIGH_LAG * PeriodConsts::RAYLEIGH_LAG;
     collected(
         pools,
-        Consts::HYPOTHESES,
-        (0..Consts::HYPOTHESES).map(|index| {
+        PeriodConsts::HYPOTHESES,
+        (0..PeriodConsts::HYPOTHESES).map(|index| {
             let lag = lag_of(index);
             lag / variance * (-lag * lag / (2.0 * variance)).exp()
         }),
@@ -316,7 +283,7 @@ mod tests {
         let reported = periods(&curve, &pools).expect("the estimates fit the region");
         assert!(!reported.is_empty(), "20 s of audio yields estimates");
 
-        let range = 1.0..=lag_of(Consts::HYPOTHESES - 1);
+        let range = 1.0..=lag_of(PeriodConsts::HYPOTHESES - 1);
         for &period in reported.iter() {
             assert!(
                 period == 0.0 || range.contains(&period),

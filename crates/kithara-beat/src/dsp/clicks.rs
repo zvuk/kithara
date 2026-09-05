@@ -1,6 +1,6 @@
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
-use super::frames::RATE;
+use super::consts::FramesConsts;
 
 const TEST_DECAY: f32 = 400.0;
 const TEST_BURST_SECONDS: f32 = 0.01;
@@ -10,7 +10,7 @@ pub(crate) fn silence(seconds: f32) -> Vec<f32> {
 }
 
 fn samples(seconds: f32) -> usize {
-    (seconds * RATE).as_()
+    (seconds * FramesConsts::RATE).as_()
 }
 
 pub(crate) fn track(seconds: f32, period_seconds: f32) -> Vec<f32> {
@@ -19,7 +19,7 @@ pub(crate) fn track(seconds: f32, period_seconds: f32) -> Vec<f32> {
     let burst = samples(TEST_BURST_SECONDS);
     for at in (0..pcm.len()).step_by(step.max(1)) {
         for (n, sample) in pcm[at..].iter_mut().take(burst).enumerate() {
-            let t = n.to_f32().unwrap_or(0.0) / RATE;
+            let t = n.to_f32().unwrap_or(0.0) / FramesConsts::RATE;
             *sample = (-TEST_DECAY * t).exp();
         }
     }

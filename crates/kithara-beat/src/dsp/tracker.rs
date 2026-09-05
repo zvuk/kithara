@@ -1,11 +1,8 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use num_traits::cast::ToPrimitive;
 
-use super::{decode, frames, novelty::Novelty, period};
+use super::{consts::TrackerConsts, decode, frames, novelty::Novelty, period};
 use crate::mark::{BeatMark, RawBeats};
-
-/// A mark is never a certainty, and never nothing.
-const CONFIDENCE_BOUNDS: (f32, f32) = (0.001, 0.999);
 
 /// Signal-processing beat detector: novelty curve, comb-filtered period,
 /// then beats decoded over inter-beat intervals. No model data, no network.
@@ -74,7 +71,10 @@ fn confidence(curve: &[f32], at: f32, mean: f32) -> f32 {
         .and_then(|index| curve.get(index))
         .copied()
         .unwrap_or(0.0);
-    (1.0 / (1.0 + (-(value - mean) / mean).exp())).clamp(CONFIDENCE_BOUNDS.0, CONFIDENCE_BOUNDS.1)
+    (1.0 / (1.0 + (-(value - mean) / mean).exp())).clamp(
+        TrackerConsts::CONFIDENCE_BOUNDS.0,
+        TrackerConsts::CONFIDENCE_BOUNDS.1,
+    )
 }
 
 #[cfg(test)]
