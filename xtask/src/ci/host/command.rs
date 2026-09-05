@@ -1,7 +1,8 @@
-use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
+use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, thread, time::Duration};
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use tracing::error;
 
 use super::{
     runners::RunnerManager,
@@ -117,16 +118,60 @@ pub(crate) fn run(args: &HostArgs) -> Result<()> {
             })
         }
         HostCommand::Preflight => HostStorage::new(&config, &process)?.preflight(),
-        HostCommand::Cleanup => HostStorage::new(&config, &process)?.cleanup(),
+        HostCommand::Cleanup => {
+            let deadline = config.host.cleanup_deadline();
+            end_the_process_after(deadline, move || {
+                error!(
+                    deadline_seconds = deadline.as_secs(),
+                    "cleanup pass outlived its deadline; ending it so the next one can start"
+                );
+                std::process::exit(1);
+            });
+            HostStorage::new(&config, &process)?.cleanup()
+        }
         HostCommand::Health => HostStorage::new(&config, &process)?.health(),
     }
 }
 
+/// Ends the process once the pass outlives `limit`, from a thread the pass
+/// cannot block.
+///
+/// The cleanup agent on this host hung for over a day inside `opendir` on a
+/// volume that had stopped answering, having done no work. `launchd` starts no
+/// second instance while the first is alive, so `StartInterval` stopped meaning
+/// anything and cleanup was simply gone with nothing saying so. A check between
+/// steps could not have ended it: the thread never reached the next step.
+fn end_the_process_after(limit: Duration, expire: impl FnOnce() + Send + 'static) {
+    thread::spawn(move || {
+        thread::sleep(limit);
+        expire();
+    });
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{sync::mpsc, time::Duration};
+
     use clap::Parser;
 
+    use super::*;
     use crate::Cli;
+
+    /// The pass this replaces a between-steps check for: the cleanup agent on
+    /// this host hung for over a day inside `opendir` on a volume that had
+    /// stopped answering. A thread that never reaches its next step cannot be
+    /// ended by a check placed between steps, so the deadline has to fire from
+    /// somewhere the pass does not touch.
+    #[test]
+    fn the_deadline_fires_while_the_pass_is_parked() {
+        let (expired, waiting) = mpsc::channel();
+
+        end_the_process_after(Duration::from_millis(10), move || drop(expired.send(())));
+
+        waiting
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the deadline never fired");
+    }
 
     fn parse(command: &[&str]) -> Result<Cli, clap::Error> {
         let mut argv = vec![

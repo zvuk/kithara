@@ -2,6 +2,7 @@ use std::{
     error::Error,
     fmt, fs,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -37,6 +38,11 @@ pub(crate) struct CiHost {
     pub(crate) cache_root_windows: PathBuf,
     pub(crate) ci_uid: u32,
     pub(crate) ci_user: String,
+    /// How long one cleanup pass may run before it is treated as wedged.
+    /// Defaulted: installed profiles predate it, and refusing to load would
+    /// kill the cleanup on every host that already has one.
+    #[serde(default = "default_cleanup_deadline_seconds")]
+    pub(crate) cleanup_deadline_seconds: u64,
     pub(crate) macos_guest_shared_root: PathBuf,
     pub(crate) macos_guest_user: String,
     /// Locally built macOS VM bundle cloned for every job.
@@ -129,6 +135,9 @@ impl CiHost {
         if self.build_cache_size.trim().is_empty() {
             bail!("CI host profile build_cache_size must not be empty");
         }
+        if self.cleanup_deadline_seconds == 0 {
+            bail!("CI host profile cleanup_deadline_seconds must be positive");
+        }
         self.build_cache_budget_bytes()?;
         if self.soft_cleanup_bytes == 0
             || self.soft_cleanup_bytes >= self.aggressive_cleanup_bytes
@@ -205,6 +214,10 @@ impl CiHost {
     pub(crate) fn build_cache_budget_bytes(&self) -> Result<u64> {
         parse_build_cache_size(&self.build_cache_size)
             .context("CI host profile build_cache_size is invalid")
+    }
+
+    pub(crate) fn cleanup_deadline(&self) -> Duration {
+        Duration::from_secs(self.cleanup_deadline_seconds)
     }
 
     pub(crate) fn sccache_slot_size(&self) -> Result<String> {
@@ -314,6 +327,13 @@ pub(crate) fn default_build_cache_size() -> String {
     "25GB".to_owned()
 }
 
+/// Long enough for a pass that walks hundreds of gigabytes of trees, short
+/// enough that a wedged one costs a handful of `StartInterval` ticks rather
+/// than the day this host lost to one.
+pub(crate) fn default_cleanup_deadline_seconds() -> u64 {
+    30 * 60
+}
+
 pub(crate) fn parse_build_cache_size(value: &str) -> Result<u64, BuildCacheSizeError> {
     const BYTES_PER_GIGABYTE: u64 = 1_000_000_000;
 
@@ -421,6 +441,38 @@ mod tests {
             CiHost::load(&path).unwrap().build_cache_size,
             default_build_cache_size()
         );
+    }
+
+    /// A deadline every installed profile predates, so refusing to load
+    /// without it would take cleanup down on the hosts it was written for.
+    #[test]
+    fn ci_host_load_accepts_a_profile_without_a_cleanup_deadline() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        let host = super::super::fixture().host;
+        host.write(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let without: String = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("cleanup_deadline_seconds"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        fs::write(&path, without).unwrap();
+
+        assert_eq!(
+            CiHost::load(&path).unwrap().cleanup_deadline_seconds,
+            default_cleanup_deadline_seconds()
+        );
+    }
+
+    /// A deadline of zero arms a watchdog that fires before the pass starts,
+    /// so the host would never finish a cleanup again.
+    #[test]
+    fn ci_host_rejects_a_cleanup_deadline_of_zero() {
+        let mut host = super::super::fixture().host;
+        host.cleanup_deadline_seconds = 0;
+
+        assert!(host.validate().is_err());
     }
 
     /// Every installed profile predates the guest, and a mac that serves no

@@ -32,6 +32,12 @@ stages:
 # instead by keeping the build directory between jobs.
 variables:
   CARGO_INCREMENTAL: "0"
+  # `GIT_CONFIG_COUNT` below is the git binary's protocol, which libgit2
+  # does not read: Cargo's own fetch stayed on the stalling version and
+  # spent twenty-five minutes listing the `boringssl` submodule's refs
+  # before `deps:deny` ran out its timeout. Fetching through the binary
+  # leaves one HTTP version for both.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   # GitHub's HTTP/2 ref listing stalls in the Linux runner.
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: http.version

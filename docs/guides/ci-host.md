@@ -137,7 +137,13 @@ Workspaces, VM overlays, logs and whole inactive cache namespaces are pruned;
 individual Cargo, Gradle and sccache files are never deleted in place: jobs hold
 a cache lease, sccache its own LRU limit. No `diskutil apfs` verb accepts
 `-quota` after creation, so the quota cannot be raised and cleanup is the whole
-answer. What its sweeps cannot show:
+answer.
+
+`build_cache_size` caps one cache and cannot see whether the volume has room:
+two checkouts each under a 100 GB cap held 183 GB between them while every pass
+reported nothing freed and jobs were already refused. Under `Aggressive` or
+`Reject` the pass also reclaims what the volume is short of the soft floor,
+evicting past the cap. What its sweeps cannot show:
 
 - The Linux guest's `/var/lib/docker` data disk is not mounted `discard` as its
   root is, so deleted layers stay allocated in a sparse file this volume pays
@@ -164,6 +170,13 @@ Health and cleanup run through launchd, and directly as `ci host health` /
 restarted forever, so health checks the process, not the loaded service: a
 missing `colima` or `gitlab-runner` looks like nothing from outside, its jobs
 sitting `pending` while the pipeline reads as hung.
+
+launchd starts no second instance while the first is alive, so a wedged pass
+silences `StartInterval` outright: one hung for over a day inside `opendir` on a
+volume that had stopped answering, and nothing said so. A watchdog thread ends
+the process at `cleanup_deadline_seconds`, thirty minutes by default, so the
+next tick gets a machine that can try again. It cannot be a check between steps,
+because such a pass never reaches the next step.
 
 ## GitLab project settings
 

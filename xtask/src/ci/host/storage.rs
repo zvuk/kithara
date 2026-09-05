@@ -55,8 +55,10 @@ pub(super) struct HostStorage<'a> {
     scratch_root: PathBuf,
     config: &'a CiConfig,
     process: &'a Process,
+    /// What the volume reports as free, so a test states one world rather than
+    /// a pressure and a free-space reading that can contradict each other.
     #[cfg(test)]
-    pressure_sequence: RefCell<VecDeque<Pressure>>,
+    available_sequence: RefCell<VecDeque<u64>>,
 }
 
 struct Agents;
@@ -165,7 +167,7 @@ impl<'a> HostStorage<'a> {
             config,
             process,
             #[cfg(test)]
-            pressure_sequence: RefCell::new(VecDeque::new()),
+            available_sequence: RefCell::new(VecDeque::new()),
         })
     }
 
@@ -181,22 +183,22 @@ impl<'a> HostStorage<'a> {
             build_root,
             config,
             process,
-            pressure_sequence: RefCell::new(VecDeque::new()),
+            available_sequence: RefCell::new(VecDeque::new()),
         })
     }
 
     #[cfg(test)]
-    fn set_pressure_sequence(&mut self, sequence: impl IntoIterator<Item = Pressure>) {
-        self.pressure_sequence = RefCell::new(sequence.into_iter().collect());
+    fn set_available_sequence(&mut self, sequence: impl IntoIterator<Item = u64>) {
+        self.available_sequence = RefCell::new(sequence.into_iter().collect());
     }
 
     pub(super) fn preflight(&self) -> Result<()> {
         let free = self.free_bytes()?;
         let (pressure, volume) = self.worst_pressure()?;
         match pressure {
-            Pressure::Reject => bail!("{} is full; new jobs stop here", volume.display()),
+            Pressure::Reject => bail!("{} is full; new jobs stop here", volume.path.display()),
             Pressure::Soft | Pressure::Aggressive => {
-                warn!(volume = %volume.display(), ?pressure, "CI volume is under pressure");
+                warn!(volume = %volume.path.display(), ?pressure, "CI volume is under pressure");
             }
             Pressure::Normal => {}
         }
@@ -219,14 +221,18 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn cleanup(&self) -> Result<()> {
-        let initial = self.free_bytes()?;
         // The worst single volume, not the sum: adding a second volume's bytes
         // to the first and comparing that against thresholds calibrated for the
         // first reads every machine with a guest volume as full, and the branch
         // it reaches for throws away the compiler caches that were never the
         // problem. `preflight` already decides this way.
+        //
+        // Free space is read off that same volume rather than measured again:
+        // the volume with the worst pressure is the one with the least left, so
+        // a second reading can only disagree with the verdict it annotates.
         let (pressure, volume) = self.worst_pressure()?;
-        info!(free_bytes = initial, ?pressure, volume = %volume.display(), "cleanup started");
+        let initial = volume.available;
+        info!(free_bytes = initial, ?pressure, volume = %volume.path.display(), "cleanup started");
 
         self.prune_host_trees("workspaces/tmp", Self::DAY)?;
         self.prune_scratch_trees(Self::DAY)?;
@@ -248,7 +254,7 @@ impl<'a> HostStorage<'a> {
         // Cargo targets are the largest reproducible caches and already have a
         // bounded owner. Re-read pressure after enforcing that budget so a
         // successful trim does not throw away review compiler artifacts too.
-        let cache_pressure = self.worst_pressure()?.0;
+        let (cache_pressure, cache_volume) = self.worst_pressure()?;
         match cache_pressure {
             Pressure::Soft => {
                 self.prune_host_trees("cache/quarantine", 7 * Self::DAY)?;
@@ -258,6 +264,10 @@ impl<'a> HostStorage<'a> {
                 self.prune_docker_cache("720h");
             }
             Pressure::Aggressive | Pressure::Reject => {
+                build_cache::reclaim_at_least(
+                    &target_dirs,
+                    self.shortfall_to_the_floor(&cache_volume),
+                )?;
                 self.prune_host_trees("cache/quarantine", Duration::ZERO)?;
                 self.prune_host_trees("cache/review", Duration::ZERO)?;
                 self.prune_host_trees("cache/bootstrap/quarantine", Duration::ZERO)?;
@@ -280,22 +290,22 @@ impl<'a> HostStorage<'a> {
         // the drift reach refusal five times.
         self.trim_linux_guest();
 
-        let (mut final_pressure, _) = self.worst_pressure()?;
+        let (mut final_pressure, mut final_volume) = self.worst_pressure()?;
         if final_pressure == Pressure::Reject {
             // The Linux guest has already been trimmed, so what remains is
             // Docker state younger than the prune window. Recycling reaches
             // that state at the cost of a cold image build, which is reserved
             // for the point where new jobs are already being refused.
             self.recycle_linux_guest();
-            final_pressure = self.worst_pressure()?.0;
+            (final_pressure, final_volume) = self.worst_pressure()?;
         }
         if final_pressure == Pressure::Reject {
             self.prune_host_trees("cache/trusted", Duration::ZERO)?;
             self.prune_host_trees("cache/bootstrap/trusted", Duration::ZERO)?;
             self.prune_retired_caches(Duration::ZERO)?;
-            final_pressure = self.worst_pressure()?.0;
+            (final_pressure, final_volume) = self.worst_pressure()?;
         }
-        let free = self.free_bytes()?;
+        let free = final_volume.available;
         info!(
             free_bytes = free,
             freed_bytes = free.saturating_sub(initial),
@@ -335,7 +345,7 @@ impl<'a> HostStorage<'a> {
                 "cleanup left {} at {final_pressure:?} with {free} bytes free, unchanged from \
                  {pressure:?}: every step this owns is already at its floor, so the space is held \
                  by {}",
-                volume.display(),
+                volume.path.display(),
                 name_holders(&holders)
             );
         }
@@ -376,7 +386,7 @@ impl<'a> HostStorage<'a> {
             .write_all(b"\n")
             .context("terminating host health JSON")?;
         if pressure == Pressure::Reject {
-            bail!("{} is above the new-job threshold", worst.display());
+            bail!("{} is above the new-job threshold", worst.path.display());
         }
         if !down.is_empty() {
             bail!("CI agents are not running: {}", down.join(", "));
@@ -450,17 +460,23 @@ impl<'a> HostStorage<'a> {
     ///
     /// Summing them would let a roomy volume hide a full one, which is the
     /// failure this split exists to prevent.
-    fn worst_pressure(&self) -> Result<(Pressure, PathBuf)> {
+    fn worst_pressure(&self) -> Result<(Pressure, Volume)> {
         #[cfg(test)]
-        if let Some(pressure) = self.pressure_sequence.borrow_mut().pop_front() {
-            return Ok((pressure, self.host_root.clone()));
+        if let Some(available) = self.available_sequence.borrow_mut().pop_front() {
+            let volume = Volume {
+                path: self.host_root.clone(),
+                total: self.config.host.quota_bytes,
+                available,
+            };
+            return Ok((self.pressure_of(&volume), volume));
         }
-        let volumes = self.volumes()?;
-        let mut worst = (Pressure::Normal, self.host_root.clone());
+        let mut volumes = self.volumes()?.into_iter();
+        let first = volumes.next().context("no CI volume to measure")?;
+        let mut worst = (self.pressure_of(&first), first);
         for volume in volumes {
             let pressure = self.pressure_of(&volume);
             if pressure > worst.0 {
-                worst = (pressure, volume.path);
+                worst = (pressure, volume);
             }
         }
         Ok(worst)
@@ -491,6 +507,18 @@ impl<'a> HostStorage<'a> {
     /// The free space a used-bytes threshold was asking for.
     fn floor(&self, threshold: u64) -> u64 {
         self.config.host.quota_bytes.saturating_sub(threshold)
+    }
+
+    /// What a volume is short of the floor the soft threshold asks for.
+    ///
+    /// The build cache budget is a ceiling, and a ceiling answers a question no
+    /// job asks: it caps one cache without knowing whether the volume has room.
+    /// Two checkouts holding 88 and 95 GB were each under the 100 GB ceiling, so
+    /// every hourly pass reported `bytes_freed=0` while the volume they share
+    /// sat below the floor and jobs were already being refused for space.
+    fn shortfall_to_the_floor(&self, volume: &Volume) -> u64 {
+        self.floor(self.config.host.soft_cleanup_bytes)
+            .saturating_sub(volume.available)
     }
 
     /// Cache namespaces nothing writes to any more, once they have gone quiet
@@ -1190,6 +1218,13 @@ mod tests {
         config
     }
 
+    /// Free bytes that read as each rung under `config`, whose 240/270/285
+    /// used-byte thresholds against a 300 quota keep 60/30/15 free.
+    mod free {
+        pub(super) const NORMAL: u64 = 100;
+        pub(super) const AGGRESSIVE: u64 = 20;
+    }
+
     #[test]
     fn pressure_thresholds_are_exact() {
         // 300 GB quota with 240/270/285 used-byte thresholds keeps 60/30/15
@@ -1463,7 +1498,7 @@ mod tests {
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
+        storage.set_available_sequence([free::NORMAL, free::NORMAL, free::NORMAL]);
 
         storage.cleanup().unwrap();
 
@@ -1482,7 +1517,7 @@ mod tests {
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
+        storage.set_available_sequence([free::NORMAL, free::NORMAL, free::NORMAL]);
 
         storage.cleanup().unwrap();
 
@@ -1551,7 +1586,7 @@ mod tests {
             .unwrap();
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
+        storage.set_available_sequence([free::NORMAL, free::NORMAL, free::NORMAL]);
 
         storage.cleanup().unwrap();
 
@@ -1595,11 +1630,7 @@ mod tests {
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_pressure_sequence([
-            Pressure::Aggressive,
-            Pressure::Aggressive,
-            Pressure::Normal,
-        ]);
+        storage.set_available_sequence([free::AGGRESSIVE, free::AGGRESSIVE, free::NORMAL]);
 
         storage.cleanup().unwrap();
 
@@ -1617,11 +1648,38 @@ mod tests {
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_pressure_sequence([Pressure::Aggressive, Pressure::Normal, Pressure::Normal]);
+        storage.set_available_sequence([free::AGGRESSIVE, free::NORMAL, free::NORMAL]);
 
         storage.cleanup().unwrap();
 
         assert!(review.is_dir());
+    }
+
+    /// The hourly pass this host ran for a day: two checkouts held 88 and 95 GB
+    /// under a 100 GB ceiling, so enforcing the budget freed nothing on every
+    /// pass while the volume they share sat below the floor and jobs were
+    /// already being refused for space.
+    ///
+    /// A ceiling answers "is any one cache too big"; the volume asks "is there
+    /// room", and only the second question has a job waiting on it.
+    #[test]
+    fn a_volume_under_the_floor_reclaims_past_the_build_cache_ceiling() {
+        let directory = tempfile::tempdir().unwrap();
+        let slot = directory.path().join("cache/target-slots/slot-0");
+        fs::create_dir_all(slot.join("debug")).unwrap();
+        fs::write(slot.join("debug/artifact.bin"), vec![0_u8; 200]).unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([free::AGGRESSIVE, free::AGGRESSIVE, free::NORMAL]);
+
+        storage.cleanup().unwrap();
+
+        assert!(
+            !slot.join("debug").exists(),
+            "the pass stopped at the build cache ceiling the caches were already under"
+        );
     }
 
     /// The hourly pass this host actually ran: in at `Aggressive`, every step
@@ -1634,11 +1692,7 @@ mod tests {
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_pressure_sequence([
-            Pressure::Aggressive,
-            Pressure::Aggressive,
-            Pressure::Aggressive,
-        ]);
+        storage.set_available_sequence([free::AGGRESSIVE, free::AGGRESSIVE, free::AGGRESSIVE]);
 
         assert!(storage.cleanup().is_err());
     }
@@ -1661,11 +1715,7 @@ mod tests {
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_pressure_sequence([
-            Pressure::Aggressive,
-            Pressure::Aggressive,
-            Pressure::Aggressive,
-        ]);
+        storage.set_available_sequence([free::AGGRESSIVE, free::AGGRESSIVE, free::AGGRESSIVE]);
 
         let error = storage.cleanup().unwrap_err().to_string();
 
@@ -1688,11 +1738,7 @@ mod tests {
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_pressure_sequence([
-            Pressure::Aggressive,
-            Pressure::Aggressive,
-            Pressure::Normal,
-        ]);
+        storage.set_available_sequence([free::AGGRESSIVE, free::AGGRESSIVE, free::NORMAL]);
 
         storage.cleanup().unwrap();
 
@@ -1762,7 +1808,7 @@ mod tests {
         tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
+        storage.set_available_sequence([free::NORMAL, free::NORMAL, free::NORMAL]);
 
         storage.cleanup().unwrap();
 

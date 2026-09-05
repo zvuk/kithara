@@ -721,3 +721,32 @@ fn every_lane_that_names_a_gitlab_pipeline_has_a_job_that_runs_it() {
         );
     }
 }
+
+/// `GIT_CONFIG_COUNT` is the git binary's protocol and libgit2 does not read
+/// it, so pinning the HTTP version alone leaves Cargo's own fetch on the
+/// stalling one: `deps:deny` spent twenty-five minutes listing the `boringssl`
+/// submodule's refs before its job timed out. The two halves are one
+/// workaround and neither carries the other.
+#[test]
+fn cargo_fetches_through_the_git_binary_that_reads_the_pinned_http_version() {
+    let pipeline = yaml(workspace_root().join(".gitlab/ci/pipeline.yml"));
+    let variables = mapping(
+        mapping(&pipeline, "the child pipeline")
+            .get("variables")
+            .expect("child pipeline has variables"),
+        "the child pipeline variables",
+    );
+
+    assert_eq!(
+        variables.get("GIT_CONFIG_KEY_0").and_then(Value::as_str),
+        Some("http.version"),
+        "the pinned HTTP version is what Cargo has to be routed to"
+    );
+    assert_eq!(
+        variables
+            .get("CARGO_NET_GIT_FETCH_WITH_CLI")
+            .and_then(Value::as_str),
+        Some("true"),
+        "the pinned HTTP version reaches Cargo only through the git binary"
+    );
+}
