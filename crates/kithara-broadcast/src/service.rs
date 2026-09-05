@@ -101,12 +101,15 @@ pub struct BroadcastOutput {
 impl BroadcastOutput {
     fn report_drop(&self, dropped: usize) {
         let dropped = u64::try_from(dropped).unwrap_or(u64::MAX);
-        let _ = self
-            .control
-            .dropped
-            .fetch_update(Ordering::Release, Ordering::Relaxed, |total| {
-                Some(total.saturating_add(dropped))
-            });
+        let mut total = self.control.dropped.load(Ordering::Relaxed);
+        while let Err(current) = self.control.dropped.compare_exchange_weak(
+            total,
+            total.saturating_add(dropped),
+            Ordering::Release,
+            Ordering::Relaxed,
+        ) {
+            total = current;
+        }
     }
 }
 

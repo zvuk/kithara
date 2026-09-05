@@ -88,12 +88,12 @@ impl ScalarState {
 }
 
 impl Scalar {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "masonry"))]
     pub(crate) const fn accepts_double_click(&self) -> bool {
         self.reset.is_some()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "masonry"))]
     pub(crate) const fn accepts_wheel(&self) -> bool {
         self.wheel.is_some()
     }

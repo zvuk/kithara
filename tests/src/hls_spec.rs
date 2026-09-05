@@ -565,7 +565,6 @@ impl ResolvedEncryption {
 mod tests {
     use std::{collections::HashMap, num::NonZeroU32};
 
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use kithara::stream::AudioCodec;
 
     use super::*;

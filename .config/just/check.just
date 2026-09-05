@@ -8,7 +8,7 @@ workspace:
 
 # The compiler cache and incremental compilation exclude each other, and a
 # workstation and a CI job want opposite halves of that trade. `xtask` owns the
-# choice; see `kithara-devtools::sccache::clippy_overrides_for`.
+# choice; see `kithara-devtools::sccache::clippy_cleared_for`.
 clippy:
     just _xtask clippy
 

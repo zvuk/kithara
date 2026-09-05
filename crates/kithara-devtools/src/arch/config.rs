@@ -879,6 +879,7 @@ fn default_writer_methods() -> Vec<String> {
         "fetch_max",
         "fetch_min",
         "fetch_update",
+        "try_update",
         "fetch_nand",
         "compare_exchange",
         "compare_exchange_weak",

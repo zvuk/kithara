@@ -43,10 +43,10 @@ fn worth_reporting(in_ci: bool, wrapper: Option<&OsStr>) -> bool {
     in_ci && set(wrapper)
 }
 
-/// What a Clippy run must override to get the caching that suits where it runs,
-/// or nothing when what it inherited already suits it.
-pub(crate) fn clippy_overrides() -> Option<[(&'static str, &'static str); 2]> {
-    clippy_overrides_for(in_ci())
+/// What a Clippy run must drop from its environment to get the caching that
+/// suits where it runs, or nothing when what it inherited already suits it.
+pub(crate) fn clippy_cleared() -> &'static [&'static str] {
+    clippy_cleared_for(in_ci())
 }
 
 /// `sccache` aborts outright rather than fall back when it meets an incremental
@@ -55,7 +55,14 @@ pub(crate) fn clippy_overrides() -> Option<[(&'static str, &'static str); 2]> {
 ///
 /// On a workstation, incremental: the dependencies are already built in the
 /// local target directory, so the cache would serve almost nothing, while
-/// incremental turns a fifteen-second re-check into two.
+/// incremental turns a fifteen-second re-check into two. Dropping the two
+/// variables is what selects it - Cargo already compiles workspace crates
+/// incrementally and registry ones never, so only the blanket
+/// `CARGO_INCREMENTAL=0` the `justfile` exports was suppressing it. Answering
+/// with `1` instead says the same thing to Cargo and one thing more to
+/// everything else: `sccache` reads that variable too, so a C or C++ dependency
+/// reaching it through a `CMake` compiler launcher dies on a Rust flag it never
+/// used.
 ///
 /// In CI, the cache: `sccache` is one content-addressed volume shared by every
 /// runner, so one runner's entry is another's hit, while incremental state is
@@ -65,12 +72,8 @@ pub(crate) fn clippy_overrides() -> Option<[(&'static str, &'static str); 2]> {
 ///
 /// Only `clippy-driver`'s own compilations - the workspace crates - go
 /// uncached either way, which is the part this cannot help.
-const fn clippy_overrides_for(in_ci: bool) -> Option<[(&'static str, &'static str); 2]> {
-    if in_ci {
-        None
-    } else {
-        Some([(WRAPPER, ""), (INCREMENTAL, "1")])
-    }
+const fn clippy_cleared_for(in_ci: bool) -> &'static [&'static str] {
+    if in_ci { &[] } else { &[WRAPPER, INCREMENTAL] }
 }
 
 #[cfg(test)]
@@ -99,14 +102,11 @@ mod tests {
 
     #[test]
     fn a_ci_clippy_run_keeps_the_shared_cache() {
-        assert_eq!(clippy_overrides_for(true), None);
+        assert!(clippy_cleared_for(true).is_empty());
     }
 
     #[test]
     fn a_workstation_clippy_run_trades_the_cache_for_incremental() {
-        let overrides = clippy_overrides_for(false).expect("a workstation overrides both");
-
-        assert!(overrides.contains(&(WRAPPER, "")));
-        assert!(overrides.contains(&(INCREMENTAL, "1")));
+        assert_eq!(clippy_cleared_for(false), [WRAPPER, INCREMENTAL]);
     }
 }

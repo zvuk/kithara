@@ -175,7 +175,7 @@ autolink-frameworks = ["AudioToolbox", "CoreAudio", "AVFoundation", "Security", 
 [workspace.package]
 version = "0.0.1-alpha4"
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.95"
 authors = ["kithara contributors"]
 license = "MIT OR Apache-2.0"
 description = "Networking + decoding building blocks for audio playback (not a full player)"
@@ -369,7 +369,7 @@ realfft = "3.5"
 regex = "1"
 reqwest = { version = "0.13.4", default-features = false }
 ringbuf = "0.5.0"
-rkyv = "0.8.17"
+rkyv = "0.8.18"
 ron = "0.12"
 roxmltree = "0.20"
 # Beat detection NN inference (kithara-beat).

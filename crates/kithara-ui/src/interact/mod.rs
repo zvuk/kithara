@@ -11,7 +11,7 @@ pub(crate) mod recognizers;
 mod text_input;
 
 pub(crate) use cursor::{CursorShape, Hover};
-#[cfg(test)]
+#[cfg(all(test, feature = "masonry"))]
 pub(crate) use input::Gestures;
 pub use input::{Hit, Input, InputMethod, Key, Scroll, ScrollAxis};
 pub use modifiers::Modifiers;

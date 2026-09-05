@@ -1,10 +1,10 @@
-#[cfg(test)]
+#[cfg(all(test, feature = "masonry"))]
 use bitflags::bitflags;
 
 use super::{modifiers::Modifiers, pointer::PointerInput};
 use crate::draw::{Pt, Rect};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "masonry"))]
 bitflags! {
     /// The input vocabulary observed from a mounted control.
     ///
@@ -23,7 +23,7 @@ bitflags! {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "masonry"))]
 impl Gestures {
     /// This set plus one gesture, when the control accepts that gesture.
     pub(crate) const fn with(self, gesture: Self, accepted: bool) -> Self {

@@ -15,7 +15,7 @@ use iced::{
 use kithara_platform::time::Instant;
 use kithara_test_macros as kithara;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "masonry"))]
 use crate::interact::Gestures;
 use crate::{
     atoms::{
@@ -655,7 +655,7 @@ where
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "masonry"))]
     pub(crate) fn gestures(&self) -> Gestures {
         match &self.recognize {
             Recognize::Press | Recognize::Command(_) | Recognize::Index { .. } => Gestures::PRESS,

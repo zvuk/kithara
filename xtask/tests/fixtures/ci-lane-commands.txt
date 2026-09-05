@@ -307,49 +307,49 @@
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / platforms
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / merge-request
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / quarantine
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / main
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / nightly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / weekly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / release
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # apple-safari / branch
   <require os> macos
   <require tools> cargo just
@@ -1492,42 +1492,42 @@
   <require os> linux
   <require tools> cargo just
   just check
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # linux-msrv / platforms
   <require os> linux
   <require tools> cargo just
   just check
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # linux-msrv / merge-request
   <require os> linux
   <require tools> cargo just
   just check
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # linux-msrv / quarantine
   <require os> linux
   <require tools> cargo just
   just check
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # linux-msrv / main
   <require os> linux
   <require tools> cargo just
   just check
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # linux-msrv / nightly
   <require os> linux
   <require tools> cargo just
   just check
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # linux-msrv / weekly
   <require os> linux
   <require tools> cargo just
   just check
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # linux-msrv / release
   <require os> linux
   <require tools> cargo just
   just check
-    RUSTUP_TOOLCHAIN=1.92.0
+    RUSTUP_TOOLCHAIN=1.95.0
 # linux-perf-memory / branch
   <require os> linux
   <require tools> cargo just

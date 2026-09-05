@@ -7,8 +7,8 @@ use crate::{sccache, verdict::ChildFailure};
 /// Run the workspace Clippy gate with the caching that suits where it runs.
 ///
 /// The recipe used to state one caching policy for both, which is one policy too
-/// few: see [`sccache::clippy_overrides`] for why a workstation and a CI job
-/// want opposite halves of a trade they cannot both have.
+/// few: see [`sccache::clippy_cleared`] for why a workstation and a CI job want
+/// opposite halves of a trade they cannot both have.
 ///
 /// # Errors
 ///
@@ -17,10 +17,8 @@ use crate::{sccache, verdict::ChildFailure};
 pub(crate) fn run() -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.args(["clippy", "--workspace", "--", "-D", "warnings"]);
-    if let Some(overrides) = sccache::clippy_overrides() {
-        for (name, value) in overrides {
-            cmd.env(name, value);
-        }
+    for name in sccache::clippy_cleared() {
+        cmd.env_remove(name);
     }
     let status = cmd.status().context("failed to run `cargo clippy`")?;
     if !status.success() {

@@ -92,7 +92,7 @@ fn clippy_command(args: &AuditClippyArgs, ctx: &Ctx, fix: bool) -> Command {
         cmd.arg("--force-warn").arg(format!("clippy::{lint}"));
     }
     cmd.env_remove("RUSTC_WRAPPER")
-        .env("CARGO_INCREMENTAL", "1")
+        .env_remove("CARGO_INCREMENTAL")
         .env("CARGO_TARGET_DIR", ctx.root.join("target-audit-clippy"));
     cmd
 }
@@ -300,10 +300,7 @@ mod tests {
             clippy_command(&args, &ctx, false),
         ] {
             assert_eq!(command_env(&command, "RUSTC_WRAPPER"), Some(None));
-            assert_eq!(
-                command_env(&command, "CARGO_INCREMENTAL"),
-                Some(Some("1".to_owned()))
-            );
+            assert_eq!(command_env(&command, "CARGO_INCREMENTAL"), Some(None));
         }
     }
 

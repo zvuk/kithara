@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "masonry"))]
 use crate::interact::Gestures;
 use crate::interact::{
     CursorShape, Hit, Hover, Outcome, ScrollAxis, TextInputLayout,
@@ -198,7 +198,7 @@ impl Descriptor {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "masonry"))]
     pub(crate) const fn gestures(&self) -> Gestures {
         match self {
             Self::Activation { .. } | Self::Segmented { .. } | Self::Wave { .. } => Gestures::PRESS,

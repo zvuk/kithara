@@ -35,15 +35,23 @@ impl Capacity {
     }
 
     pub(super) fn reserve(capacity: &Arc<Self>) -> Option<Reservation> {
-        capacity
-            .active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                (current < capacity.limit).then_some(current + 1)
-            })
-            .ok()
-            .map(|_| Reservation {
-                capacity: Arc::clone(capacity),
-            })
+        let mut active = capacity.active.load(Ordering::Acquire);
+        while active < capacity.limit {
+            match capacity.active.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Some(Reservation {
+                        capacity: Arc::clone(capacity),
+                    });
+                }
+                Err(current) => active = current,
+            }
+        }
+        None
     }
 }
 

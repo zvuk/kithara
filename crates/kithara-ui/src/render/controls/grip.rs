@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(all(test, feature = "masonry"))]
 use crate::interact::Gestures;
 #[cfg(feature = "masonry")]
 use crate::interact::recognizers::Edge;
@@ -111,7 +111,7 @@ impl Drag {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "masonry"))]
     pub(crate) const fn gestures(self) -> Gestures {
         Gestures::DRAG
             .with(Gestures::DOUBLE_CLICK, self.reset.is_some())

@@ -156,15 +156,23 @@ impl Budget {
     }
 
     fn try_acquire(budget: &Arc<Self>) -> Option<BudgetPermit> {
-        budget
-            .active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-                (active < budget.limit.get()).then_some(active + 1)
-            })
-            .ok()
-            .map(|_| BudgetPermit {
-                budget: Arc::clone(budget),
-            })
+        let mut active = budget.active.load(Ordering::Acquire);
+        while active < budget.limit.get() {
+            match budget.active.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Some(BudgetPermit {
+                        budget: Arc::clone(budget),
+                    });
+                }
+                Err(current) => active = current,
+            }
+        }
+        None
     }
 }
 

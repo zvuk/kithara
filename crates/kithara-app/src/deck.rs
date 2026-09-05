@@ -130,6 +130,7 @@ impl Deck {
         })
     }
 
+    #[cfg(any(test, feature = "gui"))]
     pub(crate) fn cancel_child(&self) -> CancelToken {
         self.cancel.child()
     }

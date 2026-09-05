@@ -149,17 +149,22 @@ impl LiveOutput for RecordingOutput {
             self.overflow();
             return;
         };
-        if self
-            .control
-            .written_frames
-            .fetch_update(Ordering::Release, Ordering::Relaxed, |written| {
-                written.checked_add(frames)
-            })
-            .is_err()
-        {
-            self.control.writing.store(false, Ordering::Release);
-            self.overflow();
-            return;
+        let mut written = self.control.written_frames.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = written.checked_add(frames) else {
+                self.control.writing.store(false, Ordering::Release);
+                self.overflow();
+                return;
+            };
+            match self.control.written_frames.compare_exchange_weak(
+                written,
+                next,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => written = current,
+            }
         }
         self.control.writing.store(false, Ordering::Release);
         self.wake.defer();

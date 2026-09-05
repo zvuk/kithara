@@ -8,7 +8,7 @@ use num_traits::cast::AsPrimitive;
 
 #[cfg(feature = "masonry")]
 use super::masonry::{TableSource, TableState, TreeSource, TreeState};
-#[cfg(test)]
+#[cfg(all(test, feature = "masonry"))]
 use crate::interact::Gestures;
 use crate::{
     atoms::{
@@ -305,7 +305,7 @@ impl HostedControlPlan {
         descriptors
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "masonry"))]
     pub(crate) fn gestures(&self) -> Gestures {
         self.descriptors()
             .iter()
