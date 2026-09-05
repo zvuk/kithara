@@ -45,18 +45,16 @@ fn registry() -> &'static CodecRegistry { CODEC_REGISTRY.get_or_init(CodecRegist
 
 ## Build/codegen/LTO
 
-**Size profile starves DSP autovectorization** (LIVE) - the workspace ships `opt-level = "z"`, which disables loop autovectorization and lowers inline thresholds; with no SIMD crate, autovectorization is the *only* vector path, so the iOS/wasm DSP ships scalar.
+**Size profile starves DSP autovectorization** (PARTLY FIXED) - the workspace ships `opt-level = "z"`, which disables loop autovectorization and lowers inline thresholds; with no SIMD crate, autovectorization is the *only* vector path, so the DSP that stays at `"z"` ships scalar.
 
 ```toml
-# bad: workspace-wide in [profile.release] and [profile.wasm-release]
-opt-level = "z"
-# good: keep "z" for cold orchestration crates, speed-opt the hot DSP crates
-[profile.release.package.kithara-resampler] # + kithara-decode/-stretch/-audio/-beat
+# the override the workspace now carries
+[profile.release.package.signalsmith-stretch]
 opt-level = 3
 ```
 
-Verify kernels vectorize with `cargo-show-asm`. Cargo caveat: a per-package override sets `opt-level` but *not* `lto`/`panic`.
-*tier: hot | detector: manual (Cargo.toml census) | present in kithara (no `[profile.release.package.*]` overrides exist)*
+A per-package override reaches two units, not one: the crate's own codegen, and its build script's `OPT_LEVEL` environment variable. `signalsmith-stretch` compiles its C++ through `cc`, which passes `OPT_LEVEL` straight to the compiler, so the override moves that C++ from `-Oz` to `-O3` as well. Verify kernels vectorize with `cargo-show-asm`. Cargo caveat: a per-package override sets `opt-level` but *not* `lto`/`panic`.
+*tier: hot | detector: manual (Cargo.toml census) | `signalsmith-stretch` is at 3; the pure-Rust DSP (`rubato`, `rustfft`, `symphonia*`, `kithara-audio`/`-decode`/`-resampler`) is still at `"z"` and reaches the wasm bundle, where `web-size` enforces a budget - raising it is a measured change of its own*
 
 **wasm ships scalar** (pairs with the above) - no wasm lane enables `+simd128` and the trunk `wasm-opt` params omit `--enable-simd`.
 

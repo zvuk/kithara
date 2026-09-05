@@ -19,7 +19,21 @@ the change that lands the work, and keep it short.
   crate wearing the MIT badge, two crates naming a dead owner, and a logo no
   published crate page could load.
 
+- Release optimization for the C++ time-stretch. `[profile.release]` sets
+  `opt-level = "z"` workspace-wide, which the audio thread pays for:
+  `signalsmith-stretch` is the one native dependency on the real-time path in a
+  shipped artifact, and its C++ was compiled `-Oz` on both device platforms.
+  A per-package override raises it to 3, which also moves its build script's
+  `OPT_LEVEL`, so the C++ now compiles `-O3`. The TLS and decompression natives
+  (`btls-sys`, `aws-lc-sys`, `zstd-sys`) keep the size setting: no audio thread
+  calls them.
+
 ## Next
+
+- The pure-Rust DSP is still at `"z"`. `rubato`, `rustfft`, `symphonia*`,
+  `kithara-audio`/`-decode`/`-resampler` all reach the wasm bundle, and
+  `web-size` enforces a budget there, so raising them is a measured change with
+  its own before/after numbers rather than a second line in this one.
 
 - Work the comment queue down by hand. `--fix` is exhausted for comments - a
   second run on a clean tree changes nothing - so all 668 are decisions: 497

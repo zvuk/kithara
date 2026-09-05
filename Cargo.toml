@@ -518,6 +518,16 @@ debug = false
 panic = "abort"
 strip = "symbols"
 
+# Size is the right default for the orchestration and network crates and the
+# wrong one for the time-stretch DSP the audio thread runs: `signalsmith-stretch`
+# ships at "z" while the dev profile above gives it 3. The override also sets
+# `OPT_LEVEL` for its build script, so its C++ moves from `-Oz` to `-O3`. The
+# other native dependencies that reach a shipped artifact serve TLS and HTTP
+# decompression (`btls-sys`, `aws-lc-sys`, `zstd-sys`); no audio thread calls
+# them, so they keep the size setting.
+[profile.release.package.signalsmith-stretch]
+opt-level = 3
+
 # Best-of-both-worlds profile for maximum testing speed.
 # Combines release-grade runtime performance (opt-level 3) with fast
 # parallel compilation (codegen-units 16, LTO off).
