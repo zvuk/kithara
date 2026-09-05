@@ -1,8 +1,9 @@
 use kithara_bufpool::{HasPool, PoolRegion};
 use smallvec::smallvec;
 
-use crate::{
+use crate::nn::{
     api::BeatError,
+    consts::Consts,
     runtime::{RtenModel, Tensor},
 };
 
@@ -50,7 +51,7 @@ impl MelExtractor {
                 reason: "mel model missing 'mel_spectrogram' output".into(),
             })?;
 
-        if mel.shape.len() != 3 || mel.shape[0] != 1 || mel.shape[2] != 128 {
+        if mel.shape.len() != 3 || mel.shape[0] != 1 || mel.shape[2] != Consts::MEL_BINS {
             return Err(BeatError::Inference {
                 reason: format!("unexpected mel shape: {:?}", mel.shape),
             });

@@ -3,7 +3,10 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use thiserror::Error;
 
 use crate::{
-    config::BeatConfig, inference::BeatPredictor, mel::MelExtractor, postprocess::PeakPicker,
+    mark::RawBeats,
+    nn::{
+        config::BeatConfig, inference::BeatPredictor, mel::MelExtractor, postprocess::PeakPicker,
+    },
 };
 
 #[derive(Debug, Error)]
@@ -15,26 +18,6 @@ pub enum BeatError {
     Inference { reason: String },
     #[error("buffer allocation failed: {0}")]
     Buffer(#[from] PoolError),
-}
-
-/// One detected beat or downbeat: where it is, and how sure the model was.
-/// Paired rather than kept in parallel vectors, which stages above would only
-/// have to keep in step.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[non_exhaustive]
-pub struct BeatMark {
-    /// Seconds from the start of the analysed audio.
-    pub at: f32,
-    /// Probability the model assigned this peak, in `(0, 1)`.
-    pub confidence: f32,
-}
-
-/// Beat / downbeat marks in seconds, whole-track.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub struct RawBeats {
-    pub beats: Vec<BeatMark>,
-    pub downbeats: Vec<BeatMark>,
 }
 
 /// `beat_this` NN detector: mel → chunked inference → peak picking.

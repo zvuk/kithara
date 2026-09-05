@@ -1,6 +1,8 @@
 use std::fmt;
 
 use bon::Builder;
+#[cfg(feature = "beat-dsp")]
+use kithara_beat::Tempo;
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
 
 struct Consts;
@@ -34,15 +36,30 @@ pub struct BeatAnalysisConfig<B> {
     target_rate: u32,
     #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
     block_frames: usize,
+    /// The tempo the signal detector searches. The network detector has no
+    /// tempo policy and does not read it.
+    #[cfg(feature = "beat-dsp")]
+    #[builder(default)]
+    #[field(get(copy))]
+    tempo: Tempo,
 }
 
 impl<B> BeatAnalysisConfig<B>
 where
     B: ResamplerBackend,
 {
+    /// What a cached analysis must have been produced under to be served back.
+    /// A build with no beat detector has none.
     #[must_use]
     pub fn cache_tag(&self) -> Option<String> {
-        super::nn::tag(self)
+        #[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
+        {
+            Some(crate::model::tag(self))
+        }
+        #[cfg(not(any(feature = "beat-nn", feature = "beat-dsp")))]
+        {
+            None
+        }
     }
 
     fn resampler_backend_name(&self) -> &'static str {
@@ -55,8 +72,8 @@ where
     B: ResamplerBackend,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BeatAnalysisConfig")
-            .field("block_frames", &self.block_frames)
+        let mut out = f.debug_struct("BeatAnalysisConfig");
+        out.field("block_frames", &self.block_frames)
             .field("target_rate", &self.target_rate)
             .field("resampler_quality", &self.resampler_quality)
             .field("resampler_backend", &self.resampler_backend_name())
@@ -65,8 +82,10 @@ where
                 &self.detector_min_window_seconds,
             )
             .field("detector_window_seconds", &self.detector_window_seconds)
-            .field("detector_overlap_seconds", &self.detector_overlap_seconds)
-            .finish()
+            .field("detector_overlap_seconds", &self.detector_overlap_seconds);
+        #[cfg(feature = "beat-dsp")]
+        out.field("tempo", &self.tempo);
+        out.finish()
     }
 }
 
@@ -94,20 +113,46 @@ mod tests {
         );
     }
 
+    /// The signal detector searches the band its config names, so two bands
+    /// are two grids and the cache must not serve one for the other.
+    #[cfg(feature = "beat-dsp")]
+    #[kithara::test(native, flash(false))]
+    fn the_cache_tag_carries_the_tempo_the_detector_searches() {
+        let tag = |tempo| {
+            BeatAnalysisConfig::builder()
+                .resampler_backend(RubatoBackend::default())
+                .tempo(tempo)
+                .build()
+                .cache_tag()
+                .expect("a build with a detector has a cache tag")
+        };
+        let narrowed = kithara_beat::Tempo::new(90.0..=180.0, 120.0).expect("a searchable band");
+
+        assert_ne!(tag(kithara_beat::Tempo::default()), tag(narrowed));
+    }
+
     #[cfg(feature = "beat-nn")]
     #[kithara::test(native, flash(false))]
-    fn cache_tag_invalidates_pre_confidence_results() {
+    fn the_cache_tag_carries_what_decides_the_grid() {
         let tag = BeatAnalysisConfig::<RubatoBackend>::default()
             .cache_tag()
             .expect("beat NN has a cache tag");
 
         assert!(
-            tag.contains(":grid_bpm_from_beats_v2:"),
+            tag.contains(":grid_bpm_from_beats_v4:"),
             "grid semantics must participate in durable-cache identity"
         );
         assert!(
-            !tag.contains(":grid_bpm_from_beats_v1:"),
-            "a grid carrying per-marker confidence is not the grid v1 cached"
+            !tag.contains(":grid_bpm_from_beats_v3:"),
+            "a grid at the level the detector reports is not the grid v3 cached"
+        );
+        assert!(
+            tag.contains(":detector_audio_seamless_v2:"),
+            "how the detector was fed decides the grid, so it must decide the tag"
+        );
+        assert!(
+            !tag.contains(":detector_audio_seamless_v1:"),
+            "a grid built from a track read whole is not the grid v1 cached"
         );
     }
 }

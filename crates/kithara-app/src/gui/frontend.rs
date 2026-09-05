@@ -5,6 +5,7 @@ use kithara::{
     platform::{
         sync::{Arc, Mutex},
         time::Duration,
+        tokio::task,
     },
     ui::render::fonts,
     worker::{DispatcherConfig, TaskConfig},
@@ -18,6 +19,7 @@ use super::{
     update, view,
 };
 use crate::{
+    analysis::AnalysisService,
     catalog::Catalog,
     config::AppConfig,
     deck::{DeckId, DeckSet},
@@ -185,6 +187,9 @@ impl GuiFrontend {
                 .build(),
             TaskConfig::new(),
         ))?;
+        let (analysis, handle) =
+            AnalysisService::new(&config, persistence, config.shutdown.child());
+        task::spawn(analysis.run());
 
         if let Some(first) = session.decks().first() {
             first
@@ -198,9 +203,8 @@ impl GuiFrontend {
                 let controller = Arc::new(StateController::new(
                     deck.queue.control().clone(),
                     Arc::clone(&deck.timestretch),
-                    config.clone(),
                     deck.cancel_child(),
-                    persistence.clone(),
+                    handle.clone(),
                 ));
                 (deck.id, controller)
             })

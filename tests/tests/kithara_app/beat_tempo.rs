@@ -81,7 +81,7 @@ async fn analyse(path: &str) -> TrackAnalysis {
         BeatAnalysisConfig::default(),
         pools,
     );
-    let mut rx = runner.analyze(config, "integration-track".into(), RATE, drop);
+    let mut rx = runner.analyze(config, "integration-track".into(), RATE, 0, drop);
 
     // The runner emits the envelope before the beat grid.
     let mut last = None;

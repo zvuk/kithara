@@ -119,7 +119,8 @@ async fn waveform_and_player_share_one_get() {
         BeatAnalysisConfig::default(),
         pools,
     );
-    let mut analysis_rx = runner.analyze(waveform_cfg, "shared-download-track".into(), RATE, drop);
+    let mut analysis_rx =
+        runner.analyze(waveform_cfg, "shared-download-track".into(), RATE, 0, drop);
 
     let player = worker.open(player_cfg).await.expect("open player audio");
     let player_drain = spawn_blocking(move || {

@@ -1,8 +1,8 @@
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    api::{BeatError, BeatMark},
-    config::BeatConfig,
+    mark::BeatMark,
+    nn::{api::BeatError, config::BeatConfig, consts::Consts},
 };
 
 pub(crate) struct PeakPicker {
@@ -46,10 +46,8 @@ struct Peak {
 
 impl Peak {
     fn mark(self) -> BeatMark {
-        const FPS: f32 = 50.0;
-
         BeatMark {
-            at: (self.at / f64::from(FPS)).as_(),
+            at: (self.at / f64::from(Consts::FPS)).as_(),
             confidence: sigmoid(self.logit),
         }
     }

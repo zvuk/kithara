@@ -89,16 +89,6 @@ impl TrackAnalysisCache {
         }
     }
 
-    /// Whether a cached snapshot carries every artifact the active
-    /// configuration expects. A stored artifact whose tag moved is dropped on
-    /// read, so a hit can be real and still need the pass to run.
-    pub(crate) fn is_sufficient(&self, progress: &AnalysisProgress) -> bool {
-        let analysis = progress.analysis();
-        let waveform = self.fingerprint.waveform().is_none() || analysis.waveform().is_some();
-        let beat = self.fingerprint.beat().is_none() || analysis.beat().is_some();
-        waveform && beat
-    }
-
     /// Look up a cached analysis: memory first, then the scope resource.
     /// `None` on a miss or an unreadable blob.
     pub(crate) fn get(

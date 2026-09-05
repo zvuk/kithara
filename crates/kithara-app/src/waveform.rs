@@ -85,8 +85,9 @@ impl TrackAnalysisRunner {
     /// Cancel any prior run and queue `config` for analysis on the `rate`
     /// axis: the reader is opened onto it and the pass is measured in it, so
     /// a producer feeding the same pass later shares one axis with it.
-    /// Staged results arrive on the returned receiver,
-    /// which closes when the run ends; nothing arrives on failure/cancel.
+    /// `revision` is the one the caller holds for `token`; every publication
+    /// outranks it. Staged results arrive on the returned receiver, which
+    /// closes when the run ends; nothing arrives on failure/cancel.
     /// `deliver` receives the producer half synchronously, before the fallback
     /// reader is opened. The runner does not know what the handle is for;
     /// attaching it to the track's playback path is the caller's business.
@@ -95,6 +96,7 @@ impl TrackAnalysisRunner {
         config: AppResourceConfig,
         token: AnalysisToken,
         rate: NonZeroU32,
+        revision: u64,
         deliver: D,
     ) -> watch::Receiver<Option<AnalysisProgress>>
     where
@@ -102,7 +104,7 @@ impl TrackAnalysisRunner {
     {
         self.clear();
 
-        let (rx, producer, pass) = self.worker.open(token, rate);
+        let (rx, producer, pass) = self.worker.open(token, rate, revision);
         let run = pass.cancel_token().clone();
         deliver(producer);
         let task = task::spawn(run_analysis(
@@ -135,8 +137,8 @@ impl TrackAnalysisRunner {
     ///
     /// # Errors
     ///
-    /// Returns an archive error when the checkpoint or source extent no longer
-    /// matches the current analyzer configuration.
+    /// Returns an archive error when the checkpoint no longer matches the
+    /// current analyzer configuration.
     pub fn resume<D>(
         &mut self,
         config: AppResourceConfig,
@@ -152,7 +154,7 @@ impl TrackAnalysisRunner {
         let (rx, producer, pass) = self.worker.open_resume(progress)?;
         let run = pass.cancel_token().clone();
         deliver(producer);
-        let task = task::spawn(run_resume_analysis(
+        let task = task::spawn(run_analysis(
             Arc::clone(&self.worker),
             config,
             run.clone(),
@@ -182,21 +184,6 @@ async fn run_analysis(
         return;
     };
     worker.start(pass, reader);
-}
-
-async fn run_resume_analysis(
-    worker: Arc<AnalysisWorker>,
-    config: AppResourceConfig,
-    cancel: CancelToken,
-    rate: NonZeroU32,
-    pass: AnalysisPass,
-) {
-    let Some(reader) = open_reader(config, &cancel, rate).await else {
-        return;
-    };
-    if let Err(error) = worker.start_resume(pass, reader) {
-        warn!(%error, "analysis: resume checkpoint rejected by source");
-    }
 }
 
 /// Open the resource under the run's cancel scope (so preemption and app

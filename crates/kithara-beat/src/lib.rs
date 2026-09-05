@@ -1,14 +1,19 @@
-mod api;
-mod config;
-mod inference;
-mod mel;
-#[cfg(feature = "embed-small-model")]
-mod models;
-mod postprocess;
-mod runtime;
-pub use api::{BeatError, BeatMark, BeatThis, RawBeats};
-pub use config::BeatConfig;
+#[cfg(feature = "dsp")]
+mod dsp;
+mod mark;
+#[cfg(feature = "nn")]
+mod nn;
+
+#[cfg(feature = "dsp")]
+pub use dsp::{SpectralBeats, Tempo, TempoError};
 #[cfg(test)]
 pub(crate) use kithara_bufpool::testing as test_pools;
-#[cfg(feature = "embed-small-model")]
-pub use models::{BEAT_MODEL_BYTES, MEL_MODEL_BYTES};
+pub use mark::{BeatMark, RawBeats};
+#[cfg(any(
+    feature = "embed-small-model",
+    feature = "embed-full-model",
+    feature = "embed-full-int8-model"
+))]
+pub use nn::{BEAT_MODEL_BYTES, BEAT_MODEL_TAG, MEL_MODEL_BYTES};
+#[cfg(feature = "nn")]
+pub use nn::{BeatConfig, BeatError, BeatThis};

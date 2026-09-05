@@ -7,7 +7,7 @@ use kithara_test_utils::kithara;
 use super::{AnalysisFile, AnalysisFileSpec, AnalysisFileUpdate};
 use crate::{
     AnalysisProgress, AnalyzerBuilder,
-    analyzer::{Detector, Ingest, TrackAnalyzers},
+    analyzer::{Detector, Extent, Ingest, TrackAnalyzers},
     beat::{BeatDetectError, BeatDetector, BeatMark, GridParams, RawBeats},
     test_pools::{Pools, TestPools, pools, sample_buffer},
 };
@@ -75,7 +75,7 @@ fn fold(
     at: u64,
 ) {
     assert_eq!(
-        analyzers.push(&decoded(pools, at), Some(detector)),
+        analyzers.push(&decoded(pools, at), &mut Extent::default(), Some(detector)),
         Ingest::Accepted,
         "a missing fixed chunk is folded once"
     );
@@ -116,7 +116,7 @@ fn finish(
     analyzers: &mut TrackAnalyzers<NoResamplerBackend, TestPools>,
     detector: &mut Detector,
 ) -> crate::TrackAnalysis {
-    analyzers.snapshot(Some(detector), true)
+    analyzers.snapshot(Some(detector), true, Some(EXTENT))
 }
 
 #[kithara::test(native, flash(false))]
@@ -125,13 +125,12 @@ fn archived_partial_resumes_without_decoding_completed_chunks() {
     let seed = [0, 2 * CHUNK_FRAMES];
     let (builder, mut detector) = configured(pools.clone());
     let mut partial = builder
-        .build(rate(), "resume-track".into())
+        .build(rate(), "resume-track".into(), 0)
         .expect("analysis buffers fit the test region");
-    partial.plan_extent(EXTENT);
     for at in seed {
         fold(&pools, &mut partial, &mut detector, at);
     }
-    let progress = partial.progress(Some(&mut detector), false, chunk_frames());
+    let progress = partial.progress(Some(&mut detector), false, chunk_frames(), Some(EXTENT));
     let partial_revision = progress.analysis().revision();
 
     let bytes = persist(&progress);
@@ -171,9 +170,8 @@ fn archived_partial_resumes_without_decoding_completed_chunks() {
 
     let (builder, mut detector) = configured(pools.clone());
     let mut uninterrupted = builder
-        .build(rate(), "resume-track".into())
+        .build(rate(), "resume-track".into(), 0)
         .expect("analysis buffers fit the test region");
-    uninterrupted.plan_extent(EXTENT);
     for at in seed.into_iter().chain(requested) {
         fold(&pools, &mut uninterrupted, &mut detector, at);
     }

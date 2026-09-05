@@ -1,9 +1,46 @@
-//! Shared helpers for the parity tests: golden loading and MIR F-measure.
+//! Shared helpers for the parity tests: fixtures, golden loading and MIR
+//! F-measure.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use num_traits::cast::AsPrimitive;
 use serde::Deserialize;
+
+/// The standard MIR tolerance a beat is matched within.
+pub(crate) const WINDOW: f64 = 0.070;
+
+pub(crate) fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+pub(crate) fn load_pcm_fixture(name: &str) -> Vec<f32> {
+    let path = fixture(name);
+    let bytes = std::fs::read(&path)
+        .unwrap_or_else(|e| panic!("failed to read PCM fixture {}: {e}", path.display()));
+    assert_eq!(
+        bytes.len() % 4,
+        0,
+        "raw f32le fixture length must be a multiple of 4"
+    );
+    bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect()
+}
+
+pub(crate) fn report(kind: &str, s: &Score) {
+    eprintln!(
+        "{kind}: F={:.4} matched {}/{} (ref {}) max_diff={:.1}ms mean_diff={:.1}ms",
+        s.f_measure,
+        s.matched,
+        s.n_est,
+        s.n_ref,
+        s.max_matched_diff * 1000.0,
+        s.mean_matched_diff * 1000.0,
+    );
+}
 
 /// A golden output for parity tests.
 #[derive(Debug, Deserialize)]

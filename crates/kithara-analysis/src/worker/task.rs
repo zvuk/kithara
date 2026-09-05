@@ -8,10 +8,11 @@ use kithara_signal::AudioSpec;
 use kithara_worker::TickResult;
 use tracing::{debug, warn};
 
-use super::schedule::{Extent, Schedule};
+use super::schedule::Schedule;
 use crate::{
     AnalysisProgress, BlobError,
-    analyzer::{AnalysisToken, AnalyzerBuilder, Detector, Ingest, TrackAnalyzers},
+    analyzer::{AnalysisToken, AnalyzerBuilder, Detector, Extent, Ingest, TrackAnalyzers},
+    beat::Intake,
     coverage::{Coverage, FrameRange},
     producer::ring,
     slots::beat::{DetectionOutput, DetectionRequest},
@@ -23,6 +24,7 @@ pub(crate) struct Job {
     pub(crate) ingest: ring::Reader,
     pub(crate) rate: NonZeroU32,
     pub(crate) token: AnalysisToken,
+    pub(crate) revision: u64,
     pub(crate) tx: watch::Sender<Option<AnalysisProgress>>,
     pub(crate) resume: Option<AnalysisProgress>,
 }
@@ -30,16 +32,20 @@ pub(crate) struct Job {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TaskPhase {
     Decode,
-    Ending,
+    /// Reading is over; `settled` says it ran out of reachable ranges
+    /// rather than being cut short.
+    Ending {
+        settled: bool,
+    },
     Done,
 }
 
 struct Run {
     chosen: u64,
     at: u64,
-    frontier: u64,
     started: bool,
     grew: bool,
+    deferred: bool,
 }
 
 #[derive(fieldwork::Fieldwork)]
@@ -56,6 +62,7 @@ where
     scratch: Option<SampleBuffer>,
     rate: NonZeroU32,
     token: AnalysisToken,
+    revision: u64,
     tx: watch::Sender<Option<AnalysisProgress>>,
     phase: TaskPhase,
     beat_dirty: bool,
@@ -64,6 +71,8 @@ where
     publish_frames: u64,
     published_at: u64,
     extent: Extent,
+    /// End of the last chunk the reader delivered since its last seek.
+    frontier: u64,
     schedule: Schedule,
     run: Option<Run>,
 }
@@ -89,17 +98,19 @@ where
             .map(|progress| builder.restore(progress, chunk_frames))
             .transpose()?;
         let published_at = analyzers.as_ref().map_or(0, TrackAnalyzers::covered_frames);
-        let extent = job
-            .resume
-            .as_ref()
-            .and_then(|progress| progress.analysis().extent())
-            .map_or_else(Extent::default, Extent::restore);
+        let extent = match &job.resume {
+            Some(progress) => {
+                Extent::restore(progress.analysis().extent().ok_or(BlobError::Corrupt)?)
+            }
+            None => Extent::default(),
+        };
         Ok(Self {
             analyzers,
             beat_dirty: false,
             cancel: job.cancel,
             chunk_frames,
             extent,
+            frontier: 0,
             ingest: job.ingest,
             phase: TaskPhase::Decode,
             producer_drain_limit: producer_drain_limit.get(),
@@ -111,29 +122,57 @@ where
             schedule: Schedule::default(),
             scratch: None,
             token: job.token,
+            revision: job.revision,
             tx: job.tx,
         })
     }
 
-    fn is_covered(&self, range: FrameRange) -> bool {
+    /// What the pass reads against right now. The beat pass takes audio only as
+    /// fast as the detector frees room, and a full hold leaves only ranges the
+    /// pass has yet to see worth a run.
+    fn target(&self) -> Option<&Coverage> {
+        let analyzers = self.analyzers.as_ref()?;
+        match analyzers.beat_intake() {
+            Intake::Full => Some(analyzers.coverage()),
+            Intake::Continuing | Intake::Anywhere => Some(analyzers.analysed()),
+        }
+    }
+
+    fn intake(&self) -> Intake {
         self.analyzers
             .as_ref()
-            .is_some_and(|analyzers| analyzers.coverage().contains(range))
+            .map_or(Intake::Anywhere, TrackAnalyzers::beat_intake)
+    }
+
+    /// How far one scheduled run reads. While the beat pass can open another
+    /// run the schedule spreads over the track; when it cannot, the run is
+    /// unbounded and aimed where a run already ends, so it continues that one.
+    fn run_window(&self) -> Option<u64> {
+        (self.intake() != Intake::Continuing).then_some(self.chunk_frames.get())
+    }
+
+    fn is_covered(&self, range: FrameRange) -> bool {
+        self.target()
+            .is_some_and(|coverage| coverage.contains(range))
     }
 
     fn is_complete(&self) -> bool {
-        self.extent
-            .frames()
-            .is_some_and(|extent| self.is_covered(FrameRange::new(0, extent)))
+        let Some(extent) = self.extent.frames() else {
+            return false;
+        };
+        self.analyzers
+            .as_ref()
+            .is_some_and(|analyzers| analyzers.analysed().contains(FrameRange::new(0, extent)))
     }
 
     fn choose(&self, window: Option<u64>) -> Option<u64> {
         let empty = Coverage::default();
-        let coverage = self
-            .analyzers
-            .as_ref()
-            .map_or(&empty, TrackAnalyzers::coverage);
-        self.schedule.next(coverage, self.extent.frames(), window)
+        let coverage = self.target().unwrap_or(&empty);
+        let extent = self.extent.frames();
+        match self.intake() {
+            Intake::Continuing => self.schedule.extend(coverage, extent),
+            Intake::Full | Intake::Anywhere => self.schedule.next(coverage, extent, window),
+        }
     }
 
     fn decode(
@@ -144,42 +183,46 @@ where
         match self.reader.next_chunk() {
             Ok(ChunkOutcome::Chunk(chunk)) => {
                 let range = FrameRange::from(&chunk.meta);
-                let Ok(analyzers) = open(&mut self.analyzers, builder, self.rate, &self.token)
-                else {
+                let Ok(analyzers) = open(
+                    &mut self.analyzers,
+                    builder,
+                    self.rate,
+                    &self.token,
+                    self.revision,
+                ) else {
                     self.phase = TaskPhase::Done;
                     return TickResult::Progress;
                 };
-                let before = analyzers.covered_frames();
-                let outcome = analyzers.push(&chunk, detector);
+                let outcome = analyzers.push(&chunk, &mut self.extent, detector);
                 if outcome != Ingest::Accepted {
                     debug!(?outcome, "analysis: range not folded in");
                 }
-                let grew = analyzers.covered_frames() > before;
+                self.frontier = range.end();
                 if let Some(run) = &mut self.run {
                     if !run.started {
                         run.started = true;
                         run.at = range.start();
                     }
-                    run.frontier = range.end();
-                    run.grew |= grew;
+                    run.grew |= outcome == Ingest::Accepted;
+                    run.deferred |= outcome == Ingest::Deferred;
                 }
                 TickResult::Progress
             }
             Ok(ChunkOutcome::Pending { .. }) => TickResult::UpstreamPending,
             Ok(ChunkOutcome::Eof { .. }) => {
-                // End of stream bounds the extent; gaps behind it may remain.
-                if self.extent.frames().is_none() {
-                    self.finish(true);
-                } else {
-                    if let Some(run) = &self.run {
-                        self.extent.unreachable(run.frontier);
-                        debug!(
-                            frontier = run.frontier,
-                            extent = ?self.extent.frames(),
-                            "analysis: eof bounds the extent"
-                        );
-                    }
+                // The source ends where the reader's audio ends. A pass
+                // without a claim reads in order, and this is its end.
+                let scheduled = self.extent.frames().is_some();
+                self.extent.unreachable(self.frontier);
+                debug!(
+                    frontier = self.frontier,
+                    extent = ?self.extent.frames(),
+                    "analysis: eof bounds the extent"
+                );
+                if scheduled {
                     self.retire();
+                } else {
+                    self.finish(true);
                 }
                 TickResult::Progress
             }
@@ -200,7 +243,13 @@ where
         let scratch = self
             .scratch
             .get_or_insert_with(|| builder.pools().get::<f32>());
-        let analyzers = open(&mut self.analyzers, builder, self.rate, &self.token)?;
+        let analyzers = open(
+            &mut self.analyzers,
+            builder,
+            self.rate,
+            &self.token,
+            self.revision,
+        )?;
         let mut detector = detector;
         let mut folded = false;
 
@@ -208,7 +257,8 @@ where
             let Some(at) = self.ingest.pop(scratch) else {
                 break;
             };
-            let outcome = analyzers.push_mono(scratch, at, detector.as_deref_mut());
+            let outcome =
+                analyzers.push_mono(scratch, at, &mut self.extent, detector.as_deref_mut());
             if outcome != Ingest::Accepted {
                 debug!(?outcome, at, "analysis: offered range not folded in");
             }
@@ -224,36 +274,20 @@ where
         analyzers.covered_frames().saturating_sub(self.published_at) >= self.publish_frames
     }
 
-    fn sync_extent(&mut self) {
-        let Some(frames) = self.extent.frames() else {
-            return;
-        };
-        if let Some(analyzers) = &mut self.analyzers {
-            analyzers.plan_extent(frames);
-        }
-    }
-
     /// `settled` when the pass ran out of reachable ranges rather than being
     /// cut short: that is what tells a consumer this is all the content gives.
     fn finish(&mut self, settled: bool) {
-        let planned = self.extent.frames();
         debug!(
-            extent = ?planned,
+            extent = ?self.extent.frames(),
             covered = ?self.analyzers.as_ref().map(TrackAnalyzers::covered_frames),
             settled,
-            "analysis: pass ended"
+            "analysis: reading ended"
         );
-        let Some(analyzers) = &mut self.analyzers else {
-            self.phase = TaskPhase::Done;
-            return;
+        self.phase = if self.analyzers.is_some() {
+            TaskPhase::Ending { settled }
+        } else {
+            TaskPhase::Done
         };
-        if let Some(frames) = planned {
-            analyzers.plan_extent(frames);
-        }
-        if settled {
-            analyzers.settle();
-        }
-        self.phase = TaskPhase::Ending;
     }
 
     pub(crate) fn is_done(&self) -> bool {
@@ -261,7 +295,7 @@ where
     }
 
     pub(crate) fn is_ending(&self) -> bool {
-        self.phase == TaskPhase::Ending
+        matches!(self.phase, TaskPhase::Ending { .. })
     }
 
     pub(crate) fn prepare_detection(&mut self) -> Option<DetectionRequest> {
@@ -288,14 +322,27 @@ where
         if analyzers.covered_frames() == 0 {
             return;
         }
-        let progress = analyzers.progress(detector, ending, self.chunk_frames);
+        let progress =
+            analyzers.progress(detector, ending, self.chunk_frames, self.extent.frames());
         self.published_at = analyzers.covered_frames();
         self.tx.send(Some(progress)).ok();
     }
+}
 
+/// Choosing where to read next, and ending a run that has read its own.
+impl<B, S> AnalysisTask<B, S>
+where
+    B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     fn reschedule(&mut self, window: Option<u64>) -> TickResult {
         self.retire();
         let Some(at) = self.choose(window) else {
+            if self.intake() == Intake::Full {
+                // Room comes from the detector, so there is nothing to read
+                // yet and nothing to conclude either.
+                return TickResult::Backpressured;
+            }
             self.finish(true);
             return TickResult::Progress;
         };
@@ -312,12 +359,13 @@ where
             // `landed_at` only echoes the target here; the first chunk says where.
             Ok(SeekOutcome::Landed { .. }) => {
                 debug!(at, "analysis: run scheduled");
+                self.frontier = at;
                 self.run = Some(Run {
                     chosen: at,
                     at,
-                    frontier: at,
                     started: false,
                     grew: false,
+                    deferred: false,
                 });
             }
             // The source cannot deliver the position the schedule planned
@@ -340,7 +388,9 @@ where
         };
         // What the run itself decoded, not what the pass covered while it ran:
         // a producer folds ranges from anywhere and would keep this alive.
-        if !run.grew {
+        // Audio the beat pass turned down says nothing about the source, so a
+        // position it waits on is not retired.
+        if !run.grew && !run.deferred {
             debug!(at = run.chosen, "analysis: position added nothing; retired");
             self.schedule.barren(run.chosen);
         }
@@ -353,22 +403,22 @@ where
         if self
             .extent
             .frames()
-            .is_some_and(|extent| run.frontier >= extent)
+            .is_some_and(|extent| self.frontier >= extent)
         {
             return true;
         }
         // Covered audio ends a run that already reached its gap. Before that
         // it is the lead-in a seek snapping back off the gap's start left in
         // front, and ending there would retire the gap unread.
-        if run.grew && self.is_covered(FrameRange::new(run.frontier, 1)) {
+        if run.grew && self.is_covered(FrameRange::new(self.frontier, 1)) {
             return true;
         }
         // Read past what it was aimed at with nothing gained: the gap the
         // schedule saw there is not where this source can put the reader.
-        if !run.grew && run.frontier > run.chosen {
+        if !run.grew && self.frontier > run.chosen {
             return true;
         }
-        run_frames.is_some_and(|window| run.frontier.saturating_sub(run.at) >= window)
+        run_frames.is_some_and(|window| self.frontier.saturating_sub(run.at) >= window)
     }
 
     fn step(
@@ -377,13 +427,18 @@ where
         detector: Option<&mut Detector>,
     ) -> TickResult {
         if self.extent.frames().is_none() {
+            // Read in order, a range passed by cannot be asked for again, so
+            // the pass waits for the beat pass rather than reading past it.
+            if self.intake() == Intake::Full {
+                return TickResult::Backpressured;
+            }
             return self.decode(builder, detector);
         }
         if self.is_complete() {
             self.finish(true);
             return TickResult::Progress;
         }
-        let window = Some(self.chunk_frames.get());
+        let window = self.run_window();
         if self.run_over(window) {
             return self.reschedule(window);
         }
@@ -411,8 +466,9 @@ where
                 // Re-read: the decode path refines a duration upward as it goes.
                 self.extent.report(self.reader.duration(), self.rate);
                 let result = self.step(builder, detector.as_deref_mut());
-                self.sync_extent();
-                if self.phase == TaskPhase::Decode && (self.due() || self.beat_dirty) {
+                // The end of reading is published on its own, ahead of the
+                // trailing detection.
+                if self.is_ending() || self.due() || self.beat_dirty {
                     self.publish(detector, false);
                     self.beat_dirty = false;
                 }
@@ -422,7 +478,10 @@ where
                     result
                 }
             }
-            TaskPhase::Ending => {
+            TaskPhase::Ending { settled } => {
+                if settled && let Some(analyzers) = &mut self.analyzers {
+                    analyzers.settle();
+                }
                 self.publish(detector, true);
                 self.phase = TaskPhase::Done;
                 TickResult::Progress
@@ -437,6 +496,7 @@ fn open<'a, B, S>(
     builder: &AnalyzerBuilder<B, S>,
     rate: NonZeroU32,
     token: &AnalysisToken,
+    revision: u64,
 ) -> Result<&'a mut TrackAnalyzers<B, S>, PoolError>
 where
     B: ResamplerBackend,
@@ -445,9 +505,11 @@ where
     if let Some(analyzers) = slot {
         Ok(analyzers)
     } else {
-        let analyzers = builder.build(rate, token.clone()).inspect_err(|error| {
-            warn!(?error, "analysis: analyzer buffer initialization failed");
-        })?;
+        let analyzers = builder
+            .build(rate, token.clone(), revision)
+            .inspect_err(|error| {
+                warn!(?error, "analysis: analyzer buffer initialization failed");
+            })?;
         Ok(slot.insert(analyzers))
     }
 }

@@ -3,12 +3,15 @@ use std::num::NonZeroU32;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::Arc;
 use kithara_resampler::ResamplerBackend;
+use tracing::warn;
 
 use crate::{
     BeatArtifact, BlobError,
     analyzer::{BeatAnalysisConfig, default_beat_detector},
-    beat::{BeatDetector, BeatPass, BeatPassConfig, DetectOutput, DetectRequest, GridParams},
-    coverage::FrameRange,
+    beat::{
+        BeatDetector, BeatPass, BeatPassConfig, DetectOutput, DetectRequest, GridParams, Intake,
+    },
+    coverage::{Coverage, FrameRange},
     progress::BeatResume,
 };
 
@@ -62,10 +65,10 @@ where
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        let source = self.0.as_mut()?.detector.clone()?;
-        let detector = match source {
-            DetectorConfig::Default => default_beat_detector(pools),
-            DetectorConfig::Ready(detector) => Some(detector.clone()),
+        let config = self.0.as_ref()?;
+        let detector = match config.detector.clone()? {
+            DetectorConfig::Default => default_beat_detector(&config.resampler, pools),
+            DetectorConfig::Ready(detector) => Some(detector),
         };
         if let Some(detector) = &detector {
             self.0.as_mut()?.detector = Some(DetectorConfig::Ready(detector.clone()));
@@ -147,22 +150,51 @@ where
         }
     }
 
+    /// Whether the pass took audio it did not have. `opens` says whether this
+    /// audio may start a run of its own. A build with no beat pass takes
+    /// nothing.
     pub(crate) fn push<S>(
         &mut self,
         pools: &PoolRegion<S>,
         pcm: &[f32],
         channels: usize,
         at: u64,
+        opens: bool,
         detector: Option<&mut Detector>,
-    ) where
+    ) -> bool
+    where
         S: HasPool<f32>,
     {
-        if let Some(analyzer) = &mut self.0 {
-            match detector {
-                Some(detector) => analyzer.push(pools, pcm, channels, at, detector.as_ref()),
-                None => analyzer.push_deferred(pools, pcm, channels, at),
-            }
+        let Some(analyzer) = &mut self.0 else {
+            return false;
+        };
+        let took = match detector {
+            Some(detector) => analyzer.push(pools, pcm, channels, at, opens, detector.as_ref()),
+            None => analyzer.push_deferred(pools, pcm, channels, at, opens),
+        };
+        self.close_if_failed();
+        took
+    }
+
+    /// A pass that failed holds audio the pass would wait on and turns down
+    /// the rest. Closing the slot releases what it holds, so the pass reads on
+    /// without a beat grid rather than waiting on a detector it cannot feed.
+    fn close_if_failed(&mut self) {
+        if let Some(error) = self.0.as_ref().and_then(BeatPass::failure) {
+            warn!(?error, "beat analysis failed; the pass reads on without it");
+            self.0 = None;
         }
+    }
+
+    /// What the beat pass has taken, which trails what the pass has seen while
+    /// the detector is behind. A build with no beat pass is governed by `seen`,
+    /// and takes anything.
+    pub(crate) fn coverage<'a>(&'a self, seen: &'a Coverage) -> &'a Coverage {
+        self.0.as_ref().map_or(seen, BeatPass::coverage)
+    }
+
+    pub(crate) fn intake(&self) -> Intake {
+        self.0.as_ref().map_or(Intake::Anywhere, BeatPass::intake)
     }
 
     pub(crate) fn prepare_detection<S>(
@@ -173,13 +205,16 @@ where
     where
         S: HasPool<f32>,
     {
-        self.0.as_mut()?.prepare_detection(pools, trailing)
+        let request = self.0.as_mut()?.prepare_detection(pools, trailing);
+        self.close_if_failed();
+        request
     }
 
     pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
         if let Some(analyzer) = &mut self.0 {
             analyzer.apply_detection(output);
         }
+        self.close_if_failed();
     }
 
     pub(crate) fn write_resume(&mut self) -> Option<Vec<u8>> {

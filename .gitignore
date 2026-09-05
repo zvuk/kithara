@@ -122,3 +122,7 @@ release-artifacts/
 
 # Machine profile of a CI host, provisioned per machine
 .config/ci-host.toml
+
+# Beat models the build keeps in its own cache; the tree holds the small ones.
+crates/kithara-beat/models/beat_this_full.onnx
+crates/kithara-beat/models/beat_this_full_int8.onnx

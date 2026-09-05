@@ -4,22 +4,11 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 use smallvec::smallvec;
 
-use crate::{
+use crate::nn::{
     api::BeatError,
+    consts::Consts,
     runtime::{RtenModel, Tensor},
 };
-
-/// Chunking geometry for beat prediction.
-struct Consts;
-
-impl Consts {
-    /// Frames discarded from each edge of predictions.
-    const BORDER_SIZE: i64 = 6;
-    /// Frames per chunk (30 seconds at 50 fps).
-    const CHUNK_SIZE: i64 = 1500;
-    /// Effective step between chunks.
-    const STRIDE: i64 = Self::CHUNK_SIZE - 2 * Self::BORDER_SIZE;
-}
 
 fn as_i64(x: usize) -> i64 {
     x.to_i64().unwrap_or(i64::MAX)
@@ -60,7 +49,7 @@ impl BeatPredictor {
     where
         S: HasPool<f32>,
     {
-        if mel.shape.len() != 3 || mel.shape[0] != 1 || mel.shape[2] != 128 {
+        if mel.shape.len() != 3 || mel.shape[0] != 1 || mel.shape[2] != Consts::MEL_BINS {
             return Err(BeatError::Inference {
                 reason: format!("expected mel shape [1, T, 128], got {:?}", mel.shape),
             });

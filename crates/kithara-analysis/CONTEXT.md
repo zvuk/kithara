@@ -47,11 +47,16 @@ covered frames, so sparse out-of-order coverage keeps its source position.
 
 A pass publishes many times. `TrackAnalyzers::snapshot` leaves the pass able to
 accept further ranges and bumps a strictly increasing revision, so a consumer
-discards anything that does not outrank what it holds. `AnalysisTask` publishes
-every `PUBLISH_SECONDS` of newly covered source and once more at end of stream,
-keyed to decoded frames rather than wall-clock time. Only that last publication
-pins the extent, to the covered frontier. `BeatState` is `Final` only once the
-whole known extent is one covered run.
+discards anything that does not outrank what it holds. `AnalysisWorker::open`
+takes the revision the caller already holds for the token and the pass publishes
+above it, so revisions stay monotonic per token across passes. `AnalysisTask` publishes
+every `PUBLISH_SECONDS` of newly covered source, keyed to decoded frames rather
+than wall-clock time; once more when the reading ends, before the trailing
+detection, so a consumer holds the whole coverage while the detector works;
+and once more after it. That last publication is the settled one and the one
+the watch closes on; the one before it is resumable, and a restart resumes the
+detection rather than the reading. `BeatState` is `Final` only on a settled
+publication in which the beat pass took every range the pass covered.
 
 Identity is an opaque `AnalysisToken` the caller opens the pass with; this crate
 echoes it and never interprets it. `AnalysisFingerprint` carries the beat tag and
@@ -62,7 +67,13 @@ reader onto the same one, and a range on another axis is refused rather than
 redefining what a frame number means. Analyzers are built lazily by whichever
 range arrives first, so a pass that covers nothing allocates nothing. A checked
 scratch-allocation failure ends that pass and closes its result channel without
-publishing a value.
+publishing a value. A failure inside one slot closes that slot alone: the
+waveform slot drops itself when a buffer cannot grow, and the beat slot drops
+itself when a detection, a resample, or a window copy fails, releasing the
+audio it held. Either logs the cause once, and the pass reads on to the end
+with that artifact absent from what it publishes. The beat slot in particular
+must never keep the pass waiting on a detector it cannot feed: what it holds is
+the only thing standing between the reader and the rest of the track.
 
 `Coverage` is the canonical record of which source ranges a pass has observed,
 kept as sorted, disjoint, non-adjacent runs; `TrackAnalyzers` owns it and every
@@ -77,25 +88,43 @@ until then, the same rule `source_frames` uses.
 `AnalysisTask` does not read its reader in order. It picks the middle of the
 largest uncovered range. That becomes binary subdivision on an uncovered track,
 so an early snapshot describes the whole track rather than its opening, and
-refills holes when playback has mostly covered the track; a range another
-producer covered is never decoded again.
+refills holes when playback has mostly covered the track. It schedules against
+the beat pass's own coverage while that pass has room, and against what the pass
+has merely seen while it does not, so a range the beat pass turned down is read
+again and one nothing is waiting for is not.
 
-- **Two extents.** The pass publishes the covered frontier at end of stream, or
-  the length the schedule planned against when that is longer, so a range given
-  up on past the last covered frame is still reported missing. The schedule works
-  from the reader's stated length, bounded by what that reader proved: end of
-  stream or a seek answered `PastEof`. That figure is never written into the
-  pass, because `TrackAnalyzers::ingest` refuses a range reaching past the extent
-  it holds and an under-reported duration would refuse the source's own tail.
-- **Run bounds.** A run decodes at least one beat-detector window before another
-  position is chosen. It ends at covered audio or the extent. It starts from the
-  first decoded chunk, not `landed_at`: a seek is begun rather than completed
-  when it answers, so the decoder resumes at its own boundary.
+- **One extent.** A pass has one `Extent`, owned by `AnalysisTask` and handed
+  to every consumer: the schedule, `TrackAnalyzers::ingest`, each snapshot. The
+  claim is the largest length the source stated or showed: the reader's
+  duration, re-read every tick, or a decoded range reaching past the claim. The
+  proof is the smallest length the source proved: end of stream at the reader's
+  frontier, or a seek answered `PastEof`. The extent is the claim bounded by the
+  proof, so an encoder's frame count is where the track ends until the decoder
+  ends sooner, and a range the pass gave up on short of an unproven claim stays
+  missing. Audio the pass was given lies inside the extent whatever the source
+  proved after it, so `ingest` takes every range on the pass axis. A resumed pass restores
+  the checkpoint's extent as its claim and re-proves whatever the reopened
+  reader claims above it the way a fresh pass does; a checkpoint is never
+  refused for what its source claims.
+- **Run bounds.** A run decodes one schedule chunk before another position is
+  chosen. While the beat pass can only continue a run it already has, the run is
+  instead unbounded and aimed at the front of the widest gap, so it continues a
+  run rather than opening an island the beat pass would turn down. A gap at the
+  start of the track has nothing in front of it and is continued from behind:
+  read through, it arrives at the covered audio that closes it. A run ends at
+  covered audio or the extent. It starts from the first decoded chunk, not `landed_at`: a seek is
+  begun rather than completed when it answers, so the decoder resumes at its own
+  boundary.
 - **End and retirement.** A pass ends when its extent is covered or every
-  uncovered position proved unreachable. A run that decoded nothing new is never
-  chosen again, preventing a coarse-seeking source from being asked forever. The
-  cost is explicit: retiring the middle of a gap drops that gap from the
-  schedule, and it remains reported as missing.
+  uncovered position proved unreachable. With nothing to read only because the
+  beat pass is full, it waits instead: room comes from the detector, so there is
+  nothing to conclude yet. Read in order there is no second chance at a range,
+  so the reader waits there rather than reading past a full beat pass. A run
+  that decoded nothing new is never chosen again, preventing a coarse-seeking
+  source from being asked forever; audio the beat pass turned down says nothing
+  about the source, so a position it waits on stays. The cost is explicit:
+  retiring the middle of a gap drops that gap from the schedule, and it remains
+  reported as missing.
 - **Decode error.** It ends the pass without discarding it: delivered ranges are
   published and the rest reported missing.
 
@@ -128,23 +157,25 @@ so playback can attach it without `kithara-audio`, `kithara-play`, or
 best-effort and never changes playback.
 
 The worker drains the transport on its own tick, where DSP is allowed, and folds
-**one block per descriptor**. Each uncovered piece is resampled through one
-call-scoped `MonoStream`, with at most one alive at a time, so no run retains its
-four scratch guards. Contiguous descriptors never share resampler state and
-beat-resampler segmentation remains a pure function of the producer's own chunk
-boundaries.
+**one block per descriptor**. A descriptor continuing a run is resampled through
+that run's own `MonoStream`, so the audio a producer contributes reaches the
+detector the same whatever its chunk boundaries are.
 
 `BeatAnalysisConfig<B>` owns beat tunables and a standalone resampler backend.
 Defaults are 1024-frame mono resampler blocks, 22 050 Hz detector input,
 30-second detector windows with 2 seconds of overlap, and
-`ResamplerQuality::High`. The analyzer never stores whole-track source PCM: it
+`ResamplerQuality::High`. A `beat-dsp` build also carries the `Tempo` the
+signal detector searches, `48..=185` BPM around `120` by default; it reaches
+the cache tag, so a grid searched over one band is never served for another. The analyzer never stores whole-track source PCM: it
 downmixes to mono and keeps covered spans at detector rate in buffers borrowed
 from the caller's typed region.
 
-Each contiguous run owns only its detector-rate mono. A range decoded later
-cannot be pushed through the stream that produced an earlier one; each uncovered
-piece starts and finishes its own stream. Every join is pinned to its implied
-detector frame, so rounding cannot accumulate into marker drift. Detector
+The contiguous run, not the pass, owns the sequential `MonoStream`. A range
+decoded later cannot be pushed through the stream that produced an earlier one:
+audio continuing a run goes through that run's stream, so the seam carries no
+step for an onset detector to read as a beat, and a run the arriving audio does
+not continue flushes its stream into its mono. Every join is pinned to its
+implied detector frame, so rounding cannot accumulate into marker drift. Detector
 windows are fixed spans of the absolute detector-rate timeline and are detected
 once when complete, regardless of arrival order. Markers therefore agree across
 arrival orders within the resampler's splice tolerance.
@@ -152,14 +183,28 @@ arrival orders within the resampler's splice tolerance.
 A run reaching `detector_min_window_seconds` is detected immediately, then
 re-detected when its full window fills. Once the extent is known, the artifact is
 spread across it at its own tempo while retaining detected marker positions. Run
-mono comes from sample guards acquired through `TrackAnalyzers`; the run set
-retains at most four detector windows and shrinks surviving mono buffers during
-reclaim so their physical charged capacity follows the logical budget, while
-every allocation still competes under the region-wide hard byte budget.
-Detection consumes a run front-first. Reclaimed spans remain covered for every
-other consumer but are reported as no longer beat-analyzable. Downmix and
-grid-cleanup scratch stay as guards for the pass lifetime; no lower component
-constructs or stores another pool facade.
+mono comes from sample guards acquired through `TrackAnalyzers`; the logical run
+set opens at most four runs of its own, and holds one more while it reads a
+stretch through to a run standing in front of it, while every physical
+allocation still competes under the region-wide hard byte budget. That cap is
+the memory bound as much as the detection one: each run holds the resampler its
+audio continues, so a source arriving in scattered fragments cannot spend the
+region on resamplers and leave a reader without scratch. Its mono
+budget is five of what a run can hold with nothing for the detector to read: a
+hop in front of its first window and a window short of ready behind it. A run
+releases everything ahead of the window it still waits on, and a run that has
+fed no window releases nothing, since the audio in front of its first window
+belongs to a window starting before it. A released run shrinks its mono to what
+it still holds, so the charged capacity follows the hold budget rather than the
+widest span the run ever carried. The hold therefore follows the detection
+backlog rather than the track
+length. Audio past the budget is turned down rather than given up: it stays
+outside the beat coverage, and the pass reads it again once the detector frees
+room. That terminates because a hold at its budget always holds a window the
+detector can read: every run it may carry, short of a window, is the budget.
+Audio the pass did not read for itself extends a run it already has and does not
+open one. Downmix and grid-cleanup scratch stay as guards for the pass lifetime;
+no lower component constructs or stores another pool facade.
 
 `AnalysisWorker` owns one `kithara-worker` dispatcher and admits every pass as a
 separate `AnalysisNode<B, S>` task (absent on wasm32). `AnalysisWorkerConfig`
@@ -186,9 +231,30 @@ against a 120-second budget.
 **Feature seams.** There is no single `analysis` feature. Artifact types are
 unconditional because analysis and cache keys use them even when a pass is
 absent. `analysis-waveform` gates the `realfft` analyzer and `with_waveform`;
-`analysis-beat` gates the beat path; `beat-nn` is a detector backend above it.
-Without `analysis-beat`, `with_beat()` is a compile-time no-op and `is_empty()`
-is the runtime signal.
+`analysis-beat` gates the beat path. Without `analysis-beat`, `with_beat()` is a
+compile-time no-op and `is_empty()` is the runtime signal.
+
+## Which detector a build carries
+
+`beat-nn` and `beat-dsp` are detector backends above `analysis-beat`, and each
+implies it. Neither implies the other; all four combinations are valid.
+
+- `beat-nn` is `BeatThis`, a neural network. It needs a model: `beat-nn-small`
+  (10.1 MB), `beat-nn-full` (79 MB) or `beat-nn-full-int8` (22.6 MB), and a
+  build carrying `beat-nn` without one does not compile.
+- `beat-dsp` is `SpectralBeats`, signal processing: no model bytes, no network
+  runtime, compiles for `wasm32`, and reports beats but never downbeats.
+- Carrying both selects `BeatThis`.
+- Carrying neither still publishes coverage and a waveform, with no beat
+  artifact. `with_beat()` drops its configuration and the pass runs on.
+
+The backends are not expected to agree; on the crate's own fixture they track
+different metrical levels. `backend::SELECTED_DETECTOR` is the single
+expression of which one a build uses, and the fingerprint tag derives from it,
+so a grid is never served from cache to a build that would not have produced
+it. The neural backend's tag names the model as well, so the three
+`beat-nn-*` features are distinct to the cache: a grid the small model made is
+not served to a build carrying a full one.
 
 ## Waveform
 
@@ -261,8 +327,9 @@ boundaries.
 - Restore requires the active analyzer fingerprint. The validated header then
   supplies the stored axis, extent, and chunk frames; the application must use
   `AnalysisFileSpec::matches_chunk_duration` to reject a coherent file created
-  under another configured duration, and validate axis/extent once current
-  source metadata is available.
+  under another configured duration, and validate the axis once current
+  source metadata is available. The extent is restored as the claim of the
+  resumed pass and re-proved by its reader.
 
 ## Guardrails
 

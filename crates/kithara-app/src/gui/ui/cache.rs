@@ -1,6 +1,9 @@
 use std::collections::BTreeSet;
 
-use kithara::{analysis::Waveform, ui::render::WaveBucket};
+use kithara::{
+    analysis::{AnalysisToken, Waveform},
+    ui::render::WaveBucket,
+};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{menu::MenuState, modules::Modules, scope::deck_letter, window::WindowState};
@@ -208,7 +211,8 @@ pub(in crate::gui) struct DeckCache {
     /// Moved by whoever writes `wave`, so a viewer holding a copy can tell
     /// the two apart without walking six figures of buckets every frame.
     pub(in crate::gui) wave_revision: u64,
-    wave_src: Option<usize>,
+    /// The publication `wave` was drawn from.
+    wave_src: Option<(AnalysisToken, u64)>,
 }
 
 #[derive(Default)]
@@ -311,7 +315,9 @@ impl DeckCache {
 
     fn refresh_wave(&mut self, analysis: Option<&TrackAnalysis>) {
         let wave = analysis.and_then(TrackAnalysis::waveform);
-        let src = wave.map(|wave| wave.buckets().as_ptr().addr());
+        let src = analysis
+            .filter(|_| wave.is_some())
+            .map(|analysis| (analysis.token().clone(), analysis.revision()));
         if src == self.wave_src {
             return;
         }
@@ -410,20 +416,69 @@ fn waveform_buckets(wave: &Waveform) -> impl Iterator<Item = WaveBucket> + '_ {
 mod tests {
     use std::num::NonZeroU32;
 
+    use ::kithara::platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        tokio::task,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{state::AbrVariant, waveform::TrackAnalysis};
+    use crate::{
+        analysis::{AnalysisHandle, fixtures},
+        state::{AbrVariant, listen},
+        waveform::TrackAnalysis,
+    };
+
+    /// The whole path a revision travels: the owner's entry, the deck
+    /// listener, `UiState::analysis`, the host's per-deck cache.
+    #[kithara::test(native, tokio)]
+    async fn a_revision_offered_to_an_entry_redraws_the_deck_waveform() {
+        let cancel = CancelToken::root();
+        let (_host, queue) = fixtures::queue();
+        let (track_id, source) = fixtures::track(&queue, 1, "file:///tmp/track-1.mp3");
+        let config = fixtures::app_config(&cancel, fixtures::memory_store());
+        let entry = fixtures::entry(&config, queue.clone(), track_id, source);
+        let state = Arc::new(Mutex::new(UiState::new(&queue)));
+        let (analysis, mut requests) = AnalysisHandle::channel();
+        task::spawn(listen(
+            queue.clone(),
+            Arc::clone(&state),
+            cancel.clone(),
+            queue.subscribe(),
+            analysis,
+        ));
+        let (asked, reply) = fixtures::next_subscribe(&mut requests).await;
+        assert_eq!(asked, track_id);
+        assert!(reply.send(entry.subscribe()).is_ok());
+        let mut cache = DeckCache::default();
+        cache.refresh_wave(state.lock().analysis.as_ref());
+        let before = cache.wave_revision;
+
+        let published = fixtures::snapshot("track".into(), 1, 1_000, fixtures::fingerprint(), None);
+        assert!(entry.offer(fixtures::progress(published)));
+        fixtures::wait_for_revision(&state, 1).await;
+
+        cache.refresh_wave(state.lock().analysis.as_ref());
+        assert_ne!(
+            cache.wave_revision, before,
+            "the deck draws the revision the entry published"
+        );
+        cancel.cancel();
+    }
 
     /// Version 1 plus one bucket of three band heights (0.5 = 0x3F000000).
-    fn wave_of(height: u8) -> TrackAnalysis {
+    fn wave_of(height: u8) -> Waveform {
         let blob = [
             1, 0, 0, 0, 0, 0, 0, height, 0, 0, 0, height, 0, 0, 0, height,
         ];
-        let wave = Waveform::try_from(blob.as_slice()).expect("hand-built blob is valid");
+        Waveform::try_from(blob.as_slice()).expect("hand-built blob is valid")
+    }
+
+    fn revision(revision: u64, wave: Waveform) -> TrackAnalysis {
         TrackAnalysis::builder()
             .token("fixture".into())
-            .revision(0)
+            .revision(revision)
             .source_sample_rate(NonZeroU32::new(44_100).expect("fixture rate is non-zero"))
             .waveform(wave)
             .build()
@@ -432,7 +487,7 @@ mod tests {
     #[kithara::test]
     fn the_deck_names_the_run_of_buckets_it_just_wrote() {
         let mut cache = DeckCache::default();
-        let quiet = wave_of(62);
+        let quiet = revision(1, wave_of(62));
 
         cache.refresh_wave(Some(&quiet));
         let named = cache.wave_revision;
@@ -440,17 +495,32 @@ mod tests {
         cache.refresh_wave(Some(&quiet));
         assert_eq!(cache.wave_revision, named, "nothing was written");
 
-        cache.refresh_wave(Some(&wave_of(63)));
+        cache.refresh_wave(Some(&revision(2, wave_of(63))));
         assert_ne!(
             cache.wave_revision, named,
             "a new run of buckets was written"
         );
     }
 
+    /// A pass publishes the same bucket store under a new revision when the
+    /// buckets it holds changed in place; the revision names the publication,
+    /// the address of the buckets does not.
+    #[kithara::test]
+    fn the_deck_cache_follows_the_analysis_revision() {
+        let mut cache = DeckCache::default();
+        let wave = wave_of(62);
+
+        cache.refresh_wave(Some(&revision(1, wave.clone())));
+        let named = cache.wave_revision;
+
+        cache.refresh_wave(Some(&revision(2, wave)));
+        assert_ne!(cache.wave_revision, named, "a new revision is a new run");
+    }
+
     #[kithara::test]
     fn dropping_the_track_names_the_empty_run() {
         let mut cache = DeckCache::default();
-        cache.refresh_wave(Some(&wave_of(63)));
+        cache.refresh_wave(Some(&revision(1, wave_of(63))));
         let named = cache.wave_revision;
 
         cache.refresh_wave(None);

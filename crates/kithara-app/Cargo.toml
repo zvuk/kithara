@@ -10,7 +10,7 @@ name = "kithara"
 path = "src/main.rs"
 
 [features]
-default = ["gui", "analysis-waveform", "beat-nn", "stretch-signalsmith"]
+default = ["gui", "analysis-waveform", "beat-nn-small", "stretch-signalsmith"]
 # HTTP backend forwarding to every kithara-net-reaching production dep
 # (kithara facade + kithara-queue). NOT in `default`: the backend is selected
 # per target (macOS desktop pulls `apple` + `client-wreq`; other desktops
@@ -31,7 +31,11 @@ gui = ["dep:iced", "kithara/ui-iced"]
 # the window and the paint pass differ.
 masonry = ["gui", "kithara/ui-masonry"]
 # NN beat/downbeat detection.
-beat-nn = ["kithara/beat-nn"]
+beat-nn-small = ["kithara/beat-nn-small"]
+beat-nn-full = ["kithara/beat-nn-full"]
+beat-nn-full-int8 = ["kithara/beat-nn-full-int8"]
+# Signal-processing beat detection, for builds that cannot carry the model.
+beat-dsp = ["kithara/beat-dsp"]
 # Waveform analysis for the deck overview.
 analysis-waveform = ["kithara/analysis-waveform"]
 # Build kithara-app as a plain library — exposes `config`/`sources`/`drm`
@@ -108,6 +112,7 @@ serde_yaml_ng = { workspace = true }
 [dev-dependencies]
 kithara = { workspace = true, default-features = false, features = ["probe", "ui-capture"] }
 kithara-encode = { workspace = true, default-features = false }
+kithara-test-fixtures = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 

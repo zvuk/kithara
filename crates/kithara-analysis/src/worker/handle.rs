@@ -19,7 +19,6 @@ use crate::{
     AnalysisFileError, AnalysisProgress,
     analyzer::{AnalysisFingerprint, AnalysisToken},
     producer::{AnalysisProducer, ring},
-    worker::schedule::extent_frames,
 };
 
 pub struct AnalysisWorker {
@@ -49,6 +48,7 @@ struct ActiveTask {
 /// the pass's fallback reader, then hand this value back to [`AnalysisWorker::start`].
 pub struct AnalysisPass {
     token: AnalysisToken,
+    revision: u64,
     cancel: CancelToken,
     rate: NonZeroU32,
     resume: Option<AnalysisProgress>,
@@ -172,8 +172,9 @@ impl AnalysisWorker {
         reader: Box<dyn AudioReader>,
         token: AnalysisToken,
         rate: NonZeroU32,
+        revision: u64,
     ) -> (watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer) {
-        let (rx, producer, pass) = self.open(token, rate);
+        let (rx, producer, pass) = self.open(token, rate, revision);
         self.start(pass, reader);
         (rx, producer)
     }
@@ -191,12 +192,14 @@ impl AnalysisWorker {
     }
 
     /// Open a pass and its bounded playback producer without waiting for the
-    /// fallback reader to open or preload.
+    /// fallback reader to open or preload. `revision` is the one the caller
+    /// already holds for `token`; every publication outranks it.
     #[must_use]
     pub fn open(
         &self,
         token: AnalysisToken,
         rate: NonZeroU32,
+        revision: u64,
     ) -> (
         watch::Receiver<Option<AnalysisProgress>>,
         AnalysisProducer,
@@ -210,6 +213,7 @@ impl AnalysisWorker {
             ingest,
             rate,
             token,
+            revision,
             tx,
             resume: None,
         };
@@ -250,6 +254,7 @@ impl AnalysisWorker {
         }
 
         let token = analysis.token().clone();
+        let revision = analysis.revision();
         let (tx, rx) = watch::channel(Some(progress.clone()));
         let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
@@ -258,43 +263,36 @@ impl AnalysisWorker {
             ingest,
             rate,
             token,
+            revision,
             tx,
             resume: Some(progress),
         };
         Ok((rx, producer, pass))
     }
 
-    /// Start an already-open pass with its fallback reader.
+    /// Start an already-open pass, fresh or resumed, with its fallback
+    /// reader. A resumed pass re-proves what the reader claims past the
+    /// checkpoint's extent the way a fresh pass proves it.
     pub fn start(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
-        if pass.resume.is_some() {
-            warn!("analysis resume pass requires extent validation");
-            return;
-        }
-        self.submit_pass(pass, reader);
-    }
-
-    /// Start a resume pass only after its opened reader confirms the persisted
-    /// source extent.
-    ///
-    /// # Errors
-    ///
-    /// Rejects a fresh pass, an unknown reader duration, or an extent that no
-    /// longer matches the validated checkpoint.
-    pub fn start_resume(
-        &self,
-        pass: AnalysisPass,
-        reader: Box<dyn AudioReader>,
-    ) -> Result<(), AnalysisFileError> {
-        let progress = pass.resume.as_ref().ok_or(AnalysisFileError::Config)?;
-        let extent = progress
-            .analysis()
-            .extent()
-            .ok_or(AnalysisFileError::UnknownExtent)?;
-        if extent_frames(reader.duration(), pass.rate) != Some(extent) {
-            return Err(AnalysisFileError::Config);
-        }
-        self.submit_pass(pass, reader);
-        Ok(())
+        let AnalysisPass {
+            cancel,
+            ingest,
+            rate,
+            token,
+            revision,
+            tx,
+            resume,
+        } = pass;
+        self.submit(Job {
+            reader,
+            cancel,
+            ingest,
+            rate,
+            token,
+            revision,
+            tx,
+            resume,
+        });
     }
 
     fn submit(&self, job: Job) {
@@ -315,26 +313,6 @@ impl AnalysisWorker {
             }
         }
     }
-
-    fn submit_pass(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
-        let AnalysisPass {
-            cancel,
-            ingest,
-            rate,
-            token,
-            tx,
-            resume,
-        } = pass;
-        self.submit(Job {
-            reader,
-            cancel,
-            ingest,
-            rate,
-            token,
-            tx,
-            resume,
-        });
-    }
 }
 
 impl Drop for AnalysisWorker {
@@ -344,7 +322,12 @@ impl Drop for AnalysisWorker {
     }
 }
 
-#[cfg(all(test, feature = "analysis-beat", not(feature = "beat-nn")))]
+#[cfg(all(
+    test,
+    feature = "analysis-beat",
+    not(feature = "beat-nn"),
+    not(feature = "beat-dsp")
+))]
 mod tests {
     use kithara_platform::CancelToken;
     use kithara_resampler::NoResamplerBackend;

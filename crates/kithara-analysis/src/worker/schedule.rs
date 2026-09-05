@@ -1,7 +1,4 @@
-use std::{collections::BTreeSet, num::NonZeroU32};
-
-use kithara_platform::time::Duration;
-use kithara_signal::AudioSpec;
+use std::collections::BTreeSet;
 
 use crate::coverage::{Coverage, FrameRange};
 
@@ -58,6 +55,24 @@ impl Schedule {
             .or_else(|| self.gap_target(coverage, extent, Some(window)))
     }
 
+    /// Where a run can continue covered audio instead of opening an island of
+    /// its own: at the front of the widest gap. A gap at the start of the
+    /// track has nothing in front of it, and is continued from behind: reading
+    /// it through arrives at the covered audio that closes it.
+    pub(crate) fn extend(&self, coverage: &Coverage, extent: Option<u64>) -> Option<u64> {
+        let extent = extent?;
+        let mut widest: Option<FrameRange> = None;
+        for gap in coverage.gaps(extent) {
+            if self.barren.contains(&gap.start()) {
+                continue;
+            }
+            if widest.is_none_or(|held| gap.frames() > held.frames()) {
+                widest = Some(gap);
+            }
+        }
+        widest.map(FrameRange::start)
+    }
+
     fn untouched(
         &self,
         coverage: &Coverage,
@@ -71,34 +86,6 @@ impl Schedule {
             && frames > 0
             && !overlaps(coverage, FrameRange::new(at, frames)))
         .then_some(at)
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct Extent {
-    reachable: Option<u64>,
-    reported: Option<u64>,
-}
-
-impl Extent {
-    pub(crate) fn frames(&self) -> Option<u64> {
-        let reported = self.reported?;
-        Some(self.reachable.map_or(reported, |limit| reported.min(limit)))
-    }
-
-    pub(crate) fn report(&mut self, duration: Option<Duration>, rate: NonZeroU32) {
-        self.reported = self.reported.max(extent_frames(duration, rate));
-    }
-
-    pub(crate) const fn restore(frames: u64) -> Self {
-        Self {
-            reported: Some(frames),
-            reachable: None,
-        }
-    }
-
-    pub(crate) fn unreachable(&mut self, frame: u64) {
-        self.reachable = Some(self.reachable.map_or(frame, |limit| limit.min(frame)));
     }
 }
 
@@ -127,19 +114,11 @@ fn aim(gap: FrameRange, window: Option<u64>) -> u64 {
     gap.start().saturating_add(inset)
 }
 
-pub(crate) fn extent_frames(duration: Option<Duration>, rate: NonZeroU32) -> Option<u64> {
-    let frames = AudioSpec::new(1, rate).frames_for(duration?).ok()?.get();
-    u64::try_from(frames).ok().filter(|frames| *frames > 0)
-}
-
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
-    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
-    use super::{Extent, Schedule};
+    use super::Schedule;
     use crate::coverage::{Coverage, FrameRange};
 
     struct Consts;
@@ -259,6 +238,23 @@ mod tests {
     }
 
     #[kithara::test]
+    fn extending_aims_at_the_front_of_the_widest_gap() {
+        let schedule = Schedule::default();
+        // Gaps of 200 and 300 frames.
+        let covered = coverage(&[(200, 200), (700, 300)]);
+        assert_eq!(
+            schedule.extend(&covered, Some(Consts::EXTENT)),
+            Some(400),
+            "the widest gap is where a run has the most to continue"
+        );
+        assert_eq!(
+            schedule.extend(&coverage(&[(200, 800)]), Some(Consts::EXTENT)),
+            Some(0),
+            "a gap at the start is read through to the audio that closes it"
+        );
+    }
+
+    #[kithara::test]
     fn a_covered_extent_schedules_nothing() {
         let schedule = Schedule::default();
         assert_eq!(
@@ -310,53 +306,6 @@ mod tests {
             schedule.next(&covered, Some(Consts::EXTENT), Some(Consts::WINDOW)),
             None,
             "a pass with nowhere left to reach is finished, not spinning"
-        );
-    }
-
-    fn rate() -> NonZeroU32 {
-        NonZeroU32::new(44_100).expect("test rate is non-zero")
-    }
-
-    #[kithara::test]
-    fn an_extent_is_measured_on_the_pass_axis() {
-        let mut extent = Extent::default();
-        assert_eq!(extent.frames(), None, "nothing is reported yet");
-
-        extent.report(Some(Duration::from_secs(2)), rate());
-        assert_eq!(extent.frames(), Some(88_200));
-
-        extent.report(None, rate());
-        assert_eq!(
-            extent.frames(),
-            Some(88_200),
-            "a live source reports no duration, which retracts nothing"
-        );
-        extent.report(Some(Duration::ZERO), rate());
-        assert_eq!(extent.frames(), Some(88_200));
-    }
-
-    #[kithara::test]
-    fn a_reported_length_grows_and_a_proved_one_bounds_it() {
-        let mut extent = Extent::default();
-        extent.report(Some(Duration::from_secs(2)), rate());
-        extent.report(Some(Duration::from_secs(4)), rate());
-        assert_eq!(
-            extent.frames(),
-            Some(176_400),
-            "the decode path refines a duration upward as it learns more"
-        );
-
-        extent.unreachable(100_000);
-        assert_eq!(
-            extent.frames(),
-            Some(100_000),
-            "what the source proved it can reach bounds what it claims"
-        );
-        extent.report(Some(Duration::from_secs(8)), rate());
-        assert_eq!(
-            extent.frames(),
-            Some(100_000),
-            "a larger claim does not undo what the source already proved"
         );
     }
 }

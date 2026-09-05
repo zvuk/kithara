@@ -210,7 +210,7 @@ kithara = { workspace = true, features = [
     "tokio-net",
     "tokio-rt-multi-thread",
 ] }
-kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn", "lib-only"] }
+kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-test-fixtures = { workspace = true }
 
 # `v4` mints the random tokens the test server hands out; the workspace

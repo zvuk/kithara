@@ -188,6 +188,7 @@ fn enqueue(
     let (tx, results) = watch::channel(None);
     jobs.send(Job {
         token: token.into(),
+        revision: 0,
         tx,
         rate: super::fixtures::spec().sample_rate,
         ingest,
@@ -235,6 +236,7 @@ fn pending_reader_yields_one_scheduler_tick() {
     let (tx, _results) = watch::channel(None);
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         tx,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
@@ -262,6 +264,7 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender() {
     let cancel = CancelToken::root();
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         tx,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
@@ -290,6 +293,7 @@ fn offered(ranges: &[(u64, usize)]) -> Option<TrackAnalysis> {
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader: Box::new(FakeReader::stalled(ranges.len() + 2)),
         tx,
         rate,
@@ -342,6 +346,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names() {
         let (writer, ingest) = ring::open_for(rate);
         jobs.send(Job {
             token: token.into(),
+            revision: 0,
             reader: Box::new(FakeReader::stalled(8)),
             tx,
             rate,
@@ -397,6 +402,7 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone() {
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader: Box::new(FakeReader::stalled(4)),
         tx,
         rate,
@@ -445,6 +451,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes() {
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader: Box::new(FakeReader::stalled(STALLS)),
         tx,
         rate,
@@ -544,6 +551,7 @@ fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader: Box::new(FakeReader::stalled(STALLS)),
         tx,
         rate,
@@ -658,6 +666,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union() {
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader: Box::new(FakeReader::stalled(STALLS)),
         tx,
         rate,
@@ -757,6 +766,7 @@ where
     let (tx, mut results) = watch::channel(None);
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader,
         tx,
         rate: super::fixtures::spec().sample_rate,
@@ -803,8 +813,15 @@ fn matches_direct_waveform_analyzer_over_chunked_stream() {
 
     let reader = Box::new(FakeReader::chunked(&pools, &samples, 4));
     let out = stages(reader, builder, &CancelToken::root());
-    assert_eq!(out.len(), 1, "waveform-only emits once");
-    let got = out[0]
+    let [.., before_last, last] = out.as_slice() else {
+        panic!("the end of reading publishes, then the settled final: {out:?}");
+    };
+    assert!(
+        !before_last.is_settled(),
+        "the publication at the end of reading is not the settled one"
+    );
+    assert!(last.is_settled(), "the final publication is settled");
+    let got = last
         .waveform()
         .cloned()
         .expect("waveform analyzer fills its slot");
@@ -1130,10 +1147,21 @@ fn final_publication_waits_for_trailing_detection() {
         .recv_timeout(Instant::now() + Duration::from_secs(2))
         .expect("EOF starts the short trailing window");
     assert_eq!(node.tick(), TickResult::Backpressured);
-    assert!(
-        results.borrow().is_none(),
-        "nothing final is published early"
-    );
+    {
+        let read = results.borrow_and_update();
+        let progress = read
+            .as_ref()
+            .expect("what the pass read is published when the reading ends");
+        assert!(
+            progress.analysis().is_complete(),
+            "the end of reading publishes the whole coverage: {:?}",
+            progress.analysis().missing()
+        );
+        assert!(
+            !progress.analysis().is_settled() && progress.is_resumable(),
+            "a pass still detecting is not settled: a restart resumes the detection"
+        );
+    }
     assert!(
         matches!(results.has_changed(), Ok(false)),
         "the final sender remains alive while detection runs"
@@ -1141,11 +1169,14 @@ fn final_publication_waits_for_trailing_detection() {
 
     release.send(()).expect("release trailing detection");
     drive_until(&mut node, || results.has_changed().is_err());
+    let read = results.borrow_and_update();
+    let progress = read.as_ref().expect("the final publication");
     assert!(
-        results
-            .borrow_and_update()
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.analysis().beat().is_some()),
+        progress.analysis().is_settled(),
+        "the final publication is the settled one"
+    );
+    assert!(
+        progress.analysis().beat().is_some(),
         "the trailing result rides the final publication"
     );
 }
@@ -1308,5 +1339,60 @@ fn pending_is_tolerated_mid_stream() {
         2,
     ));
     let out = stages(reader, builder, &CancelToken::root());
-    assert!(out.len() == 1 && out[0].waveform().is_some());
+    assert!(
+        out.last().is_some_and(|last| last.waveform().is_some()),
+        "the final publication carries the waveform: {out:?}"
+    );
+}
+
+/// A build that carries no beat detector still runs the pass: the spec requires
+/// the absence to cost the snapshot nothing but its beat artifact.
+#[cfg(all(
+    feature = "analysis-beat",
+    feature = "analysis-waveform",
+    not(feature = "beat-nn"),
+    not(feature = "beat-dsp")
+))]
+#[kithara::test]
+fn a_pass_with_no_detector_publishes_the_rest() {
+    let rate = super::fixtures::spec().sample_rate;
+    let (jobs, receiver) = mpsc::channel();
+    let (tx, results) = watch::channel(None);
+    let (writer, ingest) = ring::open_for(rate);
+    let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
+    jobs.send(Job {
+        token: "test-track".into(),
+        revision: 0,
+        reader: Box::new(FakeReader::stalled(3)),
+        tx,
+        rate,
+        ingest,
+        cancel: CancelToken::root(),
+        resume: None,
+    })
+    .expect("analysis node accepts the test job");
+    let mut node = NodeHarness::new(waveform_only().with_beat(), receiver);
+
+    assert_eq!(
+        producer.offer(&sine(1024), super::fixtures::spec(), 0),
+        Ok(())
+    );
+    for _ in 0..128 {
+        let _ = node.tick();
+    }
+
+    let analysis = latest_analysis(&results).expect("a pass with no detector still publishes");
+    assert_eq!(
+        analysis.coverage().runs(),
+        &[FrameRange::new(0, 1024)],
+        "coverage is recorded whether or not a detector ran"
+    );
+    assert!(
+        analysis.waveform().is_some(),
+        "the missing detector does not suppress the waveform"
+    );
+    assert!(
+        analysis.beat().is_none(),
+        "there is no detector, so there is no beat artifact"
+    );
 }
