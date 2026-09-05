@@ -164,7 +164,9 @@ detector the same whatever its chunk boundaries are.
 `BeatAnalysisConfig<B>` owns beat tunables and a standalone resampler backend.
 Defaults are 1024-frame mono resampler blocks, 22 050 Hz detector input,
 30-second detector windows with 2 seconds of overlap, and
-`ResamplerQuality::High`. The analyzer never stores whole-track source PCM: it
+`ResamplerQuality::High`. A `beat-dsp` build also carries the `Tempo` the
+signal detector searches, `48..=185` BPM around `120` by default; it reaches
+the cache tag, so a grid searched over one band is never served for another. The analyzer never stores whole-track source PCM: it
 downmixes to mono and keeps covered spans at detector rate in buffers borrowed
 from the caller's typed region.
 

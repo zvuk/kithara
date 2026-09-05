@@ -1,7 +1,7 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 
-use super::{buffer::collected, consts::PeriodConsts};
+use super::{buffer::collected, consts::PeriodConsts, tempo::Tempo};
 
 fn lag_of(hypothesis: usize) -> f32 {
     (hypothesis + 1).to_f32().unwrap_or(0.0)
@@ -9,7 +9,11 @@ fn lag_of(hypothesis: usize) -> f32 {
 
 /// Beat period in whole frames, one per [`PeriodConsts::ACF_STEP`].
 /// Empty when the curve is shorter than one periodicity window.
-pub(crate) fn periods<S>(curve: &[f32], pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
+pub(crate) fn periods<S>(
+    curve: &[f32],
+    tempo: Tempo,
+    pools: &PoolRegion<S>,
+) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,
 {
@@ -19,7 +23,7 @@ where
     let mut onsets = collected(pools, curve.len(), curve.iter().copied())?;
     adaptive_threshold(&mut onsets, PeriodConsts::SMOOTH_HALF, pools)?;
 
-    let weights = rayleigh_weights(pools)?;
+    let weights = rayleigh_weights(tempo, pools)?;
     let mut window = pools.get_with_len::<f32>(PeriodConsts::ACF_FRAME)?;
     let mut autocorrelation = pools.get_with_len::<f32>(PeriodConsts::ACF_FRAME)?;
     let mut saliences: Vec<SampleBuffer> = Vec::new();
@@ -33,14 +37,14 @@ where
         correlate(&window, &mut autocorrelation);
         let mut salience = comb(&autocorrelation, &weights, pools)?;
         adaptive_threshold(&mut salience, PeriodConsts::SMOOTH_HALF, pools)?;
-        salience[..PeriodConsts::SEARCH_MIN_INDEX].fill(0.0);
+        salience[..tempo.search_floor()].fill(0.0);
         saliences.push(salience);
         if start + PeriodConsts::ACF_FRAME > onsets.len() {
             break;
         }
         start += PeriodConsts::ACF_STEP;
     }
-    let hypotheses = track(&saliences, &weights, pools)?;
+    let hypotheses = track(&saliences, &weights, tempo, pools)?;
     collected(
         pools,
         hypotheses.len(),
@@ -87,6 +91,7 @@ where
 fn track<S>(
     saliences: &[SampleBuffer],
     weights: &[f32],
+    tempo: Tempo,
     pools: &PoolRegion<S>,
 ) -> Result<Vec<Option<usize>>, PoolError>
 where
@@ -112,9 +117,9 @@ where
     for (step, row) in saliences.iter().enumerate().skip(1) {
         let mut next = pools.get_with_len::<f32>(lags)?;
         next.fill(f32::NEG_INFINITY);
-        for index in PeriodConsts::BAND {
+        for index in tempo.lags() {
             let mut best = (0usize, f32::NEG_INFINITY);
-            for from in PeriodConsts::BAND {
+            for from in tempo.lags() {
                 let gap = index.to_f32().unwrap_or(0.0) - from.to_f32().unwrap_or(0.0);
                 if gap.abs() > PeriodConsts::TRANSITION_SUPPORT {
                     continue;
@@ -184,11 +189,12 @@ where
     Ok(out)
 }
 
-fn rayleigh_weights<S>(pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
+fn rayleigh_weights<S>(tempo: Tempo, pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
 where
     S: HasPool<f32>,
 {
-    let variance = PeriodConsts::RAYLEIGH_LAG * PeriodConsts::RAYLEIGH_LAG;
+    let mode = tempo.prior_lag();
+    let variance = mode * mode;
     collected(
         pools,
         PeriodConsts::HYPOTHESES,
@@ -220,7 +226,7 @@ mod tests {
             .expect("a fresh region has room for the window")
             .curve(&pcm)
             .expect("the curve fits the region");
-        periods(&curve, &pools).expect("the estimates fit the region")
+        periods(&curve, Tempo::default(), &pools).expect("the estimates fit the region")
     }
 
     /// Estimates are whole lags: the lag nearest the true period and its
@@ -280,7 +286,8 @@ mod tests {
             .expect("a fresh region has room for the window")
             .curve(&clicks::track(20.0, 0.5))
             .expect("the curve fits the region");
-        let reported = periods(&curve, &pools).expect("the estimates fit the region");
+        let reported =
+            periods(&curve, Tempo::default(), &pools).expect("the estimates fit the region");
         assert!(!reported.is_empty(), "20 s of audio yields estimates");
 
         let range = 1.0..=lag_of(PeriodConsts::HYPOTHESES - 1);
@@ -300,7 +307,7 @@ mod tests {
             .curve(&clicks::silence(0.5))
             .expect("the curve fits the region");
         assert!(
-            periods(&curve, &pools)
+            periods(&curve, Tempo::default(), &pools)
                 .expect("the estimates fit the region")
                 .is_empty(),
             "audio shorter than a periodicity window yields nothing"

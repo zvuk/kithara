@@ -22,6 +22,10 @@ the change that lands the work, and keep it short.
   `grid_bpm_from_beats_v4`. Left: the reported deck scenario on the release
   build with the full model, and the size of the resume blob.
 
+- The signal beat detector searches the `Tempo` its caller hands it:
+  `BeatAnalysisConfig` carries the band and the prior a `beat-dsp` build uses,
+  and the cache tag names them. Left: nothing.
+
 - Harness and document revision. `AGENTS.md` routes instead of restating; the
   `style` namespace budgets documents with `doc_size`, blocks drift with
   `doc_staleness`, and holds every crate README to one shape with

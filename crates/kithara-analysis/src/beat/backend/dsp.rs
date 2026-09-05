@@ -5,12 +5,16 @@ use super::{
     super::detector::{BeatDetectError, BeatDetector, RawBeats},
     build::marks,
 };
+use crate::BeatAnalysisConfig;
 
-pub(super) fn detector<S>(pools: &PoolRegion<S>) -> Result<SpectralBeats<S>, BeatDetectError>
+pub(super) fn detector<B, S>(
+    config: &BeatAnalysisConfig<B>,
+    pools: &PoolRegion<S>,
+) -> Result<SpectralBeats<S>, BeatDetectError>
 where
     S: HasPool<f32>,
 {
-    Ok(SpectralBeats::new(pools.clone())?)
+    Ok(SpectralBeats::new(pools.clone(), config.tempo())?)
 }
 
 impl<S> BeatDetector for SpectralBeats<S>

@@ -1,6 +1,8 @@
 use std::fmt;
 
 use bon::Builder;
+#[cfg(feature = "beat-dsp")]
+use kithara_beat::Tempo;
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
 
 struct Consts;
@@ -34,6 +36,12 @@ pub struct BeatAnalysisConfig<B> {
     target_rate: u32,
     #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
     block_frames: usize,
+    /// The tempo the signal detector searches. The network detector has no
+    /// tempo policy and does not read it.
+    #[cfg(feature = "beat-dsp")]
+    #[builder(default)]
+    #[field(get(copy))]
+    tempo: Tempo,
 }
 
 impl<B> BeatAnalysisConfig<B>
@@ -64,8 +72,8 @@ where
     B: ResamplerBackend,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BeatAnalysisConfig")
-            .field("block_frames", &self.block_frames)
+        let mut out = f.debug_struct("BeatAnalysisConfig");
+        out.field("block_frames", &self.block_frames)
             .field("target_rate", &self.target_rate)
             .field("resampler_quality", &self.resampler_quality)
             .field("resampler_backend", &self.resampler_backend_name())
@@ -74,8 +82,10 @@ where
                 &self.detector_min_window_seconds,
             )
             .field("detector_window_seconds", &self.detector_window_seconds)
-            .field("detector_overlap_seconds", &self.detector_overlap_seconds)
-            .finish()
+            .field("detector_overlap_seconds", &self.detector_overlap_seconds);
+        #[cfg(feature = "beat-dsp")]
+        out.field("tempo", &self.tempo);
+        out.finish()
     }
 }
 
@@ -101,6 +111,24 @@ mod tests {
             BeatAnalysisConfig::<RubatoBackend>::default().resampler_backend_name(),
             "rubato"
         );
+    }
+
+    /// The signal detector searches the band its config names, so two bands
+    /// are two grids and the cache must not serve one for the other.
+    #[cfg(feature = "beat-dsp")]
+    #[kithara::test(native, flash(false))]
+    fn the_cache_tag_carries_the_tempo_the_detector_searches() {
+        let tag = |tempo| {
+            BeatAnalysisConfig::builder()
+                .resampler_backend(RubatoBackend::default())
+                .tempo(tempo)
+                .build()
+                .cache_tag()
+                .expect("a build with a detector has a cache tag")
+        };
+        let narrowed = kithara_beat::Tempo::new(90.0..=180.0, 120.0).expect("a searchable band");
+
+        assert_ne!(tag(kithara_beat::Tempo::default()), tag(narrowed));
     }
 
     #[cfg(feature = "beat-nn")]

@@ -11,11 +11,14 @@ use crate::{
     },
 };
 
-pub(crate) fn detector<S>(pools: &PoolRegion<S>) -> Option<Arc<dyn crate::beat::BeatDetector>>
+pub(crate) fn detector<B, S>(
+    config: &BeatAnalysisConfig<B>,
+    pools: &PoolRegion<S>,
+) -> Option<Arc<dyn crate::beat::BeatDetector>>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    match build_detector(SELECTED_DETECTOR, pools) {
+    match build_detector(SELECTED_DETECTOR, config, pools) {
         Ok(detector) => Some(Arc::from(detector)),
         Err(e) => {
             warn!(?e, "beat detector init failed; beat analysis disabled");
@@ -64,7 +67,7 @@ mod tests {
     fn the_tag_names_the_detector_that_was_built() {
         let pools = kithara_bufpool::testing::pools();
         assert!(
-            build_detector(SELECTED_DETECTOR, &pools).is_ok(),
+            build_detector(SELECTED_DETECTOR, &config(), &pools).is_ok(),
             "the selected detector is the one a build can construct"
         );
         let tag = tag(&config());

@@ -5,8 +5,12 @@ use super::{
     super::detector::{BeatDetectError, BeatDetector, RawBeats},
     build::marks,
 };
+use crate::BeatAnalysisConfig;
 
-pub(super) fn detector<S>(pools: &PoolRegion<S>) -> Result<BeatThis<S>, BeatDetectError>
+pub(super) fn detector<B, S>(
+    _config: &BeatAnalysisConfig<B>,
+    pools: &PoolRegion<S>,
+) -> Result<BeatThis<S>, BeatDetectError>
 where
     S: HasPool<f32>,
 {

@@ -20,6 +20,17 @@ impl NoveltyConsts {
     pub(super) const STRIDE: usize = 2 * FramesConsts::HOP;
 }
 
+pub(super) struct TempoConsts;
+
+impl TempoConsts {
+    /// Fastest tempo the detector tracks.
+    pub(super) const BAND_HIGH_BPM: f32 = 185.0;
+    /// Slowest tempo the detector tracks.
+    pub(super) const BAND_LOW_BPM: f32 = 48.0;
+    /// The tempo the periodicity stage prefers inside the band.
+    pub(super) const PRIOR_BPM: f32 = 120.0;
+}
+
 pub(super) struct PeriodConsts;
 
 impl PeriodConsts {
@@ -27,10 +38,6 @@ impl PeriodConsts {
     pub(super) const ACF_FRAME: usize = 512;
     /// One beat-period estimate every 128 frames (1.49 s), a 75% overlap.
     pub(super) const ACF_STEP: usize = 128;
-    /// Tracked-period band, 28..=108 lags (47.9..184.6 BPM): estimates only
-    /// move inside it, so a hypothesis outside can win a single frame but
-    /// never the path.
-    pub(super) const BAND: std::ops::RangeInclusive<usize> = 27..=107;
     /// Comb elements each hypothesis is scored over.
     pub(super) const COMB_HARMONICS: usize = 4;
     /// Hypothesis `i` is a period of `i + 1` lags; one per possible lag up
@@ -40,17 +47,12 @@ impl PeriodConsts {
     /// hypothesis is where its widest element still reads inside the window.
     pub(super) const PERIOD_INDEX: std::ops::RangeInclusive<usize> = (Self::COMB_HARMONICS - 1)
         ..=((Self::ACF_FRAME - (Self::COMB_HARMONICS - 1)) / Self::COMB_HARMONICS - 1);
-    /// Rayleigh mode in lags: a 120 BPM preference at the detection rate.
-    pub(super) const RAYLEIGH_LAG: f32 = 43.0;
     /// Adaptive-threshold half window, 0.1 s of detection frames.
     pub(super) const SMOOTH_HALF: usize = 8;
     /// Between-estimate spread of the period, in lags.
     pub(super) const TRANSITION_SIGMA: f32 = 8.0;
     /// The Gaussian transition's support, in lags.
     pub(super) const TRANSITION_SUPPORT: f32 = 32.0;
-    /// Hypotheses below 25 lags sit above 208 BPM and are outside the
-    /// searched tempo range.
-    pub(super) const SEARCH_MIN_INDEX: usize = 24;
 }
 
 pub(super) struct DecodeConsts;

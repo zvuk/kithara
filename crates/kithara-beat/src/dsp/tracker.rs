@@ -1,7 +1,7 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use num_traits::cast::ToPrimitive;
 
-use super::{consts::TrackerConsts, decode, frames, novelty::Novelty, period};
+use super::{consts::TrackerConsts, decode, frames, novelty::Novelty, period, tempo::Tempo};
 use crate::mark::{BeatMark, RawBeats};
 
 /// Signal-processing beat detector: novelty curve, comb-filtered period,
@@ -15,6 +15,7 @@ where
 {
     novelty: Novelty<S>,
     pools: PoolRegion<S>,
+    tempo: Tempo,
 }
 
 impl<S> SpectralBeats<S>
@@ -23,10 +24,11 @@ where
 {
     /// # Errors
     /// [`PoolError`] when the analysis window does not fit the region.
-    pub fn new(pools: PoolRegion<S>) -> Result<Self, PoolError> {
+    pub fn new(pools: PoolRegion<S>, tempo: Tempo) -> Result<Self, PoolError> {
         Ok(Self {
             novelty: Novelty::new(pools.clone())?,
             pools,
+            tempo,
         })
     }
 
@@ -37,7 +39,7 @@ where
     /// [`PoolError`] when a stage does not fit the region.
     pub fn analyze(&self, mono_22050: &[f32]) -> Result<RawBeats, PoolError> {
         let curve = self.novelty.curve(mono_22050)?;
-        let periods = period::periods(&curve, &self.pools)?;
+        let periods = period::periods(&curve, self.tempo, &self.pools)?;
         let mean = mean(&curve);
         let beats = decode::beats(&curve, &periods, &self.pools)?
             .iter()
@@ -85,10 +87,50 @@ mod tests {
     use crate::{dsp::clicks, test_pools::pools};
 
     fn tracker() -> SpectralBeats<impl HasPool<f32>> {
-        SpectralBeats::new(pools()).expect("a fresh region has room for the window")
+        SpectralBeats::new(pools(), Tempo::default())
+            .expect("a fresh region has room for the window")
     }
 
     const SECONDS: f32 = 20.0;
+
+    /// The tempo of a click train, read from the marks the tracker returns.
+    fn reported_bpm(tempo: Tempo, clicks_per_minute: f32) -> f32 {
+        let pcm = clicks::track(SECONDS, 60.0 / clicks_per_minute);
+        let beats: Vec<f32> = SpectralBeats::new(pools(), tempo)
+            .expect("a fresh region has room for the window")
+            .analyze(&pcm)
+            .expect("the analysis fits the region")
+            .beats
+            .into_iter()
+            .map(|mark| mark.at)
+            .collect();
+        let mut gaps: Vec<f32> = beats.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        assert!(!gaps.is_empty(), "20 s of clicks decodes to beats");
+        gaps.sort_by(f32::total_cmp);
+        60.0 / gaps[gaps.len() / 2]
+    }
+
+    /// The band decides which metrical level the tracker reports: one click
+    /// train reads as its own tempo under the default band, and as its half
+    /// under a band holding only the half.
+    #[kithara::test(native, flash(false))]
+    fn the_band_holds_the_tempo_the_tracker_reports() {
+        let clicks_per_minute = 120.0;
+        let halved = Tempo::new(55.0..=75.0, 60.0).expect("a band the comb scores");
+
+        let default = reported_bpm(Tempo::default(), clicks_per_minute);
+        assert!(
+            (default - clicks_per_minute).abs() < 4.0,
+            "the default band reads the click tempo, read as {default} BPM"
+        );
+
+        let narrowed = reported_bpm(halved, clicks_per_minute);
+        assert!(
+            halved.band().contains(&narrowed),
+            "a band of {:?} BPM reported {narrowed} BPM",
+            halved.band()
+        );
+    }
 
     fn tempo_change(switch_seconds: f32, total_seconds: f32, first: f32, second: f32) -> Vec<f32> {
         let mut pcm = clicks::track(switch_seconds, first);
@@ -181,13 +223,14 @@ mod tests {
                 .collect()
         };
 
-        let reused =
-            SpectralBeats::new(region.clone()).expect("a fresh region has room for the window");
+        let reused = SpectralBeats::new(region.clone(), Tempo::default())
+            .expect("a fresh region has room for the window");
         let first = marks(&reused, &pcm);
         let _ = marks(&reused, &clicks::track(12.0, 0.4));
         let again = marks(&reused, &pcm);
         let fresh = marks(
-            &SpectralBeats::new(region.clone()).expect("a fresh region has room for the window"),
+            &SpectralBeats::new(region.clone(), Tempo::default())
+                .expect("a fresh region has room for the window"),
             &pcm,
         );
 
@@ -275,7 +318,8 @@ mod optimality {
             .expect("a fresh region has room for the window")
             .curve(&pcm)
             .expect("the curve fits the region");
-        let periods = period::periods(&curve, &region).expect("the estimates fit the region");
+        let periods = period::periods(&curve, Tempo::default(), &region)
+            .expect("the estimates fit the region");
         let (decoded, optimum, hazards, observations, states) =
             decode::probe(&curve, &periods, &region).expect("the probe fits the region");
 

@@ -23,6 +23,12 @@ same `RawBeats`: novelty curve, comb-filtered periodicity, then Viterbi over
 inter-beat intervals. It pulls `realfft` and neither `rten` nor model data, so a
 `dsp` build compiles for `wasm32`. It reports beats and never downbeats.
 
+`SpectralBeats::new` takes the `Tempo` it searches: the band its period
+estimates stay inside and the tempo it prefers within that band, both in BPM,
+`48..=185` around `120` by default. `Tempo::new` takes a band the comb scores
+and a prior inside it, and yields `TempoError` for anything else. The neural
+pipeline has no tempo policy.
+
 Neither feature implies the other and a build may carry both, one, or neither.
 The two are not expected to agree: on the crate's own fixture they track
 different metrical levels of the same track.

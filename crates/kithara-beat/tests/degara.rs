@@ -16,7 +16,7 @@
 mod common;
 
 use common::{WINDOW, f_measure, fixture, load_golden, load_pcm_fixture, report};
-use kithara_beat::SpectralBeats;
+use kithara_beat::{SpectralBeats, Tempo};
 use kithara_bufpool::testing::pools;
 use kithara_test_utils::kithara;
 use num_traits::cast::ToPrimitive;
@@ -69,7 +69,8 @@ fn between(beats: &[f32], from: f64, until: f64) -> Vec<f32> {
 }
 
 fn windows(pcm: &[f32], from: usize) -> Vec<Window> {
-    let detector = SpectralBeats::new(pools()).expect("a fresh region has room for the window");
+    let detector = SpectralBeats::new(pools(), Tempo::default())
+        .expect("a fresh region has room for the window");
     let mut out = Vec::new();
     let mut at = from;
     while at < pcm.len() {

@@ -4,9 +4,11 @@ use super::{
     super::detector::{BeatDetectError, BeatDetector, BeatMark, RawBeats},
     BeatDetectorKind,
 };
+use crate::BeatAnalysisConfig;
 
-pub(crate) fn build_detector<S>(
+pub(crate) fn build_detector<B, S>(
     kind: BeatDetectorKind,
+    config: &BeatAnalysisConfig<B>,
     pools: &PoolRegion<S>,
 ) -> Result<Box<dyn BeatDetector>, BeatDetectError>
 where
@@ -14,9 +16,9 @@ where
 {
     match kind {
         #[cfg(feature = "beat-nn")]
-        BeatDetectorKind::NnBeatThis => Ok(Box::new(super::nn::detector(pools)?)),
+        BeatDetectorKind::NnBeatThis => Ok(Box::new(super::nn::detector(config, pools)?)),
         #[cfg(feature = "beat-dsp")]
-        BeatDetectorKind::DspSpectral => Ok(Box::new(super::dsp::detector(pools)?)),
+        BeatDetectorKind::DspSpectral => Ok(Box::new(super::dsp::detector(config, pools)?)),
     }
 }
 
