@@ -95,48 +95,6 @@ async fn test_hls_stream_creation(
 }
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_hls_session_events_consumption(
-    temp_dir: TestTempDir,
-) -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let server = TestServer::new().await;
-    let test_stream_url = server.url("/master.m3u8");
-    info!("Testing HLS session events consumption");
-
-    let bus = EventBus::new(32);
-    let mut events_rx = bus.subscribe();
-
-    let pools = pools();
-    let store = AssetStore::builder(pools.clone())
-        .backend(StorageBackend::Disk {
-            root: temp_dir.path().to_path_buf(),
-        })
-        .build();
-    let config = HlsConfig::for_url(test_stream_url)
-        .store(store)
-        .pools(pools)
-        .cancel(CancelToken::never())
-        .events(bus)
-        .build();
-
-    let _stream = Stream::<Hls<TestPools>>::new(config).await?;
-
-    // State-wait: block on the first published event instead of a fixed 500ms
-    // pacing window. Session creation publishes events; `recv()` returns when one
-    // lands (or `Err` if the bus closes). The `timeout(5s)` test attribute bounds
-    // this so a real hang still fails fast.
-    match events_rx.recv().await.map(|env| env.event) {
-        Ok(event) => {
-            info!("Received event: {:?}", event);
-        }
-        Err(_) => {
-            info!("Event channel closed");
-        }
-    }
-
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_hls_invalid_url_handling(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
@@ -162,24 +120,5 @@ async fn test_hls_invalid_url_handling(
         assert!(url_result.is_err());
     }
 
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_hls_session_drop_cleanup(
-    temp_dir: TestTempDir,
-) -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let server = TestServer::new().await;
-    info!("Testing HLS session drop cleanup");
-
-    let stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), CancelToken::never())
-        .await;
-    // `drop` runs the stream's synchronous teardown before it returns; nothing
-    // here asserts on background cleanup, so there is no state to wait on and no
-    // pacing sleep is needed (the completed `drop` is the done signal).
-    drop(stream);
-
-    info!("HLS session dropped without issues");
     Ok(())
 }

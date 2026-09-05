@@ -1,17 +1,11 @@
 use kithara::{
     self,
-    abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator},
-    events::{BandwidthSource, VariantDuration, VariantIndex, VariantInfo},
+    abr::{AbrController, AbrMode, AbrState, ThroughputEstimator},
+    events::{BandwidthSource, VariantIndex, VariantInfo},
     platform::{CancelToken, sync::Arc, time::Duration},
 };
 
-fn settings_fast() -> AbrSettings {
-    AbrSettings::builder()
-        .initial_throughput_bps(Some(2_000_000))
-        .min_switch_interval(Duration::ZERO)
-        .min_buffer_for_up_switch(Duration::ZERO)
-        .build()
-}
+use super::common::{fast_settings, variants};
 
 struct TestPeer {
     cancel: CancelToken,
@@ -32,21 +26,6 @@ impl kithara::abr::Abr for TestPeer {
     }
 }
 
-fn variants(bitrates: &[u64]) -> Vec<VariantInfo> {
-    bitrates
-        .iter()
-        .enumerate()
-        .map(|(i, bps)| VariantInfo {
-            variant_index: VariantIndex::new(i),
-            bandwidth_bps: Some(*bps),
-            duration: VariantDuration::Unknown,
-            name: None,
-            codecs: None,
-            container: None,
-        })
-        .collect()
-}
-
 fn new_peer(bitrates: &[u64]) -> (Arc<AbrState>, Arc<dyn kithara::abr::Abr>) {
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn kithara::abr::Abr> = Arc::new(TestPeer {
@@ -60,7 +39,7 @@ fn new_peer(bitrates: &[u64]) -> (Arc<AbrState>, Arc<dyn kithara::abr::Abr>) {
 #[kithara::test(tokio)]
 async fn three_peers_maintain_independent_variant_indices() {
     let controller = AbrController::with_estimator(
-        settings_fast(),
+        fast_settings(),
         Arc::new(ThroughputEstimator::new()) as Arc<_>,
     );
 

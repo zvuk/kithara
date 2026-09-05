@@ -16,8 +16,10 @@ use kithara::{
     storage::{ResourceRead, ResourceStatus, StorageError, StorageResource, WaitOutcome},
 };
 #[cfg(target_arch = "wasm32")]
+use kithara_integration_tests::bufpool_ext::pools;
+#[cfg(target_arch = "wasm32")]
 use kithara_integration_tests::storage_ext::mem_resource_with_bytes;
-use kithara_integration_tests::{TestTempDir, bufpool_ext::pools, cancel_token, temp_dir};
+use kithara_integration_tests::{TestTempDir, cancel_token, storage_ext::read_bytes, temp_dir};
 
 #[cfg(not(target_arch = "wasm32"))]
 type TestResource = MmapResource;
@@ -56,16 +58,6 @@ fn open_mmap_at(
         .maybe_initial_len(initial_len)
         .build();
     Resource::open(cancel, opts).expect("open should succeed")
-}
-
-/// Helper to read bytes from resource into a new Vec.
-fn read_bytes<R: ResourceRead>(res: &R, offset: u64, len: usize) -> Vec<u8> {
-    let pools = pools();
-    let mut buf = pools
-        .get_with_len::<u8>(len)
-        .expect("read buffer fits the test pool budget");
-    let n = res.read_at(offset, &mut buf).unwrap_or(0);
-    buf[..n].to_vec()
 }
 
 fn assert_wait_times_out<T>(handle: &thread::JoinHandle<T>, timeout: Duration) {

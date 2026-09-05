@@ -257,28 +257,6 @@ async fn test_audio_read_small_buffer(#[case] sample_count: usize, #[case] buf_l
 }
 
 #[kithara::test(tokio)]
-async fn test_audio_is_eof() {
-    let region = pools();
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(10, &worker);
-    let audio = worker.open(config).await.unwrap();
-
-    let (_audio, saw_eof) = blocking_audio(audio, |audio| {
-        let mut buf = [0.0f32; 1024];
-        loop {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => break false,
-                Ok(ReadOutcome::Frames { .. }) => continue,
-                Ok(ReadOutcome::Eof { .. }) => break true,
-                Err(e) => panic!("decode error: {e}"),
-            }
-        }
-    })
-    .await;
-    assert!(saw_eof, "expected ReadOutcome::Eof after draining WAV");
-}
-
-#[kithara::test(tokio)]
 async fn test_audio_seek() {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

@@ -22,6 +22,13 @@ fn disk_asset_store(temp_dir: kithara_integration_tests::TestTempDir) -> DiskAss
     DiskAssetStore::new(temp_dir.path(), CancelToken::never())
 }
 
+#[derive(Clone, Copy)]
+enum ReadBack {
+    SameIndex,
+    NewIndex,
+    NewStore,
+}
+
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case::missing_file(None)]
 #[case::corrupted_file(Some(&b"{ this is not valid json"[..]))]
@@ -55,45 +62,54 @@ fn pins_index_bad_state_returns_default(
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn pins_index_roundtrip_store_then_load(
+#[case::new_index(vec!["asset-a", "asset-b"], ReadBack::NewIndex)]
+#[case::single(vec!["asset-a"], ReadBack::SameIndex)]
+#[case::three(vec!["asset-a", "asset-b", "asset-c"], ReadBack::SameIndex)]
+#[case::five(
+    vec!["asset-1", "asset-2", "asset-3", "asset-4", "asset-5"],
+    ReadBack::SameIndex,
+)]
+#[case::empty(Vec::new(), ReadBack::SameIndex)]
+#[case::new_store(
+    vec!["persisted-asset", "another-asset"],
+    ReadBack::NewStore,
+)]
+fn pins_index_roundtrip(
+    #[case] asset_names: Vec<&str>,
+    #[case] read_back: ReadBack,
     temp_dir: kithara_integration_tests::TestTempDir,
     disk_asset_store: DiskAssetStore,
 ) {
-    let _dir = temp_dir.path();
-    let base = disk_asset_store;
+    let pins: HashSet<String> = asset_names.iter().map(ToString::to_string).collect();
 
-    let idx = PinsIndex::open(&base, &pools()).unwrap();
-
-    let mut pins = HashSet::new();
-    pins.insert("asset-a".to_string());
-    pins.insert("asset-b".to_string());
-
-    idx.store(&pins).unwrap();
-
-    let idx2 = PinsIndex::open(&base, &pools()).unwrap();
-    let loaded = idx2.load().unwrap();
+    let loaded = match read_back {
+        ReadBack::SameIndex => {
+            let idx = PinsIndex::open(&disk_asset_store, &pools()).unwrap();
+            idx.store(&pins).unwrap();
+            idx.load().unwrap()
+        }
+        ReadBack::NewIndex => {
+            let idx = PinsIndex::open(&disk_asset_store, &pools()).unwrap();
+            idx.store(&pins).unwrap();
+            PinsIndex::open(&disk_asset_store, &pools())
+                .unwrap()
+                .load()
+                .unwrap()
+        }
+        ReadBack::NewStore => {
+            let cancel = CancelToken::never();
+            let base = DiskAssetStore::new(temp_dir.path(), cancel.clone());
+            let idx = PinsIndex::open(&base, &pools()).unwrap();
+            idx.store(&pins).unwrap();
+            let reopened = DiskAssetStore::new(temp_dir.path(), cancel);
+            PinsIndex::open(&reopened, &pools())
+                .unwrap()
+                .load()
+                .unwrap()
+        }
+    };
 
     assert_eq!(loaded, pins, "pins index must roundtrip via store/load");
-}
-
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-#[case(vec!["asset-a"])]
-#[case(vec!["asset-a", "asset-b", "asset-c"])]
-#[case(vec!["asset-1", "asset-2", "asset-3", "asset-4", "asset-5"])]
-fn pins_index_store_load_with_different_sets(
-    #[case] asset_names: Vec<&str>,
-    _temp_dir: kithara_integration_tests::TestTempDir,
-    disk_asset_store: DiskAssetStore,
-) {
-    let base = disk_asset_store;
-
-    let idx = PinsIndex::open(&base, &pools()).unwrap();
-
-    let pins: HashSet<String> = asset_names.iter().map(ToString::to_string).collect();
-    idx.store(&pins).unwrap();
-
-    let loaded = idx.load().unwrap();
-    assert_eq!(loaded, pins, "pins index must preserve all entries");
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
@@ -126,44 +142,4 @@ fn pins_index_concurrent_updates_handled_correctly(
     let idx3 = PinsIndex::open(&base, &pools()).unwrap();
     let loaded2 = idx3.load().unwrap();
     assert_eq!(loaded2, pins2);
-}
-
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn pins_index_empty_set_stores_and_loads_correctly(
-    _temp_dir: kithara_integration_tests::TestTempDir,
-    disk_asset_store: DiskAssetStore,
-) {
-    let base = disk_asset_store;
-
-    let idx = PinsIndex::open(&base, &pools()).unwrap();
-
-    let empty_pins = HashSet::new();
-    idx.store(&empty_pins).unwrap();
-
-    let loaded = idx.load().unwrap();
-    assert!(
-        loaded.is_empty(),
-        "empty pins set should roundtrip correctly"
-    );
-}
-
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn pins_index_persists_across_store_instances(temp_dir: kithara_integration_tests::TestTempDir) {
-    let dir = temp_dir.path();
-    let cancel = CancelToken::never();
-
-    let base1 = DiskAssetStore::new(dir, cancel.clone());
-    let idx1 = PinsIndex::open(&base1, &pools()).unwrap();
-
-    let mut pins = HashSet::new();
-    pins.insert("persisted-asset".to_string());
-    pins.insert("another-asset".to_string());
-
-    idx1.store(&pins).unwrap();
-
-    let base2 = DiskAssetStore::new(dir, cancel);
-    let idx2 = PinsIndex::open(&base2, &pools()).unwrap();
-
-    let loaded = idx2.load().unwrap();
-    assert_eq!(loaded, pins, "pins should persist across store instances");
 }

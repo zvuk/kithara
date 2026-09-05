@@ -797,121 +797,145 @@
   <require tools> cargo just
   just test rtsan
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-fast / platforms
   <require os> linux
   <require tools> cargo just
   just test rtsan
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-fast / merge-request
   <require os> linux
   <require tools> cargo just
   just test rtsan
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-fast / quarantine
   <require os> linux
   <require tools> cargo just
   just test rtsan
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-fast / main
   <require os> linux
   <require tools> cargo just
   just test rtsan
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-fast / nightly
   <require os> linux
   <require tools> cargo just
   just test rtsan
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-fast / weekly
   <require os> linux
   <require tools> cargo just
   just test rtsan
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-fast / release
   <require os> linux
   <require tools> cargo just
   just test rtsan
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-file / branch
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-file / platforms
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-file / merge-request
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-file / quarantine
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-file / main
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-file / nightly
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-file / weekly
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-file / release
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-hls / branch
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-hls / platforms
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-hls / merge-request
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-hls / quarantine
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-hls / main
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-hls / nightly
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-hls / weekly
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-rtsan-hls / release
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
     KITHARA_RTSAN_BACKEND=standalone
+    KITHARA_STABLE_TOOLCHAIN=1.97.1
 # deep-ui / branch
   <require os> linux
   <require tools> cargo just

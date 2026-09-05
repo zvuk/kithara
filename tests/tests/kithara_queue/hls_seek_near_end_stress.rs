@@ -9,7 +9,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{self, Duration, timeout},
+        time::{Duration, timeout},
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
@@ -19,7 +19,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event},
 };
@@ -106,21 +106,6 @@ async fn build_hls(helper: &TestServerHelper, include_sidx: bool) -> Url {
         .master_url()
 }
 
-/// Queue tick driver, flash-coherent: spawned through the platform chokepoint
-/// (participant + ambient propagation) with `#[kithara::flash(true)]` so the
-/// 50ms cadence rides the VIRTUAL clock under flash. The previous raw
-/// `tokio::spawn` + bare real sleep ran invisible to the engine: the test's
-/// virtual `ITER_DEADLINE` elapsed after a handful of real ticks under load.
-#[kithara::flash(true)]
-async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
-    loop {
-        time::sleep(Duration::from_millis(50)).await;
-        if queue.tick().is_err() {
-            break;
-        }
-    }
-}
-
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
@@ -152,7 +137,10 @@ fn build_queue_with_tick(
         ),
     )
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue.control()));
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(50),
+    ));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),

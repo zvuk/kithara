@@ -1572,20 +1572,18 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
     let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
     let pcm_data = Arc::new(create_pcm_segments(segment_count));
 
-    let (server, init_gate) = HlsTestServer::with_init_gate(
-        HlsTestServerConfig {
-            variant_count: 2,
-            segments_per_variant: segment_count,
-            segment_size: D.segment_size,
-            segment_duration_secs: segment_duration_secs(),
-            custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
-            init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-            variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-            ..Default::default()
-        },
-        1,
-    )
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        variant_count: 2,
+        segments_per_variant: segment_count,
+        segment_size: D.segment_size,
+        segment_duration_secs: segment_duration_secs(),
+        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
+        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
+        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+        ..Default::default()
+    })
     .await;
+    let init_gate = server.init_gate(1);
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();

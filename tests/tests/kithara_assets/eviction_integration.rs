@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{fs, path::Path};
+use std::fs;
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetScope, AssetStore, StorageBackend, WriteSide,
+        AssetScope, AssetStore, StorageBackend, WriteSide,
         index::schema::{ArchivedPinsIndexFile, PinsIndexFile},
     },
     platform::{thread, time::Duration},
@@ -15,20 +15,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 
-use super::support::{LiteralLayout, literal_layouts, resource, source};
-
-#[cfg(not(target_arch = "wasm32"))]
-fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
-    root.join(asset_root).exists()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
-    let AcquisitionResult::Pending(writer) = acq else {
-        panic!("fresh acquire must be Pending");
-    };
-    writer
-}
+use super::support::{LiteralLayout, asset_dir_exists, literal_layouts, pending, resource, source};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn asset_scope_with_root(
@@ -109,8 +96,8 @@ fn eviction_max_assets_skips_pinned_assets(
                 .commit(Some(b"trigger".len() as u64))
                 .unwrap();
 
-            assert!(exists_asset_dir(&dir, &format!("asset-trigger-{}", i)));
-            assert!(exists_asset_dir(&dir, &format!("asset-{}", i)));
+            assert!(asset_dir_exists(&dir, &format!("asset-trigger-{}", i)));
+            assert!(asset_dir_exists(&dir, &format!("asset-{}", i)));
 
             drop(res_b);
         }
@@ -118,8 +105,8 @@ fn eviction_max_assets_skips_pinned_assets(
 
     let mut existing_count = 0;
     for i in 0..=create_count {
-        if exists_asset_dir(&dir, &format!("asset-{}", i))
-            || exists_asset_dir(&dir, &format!("asset-trigger-{}", i))
+        if asset_dir_exists(&dir, &format!("asset-{}", i))
+            || asset_dir_exists(&dir, &format!("asset-trigger-{}", i))
         {
             existing_count += 1;
         }
@@ -183,7 +170,7 @@ fn eviction_with_zero_byte_assets(temp_dir: kithara_integration_tests::TestTempD
 
     let mut existing_count = 0;
     for i in 0..3 {
-        if exists_asset_dir(&dir, &format!("zero-asset-{}", i)) {
+        if asset_dir_exists(&dir, &format!("zero-asset-{}", i)) {
             existing_count += 1;
         }
     }
@@ -230,7 +217,7 @@ fn eviction_respects_max_assets_limit(
 
     let mut existing_count = 0;
     for i in 0..create_count {
-        if exists_asset_dir(&dir, &format!("asset-{}", i)) {
+        if asset_dir_exists(&dir, &format!("asset-{}", i)) {
             existing_count += 1;
         }
     }
@@ -246,7 +233,7 @@ fn eviction_respects_max_assets_limit(
 
     for i in create_count - pinned_count..create_count {
         assert!(
-            exists_asset_dir(&dir, &format!("asset-{}", i)),
+            asset_dir_exists(&dir, &format!("asset-{}", i)),
             "Pinned asset {} should exist",
             i
         );

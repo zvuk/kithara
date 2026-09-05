@@ -8,7 +8,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        time::{self, Duration, Instant, timeout},
+        time::{Duration, Instant, timeout},
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -17,7 +17,8 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineQueue, temp_dir,
+    offline::{OfflineQueue, drive_queue_ticks},
+    temp_dir,
 };
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -56,17 +57,6 @@ async fn wait_for_failed(
     Err(format!(
         "track neither failed nor loaded within {deadline:?} — load hung on the stalled playlist"
     ))
-}
-
-fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(50)).await;
-            if queue.tick().is_err() {
-                break;
-            }
-        }
-    })
 }
 
 /// A master-playlist GET whose body stalls after the first bytes (headers
@@ -120,7 +110,10 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
         Queue::new(QueueConfig::builder().player(player).build()),
     )
     .expect("create product offline queue");
-    let tick_handle = spawn_ticker(queue.control());
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(50),
+    ));
 
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid URL"))
         .downloader(downloader)

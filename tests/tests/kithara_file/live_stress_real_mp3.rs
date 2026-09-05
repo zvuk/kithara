@@ -36,7 +36,7 @@ impl Consts {
 
 type TestAudio = RegisteredAudio<Stream<File<TestPools>>, TestPools>;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct LiveStats {
     read_progress_events: usize,
     request_started_events: usize,
@@ -44,22 +44,9 @@ struct LiveStats {
     errors: usize,
 }
 
-#[derive(Clone, Default)]
-struct LiveSnapshot {
-    read_progress_events: usize,
-    request_started_events: usize,
-    request_completed_events: usize,
-    errors: usize,
-}
-
 impl LiveStats {
-    const fn snapshot(&self) -> LiveSnapshot {
-        LiveSnapshot {
-            read_progress_events: self.read_progress_events,
-            request_started_events: self.request_started_events,
-            request_completed_events: self.request_completed_events,
-            errors: self.errors,
-        }
+    fn snapshot(&self) -> Self {
+        self.clone()
     }
 }
 
@@ -88,7 +75,7 @@ fn file_count_and_size(path: &Path) -> (u64, u64) {
     (files, bytes)
 }
 
-fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveSnapshot {
+fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveStats {
     stats.lock().expect("stats lock poisoned").snapshot()
 }
 

@@ -1,6 +1,9 @@
 use std::num::NonZeroU32;
 
-use kithara::platform::{sync::Arc, time::Duration};
+use kithara::{
+    platform::{sync::Arc, time::Duration},
+    signal::AudioSpec,
+};
 use kithara_test_fixtures::signal;
 
 /// Default audio parameters for generated WAV test fixtures.
@@ -89,6 +92,8 @@ impl Consts {
     };
     /// Default channel count.
     pub const CHANNELS: u16 = SawWav::DEFAULT.channels;
+    /// Default decoded-audio format used by playback fixtures.
+    pub const AUDIO_SPEC: AudioSpec = AudioSpec::new(Self::CHANNELS, Self::NON_ZERO_SAMPLE_RATE);
     /// Default packaged HLS segment size (bytes).
     pub const SEGMENT_SIZE: usize = SawWav::DEFAULT.segment_size;
 
@@ -99,4 +104,16 @@ impl Consts {
 
     /// Default soft read timeout for resource/decoder integration tests.
     pub const READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Render blocks needed to cover `seconds` at the default sample rate.
+    pub fn blocks_for_seconds(seconds: f64, block_frames: usize) -> u32 {
+        let blocks = (seconds * f64::from(Self::SAMPLE_RATE) / block_frames as f64).ceil();
+        #[expect(
+            clippy::cast_sign_loss,
+            clippy::cast_possible_truncation,
+            reason = "positive ceiling fits in u32 for second-scale windows"
+        )]
+        let result = blocks as u32;
+        result
+    }
 }

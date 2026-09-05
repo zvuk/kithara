@@ -137,55 +137,47 @@ fn static_rhythmic_oracle_accepts_aligned_stems_and_rejects_one_frame_phase_erro
 }
 
 #[kithara::test(native, flash(false))]
-fn static_rhythmic_oracle_rejects_one_missing_event_for_that_reason() {
-    let deck_a = samples(rhythm_wav_deck_a_120bpm_48k());
-    let missing = samples(rhythm_wav_deck_b_missing_beat_120bpm_48k());
-    let failures = synchronization_failures(
-        "missing static beat",
-        &[deck_a.as_slice(), missing.as_slice()],
-        CHANNELS,
-        SAMPLE_RATE,
-        TARGET_BPM,
-    );
-
-    assert_eq!(
-        failures.as_slice(),
-        ["missing static beat: track 1 is missing a rhythmic event before frame 168000"],
-    );
-}
-
-#[kithara::test(native, flash(false))]
-fn static_rhythmic_oracle_rejects_wrong_target_tempo_for_that_reason() {
-    let deck = samples(rhythm_wav_deck_a_120bpm_48k());
-    let failures = synchronization_failures(
-        "wrong target tempo",
-        &[deck.as_slice()],
-        CHANNELS,
-        SAMPLE_RATE,
-        127.0,
-    );
+#[case::missing_beat(
+    Some(rhythm_wav_deck_b_missing_beat_120bpm_48k()),
+    "missing static beat",
+    TARGET_BPM,
+    "missing static beat: track 1 is missing a rhythmic event before frame 168000",
+    None
+)]
+#[case::wrong_tempo(
+    None,
+    "wrong target tempo",
+    127.0,
+    "tempo is",
+    Some("expected 127.000")
+)]
+#[case::bar_phase(
+    Some(rhythm_wav_deck_b_one_beat_bar_late_120bpm_48k()),
+    "one-beat-late static bar",
+    TARGET_BPM,
+    "one-beat-late static bar: bar phase spread is 1 beat",
+    None
+)]
+fn static_rhythmic_oracle_rejects_invalid_stems_for_the_expected_reason(
+    #[case] second: Option<Asset>,
+    #[case] label: &str,
+    #[case] target_bpm: f64,
+    #[case] expected: &str,
+    #[case] expected_extra: Option<&str>,
+) {
+    let mut tracks = vec![samples(rhythm_wav_deck_a_120bpm_48k())];
+    tracks.extend(second.map(samples));
+    let tracks: Vec<_> = tracks.iter().map(Vec::as_slice).collect();
+    let failures = synchronization_failures(label, &tracks, CHANNELS, SAMPLE_RATE, target_bpm);
 
     assert_eq!(failures.len(), 1, "unexpected failures: {failures:?}");
-    assert!(
-        failures[0].contains("tempo is") && failures[0].contains("expected 127.000"),
-        "the control must fail only on its 120 BPM signal against 127 BPM target: {failures:?}",
-    );
-}
-
-#[kithara::test(native, flash(false))]
-fn static_rhythmic_oracle_rejects_one_beat_bar_phase_error_for_that_reason() {
-    let deck_a = samples(rhythm_wav_deck_a_120bpm_48k());
-    let shifted = samples(rhythm_wav_deck_b_one_beat_bar_late_120bpm_48k());
-    let failures = synchronization_failures(
-        "one-beat-late static bar",
-        &[deck_a.as_slice(), shifted.as_slice()],
-        CHANNELS,
-        SAMPLE_RATE,
-        TARGET_BPM,
-    );
-
-    assert_eq!(
-        failures.as_slice(),
-        ["one-beat-late static bar: bar phase spread is 1 beat"],
-    );
+    let failure = &failures[0];
+    if let Some(extra) = expected_extra {
+        assert!(
+            failure.contains(expected) && failure.contains(extra),
+            "the control failed for an unexpected reason: {failures:?}",
+        );
+    } else {
+        assert_eq!(failure, expected);
+    }
 }

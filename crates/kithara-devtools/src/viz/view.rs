@@ -326,22 +326,12 @@ fn function_ancestor(
     id: &NodeId,
     parents: &BTreeMap<NodeId, NodeId>,
 ) -> Option<NodeId> {
-    let mut current = id;
-    let mut seen = BTreeSet::new();
-    loop {
-        if graph.node(current).is_some_and(|node| {
-            matches!(
-                node.kind,
-                NodeKind::Function | NodeKind::PublicFunction | NodeKind::Constructor
-            )
-        }) {
-            return Some(current.clone());
-        }
-        if !seen.insert(current.clone()) {
-            return None;
-        }
-        current = parents.get(current)?;
-    }
+    ancestor(graph, id, parents, |kind| {
+        matches!(
+            kind,
+            NodeKind::Function | NodeKind::PublicFunction | NodeKind::Constructor
+        )
+    })
 }
 
 fn abstraction_ancestor(
@@ -349,15 +339,24 @@ fn abstraction_ancestor(
     id: &NodeId,
     parents: &BTreeMap<NodeId, NodeId>,
 ) -> Option<NodeId> {
+    ancestor(graph, id, parents, |kind| {
+        matches!(
+            kind,
+            NodeKind::ConcreteType | NodeKind::Trait | NodeKind::ModuleFunctions
+        )
+    })
+}
+
+fn ancestor(
+    graph: &EvidenceGraph,
+    id: &NodeId,
+    parents: &BTreeMap<NodeId, NodeId>,
+    matches: impl Fn(NodeKind) -> bool,
+) -> Option<NodeId> {
     let mut current = id;
     let mut seen = BTreeSet::new();
     loop {
-        if graph.node(current).is_some_and(|node| {
-            matches!(
-                node.kind,
-                NodeKind::ConcreteType | NodeKind::Trait | NodeKind::ModuleFunctions
-            )
-        }) {
+        if graph.node(current).is_some_and(|node| matches(node.kind)) {
             return Some(current.clone());
         }
         if !seen.insert(current.clone()) {

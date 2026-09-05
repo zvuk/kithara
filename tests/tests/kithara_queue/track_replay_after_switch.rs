@@ -21,7 +21,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -115,16 +115,6 @@ fn build_queue_with_tick(
     build_queue_with_tick_cf(temp_dir, 0.0)
 }
 
-#[kithara::flash(true)]
-async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
-    loop {
-        sleep(Duration::from_millis(50)).await;
-        if queue.tick().is_err() {
-            break;
-        }
-    }
-}
-
 fn build_queue_with_tick_cf(
     temp_dir: &TestTempDir,
     crossfade_seconds: f32,
@@ -158,7 +148,10 @@ fn build_queue_with_tick_cf(
         ),
     )
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue.control()));
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(50),
+    ));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),

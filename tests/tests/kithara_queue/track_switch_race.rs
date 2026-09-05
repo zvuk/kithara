@@ -37,7 +37,8 @@ use kithara::{
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineQueue, temp_dir,
+    offline::{OfflineQueue, drive_queue_ticks},
+    temp_dir,
 };
 use url::Url;
 
@@ -141,7 +142,8 @@ fn build_queue_with_tick(
     )
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(run_tick_driver(queue_for_tick));
+    let tick_handle =
+        tokio::task::spawn(drive_queue_ticks(queue_for_tick, Duration::from_millis(50)));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -151,16 +153,6 @@ fn build_queue_with_tick(
         .build(),
     );
     (queue, downloader, store, tick_handle)
-}
-
-#[kithara::flash(true)]
-async fn run_tick_driver(queue: QueueControl<TestPools>) {
-    loop {
-        sleep(Duration::from_millis(50)).await;
-        if queue.tick().is_err() {
-            break;
-        }
-    }
 }
 
 /// Build a queue WITHOUT the auto-advance tick loop. Auto-advance is driven

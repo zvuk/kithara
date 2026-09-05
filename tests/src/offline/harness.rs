@@ -10,6 +10,7 @@ use kithara::{
         effects::eq::EqBandConfig,
         player::{Player, PlayerControl, PlayerControlSource},
     },
+    queue::{Queue, QueueConfig, QueueControl},
     warp::WarpConfig,
 };
 
@@ -39,6 +40,23 @@ pub struct OfflinePlayerOptions {
     #[builder(default)]
     block_on_underrun: bool,
     warp: Option<WarpConfig>,
+}
+
+/// Build a paused queue with crossfade disabled for deterministic offline tests.
+#[must_use]
+pub fn offline_queue_fixture(sample_rate: u32) -> (OfflinePlayerHarness, QueueControl<TestPools>) {
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        sample_rate,
+    );
+    let config = QueueConfig::builder()
+        .player(harness.take_player())
+        .should_autoplay(false)
+        .build();
+    let queue = harness.insert_control(Queue::new(config));
+    (harness, queue)
 }
 
 impl OfflinePlayerHarness {

@@ -7,28 +7,21 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::num::NonZeroU32;
-
 use kithara::{
     self,
     audio::ReadOutcome,
     events::{AudioEvent, Event, EventBus},
     platform::time::Duration,
     play::Resource,
-    signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::TestPcmReader;
-
-fn mock_spec() -> AudioSpec {
-    AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
-}
+use kithara_integration_tests::{audio_mock::TestPcmReader, test_defaults::Consts};
 
 fn make_resource() -> Resource {
-    Resource::from_reader(TestPcmReader::new(mock_spec(), 1.0), None)
+    Resource::from_reader(TestPcmReader::new(Consts::AUDIO_SPEC, 1.0), None)
 }
 
 fn make_resource_with_bus() -> (Resource, EventBus) {
-    let reader = TestPcmReader::new(mock_spec(), 1.0);
+    let reader = TestPcmReader::new(Consts::AUDIO_SPEC, 1.0);
     let bus = reader.event_bus().clone();
     let resource = Resource::from_reader(reader, None);
     (resource, bus)
@@ -131,7 +124,7 @@ async fn test_resource_subscribe_receives_events() {
     let (resource, bus) = make_resource_with_bus();
     let mut rx = resource.subscribe();
 
-    let spec = mock_spec();
+    let spec = Consts::AUDIO_SPEC;
     bus.publish(AudioEvent::FormatDetected { spec });
 
     let event = time::timeout(Duration::from_millis(200), rx.recv())

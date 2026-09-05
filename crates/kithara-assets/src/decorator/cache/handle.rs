@@ -13,32 +13,61 @@ use crate::{
 
 pub(super) type EnforceCapacity = Arc<dyn Fn() + Send + Sync>;
 
-/// Writer (Pending) wrapper returned by [`super::CachedAssets`].
-pub struct CachedWriter<W> {
+#[derive(Clone)]
+struct CacheHandle<T> {
     pinned: Arc<DashSet<ResourceKey>>,
     enforce_capacity: Option<EnforceCapacity>,
     key: ResourceKey,
-    inner: W,
+    inner: T,
+}
+
+/// Writer (Pending) wrapper returned by [`super::CachedAssets`].
+pub struct CachedWriter<W> {
+    handle: CacheHandle<W>,
 }
 
 /// Reader (Ready) wrapper returned by [`super::CachedAssets`]. Cheap to clone.
-#[derive(Clone)]
 pub struct CachedReader<R> {
-    pinned: Arc<DashSet<ResourceKey>>,
-    enforce_capacity: Option<EnforceCapacity>,
-    inner: R,
-    key: ResourceKey,
+    handle: CacheHandle<R>,
+}
+
+impl<T> CacheHandle<T> {
+    fn new(
+        pinned: Arc<DashSet<ResourceKey>>,
+        key: ResourceKey,
+        inner: T,
+        enforce_capacity: Option<EnforceCapacity>,
+    ) -> Self {
+        Self {
+            pinned,
+            enforce_capacity,
+            key,
+            inner,
+        }
+    }
+
+    fn retain(&self) {
+        self.pinned.insert(self.key.clone());
+    }
+}
+
+impl<R: Clone> Clone for CachedReader<R> {
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+        }
+    }
 }
 
 impl<W: fmt::Debug> fmt::Debug for CachedWriter<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.inner.fmt(f)
+        self.handle.inner.fmt(f)
     }
 }
 
 impl<R: fmt::Debug> fmt::Debug for CachedReader<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.inner.fmt(f)
+        self.handle.inner.fmt(f)
     }
 }
 
@@ -50,23 +79,20 @@ impl<W> CachedWriter<W> {
         enforce_capacity: Option<EnforceCapacity>,
     ) -> Self {
         Self {
-            pinned,
-            enforce_capacity,
-            key,
-            inner,
+            handle: CacheHandle::new(pinned, key, inner, enforce_capacity),
         }
     }
 
     /// Pin this resource in the LRU cache so it is never evicted, until
     /// [`CachedReader::release`] is called for the same key.
     pub fn retain(self) -> Self {
-        self.pinned.insert(self.key.clone());
+        self.handle.retain();
         self
     }
 
     /// Pin this resource in the LRU cache (by-ref, for use inside wrappers).
     pub(crate) fn set_retained(&self) {
-        self.pinned.insert(self.key.clone());
+        self.handle.retain();
     }
 }
 
@@ -78,17 +104,14 @@ impl<R> CachedReader<R> {
         enforce_capacity: Option<EnforceCapacity>,
     ) -> Self {
         Self {
-            pinned,
-            enforce_capacity,
-            inner,
-            key,
+            handle: CacheHandle::new(pinned, key, inner, enforce_capacity),
         }
     }
 
     /// Unpin this resource, making it eligible for LRU eviction.
     pub fn release(self) -> Self {
-        self.pinned.remove(&self.key);
-        if let Some(enforce) = &self.enforce_capacity {
+        self.handle.pinned.remove(&self.handle.key);
+        if let Some(enforce) = &self.handle.enforce_capacity {
             enforce();
         }
         self
@@ -97,13 +120,13 @@ impl<R> CachedReader<R> {
     /// Pin this resource in the LRU cache. It will not be evicted
     /// until [`release`](Self::release) is called for the same key.
     pub fn retain(self) -> Self {
-        self.pinned.insert(self.key.clone());
+        self.handle.retain();
         self
     }
 
     /// Pin this resource in the LRU cache (by-ref, for use inside wrappers).
     pub(crate) fn set_retained(&self) {
-        self.pinned.insert(self.key.clone());
+        self.handle.retain();
     }
 }
 
@@ -111,12 +134,12 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
     type Reader = CachedReader<W::Reader>;
 
     fn commit(self, final_len: Option<u64>) -> StorageResult<CachedReader<W::Reader>> {
-        let Self {
+        let CacheHandle {
             enforce_capacity,
             pinned,
             key,
             inner,
-        } = self;
+        } = self.handle;
         let reader = CachedReader::new(
             pinned,
             key,
@@ -131,15 +154,15 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
 
     fn reader(&self) -> CachedReader<W::Reader> {
         CachedReader::new(
-            Arc::clone(&self.pinned),
-            self.key.clone(),
-            self.inner.reader(),
-            self.enforce_capacity.clone(),
+            Arc::clone(&self.handle.pinned),
+            self.handle.key.clone(),
+            self.handle.inner.reader(),
+            self.handle.enforce_capacity.clone(),
         )
     }
 
     delegate::delegate! {
-        to self.inner {
+        to self.handle.inner {
             fn abandon(self);
             fn fail(self, reason: String);
             fn raw_write_handle(&self) -> RawWriteHandle;
@@ -153,15 +176,15 @@ impl<R: ReadSide> ReadSide for CachedReader<R> {
 
     fn reactivate(self) -> StorageResult<CachedWriter<R::Writer>> {
         Ok(CachedWriter::new(
-            Arc::clone(&self.pinned),
-            self.key.clone(),
-            self.inner.reactivate()?,
-            self.enforce_capacity.clone(),
+            Arc::clone(&self.handle.pinned),
+            self.handle.key.clone(),
+            self.handle.inner.reactivate()?,
+            self.handle.enforce_capacity.clone(),
         ))
     }
 
     delegate::delegate! {
-        to self.inner {
+        to self.handle.inner {
             fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
             fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;

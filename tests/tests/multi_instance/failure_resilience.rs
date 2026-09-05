@@ -1,7 +1,5 @@
 use std::path::Path;
 
-#[cfg(target_arch = "wasm32")]
-use kithara::platform::thread;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, ReadOutcome},
@@ -9,6 +7,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
+        thread,
         time::{Duration, sleep},
         tokio::task::{JoinHandle, spawn, spawn_blocking},
     },
@@ -49,37 +48,23 @@ struct Outcome {
 /// Read HLS audio until EOF or the stream stops producing data.
 /// Returns total samples read. Unlike `read_to_eof`, this tolerates
 /// early termination because some instances are intentionally cancelled.
-#[cfg(not(target_arch = "wasm32"))]
 fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) -> u64 {
-    let mut buf = vec![0.0f32; 4096];
-    let mut total = 0u64;
-    loop {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => break,
-            Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(_) => break,
-        }
-    }
-    total
-}
-
-#[cfg(target_arch = "wasm32")]
-fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) -> u64 {
-    const MAX_ZERO_READS: usize = 200;
+    const MAX_PENDING_READS: usize = if cfg!(target_arch = "wasm32") { 200 } else { 1 };
 
     let mut buf = vec![0.0f32; 4096];
     let mut total = 0u64;
-    let mut zero_reads = 0usize;
+    let mut pending_reads = 0usize;
 
-    while zero_reads < MAX_ZERO_READS {
+    while pending_reads < MAX_PENDING_READS {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Pending { .. }) => {
-                zero_reads += 1;
-                thread::sleep(Duration::from_millis(10));
+                pending_reads += 1;
+                if MAX_PENDING_READS > 1 {
+                    thread::sleep(Duration::from_millis(10));
+                }
             }
             Ok(ReadOutcome::Frames { count, .. }) => {
-                zero_reads = 0;
+                pending_reads = 0;
                 total += count.get() as u64;
             }
             Ok(ReadOutcome::Eof { .. }) | Err(_) => break,

@@ -144,53 +144,16 @@ fn resource_config(
         .build()
 }
 
-/// Open a resource with [`resource_config`] options; panics on error.
-async fn open_resource_full(
-    url: &url::Url,
-    store: AssetStore<TestPools>,
-    backend: DecoderBackend,
-    hint: Option<&str>,
-    worker: PlayWorker<TestPools>,
-) -> Resource {
-    Resource::new(resource_config(url, store, backend, hint, worker))
-        .await
-        .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
-}
-
 async fn open_resource(
     url: &url::Url,
     store: AssetStore<TestPools>,
     worker: PlayWorker<TestPools>,
     backend: DecoderBackend,
 ) -> Resource {
-    open_resource_full(url, store, backend, Some("mp3"), worker).await
-}
-
-async fn open_resource_with_worker(
-    url: &url::Url,
-    store: AssetStore<TestPools>,
-    worker: PlayWorker<TestPools>,
-    backend: DecoderBackend,
-) -> Resource {
-    open_resource_full(url, store, backend, Some("mp3"), worker).await
-}
-
-fn resource_config_with_worker(
-    url: &url::Url,
-    store: AssetStore<TestPools>,
-    worker: PlayWorker<TestPools>,
-    backend: DecoderBackend,
-) -> ResourceConfig<TestPools> {
-    resource_config(url, store, backend, Some("mp3"), worker)
-}
-
-fn resource_config_no_hint(
-    url: &url::Url,
-    store: AssetStore<TestPools>,
-    worker: PlayWorker<TestPools>,
-    backend: DecoderBackend,
-) -> ResourceConfig<TestPools> {
-    resource_config(url, store, backend, None, worker)
+    let config = resource_config(url, store, backend, Some("mp3"), worker);
+    Resource::new(config)
+        .await
+        .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
 
 // Keep this warmup nonblocking: under full-suite load a blocking underrun arms
@@ -202,6 +165,7 @@ async fn warm_hls_worker(
     store: AssetStore<TestPools>,
     worker: PlayWorker<TestPools>,
     backend: DecoderBackend,
+    seek: Option<Duration>,
 ) -> f64 {
     let wav_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -228,7 +192,12 @@ async fn warm_hls_worker(
     loop {
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => break,
+            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
+                if seek.is_none() {
+                    return audio.position().as_secs_f64();
+                }
+                break;
+            }
             Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while warming HLS worker for {url}")
@@ -239,7 +208,7 @@ async fn warm_hls_worker(
     }
 
     audio
-        .seek(Duration::from_secs(2))
+        .seek(seek.expect("seek checked above"))
         .unwrap_or_else(|err| panic!("HLS warmup seek must succeed for {}: {err}", url));
 
     loop {
@@ -253,52 +222,6 @@ async fn warm_hls_worker(
                 panic!("unexpected EOF after HLS warmup seek for {url}")
             }
             Err(e) => panic!("decode error after HLS warmup seek for {url}: {e}"),
-        }
-        sleep(Duration::from_millis(10)).await;
-    }
-}
-
-// Same nonblocking warmup contract as `warm_hls_worker`.
-#[kithara::flash(true)]
-async fn warm_hls_worker_without_seek(
-    url: &url::Url,
-    store: AssetStore<TestPools>,
-    worker: PlayWorker<TestPools>,
-    backend: DecoderBackend,
-) -> f64 {
-    let wav_info = MediaInfo::builder()
-        .maybe_codec(Some(AudioCodec::Pcm))
-        .maybe_container(Some(ContainerFormat::Wav))
-        .build();
-    let hls_config = HlsConfig::for_url(url.clone())
-        .store(store)
-        .pools(worker.pools().clone())
-        .build();
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(wav_info)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .build();
-    let mut audio = worker
-        .open(config)
-        .await
-        .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
-
-    let mut buf = [0.0f32; 4096];
-    loop {
-        audio.preload().expect("preload must succeed");
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
-                return audio.position().as_secs_f64();
-            }
-            Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Eof { .. }) => {
-                panic!("unexpected EOF while warming HLS worker without seek for {url}")
-            }
-            Err(e) => panic!("decode error while warming HLS worker for {url}: {e}"),
         }
         sleep(Duration::from_millis(10)).await;
     }
@@ -614,18 +537,26 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.url("/master.m3u8");
 
-    let hls_pos = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
+    let hls_pos = warm_hls_worker(
+        &hls_url,
+        store.clone(),
+        worker.clone(),
+        backend,
+        Some(Duration::from_secs(2)),
+    )
+    .await;
     assert!(
         hls_pos > 1.0,
         "HLS warmup seek should advance playback position, got {hls_pos}"
     );
 
     for attempt in 0..2 {
-        let result = Resource::new(resource_config_with_worker(
+        let result = Resource::new(resource_config(
             &bad_url,
             store.clone(),
-            worker.clone(),
             backend,
+            Some("mp3"),
+            worker.clone(),
         ))
         .await;
         assert!(
@@ -634,7 +565,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
         );
     }
 
-    let mut ok = open_resource_with_worker(&ok_url, store, worker, backend).await;
+    let mut ok = open_resource(&ok_url, store, worker, backend).await;
     assert!(read_some(&mut ok, "mp3_after_hls_initial").await > 0);
     let forward = seek_and_read(
         &mut ok,
@@ -675,14 +606,20 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
     let store = asset_store(&temp_dir, true, &region);
     let hls_url = hls_server.url("/master.m3u8");
 
-    let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
+    let hls_seek = warm_hls_worker(
+        &hls_url,
+        store.clone(),
+        worker.clone(),
+        backend,
+        Some(Duration::from_secs(2)),
+    )
+    .await;
     assert!(
         hls_seek > 1.0,
         "HLS warmup should advance playback position before mp3 transition, got {hls_seek}"
     );
 
-    let mut first =
-        open_resource_with_worker(&ok_url, store.clone(), worker.clone(), backend).await;
+    let mut first = open_resource(&ok_url, store.clone(), worker.clone(), backend).await;
     assert!(read_some(&mut first, "shared_mp3_first_initial").await > 0);
     let first_forward = seek_and_read(
         &mut first,
@@ -702,7 +639,7 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
     );
     drop(first);
 
-    let mut second = open_resource_with_worker(&ok_url, store, worker.clone(), backend).await;
+    let mut second = open_resource(&ok_url, store, worker.clone(), backend).await;
     assert!(read_some(&mut second, "shared_mp3_second_initial").await > 0);
     let second_forward = seek_and_read(
         &mut second,
@@ -789,10 +726,17 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
 
     let first_pos = match teardown {
         WarmupTeardown::Shutdown | WarmupTeardown::DropOnly => {
-            warm_hls_worker(&hls_url_a, store_a, worker_a.clone(), backend).await
+            warm_hls_worker(
+                &hls_url_a,
+                store_a,
+                worker_a.clone(),
+                backend,
+                Some(Duration::from_secs(2)),
+            )
+            .await
         }
         WarmupTeardown::ReadOnlyThenDrop => {
-            warm_hls_worker_without_seek(&hls_url_a, store_a, worker_a.clone(), backend).await
+            warm_hls_worker(&hls_url_a, store_a, worker_a.clone(), backend, None).await
         }
     };
 
@@ -818,7 +762,14 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
         WarmupTeardown::DropOnly | WarmupTeardown::ReadOnlyThenDrop => drop(worker_a),
     }
 
-    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone(), backend).await;
+    let second_pos = warm_hls_worker(
+        &hls_url_b,
+        store_b,
+        worker_b.clone(),
+        backend,
+        Some(Duration::from_secs(2)),
+    )
+    .await;
     assert!(
         second_pos > 1.0,
         "second HLS warmup after a prior session ({teardown:?}) must still \
@@ -1032,14 +983,20 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.url("/master.m3u8");
 
-    let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
+    let hls_seek = warm_hls_worker(
+        &hls_url,
+        store.clone(),
+        worker.clone(),
+        backend,
+        Some(Duration::from_secs(2)),
+    )
+    .await;
     assert!(
         hls_seek > 1.0,
         "HLS warmup should advance playback position before mp3 transition, got {hls_seek}"
     );
 
-    let mut first =
-        open_resource_with_worker(&ok_url, store.clone(), worker.clone(), backend).await;
+    let mut first = open_resource(&ok_url, store.clone(), worker.clone(), backend).await;
     assert!(read_some(&mut first, "mp3_first_initial").await > 0);
     let first_forward = seek_and_read(
         &mut first,
@@ -1059,7 +1016,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     );
     drop(first);
 
-    let mut second = open_resource_with_worker(&ok_url, store, worker, backend).await;
+    let mut second = open_resource(&ok_url, store, worker, backend).await;
     assert!(read_some(&mut second, "mp3_second_initial").await > 0);
     let second_forward = seek_and_read(
         &mut second,
@@ -1321,7 +1278,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     let store = asset_store(&temp_dir, true, &region);
     let path = url.as_str();
 
-    let config = resource_config_no_hint(&url, store, play_worker(&region), backend);
+    let config = resource_config(&url, store, backend, None, play_worker(&region));
     let mut resource = Resource::new(config)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));

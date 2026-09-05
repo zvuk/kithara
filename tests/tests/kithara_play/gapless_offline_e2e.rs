@@ -31,7 +31,10 @@ use kithara_integration_tests::{
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{
+        OfflinePlayerHarness, OfflinePlayerOptions, TimedPlayerEvent, deinterleave_left,
+        max_silence_run,
+    },
     temp_dir,
 };
 use kithara_test_fixtures::signal::goertzel_magnitude;
@@ -227,7 +230,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
 
     let search_start = item1_end.saturating_sub(BLOCK_FRAMES * 2);
     let search_end = item1_end.saturating_add(BLOCK_FRAMES * 2).min(left.len());
-    let max_silence = max_silence_run(&left, search_start, search_end);
+    let max_silence = max_silence_run(&left, search_start, search_end, SILENCE_THRESHOLD);
     assert!(
         max_silence < BLOCK_FRAMES,
         "boundary silence run must stay below one render block ({BLOCK_FRAMES} frames), \
@@ -627,7 +630,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
 
     let search_start = item1_end.saturating_sub(BLOCK_FRAMES * 2);
     let search_end = item1_end.saturating_add(BLOCK_FRAMES * 2).min(left.len());
-    let max_silence = max_silence_run(&left, search_start, search_end);
+    let max_silence = max_silence_run(&left, search_start, search_end, SILENCE_THRESHOLD);
     assert!(
         max_silence < BLOCK_FRAMES,
         "boundary silence run must stay below one render block ({BLOCK_FRAMES} frames), \
@@ -1234,10 +1237,7 @@ async fn render_until_item_end_with_post_roll(
             harness
                 .tick_and_drain()
                 .into_iter()
-                .map(|event| TimedPlayerEvent {
-                    frame_end: rendered_frames,
-                    event,
-                }),
+                .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
         );
 
         if events.iter().any(|event| {
@@ -1254,10 +1254,7 @@ async fn render_until_item_end_with_post_roll(
                     harness
                         .tick_and_drain()
                         .into_iter()
-                        .map(|event| TimedPlayerEvent {
-                            frame_end: rendered_frames,
-                            event,
-                        }),
+                        .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
                 );
             }
             return (rendered, events);
@@ -1269,19 +1266,6 @@ async fn render_until_item_end_with_post_roll(
         );
         time::sleep(Duration::from_millis(5)).await;
     }
-}
-
-fn deinterleave_left(samples: &[f32], channels: usize) -> Vec<f32> {
-    samples
-        .chunks_exact(channels)
-        .map(|frame| frame[0])
-        .collect()
-}
-
-#[derive(Clone, Debug)]
-struct TimedPlayerEvent {
-    frame_end: usize,
-    event: PlayerEvent,
 }
 
 struct ContinuityMetric;
@@ -1441,26 +1425,6 @@ fn audio_end_frame(samples: &[f32], threshold: f32) -> usize {
         .iter()
         .rposition(|sample| sample.abs() >= threshold)
         .map_or(0, |idx| idx + 1)
-}
-
-fn max_silence_run(samples: &[f32], start: usize, end: usize) -> usize {
-    let end = end.min(samples.len());
-    if end <= start {
-        return 0;
-    }
-    let mut max_run = 0usize;
-    let mut current = 0usize;
-    for sample in &samples[start..end] {
-        if sample.abs() < SILENCE_THRESHOLD {
-            current += 1;
-            if current > max_run {
-                max_run = current;
-            }
-        } else {
-            current = 0;
-        }
-    }
-    max_run
 }
 
 fn rms(samples: &[f32], start: usize, end: usize) -> f32 {

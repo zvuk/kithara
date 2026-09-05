@@ -11,7 +11,10 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{
+        OfflinePlayerHarness, OfflinePlayerOptions, TimedPlayerEvent, deinterleave_left,
+        max_silence_run,
+    },
     temp_dir,
 };
 use kithara_test_fixtures::signal::goertzel_magnitude;
@@ -117,7 +120,7 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
     let search_end = handover
         .saturating_add(BLOCK_FRAMES as usize)
         .min(left.len());
-    let max_silence = max_silence_run(&left, search_start, search_end);
+    let max_silence = max_silence_run(&left, search_start, search_end, SILENCE_THRESHOLD);
     let max_silence_ms_x10 = max_silence * 10_000 / sample_rate.max(1);
     assert!(
         max_silence < BLOCK_FRAMES as usize,
@@ -240,7 +243,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
          overlap_880={overlap_880:.3}, solo_880={solo_880:.3}, events={events:?}"
     );
 
-    let max_silence = max_silence_run(&left, overlap_start, overlap_end);
+    let max_silence = max_silence_run(&left, overlap_start, overlap_end, SILENCE_THRESHOLD);
     assert!(
         max_silence < BLOCK_FRAMES as usize,
         "no extended silence allowed inside the overlap; \
@@ -335,10 +338,7 @@ async fn render_until_second_item_end(
             harness
                 .tick_and_drain()
                 .into_iter()
-                .map(|event| TimedPlayerEvent {
-                    frame_end: rendered_frames,
-                    event,
-                }),
+                .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
         );
 
         if count_item_end(&events) >= 2 {
@@ -350,10 +350,7 @@ async fn render_until_second_item_end(
                     harness
                         .tick_and_drain()
                         .into_iter()
-                        .map(|event| TimedPlayerEvent {
-                            frame_end: rendered_frames,
-                            event,
-                        }),
+                        .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
                 );
             }
             return (rendered, events);
@@ -365,19 +362,6 @@ async fn render_until_second_item_end(
         );
         time::sleep(block_budget).await;
     }
-}
-
-fn deinterleave_left(samples: &[f32], channels: usize) -> Vec<f32> {
-    samples
-        .chunks_exact(channels)
-        .map(|frame| frame[0])
-        .collect::<Vec<_>>()
-}
-
-#[derive(Clone, Debug)]
-struct TimedPlayerEvent {
-    frame_end: usize,
-    event: PlayerEvent,
 }
 
 fn count_item_end(events: &[TimedPlayerEvent]) -> usize {
@@ -446,25 +430,6 @@ fn last_audible_frame(left: &[f32]) -> Option<usize> {
 
 /// Longest run of near-zero samples in `[start..end)`. Used to detect audible
 /// gaps without depending on phase alignment.
-fn max_silence_run(samples: &[f32], start: usize, end: usize) -> usize {
-    let end = end.min(samples.len());
-    if end <= start {
-        return 0;
-    }
-    let mut max_run = 0usize;
-    let mut current = 0usize;
-    for sample in &samples[start..end] {
-        if sample.abs() < SILENCE_THRESHOLD {
-            current += 1;
-            if current > max_run {
-                max_run = current;
-            }
-        } else {
-            current = 0;
-        }
-    }
-    max_run
-}
 
 fn max_windowed_goertzel_magnitude(
     samples: &[f32],

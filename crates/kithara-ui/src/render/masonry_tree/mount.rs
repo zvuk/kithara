@@ -69,54 +69,57 @@ pub(super) struct Cx<'a> {
     pub(super) declared: solve::Size<solve::Length>,
 }
 
-impl NodeControl for mount::Summary {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
+macro_rules! painted_controls {
+    ($($control:ty),+ $(,)?) => {
+        $(
+            impl NodeControl for $control {
+                fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+                where
+                    A: std::fmt::Debug + Send + 'static,
+                {
+                    painted(self, host, cx)
+                }
+            }
+        )+
+    };
 }
-impl NodeControl for mount::Brand {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Spacer {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Divider {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Preset {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Settings {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
+
+painted_controls!(
+    mount::Summary,
+    mount::Brand,
+    mount::Spacer,
+    mount::Divider,
+    mount::Preset,
+    mount::Settings,
+    mount::Glyph<'_>,
+    mount::Bpm,
+    mount::Time,
+    mount::Telemetry,
+    mount::Wave<'_>,
+    mount::Lottie<'_>,
+    mount::Sprite,
+    mount::PortalMap,
+    mount::Range,
+    mount::ContextBar<'_>,
+    mount::Segmented<'_>,
+    mount::Select,
+    mount::Readout,
+    mount::Knob,
+    mount::Chip,
+    mount::Tab,
+    mount::Meter,
+    mount::Cell,
+    mount::Swatch,
+    mount::StatusDot<'_>,
+    mount::Toggle,
+    mount::Checkbox,
+    mount::VuVertical,
+    mount::VuStereo,
+    mount::Crossfader,
+    mount::Fader,
+    mount::NavItem,
+    mount::Button,
+);
 
 impl NodeControl for mount::Drag {
     fn wire<A>(&self, host: &MasonryHost<'_, A>, _cx: &Cx<'_>, output: &mut MasonryNode<A>)
@@ -148,46 +151,6 @@ impl NodeControl for mount::Controls {
     }
 }
 
-impl NodeControl for mount::Glyph<'_> {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Bpm {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Time {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Telemetry {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Wave<'_> {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
 impl NodeControl for mount::Vis {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
@@ -230,105 +193,33 @@ impl NodeControl for mount::Custom {
     }
 }
 
-impl NodeControl for mount::Lottie<'_> {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
+macro_rules! hosted_controls {
+    ($($control:ty => $variant:ident, $leaf:ident, $message:literal);+ $(;)?) => {
+        $(
+            impl NodeControl for $control {
+                fn leaf<A>(&self, _host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+                where
+                    A: std::fmt::Debug + Send + 'static,
+                {
+                    let Some(HostedControlPlan::$variant(plan)) = cx.plan else {
+                        tracing::error!(
+                            control_path = cx.path,
+                            engine_entry = "hosted plan",
+                            $message
+                        );
+                        return MasonryNode::empty(cx.declared);
+                    };
+                    MasonryNode::control_leaf($leaf::new((**plan).clone(), cx.skin), cx.declared)
+                }
+            }
+        )+
+    };
 }
 
-impl NodeControl for mount::Sprite {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::PortalMap {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Range {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Table<'_> {
-    fn leaf<A>(&self, _host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        let Some(HostedControlPlan::Table(plan)) = cx.plan else {
-            tracing::error!(
-                control_path = cx.path,
-                engine_entry = "hosted plan",
-                "Table mount is incomplete"
-            );
-            return MasonryNode::empty(cx.declared);
-        };
-        MasonryNode::control_leaf(TableLeaf::new((**plan).clone(), cx.skin), cx.declared)
-    }
-}
-impl NodeControl for mount::Tree<'_> {
-    fn leaf<A>(&self, _host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        let Some(HostedControlPlan::Tree(plan)) = cx.plan else {
-            tracing::error!(
-                control_path = cx.path,
-                engine_entry = "hosted plan",
-                "Tree mount is incomplete"
-            );
-            return MasonryNode::empty(cx.declared);
-        };
-        MasonryNode::control_leaf(TreeLeaf::new((**plan).clone(), cx.skin), cx.declared)
-    }
-}
-impl NodeControl for mount::ContextBar<'_> {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Segmented<'_> {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Select {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-impl NodeControl for mount::Readout {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
+hosted_controls!(
+    mount::Table<'_> => Table, TableLeaf, "Table mount is incomplete";
+    mount::Tree<'_> => Tree, TreeLeaf, "Tree mount is incomplete";
+);
 impl NodeControl for mount::Text<'_> {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
@@ -350,143 +241,8 @@ impl NodeControl for mount::Text<'_> {
     }
 }
 
-impl NodeControl for mount::Knob {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::Chip {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::Tab {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
 /// An unbound meter is an empty track rather than an empty box: that is what
 /// the other host has always drawn for it.
-impl NodeControl for mount::Meter {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::Cell {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::Swatch {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::StatusDot<'_> {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::Toggle {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::Checkbox {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::VuVertical {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::VuStereo {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::Crossfader {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::Fader {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::NavItem {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
-impl NodeControl for mount::Button {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
-    }
-}
-
 /// A bounded window over a subtree taller than itself.
 ///
 /// The window itself is the neutral one both hosts keep; what lives here is

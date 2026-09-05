@@ -1957,6 +1957,14 @@ fn a_caller_always_passes_every_input_the_called_workflow_requires() {
 #[test]
 fn the_role_runner_reads_its_matrix_from_the_catalog() {
     let workflow = github_workflow("run.yml");
+    let workflow_env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
+        .as_mapping()
+        .expect("the role runner has an environment");
+    assert_eq!(
+        mapping_field(workflow_env, "CARGO_TARGET_DIR").as_str(),
+        Some("/cache/target"),
+        "matrix selection reuses the fleet build cache"
+    );
     let jobs = workflow_jobs(&workflow);
     assert_eq!(
         workflow_job_names(jobs),

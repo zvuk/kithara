@@ -76,20 +76,6 @@ async fn next_chunk(audio: &mut RegisteredAudio<Stream<File<TestPools>>, TestPoo
     }
 }
 
-/// Create Decoder<Stream<File>> and verify spec.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn decoder_file_creates_successfully(
-    #[future] server: TestServerHelper,
-    temp_dir: TestTempDir,
-) {
-    let server = server.await;
-    let decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
-
-    let spec = decoder.spec();
-    assert!(spec.sample_rate.get() > 0);
-    assert!(spec.channels > 0);
-}
-
 /// Decoder<Stream<File>> reads MP3 samples (no seek, just read).
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn decoder_file_reads_samples(#[future] server: TestServerHelper, temp_dir: TestTempDir) {

@@ -354,18 +354,11 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn queue_seek_one_track_index0(temp_dir: TestTempDir) {
-    run_seek_scenario(&["/master.m3u8"], 0, temp_dir).await;
-}
-
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn queue_seek_two_tracks_index0(temp_dir: TestTempDir) {
-    run_seek_scenario(&["/master.m3u8", "/master-encrypted.m3u8"], 0, temp_dir).await;
-}
-
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn queue_seek_two_tracks_index1(temp_dir: TestTempDir) {
-    run_seek_scenario(&["/master.m3u8", "/master-encrypted.m3u8"], 1, temp_dir).await;
+#[case::one_track(&["/master.m3u8"], 0)]
+#[case::first_of_two(&["/master.m3u8", "/master-encrypted.m3u8"], 0)]
+#[case::second_of_two(&["/master.m3u8", "/master-encrypted.m3u8"], 1)]
+async fn queue_seek_at_index(temp_dir: TestTempDir, #[case] paths: &[&str], #[case] index: usize) {
+    run_seek_scenario(paths, index, temp_dir).await;
 }
 
 /// Two concurrent `Queue::append` calls for the exact same HLS URL

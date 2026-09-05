@@ -22,10 +22,10 @@ use kithara::{
         bridge::{PlayerCmd, SlotControl, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
-    signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::{
-    SampleRateTrackingReader, SeekTrackingReader, TestPcmReader,
+use kithara_integration_tests::{
+    audio_mock::{MockReader, TestPcmReader},
+    test_defaults::Consts,
 };
 use ringbuf::traits::{Consumer, Producer};
 
@@ -49,8 +49,8 @@ fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {
 
 fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
-    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero");
-    let processor = PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &pools());
+    let processor =
+        PlayerNodeProcessor::new(inputs, stream_shape(Consts::NON_ZERO_SAMPLE_RATE), &pools());
     (processor, control)
 }
 
@@ -59,8 +59,7 @@ fn create_mock_player_resource(src: &str) -> Box<PlayerResource> {
 }
 
 fn create_mock_player_resource_with_duration(src: &str, duration_secs: f64) -> Box<PlayerResource> {
-    let spec = AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
-    let reader = TestPcmReader::new(spec, duration_secs);
+    let reader = TestPcmReader::new(Consts::AUDIO_SPEC, duration_secs);
     let resource = Resource::from_reader(reader, None);
     Box::new(
         PlayerResource::new(resource, Arc::from(src), &pools())
@@ -69,10 +68,8 @@ fn create_mock_player_resource_with_duration(src: &str, duration_secs: f64) -> B
 }
 
 fn create_duration_player_resource(src: &str, duration: Duration) -> Box<PlayerResource> {
-    let (reader, _recorded) = SampleRateTrackingReader::with_duration(
-        AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
-        duration,
-    );
+    let (reader, _recorded) =
+        MockReader::sample_rate_tracking_with_duration(Consts::AUDIO_SPEC, duration);
     let resource = Resource::from_reader(reader, None);
     Box::new(
         PlayerResource::new(resource, Arc::from(src), &pools())
@@ -84,7 +81,7 @@ fn create_tracking_player_resource(
     src: &str,
     seek_log: Arc<Mutex<Vec<u64>>>,
 ) -> Box<PlayerResource> {
-    let resource = Resource::from_reader(SeekTrackingReader::new(seek_log), None);
+    let resource = Resource::from_reader(MockReader::seek_tracking(seek_log), None);
     Box::new(
         PlayerResource::new(resource, Arc::from(src), &pools())
             .expect("player resource fits the test pool budget"),
@@ -94,10 +91,7 @@ fn create_tracking_player_resource(
 #[kithara::test(tokio)]
 async fn load_track_propagates_host_sample_rate() {
     let host_rate = 88_200u32;
-    let (reader, recorded) = SampleRateTrackingReader::new(AudioSpec::new(
-        2,
-        NonZeroU32::new(44100).expect("test rate"),
-    ));
+    let (reader, recorded) = MockReader::sample_rate_tracking(Consts::AUDIO_SPEC);
     let resource = Resource::from_reader(reader, None);
     let player_resource = Box::new(
         PlayerResource::new(resource, Arc::from("track.mp3"), &pools())
@@ -127,25 +121,14 @@ fn processor_renders_silence_when_no_tracks() {
 }
 
 #[kithara::test]
-fn processor_seek_without_tracks_does_not_panic() {
+#[case::seek(PlayerCmd::Seek {
+    seconds: 30.0,
+    seek_epoch: 1,
+})]
+#[case::playback_rate(PlayerCmd::SetPlaybackRate(2.0))]
+fn processor_command_without_tracks_does_not_panic(#[case] command: PlayerCmd) {
     let (mut processor, mut control) = make_processor();
-    control
-        .cmd_tx
-        .try_push(PlayerCmd::Seek {
-            seconds: 30.0,
-            seek_epoch: 1,
-        })
-        .ok();
-    processor.drain_commands();
-}
-
-#[kithara::test]
-fn processor_set_playback_rate_without_tracks_does_not_panic() {
-    let (mut processor, mut control) = make_processor();
-    control
-        .cmd_tx
-        .try_push(PlayerCmd::SetPlaybackRate(2.0))
-        .ok();
+    control.cmd_tx.try_push(command).ok();
     processor.drain_commands();
 }
 
@@ -164,10 +147,7 @@ fn processor_set_paused_updates_playback() {
 
 #[kithara::test(tokio)]
 async fn processor_clear_unloads_tracks_and_resets_snapshot() {
-    let (reader, _recorded) = SampleRateTrackingReader::new(AudioSpec::new(
-        2,
-        NonZeroU32::new(44100).expect("test rate"),
-    ));
+    let (reader, _recorded) = MockReader::sample_rate_tracking(Consts::AUDIO_SPEC);
     let resource = Resource::from_reader(reader, None);
     let player_resource = Box::new(
         PlayerResource::new(resource, Arc::from("track.mp3"), &pools())

@@ -9,7 +9,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, kithara,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, TimedPlayerEvent},
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -65,10 +65,11 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
         let block = harness.render(BLOCK_FRAMES);
         let drained = harness.tick_and_drain();
         rendered_frames = rendered_frames.saturating_add(block.len() / 2);
-        events.extend(drained.into_iter().map(|event| TimedPlayerEvent {
-            frame_end: rendered_frames,
-            event,
-        }));
+        events.extend(
+            drained
+                .into_iter()
+                .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
+        );
 
         if first_item_finished.is_none() {
             first_item_finished = events.iter().find_map(|timed| {
@@ -141,10 +142,4 @@ async fn make_signal_resource(
     Resource::new(config)
         .await
         .expect("open queue regression resource")
-}
-
-#[derive(Clone, Debug)]
-struct TimedPlayerEvent {
-    frame_end: usize,
-    event: PlayerEvent,
 }

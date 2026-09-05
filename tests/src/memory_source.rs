@@ -103,11 +103,8 @@ impl MemorySource {
     #[must_use]
     pub fn without_len(data: Vec<u8>) -> Self {
         Self {
-            data,
-            seek: Arc::new(SeekState::new()),
-            playhead: Arc::new(PlayheadState::new()),
-            position: Arc::new(AtomicU64::new(0)),
             report_len: false,
+            ..Self::new(data)
         }
     }
 }
@@ -244,11 +241,7 @@ impl StreamType for UnknownLenStream {
     }
 }
 
-#[derive(Default)]
-pub struct UnknownLenStreamConfig {
-    pub source: Option<MemorySource>,
-    pub event_bus: Option<EventBus>,
-}
+pub type UnknownLenStreamConfig = MemStreamConfig;
 
 /// Create a `Stream` from a `MemorySource`.
 #[must_use]

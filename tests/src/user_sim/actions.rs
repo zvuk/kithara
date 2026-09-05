@@ -22,10 +22,6 @@ pub enum Action {
     SeekNearEnd(f64),
     /// `select(tracks()[idx], Transition::None)`.
     SelectAt(usize),
-    /// `return_to_previous(Transition::None)`.
-    SelectPrev,
-    /// `advance_to_next(Transition::None)`.
-    SelectNext,
     /// `current_abr_handle().set_mode(Manual(idx))`.
     SetQuality(usize),
     /// `current_abr_handle().set_mode(Auto(None))`.
@@ -51,8 +47,6 @@ impl Action {
             Self::SeekRatio(r) => format!("SeekRatio({r:.3})"),
             Self::SeekNearEnd(r) => format!("SeekNearEnd({r:.3})"),
             Self::SelectAt(i) => format!("SelectAt({i})"),
-            Self::SelectPrev => "SelectPrev".into(),
-            Self::SelectNext => "SelectNext".into(),
             Self::SetQuality(i) => format!("SetQuality({i})"),
             Self::QualityAuto => "QualityAuto".into(),
             Self::Pause => "Pause".into(),

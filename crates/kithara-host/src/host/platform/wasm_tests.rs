@@ -155,19 +155,10 @@ fn successful_remove_releases_resident() {
 }
 
 #[kithara::test(wasm, flash(false))]
-fn session_gone_while_closing_releases_resident() {
-    let (mut host, resident, drops) = fixture(Outcome::SessionGone, Outcome::Ok);
-
-    assert!(matches!(
-        host.remove_resident(resident),
-        Err(PlayError::SessionGone { .. })
-    ));
-    assert_eq!(*drops.borrow(), 1);
-}
-
-#[kithara::test(wasm, flash(false))]
-fn session_gone_while_detaching_releases_resident() {
-    let (mut host, resident, drops) = fixture(Outcome::Ok, Outcome::SessionGone);
+#[case::closing(Outcome::SessionGone, Outcome::Ok)]
+#[case::detaching(Outcome::Ok, Outcome::SessionGone)]
+fn session_gone_releases_resident(#[case] close: Outcome, #[case] detach: Outcome) {
+    let (mut host, resident, drops) = fixture(close, detach);
 
     assert!(matches!(
         host.remove_resident(resident),

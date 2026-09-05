@@ -81,18 +81,16 @@ impl Ledger {
         attempt: u64,
         pipeline_id: u64,
     ) -> Result<()> {
-        self.with_locked_data(|data| {
-            let key = ledger_key(head_sha, base_sha);
-            let entry = testing_attempt(data, &key, attempt)?;
+        self.update(head_sha, base_sha, |data, key| {
+            let entry = testing_attempt(data, key, attempt)?;
             match entry.pipeline_id {
                 Some(previous) if previous != pipeline_id => bail!(
                     "verification {key} attempt {attempt} owns pipeline {previous}; refusing {pipeline_id}"
                 ),
-                Some(_) => Ok(()),
+                Some(_) => Ok(false),
                 None => {
                     entry.pipeline_id = Some(pipeline_id);
-                    entry.updated_at = unix_time()?;
-                    self.write(data)
+                    Ok(true)
                 }
             }
         })
@@ -105,14 +103,31 @@ impl Ledger {
         attempt: u64,
         pipeline_id: u64,
     ) -> Result<()> {
-        self.with_locked_data(|data| {
-            let key = ledger_key(head_sha, base_sha);
-            let entry = testing_pipeline(data, &key, attempt, pipeline_id)?;
+        self.update(head_sha, base_sha, |data, key| {
+            let entry = testing_pipeline(data, key, attempt, pipeline_id)?;
             if entry.announced {
-                return Ok(());
+                return Ok(false);
             }
             entry.announced = true;
-            entry.updated_at = unix_time()?;
+            Ok(true)
+        })
+    }
+
+    fn update(
+        &self,
+        head_sha: &str,
+        base_sha: &str,
+        change: impl FnOnce(&mut LedgerData, &str) -> Result<bool>,
+    ) -> Result<()> {
+        self.with_locked_data(|data| {
+            let key = ledger_key(head_sha, base_sha);
+            if !change(data, &key)? {
+                return Ok(());
+            }
+            data.verifications
+                .get_mut(&key)
+                .ok_or_else(|| anyhow::anyhow!("verification {key} has not been reserved"))?
+                .updated_at = unix_time()?;
             self.write(data)
         })
     }

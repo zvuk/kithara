@@ -1,7 +1,4 @@
 mod cochlea_continuity_oracle;
-#[cfg(not(target_arch = "wasm32"))]
-#[cfg(not(target_arch = "wasm32"))]
-mod engine_session_contract;
 mod engine_tests;
 mod gapless_offline_e2e;
 mod gapless_startup_regressions;

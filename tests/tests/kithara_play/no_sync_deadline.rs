@@ -16,7 +16,7 @@ use kithara::{
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::TestPcmReader;
+use kithara_integration_tests::{audio_mock::TestPcmReader, offline::peak};
 use ringbuf::traits::Producer;
 
 use crate::bufpool_ext::pools;
@@ -138,12 +138,6 @@ fn render_block(
 
     black_box(outcome);
     elapsed
-}
-
-fn peak(samples: &[f32]) -> f32 {
-    samples
-        .iter()
-        .fold(0.0_f32, |current, sample| current.max(sample.abs()))
 }
 
 fn assert_all_tracks_contributed(

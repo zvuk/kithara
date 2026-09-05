@@ -4,7 +4,7 @@ use kithara::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::value::Value;
+use super::value::{Value, impl_child_node};
 use crate::{
     deck::EqMode,
     gui::{
@@ -66,36 +66,34 @@ impl<'a> DeckNode<'a> {
     }
 }
 
-impl<'a> Node<'a> for DeckNode<'a> {
-    fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let node: Box<dyn Node<'a> + 'a> = match segment {
-            "playback" => Box::new(PlaybackNode {
-                ui: self.ui,
-                cache: self.cache,
-            }),
-            "track" => Box::new(TrackNode {
-                ui: self.ui,
-                cache: self.cache,
-            }),
-            "tempo" => Box::new(TempoNode {
-                timestretch: self.view.timestretch,
-            }),
-            "eq" => Box::new(EqNode {
-                ui: self.ui,
-                cache: self.cache,
-                mode: self.eq_mode,
-            }),
-            "stream" => Box::new(StreamNode {
-                ui: self.ui,
-                cache: self.cache,
-            }),
-            "view" => Box::new(ViewNode { cache: self.cache }),
-            "focused" => Box::new(Value(ReadValue::Bool(self.focused))),
-            _ => return None,
-        };
-        Some(node)
-    }
-}
+impl_child_node!(DeckNode<'a>, |this, segment, _scope| {
+    let node: Box<dyn Node<'a> + 'a> = match segment {
+        "playback" => Box::new(PlaybackNode {
+            ui: this.ui,
+            cache: this.cache,
+        }),
+        "track" => Box::new(TrackNode {
+            ui: this.ui,
+            cache: this.cache,
+        }),
+        "tempo" => Box::new(TempoNode {
+            timestretch: this.view.timestretch,
+        }),
+        "eq" => Box::new(EqNode {
+            ui: this.ui,
+            cache: this.cache,
+            mode: this.eq_mode,
+        }),
+        "stream" => Box::new(StreamNode {
+            ui: this.ui,
+            cache: this.cache,
+        }),
+        "view" => Box::new(ViewNode { cache: this.cache }),
+        "focused" => Box::new(Value(ReadValue::Bool(this.focused))),
+        _ => return None,
+    };
+    Some(node)
+});
 
 #[derive(Clone, Copy)]
 struct PlaybackNode<'a> {
@@ -114,31 +112,29 @@ impl PlaybackNode<'_> {
     }
 }
 
-impl<'a> Node<'a> for PlaybackNode<'a> {
-    fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let value = match segment {
-            "waveform" => ReadValue::Waveform(WaveformView {
-                buckets: &self.cache.wave,
-                revision: self.cache.wave_revision,
-                beats: &self.ui.beat_marks,
-                downbeats: &self.ui.downbeat_marks,
-                unready: &self.ui.unready_ranges,
-                bpm: analysis_bpm(self.ui),
-                r#loop: None,
-                cues: &[],
-            }),
-            "playing" => ReadValue::Bool(self.ui.playing),
-            "position_secs" => ReadValue::Scalar(playhead(self.ui).max(0.0)),
-            "duration_secs" => ReadValue::Scalar(self.ui.duration.max(0.0)),
-            "position_normalized" => ReadValue::Scalar(self.normalized()),
-            "tempo" => ReadValue::Text(&self.cache.tempo),
-            "bpm" => ReadValue::Text(&self.cache.bpm),
-            "remain" => ReadValue::Text(&self.cache.remain),
-            _ => return None,
-        };
-        Some(Box::new(Value(value)))
-    }
-}
+impl_child_node!(PlaybackNode<'a>, |this, segment, _scope| {
+    let value = match segment {
+        "waveform" => ReadValue::Waveform(WaveformView {
+            buckets: &this.cache.wave,
+            revision: this.cache.wave_revision,
+            beats: &this.ui.beat_marks,
+            downbeats: &this.ui.downbeat_marks,
+            unready: &this.ui.unready_ranges,
+            bpm: analysis_bpm(this.ui),
+            r#loop: None,
+            cues: &[],
+        }),
+        "playing" => ReadValue::Bool(this.ui.playing),
+        "position_secs" => ReadValue::Scalar(playhead(this.ui).max(0.0)),
+        "duration_secs" => ReadValue::Scalar(this.ui.duration.max(0.0)),
+        "position_normalized" => ReadValue::Scalar(this.normalized()),
+        "tempo" => ReadValue::Text(&this.cache.tempo),
+        "bpm" => ReadValue::Text(&this.cache.bpm),
+        "remain" => ReadValue::Text(&this.cache.remain),
+        _ => return None,
+    };
+    Some(Box::new(Value(value)))
+});
 
 #[derive(Clone, Copy)]
 struct TrackNode<'a> {
@@ -200,22 +196,20 @@ impl<'a> StreamNode<'a> {
     }
 }
 
-impl<'a> Node<'a> for StreamNode<'a> {
-    fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let stream = *self;
-        let value = match segment {
-            "quality" => ReadValue::Text(&stream.cache.quality),
-            "quality_menu" => ReadValue::Bool(stream.cache.view.quality_menu),
-            "quality_hidden" => ReadValue::Bool(stream.ui.abr_variants.is_empty()),
-            "variant_active" => ReadValue::Bool(stream.active(scope.get("variant")?)),
-            "variant_hidden" => ReadValue::Bool(stream.rung(scope.get("variant")?).is_none()),
-            "variant_label" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.label),
-            "variant_sub" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.detail),
-            _ => return None,
-        };
-        Some(Box::new(Value(value)))
-    }
-}
+impl_child_node!(StreamNode<'a>, |this, segment, scope| {
+    let stream = *this;
+    let value = match segment {
+        "quality" => ReadValue::Text(&stream.cache.quality),
+        "quality_menu" => ReadValue::Bool(stream.cache.view.quality_menu),
+        "quality_hidden" => ReadValue::Bool(stream.ui.abr_variants.is_empty()),
+        "variant_active" => ReadValue::Bool(stream.active(scope.get("variant")?)),
+        "variant_hidden" => ReadValue::Bool(stream.rung(scope.get("variant")?).is_none()),
+        "variant_label" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.label),
+        "variant_sub" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.detail),
+        _ => return None,
+    };
+    Some(Box::new(Value(value)))
+});
 
 #[derive(Clone, Copy)]
 struct EqNode<'a> {

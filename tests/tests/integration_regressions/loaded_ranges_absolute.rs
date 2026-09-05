@@ -19,7 +19,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
@@ -78,17 +78,6 @@ async fn wait_for_playing_settled_duration(
     })
 }
 
-fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(20)).await;
-            if queue.tick().is_err() {
-                break;
-            }
-        }
-    })
-}
-
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
@@ -142,7 +131,10 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
         .store(store)
         .build();
 
-    let ticker = spawn_ticker(queue.control());
+    let ticker = tokio::task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(20),
+    ));
     let mut rx = queue.subscribe();
     // Separate subscriber: the warm-up below drains `rx`, and the body can
     // finish transferring before the pause — the completion must not be eaten

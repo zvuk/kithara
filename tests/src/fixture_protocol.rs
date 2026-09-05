@@ -7,95 +7,64 @@ pub use kithara_test_fixtures::fmp4::GaplessEncoding;
 use kithara_test_fixtures::signal::Wave;
 use serde::{Deserialize, Serialize};
 
-/// Serde for [`AudioCodec`] as `snake_case` strings (matches the former
-/// `derive(Serialize)` on the enum).
-mod serde_audio_codec {
-    use kithara::stream::AudioCodec;
-    use serde::{Deserialize, Deserializer, Serializer, de::Error as DeError};
+macro_rules! serde_wire_enum {
+    ($module:ident, $ty:ident, $description:literal, { $($variant:ident => $wire:literal),+ $(,)? }) => {
+        mod $module {
+            use serde::{Deserialize, Deserializer, Serializer, de::Error as DeError};
 
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "serde with = module requires fn(&T, serializer)"
-    )]
-    pub(super) fn serialize<S>(codec: &AudioCodec, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let s: &'static str = match codec {
-            AudioCodec::AacLc => "aac_lc",
-            AudioCodec::AacHe => "aac_he",
-            AudioCodec::AacHeV2 => "aac_he_v2",
-            AudioCodec::Mp3 => "mp3",
-            AudioCodec::Flac => "flac",
-            AudioCodec::Vorbis => "vorbis",
-            AudioCodec::Opus => "opus",
-            AudioCodec::Alac => "alac",
-            AudioCodec::Pcm => "pcm",
-            AudioCodec::Adpcm => "adpcm",
-        };
-        serializer.serialize_str(s)
-    }
+            type Value = super::$ty;
 
-    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<AudioCodec, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        match s.as_str() {
-            "aac_lc" => Ok(AudioCodec::AacLc),
-            "aac_he" => Ok(AudioCodec::AacHe),
-            "aac_he_v2" => Ok(AudioCodec::AacHeV2),
-            "mp3" => Ok(AudioCodec::Mp3),
-            "flac" => Ok(AudioCodec::Flac),
-            "vorbis" => Ok(AudioCodec::Vorbis),
-            "opus" => Ok(AudioCodec::Opus),
-            "alac" => Ok(AudioCodec::Alac),
-            "pcm" => Ok(AudioCodec::Pcm),
-            "adpcm" => Ok(AudioCodec::Adpcm),
-            _ => Err(DeError::custom(format!("unknown audio codec string: {s}"))),
+            pub(super) fn serialize<S>(value: &Value, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                let wire = match value {
+                    $(Value::$variant => $wire),+
+                };
+                serializer.serialize_str(wire)
+            }
+
+            pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Value, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let wire = String::deserialize(deserializer)?;
+                match wire.as_str() {
+                    $($wire => Ok(Value::$variant),)+
+                    _ => Err(DeError::custom(format!(
+                        "unknown {} string: {wire}",
+                        $description
+                    ))),
+                }
+            }
         }
-    }
+    };
 }
 
-/// Serde for [`GaplessEncoding`] as `snake_case` strings. The mux owns the
-/// enum and has no reason to depend on serde; the wire shape belongs here.
-mod serde_gapless_encoding {
-    use kithara_test_fixtures::fmp4::GaplessEncoding;
-    use serde::{Deserialize, Deserializer, Serializer, de::Error as DeError};
+serde_wire_enum!(serde_audio_codec, AudioCodec, "audio codec", {
+    AacLc => "aac_lc",
+    AacHe => "aac_he",
+    AacHeV2 => "aac_he_v2",
+    Mp3 => "mp3",
+    Flac => "flac",
+    Vorbis => "vorbis",
+    Opus => "opus",
+    Alac => "alac",
+    Pcm => "pcm",
+    Adpcm => "adpcm",
+});
 
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "serde with = module requires fn(&T, serializer)"
-    )]
-    pub(super) fn serialize<S>(encoding: &GaplessEncoding, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
+serde_wire_enum!(
+    serde_gapless_encoding,
+    GaplessEncoding,
+    "gapless encoding",
     {
-        let s: &'static str = match encoding {
-            GaplessEncoding::None => "none",
-            GaplessEncoding::Edts => "edts",
-            GaplessEncoding::ItunSmpb => "itun_smpb",
-            GaplessEncoding::Both => "both",
-        };
-        serializer.serialize_str(s)
+        None => "none",
+        Edts => "edts",
+        ItunSmpb => "itun_smpb",
+        Both => "both",
     }
-
-    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<GaplessEncoding, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        match s.as_str() {
-            "none" => Ok(GaplessEncoding::None),
-            "edts" => Ok(GaplessEncoding::Edts),
-            "itun_smpb" => Ok(GaplessEncoding::ItunSmpb),
-            "both" => Ok(GaplessEncoding::Both),
-            _ => Err(DeError::custom(format!(
-                "unknown gapless encoding string: {s}"
-            ))),
-        }
-    }
-}
+);
 
 /// How media segment data is generated.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -181,6 +150,18 @@ pub enum PackagedSignal {
     Silence,
     Sine { freq_hz: f64 },
     Sweep { start_hz: f64, end_hz: f64 },
+}
+
+impl From<PackagedSignal> for PackagedAudioSource {
+    fn from(signal: PackagedSignal) -> Self {
+        Self::Signal(signal)
+    }
+}
+
+impl From<Vec<PcmPattern>> for PackagedAudioSource {
+    fn from(patterns: Vec<PcmPattern>) -> Self {
+        Self::PerVariantPcm { patterns }
+    }
 }
 
 /// Per-variant override for packaged audio fixtures.

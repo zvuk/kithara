@@ -242,194 +242,133 @@ impl AudioControl for TestPcmReader {
     }
 }
 
-pub struct SampleRateTrackingReader {
-    recorded_host_rate: Arc<AtomicU32>,
+pub struct MockReader {
+    behavior: MockBehavior,
     bus: EventBus,
-    duration: Duration,
     metadata: TrackMetadata,
     spec: AudioSpec,
 }
 
-impl SampleRateTrackingReader {
-    #[must_use]
-    pub fn new(spec: AudioSpec) -> (Self, Arc<AtomicU32>) {
-        Self::with_duration(spec, Duration::from_secs(60))
+enum MockBehavior {
+    SampleRateTracking {
+        recorded_host_rate: Arc<AtomicU32>,
+        duration: Duration,
+    },
+    SeekTracking {
+        seek_log: Arc<Mutex<Vec<u64>>>,
+    },
+    MisreportedDuration {
+        position_frames: usize,
+        remaining_frames: usize,
+    },
+    LiveFrontier {
+        frontier_ns: Arc<AtomicU64>,
+    },
+    Faulty(Fault),
+    SeekSplit(SeekSplitCounts),
+}
+
+impl MockReader {
+    fn with_behavior(spec: AudioSpec, behavior: MockBehavior) -> Self {
+        Self {
+            behavior,
+            bus: EventBus::default(),
+            metadata: TrackMetadata::default(),
+            spec,
+        }
     }
 
     #[must_use]
-    pub fn with_duration(spec: AudioSpec, duration: Duration) -> (Self, Arc<AtomicU32>) {
+    pub fn sample_rate_tracking(spec: AudioSpec) -> (Self, Arc<AtomicU32>) {
+        Self::sample_rate_tracking_with_duration(spec, Duration::from_secs(60))
+    }
+
+    #[must_use]
+    pub fn sample_rate_tracking_with_duration(
+        spec: AudioSpec,
+        duration: Duration,
+    ) -> (Self, Arc<AtomicU32>) {
         let recorded = Arc::new(AtomicU32::new(0));
-        let reader = Self {
-            bus: EventBus::default(),
-            duration,
-            metadata: TrackMetadata::default(),
-            recorded_host_rate: Arc::clone(&recorded),
+        let reader = Self::with_behavior(
             spec,
-        };
+            MockBehavior::SampleRateTracking {
+                recorded_host_rate: Arc::clone(&recorded),
+                duration,
+            },
+        );
         (reader, recorded)
     }
-}
 
-impl AudioSession for SampleRateTrackingReader {
-    fn duration(&self) -> Option<Duration> {
-        Some(self.duration)
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-}
-
-impl AudioRead for SampleRateTrackingReader {
-    fn decoded_frontier(&self) -> Duration {
-        Duration::ZERO
-    }
-
-    fn position(&self) -> Duration {
-        Duration::ZERO
-    }
-
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        Ok(ReadOutcome::Pending {
-            position: Duration::ZERO,
-            reason: PendingReason::Buffering,
-        })
-    }
-
-    fn read_planar<'a>(
-        &mut self,
-        _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
-        Ok(ReadOutcome::Pending {
-            position: Duration::ZERO,
-            reason: PendingReason::Buffering,
-        })
-    }
-
-    fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-}
-
-impl AudioControl for SampleRateTrackingReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
-
-    fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
-        self.recorded_host_rate
-            .store(sample_rate.get(), Ordering::Relaxed);
-    }
-}
-
-pub struct SeekTrackingReader {
-    bus: EventBus,
-    metadata: TrackMetadata,
-    seek_log: Arc<Mutex<Vec<u64>>>,
-    spec: AudioSpec,
-}
-
-impl SeekTrackingReader {
     #[must_use]
-    pub fn new(seek_log: Arc<Mutex<Vec<u64>>>) -> Self {
-        Self {
-            bus: EventBus::default(),
-            metadata: TrackMetadata {
-                title: Some("Tracking".to_owned()),
-                ..TrackMetadata::default()
-            },
-            seek_log,
-            spec: AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
-        }
-    }
-}
-
-impl AudioSession for SeekTrackingReader {
-    fn duration(&self) -> Option<Duration> {
-        None
+    pub fn seek_tracking(seek_log: Arc<Mutex<Vec<u64>>>) -> Self {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let mut reader = Self::with_behavior(spec, MockBehavior::SeekTracking { seek_log });
+        reader.metadata.title = Some("Tracking".to_owned());
+        reader
     }
 
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-}
-
-impl AudioRead for SeekTrackingReader {
-    fn position(&self) -> Duration {
-        Duration::ZERO
-    }
-
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        Ok(ReadOutcome::Pending {
-            position: Duration::ZERO,
-            reason: PendingReason::Buffering,
-        })
-    }
-
-    fn read_planar<'a>(
-        &mut self,
-        _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
-        Ok(ReadOutcome::Pending {
-            position: Duration::ZERO,
-            reason: PendingReason::Buffering,
-        })
-    }
-
-    fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-}
-
-impl AudioControl for SeekTrackingReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let ms = u64::try_from(position.as_millis()).expect("test seek fits in u64");
-        self.seek_log
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(ms);
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
-}
-
-pub struct MisreportedDurationReader {
-    bus: EventBus,
-    spec: AudioSpec,
-    metadata: TrackMetadata,
-    position_frames: usize,
-    remaining_frames: usize,
-}
-
-impl MisreportedDurationReader {
     #[must_use]
-    pub fn new(spec: AudioSpec, actual_frames: usize) -> Self {
-        Self {
-            bus: EventBus::default(),
-            metadata: TrackMetadata::default(),
-            remaining_frames: actual_frames,
-            position_frames: 0,
+    pub fn misreported_duration(spec: AudioSpec, actual_frames: usize) -> Self {
+        Self::with_behavior(
             spec,
+            MockBehavior::MisreportedDuration {
+                position_frames: 0,
+                remaining_frames: actual_frames,
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn live_frontier(spec: AudioSpec, frontier_ns: Arc<AtomicU64>) -> Self {
+        Self::with_behavior(spec, MockBehavior::LiveFrontier { frontier_ns })
+    }
+
+    #[must_use]
+    pub fn faulty(spec: AudioSpec, fault: Fault) -> Self {
+        Self::with_behavior(spec, MockBehavior::Faulty(fault))
+    }
+
+    #[must_use]
+    pub fn seek_split(spec: AudioSpec) -> (Self, SeekSplitCounts) {
+        let counts = SeekSplitCounts::default();
+        let reader = Self::with_behavior(spec, MockBehavior::SeekSplit(counts.clone()));
+        (reader, counts)
+    }
+
+    fn fixed_outcome(&self) -> Result<ReadOutcome, DecodeError> {
+        match &self.behavior {
+            MockBehavior::LiveFrontier { .. } => Ok(ReadOutcome::Eof {
+                position: Duration::ZERO,
+            }),
+            MockBehavior::Faulty(Fault::DecodeError) => Err(DecodeError::Io {
+                source: std::io::Error::other("mock decode failure"),
+            }),
+            MockBehavior::Faulty(Fault::Stall | Fault::RefuseSeek)
+            | MockBehavior::SampleRateTracking { .. }
+            | MockBehavior::SeekTracking { .. }
+            | MockBehavior::SeekSplit(_) => Ok(ReadOutcome::Pending {
+                position: Duration::ZERO,
+                reason: PendingReason::Buffering,
+            }),
+            MockBehavior::MisreportedDuration { .. } => unreachable!(),
         }
+    }
+
+    fn position_for(spec: AudioSpec, frames: usize) -> Duration {
+        let frames = u64::try_from(frames).expect("test mock position non-negative");
+        Duration::from_micros(frames * 1_000_000 / u64::from(spec.sample_rate.get()))
     }
 }
 
-impl AudioSession for MisreportedDurationReader {
+impl AudioSession for MockReader {
     fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(10))
+        match &self.behavior {
+            MockBehavior::SampleRateTracking { duration, .. } => Some(*duration),
+            MockBehavior::SeekTracking { .. } => None,
+            MockBehavior::MisreportedDuration { .. } => Some(Duration::from_secs(10)),
+            MockBehavior::LiveFrontier { .. } => Some(Duration::from_secs(180)),
+            MockBehavior::Faulty(_) | MockBehavior::SeekSplit(_) => Some(Duration::from_secs(60)),
+        }
     }
 
     fn event_bus(&self) -> &EventBus {
@@ -441,27 +380,46 @@ impl AudioSession for MisreportedDurationReader {
     }
 }
 
-impl AudioRead for MisreportedDurationReader {
+impl AudioRead for MockReader {
+    fn decoded_frontier(&self) -> Duration {
+        match &self.behavior {
+            MockBehavior::LiveFrontier { frontier_ns } => {
+                Duration::from_nanos(frontier_ns.load(Ordering::Relaxed))
+            }
+            _ => Duration::ZERO,
+        }
+    }
+
     fn position(&self) -> Duration {
-        let frames = u64::try_from(self.position_frames).expect("test mock position non-negative");
-        Duration::from_micros(frames * 1_000_000 / u64::from(self.spec.sample_rate.get()))
+        match &self.behavior {
+            MockBehavior::MisreportedDuration {
+                position_frames, ..
+            } => Self::position_for(self.spec, *position_frames),
+            _ => Duration::ZERO,
+        }
     }
 
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        let MockBehavior::MisreportedDuration {
+            position_frames,
+            remaining_frames,
+        } = &mut self.behavior
+        else {
+            return self.fixed_outcome();
+        };
         let channels = usize::from(self.spec.channels);
-        let frames = (buf.len() / channels).min(self.remaining_frames);
+        let frames = (buf.len() / channels).min(*remaining_frames);
         if frames == 0 {
             return Ok(ReadOutcome::Eof {
-                position: self.position(),
+                position: Self::position_for(self.spec, *position_frames),
             });
         }
-        let samples = frames.saturating_mul(channels);
-        buf[..samples].fill(0.5);
-        self.remaining_frames -= frames;
-        self.position_frames += frames;
+        buf[..frames.saturating_mul(channels)].fill(0.5);
+        *remaining_frames -= frames;
+        *position_frames += frames;
         Ok(ReadOutcome::Frames {
             count: NonZeroUsize::new(frames).expect("BUG: frames > 0"),
-            position: self.position(),
+            position: Self::position_for(self.spec, *position_frames),
             source_span: None,
         })
     }
@@ -470,25 +428,32 @@ impl AudioRead for MisreportedDurationReader {
         &mut self,
         output: &'a mut [&'a mut [f32]],
     ) -> Result<ReadOutcome, DecodeError> {
+        let MockBehavior::MisreportedDuration {
+            position_frames,
+            remaining_frames,
+        } = &mut self.behavior
+        else {
+            return self.fixed_outcome();
+        };
         let frames = output
             .iter()
             .map(|channel| channel.len())
             .min()
             .unwrap_or(0)
-            .min(self.remaining_frames);
+            .min(*remaining_frames);
         if frames == 0 {
             return Ok(ReadOutcome::Eof {
-                position: self.position(),
+                position: Self::position_for(self.spec, *position_frames),
             });
         }
-        for channel in output.iter_mut() {
+        for channel in output {
             channel[..frames].fill(0.5);
         }
-        self.remaining_frames -= frames;
-        self.position_frames += frames;
+        *remaining_frames -= frames;
+        *position_frames += frames;
         Ok(ReadOutcome::Frames {
             count: NonZeroUsize::new(frames).expect("BUG: frames > 0"),
-            position: self.position(),
+            position: Self::position_for(self.spec, *position_frames),
             source_span: None,
         })
     }
@@ -498,87 +463,56 @@ impl AudioRead for MisreportedDurationReader {
     }
 }
 
-impl AudioControl for MisreportedDurationReader {
+impl AudioControl for MockReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        match &mut self.behavior {
+            MockBehavior::SeekTracking { seek_log } => {
+                let ms = u64::try_from(position.as_millis()).expect("test seek fits in u64");
+                seek_log
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(ms);
+            }
+            MockBehavior::Faulty(Fault::RefuseSeek) => {
+                return Err(DecodeError::Io {
+                    source: std::io::Error::other("mock seek refusal"),
+                });
+            }
+            MockBehavior::SeekSplit(counts) => {
+                counts.blocking_seeks.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
         Ok(SeekOutcome::Landed {
             target: position,
             landed_at: position,
         })
     }
-}
 
-pub struct LiveFrontierReader {
-    frontier_ns: Arc<AtomicU64>,
-    bus: EventBus,
-    spec: AudioSpec,
-    metadata: TrackMetadata,
-}
+    fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
+        if let MockBehavior::SampleRateTracking {
+            recorded_host_rate, ..
+        } = &self.behavior
+        {
+            recorded_host_rate.store(sample_rate.get(), Ordering::Relaxed);
+        }
+    }
 
-impl LiveFrontierReader {
-    #[must_use]
-    pub fn new(spec: AudioSpec, frontier_ns: Arc<AtomicU64>) -> Self {
-        Self {
-            bus: EventBus::default(),
-            metadata: TrackMetadata::default(),
-            frontier_ns,
-            spec,
+    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
+        match &self.behavior {
+            MockBehavior::SeekSplit(counts) => Some(Arc::new(SeekSpy(counts.clone()))),
+            _ => None,
+        }
+    }
+
+    fn sync_seek(&mut self) {
+        if let MockBehavior::SeekSplit(counts) = &self.behavior {
+            counts.syncs.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
 
-impl AudioSession for LiveFrontierReader {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(180))
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-}
-
-impl AudioRead for LiveFrontierReader {
-    fn decoded_frontier(&self) -> Duration {
-        Duration::from_nanos(self.frontier_ns.load(Ordering::Relaxed))
-    }
-
-    fn position(&self) -> Duration {
-        Duration::ZERO
-    }
-
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        Ok(ReadOutcome::Eof {
-            position: Duration::ZERO,
-        })
-    }
-
-    fn read_planar<'a>(
-        &mut self,
-        _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
-        Ok(ReadOutcome::Eof {
-            position: Duration::ZERO,
-        })
-    }
-
-    fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-}
-
-impl AudioControl for LiveFrontierReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
-}
-
-/// How a [`FaultyPcmReader`] misbehaves, so RT paths that must not log or block can be driven into
+/// How a faulty `MockReader` misbehaves, so RT paths that must not log or block can be driven into
 /// their failure branches from a test.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
@@ -588,87 +522,6 @@ pub enum Fault {
     Stall,
     /// Reads succeed; seeks are refused.
     RefuseSeek,
-}
-
-/// A reader parked in one failure mode for the life of the test.
-pub struct FaultyPcmReader {
-    bus: EventBus,
-    fault: Fault,
-    metadata: TrackMetadata,
-    spec: AudioSpec,
-}
-
-impl FaultyPcmReader {
-    #[must_use]
-    pub fn new(spec: AudioSpec, fault: Fault) -> Self {
-        Self {
-            bus: EventBus::default(),
-            fault,
-            metadata: TrackMetadata::default(),
-            spec,
-        }
-    }
-
-    fn outcome(&self) -> Result<ReadOutcome, DecodeError> {
-        match self.fault {
-            Fault::DecodeError => Err(DecodeError::Io {
-                source: std::io::Error::other("mock decode failure"),
-            }),
-            Fault::Stall | Fault::RefuseSeek => Ok(ReadOutcome::Pending {
-                position: Duration::ZERO,
-                reason: PendingReason::Buffering,
-            }),
-        }
-    }
-}
-
-impl AudioSession for FaultyPcmReader {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-}
-
-impl AudioRead for FaultyPcmReader {
-    fn position(&self) -> Duration {
-        Duration::ZERO
-    }
-
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        self.outcome()
-    }
-
-    fn read_planar<'a>(
-        &mut self,
-        _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
-        self.outcome()
-    }
-
-    fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-}
-
-impl AudioControl for FaultyPcmReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        if self.fault == Fault::RefuseSeek {
-            return Err(DecodeError::Io {
-                source: std::io::Error::other("mock seek refusal"),
-            });
-        }
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
 }
 
 /// Counts which half of a seek each caller used, so a test can pin that the audio thread never runs
@@ -706,88 +559,5 @@ impl SeekBegin for SeekSpy {
             target: position,
             landed_at: position,
         }
-    }
-}
-
-/// A reader that splits its seek the way a worker-backed one does.
-pub struct SeekSplitReader {
-    bus: EventBus,
-    counts: SeekSplitCounts,
-    metadata: TrackMetadata,
-    spec: AudioSpec,
-}
-
-impl SeekSplitReader {
-    #[must_use]
-    pub fn new(spec: AudioSpec) -> (Self, SeekSplitCounts) {
-        let counts = SeekSplitCounts::default();
-        (
-            Self {
-                bus: EventBus::default(),
-                counts: counts.clone(),
-                metadata: TrackMetadata::default(),
-                spec,
-            },
-            counts,
-        )
-    }
-}
-
-impl AudioSession for SeekSplitReader {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-}
-
-impl AudioRead for SeekSplitReader {
-    fn position(&self) -> Duration {
-        Duration::ZERO
-    }
-
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        Ok(ReadOutcome::Pending {
-            position: Duration::ZERO,
-            reason: PendingReason::Buffering,
-        })
-    }
-
-    fn read_planar<'a>(
-        &mut self,
-        _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
-        Ok(ReadOutcome::Pending {
-            position: Duration::ZERO,
-            reason: PendingReason::Buffering,
-        })
-    }
-
-    fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-}
-
-impl AudioControl for SeekSplitReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        self.counts.blocking_seeks.fetch_add(1, Ordering::Relaxed);
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
-
-    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
-        Some(Arc::new(SeekSpy(self.counts.clone())))
-    }
-
-    fn sync_seek(&mut self) {
-        self.counts.syncs.fetch_add(1, Ordering::Relaxed);
     }
 }

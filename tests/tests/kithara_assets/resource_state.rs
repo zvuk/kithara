@@ -3,8 +3,8 @@ use std::{collections::HashSet, fmt, num::NonZeroUsize, path::Path};
 use kithara::{
     self,
     assets::{
-        AcquisitionResult, AssetResourceState, AssetStore, ChunkSink, DiskAssetStore, ProcessCtx,
-        ReadSide, ResourceProcessor, StorageBackend, WriteSide,
+        AssetResourceState, AssetStore, ChunkSink, DiskAssetStore, ProcessCtx, ReadSide,
+        ResourceProcessor, StorageBackend, WriteSide,
     },
     platform::{CancelToken, sync::Arc, time::Duration},
 };
@@ -13,7 +13,7 @@ use kithara_integration_tests::{
 };
 use tempfile::tempdir;
 
-use super::support::{LiteralLayout, literal_layouts, resource, source};
+use super::support::{LiteralLayout, literal_layouts, pending, resource, source};
 
 #[derive(Debug)]
 struct XorProcessor {
@@ -60,13 +60,6 @@ fn xor_processor(key: u8) -> ProcessCtx {
         identity: [key],
         key,
     })
-}
-
-fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
-    let AcquisitionResult::Pending(w) = acq else {
-        panic!("expected a Pending writer");
-    };
-    w
 }
 
 fn load_pins(root_dir: &Path) -> HashSet<String> {

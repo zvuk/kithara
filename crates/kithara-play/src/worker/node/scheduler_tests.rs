@@ -320,28 +320,21 @@ fn worker_seek_enters_pending_reset() {
 }
 
 #[kithara::test(tokio)]
-async fn worker_preload_gate_fires_on_progress() {
+#[case::progress(10, 3, "preload gate must open at the threshold")]
+#[case::eof(0, 8, "early EOF must open the preload gate")]
+async fn worker_preload_gate_fires(
+    #[case] chunks: usize,
+    #[case] preload: usize,
+    #[case] message: &str,
+) {
     let pools = pools();
     let handle = test_scheduler();
-    let (node, _pop, gate) = make_node(MockSource::new(pools.clone(), 10), 32, 3);
+    let (node, _pop, gate) = make_node(MockSource::new(pools.clone(), chunks), 32, preload);
     let _id = register(&handle, node);
 
     platform_timeout(Duration::from_secs(1), gate.wait())
         .await
-        .expect("preload gate must open at the threshold");
-    assert!(gate.is_ready());
-}
-
-#[kithara::test(tokio)]
-async fn worker_preload_gate_fires_on_eof() {
-    let pools = pools();
-    let handle = test_scheduler();
-    let (node, _pop, gate) = make_node(MockSource::new(pools.clone(), 0), 32, 8);
-    let _id = register(&handle, node);
-
-    platform_timeout(Duration::from_secs(1), gate.wait())
-        .await
-        .expect("early EOF must open the preload gate");
+        .expect(message);
     assert!(gate.is_ready());
 }
 

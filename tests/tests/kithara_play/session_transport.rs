@@ -17,6 +17,12 @@ use crate::bufpool_ext::pools;
 
 const SAMPLE_RATE: u32 = 48_000;
 
+#[derive(Clone, Copy)]
+enum CommitCase {
+    Tempo(f64),
+    Playing(bool),
+}
+
 fn session(block_frames: u32, capacity_blocks: usize) -> ManualRingSession {
     let rate = NonZeroU32::new(SAMPLE_RATE).expect("invariant: test sample rate is non-zero");
     ManualRingSession::start(ManualRingConfig::new(rate, block_frames, capacity_blocks))
@@ -157,45 +163,46 @@ fn transport_commit_is_published_to_every_registered_player_bus() {
 }
 
 #[kithara::test]
-fn tempo_commit_announces_only_the_tempo() {
+#[case::tempo(CommitCase::Tempo(90.0))]
+#[case::pause(CommitCase::Playing(false))]
+#[case::redundant_tempo(CommitCase::Tempo(120.0))]
+fn transport_commit_announces_only_the_applied_change(#[case] change: CommitCase) {
     let session = session(512, 4);
     let mut events = register_transport_events(&session);
-    let _ = commit_initial_transport(&session, &mut events);
+    let initial = commit_initial_transport(&session, &mut events);
 
-    set_tempo(&session, 90.0);
+    match change {
+        CommitCase::Tempo(beats_per_minute) => set_tempo(&session, beats_per_minute),
+        CommitCase::Playing(playing) => set_playing(&session, playing),
+    }
     session
         .credit(2)
-        .expect("invariant: changed tempo reaches its render boundary");
+        .expect("invariant: transport change reaches its render boundary");
     let committed = snapshot(&session);
+    let published = drain_transport_events(&mut events);
 
-    assert_eq!(
-        drain_transport_events(&mut events),
-        vec![TransportEvent::TempoCommitted {
-            beats_per_minute: 90.0,
-            revision: u64::from(committed.revision()),
-        }]
-    );
-}
-
-#[kithara::test]
-fn pause_commit_announces_the_play_state_with_the_applied_revision() {
-    let session = session(512, 4);
-    let mut events = register_transport_events(&session);
-    let _ = commit_initial_transport(&session, &mut events);
-
-    set_playing(&session, false);
-    session
-        .credit(2)
-        .expect("invariant: pause reaches its render boundary");
-    let committed = snapshot(&session);
-
-    assert_eq!(
-        drain_transport_events(&mut events),
-        vec![TransportEvent::PlayStateCommitted {
-            playing: false,
-            revision: u64::from(committed.revision()),
-        }]
-    );
+    match change {
+        CommitCase::Tempo(beats_per_minute)
+            if beats_per_minute == initial.tempo().beats_per_minute() =>
+        {
+            assert_eq!(committed.revision(), initial.revision());
+            assert!(published.is_empty());
+        }
+        CommitCase::Tempo(beats_per_minute) => assert_eq!(
+            published,
+            vec![TransportEvent::TempoCommitted {
+                beats_per_minute,
+                revision: u64::from(committed.revision()),
+            }]
+        ),
+        CommitCase::Playing(playing) => assert_eq!(
+            published,
+            vec![TransportEvent::PlayStateCommitted {
+                playing,
+                revision: u64::from(committed.revision()),
+            }]
+        ),
+    }
 }
 
 #[kithara::test]
@@ -222,22 +229,6 @@ fn seek_commit_announces_the_target_beat() {
             revision: u64::from(committed.revision()),
         }]
     );
-}
-
-#[kithara::test]
-fn a_redundant_tempo_publishes_nothing() {
-    let session = session(512, 4);
-    let mut events = register_transport_events(&session);
-    let initial = commit_initial_transport(&session, &mut events);
-
-    set_tempo(&session, 120.0);
-    session
-        .credit(2)
-        .expect("invariant: redundant tempo renders no commit");
-    let later = snapshot(&session);
-
-    assert_eq!(later.revision(), initial.revision());
-    assert!(drain_transport_events(&mut events).is_empty());
 }
 
 #[kithara::test]

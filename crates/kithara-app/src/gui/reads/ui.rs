@@ -1,6 +1,6 @@
 use kithara::ui::render::{Node, ReadValue, Scope};
 
-use super::value::Value;
+use super::value::{Value, impl_child_node};
 use crate::gui::ui::{
     cache::{CollapsedModules, DeckLayout},
     menu::MenuState,
@@ -39,33 +39,31 @@ impl<'a> UiNode<'a> {
     }
 }
 
-impl<'a> Node<'a> for UiNode<'a> {
-    fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let node: Box<dyn Node<'a> + 'a> = match segment {
-            "app" => Box::new(AppNode),
-            "drag" => Box::new(self.drag),
-            "layout" => Box::new(LayoutNode {
-                layout: self.layout,
-            }),
-            "layouts" => Box::new(LayoutsNode {
-                layout: self.layout,
-            }),
-            "menu" => Box::new(MenuNode { menu: self.menu }),
-            "window" => Box::new(WindowNode {
-                window: self.window,
-            }),
-            "module" => Box::new(ModulesNode {
-                collapsed: self.collapsed,
-                modules: self.modules,
-            }),
-            "modules" => Box::new(ModuleCountNode {
-                modules: self.modules,
-            }),
-            _ => return None,
-        };
-        Some(node)
-    }
-}
+impl_child_node!(UiNode<'a>, |this, segment, _scope| {
+    let node: Box<dyn Node<'a> + 'a> = match segment {
+        "app" => Box::new(AppNode),
+        "drag" => Box::new(this.drag),
+        "layout" => Box::new(LayoutNode {
+            layout: this.layout,
+        }),
+        "layouts" => Box::new(LayoutsNode {
+            layout: this.layout,
+        }),
+        "menu" => Box::new(MenuNode { menu: this.menu }),
+        "window" => Box::new(WindowNode {
+            window: this.window,
+        }),
+        "module" => Box::new(ModulesNode {
+            collapsed: this.collapsed,
+            modules: this.modules,
+        }),
+        "modules" => Box::new(ModuleCountNode {
+            modules: this.modules,
+        }),
+        _ => return None,
+    };
+    Some(node)
+});
 
 #[derive(Clone, Copy)]
 struct AppNode;
@@ -88,20 +86,18 @@ struct WindowNode<'a> {
     window: &'a WindowState,
 }
 
-impl<'a> Node<'a> for WindowNode<'a> {
-    fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let only = scope.get("window") == Some("1");
-        let value = match segment {
-            "count" => ReadValue::Text("1 WINDOW"),
-            "active" => ReadValue::Bool(only),
-            "close_hidden" => ReadValue::Bool(true),
-            "title" => ReadValue::Text(self.window.title()),
-            "caption" => ReadValue::Text(self.window.caption()),
-            _ => return None,
-        };
-        Some(Box::new(Value(value)))
-    }
-}
+impl_child_node!(WindowNode<'a>, |this, segment, scope| {
+    let only = scope.get("window") == Some("1");
+    let value = match segment {
+        "count" => ReadValue::Text("1 WINDOW"),
+        "active" => ReadValue::Bool(only),
+        "close_hidden" => ReadValue::Bool(true),
+        "title" => ReadValue::Text(this.window.title()),
+        "caption" => ReadValue::Text(this.window.caption()),
+        _ => return None,
+    };
+    Some(Box::new(Value(value)))
+});
 
 #[derive(Clone, Copy)]
 struct MenuNode<'a> {
@@ -206,22 +202,20 @@ struct ModulesNode<'a> {
     modules: &'a Modules,
 }
 
-impl<'a> Node<'a> for ModulesNode<'a> {
-    /// `on` and `hidden` are the scoped reads the menu grid binds; any other
-    /// segment is a module document id whose chrome reports its own collapse.
-    fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let value = match segment {
-            "on" => ReadValue::Bool(self.is_on(scope)),
-            "hidden" => ReadValue::Bool(!self.is_on(scope)),
-            document => {
-                return Some(Box::new(ModuleNode {
-                    collapsed: self.collapsed.contains(document),
-                }));
-            }
-        };
-        Some(Box::new(Value(value)))
-    }
-}
+impl_child_node!(ModulesNode<'a>, |this, segment, scope| {
+    // `on` and `hidden` are the scoped reads the menu grid binds; any other
+    // segment is a module document id whose chrome reports its own collapse.
+    let value = match segment {
+        "on" => ReadValue::Bool(this.is_on(scope)),
+        "hidden" => ReadValue::Bool(!this.is_on(scope)),
+        document => {
+            return Some(Box::new(ModuleNode {
+                collapsed: this.collapsed.contains(document),
+            }));
+        }
+    };
+    Some(Box::new(Value(value)))
+});
 
 impl ModulesNode<'_> {
     fn is_on(&self, scope: Scope<'_>) -> bool {

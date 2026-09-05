@@ -1,28 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::{Duration, sleep, timeout},
-        tokio,
-        tokio::sync::OnceCell,
-    },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig},
-    stream::dl::{Downloader, DownloaderConfig},
+    platform::time::{Duration, timeout},
+    queue::QueueControl,
 };
-use kithara_app::{
-    baked,
-    config::AppConfig,
-    pools::{AppPools, build as app_pools},
-    sources::build_source,
-};
-use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineQueue};
+use kithara_app::{pools::AppPools, sources::build_source};
+use kithara_integration_tests::{kithara, offline::LazyAppQueueFixture};
 use tracing_subscriber::EnvFilter;
 
 /// Real-network DRM trace harness. Loads a single zvq.me DRM master
@@ -37,12 +21,11 @@ use tracing_subscriber::EnvFilter;
 async fn zvuk_drm_master_playlist_trace() {
     install_tracing();
 
-    let cache = TestTempDir::new();
-    let ctx = shared_ctx().await;
+    let ctx = CTX.get().await;
     let url = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
 
     let mut config = ctx.config.clone();
-    config.store = super::source_helper::app_disk_asset_store(&ctx.config, cache.path());
+    config.store = super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path());
     let source = build_source(url, &config);
 
     let mut rx = ctx.queue.subscribe();
@@ -55,68 +38,7 @@ async fn zvuk_drm_master_playlist_trace() {
     }
 }
 
-struct Ctx {
-    config: AppConfig,
-    queue: OfflineQueue<AppPools>,
-}
-
-static CTX: OnceCell<Ctx> = OnceCell::const_new();
-
-async fn shared_ctx() -> &'static Ctx {
-    CTX.get_or_init(|| async {
-        let pools = app_pools().expect("build app pool region");
-        let net = NetOptions::builder().is_insecure(true).build();
-        let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
-                .build(),
-        );
-        let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-        let shutdown = CancelToken::never();
-        let store = AssetStore::builder(pools.clone())
-            .cancel(shutdown.child())
-            .backend(StorageBackend::default())
-            .flush_hub(flush_hub)
-            .layouts(baked::build_baked_asset_layouts())
-            .build();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::builder(pools)
-                .cancel(shutdown.child())
-                .build(),
-        );
-        let session_pools = worker.pools().clone();
-        let config = AppConfig::builder()
-            .downloader(downloader)
-            .shutdown(shutdown)
-            .worker(worker.clone())
-            .store(store)
-            .build();
-        let session_config = HostConfig::offline(session_pools)
-            .pacing(Duration::from_millis(10))
-            .build();
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(session_config.sample_rate())
-                .worker(worker)
-                .build(),
-        );
-        let queue = OfflineQueue::new(
-            session_config,
-            Queue::new(QueueConfig::builder().player(player).build()),
-        )
-        .expect("create product offline queue");
-
-        let q = queue.control();
-        tokio::task::spawn(async move {
-            loop {
-                sleep(Duration::from_millis(50)).await;
-                let _ = q.tick();
-            }
-        });
-
-        Ctx { config, queue }
-    })
-    .await
-}
+static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
 
 fn install_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -134,7 +56,7 @@ fn install_tracing() {
 
 async fn wait_for_terminal(
     rx: &mut EventReceiver,
-    queue: &Queue<AppPools>,
+    queue: &QueueControl<AppPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<TrackStatus, String> {

@@ -13,12 +13,28 @@ use kithara_app::{
     config::AppConfig,
     pools::{AppResourceConfig, AppStore, AppTrackSource},
 };
+use kithara_integration_tests::offline::AppQueueFixture;
 use url::Url;
 
 pub(crate) fn app_disk_asset_store(config: &AppConfig, root: impl Into<PathBuf>) -> AppStore {
     AssetStore::builder(config.worker.pools().clone())
         .backend(StorageBackend::Disk { root: root.into() })
         .build()
+}
+
+pub(crate) fn app_drm_track_source(
+    url: &str,
+    ctx: &AppQueueFixture,
+    backend: DecoderBackend,
+) -> AppTrackSource {
+    app_track_source(
+        url,
+        &ctx.config,
+        app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        backend,
+        AbrMode::Auto(None),
+        None,
+    )
 }
 
 pub(crate) fn app_track_source(

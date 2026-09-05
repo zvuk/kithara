@@ -680,6 +680,24 @@ fn write_silent_test_frame(
 }
 
 #[cfg(test)]
+macro_rules! reset_demuxer_seek {
+    ($field:ident = $value:expr) => {
+        fn seek(
+            &mut self,
+            _pos: kithara_platform::time::Duration,
+            _priming: crate::codec::CodecPriming,
+        ) -> crate::error::DecodeResult<crate::demuxer::DemuxSeekOutcome> {
+            self.$field = $value;
+            Ok(crate::demuxer::DemuxSeekOutcome::Landed {
+                landed_at: kithara_platform::time::Duration::ZERO,
+                landed_byte: Some(0),
+                preroll: crate::demuxer::PrerollHint::NotNeeded,
+            })
+        }
+    };
+}
+
+#[cfg(test)]
 mod test_stub_codec {
 
     use kithara_bufpool::SampleBuffer;
@@ -873,17 +891,18 @@ mod test_eof_drain_codec {
             _packet_desc: &[u8],
             out: &mut SampleBuffer,
         ) -> DecodeResult<u32> {
-            if bytes.is_empty() {
+            let frames = if bytes.is_empty() {
                 self.empty_decode_calls.fetch_add(1, Ordering::SeqCst);
-                if !self.tail_pending {
-                    out.clear();
-                    return Ok(0);
-                }
-                self.tail_pending = false;
-                return super::write_silent_test_frame(self.spec, self.tail_frames, out);
-            }
-
-            super::write_silent_test_frame(self.spec, self.frames_per_call, out)
+                self.tail_pending
+                    .then(|| {
+                        self.tail_pending = false;
+                        self.tail_frames
+                    })
+                    .unwrap_or(0)
+            } else {
+                self.frames_per_call
+            };
+            super::write_silent_test_frame(self.spec, frames, out)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -964,7 +983,7 @@ mod seek_trim_tests {
 
     use super::{test_counting_codec::CountingCodec, test_stub_codec::LaggedQueueCodec, *};
     use crate::{
-        demuxer::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo},
+        demuxer::{DemuxOutcome, Frame, TrackInfo},
         traits::Decoder,
     };
 
@@ -1049,18 +1068,7 @@ mod seek_trim_tests {
                 packet_desc: &[],
             }))
         }
-        fn seek(
-            &mut self,
-            _pos: Duration,
-            _priming: crate::codec::CodecPriming,
-        ) -> DecodeResult<DemuxSeekOutcome> {
-            self.idx = 0;
-            Ok(DemuxSeekOutcome::Landed {
-                landed_at: Duration::ZERO,
-                landed_byte: Some(0),
-                preroll: crate::demuxer::PrerollHint::NotNeeded,
-            })
-        }
+        reset_demuxer_seek!(idx = 0);
         fn track_info(&self) -> &TrackInfo {
             &self.track
         }
@@ -1085,18 +1093,7 @@ mod seek_trim_tests {
             }))
         }
 
-        fn seek(
-            &mut self,
-            _pos: Duration,
-            _priming: crate::codec::CodecPriming,
-        ) -> DecodeResult<DemuxSeekOutcome> {
-            self.idx = 0;
-            Ok(DemuxSeekOutcome::Landed {
-                landed_at: Duration::ZERO,
-                landed_byte: Some(0),
-                preroll: crate::demuxer::PrerollHint::NotNeeded,
-            })
-        }
+        reset_demuxer_seek!(idx = 0);
 
         fn track_info(&self) -> &TrackInfo {
             &self.track
@@ -1483,7 +1480,7 @@ mod eof_drain_tests {
         *,
     };
     use crate::{
-        demuxer::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo},
+        demuxer::{DemuxOutcome, Frame, TrackInfo},
         traits::Decoder,
     };
 
@@ -1512,18 +1509,7 @@ mod eof_drain_tests {
             }))
         }
 
-        fn seek(
-            &mut self,
-            _pos: Duration,
-            _priming: crate::codec::CodecPriming,
-        ) -> DecodeResult<DemuxSeekOutcome> {
-            self.emitted = false;
-            Ok(DemuxSeekOutcome::Landed {
-                landed_at: Duration::ZERO,
-                landed_byte: Some(0),
-                preroll: crate::demuxer::PrerollHint::NotNeeded,
-            })
-        }
+        reset_demuxer_seek!(emitted = false);
 
         fn track_info(&self) -> &TrackInfo {
             &self.track

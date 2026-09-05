@@ -625,9 +625,8 @@ mod tests {
         assert!(err.to_string().contains("variant_count"));
     }
 
-    #[kithara::test]
-    fn rejects_packaged_sine_freq_above_nyquist() {
-        let spec = HlsSpec {
+    fn packaged_signal_spec(signal: PackagedSignal) -> HlsSpec {
+        HlsSpec {
             packaged_audio: Some(PackagedAudioRequest {
                 codec: AudioCodec::AacLc,
                 sample_rate: 44_100,
@@ -637,37 +636,27 @@ mod tests {
                 bit_rate: None,
                 encoder_delay: None,
                 trailing_delay: None,
-                source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 50_000.0 }),
+                source: PackagedAudioSource::Signal(signal),
                 gapless_encoding: GaplessEncoding::default(),
                 variant_overrides: Vec::new(),
             }),
             ..HlsSpec::default()
-        };
+        }
+    }
+
+    #[kithara::test]
+    fn rejects_packaged_sine_freq_above_nyquist() {
+        let spec = packaged_signal_spec(PackagedSignal::Sine { freq_hz: 50_000.0 });
         let err = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap_err();
         assert!(err.to_string().contains("Nyquist"));
     }
 
     #[kithara::test]
     fn resolves_packaged_sweep() {
-        let spec = HlsSpec {
-            packaged_audio: Some(PackagedAudioRequest {
-                codec: AudioCodec::AacLc,
-                sample_rate: 44_100,
-                channels: 2,
-                start_frame: None,
-                timescale: None,
-                bit_rate: None,
-                encoder_delay: None,
-                trailing_delay: None,
-                source: PackagedAudioSource::Signal(PackagedSignal::Sweep {
-                    start_hz: 220.0,
-                    end_hz: 8_000.0,
-                }),
-                gapless_encoding: GaplessEncoding::default(),
-                variant_overrides: Vec::new(),
-            }),
-            ..HlsSpec::default()
-        };
+        let spec = packaged_signal_spec(PackagedSignal::Sweep {
+            start_hz: 220.0,
+            end_hz: 8_000.0,
+        });
         let resolved = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap();
         let packaged = resolved.packaged_audio.unwrap();
         assert!(matches!(
@@ -681,25 +670,10 @@ mod tests {
 
     #[kithara::test]
     fn rejects_packaged_sweep_endpoint_above_nyquist() {
-        let spec = HlsSpec {
-            packaged_audio: Some(PackagedAudioRequest {
-                codec: AudioCodec::AacLc,
-                sample_rate: 44_100,
-                channels: 2,
-                start_frame: None,
-                timescale: None,
-                bit_rate: None,
-                encoder_delay: None,
-                trailing_delay: None,
-                source: PackagedAudioSource::Signal(PackagedSignal::Sweep {
-                    start_hz: 220.0,
-                    end_hz: 50_000.0,
-                }),
-                gapless_encoding: GaplessEncoding::default(),
-                variant_overrides: Vec::new(),
-            }),
-            ..HlsSpec::default()
-        };
+        let spec = packaged_signal_spec(PackagedSignal::Sweep {
+            start_hz: 220.0,
+            end_hz: 50_000.0,
+        });
         let error = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap_err();
         assert!(error.to_string().contains("sweep end_hz"));
         assert!(error.to_string().contains("Nyquist"));

@@ -1,29 +1,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::{
-    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    decode::DecoderBackend,
-    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::{Duration, sleep, timeout},
-        tokio,
-        tokio::sync::OnceCell,
-    },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
-};
-use kithara_app::{
-    baked,
-    config::AppConfig,
-    pools::{AppPools, build as app_pools},
-};
+use kithara::{decode::DecoderBackend, platform::time::Duration, queue::Transition};
 use kithara_integration_tests::{
-    TestTempDir, kithara, offline::OfflineQueue, waits::wait_for_position_at_least,
+    kithara,
+    offline::LazyAppQueueFixture,
+    waits::{wait_for_loader_done_event, wait_for_position_at_least},
 };
 
 /// Production zvuk DRM track. Server: `cdn-hls-slicer.zvuk.com`,
@@ -37,120 +18,7 @@ use kithara_integration_tests::{
 /// (stage DRM tracks are HE-AAC v1).
 const PROD_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/master.m3u8";
 
-struct Ctx {
-    config: AppConfig,
-    queue: OfflineQueue<AppPools>,
-    cache: TestTempDir,
-}
-
-static CTX: OnceCell<Ctx> = OnceCell::const_new();
-
-async fn shared_ctx() -> &'static Ctx {
-    CTX.get_or_init(|| async {
-        let pools = app_pools().expect("build app pool region");
-        let net = NetOptions::builder().is_insecure(true).build();
-        let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
-                .build(),
-        );
-        let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-        let shutdown = CancelToken::never();
-        let store = AssetStore::builder(pools.clone())
-            .cancel(shutdown.child())
-            .backend(StorageBackend::default())
-            .flush_hub(flush_hub)
-            .layouts(baked::build_baked_asset_layouts())
-            .build();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::builder(pools)
-                .cancel(shutdown.child())
-                .build(),
-        );
-        let session_pools = worker.pools().clone();
-        let config = AppConfig::builder()
-            .downloader(downloader)
-            .shutdown(shutdown)
-            .worker(worker.clone())
-            .store(store)
-            .build();
-        let session_config = HostConfig::offline(session_pools)
-            .pacing(Duration::from_millis(10))
-            .build();
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(session_config.sample_rate())
-                .worker(worker)
-                .build(),
-        );
-        let queue = OfflineQueue::new(
-            session_config,
-            Queue::new(QueueConfig::builder().player(player).build()),
-        )
-        .expect("create product offline queue");
-
-        let q = queue.control();
-        tokio::task::spawn(async move {
-            loop {
-                sleep(Duration::from_millis(50)).await;
-                let _ = q.tick();
-            }
-        });
-
-        Ctx {
-            config,
-            queue,
-            cache: TestTempDir::new(),
-        }
-    })
-    .await
-}
-
-fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSource<AppPools> {
-    super::app_track_source(
-        url,
-        &ctx.config,
-        super::app_disk_asset_store(&ctx.config, ctx.cache.path()),
-        backend,
-        AbrMode::Auto(None),
-        None,
-    )
-}
-
-async fn wait_for_loaded(
-    rx: &mut EventReceiver,
-    queue: &QueueControl<AppPools>,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    use kithara::platform::tokio::sync::broadcast::error::RecvError;
-    if let Some(entry) = queue.track(track_id) {
-        match &entry.status {
-            TrackStatus::Loaded => return Ok(()),
-            TrackStatus::Failed(err) => return Err(format!("Failed before subscribe: {err}")),
-            _ => {}
-        }
-    }
-    timeout(deadline, async {
-        loop {
-            let ev = match rx.recv().await {
-                Ok(env) => env.event,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            };
-            if let Event::Queue(QueueEvent::TrackStatusChanged { id, status }) = ev
-                && id == track_id
-            {
-                match status {
-                    TrackStatus::Loaded => return Ok(()),
-                    TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
-                    _ => continue,
-                }
-            }
-        }
-    })
-    .await
-    .map_err(|_| format!("no Loaded within {deadline:?}"))?
-}
+static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
 
 /// Production zvuk DRM end-to-end: load → select → play, asserting
 /// that audio progresses. Pins the production code path the user
@@ -186,15 +54,15 @@ async fn zvuk_prod_drm_track_plays(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let ctx = shared_ctx().await;
-    let source = build_track_source(PROD_TRACK, ctx, backend);
+    let ctx = CTX.get().await;
+    let source = super::source_helper::app_drm_track_source(PROD_TRACK, ctx, backend);
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx
         .queue
         .append(source)
         .expect("append production DRM track");
 
-    wait_for_loaded(&mut rx, &ctx.queue, track_id, Duration::from_secs(30))
+    wait_for_loader_done_event(&mut rx, &ctx.queue, track_id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("prod DRM load fail [{PROD_TRACK}]: {e}"));
 

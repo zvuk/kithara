@@ -41,7 +41,16 @@ async fn render_mix(case: SyncCase, provider: Provider, target_bpm: Option<f64>)
     harness.request_sync(case).await;
 
     let pcm = if let Some(target_bpm) = target_bpm {
-        render_ride(&mut harness, case, target_bpm).await
+        let mut pcm = Vec::with_capacity(CAPTURE_FRAMES * usize::from(CHANNELS));
+        let mut rendered = 0;
+        for step in 1..=RIDE_STEPS {
+            let progress = step as f64 / RIDE_STEPS as f64;
+            harness.set_tempo(case, (target_bpm - 120.0).mul_add(progress, 120.0), false);
+            let deadline = CAPTURE_FRAMES * step / RIDE_STEPS;
+            pcm.extend(render_frames(&mut harness, case, deadline - rendered).await);
+            rendered = deadline;
+        }
+        pcm
     } else {
         render_frames(&mut harness, case, CAPTURE_FRAMES).await
     };
@@ -64,19 +73,6 @@ async fn render_frames(harness: &mut ProductHarness, case: SyncCase, frames: usi
         );
         pcm.extend_from_slice(&block);
         rendered += block_frames;
-    }
-    pcm
-}
-
-async fn render_ride(harness: &mut ProductHarness, case: SyncCase, target_bpm: f64) -> Vec<f32> {
-    let mut pcm = Vec::with_capacity(CAPTURE_FRAMES * usize::from(CHANNELS));
-    let mut rendered = 0;
-    for step in 1..=RIDE_STEPS {
-        let progress = step as f64 / RIDE_STEPS as f64;
-        harness.set_tempo(case, (target_bpm - 120.0).mul_add(progress, 120.0), false);
-        let deadline = CAPTURE_FRAMES * step / RIDE_STEPS;
-        pcm.extend(render_frames(harness, case, deadline - rendered).await);
-        rendered = deadline;
     }
     pcm
 }

@@ -49,27 +49,21 @@ fn decoder_config_custom_apple_backend_preserves_fields() {
 }
 
 #[kithara::test]
-fn create_with_probe_without_hint_fails_with_probe_failed() {
+#[case::without_hint(None, false)]
+#[case::mp3_hint(Some("mp3"), true)]
+fn create_with_probe_uses_hint(#[case] hint: Option<&str>, #[case] should_succeed: bool) {
     let result = DecoderFactory::create_with_probe(
         Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
-        None,
+        hint,
         TestDecoderConfig::builder().pools(pools()).build(),
     );
-    assert!(matches!(result, Err(DecodeError::ProbeFailed)));
-}
-
-#[kithara::test]
-fn create_with_probe_with_mp3_hint_succeeds() {
-    let decoder = DecoderFactory::create_with_probe(
-        Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
-        Some("mp3"),
-        TestDecoderConfig::builder().pools(pools()).build(),
-    )
-    .expect("BUG: mp3 hint should produce a decoder");
-
-    let spec = decoder.spec();
-    assert!(spec.channels > 0);
-    assert!(spec.sample_rate.get() > 0);
+    if should_succeed {
+        let spec = result.expect("mp3 hint should produce a decoder").spec();
+        assert!(spec.channels > 0);
+        assert!(spec.sample_rate.get() > 0);
+    } else {
+        assert!(matches!(result, Err(DecodeError::ProbeFailed)));
+    }
 }
 
 #[kithara::test]

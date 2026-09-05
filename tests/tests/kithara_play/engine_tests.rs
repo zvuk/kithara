@@ -90,6 +90,7 @@ fn engine_config_builder() {
         .pools(pools())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
+    assert!(!engine.is_running());
     assert_eq!(engine.max_slots(), 8);
     assert_eq!(engine.master_sample_rate(), 48000);
 }
@@ -134,18 +135,6 @@ fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorS
         NotRunningErrorScenario::ReleaseSlot => engine.release_slot(slot_id(99)).unwrap_err(),
     };
     assert!(matches!(err, PlayError::EngineNotRunning));
-}
-
-#[kithara::test]
-fn engine_master_sample_rate_returns_config_when_stopped() {
-    let config = EngineConfig::builder()
-        .grid_id(BeatGridId::allocate().expect("fixture grid id"))
-        .session(Arc::new(FixtureSession))
-        .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
-        .pools(pools())
-        .build();
-    let engine = EngineImpl::new(config, EventBus::default());
-    assert_eq!(engine.master_sample_rate(), 48000);
 }
 
 #[kithara::test]

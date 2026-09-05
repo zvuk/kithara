@@ -71,14 +71,7 @@ impl<'a> Flex<'a> {
     pub(super) fn column_weighted(
         children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
     ) -> Self {
-        Self::with_children(
-            Axis::Vertical,
-            children
-                .into_iter()
-                .map(|(child, declared, main_weight, band)| {
-                    (child, Some(declared), None, Some(main_weight), band)
-                }),
-        )
+        Self::weighted(Axis::Vertical, children)
     }
 
     pub(super) fn height(mut self, height: Length) -> Self {
@@ -141,8 +134,15 @@ impl<'a> Flex<'a> {
     pub(super) fn row_weighted(
         children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
     ) -> Self {
+        Self::weighted(Axis::Horizontal, children)
+    }
+
+    fn weighted(
+        axis: Axis,
+        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
+    ) -> Self {
         Self::with_children(
-            Axis::Horizontal,
+            axis,
             children
                 .into_iter()
                 .map(|(child, declared, main_weight, band)| {

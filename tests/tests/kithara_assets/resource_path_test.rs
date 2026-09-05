@@ -2,27 +2,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{AcquisitionResult, AssetScope, AssetStore, ReadSide, StorageBackend, WriteSide},
+    assets::{AcquisitionResult, ReadSide, WriteSide},
     platform::time::Duration,
 };
-use kithara_integration_tests::{
-    TestTempDir,
-    bufpool_ext::{TestPools, pools},
-    temp_dir,
-};
+use kithara_integration_tests::{TestTempDir, temp_dir};
 
-use super::support::{LiteralLayout, literal_layouts, resource, source};
-
-fn asset_scope_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetScope<TestPools> {
-    AssetStore::builder(pools())
-        .backend(StorageBackend::Disk {
-            root: (temp_dir.path()).into(),
-        })
-        .layouts(literal_layouts())
-        .build()
-        .scope::<LiteralLayout>(&source(asset_root))
-        .expect("scope")
-}
+use super::support::{asset_scope, resource};
 
 /// Selects the write path exercised by the case: an "atomic" single write or a
 /// "streaming" write, both finalized via `write_at` + `commit`.
@@ -39,7 +24,7 @@ fn asset_resource_path_method(
     #[case] resource_name: &str,
     #[case] write_mode: WriteMode,
 ) {
-    let scope = asset_scope_with_root(&temp_dir, "test-asset");
+    let scope = asset_scope(&temp_dir, "test-asset");
     let key = scope.key(&resource(resource_name)).unwrap();
     let AcquisitionResult::Pending(writer) = scope
         .store()
@@ -81,7 +66,7 @@ fn asset_resource_path_method(
 
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn asset_resource_path_consistency(temp_dir: TestTempDir) {
-    let scope = asset_scope_with_root(&temp_dir, "test-asset");
+    let scope = asset_scope(&temp_dir, "test-asset");
     let key = scope.key(&resource("data.bin")).unwrap();
     let AcquisitionResult::Pending(writer) = scope
         .store()
@@ -109,7 +94,7 @@ fn asset_resource_path_consistency(temp_dir: TestTempDir) {
 fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempDir) {
     let asset_root = "my-asset";
     let resource_name = "subdir/file.txt";
-    let scope = asset_scope_with_root(&temp_dir, asset_root);
+    let scope = asset_scope(&temp_dir, asset_root);
     let key = scope.key(&resource(resource_name)).unwrap();
     let AcquisitionResult::Pending(writer) = scope
         .store()
@@ -136,7 +121,7 @@ fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempD
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TestTempDir) {
     let asset_root = "shared-asset";
-    let scope = asset_scope_with_root(&temp_dir, asset_root);
+    let scope = asset_scope(&temp_dir, asset_root);
 
     let key1 = scope.key(&resource("resource1.bin")).unwrap();
     let AcquisitionResult::Pending(writer1) = scope

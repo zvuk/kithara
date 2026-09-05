@@ -17,5 +17,6 @@
 //! publish a `test_variants_3` helper.
 
 mod bandwidth_scenarios_golden;
+mod common;
 mod multi_track_contention;
 mod switch_midfetch;

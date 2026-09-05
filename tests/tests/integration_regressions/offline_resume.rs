@@ -20,7 +20,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -61,17 +61,6 @@ impl Drop for NetworkRestore<'_> {
     fn drop(&mut self) {
         self.0.set_network_online(true);
     }
-}
-
-fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(20)).await;
-            if queue.tick().is_err() {
-                break;
-            }
-        }
-    })
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -215,7 +204,10 @@ async fn resumes_after_outage(
         .store(store)
         .build();
 
-    let ticker = spawn_ticker(queue.control());
+    let ticker = tokio::task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(20),
+    ));
     let mut rx = queue.subscribe();
     let id = queue
         .append(TrackSource::Config(Box::new(cfg)))

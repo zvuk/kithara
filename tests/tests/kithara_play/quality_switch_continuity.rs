@@ -55,6 +55,23 @@ const AAC_LOW: usize = 0;
 const AAC_HIGH: usize = 1;
 const FLAC: usize = 2;
 
+fn longest_silent_run(samples: &[f32]) -> usize {
+    let mut current = 0usize;
+    let mut longest = 0usize;
+    for frame in samples.chunks_exact(usize::from(CHANNELS)) {
+        if frame
+            .iter()
+            .all(|sample| sample.abs() <= ACTIVE_SAMPLE_THRESHOLD)
+        {
+            current = current.saturating_add(1);
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    longest
+}
+
 /// Every ordered pair of the fixture's variants. A switch is characterised by
 /// what changes across it — bitrate only, codec only, or both at once — so
 /// covering a subset leaves the sharpest combinations (the two-step

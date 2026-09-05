@@ -4,35 +4,14 @@ use std::{fs, path::Path};
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetScope, AssetStore, ReadSide, ResourceKey, StorageBackend,
-        WriteSide,
+        ReadSide, ResourceKey, WriteSide,
         index::schema::{ArchivedPinsIndexFile, PinsIndexFile},
     },
     platform::{thread, time::Duration},
 };
-use kithara_integration_tests::{
-    bufpool_ext::{TestPools, pools},
-    temp_dir,
-};
+use kithara_integration_tests::{bufpool_ext::pools, storage_ext::read_bytes, temp_dir};
 
-use super::support::{LiteralLayout, literal_layouts, resource, source};
-
-/// Helper to read bytes from resource into a pooled buffer
-fn read_bytes<R: ReadSide>(res: &R, offset: u64, len: usize) -> Vec<u8> {
-    let pools = pools();
-    let mut buf = pools
-        .get_with_len::<u8>(len)
-        .expect("read buffer fits the test pool budget");
-    let n = res.read_at(offset, &mut buf).unwrap_or(0);
-    buf[..n].to_vec()
-}
-
-fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
-    let AcquisitionResult::Pending(w) = acq else {
-        panic!("expected a Pending writer")
-    };
-    w
-}
+use super::support::{asset_scope, pending, resource};
 
 fn read_pins_file(root: &Path) -> Option<Vec<String>> {
     let path = root.join("_index").join("pins.bin");
@@ -58,20 +37,6 @@ fn read_pins_file(root: &Path) -> Option<Vec<String>> {
     Some(pinned)
 }
 
-fn asset_scope_with_root(
-    temp_dir: &kithara_integration_tests::TestTempDir,
-    asset_root: &str,
-) -> AssetScope<TestPools> {
-    AssetStore::builder(pools())
-        .backend(StorageBackend::Disk {
-            root: (temp_dir.path()).into(),
-        })
-        .layouts(literal_layouts())
-        .build()
-        .scope::<LiteralLayout>(&source(asset_root))
-        .expect("scope")
-}
-
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case("asset-mp3-001", "media/audio.mp3", 128 * 1024)]
 #[case("asset-mp3-002", "audio/song.mp3", 64 * 1024)]
@@ -83,7 +48,7 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
-    let scope = asset_scope_with_root(&temp_dir, asset_root);
+    let scope = asset_scope(&temp_dir, asset_root);
 
     let key = scope.key(&resource(rel_path)).unwrap();
     let payload: Vec<u8> = (0..size)
@@ -111,56 +76,43 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-#[case("persist-atomic-1", "media/atomic_a.bin", b"atomic data")]
-#[case("persist-atomic-empty", "media/atomic_empty.bin", b"")]
-fn atomic_resource_persistence(
+#[case::atomic("persist-atomic-1", "media/atomic_a.bin", b"atomic data", false)]
+#[case::atomic_empty("persist-atomic-empty", "media/atomic_empty.bin", b"", false)]
+#[case::stream_1("persist-stream-1", "media/stream1.bin", b"stream payload", true)]
+#[case::stream_2("persist-stream-2", "media/stream2.bin", b"more stream data", true)]
+fn resource_persistence(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
     #[case] payload: &[u8],
+    #[case] streaming: bool,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let scope = asset_scope_with_root(&temp_dir, asset_root);
-    let key = scope.key(&resource(rel_path)).unwrap();
-
-    {
-        let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
-        writer.write_at(0, payload).unwrap();
-        writer.commit(Some(payload.len() as u64)).unwrap();
-    }
-
-    let res = scope.store().open_resource(&key, None).unwrap();
-    let mut buf = pools().get::<u8>();
-    res.read_into(&mut buf).unwrap();
-    assert_eq!(&*buf, payload);
-}
-
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-#[case("persist-stream-1", "media/stream1.bin", b"stream payload")]
-#[case("persist-stream-2", "media/stream2.bin", b"more stream data")]
-fn streaming_resource_persistence(
-    #[case] asset_root: &str,
-    #[case] rel_path: &str,
-    #[case] payload: &[u8],
-    temp_dir: kithara_integration_tests::TestTempDir,
-) {
-    let scope = asset_scope_with_root(&temp_dir, asset_root);
+    let scope = asset_scope(&temp_dir, asset_root);
     let key = scope.key(&resource(rel_path)).unwrap();
 
     {
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         writer.write_at(0, payload).unwrap();
         let res = writer.commit(Some(payload.len() as u64)).unwrap();
-        res.wait_range(0..payload.len() as u64).unwrap();
+        if streaming {
+            res.wait_range(0..payload.len() as u64).unwrap();
+        }
     }
 
     let res = scope.store().open_resource(&key, None).unwrap();
-    let data = read_bytes(&res, 0, payload.len());
+    let data = if streaming {
+        read_bytes(&res, 0, payload.len())
+    } else {
+        let mut buf = pools().get::<u8>();
+        res.read_into(&mut buf).unwrap();
+        buf.to_vec()
+    };
     assert_eq!(&data, payload);
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn mixed_resource_persistence_across_reopen(temp_dir: kithara_integration_tests::TestTempDir) {
-    let scope = asset_scope_with_root(&temp_dir, "mixed-asset");
+    let scope = asset_scope(&temp_dir, "mixed-asset");
 
     let atomic_key = scope.key(&resource("meta/index.json")).unwrap();
     let streaming_key = scope.key(&resource("media/data.bin")).unwrap();
@@ -205,7 +157,7 @@ fn mixed_resource_persistence_across_reopen(temp_dir: kithara_integration_tests:
 fn streaming_resource_concurrent_write_and_read_across_handles(
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let scope = asset_scope_with_root(&temp_dir, "concurrent-asset");
+    let scope = asset_scope(&temp_dir, "concurrent-asset");
 
     let key = scope.key(&resource("media/concurrent.bin")).unwrap();
     let payload: Vec<u8> = b"concurrent streaming data".to_vec();
@@ -253,7 +205,7 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
-    let scope = asset_scope_with_root(&temp_dir, asset_root);
+    let scope = asset_scope(&temp_dir, asset_root);
 
     let playlist_key = scope.key(&resource("master.m3u8")).unwrap();
     let playlist_bytes = b"#EXTM3U\n#EXT-X-VERSION:7\n".to_vec();
@@ -326,7 +278,7 @@ fn atomic_resource_roundtrip_with_different_paths(
     #[case] rel_path: &str,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let scope = asset_scope_with_root(&temp_dir, asset_root);
+    let scope = asset_scope(&temp_dir, asset_root);
 
     let key = scope.key(&resource(rel_path)).unwrap();
     let payload = b"test data for atomic resource".to_vec();
@@ -351,7 +303,7 @@ fn streaming_resource_write_read_at_different_positions(
     #[case] read_size: usize,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let scope = asset_scope_with_root(&temp_dir, "streaming-test");
+    let scope = asset_scope(&temp_dir, "streaming-test");
 
     let key = scope.key(&resource("data.bin")).unwrap();
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
@@ -379,7 +331,7 @@ fn multiple_resources_same_asset_root_independently_accessible(
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
     let asset_root = "multi-resource-asset";
-    let scope = asset_scope_with_root(&temp_dir, asset_root);
+    let scope = asset_scope(&temp_dir, asset_root);
 
     let keys: Vec<ResourceKey> = (0..resource_count)
         .map(|i| {
@@ -420,7 +372,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
     let payloads: [&[u8]; 3] = [b"alpha data", b"beta data", b"gamma data"];
 
     for (i, asset_root) in asset_roots.iter().enumerate() {
-        let scope = asset_scope_with_root(&temp_dir, asset_root);
+        let scope = asset_scope(&temp_dir, asset_root);
         let key = scope.key(&resource("data.bin")).unwrap();
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         writer.write_at(0, payloads[i]).unwrap();
@@ -437,7 +389,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
     }
 
     {
-        let scope = asset_scope_with_root(&temp_dir, "asset-beta");
+        let scope = asset_scope(&temp_dir, "asset-beta");
         scope.delete_asset().unwrap();
     }
 
@@ -451,7 +403,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
         "asset-alpha directory should still exist"
     );
     {
-        let scope = asset_scope_with_root(&temp_dir, "asset-alpha");
+        let scope = asset_scope(&temp_dir, "asset-alpha");
         let key = scope.key(&resource("data.bin")).unwrap();
         let res = scope.store().open_resource(&key, None).unwrap();
         let mut buf = pools().get::<u8>();
@@ -464,7 +416,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
         "asset-gamma directory should still exist"
     );
     {
-        let scope = asset_scope_with_root(&temp_dir, "asset-gamma");
+        let scope = asset_scope(&temp_dir, "asset-gamma");
         let key = scope.key(&resource("data.bin")).unwrap();
         let res = scope.store().open_resource(&key, None).unwrap();
         let mut buf = pools().get::<u8>();
@@ -486,7 +438,7 @@ fn delete_assets_sequentially(temp_dir: kithara_integration_tests::TestTempDir) 
     let asset_roots = ["seq-asset-1", "seq-asset-2", "seq-asset-3", "seq-asset-4"];
 
     for (i, asset_root) in asset_roots.iter().enumerate() {
-        let scope = asset_scope_with_root(&temp_dir, asset_root);
+        let scope = asset_scope(&temp_dir, asset_root);
         let key = scope.key(&resource(format!("file{}.bin", i))).unwrap();
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         let content = format!("content {}", i).into_bytes();
@@ -504,7 +456,7 @@ fn delete_assets_sequentially(temp_dir: kithara_integration_tests::TestTempDir) 
 
     for (delete_idx, asset_to_delete) in asset_roots.iter().enumerate() {
         {
-            let scope = asset_scope_with_root(&temp_dir, asset_to_delete);
+            let scope = asset_scope(&temp_dir, asset_to_delete);
             scope.delete_asset().unwrap();
         }
 
@@ -541,7 +493,7 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_integration_tests::T
     let root_path = temp_dir.path();
 
     {
-        let scope = asset_scope_with_root(&temp_dir, "existing-asset");
+        let scope = asset_scope(&temp_dir, "existing-asset");
         let key = scope.key(&resource("data.bin")).unwrap();
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         let data: &[u8] = b"existing data";
@@ -550,7 +502,7 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_integration_tests::T
     }
 
     {
-        let scope = asset_scope_with_root(&temp_dir, "nonexistent-asset");
+        let scope = asset_scope(&temp_dir, "nonexistent-asset");
         let result = scope.delete_asset();
         assert!(result.is_ok(), "deleting non-existent asset should succeed");
     }
@@ -560,7 +512,7 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_integration_tests::T
         "existing-asset should still exist"
     );
     {
-        let scope = asset_scope_with_root(&temp_dir, "existing-asset");
+        let scope = asset_scope(&temp_dir, "existing-asset");
         let key = scope.key(&resource("data.bin")).unwrap();
         let res = scope.store().open_resource(&key, None).unwrap();
         let mut buf = pools().get::<u8>();

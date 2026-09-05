@@ -7,7 +7,7 @@ use kithara::{
     decode::{DecoderTrackInfo, GaplessInfo},
     signal::AudioSpec,
 };
-use kithara_integration_tests::decode_mock::scripted_inner_decoder_with_track_info_loose;
+use kithara_integration_tests::decode_mock::{ScriptedOptions, scripted_decoder};
 
 #[kithara::test]
 fn scripted_decoder_exposes_gapless_track_info() {
@@ -18,12 +18,15 @@ fn scripted_decoder_exposes_gapless_track_info() {
     track_info.gapless = Some(gapless);
 
     let spec = AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
-    let (decoder, _) = scripted_inner_decoder_with_track_info_loose(
+    let (decoder, _) = scripted_decoder(
         spec,
         Vec::new(),
         Vec::new(),
         None,
-        track_info.clone(),
+        ScriptedOptions {
+            track_info: track_info.clone(),
+            verify_in_drop: false,
+        },
     );
 
     assert_eq!(decoder.track_info(), track_info);

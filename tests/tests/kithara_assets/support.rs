@@ -1,6 +1,16 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
+
 use kithara::{
-    assets::{AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource},
+    assets::{
+        AcquisitionResult, AssetLayout, AssetLayoutRegistry, AssetResource, AssetScope,
+        AssetSource, AssetStore, StorageBackend, WriteSide,
+    },
     platform::sync::Arc,
+};
+use kithara_integration_tests::{
+    TestTempDir,
+    bufpool_ext::{TestPools, pools},
 };
 use url::Url;
 
@@ -46,4 +56,35 @@ pub(super) fn resource(path: impl Into<String>) -> AssetResource {
         namespace: RESOURCE_NAMESPACE.to_string(),
         name: path.into(),
     }
+}
+
+pub(super) fn pending<W: WriteSide>(acquisition: AcquisitionResult<W, W::Reader>) -> W {
+    let AcquisitionResult::Pending(writer) = acquisition else {
+        panic!("expected a Pending writer")
+    };
+    writer
+}
+
+pub(super) fn asset_scope(temp_dir: &TestTempDir, asset_root: &str) -> AssetScope<TestPools> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let backend = StorageBackend::Disk {
+        root: temp_dir.path().into(),
+    };
+    #[cfg(target_arch = "wasm32")]
+    let backend = {
+        let _ = temp_dir;
+        StorageBackend::Memory
+    };
+
+    AssetStore::builder(pools())
+        .backend(backend)
+        .layouts(literal_layouts())
+        .build()
+        .scope::<LiteralLayout>(&source(asset_root))
+        .expect("scope")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn asset_dir_exists(root: &Path, asset_root: &str) -> bool {
+    root.join(asset_root).exists()
 }

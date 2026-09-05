@@ -17,9 +17,7 @@ use kithara::{
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::{
-    Fault, FaultyPcmReader, SeekSplitReader, TestPcmReader,
-};
+use kithara_integration_tests::audio_mock::{Fault, MockReader, TestPcmReader};
 use ringbuf::traits::Producer;
 
 use crate::bufpool_ext::pools;
@@ -46,7 +44,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
 
 fn faulty_track(src: &str, fault: Fault) -> Box<PlayerResource> {
     boxed(
-        Resource::from_reader(FaultyPcmReader::new(spec(), fault), None),
+        Resource::from_reader(MockReader::faulty(spec(), fault), None),
         src,
     )
 }
@@ -144,7 +142,7 @@ fn a_healthy_track_reports_no_trouble() {
 
 #[kithara::test]
 fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
-    let (reader, counts) = SeekSplitReader::new(spec());
+    let (reader, counts) = MockReader::seek_split(spec());
     let (mut processor, mut control) = processor();
     let item_id = load(
         &mut control,
@@ -179,7 +177,7 @@ fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
 
 #[kithara::test]
 fn the_slot_begins_seeks_for_the_tracks_it_shipped() {
-    let (reader, counts) = SeekSplitReader::new(spec());
+    let (reader, counts) = MockReader::seek_split(spec());
     let resource = boxed(Resource::from_reader(reader, None), "split.mp3");
     let handle = resource.seek_handle().expect("reader splits its seek");
     let (_, mut control) = processor();
@@ -201,12 +199,12 @@ fn the_slot_begins_seeks_for_the_tracks_it_shipped() {
 
 #[kithara::test]
 fn unloading_one_seek_binding_preserves_other_identity() {
-    let (first_reader, first_counts) = SeekSplitReader::new(spec());
+    let (first_reader, first_counts) = MockReader::seek_split(spec());
     let first = boxed(Resource::from_reader(first_reader, None), "same.mp3");
     let first_handle = first.seek_handle().expect("reader splits its seek");
     let first_id = TrackId::allocate();
 
-    let (second_reader, second_counts) = SeekSplitReader::new(spec());
+    let (second_reader, second_counts) = MockReader::seek_split(spec());
     let second = boxed(Resource::from_reader(second_reader, None), "same.mp3");
     let second_handle = second.seek_handle().expect("reader splits its seek");
     let second_id = TrackId::allocate();
@@ -224,7 +222,7 @@ fn unloading_one_seek_binding_preserves_other_identity() {
         "the other queue item keeps its seek path despite sharing the URL"
     );
 
-    let (replacement_reader, replacement_counts) = SeekSplitReader::new(spec());
+    let (replacement_reader, replacement_counts) = MockReader::seek_split(spec());
     let replacement = boxed(Resource::from_reader(replacement_reader, None), "same.mp3");
     let replacement_handle = replacement.seek_handle().expect("reader splits its seek");
     control.bind_seek(second_id, replacement_handle);

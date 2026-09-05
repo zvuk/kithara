@@ -450,7 +450,7 @@ fn type_sort_key(ty: &Type) -> String {
 }
 
 #[cfg(test)]
-mod fix_tests {
+mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
@@ -643,24 +643,6 @@ struct S {
             skipped.iter().any(|s| s.contains("floating")),
             "skipped: {skipped:?}"
         );
-    }
-}
-
-#[cfg(test)]
-mod detect_tests {
-    use super::*;
-
-    fn default_cfg() -> StructFieldOrderConfig {
-        StructFieldOrderConfig {
-            visibility_order: vec![
-                "pub".to_string(),
-                "pub(crate)".to_string(),
-                "pub(super)".to_string(),
-                "pub(in)".to_string(),
-                "private".to_string(),
-            ],
-            exempt_attrs: vec!["repr".to_string()],
-        }
     }
 
     /// Run the detection scan over a snippet and return the violation keys.

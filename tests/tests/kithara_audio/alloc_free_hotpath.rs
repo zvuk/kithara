@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use assert_no_alloc::*;
 use kithara::{
     self,
-    bufpool::PoolConfig,
+    bufpool::{PoolConfig, SampleBuffer},
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
@@ -121,14 +121,18 @@ fn build_resampler(pools: &Pools, source_rate: u32, target_rate: u32) -> impl Re
     create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}"))
 }
 
-fn planar_block(pools: &Pools, frames: usize) -> [kithara::bufpool::SampleBuffer; 2] {
-    let mut left = pools.get::<f32>();
-    let mut right = pools.get::<f32>();
-    left.ensure_len(frames)
-        .unwrap_or_else(|err| panic!("left channel buffer should fit: {err}"));
-    right
-        .ensure_len(frames)
-        .unwrap_or_else(|err| panic!("right channel buffer should fit: {err}"));
+fn stereo_block(pools: &Pools, frames: usize) -> [SampleBuffer; 2] {
+    std::array::from_fn(|channel| {
+        let mut buffer = pools.get::<f32>();
+        buffer
+            .ensure_len(frames)
+            .unwrap_or_else(|err| panic!("channel {channel} buffer should fit: {err}"));
+        buffer
+    })
+}
+
+fn planar_block(pools: &Pools, frames: usize) -> [SampleBuffer; 2] {
+    let [mut left, mut right] = stereo_block(pools, frames);
     for frame in 0..frames {
         #[expect(
             clippy::cast_precision_loss,
@@ -141,21 +145,10 @@ fn planar_block(pools: &Pools, frames: usize) -> [kithara::bufpool::SampleBuffer
     [left, right]
 }
 
-fn output_block(pools: &Pools, frames: usize) -> [kithara::bufpool::SampleBuffer; 2] {
-    let mut left = pools.get::<f32>();
-    let mut right = pools.get::<f32>();
-    left.ensure_len(frames)
-        .unwrap_or_else(|err| panic!("left output buffer should fit: {err}"));
-    right
-        .ensure_len(frames)
-        .unwrap_or_else(|err| panic!("right output buffer should fit: {err}"));
-    [left, right]
-}
-
 fn process_planar(
     resampler: &mut dyn Resampler,
-    input: &[kithara::bufpool::SampleBuffer; 2],
-    output: &mut [kithara::bufpool::SampleBuffer; 2],
+    input: &[SampleBuffer; 2],
+    output: &mut [SampleBuffer; 2],
 ) -> usize {
     let input_refs = [&input[0][..], &input[1][..]];
     let (left, right) = output.split_at_mut(1);
@@ -167,35 +160,26 @@ fn process_planar(
 }
 
 #[kithara::test]
-fn resampler_active_first_chunk_alloc_free() {
-    let pools = eager_pools(64, 16_384);
+#[case::active_first_chunk(48_000, 0, 64, 16_384)]
+#[case::active_steady_state(48_000, 16, 64, 16_384)]
+#[case::passthrough(44_100, 1, 32, 8_192)]
+fn resampler_process_is_allocation_free(
+    #[case] source_rate: u32,
+    #[case] warmup_chunks: usize,
+    #[case] initial_buffers: usize,
+    #[case] initial_capacity: usize,
+) {
+    let pools = eager_pools(initial_buffers, initial_capacity);
 
     let (mut resampler, input, mut output) = permit_alloc(|| {
-        let resampler = build_resampler(&pools, 48_000, 44_100);
-        let input = planar_block(&pools, 4_096);
-        let output = output_block(&pools, resampler.output_frames_next());
-        (resampler, input, output)
-    });
-
-    assert_no_alloc(|| {
-        let frames = process_planar(&mut resampler, &input, &mut output);
-        assert!(frames > 0);
-    });
-}
-
-#[kithara::test]
-fn resampler_active_steady_state_alloc_free() {
-    let pools = eager_pools(64, 16_384);
-
-    let (mut resampler, input, mut output) = permit_alloc(|| {
-        let mut resampler = build_resampler(&pools, 48_000, 44_100);
-        for _ in 0..16 {
+        let mut resampler = build_resampler(&pools, source_rate, 44_100);
+        for _ in 0..warmup_chunks {
             let warm = planar_block(&pools, 4_096);
-            let mut warm_output = output_block(&pools, resampler.output_frames_next());
+            let mut warm_output = stereo_block(&pools, resampler.output_frames_next());
             let _ = process_planar(&mut resampler, &warm, &mut warm_output);
         }
         let input = planar_block(&pools, 4_096);
-        let output = output_block(&pools, resampler.output_frames_next());
+        let output = stereo_block(&pools, resampler.output_frames_next());
         (resampler, input, output)
     });
 
@@ -222,7 +206,7 @@ fn resampler_presize_keeps_output_bit_exact() {
                 let v = ((n * 4096 + i) as f32 * 0.0007).sin();
                 *s = v;
             }
-            let mut output = output_block(&pools, resampler.output_frames_next());
+            let mut output = stereo_block(&pools, resampler.output_frames_next());
             let frames = process_planar(&mut resampler, &input, &mut output);
             out.extend_from_slice(&output[0][..frames]);
             out.extend_from_slice(&output[1][..frames]);
@@ -234,26 +218,6 @@ fn resampler_presize_keeps_output_bit_exact() {
     let b = render();
     assert_eq!(a, b, "resampler output must be deterministic and bit-exact");
     assert!(!a.is_empty(), "active resampler must emit output");
-}
-
-#[kithara::test]
-fn test_resampler_passthrough_allocation_free() {
-    let pools = eager_pools(32, 8_192);
-
-    let (mut resampler, input, mut output) = permit_alloc(|| {
-        let mut resampler = build_resampler(&pools, 44_100, 44_100);
-        let warmup = planar_block(&pools, 4_096);
-        let mut warmup_output = output_block(&pools, resampler.output_frames_next());
-        let _ = process_planar(&mut resampler, &warmup, &mut warmup_output);
-        let input = planar_block(&pools, 4_096);
-        let output = output_block(&pools, resampler.output_frames_next());
-        (resampler, input, output)
-    });
-
-    assert_no_alloc(|| {
-        let frames = process_planar(&mut resampler, &input, &mut output);
-        assert!(frames > 0);
-    });
 }
 
 #[kithara::test]

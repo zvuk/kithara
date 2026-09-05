@@ -372,8 +372,8 @@ where
     }
 }
 
-/// How a row becomes host output.
-fn mount_row<H>(
+/// How a row or column becomes host output.
+fn mount_flow<H>(
     node: &ExpandedNode,
     address: &Address<'_>,
     branch: Branch,
@@ -383,114 +383,86 @@ fn mount_row<H>(
 where
     H: Host,
 {
-    let ExpandedNode::Row {
-        measure,
-        children,
-        gap,
-        align,
-        pad,
-        pad_x,
-        pad_y,
-        frame,
-        background,
-        background_alpha,
-        active,
-        active_background,
-        frame_color,
-        active_frame_color,
-        surface,
-        ..
-    } = node
-    else {
-        unreachable!("mount_row is called only for a row")
-    };
     let snapshot: &dyn Snapshot = &ctx;
-    mount_group(
-        row_group(
-            RowNode {
+    let (group, children) = match node {
+        ExpandedNode::Row {
+            measure,
+            children,
+            gap,
+            align,
+            pad,
+            pad_x,
+            pad_y,
+            frame,
+            background,
+            background_alpha,
+            active,
+            active_background,
+            frame_color,
+            active_frame_color,
+            surface,
+            ..
+        } => (
+            row_group(
+                RowNode {
+                    measure: *measure,
+                    gap: *gap,
+                    align: *align,
+                    pad: *pad,
+                    pad_x: *pad_x,
+                    pad_y: *pad_y,
+                    frame: *frame,
+                    background: *background,
+                    background_alpha: *background_alpha,
+                    active: active.as_ref(),
+                    active_background: *active_background,
+                    frame_color: *frame_color,
+                    active_frame_color: *active_frame_color,
+                    surface: surface.as_ref(),
+                    size: effective_size(node, ctx.skin, snapshot),
+                },
+                branch.round,
+                ctx,
+            ),
+            children,
+        ),
+        ExpandedNode::Column {
+            measure,
+            children,
+            gap,
+            align,
+            pad,
+            pad_x,
+            pad_y,
+            frame,
+            frame_color,
+            background,
+            background_alpha,
+            surface,
+            ..
+        } => (
+            Group {
+                round: branch.round,
+                axis: Axis::Vertical,
                 measure: *measure,
-                gap: *gap,
-                align: *align,
-                pad: *pad,
-                pad_x: *pad_x,
-                pad_y: *pad_y,
+                alignment: *align,
+                gap: gap.unwrap_or(ctx.skin.layout.grid_gap),
+                padding_x: pad_x.unwrap_or(pad.unwrap_or(ctx.skin.layout.grid_pad)),
+                padding_y: pad_y.unwrap_or(pad.unwrap_or(ctx.skin.layout.grid_pad)),
                 frame: *frame,
                 background: *background,
                 background_alpha: *background_alpha,
-                active: active.as_ref(),
-                active_background: *active_background,
-                frame_color: *frame_color,
-                active_frame_color: *active_frame_color,
+                lit: None,
+                frame_color: frame_color.unwrap_or(ctx.skin.divider.color),
+                frame_width: ctx.skin.divider.width,
                 surface: surface.as_ref(),
                 size: effective_size(node, ctx.skin, snapshot),
             },
-            branch.round,
-            ctx,
+            children,
         ),
-        children,
-        address,
-        branch,
-        snapshot,
-        ctx,
-        host,
-    )
-}
-
-/// How a column becomes host output.
-fn mount_column<H>(
-    node: &ExpandedNode,
-    address: &Address<'_>,
-    branch: Branch,
-    ctx: Ctx<'_, '_>,
-    host: &mut H,
-) -> H::Output
-where
-    H: Host,
-{
-    let ExpandedNode::Column {
-        measure,
-        children,
-        gap,
-        align,
-        pad,
-        pad_x,
-        pad_y,
-        frame,
-        frame_color,
-        background,
-        background_alpha,
-        surface,
-        ..
-    } = node
-    else {
-        unreachable!("mount_column is called only for a column")
+        _ => unreachable!("mount_flow is called only for a row or column"),
     };
-    let snapshot: &dyn Snapshot = &ctx;
-    mount_group(
-        Group {
-            round: branch.round,
-            axis: Axis::Vertical,
-            measure: *measure,
-            alignment: *align,
-            gap: gap.unwrap_or(ctx.skin.layout.grid_gap),
-            padding_x: pad_x.unwrap_or(pad.unwrap_or(ctx.skin.layout.grid_pad)),
-            padding_y: pad_y.unwrap_or(pad.unwrap_or(ctx.skin.layout.grid_pad)),
-            frame: *frame,
-            background: *background,
-            background_alpha: *background_alpha,
-            lit: None,
-            frame_color: frame_color.unwrap_or(ctx.skin.divider.color),
-            frame_width: ctx.skin.divider.width,
-            surface: surface.as_ref(),
-            size: effective_size(node, ctx.skin, snapshot),
-        },
-        children,
-        address,
-        branch,
-        snapshot,
-        ctx,
-        host,
-    )
+    mount_group(group, children, address, branch, snapshot, ctx, host)
 }
 
 /// How one node becomes host output, once the engine question is settled.
@@ -529,8 +501,9 @@ where
             ctx,
             host,
         ),
-        ExpandedNode::Row { .. } => mount_row(node, address, branch, ctx, host),
-        ExpandedNode::Column { .. } => mount_column(node, address, branch, ctx, host),
+        ExpandedNode::Row { .. } | ExpandedNode::Column { .. } => {
+            mount_flow(node, address, branch, ctx, host)
+        }
         ExpandedNode::Popover {
             path,
             open,

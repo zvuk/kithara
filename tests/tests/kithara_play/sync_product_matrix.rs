@@ -710,20 +710,8 @@ impl ProductHarness {
         capture_frames: usize,
         block_frames: usize,
     ) -> Vec<f32> {
-        let mut pcm = Vec::with_capacity(capture_frames * usize::from(CHANNELS));
-        while pcm.len() < capture_frames * usize::from(CHANNELS) {
-            let remaining_frames =
-                (capture_frames * usize::from(CHANNELS) - pcm.len()) / usize::from(CHANNELS);
-            let frames = remaining_frames.min(block_frames);
-            let block = self.render(case, frames).await;
-            assert!(
-                !block.is_empty(),
-                "{}: product capture stopped making PCM progress",
-                case.id,
-            );
-            pcm.extend(block);
-        }
-        pcm
+        self.capture_blocks(case, capture_frames, block_frames, false)
+            .await
     }
 
     pub(super) async fn capture_paced(
@@ -731,21 +719,35 @@ impl ProductHarness {
         case: SyncCase,
         capture_frames: usize,
     ) -> Vec<f32> {
+        self.capture_blocks(case, capture_frames, self.block_frames, true)
+            .await
+    }
+
+    async fn capture_blocks(
+        &mut self,
+        case: SyncCase,
+        capture_frames: usize,
+        block_frames: usize,
+        paced: bool,
+    ) -> Vec<f32> {
+        let capture_kind = if paced { "paced" } else { "product" };
         let mut pcm = Vec::with_capacity(capture_frames * usize::from(CHANNELS));
         while pcm.len() < capture_frames * usize::from(CHANNELS) {
-            let remaining =
+            let remaining_frames =
                 (capture_frames * usize::from(CHANNELS) - pcm.len()) / usize::from(CHANNELS);
-            let frames = remaining.min(self.block_frames);
-            let started = Instant::now();
+            let frames = remaining_frames.min(block_frames);
+            let started = paced.then(Instant::now);
             let block = self.render(case, frames).await;
             assert!(
                 !block.is_empty(),
-                "{}: paced capture stopped making PCM progress",
+                "{}: {capture_kind} capture stopped making PCM progress",
                 case.id,
             );
             pcm.extend(block);
-            let period = Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate));
-            time::sleep(period.saturating_sub(started.elapsed())).await;
+            if let Some(started) = started {
+                let period = Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate));
+                time::sleep(period.saturating_sub(started.elapsed())).await;
+            }
         }
         pcm
     }

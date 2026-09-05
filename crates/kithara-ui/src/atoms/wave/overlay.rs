@@ -289,8 +289,7 @@ fn draw_left(
     role: TextRoleSkin,
     color: Rgba,
 ) {
-    let run = text.shape(content, role, Some(max_width));
-    list.text(&run, content, Transform::translate(position), color);
+    draw_aligned::<false>(list, text, content, position, max_width, role, color);
 }
 
 fn draw_right(
@@ -302,14 +301,24 @@ fn draw_right(
     role: TextRoleSkin,
     color: Rgba,
 ) {
+    draw_aligned::<true>(list, text, content, position, max_width, role, color);
+}
+
+fn draw_aligned<const RIGHT: bool>(
+    list: &mut DrawListBuilder,
+    text: &mut TextContext,
+    content: &str,
+    position: Pt,
+    max_width: f32,
+    role: TextRoleSkin,
+    color: Rgba,
+) {
     let run = text.shape(content, role, Some(max_width));
+    let x = position.x - if RIGHT { run.width() } else { 0.0 };
     list.text(
         &run,
         content,
-        Transform::translate(Pt {
-            x: position.x - run.width(),
-            y: position.y,
-        }),
+        Transform::translate(Pt { x, y: position.y }),
         color,
     );
 }

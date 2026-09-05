@@ -62,102 +62,85 @@ fn serve_content(behavior: &FixtureBehavior, headers: &HeaderMap) -> Response {
         Content::StaticBytes {
             bytes,
             content_type,
-        } => match &behavior.delivery {
-            Delivery::Range => build_range_response(bytes, headers, true, true, *content_type),
-            Delivery::Normal => {
-                build_range_response(bytes, &HeaderMap::new(), true, true, *content_type)
-            }
-            Delivery::EarlyClose { after_bytes } => {
-                early_close_response(bytes, headers, *after_bytes, *content_type)
-            }
-            Delivery::StallAfter { after_bytes } => {
-                stall_response(bytes, *after_bytes, *content_type)
-            }
-            Delivery::Throttle { chunk, delay_ms } => {
-                throttle_response(bytes, *chunk, *delay_ms, *content_type)
-            }
-        },
+        } => delivery_response(bytes, headers, &behavior.delivery, *content_type),
     }
 }
 
-fn stall_response(
-    bytes: &[u8],
-    after_bytes: usize,
-    content_type: Option<&'static str>,
-) -> Response {
-    // Advertise the full length, deliver only a prefix, then keep the
-    // connection open forever — the client must abort on its own inactivity
-    // budget, never on a server-side close.
-    let total = bytes.len();
-    let prefix = Bytes::copy_from_slice(&bytes[..after_bytes.min(total)]);
-    let body =
-        Body::from_stream(stream::iter(vec![Ok::<_, io::Error>(prefix)]).chain(stream::pending()));
-    let mut builder = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_LENGTH, total.to_string());
-    if let Some(ct) = content_type {
-        builder = builder.header(header::CONTENT_TYPE, ct);
-    }
-    builder.body(body).expect("stall response")
-}
-
-fn throttle_response(
-    bytes: &[u8],
-    chunk: usize,
-    delay_ms: u64,
-    content_type: Option<&'static str>,
-) -> Response {
-    // Stream the full body from 0 in `chunk`-sized pieces with `delay_ms`
-    // between, but advertise the full length immediately so the decoder can
-    // report duration before the body finishes arriving.
-    let total = bytes.len();
-    let pieces: Vec<Bytes> = bytes
-        .chunks(chunk.max(1))
-        .map(Bytes::copy_from_slice)
-        .collect();
-    let body = Body::from_stream(stream::unfold(
-        pieces.into_iter(),
-        move |mut it| async move {
-            let piece = it.next()?;
-            sleep(Duration::from_millis(delay_ms)).await;
-            Some((Ok::<_, io::Error>(piece), it))
-        },
-    ));
-    let mut builder = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_LENGTH, total.to_string());
-    if let Some(ct) = content_type {
-        builder = builder.header(header::CONTENT_TYPE, ct);
-    }
-    builder.body(body).expect("throttle response")
-}
-
-fn early_close_response(
+fn delivery_response(
     bytes: &[u8],
     headers: &HeaderMap,
-    after_bytes: usize,
+    delivery: &Delivery,
     content_type: Option<&'static str>,
 ) -> Response {
-    // A range request gets a normal partial response — this is the on-demand
-    // seek path that must succeed after the sequential stream closes early.
-    if headers.contains_key(header::RANGE) {
-        return build_range_response(bytes, headers, true, true, content_type);
-    }
-    // Sequential GET: advertise the full length but deliver only `after_bytes`
-    // then close, so the client observes a premature end-of-stream. A stream
-    // body keeps hyper from validating the chunk length against the explicit
-    // Content-Length; ending short closes the connection mid-message.
     let total = bytes.len();
-    let truncated = Bytes::copy_from_slice(&bytes[..after_bytes.min(total)]);
-    let body = Body::from_stream(stream::iter(vec![Ok::<_, io::Error>(truncated)]));
+    let (body, accept_ranges, context) = match delivery {
+        Delivery::Range => {
+            return build_range_response(bytes, headers, true, true, content_type);
+        }
+        Delivery::Normal => {
+            return build_range_response(bytes, &HeaderMap::new(), true, true, content_type);
+        }
+        Delivery::EarlyClose { .. } if headers.contains_key(header::RANGE) => {
+            return build_range_response(bytes, headers, true, true, content_type);
+        }
+        Delivery::EarlyClose { after_bytes } => {
+            let truncated = Bytes::copy_from_slice(&bytes[..(*after_bytes).min(total)]);
+            (
+                Body::from_stream(stream::iter(vec![Ok::<_, io::Error>(truncated)])),
+                true,
+                "early close response",
+            )
+        }
+        Delivery::StallAfter { after_bytes } => {
+            let prefix = Bytes::copy_from_slice(&bytes[..(*after_bytes).min(total)]);
+            (
+                Body::from_stream(
+                    stream::iter(vec![Ok::<_, io::Error>(prefix)]).chain(stream::pending()),
+                ),
+                false,
+                "stall response",
+            )
+        }
+        Delivery::Throttle { chunk, delay_ms } => {
+            let pieces: Vec<Bytes> = bytes
+                .chunks((*chunk).max(1))
+                .map(Bytes::copy_from_slice)
+                .collect();
+            let delay_ms = *delay_ms;
+            (
+                Body::from_stream(stream::unfold(
+                    pieces.into_iter(),
+                    move |mut it| async move {
+                        let piece = it.next()?;
+                        sleep(Duration::from_millis(delay_ms)).await;
+                        Some((Ok::<_, io::Error>(piece), it))
+                    },
+                )),
+                false,
+                "throttle response",
+            )
+        }
+    };
+    stream_response(body, total, content_type, accept_ranges, context)
+}
+
+fn stream_response(
+    body: Body,
+    total: usize,
+    content_type: Option<&'static str>,
+    accept_ranges: bool,
+    context: &'static str,
+) -> Response {
     let mut builder = Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_LENGTH, total.to_string())
-        .header(header::ACCEPT_RANGES, "bytes");
+        .header(header::CONTENT_LENGTH, total.to_string());
+    if accept_ranges {
+        builder = builder.header(header::ACCEPT_RANGES, "bytes");
+    }
     if let Some(ct) = content_type {
         builder = builder.header(header::CONTENT_TYPE, ct);
     }
-    builder.body(body).expect("early close response")
+    builder.body(body).expect(context)
 }
 
 fn html_response(body: &str) -> Response {

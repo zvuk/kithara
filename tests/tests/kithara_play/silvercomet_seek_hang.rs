@@ -16,7 +16,9 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    offline::OfflinePlayer, temp_dir, test_defaults::Consts as Shared,
+    offline::{OfflinePlayer, WindowStats, rms},
+    temp_dir,
+    test_defaults::Consts as Shared,
 };
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -47,20 +49,6 @@ impl Consts {
 
 const SILVERCOMET_URLS: &[&str] = &["https://stream.silvercomet.top/hls/master.m3u8"];
 
-/// Outcome of rendering one measurement window.
-struct WindowStats {
-    /// Number of blocks whose peak amplitude was below `ACTIVE_THRESHOLD`.
-    /// Counts **every** silent block in the window, not just the longest run —
-    /// phantom playback (clicks between long silences) drives this up.
-    silent_blocks: u32,
-    /// Total rendered blocks in the window.
-    total_blocks: u32,
-    /// Start index (in samples) into `samples_out` where this window begins.
-    /// Lets callers slice out just the after-seek portion to compute a
-    /// window-local RMS.
-    window_start_sample: usize,
-}
-
 /// Render `blocks` audio blocks, collect the raw interleaved samples,
 /// and return statistics covering exactly this window.
 fn render_and_collect(
@@ -88,22 +76,7 @@ fn render_and_collect(
         thread::sleep(block_budget.saturating_sub(elapsed));
     }
 
-    WindowStats {
-        silent_blocks,
-        total_blocks: blocks,
-        window_start_sample,
-    }
-}
-
-fn blocks_for_seconds(secs: f64) -> u32 {
-    let blocks = (secs * f64::from(Consts::SAMPLE_RATE) / Consts::BLOCK_FRAMES as f64).ceil();
-    #[expect(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        reason = "positive ceiling fits in u32 for second-scale windows"
-    )]
-    let result = blocks as u32;
-    result
+    WindowStats::new(silent_blocks, blocks, window_start_sample)
 }
 
 fn fresh_downloader() -> Downloader {
@@ -184,19 +157,6 @@ fn write_wav_f32(path: &Path, interleaved: &[f32], sample_rate: u32, channels: u
     }
 }
 
-fn rms(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "sample count precision adequate"
-    )]
-    let n = samples.len() as f32;
-    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
-    (sum_sq / n).sqrt()
-}
-
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
@@ -242,8 +202,8 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
         .with_ansi(false)
         .try_init();
 
-    let window_blocks = blocks_for_seconds(Consts::PLAY_WINDOW_SECS);
-    let warmup_blocks = blocks_for_seconds(Consts::WARMUP_SECS);
+    let window_blocks = Shared::blocks_for_seconds(Consts::PLAY_WINDOW_SECS, Consts::BLOCK_FRAMES);
+    let warmup_blocks = Shared::blocks_for_seconds(Consts::WARMUP_SECS, Consts::BLOCK_FRAMES);
     let mut next_seek_epoch = 1u64;
 
     for iter in 0..Consts::ITERATIONS {
@@ -389,7 +349,7 @@ mod unit_tests {
 
     #[kithara::test(native, flash(false))]
     fn blocks_for_three_seconds_matches_expected() {
-        let blocks = blocks_for_seconds(3.0);
+        let blocks = Shared::blocks_for_seconds(3.0, Consts::BLOCK_FRAMES);
         assert_eq!(blocks, 259);
     }
 }

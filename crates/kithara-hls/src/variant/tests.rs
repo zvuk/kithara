@@ -97,7 +97,7 @@ fn make_placeholder_init(size: u64, scope: &TestAssetScope) -> Segment {
     })
 }
 
-fn make_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment {
+fn make_media_seg(idx: u32, size: SegmentSize, scope: &TestAssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
@@ -108,29 +108,19 @@ fn make_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment {
         url,
         resource_id,
         state: SegmentSlotState::missing(),
-        size: SegmentSize::seed(size),
+        size,
         content: SegmentContent::Plain,
         decode_time: Duration::from_millis(u64::from(idx) * 2000),
         duration: Duration::from_secs(2),
     })
 }
 
+fn make_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment {
+    make_media_seg(idx, SegmentSize::seed(size), scope)
+}
+
 fn make_placeholder_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment {
-    let url: Url = format!("https://example.com/seg{idx}.m4s")
-        .parse()
-        .expect("valid url");
-    let resource_id = scope
-        .key(&AssetResource::Url(url.clone()))
-        .expect("segment key");
-    Segment::Media(MediaSegment {
-        url,
-        resource_id,
-        state: SegmentSlotState::missing(),
-        size: SegmentSize::placeholder(size),
-        content: SegmentContent::Plain,
-        decode_time: Duration::from_millis(u64::from(idx) * 2000),
-        duration: Duration::from_secs(2),
-    })
+    make_media_seg(idx, SegmentSize::placeholder(size), scope)
 }
 
 fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {

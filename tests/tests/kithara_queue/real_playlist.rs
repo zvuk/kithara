@@ -1,62 +1,34 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, AdvanceReason, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        sync::Arc,
         time::{Duration, sleep, timeout},
-        tokio,
         tokio::sync::OnceCell,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    queue::{QueueControl, TrackSource, Transition},
 };
-use kithara_app::{
-    baked,
-    config::AppConfig,
-    pools::{AppPools, build as app_pools},
-};
+use kithara_app::{baked, pools::AppPools};
 use kithara_integration_tests::{
-    TestTempDir, Xorshift64, kithara,
-    offline::{OfflineQueue, offline_gain_window},
+    Xorshift64, kithara,
+    offline::{AppQueueFixture, insecure_app_queue, offline_gain_window},
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
-
-#[path = "source_helper.rs"]
-mod source_helper;
-
-/// Per-process singleton: one offline audio session, one Downloader,
-/// one Queue. `#[case]` tests inside this file share it, so init cost
-/// (network TLS context, audio graph) is paid once.
-struct TestCtx {
-    config: AppConfig,
-    queue: OfflineQueue<AppPools>,
-    /// Isolated cache dir, shared by every track this test binary
-    /// loads. Auto-deletes when the process exits, so real-network
-    /// runs don't pollute the shared app cache at
-    /// `env::temp_dir()/kithara`.
-    cache: TestTempDir,
-}
 
 /// Same as [`build_source`] but overrides `store.cache_dir` with this
 /// process's private temp dir so the real `kithara-app` cache stays
 /// clean.
 fn build_track_source(
     url: &str,
-    ctx: &TestCtx,
+    ctx: &AppQueueFixture,
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> TrackSource<AppPools> {
-    source_helper::app_track_source(
+    super::source_helper::app_track_source(
         url,
         &ctx.config,
-        source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
         backend,
         abr,
         None,
@@ -65,71 +37,12 @@ fn build_track_source(
 
 mod test_statics {
     use super::*;
-    pub(super) static TEST_CTX: OnceCell<TestCtx> = OnceCell::const_new();
+    pub(super) static TEST_CTX: OnceCell<AppQueueFixture> = OnceCell::const_new();
 }
 
-async fn shared_test_ctx() -> &'static TestCtx {
+async fn shared_test_ctx() -> &'static AppQueueFixture {
     test_statics::TEST_CTX
-        .get_or_init(|| async {
-            let pools = app_pools().expect("build app pool region");
-            let net = NetOptions::builder().is_insecure(true).build();
-            let downloader = Downloader::new(
-                DownloaderConfig::for_client(HttpClient::new(
-                    net,
-                    pools.clone(),
-                    CancelToken::never(),
-                ))
-                .build(),
-            );
-            let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-            let shutdown = CancelToken::never();
-            let store = AssetStore::builder(pools.clone())
-                .cancel(shutdown.child())
-                .backend(StorageBackend::default())
-                .flush_hub(flush_hub)
-                .layouts(baked::build_baked_asset_layouts())
-                .build();
-            let worker = PlayWorker::new(
-                PlayWorkerConfig::builder(pools)
-                    .cancel(shutdown.child())
-                    .build(),
-            );
-            let session_pools = worker.pools().clone();
-            let config = AppConfig::builder()
-                .downloader(downloader)
-                .shutdown(shutdown)
-                .worker(worker.clone())
-                .store(store)
-                .build();
-            let session_config = HostConfig::offline(session_pools)
-                .pacing(Duration::from_millis(10))
-                .build();
-            let player = PlayerImpl::new(
-                PlayerConfig::builder()
-                    .sample_rate(session_config.sample_rate())
-                    .worker(worker)
-                    .build(),
-            );
-            let queue = OfflineQueue::new(
-                session_config,
-                Queue::new(QueueConfig::builder().player(player).build()),
-            )
-            .expect("create product offline queue");
-
-            let queue_for_tick = queue.control();
-            tokio::task::spawn(async move {
-                loop {
-                    sleep(Duration::from_millis(50)).await;
-                    let _ = queue_for_tick.tick();
-                }
-            });
-
-            TestCtx {
-                config,
-                queue,
-                cache: TestTempDir::new(),
-            }
-        })
+        .get_or_init(|| async { insecure_app_queue() })
         .await
 }
 

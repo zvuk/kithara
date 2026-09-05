@@ -309,16 +309,9 @@ where
         bounds: Rect,
         visual: VisualState,
     ) -> DrawList {
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.text_resources.into());
-        let mut builder = self
-            .pools
-            .as_ref()
-            .map_or_else(DrawListBuilder::default, DrawBuffers::list);
-        builder.transformed(self.transform, |builder| {
+        self.build_draw_list(state, |builder, text| {
             self.painter.draw(builder, text, &self.data, bounds, visual);
-        });
-        builder.finish()
+        })
     }
 
     pub(crate) fn indexed_draw_list(
@@ -327,17 +320,38 @@ where
         bounds: Rect,
         visual: IndexedVisual,
     ) -> DrawList {
+        self.build_draw_list(state, |builder, text| {
+            self.painter
+                .draw_indexed(builder, text, &self.data, bounds, visual);
+        })
+    }
+
+    fn build_draw_list(
+        &self,
+        state: &PaintState<ControlKey<Painter>>,
+        draw: impl FnOnce(&mut DrawListBuilder, &mut TextContext),
+    ) -> DrawList {
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
         let mut builder = self
             .pools
             .as_ref()
             .map_or_else(DrawListBuilder::default, DrawBuffers::list);
-        builder.transformed(self.transform, |builder| {
-            self.painter
-                .draw_indexed(builder, text, &self.data, bounds, visual);
-        });
+        builder.transformed(self.transform, |builder| draw(builder, text));
         builder.finish()
+    }
+
+    fn paint_visual_into(
+        &self,
+        state: &PaintState<ControlKey<Painter>>,
+        renderer: &mut Renderer,
+        bounds: Rectangle,
+        visual: Visual,
+    ) {
+        match visual {
+            Visual::Indexed(visual) => self.paint_indexed_into(state, renderer, bounds, visual),
+            Visual::Whole(visual) => self.paint_into(state, renderer, bounds, visual),
+        }
     }
 
     /// Replays the painter into the renderer at the box the layout gave it.
@@ -496,11 +510,11 @@ where
         _viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
-        self.paint_into(
+        self.paint_visual_into(
             tree.state.downcast_ref::<PaintState<ControlKey<Painter>>>(),
             renderer,
             bounds,
-            hovered(Painter::READS_POINTER, bounds, cursor),
+            Visual::Whole(hovered(Painter::READS_POINTER, bounds, cursor)),
         );
     }
 }
@@ -772,20 +786,12 @@ where
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<GestureState<Painter>>();
-        match &self.recognize {
-            Recognize::Index { .. } => self.paint.paint_indexed_into(
-                &state.paint,
-                renderer,
-                layout.bounds(),
-                state.index.visual(),
-            ),
-            _ => self.paint.paint_into(
-                &state.paint,
-                renderer,
-                layout.bounds(),
-                state.press.visual(),
-            ),
-        }
+        let visual = match &self.recognize {
+            Recognize::Index { .. } => Visual::Indexed(state.index.visual()),
+            _ => Visual::Whole(state.press.visual()),
+        };
+        self.paint
+            .paint_visual_into(&state.paint, renderer, layout.bounds(), visual);
     }
 
     fn mouse_interaction(

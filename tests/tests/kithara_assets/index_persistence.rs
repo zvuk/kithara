@@ -8,18 +8,15 @@ use std::{
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetScope, AssetStore, StorageBackend, WriteSide,
+        AcquisitionResult, WriteSide,
         index::schema::{ArchivedAvailabilityFile, ArchivedLruIndexFile, ArchivedPinsIndexFile},
     },
     platform::time::Duration,
 };
-use kithara_integration_tests::{
-    bufpool_ext::{TestPools, pools},
-    kithara, temp_dir,
-};
+use kithara_integration_tests::{kithara, temp_dir};
 use rkyv::option::ArchivedOption;
 
-use super::support::{LiteralLayout, literal_layouts, resource, source};
+use super::support::{asset_scope, resource};
 
 fn index_dir(root: &Path) -> PathBuf {
     root.join("_index")
@@ -105,20 +102,6 @@ fn read_archived_availability(path: &Path, asset_root: &str, key: &str) -> Archi
     }
 }
 
-fn build_scope(
-    temp_dir: &kithara_integration_tests::TestTempDir,
-    asset_root: &str,
-) -> AssetScope<TestPools> {
-    AssetStore::builder(pools())
-        .backend(StorageBackend::Disk {
-            root: (temp_dir.path()).into(),
-        })
-        .layouts(literal_layouts())
-        .build()
-        .scope::<LiteralLayout>(&source(asset_root))
-        .expect("scope")
-}
-
 /// End-to-end persistence contract: realistic acquire → write →
 /// commit → read lifecycle, checking every index file at every
 /// observable step.
@@ -130,7 +113,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
     let lru = lru_path(&root);
     let availability = availability_path(&root);
 
-    let scope = build_scope(&temp_dir, asset_root);
+    let scope = asset_scope(&temp_dir, asset_root);
     assert!(
         !pins.exists(),
         "pins.bin must not exist before any activity"
@@ -235,7 +218,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
         "after dropping the last live resource, no asset_root should remain pinned; got {pinned_after_drop:?}"
     );
 
-    let reopened = build_scope(&temp_dir, asset_root);
+    let reopened = asset_scope(&temp_dir, asset_root);
     let rehydrated = reopened.store().available_ranges(&key_a);
     let rehydrated_vec: Vec<(u64, u64)> = rehydrated.iter().map(|r| (r.start, r.end)).collect();
     assert_eq!(
@@ -251,7 +234,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
 #[kithara::test(timeout(Duration::from_secs(3)))]
 fn index_files_land_under_root_dir_index(temp_dir: kithara_integration_tests::TestTempDir) {
     let root = temp_dir.path().to_path_buf();
-    let scope = build_scope(&temp_dir, "basic-asset");
+    let scope = asset_scope(&temp_dir, "basic-asset");
     let key = scope.key(&resource("one.bin")).unwrap();
     {
         let AcquisitionResult::Pending(writer) =

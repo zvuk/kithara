@@ -77,17 +77,6 @@ impl SeekScenario {
     }
 }
 
-fn blocks_for_seconds(secs: f64) -> u32 {
-    let blocks = (secs * f64::from(Consts::SAMPLE_RATE) / Consts::BLOCK_FRAMES as f64).ceil();
-    #[expect(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        reason = "positive ceiling fits in u32"
-    )]
-    let result = blocks as u32;
-    result
-}
-
 /// Render at least `min_blocks` blocks and return only once
 /// `player.position() >= until_position`. Between batches it yields a
 /// single virtual tick so the async HLS engine can fetch + decode the
@@ -240,7 +229,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
     let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
         &mut player,
-        blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS),
+        Shared::blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS, Consts::BLOCK_FRAMES),
         warmup_target,
     )
     .await;
@@ -272,7 +261,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
 
     render_until_position(
         &mut player,
-        blocks_for_seconds(Consts::POST_SEEK_AUDIO_SECS),
+        Shared::blocks_for_seconds(Consts::POST_SEEK_AUDIO_SECS, Consts::BLOCK_FRAMES),
         post_target,
     )
     .await;

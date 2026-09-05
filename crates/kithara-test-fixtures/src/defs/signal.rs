@@ -45,6 +45,19 @@ fn encode(
     .bytes
 }
 
+macro_rules! encode_signal {
+    ($target:ident, $wave:ident, $sample_rate:ident, $channels:ident, $total_frames:ident, $bit_rate:ident) => {
+        encode(
+            BytesEncodeTarget::$target,
+            $wave,
+            $sample_rate,
+            $channels,
+            $total_frames,
+            $bit_rate,
+        )
+    };
+}
+
 /// Writes the frame count into STREAMINFO, which the streaming encoder leaves
 /// at zero. A decoder that reads zero there reports an unknown duration.
 fn backfill_flac_frame_count(bytes: &mut [u8], total_frames: usize) {
@@ -212,14 +225,7 @@ fn signal_mp3(
     total_frames: usize,
     bit_rate: Option<u64>,
 ) -> Vec<u8> {
-    encode(
-        BytesEncodeTarget::Mp3,
-        wave,
-        sample_rate,
-        channels,
-        total_frames,
-        bit_rate,
-    )
+    encode_signal!(Mp3, wave, sample_rate, channels, total_frames, bit_rate)
 }
 
 /// The full-length MPEG clip in-process decoders read: minutes rather than
@@ -244,14 +250,7 @@ fn signal_mp3_track(
     total_frames: usize,
     bit_rate: Option<u64>,
 ) -> Vec<u8> {
-    encode(
-        BytesEncodeTarget::Mp3,
-        wave,
-        sample_rate,
-        channels,
-        total_frames,
-        bit_rate,
-    )
+    encode_signal!(Mp3, wave, sample_rate, channels, total_frames, bit_rate)
 }
 
 /// FLAC bodies the `/signal` route serves.
@@ -338,14 +337,7 @@ fn signal_aac(
     total_frames: usize,
     bit_rate: Option<u64>,
 ) -> Vec<u8> {
-    encode(
-        BytesEncodeTarget::Aac,
-        wave,
-        sample_rate,
-        channels,
-        total_frames,
-        bit_rate,
-    )
+    encode_signal!(Aac, wave, sample_rate, channels, total_frames, bit_rate)
 }
 
 /// AAC-in-MP4 bodies the `/signal` route serves.
@@ -399,12 +391,5 @@ fn signal_m4a(
     total_frames: usize,
     bit_rate: Option<u64>,
 ) -> Vec<u8> {
-    encode(
-        BytesEncodeTarget::M4a,
-        wave,
-        sample_rate,
-        channels,
-        total_frames,
-        bit_rate,
-    )
+    encode_signal!(M4a, wave, sample_rate, channels, total_frames, bit_rate)
 }

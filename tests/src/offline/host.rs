@@ -13,10 +13,10 @@ use kithara::{
             Arc, Mutex,
             atomic::{AtomicU64, Ordering},
         },
-        time::Duration,
+        time::{Duration, sleep},
     },
     play::{MixTapWriter, PlayError, TransportRevision, player::PlayerControlSource},
-    queue::Queue,
+    queue::{Queue, QueueControl},
     signal::AudioSpec,
 };
 use ringbuf::{
@@ -93,6 +93,23 @@ where
 }
 
 pub type OfflineQueue<S> = OfflineResident<Queue<S>, S>;
+
+/// Drive the periodic queue poll on the active test clock.
+///
+/// The flash gate keeps the spawned task on virtual time. Without it, buffered
+/// sources can outrun the real-time ticker and trigger false hang timeouts.
+#[kithara::flash(true)]
+pub async fn drive_queue_ticks<S>(queue: QueueControl<S>, interval: Duration)
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    loop {
+        sleep(interval).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
+}
 
 impl<S> OfflineHostHarness<S>
 where

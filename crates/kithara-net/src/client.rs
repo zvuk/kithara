@@ -642,15 +642,7 @@ mod tests {
                 }
             }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr: SocketAddr = listener.local_addr().expect("local_addr");
-        spawn(async move {
-            axum::serve(listener, app.into_make_service())
-                .await
-                .expect("serve");
-        });
-        let url = Url::parse(&format!("http://{addr}/probe")).expect("url");
-        (url, counter)
+        (serve_test_app(app, "/probe").await, counter)
     }
 
     /// Spawn an axum server whose `/echo` POST route returns 503 for the
@@ -672,6 +664,10 @@ mod tests {
                 }
             }),
         );
+        (serve_test_app(app, "/echo").await, counter)
+    }
+
+    async fn serve_test_app(app: Router, path: &str) -> Url {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr: SocketAddr = listener.local_addr().expect("local_addr");
         spawn(async move {
@@ -679,8 +675,7 @@ mod tests {
                 .await
                 .expect("serve");
         });
-        let url = Url::parse(&format!("http://{addr}/echo")).expect("url");
-        (url, counter)
+        Url::parse(&format!("http://{addr}{path}")).expect("url")
     }
 
     fn fast_options(max_retries: u32) -> NetOptions {

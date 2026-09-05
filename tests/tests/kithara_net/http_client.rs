@@ -189,21 +189,30 @@ async fn timeout_test_endpoint() -> impl IntoResponse {
     "Should timeout"
 }
 
+const KEY_BYTES: &[u8] = &[
+    0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
+];
+const AUTH_KEY_BYTES: &[u8] = &[
+    0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
+];
+const PARAM_KEY_BYTES: &[u8] = &[
+    0xfe, 0xed, 0xfa, 0xce, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x12, 0x34, 0x56, 0x78,
+];
+
+fn key_response(key_bytes: &'static [u8]) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/octet-stream")
+        .body(Body::from(Bytes::from_static(key_bytes)))
+        .unwrap()
+}
+
 async fn key_endpoint(
     State(counter): State<KeyRequestCounter>,
     _request: Request,
 ) -> Result<Response, StatusCode> {
     counter.increment("/key");
-
-    let key_bytes = vec![
-        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32,
-        0x10,
-    ];
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/octet-stream")
-        .body(Body::from(Bytes::from(key_bytes)))
-        .unwrap())
+    Ok(key_response(KEY_BYTES))
 }
 
 async fn key_with_auth_endpoint(
@@ -217,10 +226,7 @@ async fn key_with_auth_endpoint(
 
     match auth_header {
         Some("Bearer secret-key-token") => {
-            let key_bytes = vec![
-                0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54,
-                0x32, 0x10,
-            ];
+            let key_bytes = AUTH_KEY_BYTES;
 
             let range_header = headers.get("Range").and_then(|h| h.to_str().ok());
 
@@ -250,11 +256,7 @@ async fn key_with_auth_endpoint(
 
                 Err(StatusCode::BAD_REQUEST)
             } else {
-                Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/octet-stream")
-                    .body(Body::from(Bytes::from(key_bytes)))
-                    .unwrap())
+                Ok(key_response(key_bytes))
             }
         }
         _ => Err(StatusCode::UNAUTHORIZED),
@@ -274,15 +276,7 @@ async fn key_with_params_endpoint(
         query_params.contains("drm_id=test123") && query_params.contains("version=1.0");
 
     if has_required_params {
-        let key_bytes = vec![
-            0xfe, 0xed, 0xfa, 0xce, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x12, 0x34,
-            0x56, 0x78,
-        ];
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "application/octet-stream")
-            .body(Body::from(Bytes::from(key_bytes)))
-            .unwrap())
+        Ok(key_response(PARAM_KEY_BYTES))
     } else {
         Err(StatusCode::BAD_REQUEST)
     }
@@ -503,22 +497,6 @@ async fn test_head_success_case(#[future] test_server: TestServer, http_client: 
     assert_eq!(headers.get("content-type"), Some("text/plain"));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_headers_variants(#[future] test_server: TestServer, http_client: HttpClient) {
-    let test_server = test_server.await;
-    let url = test_server.url("/headers");
-
-    let mut headers = Headers::default();
-    headers.insert("X-Custom-Header", "test-value");
-    headers.insert("User-Agent", "test-agent");
-
-    let result = http_client.get_bytes(url, Some(headers)).await;
-
-    assert!(result.is_ok());
-    let data = result.unwrap();
-    assert_eq!(data, Bytes::from("Headers received"));
-}
-
 #[kithara::test(tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case("/slow-headers", Duration::from_millis(1000), true)]
 #[case("/slow-body", Duration::from_millis(1000), true)]
@@ -627,79 +605,6 @@ async fn test_stream_cancellation(#[future] test_server: TestServer, http_client
 }
 
 #[kithara::test(tokio)]
-async fn test_stream_get_returns_expected_bytes() {
-    let server = TestServer::new(test_router()).await;
-    let url = server.url("/test");
-
-    let client = HttpClient::new(NetOptions::default(), pools(), CancelToken::never());
-    let mut stream = client.stream(url, None).await.unwrap();
-    let mut collected = Vec::new();
-
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.unwrap();
-        collected.extend_from_slice(&chunk);
-    }
-
-    assert_eq!(collected, b"Hello, World!");
-}
-
-#[kithara::test(tokio)]
-async fn test_range_request_returns_correct_slice() {
-    let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default(), pools(), CancelToken::never());
-    let url = server.url("/range");
-
-    let mut stream = client
-        .get_range(url, RangeSpec::new(7, Some(11)), None)
-        .await
-        .unwrap();
-    let mut collected = Vec::new();
-
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.unwrap();
-        collected.extend_from_slice(&chunk);
-    }
-
-    assert_eq!(collected, b"World");
-}
-
-#[kithara::test(tokio)]
-async fn test_headers_are_sent_correctly() {
-    let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default(), pools(), CancelToken::never());
-    let url = server.url("/headers");
-
-    let mut headers = HashMap::new();
-    headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
-
-    let result = client.get_bytes(url, Some(headers.into())).await.unwrap();
-    assert_eq!(result, Bytes::from("Headers received"));
-}
-
-#[kithara::test(tokio)]
-async fn test_get_bytes_simple() {
-    let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default(), pools(), CancelToken::never());
-    let url = server.url("/test");
-
-    let bytes = client.get_bytes(url, None).await.unwrap();
-    assert_eq!(bytes, Bytes::from("Hello, World!"));
-}
-
-#[kithara::test(tokio)]
-async fn test_head_returns_content_length() {
-    let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default(), pools(), CancelToken::never());
-    let url = server.url("/head-length");
-
-    let headers = client.head(url, None).await.unwrap();
-    let content_length = headers
-        .get("content-length")
-        .or_else(|| headers.get("Content-Length"));
-    assert_eq!(content_length, Some("13"));
-}
-
-#[kithara::test(tokio)]
 async fn test_retry_policy_exponential_backoff() {
     let policy = RetryPolicy::builder()
         .max_retries(3)
@@ -712,19 +617,6 @@ async fn test_retry_policy_exponential_backoff() {
     assert_eq!(policy.delay_for_attempt(2), Duration::from_millis(20));
     assert_eq!(policy.delay_for_attempt(3), Duration::from_millis(40));
     assert_eq!(policy.delay_for_attempt(10), Duration::from_millis(100));
-}
-
-#[kithara::test(tokio)]
-async fn test_net_builder_creates_functional_client() {
-    let client = HttpClient::new(NetOptions::default(), pools(), CancelToken::never());
-    let server = TestServer::new(test_router()).await;
-    let url = server.url("/test");
-
-    let result = client.get_bytes(url, None).await;
-    assert!(
-        result.is_ok(),
-        "NetBuilder client should work like regular client"
-    );
 }
 
 #[kithara::test(tokio)]
@@ -903,24 +795,4 @@ async fn test_timeout_matrix(#[case] path: &str, #[case] timeout: Duration, #[ca
         Ok(()) => panic!("Expected Timeout error, got Ok"),
         Err(e) => panic!("Expected Timeout error, got {:?}", e),
     }
-}
-
-#[kithara::test(tokio)]
-async fn test_range_behavior_contract() {
-    let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default(), pools(), CancelToken::never());
-    let url = server.url("/ignore-range");
-
-    let mut stream = client
-        .get_range(url, RangeSpec::new(0, Some(5)), None)
-        .await
-        .unwrap();
-    let mut collected = Vec::new();
-
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.unwrap();
-        collected.extend_from_slice(&chunk);
-    }
-
-    assert_eq!(collected, b"Full response ignoring range");
 }

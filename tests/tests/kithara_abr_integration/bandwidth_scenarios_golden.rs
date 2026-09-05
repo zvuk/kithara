@@ -1,37 +1,16 @@
 use kithara::{
     self,
-    abr::{AbrMode, AbrSettings, AbrState, AbrView},
-    events::{VariantDuration, VariantIndex, VariantInfo},
-    platform::time::{Duration as StdDuration, Duration, Instant},
+    abr::{AbrMode, AbrState, AbrView},
+    events::VariantIndex,
+    platform::time::{Duration as StdDuration, Instant},
 };
 
-fn variants() -> Vec<VariantInfo> {
-    [300_000u64, 900_000, 3_000_000]
-        .iter()
-        .enumerate()
-        .map(|(i, bps)| VariantInfo {
-            variant_index: VariantIndex::new(i),
-            bandwidth_bps: Some(*bps),
-            duration: VariantDuration::Unknown,
-            name: None,
-            codecs: None,
-            container: None,
-        })
-        .collect()
-}
-
-fn fast_settings() -> AbrSettings {
-    AbrSettings::builder()
-        .initial_throughput_bps(Some(2_000_000))
-        .min_switch_interval(Duration::ZERO)
-        .min_buffer_for_up_switch(Duration::ZERO)
-        .build()
-}
+use super::common::{fast_settings, variants};
 
 fn run_profile(profile: &[u64]) -> usize {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let settings = fast_settings();
-    let variants = variants();
+    let variants = variants(&[300_000, 900_000, 3_000_000]);
     let base = Instant::now();
     for (i, bps) in profile.iter().enumerate() {
         let view = AbrView {

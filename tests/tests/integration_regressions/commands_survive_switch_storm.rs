@@ -21,7 +21,7 @@ use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
@@ -35,17 +35,6 @@ const SEEK_TOLERANCE_SECS: f64 = 1.0;
 /// How far playback must carry past the seek landing to prove `play` was not
 /// swallowed. A positive fact, so no window of "nothing happened" is needed.
 const MIN_RESUME_PROGRESS_SECS: f64 = 1.0;
-
-fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(20)).await;
-            if queue.tick().is_err() {
-                break;
-            }
-        }
-    })
-}
 
 /// `pause` and `play` reach the sink as slot commands, so the snapshot the
 /// queue exposes converges a tick later. Waiting for that convergence is the
@@ -151,7 +140,10 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
         ),
     )
     .expect("create product offline queue");
-    let ticker = spawn_ticker(queue.control());
+    let ticker = tokio::task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(20),
+    ));
     let mut status_rx = queue.subscribe();
     let mut probe_rx = queue.subscribe();
 

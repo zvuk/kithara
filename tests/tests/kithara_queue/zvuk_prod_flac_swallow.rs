@@ -15,7 +15,7 @@ use kithara::{
 };
 use kithara_app::{baked, config::AppConfig, pools::build as app_pools};
 use kithara_integration_tests::{
-    TestTempDir, bufpool_ext::pools, kithara, offline::OfflinePlayer,
+    TestTempDir, bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
     swallow_detector::assert_no_committed_swallow,
 };
 use kithara_test_utils::probe::capture as probe_capture;
@@ -153,7 +153,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     let recorder = probe_capture::install();
 
     let mut player = OfflinePlayer::new(
-        HostConfig::offline(pools())
+        HostConfig::offline(test_pools())
             .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
             .build(),
     );

@@ -20,7 +20,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::PcmPattern,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, deinterleave_left},
     temp_dir,
 };
 use kithara_test_fixtures::signal::{
@@ -89,40 +89,43 @@ struct ProvenanceDumpContext<'a> {
     runs: &'a [ClassRun],
     onset_window: Option<usize>,
     b_onset_window: Option<usize>,
+    switch_issue_frame: Option<usize>,
     current_index: Option<usize>,
 }
 
-impl ProvenanceDumpContext<'_> {
-    fn dump(&self) -> String {
-        dump(
-            self.replays,
-            self.runs,
-            self.onset_window,
-            self.b_onset_window,
-            self.current_index,
-        )
+trait DiagnosticContext {
+    fn onset_window(&self) -> Option<usize>;
+    fn b_onset_window(&self) -> Option<usize>;
+    fn dump(&self) -> String;
+}
+
+impl DiagnosticContext for ProvenanceDumpContext<'_> {
+    fn onset_window(&self) -> Option<usize> {
+        self.onset_window
     }
-}
 
-struct SwitchDumpContext<'a> {
-    replays: &'a [Replay],
-    runs: &'a [ClassRun],
-    onset_window: Option<usize>,
-    b_onset_window: Option<usize>,
-    switch_issue_frame: usize,
-    current_index: Option<usize>,
-}
+    fn b_onset_window(&self) -> Option<usize> {
+        self.b_onset_window
+    }
 
-impl SwitchDumpContext<'_> {
     fn dump(&self) -> String {
-        dump_with_switch(
-            self.replays,
-            self.runs,
-            self.onset_window,
-            self.b_onset_window,
-            self.switch_issue_frame,
-            self.current_index,
-        )
+        match self.switch_issue_frame {
+            Some(switch_issue_frame) => dump_with_switch(
+                self.replays,
+                self.runs,
+                self.onset_window,
+                self.b_onset_window,
+                switch_issue_frame,
+                self.current_index,
+            ),
+            None => dump(
+                self.replays,
+                self.runs,
+                self.onset_window,
+                self.b_onset_window,
+                self.current_index,
+            ),
+        }
     }
 }
 
@@ -180,6 +183,31 @@ enum ToneClass {
     Unknown,
 }
 
+#[derive(Clone, Copy)]
+enum CrossfadeFlavor {
+    Plain,
+    Eq,
+    EqStretch,
+}
+
+impl CrossfadeFlavor {
+    fn player_config(self) -> OfflinePlayerOptions {
+        let builder = OfflinePlayerOptions::builder().crossfade_duration(CROSSFADE_SECS);
+        match self {
+            Self::Plain => builder.build(),
+            Self::Eq => builder.eq_layout(generate_log_spaced_bands(10)).build(),
+            Self::EqStretch => builder
+                .eq_layout(generate_log_spaced_bands(10))
+                .warp(
+                    WarpConfig::builder()
+                        .stretch(StretchControls::new(1.0))
+                        .build(),
+                )
+                .build(),
+        }
+    }
+}
+
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
@@ -192,14 +220,23 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
-    let runs = class_runs(&classes);
-    let onset_window = require_first_non_silence(&classes, &runs, setup.queue.current_index());
+    let runs = collect_runs(&classes);
+    let onset_window = require_first_non_silence(&classes, "audio onset must be rendered", || {
+        dump(&[], &runs, None, None, setup.queue.current_index())
+    });
     let b_onset_window = require_first_sustained_descending_window(
         &classes,
         0,
-        &runs,
-        Some(onset_window),
-        setup.queue.current_index(),
+        "sustained Descending B onset must be rendered",
+        || {
+            dump(
+                &[],
+                &runs,
+                Some(onset_window),
+                None,
+                setup.queue.current_index(),
+            )
+        },
     );
     let onset_frame = frame_for_window(onset_window);
     let phase_start_frame = onset_frame.saturating_add(WINDOW_FRAMES);
@@ -208,6 +245,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
         runs: &runs,
         onset_window: Some(onset_window),
         b_onset_window: Some(b_onset_window),
+        switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
     let last_ascending_window = require_last_class_window_before(
@@ -228,6 +266,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
         runs: &runs,
         onset_window: Some(onset_window),
         b_onset_window: Some(b_onset_window),
+        switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
 
@@ -255,8 +294,17 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
         )
     );
 
-    assert_ascending_len(&classes, expected_a_frames, &context);
-    assert_no_ascending_after_b(&classes, &context);
+    assert_ascending_len(
+        &classes,
+        expected_a_frames,
+        "track A ascending length must be exactly one full track before B starts",
+        &context,
+    );
+    assert_no_ascending_after_b(
+        &classes,
+        "B region must not contain Ascending A windows",
+        &context,
+    );
     assert_eq!(
         setup.queue.current_index(),
         Some(1),
@@ -282,32 +330,47 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
-    let runs = class_runs(&classes);
-    let onset_window = require_first_non_silence_with_switch(
+    let runs = collect_runs(&classes);
+    let onset_window = require_first_non_silence(
         &classes,
-        &runs,
-        switch_issue_frame,
-        setup.queue.current_index(),
+        "audio onset must be rendered after late variant switch",
+        || {
+            dump_with_switch(
+                &[],
+                &runs,
+                None,
+                None,
+                switch_issue_frame,
+                setup.queue.current_index(),
+            )
+        },
     );
-    let b_onset_window = require_first_sustained_descending_window_with_switch(
+    let b_onset_window = require_first_sustained_descending_window(
         &classes,
         0,
-        &runs,
-        Some(onset_window),
-        switch_issue_frame,
-        setup.queue.current_index(),
+        "sustained Descending B onset must be rendered after late variant switch",
+        || {
+            dump_with_switch(
+                &[],
+                &runs,
+                Some(onset_window),
+                None,
+                switch_issue_frame,
+                setup.queue.current_index(),
+            )
+        },
     );
     let onset_frame = frame_for_window(onset_window);
     let phase_start_frame = onset_frame.saturating_add(WINDOW_FRAMES);
-    let search_context = SwitchDumpContext {
+    let search_context = ProvenanceDumpContext {
         replays: &[],
         runs: &runs,
         onset_window: Some(onset_window),
         b_onset_window: Some(b_onset_window),
-        switch_issue_frame,
+        switch_issue_frame: Some(switch_issue_frame),
         current_index: setup.queue.current_index(),
     };
-    let last_ascending_window = require_last_class_window_before_with_switch(
+    let last_ascending_window = require_last_class_window_before(
         &classes,
         FrameClass::Ascending,
         b_onset_window,
@@ -320,12 +383,12 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
         last_ascending_end_frame,
         PHASE_TOL_UNITS,
     );
-    let context = SwitchDumpContext {
+    let context = ProvenanceDumpContext {
         replays: &replays,
         runs: &runs,
         onset_window: Some(onset_window),
         b_onset_window: Some(b_onset_window),
-        switch_issue_frame,
+        switch_issue_frame: Some(switch_issue_frame),
         current_index: setup.queue.current_index(),
     };
 
@@ -370,8 +433,17 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
         )
     );
 
-    assert_ascending_len_with_switch(&classes, expected_a_frames, &context);
-    assert_no_ascending_after_b_with_switch(&classes, &context);
+    assert_ascending_len(
+        &classes,
+        expected_a_frames,
+        "track A ascending length must be exactly one full track before B starts after variant switch",
+        &context,
+    );
+    assert_no_ascending_after_b(
+        &classes,
+        "B region must not contain Ascending A windows after late variant switch",
+        &context,
+    );
     assert_eq!(
         setup.queue.current_index(),
         Some(1),
@@ -496,16 +568,25 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
-    let raw_runs = class_runs(&classes);
+    let raw_runs = collect_runs(&classes);
     let collapsed_runs = collapse_resampled_noise_islands(&raw_runs);
     let replays: Vec<Replay> = Vec::new();
-    let onset_window = require_first_non_silence(&classes, &raw_runs, setup.queue.current_index());
+    let onset_window = require_first_non_silence(&classes, "audio onset must be rendered", || {
+        dump(&[], &raw_runs, None, None, setup.queue.current_index())
+    });
     let b_onset_window = require_first_sustained_descending_window(
         &classes,
         0,
-        &raw_runs,
-        Some(onset_window),
-        setup.queue.current_index(),
+        "sustained Descending B onset must be rendered",
+        || {
+            dump(
+                &[],
+                &raw_runs,
+                Some(onset_window),
+                None,
+                setup.queue.current_index(),
+            )
+        },
     );
     let _first_ascending_window = require_ascending_near_onset(
         &classes,
@@ -535,6 +616,7 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
         runs: &raw_runs,
         onset_window: Some(onset_window),
         b_onset_window: Some(b_onset_window),
+        switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
 
@@ -611,48 +693,38 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(temp_dir: TestTempDir) {
+#[case::plain(false, "crossfade FLAC", CrossfadeFlavor::Plain)]
+#[case::eq(false, "crossfade FLAC eq", CrossfadeFlavor::Eq)]
+#[case::eq_stretch(false, "crossfade FLAC eq stretch", CrossfadeFlavor::EqStretch)]
+#[case::resampled(true, "crossfade resampled FLAC", CrossfadeFlavor::Plain)]
+async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
+    temp_dir: TestTempDir,
+    #[case] resampled: bool,
+    #[case] label: &str,
+    #[case] flavor: CrossfadeFlavor,
+) {
     let server = TestServerHelper::new().await;
+    let (sample_rate, collapse_runs, provenance_headroom) = if resampled {
+        (
+            RESAMPLED_RENDER_RATE,
+            collapse_resampled_noise_islands as fn(&[ClassRun]) -> Vec<ClassRun>,
+            true,
+        )
+    } else {
+        (
+            SAMPLE_RATE,
+            collapse_short_unknown_islands as fn(&[ClassRun]) -> Vec<ClassRun>,
+            false,
+        )
+    };
     run_crossfade_flac_case(
         &server,
         &temp_dir,
-        SAMPLE_RATE,
-        collapse_short_unknown_islands,
-        "crossfade FLAC",
-        false,
-        crossfade_player_config,
-    )
-    .await;
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_eq(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    run_crossfade_flac_case(
-        &server,
-        &temp_dir,
-        SAMPLE_RATE,
-        collapse_short_unknown_islands,
-        "crossfade FLAC eq",
-        false,
-        crossfade_eq_player_config,
-    )
-    .await;
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_eq_stretch(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let timestretch = StretchControls::new(1.0);
-
-    run_crossfade_flac_case(
-        &server,
-        &temp_dir,
-        SAMPLE_RATE,
-        collapse_short_unknown_islands,
-        "crossfade FLAC eq stretch",
-        false,
-        || crossfade_eq_stretch_player_config(&timestretch),
+        sample_rate,
+        collapse_runs,
+        label,
+        provenance_headroom,
+        || flavor.player_config(),
     )
     .await;
 }
@@ -695,21 +767,6 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(temp_dir: TestTemp
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_resampled_48k(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    run_crossfade_flac_case(
-        &server,
-        &temp_dir,
-        RESAMPLED_RENDER_RATE,
-        collapse_resampled_noise_islands,
-        "crossfade resampled FLAC",
-        true,
-        crossfade_player_config,
-    )
-    .await;
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let setup = setup_queue(&server, &temp_dir, true).await;
@@ -720,13 +777,12 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
-    let runs = class_runs(&classes);
+    let runs = collect_runs(&classes);
     let b_onset_window = require_first_sustained_descending_window(
         &classes,
         seek_issue_frame,
-        &runs,
-        None,
-        setup.queue.current_index(),
+        "sustained Descending B onset must be rendered",
+        || dump(&[], &runs, None, None, setup.queue.current_index()),
     );
     let seek_complete_window = seek_complete_frame / WINDOW_FRAMES;
     let search_context = ProvenanceDumpContext {
@@ -734,6 +790,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         runs: &runs,
         onset_window: Some(seek_complete_window),
         b_onset_window: Some(b_onset_window),
+        switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
     let last_ascending_window = require_last_class_window_before(
@@ -770,6 +827,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         runs: &runs,
         onset_window: Some(seek_complete_window),
         b_onset_window: Some(b_onset_window),
+        switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
     assert!(
@@ -802,7 +860,11 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         &context,
     );
 
-    assert_no_ascending_after_b(&classes, &context);
+    assert_no_ascending_after_b(
+        &classes,
+        "B region must not contain Ascending A windows",
+        &context,
+    );
     assert_eq!(
         setup.queue.current_index(),
         Some(1),
@@ -829,19 +891,21 @@ async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
         render_until_tone_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE).await;
     let left = deinterleave_left(&rendered, usize::from(CHANNELS));
     let classes = classify_tone_windows(&left, TONE_WINDOW_FRAMES, SAMPLE_RATE);
-    let runs = tone_runs(&classes);
-    let onset_window = require_first_tone_window(
+    let runs = collect_runs(&classes);
+    let onset_window = require_tone_window(
         &classes,
         ToneClass::A440,
         0,
+        1,
         &runs,
         None,
         setup.queue.current_index(),
     );
-    let b_onset_window = require_first_sustained_tone_window(
+    let b_onset_window = require_tone_window(
         &classes,
         ToneClass::B880,
         0,
+        SUSTAINED_DESCENDING_WINDOWS,
         &runs,
         Some(onset_window),
         setup.queue.current_index(),
@@ -974,19 +1038,6 @@ async fn run_crossfade_flac_case(
         collapse_runs,
         label,
     );
-}
-
-fn crossfade_player_config() -> OfflinePlayerOptions {
-    OfflinePlayerOptions::builder()
-        .crossfade_duration(CROSSFADE_SECS)
-        .build()
-}
-
-fn crossfade_eq_player_config() -> OfflinePlayerOptions {
-    OfflinePlayerOptions::builder()
-        .crossfade_duration(CROSSFADE_SECS)
-        .eq_layout(generate_log_spaced_bands(10))
-        .build()
 }
 
 fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> OfflinePlayerOptions {
@@ -1718,8 +1769,13 @@ impl RenderProgress {
 
         if self.descending_seen_at.is_none() {
             self.descending_seen_at = detect_descending_from.and_then(|min_frame| {
-                first_sustained_class_window(&self.classes, FrameClass::Descending, min_frame)
-                    .map(frame_for_window)
+                first_sustained_window(
+                    &self.classes,
+                    FrameClass::Descending,
+                    min_frame,
+                    WINDOW_FRAMES,
+                )
+                .map(frame_for_window)
             });
         }
 
@@ -1767,8 +1823,9 @@ impl ToneRenderProgress {
         }
 
         if self.b_seen_at.is_none() {
-            self.b_seen_at = first_sustained_tone_window(&self.classes, ToneClass::B880, 0)
-                .map(tone_frame_for_window);
+            self.b_seen_at =
+                first_sustained_window(&self.classes, ToneClass::B880, 0, TONE_WINDOW_FRAMES)
+                    .map(tone_frame_for_window);
         }
     }
 
@@ -1780,13 +1837,6 @@ impl ToneRenderProgress {
         self.b_seen_at
             .is_some_and(|frame| self.rendered_frames() >= frame.saturating_add(POST_ROLL_FRAMES))
     }
-}
-
-fn deinterleave_left(samples: &[f32], channels: usize) -> Vec<f32> {
-    samples
-        .chunks_exact(channels)
-        .map(|frame| frame[0])
-        .collect()
 }
 
 fn normalized_left(left: &[f32], current_index: Option<usize>) -> Vec<f32> {
@@ -1861,35 +1911,13 @@ fn classify_tone_window(samples: &[f32], sample_rate: u32) -> ToneClass {
 
 fn require_first_non_silence(
     classes: &[FrameClass],
-    runs: &[ClassRun],
-    current_index: Option<usize>,
+    message: &str,
+    diagnostics: impl FnOnce() -> String,
 ) -> usize {
     classes
         .iter()
         .position(|class| *class != FrameClass::Silence)
-        .unwrap_or_else(|| {
-            panic!(
-                "audio onset must be rendered; {}",
-                dump(&[], runs, None, None, current_index)
-            )
-        })
-}
-
-fn require_first_non_silence_with_switch(
-    classes: &[FrameClass],
-    runs: &[ClassRun],
-    switch_issue_frame: usize,
-    current_index: Option<usize>,
-) -> usize {
-    classes
-        .iter()
-        .position(|class| *class != FrameClass::Silence)
-        .unwrap_or_else(|| {
-            panic!(
-                "audio onset must be rendered after late variant switch; {}",
-                dump_with_switch(&[], runs, None, None, switch_issue_frame, current_index)
-            )
-        })
+        .unwrap_or_else(|| panic!("{message}; {}", diagnostics()))
 }
 
 fn require_ascending_near_onset(
@@ -1922,54 +1950,45 @@ fn require_ascending_near_onset(
     first_ascending_window
 }
 
-fn require_first_tone_window(
+fn require_tone_window(
     classes: &[ToneClass],
     target: ToneClass,
     min_frame: usize,
+    consecutive_windows: usize,
     runs: &[ToneRun],
     onset_window: Option<usize>,
     current_index: Option<usize>,
 ) -> usize {
     let start_window = min_frame / TONE_WINDOW_FRAMES;
     classes
-        .iter()
+        .windows(consecutive_windows)
         .enumerate()
         .skip(start_window)
-        .find_map(|(idx, class)| (*class == target).then_some(idx))
+        .find_map(|(window, slice)| slice.iter().all(|class| *class == target).then_some(window))
         .unwrap_or_else(|| {
+            let requirement = if consecutive_windows == 1 {
+                "target tone class"
+            } else {
+                "sustained target tone class"
+            };
             panic!(
-                "target tone class {target:?} must be rendered from frame {min_frame}; {}",
+                "{requirement} {target:?} must be rendered from frame {min_frame}; {}",
                 tone_dump(runs, onset_window, None, current_index)
             )
         })
 }
 
-fn require_first_sustained_tone_window(
-    classes: &[ToneClass],
-    target: ToneClass,
+fn first_sustained_window<T: Copy + PartialEq>(
+    classes: &[T],
+    target: T,
     min_frame: usize,
-    runs: &[ToneRun],
-    onset_window: Option<usize>,
-    current_index: Option<usize>,
-) -> usize {
-    first_sustained_tone_window(classes, target, min_frame).unwrap_or_else(|| {
-        panic!(
-            "sustained target tone class {target:?} must be rendered from frame {min_frame}; {}",
-            tone_dump(runs, onset_window, None, current_index)
-        )
-    })
-}
-
-fn first_sustained_tone_window(
-    classes: &[ToneClass],
-    target: ToneClass,
-    min_frame: usize,
+    window_frames: usize,
 ) -> Option<usize> {
     classes
         .windows(SUSTAINED_DESCENDING_WINDOWS)
         .enumerate()
         .find_map(|(window, slice)| {
-            let starts_after_gate = tone_frame_for_window(window) >= min_frame;
+            let starts_after_gate = window * window_frames >= min_frame;
             (starts_after_gate && slice.iter().all(|class| *class == target)).then_some(window)
         })
 }
@@ -1977,47 +1996,18 @@ fn first_sustained_tone_window(
 fn require_first_sustained_descending_window(
     classes: &[FrameClass],
     min_frame: usize,
-    runs: &[ClassRun],
-    onset_window: Option<usize>,
-    current_index: Option<usize>,
+    message: &str,
+    diagnostics: impl FnOnce() -> String,
 ) -> usize {
-    first_sustained_class_window(classes, FrameClass::Descending, min_frame).unwrap_or_else(|| {
-        panic!(
-            "sustained Descending B onset must be rendered from frame {min_frame}; {}",
-            dump(&[], runs, onset_window, None, current_index)
-        )
-    })
-}
-
-fn require_first_sustained_descending_window_with_switch(
-    classes: &[FrameClass],
-    min_frame: usize,
-    runs: &[ClassRun],
-    onset_window: Option<usize>,
-    switch_issue_frame: usize,
-    current_index: Option<usize>,
-) -> usize {
-    first_sustained_class_window(classes, FrameClass::Descending, min_frame).unwrap_or_else(|| {
-        panic!(
-            "sustained Descending B onset must be rendered from frame {min_frame} \
-             after late variant switch; {}",
-            dump_with_switch(
-                &[],
-                runs,
-                onset_window,
-                None,
-                switch_issue_frame,
-                current_index,
-            )
-        )
-    })
+    first_sustained_window(classes, FrameClass::Descending, min_frame, WINDOW_FRAMES)
+        .unwrap_or_else(|| panic!("{message} from frame {min_frame}; {}", diagnostics()))
 }
 
 fn require_last_class_window_before(
     classes: &[FrameClass],
     target: FrameClass,
     before_window: usize,
-    context: &ProvenanceDumpContext<'_>,
+    context: &impl DiagnosticContext,
 ) -> usize {
     classes[..before_window]
         .iter()
@@ -2052,38 +2042,6 @@ fn require_run_containing(
         })
 }
 
-fn require_last_class_window_before_with_switch(
-    classes: &[FrameClass],
-    target: FrameClass,
-    before_window: usize,
-    context: &SwitchDumpContext<'_>,
-) -> usize {
-    classes[..before_window]
-        .iter()
-        .rposition(|class| *class == target)
-        .unwrap_or_else(|| {
-            panic!(
-                "target class {target:?} must appear before window {before_window} \
-                 after late variant switch; {}",
-                context.dump()
-            )
-        })
-}
-
-fn first_sustained_class_window(
-    classes: &[FrameClass],
-    target: FrameClass,
-    min_frame: usize,
-) -> Option<usize> {
-    classes
-        .windows(SUSTAINED_DESCENDING_WINDOWS)
-        .enumerate()
-        .find_map(|(window, slice)| {
-            let starts_after_gate = frame_for_window(window) >= min_frame;
-            (starts_after_gate && slice.iter().all(|class| *class == target)).then_some(window)
-        })
-}
-
 fn class_count_between(
     classes: &[FrameClass],
     target: FrameClass,
@@ -2099,10 +2057,13 @@ fn class_count_between(
 fn assert_ascending_len(
     classes: &[FrameClass],
     expected_frames: usize,
-    context: &ProvenanceDumpContext<'_>,
+    label: &str,
+    context: &impl DiagnosticContext,
 ) {
-    let onset_window = context.onset_window.expect("onset window must be set");
-    let b_onset_window = context.b_onset_window.expect("B onset window must be set");
+    let onset_window = context.onset_window().expect("onset window must be set");
+    let b_onset_window = context
+        .b_onset_window()
+        .expect("B onset window must be set");
     let ascending_frames =
         class_count_between(classes, FrameClass::Ascending, onset_window, b_onset_window)
             * WINDOW_FRAMES;
@@ -2110,26 +2071,7 @@ fn assert_ascending_len(
         ascending_frames,
         expected_frames,
         TRACK_FRAME_TOLERANCE,
-        "track A ascending length must be exactly one full track before B starts",
-        context,
-    );
-}
-
-fn assert_ascending_len_with_switch(
-    classes: &[FrameClass],
-    expected_frames: usize,
-    context: &SwitchDumpContext<'_>,
-) {
-    let onset_window = context.onset_window.expect("onset window must be set");
-    let b_onset_window = context.b_onset_window.expect("B onset window must be set");
-    let ascending_frames =
-        class_count_between(classes, FrameClass::Ascending, onset_window, b_onset_window)
-            * WINDOW_FRAMES;
-    assert_close_len_with_switch(
-        ascending_frames,
-        expected_frames,
-        TRACK_FRAME_TOLERANCE,
-        "track A ascending length must be exactly one full track before B starts after variant switch",
+        label,
         context,
     );
 }
@@ -2139,7 +2081,7 @@ fn assert_close_len(
     expected: usize,
     tolerance: usize,
     label: &str,
-    context: &ProvenanceDumpContext<'_>,
+    context: &impl DiagnosticContext,
 ) {
     let lower = expected.saturating_sub(tolerance);
     let upper = expected.saturating_add(tolerance);
@@ -2150,41 +2092,14 @@ fn assert_close_len(
     );
 }
 
-fn assert_close_len_with_switch(
-    actual: usize,
-    expected: usize,
-    tolerance: usize,
-    label: &str,
-    context: &SwitchDumpContext<'_>,
-) {
-    let lower = expected.saturating_sub(tolerance);
-    let upper = expected.saturating_add(tolerance);
-    assert!(
-        actual >= lower && actual <= upper,
-        "{label}: expected {expected} +/- {tolerance} frames, got {actual}; {}",
-        context.dump()
-    );
-}
-
-fn assert_no_ascending_after_b(classes: &[FrameClass], context: &ProvenanceDumpContext<'_>) {
-    let b_onset_window = context.b_onset_window.expect("B onset window must be set");
-    let second_ascending = classes
-        .iter()
-        .enumerate()
-        .skip(b_onset_window + 1)
-        .find_map(|(idx, class)| (*class == FrameClass::Ascending).then_some(idx));
-    assert!(
-        second_ascending.is_none(),
-        "B region must not contain Ascending A windows; second_ascending={second_ascending:?}; {}",
-        context.dump()
-    );
-}
-
-fn assert_no_ascending_after_b_with_switch(
+fn assert_no_ascending_after_b(
     classes: &[FrameClass],
-    context: &SwitchDumpContext<'_>,
+    label: &str,
+    context: &impl DiagnosticContext,
 ) {
-    let b_onset_window = context.b_onset_window.expect("B onset window must be set");
+    let b_onset_window = context
+        .b_onset_window()
+        .expect("B onset window must be set");
     let second_ascending = classes
         .iter()
         .enumerate()
@@ -2192,8 +2107,7 @@ fn assert_no_ascending_after_b_with_switch(
         .find_map(|(idx, class)| (*class == FrameClass::Ascending).then_some(idx));
     assert!(
         second_ascending.is_none(),
-        "B region must not contain Ascending A windows after late variant switch; \
-         second_ascending={second_ascending:?}; {}",
+        "{label}; second_ascending={second_ascending:?}; {}",
         context.dump()
     );
 }
@@ -2209,15 +2123,24 @@ fn assert_crossfade_contract(
     let left_raw = deinterleave_left(rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
-    let raw_runs = class_runs(&classes);
+    let raw_runs = collect_runs(&classes);
     let collapsed_runs = collapse_runs(&raw_runs);
-    let onset_window = require_first_non_silence(&classes, &raw_runs, queue.current_index());
+    let onset_window = require_first_non_silence(&classes, "audio onset must be rendered", || {
+        dump(&[], &raw_runs, None, None, queue.current_index())
+    });
     let b_onset_window = require_first_sustained_descending_window(
         &classes,
         0,
-        &raw_runs,
-        Some(onset_window),
-        queue.current_index(),
+        "sustained Descending B onset must be rendered",
+        || {
+            dump(
+                &[],
+                &raw_runs,
+                Some(onset_window),
+                None,
+                queue.current_index(),
+            )
+        },
     );
     let b_onset_frame = frame_for_window(b_onset_window);
     let render_rate = usize::try_from(render_sample_rate).expect("render sample rate fits usize");
@@ -2286,28 +2209,7 @@ fn assert_no_late_sustained_ascending(
     );
 }
 
-fn class_runs(classes: &[FrameClass]) -> Vec<ClassRun> {
-    let Some((&first, rest)) = classes.split_first() else {
-        return Vec::new();
-    };
-    let mut runs = Vec::new();
-    let mut current = (first, 0, 1);
-
-    for (idx, class) in rest.iter().copied().enumerate() {
-        let window = idx + 1;
-        if class == current.0 {
-            current.2 += 1;
-        } else {
-            runs.push(current);
-            current = (class, window, 1);
-        }
-    }
-
-    runs.push(current);
-    runs
-}
-
-fn tone_runs(classes: &[ToneClass]) -> Vec<ToneRun> {
+fn collect_runs<T: Copy + PartialEq>(classes: &[T]) -> Vec<(T, usize, usize)> {
     let Some((&first, rest)) = classes.split_first() else {
         return Vec::new();
     };

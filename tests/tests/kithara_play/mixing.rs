@@ -11,7 +11,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
-    offline::{OfflineHostHarness, resource_from_reader},
+    offline::{OfflineHostHarness, peak, resource_from_reader},
 };
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -117,10 +117,6 @@ impl MixHarness {
     }
 }
 
-fn peak(samples: &[f32]) -> f32 {
-    samples.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()))
-}
-
 fn assert_near(actual: f32, expected: f32, what: &str) {
     assert!(
         (actual - expected).abs() < TOL,
@@ -129,29 +125,23 @@ fn assert_near(actual: f32, expected: f32, what: &str) {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn two_players_render_exact_weighted_sum() {
-    let values = [0.4, 0.2];
-    let levels = [0.5, 0.25];
-
+#[case::two(&[0.4, 0.2], &[0.5, 0.25], "two-player sum")]
+#[case::four(
+    &[0.4, 0.3, 0.2, 0.1],
+    &[0.5, 0.5, 0.25, 0.25],
+    "four-player sum"
+)]
+async fn players_render_exact_weighted_sum(
+    #[case] values: &[f32],
+    #[case] levels: &[f32],
+    #[case] label: &str,
+) {
     let harness = MixHarness::new(values.len());
-    harness.apply(&levels).expect("apply mix");
-    harness.play(&values);
+    harness.apply(levels).expect("apply mix");
+    harness.play(values);
 
-    let expected = 0.4 * 0.5 + 0.2 * 0.25;
-    assert_near(harness.steady_peak().await, expected, "two-player sum");
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn four_players_render_exact_weighted_sum() {
-    let values = [0.4, 0.3, 0.2, 0.1];
-    let levels = [0.5, 0.5, 0.25, 0.25];
-
-    let harness = MixHarness::new(values.len());
-    harness.apply(&levels).expect("apply mix");
-    harness.play(&values);
-
-    let raw: f32 = values.iter().zip(&levels).map(|(v, l)| v * l).sum::<f32>();
-    assert_near(harness.steady_peak().await, raw, "four-player sum");
+    let expected = values.iter().zip(levels).map(|(v, l)| v * l).sum();
+    assert_near(harness.steady_peak().await, expected, label);
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]

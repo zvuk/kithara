@@ -1,25 +1,19 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
-
-use kithara::{self, events::TrackId, play::Resource, signal::AudioSpec};
-use kithara_integration_tests::offline::{
-    OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
+use kithara::{self, events::TrackId, play::Resource};
+use kithara_integration_tests::{
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
+    test_defaults::Consts,
 };
 
-const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 /// 100 ms of stereo audio at 44.1 kHz: `4_410` frames × 2 channels.
 const TARGET_SAMPLES: usize = 8_820;
 const MAX_RENDERED_FRAMES: usize = 9_000;
 
-fn mock_spec() -> AudioSpec {
-    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"))
-}
-
 fn make_resource(duration_secs: f64) -> Resource {
     resource_from_reader(kithara_integration_tests::audio_mock::TestPcmReader::new(
-        mock_spec(),
+        Consts::AUDIO_SPEC,
         duration_secs,
     ))
 }
@@ -28,7 +22,7 @@ fn make_resource(duration_secs: f64) -> Resource {
 fn offline_harness_smoke() {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder().build(),
-        SAMPLE_RATE,
+        Consts::SAMPLE_RATE,
     );
     harness.with_player(|player| {
         player.insert(make_resource(0.1), TrackId::allocate(), None);

@@ -80,17 +80,21 @@ pub fn create_test_assets() -> TestAssets {
     create_test_assets_with_root("test-hls")
 }
 
-/// Create test assets with custom asset root
-#[cfg(not(target_arch = "wasm32"))]
+/// Create test assets with custom asset root.
 pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
-    let temp_dir = TestTempDir::new();
-    let temp_dir = Arc::new(temp_dir);
-
     let pools = pools();
-    let assets = AssetStore::builder(pools.clone())
-        .backend(StorageBackend::Disk {
+    let builder = AssetStore::builder(pools.clone());
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let (builder, temp_dir) = {
+        let temp_dir = Arc::new(TestTempDir::new());
+        let builder = builder.backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
-        })
+        });
+        (builder, temp_dir)
+    };
+
+    let assets = builder
         .cancel(CancelToken::never())
         .layouts(test_layouts())
         .build();
@@ -99,23 +103,8 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
         assets,
         pools,
         source: test_source(asset_root),
+        #[cfg(not(target_arch = "wasm32"))]
         _temp_dir: temp_dir,
-    }
-}
-
-/// Create test assets with custom asset root (WASM: ephemeral in-memory store)
-#[cfg(target_arch = "wasm32")]
-pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
-    let pools = pools();
-    let assets = AssetStore::builder(pools.clone())
-        .cancel(CancelToken::never())
-        .layouts(test_layouts())
-        .build();
-
-    TestAssets {
-        assets,
-        pools,
-        source: test_source(asset_root),
     }
 }
 

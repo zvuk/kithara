@@ -375,36 +375,27 @@ where
 
 impl<T, F> Drop for WaitFor<'_, T, F> {
     fn drop(&mut self) {
-        match self.rx.pending.take() {
-            Some(Parked::Real(waker)) => {
-                self.rx
-                    .shared
-                    .state
-                    .lock()
-                    .wakers
-                    .retain(|w| !w.will_wake(&waker));
-            }
-            Some(Parked::Engine(handle)) => system::cancel_async_wait(&handle),
-            None => {}
-        }
+        cancel_pending(self.rx);
     }
 }
 
 impl<T> Drop for Changed<'_, T> {
     fn drop(&mut self) {
-        match self.rx.pending.take() {
-            // WHY: Remove EXACTLY our own waker so a signal does not wake a dropped future (mirrors `broadcast`/`mpsc`).
-            Some(Parked::Real(waker)) => {
-                self.rx
-                    .shared
-                    .state
-                    .lock()
-                    .wakers
-                    .retain(|w| !w.will_wake(&waker));
-            }
-            Some(Parked::Engine(handle)) => system::cancel_async_wait(&handle),
-            None => {}
-        }
+        cancel_pending(self.rx);
+    }
+}
+
+fn cancel_pending<T>(rx: &mut Receiver<T>) {
+    match rx.pending.take() {
+        // WHY: Remove EXACTLY our own waker so a signal does not wake a dropped future (mirrors `broadcast`/`mpsc`).
+        Some(Parked::Real(waker)) => rx
+            .shared
+            .state
+            .lock()
+            .wakers
+            .retain(|w| !w.will_wake(&waker)),
+        Some(Parked::Engine(handle)) => system::cancel_async_wait(&handle),
+        None => {}
     }
 }
 

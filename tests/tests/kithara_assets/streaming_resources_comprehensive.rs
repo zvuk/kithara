@@ -1,59 +1,12 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::{AcquisitionResult, AssetScope, AssetStore, ReadSide, StorageBackend, WriteSide},
+    assets::{ReadSide, WriteSide},
     platform::{thread, time::Duration},
 };
-use kithara_integration_tests::{
-    bufpool_ext::{TestPools, pools},
-    temp_dir,
-};
+use kithara_integration_tests::{storage_ext::read_bytes, temp_dir};
 
-use super::support::{LiteralLayout, literal_layouts, resource, source};
-
-/// Helper to read bytes from resource into a new Vec
-fn read_bytes<R: ReadSide>(res: &R, offset: u64, len: usize) -> Vec<u8> {
-    let pools = pools();
-    let mut buf = pools
-        .get_with_len::<u8>(len)
-        .expect("read buffer fits the test pool budget");
-    let n = res.read_at(offset, &mut buf).unwrap_or(0);
-    buf[..n].to_vec()
-}
-
-fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
-    let AcquisitionResult::Pending(w) = acq else {
-        panic!("expected a Pending writer")
-    };
-    w
-}
-
-fn asset_scope_with_root(
-    temp_dir: &kithara_integration_tests::TestTempDir,
-    asset_root: &str,
-) -> AssetScope<TestPools> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        AssetStore::builder(pools())
-            .backend(StorageBackend::Disk {
-                root: (temp_dir.path()).into(),
-            })
-            .layouts(literal_layouts())
-            .build()
-            .scope::<LiteralLayout>(&source(asset_root))
-            .expect("scope")
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = temp_dir;
-        AssetStore::builder(pools())
-            .backend(StorageBackend::Memory)
-            .layouts(literal_layouts())
-            .build()
-            .scope::<LiteralLayout>(&source(asset_root))
-            .expect("scope")
-    }
-}
+use super::support::{asset_scope, pending, resource};
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case(1024, 512, 0)]
@@ -66,7 +19,7 @@ fn streaming_resource_complex_write_patterns(
     #[case] initial_offset: u64,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let scope = asset_scope_with_root(&temp_dir, "streaming-complex");
+    let scope = asset_scope(&temp_dir, "streaming-complex");
 
     let key = scope.key(&resource("data.bin")).unwrap();
 
@@ -100,7 +53,7 @@ fn streaming_resource_concurrent_writes(
     #[case] chunk_size: usize,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let scope = asset_scope_with_root(&temp_dir, "streaming-concurrent");
+    let scope = asset_scope(&temp_dir, "streaming-concurrent");
 
     let key = scope.key(&resource("concurrent.bin")).unwrap();
 
@@ -140,7 +93,7 @@ fn streaming_resource_edge_case_reads(
     #[case] read_size: usize,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let scope = asset_scope_with_root(&temp_dir, "streaming-edge-reads");
+    let scope = asset_scope(&temp_dir, "streaming-edge-reads");
 
     let key = scope.key(&resource("edge.bin")).unwrap();
 
@@ -177,7 +130,7 @@ fn streaming_resource_multiple_range_operations(
     #[case] write_ranges: Vec<(usize, usize)>,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let scope = asset_scope_with_root(&temp_dir, "streaming-multi-range");
+    let scope = asset_scope(&temp_dir, "streaming-multi-range");
 
     let key = scope.key(&resource("multi.bin")).unwrap();
 
@@ -217,7 +170,7 @@ fn streaming_resource_commit_behavior(
     #[case] explicit_commit: bool,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let scope = asset_scope_with_root(&temp_dir, "streaming-commit");
+    let scope = asset_scope(&temp_dir, "streaming-commit");
 
     let key = scope.key(&resource("commit.bin")).unwrap();
 
@@ -273,7 +226,7 @@ fn streaming_resource_zero_length_operations(
     #[case] base_offset: u64,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let scope = asset_scope_with_root(&temp_dir, "streaming-zero-length");
+    let scope = asset_scope(&temp_dir, "streaming-zero-length");
 
     let key = scope.key(&resource("zero.bin")).unwrap();
 

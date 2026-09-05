@@ -50,16 +50,20 @@ fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) -> Vec<f32> {
     rendered
 }
 
-#[kithara::test]
-fn zero_output_sink_is_processed_beside_graph_out() {
+fn render_with_tap() -> (Vec<f32>, Vec<f32>, u64) {
     let harness = playing_harness();
     let mut tap = harness
         .host()
         .enable_mix_tap(ROOMY_CAPACITY)
         .expect("enable mix tap");
-
     let rendered = render_blocks(&harness, BLOCKS);
     let tapped = tap.drain();
+    (rendered, tapped, tap.drops())
+}
+
+#[kithara::test]
+fn zero_output_sink_is_processed_beside_graph_out() {
+    let (rendered, tapped, drops) = render_with_tap();
 
     assert_eq!(
         rendered.len(),
@@ -71,19 +75,12 @@ fn zero_output_sink_is_processed_beside_graph_out() {
         rendered.len(),
         "the zero-output sink must process every block"
     );
-    assert_eq!(tap.drops(), 0);
+    assert_eq!(drops, 0);
 }
 
 #[kithara::test]
 fn mix_tap_matches_graph_out_bit_exactly() {
-    let harness = playing_harness();
-    let mut tap = harness
-        .host()
-        .enable_mix_tap(ROOMY_CAPACITY)
-        .expect("enable mix tap");
-
-    let rendered = render_blocks(&harness, BLOCKS);
-    let tapped = tap.drain();
+    let (rendered, tapped, _) = render_with_tap();
 
     assert!(
         rendered.iter().any(|sample| sample.abs() > 0.0),

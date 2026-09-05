@@ -178,38 +178,6 @@ fn encoded_variants() -> &'static [EncodedVariant] {
     })
 }
 
-fn variants() -> &'static [Variant] {
-    static PACKAGED: OnceLock<Vec<Variant>> = OnceLock::new();
-    PACKAGED.get_or_init(|| {
-        encoded_variants()
-            .iter()
-            .map(|variant| {
-                let boundaries = boundaries_at(
-                    &variant.track,
-                    (1..Consts::SEGMENTS)
-                        .map(|index| {
-                            u64::try_from(index).expect("invariant: segment index fits u64")
-                                * Consts::SEGMENT_MILLIS
-                        })
-                        .chain(std::iter::once(Consts::TOTAL_MILLIS)),
-                );
-                let package =
-                    mux_audio_track_at(&variant.track, GaplessEncoding::None, &boundaries)
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "kithara-test-fixtures: {:?} long HLS mux failed: {error}",
-                                variant.spec.codec
-                            )
-                        });
-                Variant {
-                    package,
-                    spec: variant.spec,
-                }
-            })
-            .collect()
-    })
-}
-
 fn boundaries_at(track: &EncodedTrack, target_millis: impl IntoIterator<Item = u64>) -> Vec<usize> {
     let mut boundaries = Vec::new();
     let mut targets = target_millis.into_iter();
@@ -245,6 +213,18 @@ fn boundaries_at(track: &EncodedTrack, target_millis: impl IntoIterator<Item = u
     boundaries
 }
 
+fn long_boundaries(track: &EncodedTrack) -> Vec<usize> {
+    boundaries_at(
+        track,
+        (1..Consts::SEGMENTS)
+            .map(|index| {
+                u64::try_from(index).expect("invariant: segment index fits u64")
+                    * Consts::SEGMENT_MILLIS
+            })
+            .chain(std::iter::once(Consts::TOTAL_MILLIS)),
+    )
+}
+
 fn gapless_boundaries(track: &EncodedTrack) -> Vec<usize> {
     boundaries_at(track, GaplessConsts::BOUNDARY_MILLIS)
 }
@@ -259,52 +239,43 @@ fn rss_boundaries(track: &EncodedTrack) -> Vec<usize> {
     )
 }
 
+fn package_variants(
+    boundaries_for: impl Fn(&EncodedTrack) -> Vec<usize>,
+    encoding: GaplessEncoding,
+    label: &str,
+) -> Vec<Variant> {
+    encoded_variants()
+        .iter()
+        .map(|variant| {
+            let boundaries = boundaries_for(&variant.track);
+            let package =
+                mux_audio_track_at(&variant.track, encoding, &boundaries).unwrap_or_else(|error| {
+                    panic!(
+                        "kithara-test-fixtures: {:?} {label} HLS mux failed: {error}",
+                        variant.spec.codec
+                    )
+                });
+            Variant {
+                package,
+                spec: variant.spec,
+            }
+        })
+        .collect()
+}
+
+fn variants() -> &'static [Variant] {
+    static PACKAGED: OnceLock<Vec<Variant>> = OnceLock::new();
+    PACKAGED.get_or_init(|| package_variants(long_boundaries, GaplessEncoding::None, "long"))
+}
+
 fn gapless_variants() -> &'static [Variant] {
     static PACKAGED: OnceLock<Vec<Variant>> = OnceLock::new();
-    PACKAGED.get_or_init(|| {
-        encoded_variants()
-            .iter()
-            .map(|variant| {
-                let boundaries = gapless_boundaries(&variant.track);
-                let package =
-                    mux_audio_track_at(&variant.track, GaplessEncoding::Both, &boundaries)
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "kithara-test-fixtures: {:?} gapless HLS mux failed: {error}",
-                                variant.spec.codec
-                            )
-                        });
-                Variant {
-                    package,
-                    spec: variant.spec,
-                }
-            })
-            .collect()
-    })
+    PACKAGED.get_or_init(|| package_variants(gapless_boundaries, GaplessEncoding::Both, "gapless"))
 }
 
 fn rss_variants() -> &'static [Variant] {
     static PACKAGED: OnceLock<Vec<Variant>> = OnceLock::new();
-    PACKAGED.get_or_init(|| {
-        encoded_variants()
-            .iter()
-            .map(|variant| {
-                let boundaries = rss_boundaries(&variant.track);
-                let package =
-                    mux_audio_track_at(&variant.track, GaplessEncoding::None, &boundaries)
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "kithara-test-fixtures: {:?} RSS HLS mux failed: {error}",
-                                variant.spec.codec
-                            )
-                        });
-                Variant {
-                    package,
-                    spec: variant.spec,
-                }
-            })
-            .collect()
-    })
+    PACKAGED.get_or_init(|| package_variants(rss_boundaries, GaplessEncoding::None, "RSS"))
 }
 
 fn encrypt(bytes: &[u8]) -> Vec<u8> {

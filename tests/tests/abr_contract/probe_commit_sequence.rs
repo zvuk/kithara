@@ -1,12 +1,9 @@
 use kithara::{
     self,
-    abr::{AbrMode, AbrReason, AbrState, VariantIndex},
+    abr::{AbrMode, AbrReason, VariantIndex},
     platform::time::Duration,
 };
-
-fn fresh_state(initial: usize) -> AbrState {
-    AbrState::new(AbrMode::Auto(Some(VariantIndex::new(initial))))
-}
+use kithara_integration_tests::abr_fixtures::state as fresh_state;
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 async fn auto_commit_flips_active_variant() {

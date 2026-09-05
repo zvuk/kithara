@@ -1,3 +1,5 @@
+use std::iter;
+
 use kithara::{
     platform::{sync::Arc, time::Duration},
     stream::AudioCodec,
@@ -8,6 +10,15 @@ use crate::{
     CreatedHls, HlsFixtureBuilder, HlsSpec, TestServerHelper,
     fixture_protocol::{DataMode, DelayRule, EncryptionRequest, HttpErrorRule, InitMode},
 };
+
+macro_rules! url_method {
+    ($self:ident, $path:ident, $message:literal, $resolve:expr) => {
+        #[must_use]
+        pub fn url(&$self, $path: &str) -> Url {
+            $resolve.unwrap_or_else(|| panic!(concat!($message, " `{}`"), $path))
+        }
+    };
+}
 
 /// Compatibility fixture that preserves historical byte-exact HLS payloads.
 ///
@@ -44,36 +55,32 @@ impl TestServer {
         }
     }
 
-    #[must_use]
-    pub fn url(&self, path: &str) -> Url {
-        if let Some(url) = match path {
-            "/master.m3u8" => Some(self.plain.master_url()),
-            "/master-init.m3u8" => Some(self.init.master_url()),
-            "/master-encrypted.m3u8" => Some(self.encrypted.master_url()),
-            "/video/480p/playlist.m3u8" => Some(self.plain.media_url(1)),
-            "/v0-init.m3u8" => Some(self.init.media_url(0)),
-            "/v1-init.m3u8" => Some(self.init.media_url(1)),
-            "/v2-init.m3u8" => Some(self.init.media_url(2)),
-            "/v0-encrypted.m3u8" => Some(self.encrypted.media_url(0)),
-            "/key.bin" => Some(self.plain.key_url()),
-            "/aes/key.bin" => Some(self.encrypted.key_url()),
-            "/aes/seg0.bin" => Some(self.encrypted.segment_url(0, 0)),
-            "/custom/base/" | "/base/" => Some(self._helper.url(path)),
-            _ => None,
-        } {
-            return url;
-        }
-        if let Some(url) = route_segment_path(&self.plain, path, "/seg/", ".bin") {
-            return url;
-        }
-        if let Some(url) = route_init_path(&self.init, path, "/init/", ".bin") {
-            return url;
-        }
-        if let Some(url) = route_media_playlist_path(&self.plain, path) {
-            return url;
-        }
-        panic!("unknown TestServer compatibility path `{path}`")
-    }
+    url_method!(
+        self,
+        path,
+        "unknown TestServer compatibility path",
+        route_hls_path(
+            &self.plain,
+            &self.init,
+            path,
+            ".bin",
+            ".bin",
+            |plain, path| {
+                match path {
+                    "/master-init.m3u8" => Some(self.init.master_url()),
+                    "/v0-init.m3u8" => Some(self.init.media_url(0)),
+                    "/v1-init.m3u8" => Some(self.init.media_url(1)),
+                    "/v2-init.m3u8" => Some(self.init.media_url(2)),
+                    "/key.bin" => Some(plain.key_url()),
+                    "/aes/seg0.bin" => Some(self.encrypted.segment_url(0, 0)),
+                    "/custom/base/" | "/base/" => Some(self._helper.url(path)),
+                    _ => None,
+                }
+                .or_else(|| route_compat_alias(plain, &self.encrypted, path))
+                .or_else(|| route_media_playlist_path(plain, path))
+            },
+        )
+    );
 }
 
 #[::kithara::fixture]
@@ -105,47 +112,6 @@ v1-init.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=5120000,RESOLUTION=1920x1080,CODECS="avc1.42c01e,mp4a.40.2"
 v2-init.m3u8
 "#
-}
-
-#[must_use]
-pub fn test_media_playlist(variant: usize) -> String {
-    format!(
-        r#"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXTINF:4.0,
-seg/v{}_0.bin
-#EXTINF:4.0,
-seg/v{}_1.bin
-#EXTINF:4.0,
-seg/v{}_2.bin
-#EXT-X-ENDLIST
-"#,
-        variant, variant, variant
-    )
-}
-
-#[must_use]
-pub fn test_media_playlist_with_init(variant: usize) -> String {
-    format!(
-        r#"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXT-X-MAP:URI="init/v{}.bin"
-#EXTINF:4.0,
-seg/v{}_0.bin
-#EXTINF:4.0,
-seg/v{}_1.bin
-#EXTINF:4.0,
-seg/v{}_2.bin
-#EXT-X-ENDLIST
-"#,
-        variant, variant, variant, variant
-    )
 }
 
 #[must_use]
@@ -278,23 +244,12 @@ impl HlsTestServer {
         (server, handle)
     }
 
-    /// Build a configurable HLS server that withholds the GET (body)
-    /// response for one variant's init (`EXT-X-MAP`) segment until the
-    /// returned handle releases it. A held init parks that variant's
-    /// session construction, so an incoming variant transition cannot
-    /// build or prime while the gate is closed — a release-driven lever
-    /// for "the switch target is still constructing" scenarios.
+    /// Withhold one variant's init (`EXT-X-MAP`) segment until released.
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
-    pub async fn with_init_gate(
-        config: HlsTestServerConfig,
-        variant: usize,
-    ) -> (Self, crate::InitGateHandle) {
-        let server = Self::new(config).await;
-        let handle = server
-            ._helper
-            .register_init_gate(server.created.token(), variant);
-        (server, handle)
+    pub fn init_gate(&self, variant: usize) -> crate::InitGateHandle {
+        self._helper
+            .register_init_gate(self.created.token(), variant)
     }
 
     #[must_use]
@@ -393,7 +348,7 @@ impl HlsTestServer {
             if let Some(data) = init_data {
                 Self::scan_data_mismatches(data, offset, &actual[..init_count], 0, &mut mismatch);
             } else {
-                Self::scan_repeated_mismatches(0, &actual[..init_count], 0, &mut mismatch);
+                Self::scan_mismatches(iter::repeat(0), &actual[..init_count], 0, &mut mismatch);
             }
             checked = init_count;
         }
@@ -426,24 +381,29 @@ impl HlsTestServer {
         mismatch: &mut impl FnMut(usize, u8, u8),
     ) {
         let Ok(data_offset) = usize::try_from(data_offset) else {
-            Self::scan_repeated_mismatches(0, actual, base_index, mismatch);
+            Self::scan_mismatches(iter::repeat(0), actual, base_index, mismatch);
             return;
         };
 
         if data_offset >= data.len() {
-            Self::scan_repeated_mismatches(0, actual, base_index, mismatch);
+            Self::scan_mismatches(iter::repeat(0), actual, base_index, mismatch);
             return;
         }
 
         let data_len = actual.len().min(data.len() - data_offset);
-        Self::scan_slice_mismatches(
-            &data[data_offset..data_offset + data_len],
+        Self::scan_mismatches(
+            data[data_offset..data_offset + data_len].iter().copied(),
             &actual[..data_len],
             base_index,
             mismatch,
         );
         if data_len < actual.len() {
-            Self::scan_repeated_mismatches(0, &actual[data_len..], base_index + data_len, mismatch);
+            Self::scan_mismatches(
+                iter::repeat(0),
+                &actual[data_len..],
+                base_index + data_len,
+                mismatch,
+            );
         }
     }
 
@@ -467,23 +427,25 @@ impl HlsTestServer {
 
             if off_in_seg < prefix_bytes.len() {
                 let prefix_len = n.min(prefix_bytes.len() - off_in_seg);
-                Self::scan_slice_mismatches(
-                    &prefix_bytes[off_in_seg..off_in_seg + prefix_len],
+                Self::scan_mismatches(
+                    prefix_bytes[off_in_seg..off_in_seg + prefix_len]
+                        .iter()
+                        .copied(),
                     &actual[checked..checked + prefix_len],
                     base_index + checked,
                     mismatch,
                 );
                 if prefix_len < n {
-                    Self::scan_repeated_mismatches(
-                        0xFF,
+                    Self::scan_mismatches(
+                        iter::repeat(0xFF),
                         &actual[checked + prefix_len..checked + n],
                         base_index + checked + prefix_len,
                         mismatch,
                     );
                 }
             } else {
-                Self::scan_repeated_mismatches(
-                    0xFF,
+                Self::scan_mismatches(
+                    iter::repeat(0xFF),
                     &actual[checked..checked + n],
                     base_index + checked,
                     mismatch,
@@ -495,28 +457,15 @@ impl HlsTestServer {
         }
     }
 
-    fn scan_slice_mismatches(
-        expected: &[u8],
+    fn scan_mismatches(
+        expected: impl IntoIterator<Item = u8>,
         actual: &[u8],
         base_index: usize,
         mismatch: &mut impl FnMut(usize, u8, u8),
     ) {
-        for (index, (&expected_byte, &actual_byte)) in expected.iter().zip(actual).enumerate() {
+        for (index, (expected_byte, &actual_byte)) in expected.into_iter().zip(actual).enumerate() {
             if actual_byte != expected_byte {
                 mismatch(base_index + index, expected_byte, actual_byte);
-            }
-        }
-    }
-
-    fn scan_repeated_mismatches(
-        expected: u8,
-        actual: &[u8],
-        base_index: usize,
-        mismatch: &mut impl FnMut(usize, u8, u8),
-    ) {
-        for (index, &actual_byte) in actual.iter().enumerate() {
-            if actual_byte != expected {
-                mismatch(base_index + index, expected, actual_byte);
             }
         }
     }
@@ -540,31 +489,29 @@ impl HlsTestServer {
         self.config.segments_per_variant as f64 * self.config.segment_duration_secs
     }
 
-    #[must_use]
-    pub fn url(&self, path: &str) -> Url {
-        if path == "/master.m3u8" {
-            return self.created.master_url();
-        }
-        if path == "/key.bin" {
-            return self.created.key_url();
-        }
-        if let Some(variant_part) = path
-            .strip_prefix("/playlist/v")
-            .and_then(|s| s.strip_suffix(".m3u8"))
-        {
-            let variant: usize = variant_part
-                .parse()
-                .expect("invalid HlsTestServer playlist path");
-            return self.created.media_url(variant);
-        }
-        if let Some(url) = route_segment_path(&self.created, path, "/seg/", ".bin") {
-            return url;
-        }
-        if let Some(url) = route_init_path(&self.created, path, "/init/", "_init.bin") {
-            return url;
-        }
-        panic!("unknown HlsTestServer path `{path}`")
-    }
+    url_method!(
+        self,
+        path,
+        "unknown HlsTestServer path",
+        route_hls_path(
+            &self.created,
+            &self.created,
+            path,
+            ".bin",
+            "_init.bin",
+            |fixture, path| {
+                if path == "/key.bin" {
+                    return Some(fixture.key_url());
+                }
+                let variant = path
+                    .strip_prefix("/playlist/v")?
+                    .strip_suffix(".m3u8")?
+                    .parse()
+                    .expect("invalid HlsTestServer playlist path");
+                Some(fixture.media_url(variant))
+            },
+        )
+    );
 }
 
 /// Preferred packaged-audio fixture for new synthetic HLS audio tests.
@@ -577,34 +524,31 @@ pub struct PackagedTestServer {
 impl PackagedTestServer {
     #[must_use]
     pub async fn new() -> Self {
-        Self::with_delay_rules(Vec::new()).await
+        Self::from_builders(packaged_plain_builder(), packaged_encrypted_builder()).await
     }
 
-    #[must_use]
-    pub fn url(&self, path: &str) -> Url {
-        let aliased = match path {
-            "/master.m3u8" | "/master-init.m3u8" => Some(self.plain.master_url()),
-            "/master-encrypted.m3u8" => Some(self.encrypted.master_url()),
-            "/video/480p/playlist.m3u8" => Some(self.plain.media_url(1)),
-            "/v0-encrypted.m3u8" => Some(self.encrypted.media_url(0)),
-            "/key.bin" | "/aes/key.bin" => Some(self.encrypted.key_url()),
-            "/aes/seg0.m4s" => Some(self.encrypted.segment_url(0, 0)),
-            _ => None,
-        };
-        if let Some(url) = aliased {
-            return url;
-        }
-        if let Some(url) = route_segment_path(&self.plain, path, "/seg/", ".m4s") {
-            return url;
-        }
-        if let Some(url) = route_init_path(&self.plain, path, "/init/", ".mp4") {
-            return url;
-        }
-        if let Some(url) = route_media_playlist_path(&self.plain, path) {
-            return url;
-        }
-        panic!("unknown PackagedTestServer path `{path}`")
-    }
+    url_method!(
+        self,
+        path,
+        "unknown PackagedTestServer path",
+        route_hls_path(
+            &self.plain,
+            &self.plain,
+            path,
+            ".m4s",
+            ".mp4",
+            |plain, path| {
+                match path {
+                    "/master-init.m3u8" => Some(plain.master_url()),
+                    "/key.bin" => Some(self.encrypted.key_url()),
+                    "/aes/seg0.m4s" => Some(self.encrypted.segment_url(0, 0)),
+                    _ => None,
+                }
+                .or_else(|| route_compat_alias(plain, &self.encrypted, path))
+                .or_else(|| route_media_playlist_path(plain, path))
+            },
+        )
+    );
 
     /// Build a server whose plain (3-variant AAC fMP4) fixture applies the
     /// given per-segment server-side delays. Lets tests pin behaviour
@@ -612,20 +556,11 @@ impl PackagedTestServer {
     /// without delays as it is unaffected by these scenarios.
     #[must_use]
     pub async fn with_delay_rules(delay_rules: Vec<DelayRule>) -> Self {
-        let helper = TestServerHelper::new().await;
-        let plain = helper
-            .create_hls(packaged_plain_builder().delay_rules(delay_rules))
-            .await
-            .expect("create packaged plain HLS fixture");
-        let encrypted = helper
-            .create_hls(packaged_encrypted_builder())
-            .await
-            .expect("create packaged encrypted HLS fixture");
-        Self {
-            plain,
-            encrypted,
-            _helper: helper,
-        }
+        Self::from_builders(
+            packaged_plain_builder().delay_rules(delay_rules),
+            packaged_encrypted_builder(),
+        )
+        .await
     }
 
     /// Build a server whose encrypted fixture applies the given HTTP
@@ -633,13 +568,21 @@ impl PackagedTestServer {
     /// built without error rules and stays usable for unaffected tests.
     #[must_use]
     pub async fn with_error_rules(error_rules: Vec<HttpErrorRule>) -> Self {
+        Self::from_builders(
+            packaged_plain_builder(),
+            packaged_encrypted_builder().error_rules(error_rules),
+        )
+        .await
+    }
+
+    async fn from_builders(plain: HlsFixtureBuilder, encrypted: HlsFixtureBuilder) -> Self {
         let helper = TestServerHelper::new().await;
         let plain = helper
-            .create_hls(packaged_plain_builder())
+            .create_hls(plain)
             .await
             .expect("create packaged plain HLS fixture");
         let encrypted = helper
-            .create_hls(packaged_encrypted_builder().error_rules(error_rules))
+            .create_hls(encrypted)
             .await
             .expect("create packaged encrypted HLS fixture");
         Self {
@@ -732,9 +675,8 @@ pub mod abr {
 pub mod compat {
     pub use super::{
         AbrTestServer, HlsTestServer, TestServer, abr, master_playlist, test_master_playlist,
-        test_master_playlist_encrypted, test_master_playlist_with_init, test_media_playlist,
-        test_media_playlist_encrypted, test_media_playlist_with_init, test_segment_data,
-        test_server,
+        test_master_playlist_encrypted, test_master_playlist_with_init,
+        test_media_playlist_encrypted, test_segment_data, test_server,
     };
 }
 
@@ -767,22 +709,44 @@ impl AbrTestServer {
         }
     }
 
-    #[must_use]
-    pub fn url(&self, path: &str) -> Url {
-        if path == "/master.m3u8" {
-            return self.created.master_url();
-        }
-        if let Some(url) = route_media_playlist_path(&self.created, path) {
-            return url;
-        }
-        if let Some(url) = route_segment_path(&self.created, path, "/seg/", ".bin") {
-            return url;
-        }
-        if let Some(url) = route_init_path(&self.created, path, "/init/", ".bin") {
-            return url;
-        }
-        panic!("unknown AbrTestServer path `{path}`")
+    url_method!(
+        self,
+        path,
+        "unknown AbrTestServer path",
+        route_hls_path(
+            &self.created,
+            &self.created,
+            path,
+            ".bin",
+            ".bin",
+            route_media_playlist_path,
+        )
+    );
+}
+
+fn route_compat_alias(plain: &CreatedHls, encrypted: &CreatedHls, path: &str) -> Option<Url> {
+    match path {
+        "/master-encrypted.m3u8" => Some(encrypted.master_url()),
+        "/video/480p/playlist.m3u8" => Some(plain.media_url(1)),
+        "/v0-encrypted.m3u8" => Some(encrypted.media_url(0)),
+        "/aes/key.bin" => Some(encrypted.key_url()),
+        _ => None,
     }
+}
+
+fn route_hls_path(
+    fixture: &CreatedHls,
+    init: &CreatedHls,
+    path: &str,
+    segment_ext: &str,
+    init_ext: &str,
+    alias: impl FnOnce(&CreatedHls, &str) -> Option<Url>,
+) -> Option<Url> {
+    (path == "/master.m3u8")
+        .then(|| fixture.master_url())
+        .or_else(|| alias(fixture, path))
+        .or_else(|| route_segment_path(fixture, path, "/seg/", segment_ext))
+        .or_else(|| route_init_path(init, path, "/init/", init_ext))
 }
 
 /// Resolve a `/<prefix>vX_Y<ext>` segment path on the given fixture.

@@ -1,6 +1,6 @@
 use kithara::ui::render::{Node, ReadValue, Scope, StereoLevels};
 
-use super::value::Value;
+use super::value::{Value, impl_child_node};
 use crate::{gui::ui::scope::deck_index, mix::MixState};
 
 #[derive(Clone, Copy)]
@@ -44,23 +44,21 @@ impl<'a> OutputNode<'a> {
     }
 }
 
-impl<'a> Node<'a> for OutputNode<'a> {
-    fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let value = match segment {
-            "levels" => {
-                let passing = self.passing()?;
-                ReadValue::Stereo(StereoLevels {
-                    l: passing,
-                    r: passing,
-                    volume: self.mix.group_master,
-                })
-            }
-            "volume" => ReadValue::Scalar(f64::from(self.mix.group_master)),
-            _ => return None,
-        };
-        Some(Box::new(Value(value)))
-    }
-}
+impl_child_node!(OutputNode<'a>, |this, segment, _scope| {
+    let value = match segment {
+        "levels" => {
+            let passing = this.passing()?;
+            ReadValue::Stereo(StereoLevels {
+                l: passing,
+                r: passing,
+                volume: this.mix.group_master,
+            })
+        }
+        "volume" => ReadValue::Scalar(f64::from(this.mix.group_master)),
+        _ => return None,
+    };
+    Some(Box::new(Value(value)))
+});
 
 #[derive(Clone, Copy)]
 pub(super) struct PlayerNode<'a> {
@@ -93,18 +91,16 @@ impl<'a> StripsNode<'a> {
     }
 }
 
-impl<'a> Node<'a> for StripsNode<'a> {
-    fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let strip = self.mix.strips.get(deck_index(scope.get("deck")?)?)?;
-        let value = match segment {
-            "muted" => ReadValue::Bool(strip.muted),
-            "trim" => ReadValue::Scalar(f64::from(strip.trim)),
-            "volume" => ReadValue::Stereo(StereoLevels {
-                volume: strip.trim,
-                ..StereoLevels::default()
-            }),
-            _ => return None,
-        };
-        Some(Box::new(Value(value)))
-    }
-}
+impl_child_node!(StripsNode<'a>, |this, segment, scope| {
+    let strip = this.mix.strips.get(deck_index(scope.get("deck")?)?)?;
+    let value = match segment {
+        "muted" => ReadValue::Bool(strip.muted),
+        "trim" => ReadValue::Scalar(f64::from(strip.trim)),
+        "volume" => ReadValue::Stereo(StereoLevels {
+            volume: strip.trim,
+            ..StereoLevels::default()
+        }),
+        _ => return None,
+    };
+    Some(Box::new(Value(value)))
+});

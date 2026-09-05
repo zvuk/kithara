@@ -1,27 +1,17 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
-    events::{AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::{Duration, Instant, sleep, timeout},
-        tokio,
-    },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    events::{Event, EventReceiver, PlayerEvent},
+    platform::time::{Duration, Instant, timeout},
+    queue::{QueueControl, Transition},
 };
-use kithara_app::{
-    baked,
-    config::AppConfig,
-    pools::{AppPools, build as app_pools},
+use kithara_app::pools::AppPools;
+use kithara_integration_tests::{
+    kithara,
+    offline::{AppQueueFixture, insecure_app_queue},
+    waits::wait_for_loader_done_event,
 };
-use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineQueue};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 
 /// `cdn-hls-slicer.zvuk.com` → `zvuk-prod` provider in baked `app.yaml`.
@@ -56,114 +46,8 @@ const OUTCOME_BUDGET: Duration = Duration::from_secs(45);
 /// chunk's timestamp can't accidentally satisfy it.
 const MIN_POST_SEEK_GROWTH_SECS: f64 = 1.0;
 
-struct Ctx {
-    config: AppConfig,
-    queue: OfflineQueue<AppPools>,
-    cache: TestTempDir,
-}
-
-async fn build_ctx() -> Ctx {
-    let pools = app_pools().expect("build app pool region");
-    let net = NetOptions::builder().is_insecure(true).build();
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
-            .build(),
-    );
-    let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let shutdown = CancelToken::never();
-    let store = AssetStore::builder(pools.clone())
-        .cancel(shutdown.child())
-        .backend(StorageBackend::default())
-        .flush_hub(flush_hub)
-        .layouts(baked::build_baked_asset_layouts())
-        .build();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::builder(pools)
-            .cancel(shutdown.child())
-            .build(),
-    );
-    let session_pools = worker.pools().clone();
-    let config = AppConfig::builder()
-        .downloader(downloader)
-        .shutdown(shutdown)
-        .worker(worker.clone())
-        .store(store)
-        .build();
-    let session_config = HostConfig::offline(session_pools)
-        .pacing(Duration::from_millis(10))
-        .build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session_config.sample_rate())
-            .worker(worker)
-            .build(),
-    );
-    let queue = OfflineQueue::new(
-        session_config,
-        Queue::new(QueueConfig::builder().player(player).build()),
-    )
-    .expect("create product offline queue");
-
-    let q = queue.control();
-    tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            let _ = q.tick();
-        }
-    });
-
-    Ctx {
-        config,
-        queue,
-        cache: TestTempDir::new(),
-    }
-}
-
-fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSource<AppPools> {
-    super::app_track_source(
-        url,
-        &ctx.config,
-        super::app_disk_asset_store(&ctx.config, ctx.cache.path()),
-        backend,
-        AbrMode::Auto(None),
-        None,
-    )
-}
-
-async fn wait_for_loaded(
-    rx: &mut EventReceiver,
-    queue: &QueueControl<AppPools>,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    use kithara::platform::tokio::sync::broadcast::error::RecvError;
-    if let Some(entry) = queue.track(track_id) {
-        match &entry.status {
-            TrackStatus::Loaded => return Ok(()),
-            TrackStatus::Failed(err) => return Err(format!("Failed before subscribe: {err}")),
-            _ => {}
-        }
-    }
-    timeout(deadline, async {
-        loop {
-            let ev = match rx.recv().await {
-                Ok(env) => env.event,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            };
-            if let Event::Queue(QueueEvent::TrackStatusChanged { id, status }) = ev
-                && id == track_id
-            {
-                match status {
-                    TrackStatus::Loaded => return Ok(()),
-                    TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
-                    _ => continue,
-                }
-            }
-        }
-    })
-    .await
-    .map_err(|_| format!("no Loaded within {deadline:?}"))?
+async fn build_ctx() -> AppQueueFixture {
+    insecure_app_queue()
 }
 
 /// Wait until the decoder has produced at least one PCM chunk for the
@@ -249,7 +133,7 @@ enum AdvanceTrigger {
 }
 
 struct ScrubObservation<'a> {
-    queue: &'a Queue<AppPools>,
+    queue: &'a QueueControl<AppPools>,
     rx: &'a mut EventReceiver,
     recorder: &'a Recorder,
     event_log: &'a mut Vec<TimedEvent>,
@@ -409,18 +293,30 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
 
     let _before_id = ctx
         .queue
-        .append(build_track_source(SENTINEL_BEFORE, &ctx, backend))
+        .append(super::source_helper::app_drm_track_source(
+            SENTINEL_BEFORE,
+            &ctx,
+            backend,
+        ))
         .expect("append leading sentinel");
     let target_id = ctx
         .queue
-        .append(build_track_source(TARGET_TRACK, &ctx, backend))
+        .append(super::source_helper::app_drm_track_source(
+            TARGET_TRACK,
+            &ctx,
+            backend,
+        ))
         .expect("append scrub target");
     let _after_id = ctx
         .queue
-        .append(build_track_source(SENTINEL_AFTER, &ctx, backend))
+        .append(super::source_helper::app_drm_track_source(
+            SENTINEL_AFTER,
+            &ctx,
+            backend,
+        ))
         .expect("append trailing sentinel");
 
-    wait_for_loaded(&mut rx, &ctx.queue, target_id, LOAD_BUDGET)
+    wait_for_loader_done_event(&mut rx, &ctx.queue, target_id, LOAD_BUDGET)
         .await
         .unwrap_or_else(|e| panic!("Loaded never arrived for {TARGET_TRACK}: {e}"));
 

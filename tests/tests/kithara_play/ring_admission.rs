@@ -39,7 +39,7 @@ fn config(capacity_blocks: usize) -> ManualRingConfig {
 
 fn tone_session(capacity_blocks: usize) -> ManualRingSession {
     ManualRingSession::start_with(config(capacity_blocks), |ctx| {
-        install_stereo_source(ctx, DeterministicToneNode)
+        install_stereo_source(ctx, DeterministicToneNode::default())
             .map(|_| ())
             .map_err(RingSessionError::Setup)
     })

@@ -9,19 +9,14 @@ use kithara::{
     events::AbrMode,
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::{Duration, sleep},
-        tokio,
-    },
+    platform::{CancelToken, sync::Arc, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
@@ -37,16 +32,6 @@ struct Session {
     store: AssetStore<TestPools>,
     flush_hub: Arc<FlushHub>,
     tick: tokio::task::JoinHandle<()>,
-}
-
-#[kithara::flash(true)]
-async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
-    loop {
-        sleep(Duration::from_millis(50)).await;
-        if queue.tick().is_err() {
-            break;
-        }
-    }
 }
 
 fn build_session(cache_path: &Path) -> Session {
@@ -81,7 +66,10 @@ fn build_session(cache_path: &Path) -> Session {
         ),
     )
     .expect("create product offline queue");
-    let tick = tokio::task::spawn(drive_queue_ticks(queue.control()));
+    let tick = tokio::task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(50),
+    ));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),

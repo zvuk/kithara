@@ -12,12 +12,12 @@ use kithara::{
     self,
     events::{Event, ItemRole, PlayerEvent, SlotId, TrackId, TrackRef, TrackStatus},
     platform::sync::Arc,
-    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    queue::{QueueControl, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader_with_src},
+    offline::{OfflinePlayerHarness, offline_queue_fixture, resource_from_reader_with_src},
 };
 
 use crate::bufpool_ext::TestPools;
@@ -30,21 +30,6 @@ const WARMUP_BLOCKS: usize = 64;
 const TRACK_SECS: f64 = 30.0;
 const LOUD: f32 = 0.80;
 const REPEATED_SRC: &str = "https://example.com/repeat.mp3";
-
-fn make_fixture() -> (OfflinePlayerHarness, QueueControl<TestPools>) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .crossfade_duration(0.0)
-            .build(),
-        SAMPLE_RATE,
-    );
-    let config = QueueConfig::builder()
-        .player(harness.take_player())
-        .should_autoplay(false)
-        .build();
-    let queue = harness.insert_control(Queue::new(config));
-    (harness, queue)
-}
 
 fn load(queue: &QueueControl<TestPools>, id: TrackId) {
     let spec = AudioSpec::new(
@@ -87,7 +72,7 @@ fn fixture_playing_the_second_copy() -> (
     TrackId,
     TrackId,
 ) {
-    let (harness, queue) = make_fixture();
+    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE);
     let first = queue.append(REPEATED_SRC).expect("append first copy");
     let playing = queue.append(REPEATED_SRC).expect("append second copy");
     load(&queue, first);
@@ -111,29 +96,19 @@ fn publish_leading_failure(harness: &OfflinePlayerHarness, id: TrackId) {
 }
 
 #[kithara::test(tokio)]
-async fn a_failure_flags_the_entry_that_played() {
-    let (harness, queue, _first, playing) = fixture_playing_the_second_copy();
-
-    publish_leading_failure(&harness, playing);
-    render_loop(&queue, &harness, WARMUP_BLOCKS);
-
-    let status = status_of(&queue, playing);
-    assert!(
-        matches!(status, TrackStatus::Failed(_)),
-        "the entry that played must be the one flagged: {status:?}"
-    );
-}
-
-#[kithara::test(tokio)]
-async fn a_failure_spares_an_entry_that_only_shares_the_url() {
+#[case::played_entry(true)]
+#[case::same_url_entry(false)]
+async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) {
     let (harness, queue, first, playing) = fixture_playing_the_second_copy();
 
     publish_leading_failure(&harness, playing);
     render_loop(&queue, &harness, WARMUP_BLOCKS);
 
-    let status = status_of(&queue, first);
-    assert!(
-        !matches!(status, TrackStatus::Failed(_)),
-        "an entry that never played must not be flagged for sharing a URL: {status:?}"
+    let id = if played_entry { playing } else { first };
+    let status = status_of(&queue, id);
+    assert_eq!(
+        matches!(status, TrackStatus::Failed(_)),
+        played_entry,
+        "only the entry that played may be flagged: {status:?}"
     );
 }

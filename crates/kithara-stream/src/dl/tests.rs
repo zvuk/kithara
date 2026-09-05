@@ -1174,14 +1174,7 @@ async fn spawn_slow_server(delay_ms: u64) -> Url {
             "ok"
         }),
     );
-    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    tokio_spawn(async move {
-        axum::serve(listener, app.into_make_service())
-            .await
-            .expect("serve");
-    });
-    Url::parse(&format!("http://{addr}/data")).expect("url")
+    spawn_server(app).await
 }
 
 async fn spawn_slow_body_server(delay_ms: u64) -> Url {
@@ -1194,6 +1187,10 @@ async fn spawn_slow_body_server(delay_ms: u64) -> Url {
             }))
         }),
     );
+    spawn_server(app).await
+}
+
+async fn spawn_server(app: Router) -> Url {
     let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
     tokio_spawn(async move {

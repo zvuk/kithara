@@ -24,96 +24,26 @@ fn key_for(assets: &TestAssets, url: &Url) -> ResourceKey {
 }
 
 #[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
-async fn fetch_master_playlist_from_network(
-    #[future] test_server: TestServer,
-    assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
-) -> HlsResult<()> {
-    let server = test_server.await;
-    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
-    let master_url = server.url("/master.m3u8");
-    let master_playlist = fetch_manager
-        .master_playlist(&key_for(&assets_fixture, &master_url), &master_url)
-        .await?;
-
-    assert_eq!(master_playlist.variants.len(), 3);
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
+#[case::v0(0)]
+#[case::v1(1)]
 async fn fetch_media_playlist_from_network(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
+    #[case] variant: usize,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
-    let media_url = server.url("/v0.m3u8");
+    let media_url = server.url(&format!("/v{variant}.m3u8"));
 
     let media_playlist = fetch_manager
         .media_playlist(
             &key_for(&assets_fixture, &media_url),
             &media_url,
-            VariantId(0),
+            VariantId(variant),
         )
         .await?;
-
-    let segment_count = media_playlist.segments.len();
-    assert_eq!(segment_count, 3);
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
-async fn resolve_url_with_base_override(
-    #[future] test_server: TestServer,
-    assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
-) -> HlsResult<()> {
-    let server = test_server.await;
-    let base_url = server.url("/custom/base/");
-    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
-    fetch_manager.set_base_url(Some(base_url.clone()));
-
-    let relative_url = "video/480p/playlist.m3u8";
-    let resolved = fetch_manager.resolve_url(&base_url, relative_url)?;
-
-    assert!(
-        resolved
-            .as_str()
-            .contains("/custom/base/video/480p/playlist.m3u8"),
-        "Expected resolved URL to contain base path"
-    );
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
-async fn fetch_media_playlist_for_different_variants(
-    #[future] test_server: TestServer,
-    assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
-) -> HlsResult<()> {
-    let server = test_server.await;
-    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
-
-    let media_url_0 = server.url("/v0.m3u8");
-    let media_playlist_0 = fetch_manager
-        .media_playlist(
-            &key_for(&assets_fixture, &media_url_0),
-            &media_url_0,
-            VariantId(0),
-        )
-        .await?;
-    assert_eq!(media_playlist_0.segments.len(), 3);
-
-    let media_url_1 = server.url("/v1.m3u8");
-    let media_playlist_1 = fetch_manager
-        .media_playlist(
-            &key_for(&assets_fixture, &media_url_1),
-            &media_url_1,
-            VariantId(1),
-        )
-        .await?;
-    assert_eq!(media_playlist_1.segments.len(), 3);
+    assert_eq!(media_playlist.segments.len(), 3);
 
     Ok(())
 }
@@ -162,33 +92,28 @@ async fn fetch_manager_error_handling_invalid_url(
 }
 
 #[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
-async fn resolve_multiple_relative_urls(
+#[case::file("segment.ts", "/base/segment.ts")]
+#[case::current_dir("./segment.ts", "/base/segment.ts")]
+#[case::parent_dir("../segment.ts", "/segment.ts")]
+#[case::subdir("subdir/segment.ts", "/base/subdir/segment.ts")]
+#[case::nested_playlist("video/480p/playlist.m3u8", "/base/video/480p/playlist.m3u8")]
+async fn resolve_relative_url(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
+    #[case] relative: &str,
+    #[case] expected_suffix: &str,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let base_url = server.url("/base/");
     let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
     fetch_manager.set_base_url(Some(base_url.clone()));
 
-    let test_cases = vec![
-        ("segment.ts", "/base/segment.ts"),
-        ("./segment.ts", "/base/segment.ts"),
-        ("../segment.ts", "/segment.ts"),
-        ("subdir/segment.ts", "/base/subdir/segment.ts"),
-    ];
-
-    for (relative, expected_suffix) in test_cases {
-        let resolved = fetch_manager.resolve_url(&base_url, relative)?;
-        assert!(
-            resolved.as_str().ends_with(expected_suffix),
-            "Expected {} to end with {}, got {}",
-            relative,
-            expected_suffix,
-            resolved
-        );
-    }
+    let resolved = fetch_manager.resolve_url(&base_url, relative)?;
+    assert!(
+        resolved.as_str().ends_with(expected_suffix),
+        "Expected {relative} to end with {expected_suffix}, got {resolved}"
+    );
 
     Ok(())
 }

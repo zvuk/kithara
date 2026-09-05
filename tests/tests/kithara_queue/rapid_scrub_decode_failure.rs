@@ -21,7 +21,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     temp_dir,
 };
 
@@ -184,16 +184,6 @@ struct Harness {
     tick: tokio::task::JoinHandle<()>,
 }
 
-#[kithara::flash(true)]
-async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
-    loop {
-        sleep(Duration::from_millis(50)).await;
-        if queue.tick().is_err() {
-            break;
-        }
-    }
-}
-
 impl Harness {
     async fn setup(temp_dir: &TestTempDir) -> Self {
         // AES-128 key + IV matching `packaged_encrypted_builder` in
@@ -278,7 +268,10 @@ impl Harness {
         )
         .expect("create product offline queue");
 
-        let tick = tokio::task::spawn(drive_queue_ticks(queue.control()));
+        let tick = tokio::task::spawn(drive_queue_ticks(
+            queue.control(),
+            Duration::from_millis(50),
+        ));
 
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid URL"))
             .downloader(downloader)

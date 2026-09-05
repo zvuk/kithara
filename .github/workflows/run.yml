@@ -32,6 +32,8 @@ on:
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
   CARGO_TERM_COLOR: always
+  # Matrix selection compiles xtask, so keep that build across ephemeral jobs.
+  CARGO_TARGET_DIR: /cache/target
   RUST_BACKTRACE: 1
 
 jobs:

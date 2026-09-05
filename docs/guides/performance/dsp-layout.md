@@ -11,7 +11,7 @@ slower, not faster. Keep `mul_add` on aarch64 and write plain FMA-contractable
 arithmetic on the scalar wasm and x86 paths, or guarantee the target feature.
 `powf(2.0)` -> `powi(2)` and `hypot` are already used correctly.
 *tier: hot | detector: manual (clippy's flop lints are nursery, not enabled) |
-present in kithara (`ScalarBiquad`)*
+present in kithara (`backend::Filter`)*
 
 **A serial float reduction will not vectorize; the fast-math escape is UB.**
 LLVM may not reassociate an `f32` add chain, so a naive sum stays scalar. The
@@ -38,7 +38,7 @@ thread (aarch64 FPCR, x86_64 MXCSR) and clamp the state below a threshold, or
 keep the silence fast path that freezes state. wasm32 has *no* FTZ mechanism and
 Apple aarch64 already handles subnormals better, so measure per target and prefer
 algorithmic suppression. *tier: hot | detector: manual | present in kithara
-(`DirectForm1`, `ScalarBiquad` state)*
+(`DirectForm1`, `backend::Filter` state)*
 
 **Keep the kernel body branch-free and side-effect-free.** A log, an allocation,
 or an inline `format!` mid-kernel blocks autovectorization and may allocate on

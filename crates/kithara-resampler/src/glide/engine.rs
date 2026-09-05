@@ -1,7 +1,11 @@
-use kithara_bufpool::SampleBuffer;
+use std::num::NonZeroUsize;
 
-use super::GlideConfig;
-use crate::ResamplerMode;
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use num_traits::cast::ToPrimitive;
+use smallvec::SmallVec;
+
+use super::{GlideConfig, GlideInterpolation};
+use crate::{ResamplerBuildError, ResamplerError, ResamplerMode};
 
 pub(in crate::glide) struct RenderRequest<'a, 'out, 'channel> {
     pub(in crate::glide) input: &'a [&'a [f32]],
@@ -13,235 +17,252 @@ pub(in crate::glide) struct RenderRequest<'a, 'out, 'channel> {
     pub(in crate::glide) produced: usize,
 }
 
+struct FilterParams {
+    cutoff_to_nyquist: f64,
+    low_pass_q: f64,
+}
+
+const FILTER_PARAMS: FilterParams = FilterParams {
+    cutoff_to_nyquist: 0.9,
+    low_pass_q: std::f64::consts::FRAC_1_SQRT_2,
+};
+
+#[derive(fieldwork::Fieldwork)]
+pub(in crate::glide) struct GlideEngine {
+    filter_cutoff: Option<f64>,
+    positions: SampleBuffer,
+    filtered: SmallVec<[SampleBuffer; 8]>,
+    filters: SmallVec<[Option<backend::Filter>; 8]>,
+    padded: SmallVec<[SampleBuffer; 8]>,
+    max_input_frames: usize,
+    #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
+    max_output_frames: usize,
+}
+
+impl GlideEngine {
+    pub(in crate::glide) fn new<S>(
+        pools: &PoolRegion<S>,
+        channels: NonZeroUsize,
+        max_input_frames: usize,
+        max_ratio_adjustment: f64,
+        backend: &'static str,
+    ) -> Result<Self, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
+        let max_output_frames = max_output_frames(max_input_frames, max_ratio_adjustment);
+        let mut positions = pools.get::<f32>();
+        ensure_build_len(&mut positions, max_output_frames, backend)?;
+        let mut padded = SmallVec::new();
+        let mut filtered = SmallVec::new();
+        let mut filters = SmallVec::new();
+        for _ in 0..channels.get() {
+            let mut padded_channel = pools.get::<f32>();
+            ensure_build_len(
+                &mut padded_channel,
+                max_input_frames.saturating_add(2),
+                backend,
+            )?;
+            padded.push(padded_channel);
+
+            let mut filtered_channel = pools.get::<f32>();
+            ensure_build_len(
+                &mut filtered_channel,
+                max_input_frames.saturating_add(2),
+                backend,
+            )?;
+            filtered.push(filtered_channel);
+            filters.push(None);
+        }
+        Ok(Self {
+            positions,
+            padded,
+            filtered,
+            filters,
+            max_input_frames,
+            max_output_frames,
+            filter_cutoff: None,
+        })
+    }
+
+    fn ensure_filters(&mut self, sample_rate: f64, cutoff: f64) -> Result<(), ResamplerError> {
+        if self
+            .filter_cutoff
+            .is_some_and(|current| (current - cutoff).abs() < 1.0)
+        {
+            return Ok(());
+        }
+        for filter in &mut self.filters {
+            *filter = backend::new_filter(sample_rate, cutoff, FILTER_PARAMS.low_pass_q);
+            if filter.is_none() {
+                return Err(ResamplerError::Backend {
+                    op: backend::FILTER_OP,
+                    detail: backend::FILTER_ERROR.into(),
+                });
+            }
+        }
+        self.filter_cutoff = Some(cutoff);
+        Ok(())
+    }
+
+    pub(in crate::glide) fn positions_mut(
+        &mut self,
+        frames: usize,
+    ) -> Result<&mut [f32], ResamplerError> {
+        if frames > self.max_output_frames {
+            return Err(ResamplerError::Backend {
+                op: backend::POSITIONS_OP,
+                detail: "output frame request exceeds preallocated position buffer".into(),
+            });
+        }
+        Ok(&mut self.positions[..frames])
+    }
+
+    pub(in crate::glide) fn render(
+        &mut self,
+        request: RenderRequest<'_, '_, '_>,
+    ) -> Result<(), ResamplerError> {
+        let RenderRequest {
+            input,
+            previous,
+            output,
+            produced,
+            config,
+            filter_ratio,
+            mode,
+        } = request;
+        let input_frames = input.first().map_or(0, |channel| channel.len());
+        if input_frames > self.max_input_frames {
+            return Err(ResamplerError::Backend {
+                op: backend::INPUT_OP,
+                detail: "input frame count exceeds preallocated source buffer".into(),
+            });
+        }
+        let sample_rate = sample_rate(mode);
+        let cutoff = config
+            .anti_alias
+            .then(|| low_pass_cutoff(sample_rate, filter_ratio))
+            .filter(|_| filter_ratio > 1.0);
+        if let Some(cutoff) = cutoff {
+            self.ensure_filters(sample_rate, cutoff)?;
+        }
+
+        for (channel_idx, source) in input.iter().enumerate() {
+            let padded = &mut self.padded[channel_idx];
+            padded[0] = previous[channel_idx][0];
+            backend::copy(source, &mut padded[1..input_frames.saturating_add(1)]);
+            padded[input_frames.saturating_add(1)] = 0.0;
+
+            let source = if cutoff.is_some() {
+                let filtered = &mut self.filtered[channel_idx];
+                let filter =
+                    self.filters[channel_idx]
+                        .as_mut()
+                        .ok_or_else(|| ResamplerError::Backend {
+                            op: backend::FILTER_OP,
+                            detail: "anti-alias filter was not initialized".into(),
+                        })?;
+                backend::filter(filter, &padded[..input_frames.saturating_add(2)], filtered);
+                &filtered[..input_frames.saturating_add(2)]
+            } else {
+                &padded[..input_frames.saturating_add(2)]
+            };
+
+            backend::interpolate(
+                config.interpolation,
+                source,
+                &self.positions[..produced],
+                &mut output[channel_idx][..produced],
+            );
+        }
+        Ok(())
+    }
+
+    pub(in crate::glide) fn reset(&mut self) {
+        for filter in self.filters.iter_mut().flatten() {
+            backend::reset(filter);
+        }
+    }
+}
+
+fn ensure_build_len(
+    buffer: &mut SampleBuffer,
+    frames: usize,
+    backend: &'static str,
+) -> Result<(), ResamplerBuildError> {
+    buffer
+        .ensure_len(frames)
+        .map_err(|err| ResamplerBuildError::BackendBuild {
+            backend,
+            detail: err.to_string(),
+        })
+}
+
+fn low_pass_cutoff(sample_rate: f64, ratio: f64) -> f64 {
+    FILTER_PARAMS.cutoff_to_nyquist * sample_rate / (2.0 * ratio.max(1.0))
+}
+
+fn max_output_frames(input_frames: usize, max_ratio_adjustment: f64) -> usize {
+    let Some(input_frames) = input_frames.to_f64() else {
+        return usize::MAX;
+    };
+    let frames = (input_frames * max_ratio_adjustment).ceil();
+    frames.to_usize().unwrap_or(usize::MAX).saturating_add(2)
+}
+
+fn sample_rate(mode: ResamplerMode) -> f64 {
+    match mode {
+        ResamplerMode::FixedRatio {
+            source_sample_rate, ..
+        } => f64::from(source_sample_rate.get()),
+        ResamplerMode::VariableRatio { sample_rate, .. } => f64::from(sample_rate.get()),
+    }
+}
+
 #[cfg(all(
     feature = "apple-accelerate",
     any(target_os = "macos", target_os = "ios")
 ))]
-mod imp {
-    use std::num::NonZeroUsize;
-
+mod backend {
     use kithara_apple::accelerate::{
         BiquadFilter, copy_f32, linear_interpolate_f32, quadratic_interpolate_f32,
     };
-    use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-    use num_traits::cast::ToPrimitive;
-    use smallvec::SmallVec;
 
-    use super::{super::GlideInterpolation, RenderRequest};
-    use crate::{ResamplerBuildError, ResamplerError, ResamplerMode};
+    use super::GlideInterpolation;
 
-    struct FilterParams {
-        cutoff_to_nyquist: f64,
-        low_pass_q: f64,
+    pub(super) type Filter = BiquadFilter;
+
+    pub(super) const FILTER_OP: &str = "glide accelerate filter";
+    pub(super) const FILTER_ERROR: &str = "failed to create vDSP low-pass filter";
+    pub(super) const INPUT_OP: &str = "glide accelerate input";
+    pub(super) const POSITIONS_OP: &str = "glide accelerate positions";
+
+    pub(super) fn copy(source: &[f32], target: &mut [f32]) {
+        copy_f32(source, target);
     }
 
-    const FILTER_PARAMS: FilterParams = FilterParams {
-        cutoff_to_nyquist: 0.9,
-        low_pass_q: std::f64::consts::FRAC_1_SQRT_2,
-    };
-
-    #[derive(fieldwork::Fieldwork)]
-    pub(in crate::glide) struct GlideEngine {
-        filter_cutoff: Option<f64>,
-        positions: SampleBuffer,
-        filtered: SmallVec<[SampleBuffer; 8]>,
-        filters: SmallVec<[Option<BiquadFilter>; 8]>,
-        padded: SmallVec<[SampleBuffer; 8]>,
-        max_input_frames: usize,
-        #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
-        max_output_frames: usize,
+    pub(super) fn filter(filter: &mut Filter, source: &[f32], target: &mut [f32]) {
+        filter.process(source, target);
     }
 
-    impl GlideEngine {
-        pub(in crate::glide) fn new<S>(
-            pools: &PoolRegion<S>,
-            channels: NonZeroUsize,
-            max_input_frames: usize,
-            max_ratio_adjustment: f64,
-            backend: &'static str,
-        ) -> Result<Self, ResamplerBuildError>
-        where
-            S: HasPool<f32>,
-        {
-            let max_output_frames = max_output_frames(max_input_frames, max_ratio_adjustment);
-            let mut positions = pools.get::<f32>();
-            ensure_build_len(&mut positions, max_output_frames, backend)?;
-            let mut padded = SmallVec::new();
-            let mut filtered = SmallVec::new();
-            let mut filters = SmallVec::new();
-            for _ in 0..channels.get() {
-                let mut padded_channel = pools.get::<f32>();
-                ensure_build_len(
-                    &mut padded_channel,
-                    max_input_frames.saturating_add(2),
-                    backend,
-                )?;
-                padded.push(padded_channel);
-
-                let mut filtered_channel = pools.get::<f32>();
-                ensure_build_len(
-                    &mut filtered_channel,
-                    max_input_frames.saturating_add(2),
-                    backend,
-                )?;
-                filtered.push(filtered_channel);
-                filters.push(None);
-            }
-            Ok(Self {
-                positions,
-                padded,
-                filtered,
-                filters,
-                max_input_frames,
-                max_output_frames,
-                filter_cutoff: None,
-            })
-        }
-
-        fn ensure_filters(&mut self, sample_rate: f64, cutoff: f64) -> Result<(), ResamplerError> {
-            if self
-                .filter_cutoff
-                .is_some_and(|current| (current - cutoff).abs() < 1.0)
-            {
-                return Ok(());
-            }
-            for filter in &mut self.filters {
-                *filter = BiquadFilter::low_pass(sample_rate, cutoff, FILTER_PARAMS.low_pass_q);
-                if filter.is_none() {
-                    return Err(ResamplerError::Backend {
-                        op: "glide accelerate filter",
-                        detail: "failed to create vDSP low-pass filter".into(),
-                    });
-                }
-            }
-            self.filter_cutoff = Some(cutoff);
-            Ok(())
-        }
-
-        pub(in crate::glide) fn positions_mut(
-            &mut self,
-            frames: usize,
-        ) -> Result<&mut [f32], ResamplerError> {
-            if frames > self.max_output_frames {
-                return Err(ResamplerError::Backend {
-                    op: "glide accelerate positions",
-                    detail: "output frame request exceeds preallocated position buffer".into(),
-                });
-            }
-            Ok(&mut self.positions[..frames])
-        }
-
-        pub(in crate::glide) fn render(
-            &mut self,
-            request: RenderRequest<'_, '_, '_>,
-        ) -> Result<(), ResamplerError> {
-            let RenderRequest {
-                input,
-                previous,
-                output,
-                produced,
-                config,
-                filter_ratio,
-                mode,
-            } = request;
-            let input_frames = input.first().map_or(0, |channel| channel.len());
-            if input_frames > self.max_input_frames {
-                return Err(ResamplerError::Backend {
-                    op: "glide accelerate input",
-                    detail: "input frame count exceeds preallocated source buffer".into(),
-                });
-            }
-            let sample_rate = sample_rate(mode);
-            let cutoff = config
-                .anti_alias
-                .then(|| low_pass_cutoff(sample_rate, filter_ratio))
-                .filter(|_| filter_ratio > 1.0);
-            if let Some(cutoff) = cutoff {
-                self.ensure_filters(sample_rate, cutoff)?;
-            }
-
-            for (channel_idx, source) in input.iter().enumerate() {
-                let padded = &mut self.padded[channel_idx];
-                padded[0] = previous[channel_idx][0];
-                copy_f32(source, &mut padded[1..input_frames.saturating_add(1)]);
-                padded[input_frames.saturating_add(1)] = 0.0;
-
-                let source = if cutoff.is_some() {
-                    let filtered = &mut self.filtered[channel_idx];
-                    let filter = self.filters[channel_idx].as_mut().ok_or_else(|| {
-                        ResamplerError::Backend {
-                            op: "glide accelerate filter",
-                            detail: "anti-alias filter was not initialized".into(),
-                        }
-                    })?;
-                    filter.process(&padded[..input_frames.saturating_add(2)], filtered);
-                    &filtered[..input_frames.saturating_add(2)]
-                } else {
-                    &padded[..input_frames.saturating_add(2)]
-                };
-
-                let positions = &self.positions[..produced];
-                match config.interpolation {
-                    GlideInterpolation::Linear => {
-                        linear_interpolate_f32(
-                            source,
-                            positions,
-                            &mut output[channel_idx][..produced],
-                        );
-                    }
-                    GlideInterpolation::Quadratic => {
-                        quadratic_interpolate_f32(
-                            source,
-                            positions,
-                            &mut output[channel_idx][..produced],
-                        );
-                    }
-                }
-            }
-            Ok(())
-        }
-
-        pub(in crate::glide) fn reset(&mut self) {
-            for filter in &mut self.filters {
-                if let Some(filter) = filter.as_mut() {
-                    filter.reset();
-                }
-            }
-        }
-    }
-
-    fn ensure_build_len(
-        buffer: &mut SampleBuffer,
-        frames: usize,
-        backend: &'static str,
-    ) -> Result<(), ResamplerBuildError> {
-        buffer
-            .ensure_len(frames)
-            .map_err(|err| ResamplerBuildError::BackendBuild {
-                backend,
-                detail: err.to_string(),
-            })
-    }
-
-    fn low_pass_cutoff(sample_rate: f64, ratio: f64) -> f64 {
-        FILTER_PARAMS.cutoff_to_nyquist * sample_rate / (2.0 * ratio.max(1.0))
-    }
-
-    fn max_output_frames(input_frames: usize, max_ratio_adjustment: f64) -> usize {
-        let Some(input_frames) = input_frames.to_f64() else {
-            return usize::MAX;
+    pub(super) fn interpolate(
+        kind: GlideInterpolation,
+        source: &[f32],
+        positions: &[f32],
+        target: &mut [f32],
+    ) {
+        match kind {
+            GlideInterpolation::Linear => linear_interpolate_f32(source, positions, target),
+            GlideInterpolation::Quadratic => quadratic_interpolate_f32(source, positions, target),
         };
-        let frames = (input_frames * max_ratio_adjustment).ceil();
-        frames.to_usize().unwrap_or(usize::MAX).saturating_add(2)
     }
 
-    fn sample_rate(mode: ResamplerMode) -> f64 {
-        match mode {
-            ResamplerMode::FixedRatio {
-                source_sample_rate, ..
-            } => f64::from(source_sample_rate.get()),
-            ResamplerMode::VariableRatio { sample_rate, .. } => f64::from(sample_rate.get()),
-        }
+    pub(super) fn new_filter(sample_rate: f64, cutoff: f64, q: f64) -> Option<Filter> {
+        Filter::low_pass(sample_rate, cutoff, q)
+    }
+
+    pub(super) fn reset(filter: &mut Filter) {
+        filter.reset();
     }
 }
 
@@ -249,202 +270,54 @@ mod imp {
     feature = "apple-accelerate",
     any(target_os = "macos", target_os = "ios")
 )))]
-mod imp {
-    use std::num::NonZeroUsize;
-
-    use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+mod backend {
     use num_traits::cast::ToPrimitive;
-    use smallvec::SmallVec;
 
-    use super::{super::GlideInterpolation, RenderRequest};
-    use crate::{ResamplerBuildError, ResamplerError, ResamplerMode};
+    use super::GlideInterpolation;
 
-    struct FilterParams {
-        cutoff_to_nyquist: f64,
-        low_pass_q: f64,
-    }
+    pub(super) const FILTER_OP: &str = "glide scalar filter";
+    pub(super) const FILTER_ERROR: &str = "failed to create low-pass filter";
+    pub(super) const INPUT_OP: &str = "glide scalar input";
+    pub(super) const POSITIONS_OP: &str = "glide scalar positions";
 
-    const FILTER_PARAMS: FilterParams = FilterParams {
-        cutoff_to_nyquist: 0.9,
-        low_pass_q: std::f64::consts::FRAC_1_SQRT_2,
-    };
-
-    #[derive(fieldwork::Fieldwork)]
-    pub(in crate::glide) struct GlideEngine {
-        filter_cutoff: Option<f64>,
-        positions: SampleBuffer,
-        filtered: SmallVec<[SampleBuffer; 8]>,
-        filters: SmallVec<[Option<ScalarBiquad>; 8]>,
-        padded: SmallVec<[SampleBuffer; 8]>,
-        max_input_frames: usize,
-        #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
-        max_output_frames: usize,
-    }
-
-    impl GlideEngine {
-        pub(in crate::glide) fn new<S>(
-            pools: &PoolRegion<S>,
-            channels: NonZeroUsize,
-            max_input_frames: usize,
-            max_ratio_adjustment: f64,
-            backend: &'static str,
-        ) -> Result<Self, ResamplerBuildError>
-        where
-            S: HasPool<f32>,
-        {
-            let max_output_frames = max_output_frames(max_input_frames, max_ratio_adjustment);
-            let mut positions = pools.get::<f32>();
-            ensure_build_len(&mut positions, max_output_frames, backend)?;
-            let mut padded = SmallVec::new();
-            let mut filtered = SmallVec::new();
-            let mut filters = SmallVec::new();
-            for _ in 0..channels.get() {
-                let mut padded_channel = pools.get::<f32>();
-                ensure_build_len(
-                    &mut padded_channel,
-                    max_input_frames.saturating_add(2),
-                    backend,
-                )?;
-                padded.push(padded_channel);
-
-                let mut filtered_channel = pools.get::<f32>();
-                ensure_build_len(
-                    &mut filtered_channel,
-                    max_input_frames.saturating_add(2),
-                    backend,
-                )?;
-                filtered.push(filtered_channel);
-                filters.push(None);
-            }
-            Ok(Self {
-                positions,
-                padded,
-                filtered,
-                filters,
-                max_input_frames,
-                max_output_frames,
-                filter_cutoff: None,
-            })
-        }
-
-        fn ensure_filters(&mut self, sample_rate: f64, cutoff: f64) -> Result<(), ResamplerError> {
-            if self
-                .filter_cutoff
-                .is_some_and(|current| (current - cutoff).abs() < 1.0)
-            {
-                return Ok(());
-            }
-            for filter in &mut self.filters {
-                *filter = ScalarBiquad::low_pass(sample_rate, cutoff, FILTER_PARAMS.low_pass_q);
-                if filter.is_none() {
-                    return Err(ResamplerError::Backend {
-                        op: "glide scalar filter",
-                        detail: "failed to create low-pass filter".into(),
-                    });
-                }
-            }
-            self.filter_cutoff = Some(cutoff);
-            Ok(())
-        }
-
-        pub(in crate::glide) fn positions_mut(
-            &mut self,
-            frames: usize,
-        ) -> Result<&mut [f32], ResamplerError> {
-            if frames > self.max_output_frames {
-                return Err(ResamplerError::Backend {
-                    op: "glide scalar positions",
-                    detail: "output frame request exceeds preallocated position buffer".into(),
-                });
-            }
-            Ok(&mut self.positions[..frames])
-        }
-
-        pub(in crate::glide) fn render(
-            &mut self,
-            request: RenderRequest<'_, '_, '_>,
-        ) -> Result<(), ResamplerError> {
-            let RenderRequest {
-                input,
-                previous,
-                output,
-                produced,
-                config,
-                filter_ratio,
-                mode,
-            } = request;
-            let input_frames = input.first().map_or(0, |channel| channel.len());
-            if input_frames > self.max_input_frames {
-                return Err(ResamplerError::Backend {
-                    op: "glide scalar input",
-                    detail: "input frame count exceeds preallocated source buffer".into(),
-                });
-            }
-            let sample_rate = sample_rate(mode);
-            let cutoff = config
-                .anti_alias
-                .then(|| low_pass_cutoff(sample_rate, filter_ratio))
-                .filter(|_| filter_ratio > 1.0);
-            if let Some(cutoff) = cutoff {
-                self.ensure_filters(sample_rate, cutoff)?;
-            }
-
-            for (channel_idx, source) in input.iter().enumerate() {
-                let padded = &mut self.padded[channel_idx];
-                padded[0] = previous[channel_idx][0];
-                padded[1..input_frames.saturating_add(1)].copy_from_slice(source);
-                padded[input_frames.saturating_add(1)] = 0.0;
-
-                let source = if cutoff.is_some() {
-                    let filtered = &mut self.filtered[channel_idx];
-                    let filter = self.filters[channel_idx].as_mut().ok_or_else(|| {
-                        ResamplerError::Backend {
-                            op: "glide scalar filter",
-                            detail: "anti-alias filter was not initialized".into(),
-                        }
-                    })?;
-                    filter.process(&padded[..input_frames.saturating_add(2)], filtered);
-                    &filtered[..input_frames.saturating_add(2)]
-                } else {
-                    &padded[..input_frames.saturating_add(2)]
-                };
-
-                let positions = &self.positions[..produced];
-                match config.interpolation {
-                    GlideInterpolation::Linear => {
-                        interpolate::<LinearInterpolation>(
-                            source,
-                            positions,
-                            &mut output[channel_idx][..produced],
-                        );
-                    }
-                    GlideInterpolation::Quadratic => {
-                        interpolate::<QuadraticInterpolation>(
-                            source,
-                            positions,
-                            &mut output[channel_idx][..produced],
-                        );
-                    }
-                }
-            }
-            Ok(())
-        }
-
-        pub(in crate::glide) fn reset(&mut self) {
-            for filter in &mut self.filters {
-                if let Some(filter) = filter.as_mut() {
-                    filter.reset();
-                }
-            }
-        }
-    }
-
-    struct ScalarBiquad {
+    pub(super) struct Filter {
         coefficients: [f64; 5],
         delay: [f64; 4],
     }
 
-    impl ScalarBiquad {
+    pub(super) fn copy(source: &[f32], target: &mut [f32]) {
+        target.copy_from_slice(source);
+    }
+
+    pub(super) fn filter(filter: &mut Filter, source: &[f32], target: &mut [f32]) {
+        filter.process(source, target);
+    }
+
+    pub(super) fn interpolate(
+        kind: GlideInterpolation,
+        source: &[f32],
+        positions: &[f32],
+        target: &mut [f32],
+    ) {
+        match kind {
+            GlideInterpolation::Linear => {
+                interpolate_with::<LinearInterpolation>(source, positions, target);
+            }
+            GlideInterpolation::Quadratic => {
+                interpolate_with::<QuadraticInterpolation>(source, positions, target);
+            }
+        }
+    }
+
+    pub(super) fn new_filter(sample_rate: f64, cutoff: f64, q: f64) -> Option<Filter> {
+        Filter::low_pass(sample_rate, cutoff, q)
+    }
+
+    pub(super) fn reset(filter: &mut Filter) {
+        filter.reset();
+    }
+
+    impl Filter {
         fn low_pass(sample_rate: f64, cutoff_hz: f64, q: f64) -> Option<Self> {
             Some(Self {
                 coefficients: rbj_low_pass_coefficients(sample_rate, cutoff_hz, q)?,
@@ -472,19 +345,6 @@ mod imp {
         fn reset(&mut self) {
             self.delay = [0.0; 4];
         }
-    }
-
-    fn ensure_build_len(
-        buffer: &mut SampleBuffer,
-        frames: usize,
-        backend: &'static str,
-    ) -> Result<(), ResamplerBuildError> {
-        buffer
-            .ensure_len(frames)
-            .map_err(|err| ResamplerBuildError::BackendBuild {
-                backend,
-                detail: err.to_string(),
-            })
     }
 
     trait Interpolation {
@@ -518,7 +378,7 @@ mod imp {
         }
     }
 
-    fn interpolate<I>(source: &[f32], positions: &[f32], target: &mut [f32])
+    fn interpolate_with<I>(source: &[f32], positions: &[f32], target: &mut [f32])
     where
         I: Interpolation,
     {
@@ -526,27 +386,6 @@ mod imp {
             let base = position.floor().to_usize().unwrap_or(usize::MAX);
             let frac = position - base.to_f32().unwrap_or(0.0);
             *output = I::sample(source, base, frac);
-        }
-    }
-
-    fn low_pass_cutoff(sample_rate: f64, ratio: f64) -> f64 {
-        FILTER_PARAMS.cutoff_to_nyquist * sample_rate / (2.0 * ratio.max(1.0))
-    }
-
-    fn max_output_frames(input_frames: usize, max_ratio_adjustment: f64) -> usize {
-        let Some(input_frames) = input_frames.to_f64() else {
-            return usize::MAX;
-        };
-        let frames = (input_frames * max_ratio_adjustment).ceil();
-        frames.to_usize().unwrap_or(usize::MAX).saturating_add(2)
-    }
-
-    fn sample_rate(mode: ResamplerMode) -> f64 {
-        match mode {
-            ResamplerMode::FixedRatio {
-                source_sample_rate, ..
-            } => f64::from(source_sample_rate.get()),
-            ResamplerMode::VariableRatio { sample_rate, .. } => f64::from(sample_rate.get()),
         }
     }
 
@@ -572,5 +411,3 @@ mod imp {
         Some([b0 / a0, b1 / a0, b2 / a0, -a1 / a0, -a2 / a0])
     }
 }
-
-pub(super) use imp::GlideEngine;

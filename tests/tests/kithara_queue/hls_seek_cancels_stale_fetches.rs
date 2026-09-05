@@ -11,17 +11,21 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{self, Duration, Instant, sleep},
+        time::{self, Duration, Instant},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
-    offline::OfflineQueue, temp_dir, waits::wait_for_loader_done,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    fixture_protocol::DelayRule,
+    kithara,
+    offline::{OfflineQueue, drive_queue_ticks},
+    temp_dir,
+    waits::wait_for_loader_done,
 };
 use kithara_test_utils::probe::capture as probe_capture;
 use url::Url;
@@ -91,22 +95,6 @@ async fn build_hls_with_delay(helper: &TestServerHelper) -> Url {
         .master_url()
 }
 
-/// Queue tick driver, flash-coherent: spawned through the platform chokepoint
-/// (participant + ambient propagation) with `#[kithara::flash(true)]` so the
-/// 50ms cadence rides the VIRTUAL clock under flash. A raw `tokio::spawn` plus
-/// a bare `sleep` runs invisible to the engine — the spawned task never parks
-/// on the virtual clock, so the scheduler poll loop never cycles to observe the
-/// seek-epoch bump and `kithara_hls_probe::seek_epoch_reset` never fires.
-#[kithara::flash(true)]
-async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
-    loop {
-        sleep(Duration::from_millis(50)).await;
-        if queue.tick().is_err() {
-            break;
-        }
-    }
-}
-
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
@@ -138,7 +126,10 @@ fn build_queue_with_tick(
         ),
     )
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue.control()));
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(50),
+    ));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),

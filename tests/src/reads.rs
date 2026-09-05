@@ -42,9 +42,16 @@ where
 /// terminates on the real `ReadOutcome::Eof`; the caller's test `timeout(...)`
 /// is the only backstop against a genuinely wedged pipeline.
 pub fn read_to_eof<R: AudioRead + ?Sized>(audio: &mut R) -> u64 {
+    read_samples(audio, None)
+}
+
+fn read_samples<R: AudioRead + ?Sized>(audio: &mut R, target: Option<u64>) -> u64 {
     let mut buf = vec![0.0f32; READ_BUF_SAMPLES];
     let mut total = 0u64;
     loop {
+        if target.is_some_and(|target| total >= target) {
+            return total;
+        }
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Pending { .. }) => continue,
             Ok(ReadOutcome::Frames { count, .. }) => {
@@ -67,23 +74,7 @@ pub fn read_to_eof<R: AudioRead + ?Sized>(audio: &mut R) -> u64 {
 /// never on elapsed (virtual-under-flash) time. Same engine-aware blocking
 /// `Pending => continue` model as [`read_to_eof`].
 pub fn read_until_samples<R: AudioRead + ?Sized>(audio: &mut R, target: u64) -> u64 {
-    let mut buf = vec![0.0f32; READ_BUF_SAMPLES];
-    let mut total = 0u64;
-    while total < target {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => continue,
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                let n = count.get();
-                for &s in &buf[..n] {
-                    assert!(s.is_finite(), "non-finite sample at offset {total}");
-                }
-                total += n as u64;
-            }
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error at offset {total}: {e}"),
-        }
-    }
-    total
+    read_samples(audio, Some(target))
 }
 
 /// Bounds for cooperative wasm reads: cap the zero-read retries and require a

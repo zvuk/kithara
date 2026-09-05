@@ -84,8 +84,9 @@ impl MediaInfo {
     /// dispatch needs both codec and container to pick a backend.
     #[must_use]
     pub fn parse_mime(mime: &str) -> Option<Self> {
-        let codec = AudioCodec::parse_mime(mime)?;
-        let container = match mime.to_lowercase().as_str() {
+        let mime = mime.to_lowercase();
+        let codec = AudioCodec::parse_normalized_mime(&mime)?;
+        let container = match mime.as_str() {
             "audio/mp4" | "audio/x-m4a" => Some(ContainerFormat::Mp4),
             "audio/aac" | "audio/aacp" => Some(ContainerFormat::Adts),
             _ => ContainerFormat::try_from(codec).ok(),
@@ -221,6 +222,10 @@ impl AudioCodec {
     #[must_use]
     pub fn parse_mime(mime: &str) -> Option<Self> {
         let m = mime.to_lowercase();
+        Self::parse_normalized_mime(&m)
+    }
+
+    fn parse_normalized_mime(m: &str) -> Option<Self> {
         [
             (m.contains("mp3") || m == "audio/mpeg", Self::Mp3),
             (m.contains("aac"), Self::AacLc),
@@ -229,13 +234,10 @@ impl AudioCodec {
             (m.contains("opus"), Self::Opus),
             (m == "audio/ogg", Self::Vorbis),
             (
-                matches!(m.as_str(), "audio/wav" | "audio/wave" | "audio/x-wav"),
+                matches!(m, "audio/wav" | "audio/wave" | "audio/x-wav"),
                 Self::Pcm,
             ),
-            (
-                matches!(m.as_str(), "audio/mp4" | "audio/x-m4a"),
-                Self::AacLc,
-            ),
+            (matches!(m, "audio/mp4" | "audio/x-m4a"), Self::AacLc),
         ]
         .into_iter()
         .find_map(|(matches, codec)| matches.then_some(codec))

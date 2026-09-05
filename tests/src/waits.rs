@@ -55,6 +55,27 @@ where
     }
 }
 
+async fn wait_for_queue_position<S>(
+    queue: &QueueControl<S>,
+    deadline: Duration,
+    label: &str,
+    mut matches: impl FnMut(f64) -> bool,
+) -> Result<f64, ()>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    let mut observed = None;
+    wait_until(deadline, label, || {
+        observed = queue
+            .position_seconds()
+            .filter(|&position| matches(position));
+        observed.is_some()
+    })
+    .await
+    .map_err(|_| ())?;
+    observed.ok_or(())
+}
+
 /// Wait until `queue.position_seconds()` reports at least `min_secs`, then
 /// return the observed position (seconds).
 ///
@@ -72,24 +93,16 @@ pub async fn wait_for_position_at_least<S>(
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    let mut observed = min_secs;
-    wait_until(deadline, "position_at_least", || {
-        match queue.position_seconds() {
-            Some(p) if p >= min_secs => {
-                observed = p;
-                true
-            }
-            _ => false,
-        }
+    wait_for_queue_position(queue, deadline, "position_at_least", |position| {
+        position >= min_secs
     })
     .await
-    .map_err(|_| {
+    .map_err(|()| {
         format!(
             "position stayed below {min_secs:.2}s for {deadline:?} (last: {:?})",
             queue.position_seconds()
         )
-    })?;
-    Ok(observed)
+    })
 }
 
 /// Wait until playback reaches `min_secs`, observed on sink-truth
@@ -158,24 +171,16 @@ pub async fn wait_for_position_near<S>(
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    let mut observed = target;
-    wait_until(deadline, "position_near", || {
-        match queue.position_seconds() {
-            Some(p) if (p - target).abs() < tolerance => {
-                observed = p;
-                true
-            }
-            _ => false,
-        }
+    wait_for_queue_position(queue, deadline, "position_near", |position| {
+        (position - target).abs() < tolerance
     })
     .await
-    .map_err(|_| {
+    .map_err(|()| {
         format!(
             "position never reached {target:.2}s (±{tolerance:.2}) in {deadline:?} (last: {:?})",
             queue.position_seconds()
         )
-    })?;
-    Ok(observed)
+    })
 }
 
 /// Event-driven [`wait_for_position_near`]: resolves the moment sink-truth

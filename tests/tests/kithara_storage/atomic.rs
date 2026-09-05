@@ -51,6 +51,7 @@ fn atomic_resource_path_method(temp_dir: TestTempDir, cancel_token: CancelToken)
 #[case("simple data", b"Hello, World!")]
 #[case("binary data", &[0x00, 0xFF, 0x80, 0x7F])]
 #[case("large data", &[0x42; 1024 * 1024])]
+#[case("empty data", b"")]
 fn atomic_resource_write_read_success(
     temp_dir: TestTempDir,
     cancel_token: CancelToken,
@@ -62,19 +63,9 @@ fn atomic_resource_write_read_success(
     let atomic = atomic.write_all(test_data).expect("write should succeed");
 
     let mut buf = Vec::new();
-    atomic.read_into(&mut buf).expect("read should succeed");
-    assert_eq!(&*buf, test_data, "read data should match");
-}
-
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn atomic_resource_empty_write_read(temp_dir: TestTempDir, cancel_token: CancelToken) {
-    let atomic = open_test_resource(&temp_dir, "empty.dat", cancel_token);
-
-    let atomic = atomic.write_all(b"").expect("write should succeed");
-
-    let mut buf = Vec::new();
     let n = atomic.read_into(&mut buf).expect("read should succeed");
-    assert_eq!(n, 0, "empty write should produce empty read");
+    assert_eq!(n, test_data.len(), "read length should match");
+    assert_eq!(&*buf, test_data, "read data should match");
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]

@@ -1,9 +1,6 @@
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::Path;
-
 use bytes::Bytes;
 use kithara::{
     assets::{AcquisitionResult, AssetScope, AssetStore, StorageBackend, WriteSide},
@@ -14,12 +11,7 @@ use kithara_integration_tests::{
     cancel_token, temp_dir,
 };
 
-use super::support::{LiteralLayout, literal_layouts, resource, source};
-
-#[cfg(not(target_arch = "wasm32"))]
-fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
-    root.join(asset_root).exists()
-}
+use super::support::{LiteralLayout, asset_dir_exists, literal_layouts, resource, source};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn asset_scope_with_root_and_limit(
@@ -214,7 +206,7 @@ fn eviction_corner_cases_different_byte_limits(
     }
 
     assert!(
-        exists_asset_dir(&dir, "asset-probe"),
+        asset_dir_exists(&dir, "asset-probe"),
         "asset-probe (newly created) must exist"
     );
 
@@ -223,11 +215,11 @@ fn eviction_corner_cases_different_byte_limits(
     if total_old_size + new_asset_size > max_bytes {
         let mut evicted_count = 0;
         for name in &asset_names {
-            if !exists_asset_dir(&dir, name) {
+            if !asset_dir_exists(&dir, name) {
                 evicted_count += 1;
             }
         }
-        if !exists_asset_dir(&dir, "asset-trigger") {
+        if !asset_dir_exists(&dir, "asset-trigger") {
             evicted_count += 1;
         }
 
@@ -241,13 +233,13 @@ fn eviction_corner_cases_different_byte_limits(
     } else {
         for name in &asset_names {
             assert!(
-                exists_asset_dir(&dir, name),
+                asset_dir_exists(&dir, name),
                 "{} should remain when under byte limit",
                 name
             );
         }
         assert!(
-            exists_asset_dir(&dir, "asset-trigger"),
+            asset_dir_exists(&dir, "asset-trigger"),
             "asset-trigger should remain when under byte limit"
         );
     }

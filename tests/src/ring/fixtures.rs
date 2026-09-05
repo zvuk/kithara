@@ -42,19 +42,33 @@ impl CountingProbe {
     }
 }
 
-#[derive(Clone)]
-pub struct CountingNode {
-    probe: CountingProbe,
+#[derive(Clone, Default)]
+pub struct FixtureNode<S> {
+    state: S,
 }
 
-impl CountingNode {
+impl<S> FixtureNode<S> {
     #[must_use]
-    pub const fn new(probe: CountingProbe) -> Self {
-        Self { probe }
+    pub const fn new(state: S) -> Self {
+        Self { state }
     }
 }
 
-impl AudioNode for CountingNode {
+pub type CountingNode = FixtureNode<CountingProbe>;
+pub type DeterministicToneNode = FixtureNode<()>;
+
+trait FixtureState: Clone + Send + 'static {
+    const DEBUG_NAME: &'static str;
+
+    fn construct(&self, stream_info: &StreamInfo);
+    fn new_stream(&mut self);
+    fn process(&mut self, info: &ProcInfo, buffers: ProcBuffers) -> ProcessStatus;
+}
+
+impl<S> AudioNode for FixtureNode<S>
+where
+    S: FixtureState,
+{
     type Configuration = EmptyConfig;
 
     fn construct_processor(
@@ -62,22 +76,13 @@ impl AudioNode for CountingNode {
         _configuration: &Self::Configuration,
         cx: ConstructProcessorContext,
     ) -> impl AudioNodeProcessor {
-        self.probe
-            .inner
-            .construction_sample_rate
-            .store(cx.stream_info.sample_rate.get(), Ordering::SeqCst);
-        self.probe
-            .inner
-            .constructions
-            .fetch_add(1, Ordering::SeqCst);
-        CountingProcessor {
-            probe: self.probe.clone(),
-        }
+        self.state.construct(cx.stream_info);
+        FixtureProcessor(self.state.clone())
     }
 
     fn info(&self, _configuration: &Self::Configuration) -> AudioNodeInfo {
         AudioNodeInfo::new()
-            .debug_name("ring_counting")
+            .debug_name(S::DEBUG_NAME)
             .channel_config(ChannelConfig {
                 num_inputs: ChannelCount::ZERO,
                 num_outputs: ChannelCount::STEREO,
@@ -85,13 +90,14 @@ impl AudioNode for CountingNode {
     }
 }
 
-struct CountingProcessor {
-    probe: CountingProbe,
-}
+struct FixtureProcessor<S>(S);
 
-impl AudioNodeProcessor for CountingProcessor {
+impl<S> AudioNodeProcessor for FixtureProcessor<S>
+where
+    S: FixtureState,
+{
     fn new_stream(&mut self, _stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
-        self.probe.inner.new_streams.fetch_add(1, Ordering::SeqCst);
+        self.0.new_stream();
     }
 
     fn process(
@@ -101,6 +107,25 @@ impl AudioNodeProcessor for CountingProcessor {
         _events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
+        self.0.process(info, buffers)
+    }
+}
+
+impl FixtureState for CountingProbe {
+    const DEBUG_NAME: &'static str = "ring_counting";
+
+    fn construct(&self, stream_info: &StreamInfo) {
+        self.inner
+            .construction_sample_rate
+            .store(stream_info.sample_rate.get(), Ordering::SeqCst);
+        self.inner.constructions.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn new_stream(&mut self) {
+        self.inner.new_streams.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn process(&mut self, info: &ProcInfo, buffers: ProcBuffers) -> ProcessStatus {
         for output in &mut *buffers.outputs {
             output[..info.frames].fill(0.0);
         }
@@ -108,40 +133,14 @@ impl AudioNodeProcessor for CountingProcessor {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DeterministicToneNode;
+impl FixtureState for () {
+    const DEBUG_NAME: &'static str = "ring_deterministic_tone";
 
-impl AudioNode for DeterministicToneNode {
-    type Configuration = EmptyConfig;
+    fn construct(&self, _stream_info: &StreamInfo) {}
 
-    fn construct_processor(
-        &self,
-        _configuration: &Self::Configuration,
-        _cx: ConstructProcessorContext,
-    ) -> impl AudioNodeProcessor {
-        DeterministicToneProcessor
-    }
+    fn new_stream(&mut self) {}
 
-    fn info(&self, _configuration: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
-            .debug_name("ring_deterministic_tone")
-            .channel_config(ChannelConfig {
-                num_inputs: ChannelCount::ZERO,
-                num_outputs: ChannelCount::STEREO,
-            })
-    }
-}
-
-struct DeterministicToneProcessor;
-
-impl AudioNodeProcessor for DeterministicToneProcessor {
-    fn process(
-        &mut self,
-        info: &ProcInfo,
-        buffers: ProcBuffers,
-        _events: &mut ProcEvents,
-        _extra: &mut ProcExtra,
-    ) -> ProcessStatus {
+    fn process(&mut self, info: &ProcInfo, buffers: ProcBuffers) -> ProcessStatus {
         for frame in 0..info.frames {
             let absolute = info.clock_samples.0 + frame as i64;
             let sample = absolute.rem_euclid(64) as f32 / 128.0 - 0.25;

@@ -60,9 +60,7 @@ impl DecoderLogs {
     }
 }
 
-/// Options for `scripted_decoder`. Bundles knobs that previously lived
-/// in three near-duplicate constructors (`scripted_decoder`,
-/// `scripted_decoder_loose`, `scripted_inner_decoder_with_track_info_loose`).
+/// Options for [`scripted_decoder`].
 #[derive(Clone, Default)]
 pub struct ScriptedOptions {
     /// `DecoderTrackInfo` exposed by [`Decoder::track_info`]. Use a
@@ -103,47 +101,6 @@ pub fn scripted_decoder(
         duration,
         options.track_info,
         options.verify_in_drop,
-    )
-}
-
-/// Convenience wrapper over [`scripted_decoder`] for the common
-/// `verify_in_drop: false` data-plane tests.
-#[must_use]
-pub fn scripted_decoder_loose(
-    spec: AudioSpec,
-    chunks: Vec<AudioChunk>,
-    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
-    duration: Option<Duration>,
-) -> (Box<dyn Decoder>, DecoderLogs) {
-    scripted_decoder(
-        spec,
-        chunks,
-        seek_results,
-        duration,
-        ScriptedOptions::default(),
-    )
-}
-
-/// Convenience wrapper over [`scripted_decoder`] for tests that pin a
-/// custom [`DecoderTrackInfo`] (gapless metadata) with verification
-/// disabled.
-#[must_use]
-pub fn scripted_inner_decoder_with_track_info_loose(
-    spec: AudioSpec,
-    chunks: Vec<AudioChunk>,
-    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
-    duration: Option<Duration>,
-    track_info: DecoderTrackInfo,
-) -> (Box<dyn Decoder>, DecoderLogs) {
-    scripted_decoder(
-        spec,
-        chunks,
-        seek_results,
-        duration,
-        ScriptedOptions {
-            track_info,
-            verify_in_drop: false,
-        },
     )
 }
 

@@ -107,6 +107,26 @@ fn drain_latest_position(rx: &mut EventReceiver) -> Option<f64> {
     latest
 }
 
+async fn receive_progress(
+    rx: &mut EventReceiver,
+    mut lagged: impl FnMut() -> Option<f64>,
+) -> Result<f64, String> {
+    loop {
+        match rx.recv().await.map(|env| env.event) {
+            Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                return Ok(position_ms as f64 / 1000.0);
+            }
+            Ok(_) => {}
+            Err(RecvError::Lagged(_)) => {
+                if let Some(position) = lagged() {
+                    return Ok(position);
+                }
+            }
+            Err(RecvError::Closed) => return Err("event stream closed".to_string()),
+        }
+    }
+}
+
 /// Block for the next sink-truth `PlaybackProgress` and return its
 /// position (seconds). `recv()` parks on the virtual clock, so the offline
 /// render worker advances and a fresh progress event is emitted; this
@@ -114,20 +134,9 @@ fn drain_latest_position(rx: &mut EventReceiver) -> Option<f64> {
 /// instead of the REAL-clock-gated tick cache. A buffered event already
 /// past is fine — it is still event-sourced and on the render cadence.
 async fn next_progress_position(rx: &mut EventReceiver, deadline: Duration) -> Result<f64, String> {
-    timeout(deadline, async {
-        loop {
-            match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                    return Ok(position_ms as f64 / 1000.0);
-                }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {}
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            }
-        }
-    })
-    .await
-    .map_err(|_| format!("no PlaybackProgress within {deadline:?}"))?
+    timeout(deadline, receive_progress(rx, || None))
+        .await
+        .map_err(|_| format!("no PlaybackProgress within {deadline:?}"))?
 }
 
 /// Collect `count` playback positions sampled on consecutive sink-truth
@@ -145,18 +154,9 @@ async fn sample_positions_via_progress(
     out.push(queue.position_seconds().unwrap_or(0.0));
     timeout(deadline, async {
         while out.len() < count {
-            match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                    out.push(position_ms as f64 / 1000.0);
-                }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {
-                    out.push(queue.position_seconds().unwrap_or(0.0));
-                }
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            }
+            out.push(receive_progress(rx, || Some(queue.position_seconds().unwrap_or(0.0))).await?);
         }
-        Ok(())
+        Ok::<(), String>(())
     })
     .await
     .map_err(|_| {

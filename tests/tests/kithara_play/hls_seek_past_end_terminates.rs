@@ -41,17 +41,6 @@ impl Consts {
     const SEEK_TARGET_SECS: f64 = 50.0;
 }
 
-fn blocks_for_seconds(secs: f64) -> u32 {
-    let blocks = (secs * f64::from(Consts::SAMPLE_RATE) / Consts::BLOCK_FRAMES as f64).ceil();
-    #[expect(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        reason = "positive ceiling fits in u32"
-    )]
-    let result = blocks as u32;
-    result
-}
-
 async fn render_burst(player: &mut OfflinePlayer, blocks: u32) {
     const BATCH: u32 = 16;
     let mut remaining = blocks;
@@ -107,7 +96,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     // no-progress watchdog still bounds a genuinely wedged pipeline.
     render_until_position(
         &mut player,
-        blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS),
+        Shared::blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS, Consts::BLOCK_FRAMES),
         Consts::PRE_SEEK_MIN_POSITION_SECS,
         Consts::BLOCK_FRAMES,
         Consts::PRE_SEEK_WALL_MS,
@@ -128,7 +117,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
 
     render_burst(
         &mut player,
-        blocks_for_seconds(Consts::POST_SEEK_RENDER_SECS),
+        Shared::blocks_for_seconds(Consts::POST_SEEK_RENDER_SECS, Consts::BLOCK_FRAMES),
     )
     .await;
 

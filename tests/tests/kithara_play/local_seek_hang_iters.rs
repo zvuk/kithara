@@ -17,7 +17,9 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayer, temp_dir,
+    HlsFixtureBuilder, TestServerHelper,
+    offline::{OfflinePlayer, WindowStats, rms},
+    temp_dir,
 };
 use url::Url;
 
@@ -47,12 +49,6 @@ impl Consts {
     /// did.
     const SEGMENTS_PER_VARIANT: usize = 16;
     const SEGMENT_DURATION_SECS: f64 = 4.0;
-}
-
-struct WindowStats {
-    silent_blocks: u32,
-    total_blocks: u32,
-    window_start_sample: usize,
 }
 
 /// Render `blocks` measured blocks, parking on the virtual clock between
@@ -120,11 +116,7 @@ async fn render_and_collect(
         samples_out.extend_from_slice(&out);
     }
 
-    WindowStats {
-        silent_blocks,
-        total_blocks: blocks,
-        window_start_sample,
-    }
+    WindowStats::new(silent_blocks, blocks, window_start_sample)
 }
 
 /// Drain pending bus events without blocking. Keeps the bounded broadcast bus
@@ -138,30 +130,6 @@ fn drain_events(events: &mut EventReceiver) {
             Err(TryRecvError::Lagged(_)) => continue,
         }
     }
-}
-
-fn blocks_for_seconds(secs: f64) -> u32 {
-    let blocks = (secs * f64::from(Consts::SAMPLE_RATE) / Consts::BLOCK_FRAMES as f64).ceil();
-    #[expect(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        reason = "positive ceiling fits in u32 for second-scale windows"
-    )]
-    let result = blocks as u32;
-    result
-}
-
-fn rms(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "sample count precision adequate"
-    )]
-    let n = samples.len() as f32;
-    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
-    (sum_sq / n).sqrt()
 }
 
 /// Drive the offline render pull until the decode worker has actually
@@ -291,7 +259,7 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         .expect("create local HLS fixture")
         .master_url();
 
-    let window_blocks = blocks_for_seconds(Consts::PLAY_WINDOW_SECS);
+    let window_blocks = Shared::blocks_for_seconds(Consts::PLAY_WINDOW_SECS, Consts::BLOCK_FRAMES);
     let mut next_seek_epoch = 1u64;
 
     for iter in 0..Consts::ITERATIONS {

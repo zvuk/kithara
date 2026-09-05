@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    ops::Deref,
     sync::{
         RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -58,6 +59,64 @@ struct BehaviorEntry {
     hits: AtomicU64,
 }
 
+pub(crate) trait RequestMode: Default {
+    fn requested(&self);
+}
+
+#[derive(Default)]
+pub(crate) struct SilentRequest;
+
+impl RequestMode for SilentRequest {
+    fn requested(&self) {}
+}
+
+#[derive(Default)]
+pub(crate) struct NotifyRequest(Notify);
+
+impl RequestMode for NotifyRequest {
+    fn requested(&self) {
+        self.0.notify_one();
+    }
+}
+
+pub(crate) struct Gate<M> {
+    mode: M,
+    released: watch::Sender<bool>,
+    requested: AtomicU64,
+}
+
+impl<M> Gate<M>
+where
+    M: RequestMode,
+{
+    fn new() -> Self {
+        let (released, _rx) = watch::channel(false);
+        Self {
+            mode: M::default(),
+            released,
+            requested: AtomicU64::new(0),
+        }
+    }
+
+    pub(crate) fn mark_requested(&self) {
+        self.requested.fetch_add(1, Ordering::Relaxed);
+        self.mode.requested();
+    }
+
+    pub(crate) async fn wait_until_released(&self) {
+        let mut rx = self.released.subscribe();
+        let _ = rx.wait_for(|released| *released).await;
+    }
+
+    pub(crate) fn release(&self) {
+        self.released.send_replace(true);
+    }
+
+    pub(crate) fn requested(&self) -> u64 {
+        self.requested.load(Ordering::Relaxed)
+    }
+}
+
 /// A test-controlled withhold gate for one `(hls token, variant, segment)`.
 ///
 /// Two independently-controllable seams:
@@ -77,43 +136,18 @@ struct BehaviorEntry {
 /// Lives in `TestServerState` (mutable, per-token) — never in the immutable
 /// Arc-cached `GeneratedHls`.
 pub(crate) struct SegmentGate {
-    released: watch::Sender<bool>,
-    requested: AtomicU64,
+    body: Gate<SilentRequest>,
     head_withheld: AtomicBool,
     head_requested: AtomicU64,
 }
 
 impl SegmentGate {
     fn new() -> Self {
-        let (released, _rx) = watch::channel(false);
         Self {
-            released,
-            requested: AtomicU64::new(0),
+            body: Gate::new(),
             head_withheld: AtomicBool::new(false),
             head_requested: AtomicU64::new(0),
         }
-    }
-
-    pub(crate) fn mark_requested(&self) {
-        self.requested.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Park until [`Self::release`] is called. Returns immediately if already
-    /// released — a fresh receiver observes the latest value first.
-    pub(crate) async fn wait_until_released(&self) {
-        let mut rx = self.released.subscribe();
-        // `Err` only if the sender was dropped (gate removed) — proceed then.
-        let _ = rx.wait_for(|released| *released).await;
-    }
-
-    /// Release the withheld segment so its GET response completes.
-    pub(crate) fn release(&self) {
-        self.released.send_replace(true);
-    }
-
-    /// In-process count of GET requests that reached this gate.
-    pub(crate) fn requested(&self) -> u64 {
-        self.requested.load(Ordering::Relaxed)
     }
 
     /// Mark the segment's HEAD (size) response to report `Content-Length: 0`
@@ -141,6 +175,14 @@ impl SegmentGate {
     /// In-process count of HEAD (size) requests that reached this gate.
     pub(crate) fn head_requested(&self) -> u64 {
         self.head_requested.load(Ordering::Relaxed)
+    }
+}
+
+impl Deref for SegmentGate {
+    type Target = Gate<SilentRequest>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.body
     }
 }
 
@@ -172,42 +214,7 @@ fn size_probe_key(hls_token: &str, variant: usize, segment: usize) -> String {
 /// The `requested` counter lets a test observe the gated init GET reached the
 /// server. Lives in `TestServerState` (mutable, per-token) — never in the
 /// immutable Arc-cached `GeneratedHls`.
-pub(crate) struct InitGate {
-    released: watch::Sender<bool>,
-    requested: AtomicU64,
-}
-
-impl InitGate {
-    fn new() -> Self {
-        let (released, _rx) = watch::channel(false);
-        Self {
-            released,
-            requested: AtomicU64::new(0),
-        }
-    }
-
-    pub(crate) fn mark_requested(&self) {
-        self.requested.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Park until [`Self::release`] is called. Returns immediately if already
-    /// released — a fresh receiver observes the latest value first.
-    pub(crate) async fn wait_until_released(&self) {
-        let mut rx = self.released.subscribe();
-        // `Err` only if the sender was dropped (gate removed) — proceed then.
-        let _ = rx.wait_for(|released| *released).await;
-    }
-
-    /// Release the withheld init segment so its parked GET (body) completes.
-    pub(crate) fn release(&self) {
-        self.released.send_replace(true);
-    }
-
-    /// In-process count of init GET requests that reached this gate.
-    pub(crate) fn requested(&self) -> u64 {
-        self.requested.load(Ordering::Relaxed)
-    }
-}
+pub(crate) type InitGate = Gate<SilentRequest>;
 
 fn init_gate_key(hls_token: &str, variant: usize) -> String {
     format!("{hls_token}|v{variant}|init")
@@ -231,50 +238,17 @@ fn init_gate_key(hls_token: &str, variant: usize) -> String {
 ///
 /// Lives in `TestServerState` (mutable, per-token) — never in the immutable
 /// Arc-cached `GeneratedHls`.
-pub(crate) struct DelayGate {
-    released: watch::Sender<bool>,
-    requested: AtomicU64,
-    request_arrived: Notify,
-}
+pub(crate) type DelayGate = Gate<NotifyRequest>;
 
-impl DelayGate {
-    fn new() -> Self {
-        let (released, _rx) = watch::channel(false);
-        Self {
-            released,
-            requested: AtomicU64::new(0),
-            request_arrived: Notify::default(),
-        }
-    }
-
-    /// Mark that a segment GET reached this gate and wake the releaser so its
-    /// virtual countdown starts at the moment the fetch actually arrives.
-    pub(crate) fn mark_requested(&self) {
-        self.requested.fetch_add(1, Ordering::Relaxed);
-        self.request_arrived.notify_one();
-    }
-
-    /// Park until [`Self::release`] is called. Returns immediately if already
-    /// released — a fresh receiver observes the latest value first.
-    pub(crate) async fn wait_until_released(&self) {
-        let mut rx = self.released.subscribe();
-        // `Err` only if the sender was dropped (gate removed) — proceed then.
-        let _ = rx.wait_for(|released| *released).await;
-    }
-
+impl Gate<NotifyRequest> {
     /// Park until the gated segment GET has reached the server at least once.
     /// Returns immediately if a request already arrived before the releaser
     /// began waiting (the permit from `notify_one` is stored).
     pub(crate) async fn wait_requested(&self) {
-        if self.requested.load(Ordering::Relaxed) > 0 {
+        if self.requested() > 0 {
             return;
         }
-        self.request_arrived.notified().await;
-    }
-
-    /// Release the withheld segment so its parked GET (body) response completes.
-    pub(crate) fn release(&self) {
-        self.released.send_replace(true);
+        self.mode.0.notified().await;
     }
 }
 
@@ -282,14 +256,31 @@ fn delay_gate_key(hls_token: &str, variant: usize, segment: usize) -> String {
     format!("{hls_token}|v{variant}|s{segment}|delay")
 }
 
+type GateMap<T> = RwLock<HashMap<String, Arc<T>>>;
+
+fn register_gate<T>(map: &GateMap<T>, key: String, gate: T) -> Arc<T> {
+    let gate = Arc::new(gate);
+    map.write()
+        .expect("gate map poisoned")
+        .insert(key, Arc::clone(&gate));
+    gate
+}
+
+fn get_gate<T>(map: &GateMap<T>, key: &str) -> Option<Arc<T>> {
+    map.read()
+        .expect("gate map poisoned")
+        .get(key)
+        .map(Arc::clone)
+}
+
 pub(crate) struct TestServerState {
     hls_cache: GeneratedHlsCache,
     hls_blobs: RwLock<HashMap<String, Arc<Vec<u8>>>>,
     tokens: RwLock<HashMap<String, Arc<GeneratedHls>>>,
     behaviors: RwLock<HashMap<String, Arc<BehaviorEntry>>>,
-    segment_gates: RwLock<HashMap<String, Arc<SegmentGate>>>,
-    init_gates: RwLock<HashMap<String, Arc<InitGate>>>,
-    delay_gates: RwLock<HashMap<String, Arc<DelayGate>>>,
+    segment_gates: GateMap<SegmentGate>,
+    init_gates: GateMap<InitGate>,
+    delay_gates: GateMap<DelayGate>,
     /// Per-`(hls token, variant, segment)` count of size-probe requests the
     /// server has served: every `HEAD` and every single-byte ranged
     /// `GET` (`Range: bytes=0-0`). Unlike the withhold gates this counter is
@@ -312,9 +303,9 @@ impl TestServerState {
             hls_cache: RwLock::new(HashMap::new()),
             hls_blobs: RwLock::new(HashMap::new()),
             behaviors: RwLock::new(HashMap::new()),
-            segment_gates: RwLock::new(HashMap::new()),
-            init_gates: RwLock::new(HashMap::new()),
-            delay_gates: RwLock::new(HashMap::new()),
+            segment_gates: GateMap::default(),
+            init_gates: GateMap::default(),
+            delay_gates: GateMap::default(),
             size_probes: RwLock::new(HashMap::new()),
             network_online: AtomicBool::new(true),
         })
@@ -367,13 +358,8 @@ impl TestServerState {
         variant: usize,
         segment: usize,
     ) -> Arc<SegmentGate> {
-        let gate = Arc::new(SegmentGate::new());
-        let mut map = self.segment_gates.write().expect("segment gates poisoned");
-        map.insert(
-            segment_gate_key(hls_token, variant, segment),
-            Arc::clone(&gate),
-        );
-        gate
+        let key = segment_gate_key(hls_token, variant, segment);
+        register_gate(&self.segment_gates, key, SegmentGate::new())
     }
 
     pub(crate) fn segment_gate(
@@ -382,9 +368,8 @@ impl TestServerState {
         variant: usize,
         segment: usize,
     ) -> Option<Arc<SegmentGate>> {
-        let map = self.segment_gates.read().expect("segment gates poisoned");
-        map.get(&segment_gate_key(hls_token, variant, segment))
-            .map(Arc::clone)
+        let key = segment_gate_key(hls_token, variant, segment);
+        get_gate(&self.segment_gates, &key)
     }
 
     /// Register a withhold gate for one `(hls token, variant)` init
@@ -392,15 +377,15 @@ impl TestServerState {
     /// parks until [`InitGate::release`], holding the owning track's loader in
     /// `Loading`.
     pub(crate) fn register_init_gate(&self, hls_token: &str, variant: usize) -> Arc<InitGate> {
-        let gate = Arc::new(InitGate::new());
-        let mut map = self.init_gates.write().expect("init gates poisoned");
-        map.insert(init_gate_key(hls_token, variant), Arc::clone(&gate));
-        gate
+        register_gate(
+            &self.init_gates,
+            init_gate_key(hls_token, variant),
+            InitGate::new(),
+        )
     }
 
     pub(crate) fn init_gate(&self, hls_token: &str, variant: usize) -> Option<Arc<InitGate>> {
-        let map = self.init_gates.read().expect("init gates poisoned");
-        map.get(&init_gate_key(hls_token, variant)).map(Arc::clone)
+        get_gate(&self.init_gates, &init_gate_key(hls_token, variant))
     }
 
     /// Register a virtual-time delay gate for one `(hls token, variant, segment)`
@@ -413,13 +398,8 @@ impl TestServerState {
         variant: usize,
         segment: usize,
     ) -> Arc<DelayGate> {
-        let gate = Arc::new(DelayGate::new());
-        let mut map = self.delay_gates.write().expect("delay gates poisoned");
-        map.insert(
-            delay_gate_key(hls_token, variant, segment),
-            Arc::clone(&gate),
-        );
-        gate
+        let key = delay_gate_key(hls_token, variant, segment);
+        register_gate(&self.delay_gates, key, DelayGate::new())
     }
 
     pub(crate) fn delay_gate(
@@ -428,9 +408,8 @@ impl TestServerState {
         variant: usize,
         segment: usize,
     ) -> Option<Arc<DelayGate>> {
-        let map = self.delay_gates.read().expect("delay gates poisoned");
-        map.get(&delay_gate_key(hls_token, variant, segment))
-            .map(Arc::clone)
+        let key = delay_gate_key(hls_token, variant, segment);
+        get_gate(&self.delay_gates, &key)
     }
 
     /// Record one size-probe (`HEAD` or single-byte ranged `GET`) served for

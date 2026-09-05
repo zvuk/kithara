@@ -346,23 +346,6 @@ async fn render_desktop(master_url: &url::Url, switch: bool) -> DesktopRender {
     }
 }
 
-fn longest_desktop_silent_run(samples: &[f32]) -> usize {
-    let mut current = 0usize;
-    let mut longest = 0usize;
-    for frame in samples.chunks_exact(usize::from(CHANNELS)) {
-        if frame
-            .iter()
-            .all(|sample| sample.abs() <= ACTIVE_SAMPLE_THRESHOLD)
-        {
-            current = current.saturating_add(1);
-            longest = longest.max(current);
-        } else {
-            current = 0;
-        }
-    }
-    longest
-}
-
 fn desktop_silent_buckets(samples: &[f32]) -> usize {
     let audio = ProbeAudio {
         samples: samples.to_vec(),
@@ -464,8 +447,8 @@ async fn kithara_app_manual_aac_to_flac_switch_is_gapless() {
         switched.capture_frame, control.capture_frame,
         "Kithara App switch and control must start at the same host frame",
     );
-    let control_silence = longest_desktop_silent_run(&control.samples);
-    let switched_silence = longest_desktop_silent_run(&switched.samples);
+    let control_silence = longest_silent_run(&control.samples);
+    let switched_silence = longest_silent_run(&switched.samples);
     assert!(
         switched_silence <= control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES),
         "Kithara App AAC-to-FLAC switch inserted an audible gap: switched={switched_silence} host frames, control={control_silence}, target_delay_ms={TARGET_DELAY_MS}",

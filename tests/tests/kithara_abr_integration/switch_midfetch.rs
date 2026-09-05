@@ -1,39 +1,15 @@
 use kithara::{
     self,
-    abr::{AbrMode, AbrSettings, AbrState, AbrView},
-    events::{VariantDuration, VariantIndex, VariantInfo},
-    platform::{
-        sync::Arc,
-        time::{Duration, Duration as StdDuration},
-    },
+    abr::{AbrMode, AbrState, AbrView},
+    events::VariantIndex,
+    platform::{sync::Arc, time::Duration as StdDuration},
 };
 
-fn fast_settings() -> AbrSettings {
-    AbrSettings::builder()
-        .initial_throughput_bps(Some(2_000_000))
-        .min_switch_interval(Duration::ZERO)
-        .min_buffer_for_up_switch(Duration::ZERO)
-        .build()
-}
-
-fn variants_for(bitrates: &[u64]) -> Vec<VariantInfo> {
-    bitrates
-        .iter()
-        .enumerate()
-        .map(|(i, bps)| VariantInfo {
-            variant_index: VariantIndex::new(i),
-            bandwidth_bps: Some(*bps),
-            duration: VariantDuration::Unknown,
-            name: None,
-            codecs: None,
-            container: None,
-        })
-        .collect()
-}
+use super::common::{fast_settings, variants};
 
 #[kithara::test]
 fn manual_switch_wins_over_in_flight_auto_decisions() {
-    let variants = variants_for(&[300_000, 1_000_000, 3_000_000]);
+    let variants = variants(&[300_000, 1_000_000, 3_000_000]);
     let settings = fast_settings();
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
 
@@ -66,7 +42,7 @@ fn variants_snapshot_is_stable_for_decide() {
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let settings = fast_settings();
 
-    let variants_small = variants_for(&[300_000, 900_000]);
+    let variants_small = variants(&[300_000, 900_000]);
 
     let view = AbrView {
         estimate_bps: Some(10_000_000),

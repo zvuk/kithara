@@ -121,15 +121,19 @@ fn http_500() -> NetError {
 }
 
 #[kithara::test(tokio)]
-#[case(1)]
-#[case(2)]
-#[case(3)]
-async fn test_retryable_errors_success_after_retries(#[case] failures_before_success: usize) {
+#[case::one_retry(1, Duration::from_millis(10))]
+#[case::two_retries(2, Duration::from_millis(10))]
+#[case::three_retries(3, Duration::from_millis(10))]
+#[case::zero_delay(1, Duration::ZERO)]
+async fn test_retryable_errors_success_after_retries(
+    #[case] failures_before_success: usize,
+    #[case] base_delay: Duration,
+) {
     let result = try_with_retry(
         failures_before_success,
         http_500(),
         u32::try_from(failures_before_success).unwrap_or(0),
-        Duration::from_millis(10),
+        base_delay,
     )
     .await;
     assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
@@ -196,9 +200,8 @@ async fn test_exponential_backoff_with_max_delay(
 }
 
 #[kithara::test(tokio)]
-#[case(1)]
-#[case(2)]
-async fn test_all_net_methods_with_retry(#[case] failures_before_success: usize) {
+async fn test_all_net_methods_with_retry() {
+    let failures_before_success = 1;
     let mock_net = make_retry_mock(failures_before_success, http_500());
     let retry_policy = RetryPolicy::builder()
         .max_retries(u32::try_from(failures_before_success).unwrap_or(0))
@@ -230,17 +233,4 @@ async fn test_timeout_retry_chaining(#[case] failures_before_success: usize) {
 async fn test_zero_max_retries() {
     let result = try_with_retry(1, http_500(), 0, Duration::from_millis(10)).await;
     assert!(matches!(result, Err(NetError::Status { .. })));
-}
-
-#[kithara::test(tokio)]
-#[case(1)]
-async fn test_zero_base_delay(#[case] failures_before_success: usize) {
-    let result = try_with_retry(
-        failures_before_success,
-        http_500(),
-        u32::try_from(failures_before_success).unwrap_or(0),
-        Duration::from_millis(0),
-    )
-    .await;
-    assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
 }

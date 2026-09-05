@@ -82,6 +82,13 @@ fn make_timeout_mock(should_succeed: bool) -> Unimock {
 #[case::large_timeout(Duration::from_millis(1000), Duration::from_millis(10), false)]
 #[case::quick_success(Duration::from_millis(50), Duration::from_millis(100), true)]
 #[case::moderate_timeout(Duration::from_millis(150), Duration::from_millis(100), false)]
+#[case::zero_timeout_immediate(Duration::ZERO, Duration::ZERO, true)]
+#[case::zero_timeout_delayed_50(Duration::from_millis(50), Duration::ZERO, false)]
+#[case::zero_timeout_delayed_100(Duration::from_millis(100), Duration::ZERO, false)]
+#[case::large_timeout_immediate(Duration::ZERO, Duration::from_secs(10), true)]
+#[case::large_timeout_100(Duration::from_millis(100), Duration::from_secs(10), true)]
+#[case::large_timeout_1000(Duration::from_millis(1000), Duration::from_secs(10), true)]
+#[case::large_timeout_5000(Duration::from_millis(5000), Duration::from_secs(10), true)]
 async fn test_timeout_scenarios(
     #[case] delay: Duration,
     #[case] timeout: Duration,
@@ -117,54 +124,10 @@ async fn test_timeout_with_error() {
 }
 
 #[kithara::test(tokio)]
-#[case(Duration::from_millis(100), Duration::from_millis(200), true)]
-#[case(Duration::from_millis(200), Duration::from_millis(100), false)]
-async fn test_all_net_methods_with_timeout(
-    #[case] delay: Duration,
-    #[case] timeout: Duration,
-    #[case] should_succeed: bool,
-) {
-    let mock_net = DelayedNet::new(make_timeout_mock(true), delay);
-    let timeout_net = mock_net.with_timeout(timeout);
-
-    if should_succeed {
-        assert_success_all_net_methods(&timeout_net).await;
-    } else {
-        let url = test_url();
-        let result = timeout_net.get_bytes(url, None).await;
-        assert!(result.is_err());
-        assert!(matches!(result.err().unwrap(), NetError::Timeout));
-    }
-}
-
-#[kithara::test(tokio)]
-#[case(Duration::from_millis(0), true)]
-#[case(Duration::from_millis(50), false)]
-#[case(Duration::from_millis(100), false)]
-async fn test_zero_timeout(#[case] delay: Duration, #[case] should_succeed: bool) {
-    let mock_net = DelayedNet::new(make_timeout_mock(true), delay);
-    let timeout_net = mock_net.with_timeout(Duration::from_millis(0));
-
-    let url = test_url();
-    let result = timeout_net.get_bytes(url, None).await;
-
-    assert_bytes_or_timeout(result, should_succeed);
-}
-
-#[kithara::test(tokio)]
-#[case(Duration::from_millis(0))]
-#[case(Duration::from_millis(100))]
-#[case(Duration::from_millis(1000))]
-#[case(Duration::from_millis(5000))]
-async fn test_large_timeout(#[case] delay: Duration) {
-    let mock_net = DelayedNet::new(make_timeout_mock(true), delay);
-    let timeout_net = mock_net.with_timeout(Duration::from_secs(10));
-
-    let url = test_url();
-    let result = timeout_net.get_bytes(url, None).await;
-
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
+async fn test_all_net_methods_with_timeout() {
+    let mock_net = DelayedNet::new(make_timeout_mock(true), Duration::from_millis(100));
+    let timeout_net = mock_net.with_timeout(Duration::from_millis(200));
+    assert_success_all_net_methods(&timeout_net).await;
 }
 
 #[kithara::test(tokio)]

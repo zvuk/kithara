@@ -7,10 +7,7 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::{
-    num::NonZeroU32,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara::{
     self,
@@ -22,16 +19,10 @@ use kithara::{
         PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome, SessionDispatcher,
         SessionDuckingMode, SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
     },
-    signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::TestPcmReader;
+use kithara_integration_tests::{audio_mock::TestPcmReader, test_defaults::Consts};
 
 use crate::bufpool_ext::{TestPools, pools};
-
-const FIXTURE_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
-};
 
 #[derive(Clone, Copy)]
 enum InsertScenario {
@@ -46,13 +37,9 @@ enum RemoveAtScenario {
     ShiftCurrentIndex,
 }
 
-fn mock_spec() -> AudioSpec {
-    AudioSpec::new(2, FIXTURE_SAMPLE_RATE)
-}
-
 fn make_resource(duration_secs: f64) -> Resource {
     Resource::from_reader(
-        TestPcmReader::new(mock_spec(), duration_secs),
+        TestPcmReader::new(Consts::AUDIO_SPEC, duration_secs),
         Some(Arc::from(format!("test-resource-{duration_secs}"))),
     )
 }
@@ -61,7 +48,7 @@ fn make_resource(duration_secs: f64) -> Resource {
 /// stay distinguishable in failure output.
 fn make_tagged_resource(label: &'static str, duration_secs: f64) -> Resource {
     Resource::from_reader(
-        TestPcmReader::new(mock_spec(), duration_secs),
+        TestPcmReader::new(Consts::AUDIO_SPEC, duration_secs),
         Some(Arc::from(format!("memory://{label}"))),
     )
 }
@@ -94,9 +81,10 @@ impl SessionDispatcher<TestPools> for FixtureSession {
                 self.nodes.lock().push(inputs);
                 Reply::SlotAllocated(AllocatedSlot::new(control, slot))
             }
-            Cmd::QuerySampleRate => {
-                Reply::SampleRate(SessionSampleRate::new(None, FIXTURE_SAMPLE_RATE.get()))
-            }
+            Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(
+                None,
+                Consts::NON_ZERO_SAMPLE_RATE.get(),
+            )),
             Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
             _ => Reply::Ok,
         };
@@ -118,7 +106,7 @@ fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<F
     let player_config = PlayerConfig::builder()
         .bus(bus)
         .crossfade_duration(crossfade_duration)
-        .sample_rate(FIXTURE_SAMPLE_RATE)
+        .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
         .build();
@@ -126,9 +114,23 @@ fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<F
     (player, session)
 }
 
+fn prepared_player<const N: usize>(
+    crossfade_duration: f32,
+    labels: [&'static str; N],
+) -> PlayerImpl<TestPools> {
+    let (player, _session) = make_fixture_player(crossfade_duration);
+    player.set_auto_advance_enabled(false);
+    for label in labels {
+        player.insert(make_tagged_resource(label, 0.05), TrackId::allocate(), None);
+    }
+    player.ensure_engine_started().unwrap();
+    player.ensure_slot().unwrap();
+    player
+}
+
 fn default_player_config() -> PlayerConfig<TestPools> {
     PlayerConfig::builder()
-        .sample_rate(FIXTURE_SAMPLE_RATE)
+        .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(fixture_session())
         .build()
@@ -325,14 +327,7 @@ fn replacing_current_item_re_announces_on_next_play() {
 
 #[kithara::test]
 fn arm_next_loads_item_and_returns_src() {
-    let (player, _session) = make_fixture_player(0.0);
-    player.set_auto_advance_enabled(false);
-    let first = make_tagged_resource("item-1", 0.05);
-    let second = make_tagged_resource("item-2", 0.05);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-    player.ensure_engine_started().unwrap();
-    player.ensure_slot().unwrap();
+    let player = prepared_player(0.0, ["item-1", "item-2"]);
 
     let src = player
         .arm_next(1)
@@ -371,14 +366,7 @@ fn arm_next_returns_none_for_empty_slot() {
 
 #[kithara::test]
 fn arm_next_idempotent_for_same_index() {
-    let (player, _session) = make_fixture_player(0.0);
-    player.set_auto_advance_enabled(false);
-    let first = make_tagged_resource("item-1", 0.05);
-    let second = make_tagged_resource("item-2", 0.05);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-    player.ensure_engine_started().unwrap();
-    player.ensure_slot().unwrap();
+    let player = prepared_player(0.0, ["item-1", "item-2"]);
 
     let first_src = player
         .arm_next(1)
@@ -394,16 +382,7 @@ fn arm_next_idempotent_for_same_index() {
 
 #[kithara::test]
 fn arm_next_replaces_previously_armed_slot() {
-    let (player, _session) = make_fixture_player(0.0);
-    player.set_auto_advance_enabled(false);
-    let a = make_tagged_resource("a", 0.05);
-    let b = make_tagged_resource("b", 0.05);
-    let c = make_tagged_resource("c", 0.05);
-    player.insert(a, TrackId::allocate(), None);
-    player.insert(b, TrackId::allocate(), None);
-    player.insert(c, TrackId::allocate(), None);
-    player.ensure_engine_started().unwrap();
-    player.ensure_slot().unwrap();
+    let player = prepared_player(0.0, ["a", "b", "c"]);
 
     let first = player
         .arm_next(1)
@@ -419,14 +398,7 @@ fn arm_next_replaces_previously_armed_slot() {
 
 #[kithara::test]
 fn commit_next_index_mismatch_returns_typed_error() {
-    let (player, _session) = make_fixture_player(1.0);
-    player.set_auto_advance_enabled(false);
-    let first = make_tagged_resource("a", 0.05);
-    let second = make_tagged_resource("b", 0.05);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-    player.ensure_engine_started().unwrap();
-    player.ensure_slot().unwrap();
+    let player = prepared_player(1.0, ["a", "b"]);
     player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -444,14 +416,7 @@ fn commit_next_index_mismatch_returns_typed_error() {
 
 #[kithara::test]
 fn commit_next_advances_index_and_publishes_event() {
-    let (player, _session) = make_fixture_player(1.0);
-    player.set_auto_advance_enabled(false);
-    let first = make_tagged_resource("a", 0.05);
-    let second = make_tagged_resource("b", 0.05);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-    player.ensure_engine_started().unwrap();
-    player.ensure_slot().unwrap();
+    let player = prepared_player(1.0, ["a", "b"]);
     player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -475,14 +440,7 @@ fn commit_next_advances_index_and_publishes_event() {
 
 #[kithara::test]
 fn commit_next_idempotent_when_already_activated() {
-    let (player, _session) = make_fixture_player(1.0);
-    player.set_auto_advance_enabled(false);
-    let first = make_tagged_resource("a", 0.05);
-    let second = make_tagged_resource("b", 0.05);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-    player.ensure_engine_started().unwrap();
-    player.ensure_slot().unwrap();
+    let player = prepared_player(1.0, ["a", "b"]);
     player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -495,14 +453,7 @@ fn commit_next_idempotent_when_already_activated() {
 
 #[kithara::test]
 fn unarm_next_clears_when_not_activated_and_unloads() {
-    let (player, _session) = make_fixture_player(0.0);
-    player.set_auto_advance_enabled(false);
-    let first = make_tagged_resource("a", 0.05);
-    let second = make_tagged_resource("b", 0.05);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-    player.ensure_engine_started().unwrap();
-    player.ensure_slot().unwrap();
+    let player = prepared_player(0.0, ["a", "b"]);
     let src = player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -515,14 +466,7 @@ fn unarm_next_clears_when_not_activated_and_unloads() {
 
 #[kithara::test]
 fn unarm_next_preserves_activated_current() {
-    let (player, _session) = make_fixture_player(1.0);
-    player.set_auto_advance_enabled(false);
-    let first = make_tagged_resource("a", 0.05);
-    let second = make_tagged_resource("b", 0.05);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-    player.ensure_engine_started().unwrap();
-    player.ensure_slot().unwrap();
+    let player = prepared_player(1.0, ["a", "b"]);
     player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -535,17 +479,7 @@ fn unarm_next_preserves_activated_current() {
 
 #[kithara::test]
 fn select_item_clears_pending_next_and_unloads_preloaded_track() {
-    let (player, _session) = make_fixture_player(1.0);
-    player.set_auto_advance_enabled(false);
-    let first = make_tagged_resource("item-1", 0.05);
-    let second = make_tagged_resource("item-2", 0.05);
-    let third = make_tagged_resource("item-3", 0.05);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-    player.insert(third, TrackId::allocate(), None);
-
-    player.ensure_engine_started().unwrap();
-    player.ensure_slot().unwrap();
+    let player = prepared_player(1.0, ["item-1", "item-2", "item-3"]);
     let src = player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -565,15 +499,7 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track() {
 /// `arm_next`'s `take()` and `enqueue_to_processor` returns `None`.
 #[kithara::test]
 fn select_item_on_armed_index_promotes_armed_slot() {
-    let (player, _session) = make_fixture_player(1.0);
-    player.set_auto_advance_enabled(false);
-    let first = make_tagged_resource("item-1", 0.05);
-    let second = make_tagged_resource("item-2", 0.05);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-
-    player.ensure_engine_started().unwrap();
-    player.ensure_slot().unwrap();
+    let player = prepared_player(1.0, ["item-1", "item-2"]);
     player.select_item(0, true).unwrap();
     let armed_src = player
         .arm_next(1)

@@ -29,7 +29,7 @@ brew_formulae = [
   "rustup",
   "xcodegen",
 ]
-chromium_version = "151.0.7922.137"
+chromium_version = "152.0.7977.75"
 cmake_linux_amd64_sha256 = "0dc2e9a6860f06bf10bd8fadc03e35d9eeb4df46e33763a7e480e987758f385c"
 cmake_linux_arm64_sha256 = "83f8fd91d2038a56556e1400390fcfe42f79602940c494f6c6f1cdae7f9e7f40"
 cmake_version = "3.31.12"

@@ -6,14 +6,14 @@ use kithara::{
     bufpool::HasPool,
     decode::DecoderBackend,
     events::{
-        AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
-        TrackId, TrackStatus,
+        AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId,
+        TrackStatus,
     },
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, Instant, sleep, timeout},
+        time::{Duration, Instant, timeout},
         tokio,
     },
     play::{
@@ -28,7 +28,7 @@ use url::Url;
 use crate::{
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     user_sim::actions::Action,
 };
 
@@ -54,28 +54,6 @@ const STAGNATION_TICKS: u32 = 75;
 /// Producer-tick wakes a quality switch is given to land before the harness
 /// stops waiting for it.
 const SWITCH_PROGRESS_TICKS: u32 = 200;
-
-/// Periodic queue tick driver, run as a spawned task. `#[kithara::flash(true)]`
-/// makes the body flash-ACTIVE under an ambient (flash) test, so its
-/// `sleep` resolves to the engine-backed virtual timer — without it the
-/// async spawn chokepoint only propagates the per-test ambient gate (it does
-/// NOT set the active flag, unlike the sync `spawn_named` pacer), and
-/// `kithara::platform::time::sleep` keys on the active flag, so the driver
-/// would run on a REAL timer. A real-paced driver keeps up with the virtual
-/// clock only while ongoing real I/O paces it (HLS); for a fully-buffered
-/// source (file / local mp3) the virtual clock collapses ahead of it, the
-/// cached playhead freezes relative to virtual time, and the action
-/// watchdog false-fires. Off the `flash` feature the macro is a no-op, so
-/// the driver is a plain real-time tick exactly as before.
-#[kithara::flash(true)]
-async fn run_tick_driver(queue: QueueControl<TestPools>) {
-    loop {
-        sleep(Duration::from_millis(50)).await;
-        if queue.tick().is_err() {
-            break;
-        }
-    }
-}
 
 /// `SimHarness` is the integration-test entry point for the user
 /// simulation scenarios. It owns a `Queue + Player + Downloader` triple
@@ -164,9 +142,9 @@ impl SimHarness {
         // flash this installs the quiescence poll-wrapper + ambient gate so the
         // driver participates in the virtual clock. The active flag that makes
         // its `sleep` engine-virtual comes from `#[kithara::flash(true)]` on
-        // `run_tick_driver` (the async chokepoint propagates ambient only) — see
+        // `drive_queue_ticks` (the async chokepoint propagates ambient only) — see
         // that fn's doc for why a real-paced driver false-HANGs buffered sources.
-        let tick = tokio::task::spawn(run_tick_driver(queue_for_tick));
+        let tick = tokio::task::spawn(drive_queue_ticks(queue_for_tick, Duration::from_millis(50)));
 
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
@@ -249,8 +227,6 @@ impl SimHarness {
             Action::SeekRatio(r) => self.do_seek(r, false).await,
             Action::SeekNearEnd(r) => self.do_seek(r, true).await,
             Action::SelectAt(i) => self.do_select_at(i).await,
-            Action::SelectPrev => self.do_select_prev().await,
-            Action::SelectNext => self.do_select_next().await,
             Action::SetQuality(idx) => self.do_set_quality(idx).await,
             Action::QualityAuto => self.do_quality_auto().await,
             Action::Pause => self.do_pause(),
@@ -488,51 +464,6 @@ impl SimHarness {
         // Refresh codec snapshot — picking a different track legitimately
         // changes the codec, so this is a reset, not an assertion.
         self.last_known_codec = self.current_codec();
-    }
-
-    async fn do_select_prev(&mut self) {
-        let mut rx = self.queue.subscribe();
-        if self
-            .queue
-            .return_to_previous(Transition::None)
-            .expect("queue stays open during the scenario")
-            .is_some()
-        {
-            self.await_current_changed(&mut rx).await;
-            self.last_known_codec = self.current_codec();
-        }
-    }
-
-    async fn do_select_next(&mut self) {
-        let mut rx = self.queue.subscribe();
-        if self
-            .queue
-            .advance_to_next(Transition::None, AdvanceReason::UserNext)
-            .expect("queue stays open during the scenario")
-            .is_some()
-        {
-            self.await_current_changed(&mut rx).await;
-            self.last_known_codec = self.current_codec();
-        }
-    }
-
-    /// Park (on the virtual clock) until the queue publishes a
-    /// `CurrentTrackChanged`, or a short virtual deadline elapses. Lets
-    /// the engine run the handover instead of guessing with a fixed
-    /// sleep that may fire before the tick driver applies the change.
-    async fn await_current_changed(&self, rx: &mut EventReceiver) {
-        let wait = async {
-            loop {
-                match recv_event(rx).await {
-                    // The handover landed, or the bus closed and never will.
-                    Ok(Some(Event::Queue(QueueEvent::CurrentTrackChanged { .. }))) | Err(_) => {
-                        return;
-                    }
-                    Ok(_) => {}
-                }
-            }
-        };
-        let _ = timeout(Duration::from_secs(5), wait).await;
     }
 
     async fn do_set_quality(&mut self, idx: usize) {

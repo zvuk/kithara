@@ -18,7 +18,7 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
     bufpool_ext::{Pools, TestPools, pools},
     kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -26,17 +26,6 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::SignalAsset;
 
 const SAVE_AFTER_SECS: f64 = 4.0;
-
-fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(50)).await;
-            if queue.tick().is_err() {
-                break;
-            }
-        }
-    })
-}
 
 fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<TestPools> {
     let player = PlayerImpl::new(
@@ -95,7 +84,10 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         .build();
     let first_queue = new_queue(&first_pools, first_store.clone());
     let first_downloader = new_downloader(first_pools);
-    let first_tick = spawn_ticker(first_queue.control());
+    let first_tick = tokio::task::spawn(drive_queue_ticks(
+        first_queue.control(),
+        Duration::from_millis(50),
+    ));
     let mut first_rx = first_queue.subscribe();
     let first_id = append_track(&first_queue, url.as_str(), &first_downloader, &first_store);
     first_queue
@@ -142,7 +134,10 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         .build();
     let second_queue = new_queue(&second_pools, second_store.clone());
     let second_downloader = new_downloader(second_pools);
-    let second_tick = spawn_ticker(second_queue.control());
+    let second_tick = tokio::task::spawn(drive_queue_ticks(
+        second_queue.control(),
+        Duration::from_millis(50),
+    ));
     let mut second_rx = second_queue.subscribe();
     let second_id = append_track(
         &second_queue,

@@ -8,7 +8,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, Instant, sleep, timeout},
+        time::{Duration, Instant, timeout},
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
@@ -24,7 +24,7 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     temp_dir,
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
@@ -92,15 +92,7 @@ async fn wait_for_status(
 /// `*_when_body_stalls` tests. This mirror pins the healthy-path contract
 /// across decoder/ABR-mode axes.
 async fn run_drm_seek(backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
-    install_tracing();
-
-    let helper = TestServerHelper::new().await;
-    let created = helper
-        .create_hls(mixed_codec_ladder_encrypted())
-        .await
-        .expect("create encrypted HLS fixture");
-    let url = created.master_url();
-    run_seek_scenario(&url, backend, abr, temp).await;
+    run_drm_seek_case(backend, abr, None, temp).await;
 }
 
 /// Same scenario on the same ladder plus a per-segment fetch delay modelling
@@ -113,28 +105,31 @@ async fn run_delayed_drm_seek(
     delay_ms: u64,
     temp: TestTempDir,
 ) {
+    run_drm_seek_case(backend, abr, Some(delay_ms), temp).await;
+}
+
+async fn run_drm_seek_case(
+    backend: DecoderBackend,
+    abr: AbrMode,
+    delay_ms: Option<u64>,
+    temp: TestTempDir,
+) {
     install_tracing();
 
     let helper = TestServerHelper::new().await;
-    let created = helper
-        .create_hls(mixed_codec_ladder_encrypted().push_delay_rule(DelayRule {
+    let mut builder = mixed_codec_ladder_encrypted();
+    if let Some(delay_ms) = delay_ms {
+        builder = builder.push_delay_rule(DelayRule {
             delay_ms,
             ..DelayRule::default()
-        }))
+        });
+    }
+    let created = helper
+        .create_hls(builder)
         .await
-        .expect("create delayed encrypted HLS fixture");
+        .expect("create encrypted HLS fixture");
     let url = created.master_url();
     run_seek_scenario(&url, backend, abr, temp).await;
-}
-
-#[kithara::flash(true)]
-async fn drive_queue_ticks(queue: QueueControl<AppPools>) {
-    loop {
-        sleep(Duration::from_millis(50)).await;
-        if queue.tick().is_err() {
-            break;
-        }
-    }
 }
 
 async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
@@ -179,7 +174,10 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         Queue::new(QueueConfig::builder().player(player).build()),
     )
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue.control()));
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(50),
+    ));
 
     let source = super::app_track_source(
         url.as_str(),
