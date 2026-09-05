@@ -238,6 +238,7 @@ coverage:
       --cargo-profile test-release || test_rc=$?
     cargo llvm-cov nextest --no-report \
       -p kithara-ui \
+      --features kithara-ui/capture \
       --cargo-profile test-release \
       --ignore-default-filter || test_rc=$?
     cargo llvm-cov nextest --no-report \

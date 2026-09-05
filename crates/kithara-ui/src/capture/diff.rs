@@ -476,11 +476,51 @@ mod tests {
         let budget_path = root.join("budget.txt");
         fs::write(&budget_path, "page.png 5\n").unwrap();
 
-        let report = compare(&left_dir, &right_dir, &masks, Some(&budget_path));
-        let passed = report.map(|report| report.passed());
+        let report = compare(&left_dir, &right_dir, &masks, Some(&budget_path))
+            .expect("two complete capture sets");
+        let passed = report.passed();
+        let message = report.to_string();
 
         fs::remove_dir_all(&root).ok();
 
-        assert_eq!(passed, Ok(false));
+        assert!(!passed);
+        assert!(message.contains("over budget: page.png differs by 10.0%, allowed 5.0%"));
+        assert!(message.contains("1 page(s) compared, 1 over budget"));
+    }
+
+    #[kithara::test]
+    fn an_unjudged_comparison_reports_a_missing_page_without_failing() {
+        let root = scratch_dir("missing");
+        let left_dir = root.join("left");
+        let right_dir = root.join("right");
+        let masks = root.join("out");
+        create_dir_all(&left_dir).unwrap();
+        create_dir_all(&right_dir).unwrap();
+
+        let frame = Geometry {
+            height: 1,
+            scale: 1.0,
+            width: 1,
+        };
+        write_geometry(&left_dir, frame).unwrap();
+        write_geometry(&right_dir, frame).unwrap();
+        write_png(
+            &left_dir.join("missing.png"),
+            1,
+            1,
+            once([0, 0, 0, 255].as_slice()),
+        )
+        .unwrap();
+
+        let report = compare(&left_dir, &right_dir, &masks, None)
+            .expect("matching geometry is enough for an unjudged comparison");
+        let message = report.to_string();
+
+        fs::remove_dir_all(&root).ok();
+
+        assert!(report.passed());
+        assert!(message.contains("missing.png"));
+        assert!(message.contains("missing"));
+        assert!(message.contains("0 page(s) compared; no budget given, so nothing was decided"));
     }
 }
