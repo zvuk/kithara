@@ -1,6 +1,8 @@
+use std::num::NonZeroU32;
+
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 use kithara_bufpool::HasPool;
-use kithara_play::PlayError;
+use kithara_play::{PlayError, StreamShape};
 use kithara_warp::{SyncCapability, SyncGroup, SyncOperation, SyncRejected, TopologyOperation};
 use tracing::{debug, trace, warn};
 
@@ -202,16 +204,30 @@ where
         },
         Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),
         Cmd::QuerySampleRate => {
-            let measured = state
-                .ctx
-                .as_ref()
-                .and_then(FirewheelCtx::stream_info)
-                .map(|info| info.sample_rate.get());
+            let measured = measured_stream_shape(state).map(|shape| shape.sample_rate.get());
             trace_stream_info(state, "query-sample-rate");
             Reply::SampleRate(SessionSampleRate::new(measured, state.sample_rate_hint))
         }
+        Cmd::QueryStreamShape => Reply::StreamShape(stream_shape(state)),
         Cmd::Tick => tick_session(state),
     }
+}
+
+fn measured_stream_shape<B: AudioBackend, S>(state: &SessionState<B, S>) -> Option<StreamShape> {
+    state
+        .ctx
+        .as_ref()
+        .and_then(FirewheelCtx::stream_info)
+        .map(|info| StreamShape::new(info.max_block_frames, info.sample_rate))
+}
+
+fn stream_shape<B: AudioBackend, S>(state: &SessionState<B, S>) -> Option<StreamShape> {
+    measured_stream_shape(state).or_else(|| {
+        Some(StreamShape::new(
+            state.requested_max_block_frames?,
+            NonZeroU32::new(state.sample_rate_hint)?,
+        ))
+    })
 }
 
 pub(super) fn tick_session<B: AudioBackend, S>(state: &mut SessionState<B, S>) -> Reply {
@@ -405,6 +421,7 @@ pub(super) fn trace_stream_info<B: AudioBackend, S>(
         trace!(
             context,
             sample_rate_hint = state.sample_rate_hint,
+            requested_max_block_frames = state.requested_max_block_frames.map(NonZeroU32::get),
             stream_needs_restart = state.stream_needs_restart,
             "[KITHARA-ROUTE] session stream-info unavailable"
         );
@@ -877,6 +894,42 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[kithara::test]
+    fn stream_shape_query_prefers_measurement_over_an_explicit_request() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::QueryStreamShape),
+            Reply::StreamShape(None)
+        ));
+
+        state.requested_max_block_frames = NonZeroU32::new(128);
+        let Reply::StreamShape(Some(requested)) = run_cmd(&mut state, Cmd::QueryStreamShape) else {
+            panic!("the explicit output block is available before stream start")
+        };
+        assert_eq!(requested.max_block_frames.get(), 128);
+        assert_eq!(requested.sample_rate.get(), TestState::DEFAULT_SAMPLE_RATE);
+
+        let player_id = register_player(&mut state);
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::StartPlayer {
+                    master_volume: 1.0,
+                    player_id,
+                    sample_rate: TestState::DEFAULT_SAMPLE_RATE,
+                },
+            ),
+            Reply::Ok
+        ));
+        let Reply::StreamShape(Some(measured)) = run_cmd(&mut state, Cmd::QueryStreamShape) else {
+            panic!("the running stream reports its measured output shape")
+        };
+        assert_eq!(measured.max_block_frames.get(), 512);
+        assert_eq!(measured.sample_rate.get(), TestState::DEFAULT_SAMPLE_RATE);
     }
 
     #[kithara::test]

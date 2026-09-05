@@ -12,12 +12,12 @@ use super::{
     built::{BlockState, LayerParts},
     custom::{HostAction, MappedCustom, MountedCustom},
     flex::{ChildLayout, Flex},
-    leaf::{Leaf, WindowLeafLayer},
+    leaf::{Leaf, TextFace, TextFaces, WindowLeafLayer},
     mount::{
         Cx, NodeControl, NodeLayout, Viewport, activates, alignment, control_declared, declared,
         main_length, pointer_owner,
     },
-    node::Detent,
+    node::{Detent, Face, Faces},
     popover::{PopoverLayer, PopoverState},
     root::WindowLayer,
     shader::ShaderLeaf,
@@ -42,6 +42,7 @@ use crate::{
     },
     shaping::TextContext,
     size::SizeSpec,
+    skin::ColorRole,
     solve,
 };
 
@@ -179,6 +180,27 @@ where
         state.latch(self.ctx.flag(Some(&binding)));
         blocks.push((binding, Rc::clone(&state)));
         Some(state)
+    }
+
+    /// One flow's children, split into the layout each asks for and the node
+    /// it is, with the state of every block among them collected on the way.
+    fn flow(
+        &self,
+        children: Vec<GroupMount<MasonryNode<Action>>>,
+        blocks: &mut Vec<(Binding, Rc<BlockState>)>,
+    ) -> (Vec<ChildLayout>, Vec<MasonryNode<Action>>) {
+        let mut layouts: Vec<ChildLayout> = Vec::with_capacity(children.len());
+        let mut nodes: Vec<MasonryNode<Action>> = Vec::with_capacity(children.len());
+        for child in children {
+            let block = self.block(child.block, blocks);
+            layouts.push(
+                ChildLayout::natural(child.output.declared(), child.minimum)
+                    .within(child.band)
+                    .blocked(block),
+            );
+            nodes.push(child.output);
+        }
+        (layouts, nodes)
     }
 
     /// A leaf drawing content this toolkit does not own.
@@ -343,21 +365,36 @@ where
         )
     }
 
-    /// The text leaf `spec` describes, carrying `content` and whether the
-    /// control reads as active right now. Both are resolved by the caller,
-    /// which is the only thing that can reach the readings.
+    /// The text leaf `spec` describes, carrying `content` and the flag it is
+    /// dressed by. The content is resolved by the caller, which is the only
+    /// thing that can reach the reading; the flag travels so that this host can
+    /// read it again into the tree it keeps.
     pub(super) fn text_leaf(
         &self,
         spec: &mount::Text<'_>,
         content: String,
-        active: bool,
         declared: solve::Size<solve::Length>,
     ) -> MasonryNode<Action> {
         let style = spec.style;
-        let role = self
-            .skin
-            .text_role(style, spec.color, spec.active_color, active)
-            .faced(spec.font, spec.weight);
+        let face = |active| {
+            let role = self
+                .skin
+                .text_role(style, spec.color, spec.active_color, active)
+                .faced(spec.font, spec.weight);
+            TextFace {
+                role,
+                color: self.skin.rgba(role.color),
+            }
+        };
+        let idle = face(false);
+        let lit = spec.active.map(|flag| (flag, face(true)));
+        let shown = lit
+            .as_ref()
+            .is_some_and(|(flag, _)| self.ctx.flag(Some(flag)));
+        let TextFace { role, color } = lit
+            .as_ref()
+            .filter(|_| shown)
+            .map_or(idle, |(_, face)| *face);
         let padding_x = match style {
             TextStyle::VisFooter => self.skin.vis.footer_padding_x,
             TextStyle::VisMeta => self.skin.vis.index_padding_x,
@@ -365,13 +402,14 @@ where
             _ => 0.0,
         };
         let content = style.cased(content);
-        MasonryNode::document(
+        let mut output = MasonryNode::document(
             NodeLayout::Leaf(Leaf::Text {
                 align: spec.align,
                 content,
                 role,
                 padding_x,
-                color: self.skin.rgba(role.color),
+                color,
+                lit: lit.map(|(_, lit)| TextFaces { idle, lit }),
                 text: Box::new(TextContext::from(self.skin.text_resources())),
             }),
             declared,
@@ -379,7 +417,11 @@ where
             false,
             None,
             None,
-        )
+        );
+        if let Some((flag, _)) = lit {
+            output.lights(flag.clone(), None);
+        }
+        output
     }
 
     pub(super) fn vis_leaf(
@@ -451,11 +493,6 @@ where
             InputOwner::Leaf => interactive(control, path.to_owned(), Rc::clone(&self.map_event)),
             InputOwner::Engine => control,
         }
-    }
-
-    pub(super) fn reads_true(&self, read: Option<&Binding>) -> bool {
-        read.and_then(|binding| self.ctx.read(binding))
-            .is_some_and(|value| matches!(value, ReadValue::Bool(true)))
     }
 
     fn shared_control_action(
@@ -559,30 +596,30 @@ where
 
     fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output {
         let size = group.size().unwrap_or(SizeSpec::FILL);
-        let mut layouts: Vec<ChildLayout> = Vec::with_capacity(children.len());
-        let mut nodes: Vec<MasonryNode<Action>> = Vec::with_capacity(children.len());
         let mut blocks = Vec::new();
-        for child in children {
-            let block = self.block(child.block, &mut blocks);
-            layouts.push(
-                ChildLayout::natural(child.output.declared(), child.minimum)
-                    .within(child.band)
-                    .blocked(block),
-            );
-            nodes.push(child.output);
-        }
-        let background = group.background().map(|role| {
-            let mut color = self.skin.rgba(role);
-            color.a = group.background_alpha().unwrap_or(1.0);
-            color
-        });
-        let frame = group.frame().map(|sides| {
-            (
-                sides,
-                self.skin.rgba(group.frame_color()),
-                group.frame_width(),
-            )
-        });
+        let (layouts, nodes) = self.flow(children, &mut blocks);
+        let alpha = group.background_alpha().unwrap_or(1.0);
+        let face = |background: Option<ColorRole>, frame_color: ColorRole| Face {
+            background: background.map(|role| {
+                let mut color = self.skin.rgba(role);
+                color.a = alpha;
+                color
+            }),
+            frame: group
+                .frame()
+                .map(|sides| (sides, self.skin.rgba(frame_color), group.frame_width())),
+        };
+        let idle = face(group.background(), group.frame_color());
+        let lit = group
+            .lit()
+            .map(|lit| (lit.flag(), face(lit.background(), lit.frame_color())));
+        let shown = lit
+            .as_ref()
+            .is_some_and(|(flag, _)| self.ctx.flag(Some(flag)));
+        let Face { background, frame } = lit
+            .as_ref()
+            .filter(|_| shown)
+            .map_or(idle, |(_, face)| *face);
         let mut output = MasonryNode::document(
             NodeLayout::Flex(
                 Flex::new(
@@ -615,6 +652,9 @@ where
             ));
         }
         output.hides(blocks);
+        if let Some((flag, lit)) = lit {
+            output.lights(flag.clone(), Some(Faces { idle, lit }));
+        }
         output
     }
 
@@ -762,16 +802,18 @@ where
         )
     }
 
-    fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
+    fn slot(
+        &mut self,
+        children: Vec<GroupMount<Self::Output>>,
+        size: Option<SizeSpec>,
+    ) -> Self::Output {
         let declared = size.map_or(
             solve::Size::new(solve::Length::Fill, solve::Length::Shrink),
             declared,
         );
-        let layouts = children
-            .iter()
-            .map(|child| ChildLayout::natural(child.declared(), None))
-            .collect();
-        MasonryNode::document(
+        let mut blocks = Vec::new();
+        let (layouts, nodes) = self.flow(children, &mut blocks);
+        let mut output = MasonryNode::document(
             NodeLayout::Flex(
                 Flex::new(
                     Axis::Vertical,
@@ -785,11 +827,13 @@ where
                 .align_main(solve::Alignment::Center),
             ),
             declared,
-            children,
+            nodes,
             true,
             None,
             None,
-        )
+        );
+        output.hides(blocks);
+        output
     }
 
     fn split(

@@ -8,7 +8,7 @@ use axum::{
 };
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use kithara::platform::sync::Arc;
-use kithara_test_fixtures::assets::by_name;
+use kithara_test_fixtures::{assets::by_name, hls::long_plain};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -37,6 +37,9 @@ pub(crate) enum ContentSpec {
     /// An out-of-process client cannot upload a multi-megabyte body. Generated
     /// bodies are resolved by accessor name instead.
     Signal {
+        name: String,
+    },
+    Asset {
         name: String,
     },
 }
@@ -104,6 +107,18 @@ fn content_from_spec(spec: ContentSpec) -> Result<Content, String> {
             Ok(Content::StaticBytes {
                 bytes: Arc::new(asset.bytes().to_vec()),
                 content_type: Some(asset.entry().content_type),
+            })
+        }
+        ContentSpec::Asset { name } => {
+            let route = format!("/{}", name.trim_start_matches('/'));
+            let resource = long_plain()
+                .get(&route)
+                .ok_or_else(|| format!("the generated HLS bundle has no `{name}`"))?;
+            let bytes = std::fs::read(resource.path())
+                .map_err(|error| format!("generated `{name}` is unreadable: {error}"))?;
+            Ok(Content::StaticBytes {
+                bytes: Arc::new(bytes),
+                content_type: Some(resource.content_type()),
             })
         }
     }
@@ -215,6 +230,23 @@ mod tests {
             error.contains("no generated asset is named"),
             "unexpected rejection reason: {error}"
         );
+    }
+
+    #[kithara::test]
+    fn asset_spec_serves_a_file_of_the_generated_hls_bundle() {
+        let content = content_from_spec(ContentSpec::Asset {
+            name: "hls/index-slq-a1.m3u8".to_owned(),
+        })
+        .expect("the generated variant playlist must resolve");
+        let Content::StaticBytes {
+            bytes,
+            content_type,
+        } = content
+        else {
+            panic!("asset spec must resolve to static bytes");
+        };
+        assert!(bytes.starts_with(b"#EXTM3U"));
+        assert_eq!(content_type, Some("application/vnd.apple.mpegurl"));
     }
 
     #[kithara::test]

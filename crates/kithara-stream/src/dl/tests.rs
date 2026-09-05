@@ -152,6 +152,139 @@ async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
     );
 }
 
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+async fn cancelled_abr_deadline_does_not_stop_the_downloader_loop() {
+    const INTERVAL: Duration = Duration::from_millis(100);
+
+    let settings = AbrSettings::builder()
+        .min_switch_interval(INTERVAL)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let downloader = Downloader::new(DownloaderConfig {
+        abr_settings: settings,
+        ..test_config()
+    });
+    let first_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let first_bus = EventBus::default();
+    let mut first_events = first_bus.subscribe();
+    let first_handle = downloader
+        .register(Arc::new(ScheduledAbrPeer {
+            cancel: CancelToken::never(),
+            state: first_state,
+            wake: Arc::new(Notify::default()),
+        }))
+        .with_bus(first_bus);
+    let second_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let second_wake = Arc::new(Notify::default());
+
+    first_handle.abr().reevaluate();
+    loop {
+        let envelope = first_events
+            .recv()
+            .await
+            .expect("the first peer event bus remains open");
+        if matches!(
+            envelope.event,
+            Event::Abr(AbrEvent::DecisionSkipped {
+                reason: AbrReason::MinInterval
+            })
+        ) {
+            break;
+        }
+    }
+    drop(first_handle);
+    time::sleep(INTERVAL.saturating_mul(2)).await;
+
+    let second_handle = downloader.register(Arc::new(ScheduledAbrPeer {
+        cancel: CancelToken::never(),
+        state: Arc::clone(&second_state),
+        wake: Arc::clone(&second_wake),
+    }));
+
+    second_handle.abr().reevaluate();
+    second_wake.notified().await;
+    assert_eq!(second_state.pending_target(), Some(VariantIndex::new(3)));
+}
+
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+async fn cancelled_abr_deadline_rearms_the_next_live_peer() {
+    const INTERVAL: Duration = Duration::from_millis(500);
+    const STAGGER: Duration = Duration::from_millis(50);
+
+    let settings = AbrSettings::builder()
+        .min_switch_interval(INTERVAL)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let downloader = Downloader::new(DownloaderConfig {
+        abr_settings: settings,
+        ..test_config()
+    });
+    let first_started = Instant::now();
+    let first_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let first_bus = EventBus::default();
+    let mut first_events = first_bus.subscribe();
+    let first_handle = downloader
+        .register(Arc::new(ScheduledAbrPeer {
+            cancel: CancelToken::never(),
+            state: Arc::clone(&first_state),
+            wake: Arc::new(Notify::default()),
+        }))
+        .with_bus(first_bus);
+
+    first_handle.abr().reevaluate();
+    loop {
+        let envelope = first_events
+            .recv()
+            .await
+            .expect("the first peer event bus remains open");
+        if matches!(
+            envelope.event,
+            Event::Abr(AbrEvent::DecisionSkipped {
+                reason: AbrReason::MinInterval
+            })
+        ) {
+            break;
+        }
+    }
+
+    time::sleep(STAGGER).await;
+    let second_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let second_wake = Arc::new(Notify::default());
+    let second_bus = EventBus::default();
+    let mut second_events = second_bus.subscribe();
+    let second_handle = downloader
+        .register(Arc::new(ScheduledAbrPeer {
+            cancel: CancelToken::never(),
+            state: Arc::clone(&second_state),
+            wake: Arc::clone(&second_wake),
+        }))
+        .with_bus(second_bus);
+    second_handle.abr().reevaluate();
+    loop {
+        let envelope = second_events
+            .recv()
+            .await
+            .expect("the second peer event bus remains open");
+        if matches!(
+            envelope.event,
+            Event::Abr(AbrEvent::DecisionSkipped {
+                reason: AbrReason::MinInterval
+            })
+        ) {
+            break;
+        }
+    }
+
+    assert_eq!(first_state.pending_target(), None);
+    assert!(
+        Instant::now().saturating_duration_since(first_started) < INTERVAL,
+        "the first ABR deadline must still be pending before cancellation"
+    );
+    drop(first_handle);
+    second_wake.notified().await;
+    assert_eq!(second_state.pending_target(), Some(VariantIndex::new(3)));
+}
+
 /// Event-driven completion barrier. Each finished fetch calls
 /// [`complete`](Self::complete); the `target`-th completion signals the
 /// waiter parked in [`wait`](Self::wait).

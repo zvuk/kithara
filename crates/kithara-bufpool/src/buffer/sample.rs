@@ -43,6 +43,8 @@ impl SampleBuffer {
             /// Returns an error when the requested capacity overflows, exceeds either
             /// hard budget, or cannot be allocated.
             pub fn ensure_len(&mut self, min_len: usize) -> Result<(), PoolError>;
+            /// Reduce retained capacity to the current length and release its pool charge.
+            pub fn shrink_to_fit(&mut self);
             /// Shorten the buffer without changing its capacity.
             pub fn truncate(&mut self, len: usize);
             /// Append samples under both hard budgets.

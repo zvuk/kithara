@@ -328,13 +328,8 @@ impl ControlPainter for Button {
         self.paint(list, text, &data.label, data.active, bounds, state);
     }
 
-    fn length(&self, text: &mut TextContext, data: &Self::Data) -> Size<Length> {
-        self.declared(text, &data.label, data.active)
-    }
-
-    /// Only the width: every button fills the height of the row it sits in.
-    fn measure(&self, text: &mut TextContext, data: &Self::Data) -> Size {
-        Size::new(self.intrinsic_width(text, &data.label, data.active), 0.0)
+    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
+        self.declared()
     }
 }
 

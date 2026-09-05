@@ -20,21 +20,49 @@ use crate::{
     view,
 };
 
-/// The shape of the document below, and the window both hosts are given.
+/// The shape of the documents below, and the window both hosts are given.
 struct Consts;
 
 impl Consts {
     /// The room the window leaves, wide and tall enough for every block.
     const CASE: (u32, u32) = (300, 240);
-    /// Every leaf the document lays out, in the order it holds them: a row of
-    /// the flow, the block that flow hides, the row after it, and the cell the
-    /// split hides beside them.
-    const LEAVES: [&'static str; 4] = ["head", "body", "tail", "aside"];
+    /// Every leaf the flow document lays out, in the order it holds them: a
+    /// row of the flow, the block that flow hides, the row after it, and the
+    /// cell the split hides beside them.
+    const FLOW_LEAVES: [&'static str; 4] = ["flow/head", "flow/body", "flow/tail", "aside/aside"];
+    /// The same three leaves of the slot document, the middle one held by a
+    /// slot rather than by the column itself.
+    const SLOT_LEAVES: [&'static str; 3] = ["well/head", "well/body", "well/tail"];
+}
+
+/// One document, and the leaves it lays out in the order it holds them.
+#[derive(Clone, Copy)]
+struct Case {
+    document: &'static str,
+    leaves: &'static [&'static str],
+}
+
+impl Case {
+    /// A block held by the flow that draws it, and one held by a split.
+    const FLOW: Self = Self {
+        document: "blocks.klayout.ron",
+        leaves: &Consts::FLOW_LEAVES,
+    };
+    /// A block held by a slot, which is a flow the facade used to speak for.
+    const SLOT: Self = Self {
+        document: "slot.klayout.ron",
+        leaves: &Consts::SLOT_LEAVES,
+    };
 }
 
 /// A document that hides a child of a flow and a cell of a split behind the
 /// same flag, the way the shipped menu hides a group and the shipped layout
 /// hides a module.
+///
+/// The slot stands its children in the middle of the room it is given, so its
+/// heights leave an even number of pixels free: the retained toolkit snaps
+/// every child origin to a whole pixel and the immediate one does not, and a
+/// half-pixel centre would measure that rather than where the block stands.
 fn documents() -> MemResolver {
     let mut resolver = MemResolver::default();
     resolver.insert(
@@ -60,6 +88,25 @@ fn documents() -> MemResolver {
             ]))"#,
     );
     resolver.insert(
+        "slot.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "slot",
+            root: Module(instance: "well", source: "well.kmodule.ron",
+                size: (w: Fill, h: Fill)))"#,
+    );
+    resolver.insert(
+        "well.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "well", chrome: Plain,
+            root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                Pressable(id: "open", press: Command(id: "fixture.toggle"),
+                    child: Spacer(id: "head", size: Some((w: Fill, h: Fixed(26.0))))),
+                Slot(id: "held", size: (w: Fill, h: Fill), default: [
+                    Optional(id: "body-block", hidden: Model(id: "fixture.hidden"),
+                        child: Spacer(id: "body", size: Some((w: Fill, h: Fixed(40.0))))),
+                    Spacer(id: "tail", size: Some((w: Fill, h: Fixed(27.0)))),
+                ]),
+            ]))"#,
+    );
+    resolver.insert(
         "aside.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "aside", chrome: Plain,
             root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
@@ -71,9 +118,19 @@ fn documents() -> MemResolver {
 
 /// An application that hides every block until something presses the row that
 /// shows them.
-#[derive(Default)]
 struct Blocks {
+    document: &'static str,
     shown: bool,
+}
+
+impl Blocks {
+    /// The application as a window first shows it: every block hidden.
+    const fn hidden(case: Case) -> Self {
+        Self {
+            document: case.document,
+            shown: false,
+        }
+    }
 }
 
 impl Reads for Blocks {
@@ -85,7 +142,7 @@ impl Reads for Blocks {
 
 impl App for Blocks {
     fn document(&self) -> &str {
-        "blocks.klayout.ron"
+        self.document
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
@@ -111,12 +168,12 @@ impl App for Blocks {
 /// The blocks are shown by pressing the row the document names for it, so the
 /// boxes below are the ones a person sees after using the document rather than
 /// a state the test declared.
-fn retained() -> Vec<Rect> {
+fn retained(case: Case) -> Vec<Rect> {
     let endpoints = Endpoints::default();
     let resolver = documents();
     let (width, height) = Consts::CASE;
     let mut ui = Ui::new(
-        Blocks::default(),
+        Blocks::hidden(case),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
@@ -127,7 +184,7 @@ fn retained() -> Vec<Rect> {
     )
     .unwrap_or_else(|error| panic!("the block fixture must mount: {error}"));
     let head = ui
-        .rect_of("flow/head")
+        .rect_of(case.leaves[0])
         .expect("the row that shows the blocks must be laid out");
     let at = Pt {
         x: head.x + head.w / 2.0,
@@ -148,9 +205,9 @@ fn retained() -> Vec<Rect> {
     );
     ui.scene()
         .unwrap_or_else(|error| panic!("the retained host must draw the shown blocks: {error}"));
-    Consts::LEAVES
+    case.leaves
         .iter()
-        .filter_map(|leaf| ui.rect_of(&format!("{}/{leaf}", instance(leaf))))
+        .filter_map(|leaf| ui.rect_of(leaf))
         .filter(|rect| rect.w > 0.0 && rect.h > 0.0)
         .collect()
 }
@@ -160,9 +217,9 @@ fn retained() -> Vec<Rect> {
 ///
 /// This host has no pointer of its own here: it builds its whole tree from that
 /// reading, which is exactly what makes a block it never mounts invisible.
-fn neutral() -> Vec<Rect> {
+fn neutral(case: Case) -> Vec<Rect> {
     let ui = compile(
-        "blocks.klayout.ron",
+        case.document,
         &documents(),
         &Endpoints::default(),
         builtin::skin_doc(),
@@ -177,7 +234,10 @@ fn neutral() -> Vec<Rect> {
     let mut element = tree::render(
         &ui.root,
         &ui,
-        &Blocks { shown: true },
+        &Blocks {
+            document: case.document,
+            shown: true,
+        },
         &view::EMPTY,
         builtin::skin(),
         Clock::default(),
@@ -193,11 +253,6 @@ fn neutral() -> Vec<Rect> {
     rows
 }
 
-/// Which module holds one leaf of the document.
-fn instance(leaf: &str) -> &'static str {
-    if leaf == "aside" { "aside" } else { "flow" }
-}
-
 /// A block shown by a press stands in the same box on both hosts.
 ///
 /// The host that throws its tree away every frame builds the block the moment
@@ -207,8 +262,22 @@ fn instance(leaf: &str) -> &'static str {
 #[kithara::test]
 fn both_hosts_lay_a_shown_block_out_the_same_way() {
     assert_eq!(
-        retained(),
-        neutral(),
+        retained(Case::FLOW),
+        neutral(Case::FLOW),
         "the two hosts disagree on where the blocks a press showed stand"
+    );
+}
+
+/// A slot holds a block the same way, because a slot is a flow.
+///
+/// The facade used to answer the hiding question for the slot itself, which
+/// left the retained host no block to show: the child was never mounted, and
+/// nothing short of rebuilding the document could bring it back.
+#[kithara::test]
+fn both_hosts_lay_a_block_a_slot_holds_out_the_same_way() {
+    assert_eq!(
+        retained(Case::SLOT),
+        neutral(Case::SLOT),
+        "the two hosts disagree on where the block a slot holds stands after a press showed it"
     );
 }

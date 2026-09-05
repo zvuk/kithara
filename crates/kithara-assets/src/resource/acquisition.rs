@@ -133,13 +133,13 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
     /// # Errors
     /// Returns error if the resource is cancelled, failed, or the read fails.
     fn read_into(&self, buf: &mut ByteBuffer) -> StorageResult<usize> {
+        buf.clear();
         let Some(len) = self.len() else {
             let mut probe = [0u8; 1];
             let _ = self.read_at(0, &mut probe)?;
             return Ok(0);
         };
         if len == 0 {
-            buf.clear();
             return Ok(0);
         }
         let len_usize = usize::try_from(len).map_err(|error| {

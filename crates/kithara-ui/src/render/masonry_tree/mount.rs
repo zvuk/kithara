@@ -346,7 +346,7 @@ impl NodeControl for mount::Text<'_> {
                     .map(|label| host.ctx.ui.resolve(label).to_owned())
             })
             .unwrap_or_default();
-        host.text_leaf(self, content, host.reads_true(self.active), cx.declared)
+        host.text_leaf(self, content, cx.declared)
     }
 }
 

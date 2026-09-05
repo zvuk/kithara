@@ -15,7 +15,7 @@ use crate::SourceSpan;
 
 #[derive(Clone, Copy)]
 pub(super) struct CursorRead {
-    pub(super) last_output_meta: Option<AudioChunkInfo>,
+    pub(super) first_output_meta: Option<AudioChunkInfo>,
     pub(super) outcome: ReadOutcome,
 }
 
@@ -130,7 +130,7 @@ impl ChunkCursor {
         }
 
         let mut written = 0;
-        let mut last_output_meta = None;
+        let mut first_output_meta = None;
         let mut source_span = None;
         let mut source_output_frames = 0_u64;
         while written < buf.len() {
@@ -152,7 +152,7 @@ impl ChunkCursor {
                     self.copy_into(chunk, chunk_source_span, &mut buf[written..], playhead)?;
                 if copied.samples > 0 {
                     hang_reset!();
-                    last_output_meta = Some(chunk.meta);
+                    first_output_meta.get_or_insert(chunk.meta);
                     written += copied.samples;
                     if let Some(next) = copied.source_span {
                         source_span = source_span.map_or(Some(next), |current| {
@@ -199,7 +199,7 @@ impl ChunkCursor {
                     .is_none_or(|duration| position <= duration)
             );
             return Ok(CursorRead {
-                last_output_meta,
+                first_output_meta,
                 outcome: ReadOutcome::Frames {
                     count,
                     position,
@@ -364,7 +364,7 @@ fn pending(playhead: &dyn PlayheadWrite, reason: PendingReason) -> CursorRead {
             reason,
             position: playhead.position(),
         },
-        last_output_meta: None,
+        first_output_meta: None,
     }
 }
 
@@ -373,7 +373,7 @@ fn eof(playhead: &dyn PlayheadWrite) -> CursorRead {
         outcome: ReadOutcome::Eof {
             position: playhead.position(),
         },
-        last_output_meta: None,
+        first_output_meta: None,
     }
 }
 
@@ -513,6 +513,10 @@ mod tests {
                 &mut output,
             )
             .expect("first read succeeds");
+        assert_eq!(
+            first_read.first_output_meta.map(|meta| meta.timestamp),
+            Some(Duration::ZERO)
+        );
         let ReadOutcome::Frames {
             count, source_span, ..
         } = first_read.outcome

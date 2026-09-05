@@ -250,6 +250,11 @@ moved and deleted with the audio bytes. Its header and completion index identify
 committed generation replaces the payload. Restore validates fingerprint, source rate, extent and chunk duration
 before resuming only missing ranges.
 
+The cache and the persistence actor each reuse one checked-out byte scratch buffer. Capacity up to 2 MiB
+remains charged as fixed working memory between operations; `normalize` releases larger allocations after
+each operation. These guards are active rather than idle pool inventory, so region pressure does not reclaim
+them.
+
 Invalidation has two levers: the composite codec version in `kithara-analysis`, bumped whenever its framing or
 the waveform / beat-grid encodings change, and `analysis_fingerprint`, written into every blob so a
 configuration mismatch is a miss and `waveform_max_buckets` or beat-analysis tuning re-analyse on their own.

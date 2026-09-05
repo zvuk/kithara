@@ -103,8 +103,16 @@ pub trait Host {
     fn scroll(&mut self, id: InternId, child: Self::Output, size: Option<SizeSpec>)
     -> Self::Output;
 
-    /// Mounts a vertical slot of visible children.
-    fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
+    /// Mounts a vertical slot around its already-produced children.
+    ///
+    /// A slot is a flow like any other, so it is handed every child this host
+    /// mounts and stands the ones the document does not hide - the block a
+    /// host keeps in its tree is the host's to hide, not the facade's to drop.
+    fn slot(
+        &mut self,
+        children: Vec<GroupMount<Self::Output>>,
+        size: Option<SizeSpec>,
+    ) -> Self::Output;
 
     /// Mounts a weighted layout split.
     ///

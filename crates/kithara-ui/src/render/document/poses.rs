@@ -84,7 +84,7 @@ impl Host for &mut Poses {
 
     fn scroll(&mut self, _id: InternId, _child: Self::Output, _size: Option<SizeSpec>) {}
 
-    fn slot(&mut self, _children: Vec<Self::Output>, _size: Option<SizeSpec>) {}
+    fn slot(&mut self, _children: Vec<GroupMount<Self::Output>>, _size: Option<SizeSpec>) {}
 
     fn split(
         &mut self,

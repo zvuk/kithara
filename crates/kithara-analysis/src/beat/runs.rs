@@ -171,6 +171,9 @@ where
             }
             run.mono.drain(..exact);
             run.start = target;
+            // The charge follows what the run still holds, so the hold budget
+            // bounds the bytes as well as the frames.
+            run.mono.shrink_to_fit();
         }
     }
 
@@ -443,6 +446,7 @@ where
                 .get_with_len::<f32>(samples.len())
                 .map_err(|_| BlobError::Corrupt)?;
             mono.copy_from_slice(&samples);
+            mono.shrink_to_fit();
             restored.push(Run {
                 start: run.start,
                 end: run.end,
@@ -562,6 +566,7 @@ fn slice(mono: &[f32], at: u64, from: u64, to: u64) -> Option<&[f32]> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::PoolConfig;
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;
 
@@ -569,7 +574,7 @@ mod tests {
     use crate::{
         BeatAnalysisConfig,
         coverage::FrameRange,
-        test_pools::{Pools, pools},
+        test_pools::{Pools, pools, pools_with},
     };
 
     const SRC: u32 = 44_100;
@@ -610,6 +615,15 @@ mod tests {
     }
 
     fn budgeted(source_rate: u32, budget: usize, max_runs: usize) -> TestRuns {
+        budgeted_with_pools(source_rate, budget, max_runs, pools())
+    }
+
+    fn budgeted_with_pools(
+        source_rate: u32,
+        budget: usize,
+        max_runs: usize,
+        pools: Pools,
+    ) -> TestRuns {
         TestRuns {
             inner: Runs::new(
                 BeatAnalysisConfig::<RubatoBackend>::default(),
@@ -617,8 +631,19 @@ mod tests {
                 budget,
                 max_runs,
             ),
-            pools: pools(),
+            pools,
         }
+    }
+
+    fn non_retaining_pools(max_bytes: usize) -> Pools {
+        pools_with(
+            max_bytes,
+            PoolConfig::builder().max_buffers(32).build(),
+            PoolConfig::builder()
+                .max_buffers(8)
+                .max_retained_capacity(1)
+                .build(),
+        )
     }
 
     fn ramp(frames: usize, from: u64) -> Vec<f32> {
@@ -922,6 +947,65 @@ mod tests {
             "the run kept its audio: {:?}",
             layout(&set)
         );
+    }
+
+    #[kithara::test]
+    fn reclaimed_mono_releases_charged_capacity() {
+        const BUDGET: usize = 4096;
+        const MAX_CHARGED_BYTES: usize = BUDGET * size_of::<f32>();
+        const TARGET_RATE: u32 = 22_050;
+
+        let pools = non_retaining_pools(4 * MAX_CHARGED_BYTES);
+        let mut set = budgeted_with_pools(TARGET_RATE, BUDGET, usize::MAX, pools.clone());
+        for cycle in 0..4u64 {
+            let at = cycle * BUDGET as u64;
+            set.push(&ramp(BUDGET, at), at, true);
+
+            assert_eq!(set.held(), BUDGET);
+            assert!(
+                pools.stats().allocated_bytes <= MAX_CHARGED_BYTES,
+                "cycle {cycle} retains {} charged bytes for a {MAX_CHARGED_BYTES}-byte mono budget",
+                pools.stats().allocated_bytes
+            );
+            set.release(|base| base + BUDGET);
+        }
+    }
+
+    #[kithara::test]
+    fn fragmented_runs_share_the_region_with_loader_scratch() {
+        // Every run holds its own resampler, so the run cap is what bounds the
+        // region a source arriving in scattered fragments can take.
+        const RUNS: usize = 4;
+        const LOADER_BYTES: usize = 512 * 1024;
+        const POOL_BYTES: usize = 2 * LOADER_BYTES;
+
+        let pools = non_retaining_pools(POOL_BYTES);
+        let loader = pools
+            .get_with_len::<u8>(LOADER_BYTES)
+            .expect("initial loader scratch must fit");
+
+        let mut set = budgeted_with_pools(SRC, usize::MAX, RUNS, pools.clone());
+        for fragment in 0..24u16 {
+            set.push(&[f32::from(fragment)], u64::from(fragment) * 2, true);
+        }
+        assert_eq!(
+            set.spans().count(),
+            RUNS,
+            "the cap bounds the runs a fragmented source opens"
+        );
+        assert_eq!(loader.len(), LOADER_BYTES);
+
+        drop(loader);
+        let loader = pools
+            .get_with_len::<u8>(LOADER_BYTES)
+            .expect("fragmented analysis must leave capacity for loader scratch");
+        assert_eq!(loader.len(), LOADER_BYTES);
+
+        drop(set);
+        drop(loader);
+        pools
+            .get_with_len::<u8>(POOL_BYTES)
+            .expect("completed analysis must return its capacity to the region");
     }
 
     #[kithara::test]

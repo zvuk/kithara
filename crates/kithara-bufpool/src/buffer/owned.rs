@@ -1,4 +1,4 @@
-use std::ops::RangeBounds;
+use std::{mem, ops::RangeBounds};
 
 use kithara_platform::sync::Arc;
 
@@ -36,12 +36,16 @@ where
     }
 
     pub(super) fn renew(&mut self) {
-        let core = Arc::clone(&self.core);
-        *self = core.acquire();
+        let value = mem::take(&mut self.value);
+        self.core.put(value, self.shard_idx);
+    }
+
+    pub(super) fn normalize(&mut self) {
+        self.core.normalize(&mut self.value, self.shard_idx);
     }
 
     fn grow(&mut self, new_len: usize) -> Result<(), PoolError> {
-        self.core.grow(&mut self.value, new_len)
+        self.core.grow(&mut self.value, new_len, self.shard_idx)
     }
 }
 
@@ -71,6 +75,11 @@ impl<const SHARDS: usize, T, const OBSERVE: bool> OwnedBuffer<SHARDS, Vec<T>, OB
         F: FnMut(&T) -> bool,
     {
         self.value.retain(keep);
+    }
+
+    pub(super) fn shrink_to_fit(&mut self) {
+        let len = self.value.len();
+        self.core.shrink_to(&mut self.value, len);
     }
 
     pub(super) fn try_extend<I>(&mut self, values: I) -> Result<(), PoolError>
@@ -141,7 +150,6 @@ where
     B: Storage,
 {
     fn drop(&mut self) {
-        self.core
-            .put(std::mem::take(&mut self.value), self.shard_idx);
+        self.core.put(mem::take(&mut self.value), self.shard_idx);
     }
 }

@@ -214,9 +214,8 @@ impl DriverIo for MmapDriver {
         if committed {
             match (&*mmap_guard, self.mode) {
                 (MmapState::Committed(_), OpenMode::ReadWrite) => {
-                    self.committed.store(None);
-                    *mmap_guard = MmapState::Empty;
                     let rw = MemoryMappedFile::open_rw(&self.path)?;
+                    self.committed.store(None);
                     *mmap_guard = MmapState::Active(rw);
                 }
                 (MmapState::Active(_), _)
@@ -229,35 +228,24 @@ impl DriverIo for MmapDriver {
             }
         }
 
-        let mmap = match &*mmap_guard {
-            MmapState::Active(m) => {
-                if end > m.len() {
-                    let new_size = end.max(m.len() * self.growth_factor);
-                    m.resize(new_size)?;
-                }
-                m
-            }
-            MmapState::Committed(_) => {
-                return Err(StorageError::Failed(
-                    "cannot write to committed resource".to_string(),
-                ));
-            }
-            MmapState::Empty => {
-                let size = end.max(self.initial_len);
-                let m = MemoryMappedFile::create_rw(&self.path, size)?;
-                *mmap_guard = MmapState::Active(m);
-                match &*mmap_guard {
-                    MmapState::Active(m) => m,
-                    _ => {
-                        return Err(StorageError::Failed(
-                            "mmap not available after create".to_string(),
-                        ));
-                    }
-                }
-            }
+        if matches!(*mmap_guard, MmapState::Empty) {
+            let size = end.max(self.initial_len);
+            let mmap = MemoryMappedFile::create_rw(&self.path, size)?;
+            *mmap_guard = MmapState::Active(mmap);
+        }
+
+        let MmapState::Active(mmap) = &*mmap_guard else {
+            return Err(StorageError::Failed(
+                "cannot write to committed resource".to_string(),
+            ));
         };
+        if end > mmap.len() {
+            let new_size = end.max(mmap.len() * self.growth_factor);
+            mmap.resize(new_size)?;
+        }
 
         mmap.update_region(offset, data)?;
+        drop(mmap_guard);
         Ok(())
     }
 }

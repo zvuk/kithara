@@ -64,7 +64,7 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
         .runners
         .iter()
         .flat_map(|runner| {
-            super::container::Container::mounts(runner)
+            super::container::Container::mounts(host, runner)
                 .into_iter()
                 .map(|(name, _)| name)
         })
@@ -73,11 +73,16 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
     volumes.dedup();
     let pins = CiPins::load(std::path::Path::new(PINS_PATH))?;
     for volume in &volumes {
-        process.run(
-            "docker",
-            &["volume", "create", volume],
-            "create a runner cache volume",
-        )?;
+        if std::path::Path::new(volume).is_absolute() {
+            std::fs::create_dir_all(volume)
+                .with_context(|| format!("creating runner cache directory {volume}"))?;
+        } else {
+            process.run(
+                "docker",
+                &["volume", "create", volume],
+                "create a runner cache volume",
+            )?;
+        }
         give_to_the_job(process, volume, &pins)?;
     }
     info!(network = host.network, "runner machine prepared");
@@ -145,7 +150,7 @@ fn require_linux() -> Result<()> {
     Ok(())
 }
 
-/// Hand a cache volume to the user the job runs as.
+/// Hand a cache mount to the user the job runs as.
 ///
 /// Docker fills a fresh named volume from the image, ownership included — but
 /// only where the image has that directory. A mount point the image does not
@@ -153,9 +158,10 @@ fn require_linux() -> Result<()> {
 /// cannot write to its own cache. That is not a cache being temperamental: it
 /// is a volume nobody gave away. Both existing volumes worked by accident of
 /// their paths existing in the image; this makes it true on purpose, for every
-/// volume, on every machine that bootstraps.
+/// cache mount, on every machine that bootstraps.
 fn give_to_the_job(process: &Process, volume: &str, pins: &CiPins) -> Result<()> {
-    let mount = format!("{volume}:/volume");
+    let mount_type = super::container::Container::mount_type(volume);
+    let mount = format!("type={mount_type},source={volume},target=/volume");
     let owner = format!("chown {user}:{user} /volume", user = Consts::JOB_USER);
     process.run(
         "docker",
@@ -166,7 +172,7 @@ fn give_to_the_job(process: &Process, volume: &str, pins: &CiPins) -> Result<()>
             // image starts as the user being given it.
             "--user",
             "0:0",
-            "--volume",
+            "--mount",
             &mount,
             "--entrypoint",
             "sh",

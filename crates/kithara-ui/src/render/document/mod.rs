@@ -16,7 +16,7 @@ pub use ctx::{Clock, Ctx};
 pub use facade::render;
 #[cfg(test)]
 pub(crate) use facade::render_engine_subtree;
-pub use group::Group;
+pub use group::{Group, Lit};
 pub use host::Host;
 pub use module::Module;
 pub use placed::{PlacedMount, Snap};

@@ -1157,6 +1157,154 @@ mod tests {
     }
 
     #[kithara::test]
+    fn advance_reason_conversion_preserves_known_variants() {
+        for (source, expected) in [
+            (AdvanceReason::NaturalEof, FfiAdvanceReason::NaturalEof),
+            (
+                AdvanceReason::CrossfadePreArm,
+                FfiAdvanceReason::CrossfadePreArm,
+            ),
+            (AdvanceReason::UserSelect, FfiAdvanceReason::UserSelect),
+            (AdvanceReason::UserNext, FfiAdvanceReason::UserNext),
+            (AdvanceReason::UserPrev, FfiAdvanceReason::UserPrev),
+            (AdvanceReason::TrackFailed, FfiAdvanceReason::TrackFailed),
+            (
+                AdvanceReason::RemovedCurrent,
+                FfiAdvanceReason::RemovedCurrent,
+            ),
+            (AdvanceReason::Repeat, FfiAdvanceReason::Repeat),
+            (AdvanceReason::Cancelled, FfiAdvanceReason::Cancelled),
+        ] {
+            assert_eq!(FfiAdvanceReason::from(source), expected);
+        }
+    }
+
+    #[kithara::test]
+    fn audio_codec_conversion_preserves_known_variants() {
+        for (source, expected) in [
+            (AudioCodecKind::AacLc, FfiAudioCodecKind::AacLc),
+            (AudioCodecKind::AacHe, FfiAudioCodecKind::AacHe),
+            (AudioCodecKind::AacHeV2, FfiAudioCodecKind::AacHeV2),
+            (AudioCodecKind::Mp3, FfiAudioCodecKind::Mp3),
+            (AudioCodecKind::Flac, FfiAudioCodecKind::Flac),
+            (AudioCodecKind::Vorbis, FfiAudioCodecKind::Vorbis),
+            (AudioCodecKind::Opus, FfiAudioCodecKind::Opus),
+            (AudioCodecKind::Alac, FfiAudioCodecKind::Alac),
+            (AudioCodecKind::Pcm, FfiAudioCodecKind::Pcm),
+            (AudioCodecKind::Adpcm, FfiAudioCodecKind::Adpcm),
+        ] {
+            assert_eq!(FfiAudioCodecKind::from(source), expected);
+        }
+    }
+
+    #[kithara::test]
+    fn container_conversion_preserves_known_variants() {
+        for (source, expected) in [
+            (ContainerKind::Mp4, FfiContainerKind::Mp4),
+            (ContainerKind::Fmp4, FfiContainerKind::Fmp4),
+            (ContainerKind::MpegTs, FfiContainerKind::MpegTs),
+            (ContainerKind::MpegAudio, FfiContainerKind::MpegAudio),
+            (ContainerKind::Adts, FfiContainerKind::Adts),
+            (ContainerKind::Flac, FfiContainerKind::Flac),
+            (ContainerKind::Wav, FfiContainerKind::Wav),
+            (ContainerKind::Ogg, FfiContainerKind::Ogg),
+            (ContainerKind::Caf, FfiContainerKind::Caf),
+            (ContainerKind::Mkv, FfiContainerKind::Mkv),
+        ] {
+            assert_eq!(FfiContainerKind::from(source), expected);
+        }
+    }
+
+    #[kithara::test]
+    fn decoder_change_cause_conversion_preserves_known_variants() {
+        for (source, expected) in [
+            (DecoderChangeCause::Initial, FfiDecoderChangeCause::Initial),
+            (
+                DecoderChangeCause::VariantSwitch,
+                FfiDecoderChangeCause::VariantSwitch,
+            ),
+            (
+                DecoderChangeCause::FormatBoundary,
+                FfiDecoderChangeCause::FormatBoundary,
+            ),
+            (
+                DecoderChangeCause::SeekRecreate,
+                FfiDecoderChangeCause::SeekRecreate,
+            ),
+            (
+                DecoderChangeCause::Recovery,
+                FfiDecoderChangeCause::Recovery,
+            ),
+            (
+                DecoderChangeCause::HostRateChange,
+                FfiDecoderChangeCause::HostRateChange,
+            ),
+        ] {
+            assert_eq!(FfiDecoderChangeCause::from(source), expected);
+        }
+    }
+
+    #[kithara::test]
+    fn decode_error_kind_conversion_preserves_known_variants() {
+        for (source, expected) in [
+            (DecodeErrorKind::Io, FfiDecodeErrorKind::Io),
+            (
+                DecodeErrorKind::UnsupportedCodec,
+                FfiDecodeErrorKind::UnsupportedCodec,
+            ),
+            (
+                DecodeErrorKind::UnsupportedContainer,
+                FfiDecodeErrorKind::UnsupportedContainer,
+            ),
+            (
+                DecodeErrorKind::InvalidData,
+                FfiDecodeErrorKind::InvalidData,
+            ),
+            (DecodeErrorKind::SeekFailed, FfiDecodeErrorKind::SeekFailed),
+            (
+                DecodeErrorKind::SeekOutOfRange,
+                FfiDecodeErrorKind::SeekOutOfRange,
+            ),
+            (DecodeErrorKind::Parse, FfiDecodeErrorKind::Parse),
+            (
+                DecodeErrorKind::ProbeFailed,
+                FfiDecodeErrorKind::ProbeFailed,
+            ),
+            (
+                DecodeErrorKind::BackendUnavailable,
+                FfiDecodeErrorKind::BackendUnavailable,
+            ),
+            (
+                DecodeErrorKind::InvalidSampleRate,
+                FfiDecodeErrorKind::InvalidSampleRate,
+            ),
+            (
+                DecodeErrorKind::BackendStatus,
+                FfiDecodeErrorKind::BackendStatus,
+            ),
+            (
+                DecodeErrorKind::Interrupted,
+                FfiDecodeErrorKind::Interrupted,
+            ),
+            (DecodeErrorKind::Backend, FfiDecodeErrorKind::Backend),
+        ] {
+            assert_eq!(FfiDecodeErrorKind::from(source), expected);
+        }
+    }
+
+    #[kithara::test]
+    fn resampler_kind_conversion_preserves_known_variants() {
+        for (source, expected) in [
+            (ResamplerKind::Rubato, FfiResamplerKind::Rubato),
+            (ResamplerKind::Apple, FfiResamplerKind::Apple),
+            (ResamplerKind::Glide, FfiResamplerKind::Glide),
+            (ResamplerKind::None, FfiResamplerKind::None),
+        ] {
+            assert_eq!(FfiResamplerKind::from(source), expected);
+        }
+    }
+
+    #[kithara::test]
     fn queue_repeat_mode_round_trips_through_ffi() {
         for expected in [
             kithara::queue::RepeatMode::Off,

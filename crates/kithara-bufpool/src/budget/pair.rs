@@ -24,6 +24,8 @@ impl BudgetPair {
             pub(crate) fn region_current(&self) -> usize;
             #[call(limit)]
             pub(crate) fn region_limit(&self) -> usize;
+            #[call(reclaim)]
+            pub(crate) fn reclaim_region(&self, requested: usize) -> usize;
         }
     }
 
@@ -39,7 +41,7 @@ impl BudgetPair {
         }
 
         self.region
-            .0
+            .counter
             .try_acquire(amount)
             .map_err(|snapshot| ReserveFailure::Overall { amount, snapshot })?;
         reservation.region_acquired = true;
@@ -57,7 +59,7 @@ impl BudgetPair {
             return;
         }
         if self.pool.0.release(amount, "typed pool") {
-            let _ = self.region.0.release(amount, "buffer region");
+            let _ = self.region.counter.release(amount, "buffer region");
         }
     }
 }
@@ -113,7 +115,7 @@ impl Drop for Reservation<'_> {
             let _ = self
                 .budgets
                 .region
-                .0
+                .counter
                 .release(self.amount, "buffer region reservation");
             self.region_acquired = false;
         }

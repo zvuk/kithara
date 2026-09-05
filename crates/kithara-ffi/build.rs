@@ -1,26 +1,44 @@
-use std::process::Command;
+use std::{env, process::Command};
+
+fn git_output(args: &[&str]) -> Option<String> {
+    let output = Command::new("git").args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|value| value.trim().to_owned())
+}
 
 fn main() {
-    // Git short hash
-    let git_hash = Command::new("git")
-        .args(["rev-parse", "--short=8", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_else(|| "unknown".into());
-    println!("cargo:rustc-env=BUILD_GIT_HASH={}", git_hash.trim());
+    println!("cargo:rerun-if-env-changed=CI_COMMIT_SHA");
+    println!("cargo:rerun-if-env-changed=GITHUB_SHA");
 
-    // Build timestamp (compact: MMDD-HHMM)
-    let ts = Command::new("date")
-        .args(["+%m%d-%H%M%S"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_else(|| "0000-0000".into());
-    println!("cargo:rustc-env=BUILD_TIMESTAMP={}", ts.trim());
+    let ci_revision = env::var("CI_COMMIT_SHA")
+        .or_else(|_| env::var("GITHUB_SHA"))
+        .ok();
+    let revision = ci_revision.as_deref().unwrap_or("HEAD");
 
-    // Rebuild when git HEAD changes or any source file changes
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
+    let git_hash =
+        git_output(&["rev-parse", "--short=8", revision]).unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=BUILD_GIT_HASH={git_hash}");
+
+    let timestamp = git_output(&[
+        "show",
+        "-s",
+        "--format=%cd",
+        "--date=format:%m%d-%H%M%S",
+        revision,
+    ])
+    .unwrap_or_else(|| "0000-0000".into());
+    println!("cargo:rustc-env=BUILD_TIMESTAMP={timestamp}");
+
+    // CI checkout changes HEAD's mtime even when the revision is unchanged.
+    if ci_revision.is_none()
+        && let Some(path) = git_output(&["rev-parse", "--git-path", "HEAD"])
+    {
+        println!("cargo:rerun-if-changed={path}");
+    }
     println!("cargo:rerun-if-changed=src/");
     println!("cargo:rerun-if-changed=build.rs");
 }

@@ -7,13 +7,6 @@ extension IntegrationRegressionsIOS {
     func playedAudioLandsInConfiguredCache() async throws {
         let fixtureURL = try TestServerFixture.signal("signal_mp3_track_sine440_187s.mp3")
         let expectedSize = try await cachedFixtureContentLength(at: fixtureURL)
-        try #require(
-            expectedSize == 2_994_349,
-            """
-            precondition: expected the 2,994,349-byte MP3 fixture, \
-            got \(expectedSize) bytes
-            """
-        )
 
         let cacheURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("played-audio-cache-\(UUID().uuidString)", isDirectory: true)

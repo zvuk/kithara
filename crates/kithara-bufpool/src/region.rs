@@ -1,10 +1,12 @@
-use std::{fmt, marker::PhantomData};
+use std::{cell::RefCell, fmt, marker::PhantomData};
 
-use kithara_platform::sync::Arc;
+use kithara_platform::sync::{Arc, Weak};
 
 use crate::{
     HasPool, OverallBudget, Percent, PoolConfig, PoolError, PoolKey, PoolKeyWithLen, PoolStats,
-    budget::RegionBudget, key::PoolAccess,
+    budget::{IdleReclaimer, RegionBudget},
+    key::PoolAccess,
+    pool::{Core, storage::Storage},
 };
 
 /// Region-wide byte statistics.
@@ -91,8 +93,10 @@ impl<S> PoolRegion<S> {
     {
         let context = BuildContext {
             budget: RegionBudget::new(overall_budget.0),
+            reclaimers: RefCell::new(Vec::new()),
         };
         let schema = build_schema(&context)?;
+        context.install_reclaimers()?;
         Ok(Self {
             inner: Arc::new(RegionInner {
                 budget: context.budget,
@@ -135,6 +139,7 @@ impl<S> fmt::Debug for PoolRegion<S> {
 #[doc(hidden)]
 pub struct BuildContext {
     budget: RegionBudget,
+    reclaimers: RefCell<Vec<Weak<dyn IdleReclaimer>>>,
 }
 
 impl BuildContext {
@@ -171,6 +176,31 @@ impl BuildContext {
 
     pub(crate) fn region_budget(&self) -> RegionBudget {
         self.budget.clone()
+    }
+
+    pub(crate) fn core<const SHARDS: usize, B, const OBSERVE: bool>(
+        &self,
+        config: PoolConfig,
+        pool_limit: usize,
+    ) -> Result<Arc<Core<SHARDS, B, OBSERVE>>, PoolError>
+    where
+        B: Storage + Send + 'static,
+    {
+        let core = Arc::new(Core::new(config, self.region_budget(), pool_limit)?);
+        self.reclaimers
+            .borrow_mut()
+            .push(Arc::downgrade(&core) as Weak<dyn IdleReclaimer>);
+        Ok(core)
+    }
+
+    fn install_reclaimers(&self) -> Result<(), PoolError> {
+        let reclaimers = std::mem::take(&mut *self.reclaimers.borrow_mut()).into_boxed_slice();
+        self.budget
+            .install_reclaimers(reclaimers)
+            .map_err(|_| PoolError::InvalidConfig {
+                field: "schema",
+                reason: "idle reclaimer inventory was already installed",
+            })
     }
 }
 

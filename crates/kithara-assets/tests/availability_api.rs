@@ -2,7 +2,7 @@
 //! available_ranges, final_len}`.
 mod support;
 
-use kithara_assets::{AcquisitionResult, AssetStore, StorageBackend, WriteSide};
+use kithara_assets::{AcquisitionResult, AssetStore, ReadSide, StorageBackend, WriteSide};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use support::{Test, resource, source};
@@ -41,6 +41,28 @@ fn mem_store_empty_aggregate_returns_empty() {
     assert!(scope.store().available_ranges(&key).is_empty());
     assert!(!scope.store().contains_range(&key, 0..100));
     assert_eq!(scope.store().final_len(&key), None);
+}
+
+#[kithara::test(timeout(Duration::from_secs(5)))]
+fn unknown_length_read_clears_the_destination() {
+    let pools = support::pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Memory)
+        .build();
+    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
+    let key = scope.key(&resource("segments/unknown.bin")).unwrap();
+    let AcquisitionResult::Pending(writer) = scope.store().acquire_resource(&key, None).unwrap()
+    else {
+        panic!("fresh acquire must be Pending");
+    };
+    let reader = writer.commit(None).unwrap();
+    assert_eq!(reader.len(), None, "fixture must have no committed length");
+
+    let mut buffer = pools.get_with_len::<u8>(5).unwrap();
+    buffer.copy_from_slice(b"stale");
+
+    assert_eq!(reader.read_into(&mut buffer).unwrap(), 0);
+    assert!(buffer.is_empty());
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]

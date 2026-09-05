@@ -101,10 +101,30 @@ impl Detent {
     }
 }
 
+/// One face a flow shows: what it fills itself with, and what it draws around
+/// itself.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct Face {
+    pub(crate) background: Option<Rgba>,
+    pub(crate) frame: Option<(FrameSides, Rgba, f32)>,
+}
+
+/// The two faces a flow shows, where the document named a flag to choose
+/// between them.
+#[derive(Clone, Copy)]
+pub(crate) struct Faces {
+    pub(crate) idle: Face,
+    pub(crate) lit: Face,
+}
+
 pub(crate) struct Node {
     round: FrameCorners,
     layout: NodeLayout,
     background: Option<Rgba>,
+    /// The face this flow shows while the flag it named reads true, beside the
+    /// one it shows otherwise. A flow that named no flag has one face and keeps
+    /// none of this.
+    lit: Option<Faces>,
     /// The stepping surface this flow declares over itself, where it declares
     /// one.
     detent: Option<Detent>,
@@ -150,9 +170,16 @@ impl Node {
             leaf_holds: false,
             engine: None,
             detent: None,
+            lit: None,
             spot: None,
             transform: Transform::IDENTITY,
         }
+    }
+
+    /// Keeps the two faces this flow chooses between, so the flag can be read
+    /// again into a tree already standing.
+    pub(crate) const fn set_faces(&mut self, faces: Faces) {
+        self.lit = Some(faces);
     }
 
     /// Offers the input to the grip a placement carries, answering whether
@@ -444,6 +471,38 @@ impl Node {
     /// waiting for the rebuild that follows the gesture.
     pub(crate) fn show_live(&mut self, value: &ReadValue<'_>) -> bool {
         self.layout.leaf().is_some_and(|leaf| leaf.set_read(value))
+    }
+
+    /// The colour this node writes its text in right now, where it writes any.
+    #[cfg(any(test, feature = "capture"))]
+    pub(crate) fn ink(&self) -> Option<Rgba> {
+        match &self.layout {
+            NodeLayout::Leaf(leaf) => leaf.ink(),
+            NodeLayout::Flex(_)
+            | NodeLayout::Measured(_)
+            | NodeLayout::Scroll(_)
+            | NodeLayout::Stack
+            | NodeLayout::Stage => None,
+        }
+    }
+
+    /// Shows the face the flag now reads for, answering whether the picture
+    /// changed. What a flag lights is a value the document reads, so it is
+    /// swapped in place rather than by building the tree again.
+    pub(crate) fn light(&mut self, on: bool) -> bool {
+        let flow = self.lit.is_some_and(|faces| {
+            let face = if on { faces.lit } else { faces.idle };
+            let moved = face
+                != Face {
+                    background: self.background,
+                    frame: self.frame,
+                };
+            self.background = face.background;
+            self.frame = face.frame;
+            moved
+        });
+        let leaf = self.layout.leaf().is_some_and(|leaf| leaf.light(on));
+        flow || leaf
     }
 
     /// Offers the input to the stepping surface this flow declares, answering

@@ -33,11 +33,11 @@ pub(crate) struct Button {
     width: Width,
 }
 
-/// What settles a button's width: a share of the row it sits in, a number the
-/// skin fixes, or the word it is currently showing.
+/// What settles a button's width: the box the row hands it, a number the skin
+/// fixes, or a share of the row it sits in.
 #[derive(Clone, Copy, PartialEq)]
 enum Width {
-    Content,
+    Fill,
     Fixed(f32),
     Portion(u16),
 }
@@ -136,37 +136,12 @@ impl Button {
 
     /// The box it asks for. Only the width is its own: every button fills the
     /// height of the row it sits in.
-    pub(crate) fn declared<Words>(
-        &self,
-        text: &mut TextContext,
-        label: &ButtonLabel<Words>,
-        active: bool,
-    ) -> Size<Length>
-    where
-        Words: AsRef<str>,
-    {
-        let width = match self.width {
-            Width::Content => Length::Fixed(self.intrinsic_width(text, label, active)),
-            Width::Fixed(value) => Length::Fixed(value),
-            Width::Portion(factor) => Length::FillPortion(factor),
-        };
-        Size::new(width, Length::Fill)
+    pub(crate) fn declared(&self) -> Size<Length> {
+        Size::new(self.width.length(), Length::Fill)
     }
 
     const fn face(&self, active: bool) -> &Face {
         if active { &self.active } else { &self.idle }
-    }
-
-    pub(crate) fn intrinsic_width<Words>(
-        &self,
-        text: &mut TextContext,
-        label: &ButtonLabel<Words>,
-        active: bool,
-    ) -> f32
-    where
-        Words: AsRef<str>,
-    {
-        self.face(active).intrinsic_width(text, label)
     }
 
     pub(crate) fn paint<Words>(
@@ -187,11 +162,19 @@ impl Button {
 impl Width {
     fn new(style: ButtonStyle, skin: &Skin) -> Self {
         match style {
-            ButtonStyle::Default => Self::Content,
+            ButtonStyle::Default => Self::Fill,
             ButtonStyle::MicroPrimary => Self::Fixed(skin.button.micro_size),
             ButtonStyle::Transport => Self::Portion(skin.button.transport_portion),
             ButtonStyle::TransportPrimary => Self::Portion(skin.button.primary_portion),
             ButtonStyle::VisNav => Self::Fixed(skin.vis.nav_cell_size),
+        }
+    }
+
+    const fn length(self) -> Length {
+        match self {
+            Self::Fill => Length::Fill,
+            Self::Fixed(value) => Length::Fixed(value),
+            Self::Portion(factor) => Length::FillPortion(factor),
         }
     }
 }
@@ -201,19 +184,13 @@ impl Width {
 ///
 /// A retained host settles a row's shares while it is still walking the
 /// document, which is earlier than it holds a painter — so this reads the same
-/// table the painter reads rather than restating it. A width the button
-/// measures from its own word is not something a parent can be told, so it
-/// answers `Shrink` and the leaf is asked instead.
+/// table the painter reads rather than restating it.
 ///
 /// Only the retained host asks: the immediate one reads the box off the built
 /// widget, which by then holds the painter.
 #[cfg(feature = "masonry")]
 pub(crate) fn declared_width(style: ButtonStyle, skin: &Skin) -> Length {
-    match Width::new(style, skin) {
-        Width::Content => Length::Shrink,
-        Width::Fixed(value) => Length::Fixed(value),
-        Width::Portion(factor) => Length::FillPortion(factor),
-    }
+    Width::new(style, skin).length()
 }
 
 impl Face {
@@ -271,26 +248,6 @@ impl Face {
             },
             role: TextRoleSkin { color, ..role },
         }
-    }
-
-    fn intrinsic_width<Words>(&self, text: &mut TextContext, label: &ButtonLabel<Words>) -> f32
-    where
-        Words: AsRef<str>,
-    {
-        let label = self.label(label);
-        let content = match &self.art {
-            Some(art) => {
-                let icon = art.width(text);
-                if art.placement.alone(label) {
-                    icon
-                } else {
-                    icon + self.gap + self.shape(text, label).width()
-                }
-            }
-            None if label.is_empty() => 0.0,
-            None => self.shape(text, label).width(),
-        };
-        content + self.padding_x * 2.0
     }
 
     fn label<'a, Words>(&self, label: &'a ButtonLabel<Words>) -> &'a str

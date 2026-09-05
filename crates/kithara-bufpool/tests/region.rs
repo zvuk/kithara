@@ -243,6 +243,95 @@ fn aliases_of_one_item_type_own_distinct_physical_slots() {
     assert_eq!(second.capacity(), 0);
 }
 
+mod reclaim_keys {
+    use super::*;
+
+    pub(super) enum DonorTag {}
+    pub(super) enum RequesterTag {}
+    pub(super) type Donor = PoolAlias<DonorTag, VecKey<u8, 1>>;
+    pub(super) type Requester = PoolAlias<RequesterTag, VecKey<u8, 1>>;
+
+    pool_schema! {
+        pub(super) ReclaimPools {
+            donor: Donor,
+            requester: Requester,
+        }
+    }
+
+    pub(super) fn pools(max_bytes: usize) -> PoolRegion<ReclaimPools> {
+        let config = || PoolConfig::builder().max_buffers(2).build();
+        ReclaimPools::builder(OverallBudget(max_bytes))
+            .donor(config())
+            .requester(config())
+            .build()
+            .unwrap_or_else(|error| panic!("reclaim region: {error}"))
+    }
+}
+
+#[kithara::test]
+fn sibling_capacity_is_reclaimed_only_after_it_becomes_idle() {
+    const BUDGET: usize = 8;
+
+    let pools = reclaim_keys::pools(BUDGET);
+    let first = pools
+        .get_with_len::<reclaim_keys::Donor>(BUDGET / 2)
+        .unwrap_or_else(|error| panic!("first donor: {error}"));
+    let second = pools
+        .get_with_len::<reclaim_keys::Donor>(BUDGET / 2)
+        .unwrap_or_else(|error| panic!("second donor: {error}"));
+    let mut requester = pools.get::<reclaim_keys::Requester>();
+
+    assert!(matches!(
+        requester.ensure_len(BUDGET),
+        Err(PoolError::OverallBudgetExceeded { .. })
+    ));
+    drop(first);
+    drop(second);
+    assert_eq!(pools.stats().allocated_bytes, BUDGET);
+    assert_eq!(pools.stats().peak_allocated_bytes, BUDGET);
+
+    requester
+        .ensure_len(BUDGET)
+        .unwrap_or_else(|error| panic!("requester after idle reclaim: {error}"));
+
+    assert_eq!(pools.stats().allocated_bytes, BUDGET);
+    assert_eq!(pools.stats().peak_allocated_bytes, BUDGET);
+    assert_eq!(pools.stats().max_bytes, BUDGET);
+}
+
+#[kithara::test]
+fn smaller_idle_buffers_are_reclaimed_at_the_slot_cap() {
+    const BUFFER_BYTES: usize = 4;
+    const POOL_BYTES: usize = 2 * BUFFER_BYTES;
+
+    let pools = TestPools::region(
+        OverallBudget(2 * POOL_BYTES),
+        PoolConfig::builder()
+            .max_buffers(64)
+            .max_share(Percent(50))
+            .build(),
+        config(8),
+    )
+    .unwrap_or_else(|error| panic!("slot-cap region: {error}"));
+    let first = pools
+        .get_with_len::<u8>(BUFFER_BYTES)
+        .unwrap_or_else(|error| panic!("first buffer: {error}"));
+    let second = pools
+        .get_with_len::<u8>(BUFFER_BYTES)
+        .unwrap_or_else(|error| panic!("second buffer: {error}"));
+    drop(first);
+    drop(second);
+    let mut requester = pools.get::<u8>();
+    assert_eq!(requester.capacity(), BUFFER_BYTES);
+
+    requester
+        .ensure_len(POOL_BYTES)
+        .unwrap_or_else(|error| panic!("requester after slot reclaim: {error}"));
+
+    assert_eq!(requester.capacity(), POOL_BYTES);
+    assert_eq!(pools.stats().allocated_bytes, POOL_BYTES);
+}
+
 #[kithara::test]
 fn racing_typed_slots_never_admit_past_the_global_limit() {
     let pools = pools(64);
@@ -293,6 +382,91 @@ fn trimmed_returns_release_both_pool_and_region_charges() {
     drop(samples);
 
     assert!(pools.stats().allocated_bytes < charged);
+}
+
+#[kithara::test]
+fn normalize_reuses_the_held_capacity() {
+    const CAPACITY: usize = 8;
+
+    let pools = TestPools::region(
+        OverallBudget(4 * CAPACITY),
+        PoolConfig::builder()
+            .max_buffers(64)
+            .max_retained_capacity(CAPACITY)
+            .build(),
+        config(8),
+    )
+    .unwrap_or_else(|error| panic!("test region: {error}"));
+    let first = pools
+        .get_with_len::<u8>(1)
+        .unwrap_or_else(|error| panic!("first priming buffer: {error}"));
+    let second = pools
+        .get_with_len::<u8>(1)
+        .unwrap_or_else(|error| panic!("second priming buffer: {error}"));
+    drop(first);
+    drop(second);
+    let mut buffer = pools
+        .get_with_len::<u8>(CAPACITY)
+        .unwrap_or_else(|error| panic!("initial buffer: {error}"));
+    let charged = pools.stats().allocated_bytes;
+
+    buffer.normalize();
+    buffer
+        .ensure_len(CAPACITY)
+        .unwrap_or_else(|error| panic!("renewed buffer: {error}"));
+
+    assert_eq!(pools.stats().allocated_bytes, charged);
+}
+
+#[kithara::test]
+fn normalize_drops_capacity_above_the_retention_ceiling() {
+    const RETAINED_CAPACITY: usize = 8;
+
+    let pools = TestPools::region(
+        OverallBudget(2 * RETAINED_CAPACITY),
+        PoolConfig::builder()
+            .max_buffers(32)
+            .max_retained_capacity(RETAINED_CAPACITY)
+            .build(),
+        config(8),
+    )
+    .unwrap_or_else(|error| panic!("test region: {error}"));
+    let mut buffer = pools
+        .get_with_len::<u8>(2 * RETAINED_CAPACITY)
+        .unwrap_or_else(|error| panic!("oversized buffer: {error}"));
+    assert!(pools.stats().allocated_bytes > 0);
+
+    buffer.normalize();
+
+    assert_eq!(buffer.capacity(), 0);
+    assert_eq!(pools.stats().allocated_bytes, 0);
+}
+
+#[kithara::test]
+fn shrinking_samples_releases_removed_capacity_charge() {
+    const CAPACITY: usize = 16;
+    const RETAINED: usize = CAPACITY / 2;
+
+    let pools = TestPools::region(
+        OverallBudget(CAPACITY * size_of::<f32>()),
+        config(32),
+        config(8),
+    )
+    .unwrap_or_else(|error| panic!("test region: {error}"));
+    let mut samples = pools
+        .get_with_len::<f32>(CAPACITY)
+        .unwrap_or_else(|error| panic!("sample buffer: {error}"));
+    let before = pools.stats().allocated_bytes;
+    samples.drain(..CAPACITY - RETAINED);
+
+    samples.shrink_to_fit();
+
+    assert!(samples.capacity() >= RETAINED);
+    assert!(pools.stats().allocated_bytes < before);
+    assert_eq!(
+        pools.stats().allocated_bytes,
+        samples.capacity() * size_of::<f32>()
+    );
 }
 
 mod generic_keys {

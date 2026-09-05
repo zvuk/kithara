@@ -184,6 +184,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / platforms
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -194,6 +195,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / merge-request
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -204,6 +206,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / quarantine
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -214,6 +217,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / main
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -224,6 +228,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / nightly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -234,6 +239,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / weekly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -244,6 +250,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / release
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -254,6 +261,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-lint / branch
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen

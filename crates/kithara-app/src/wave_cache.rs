@@ -6,6 +6,7 @@ use std::{
 use kithara::{
     analysis::{AnalysisFile, AnalysisFingerprint, AnalysisProgress, AnalysisToken},
     assets::{AssetResource, AssetResourceState, ReadSide, ResourceKey},
+    bufpool::ByteBuffer,
     decode::DecodeError,
     platform::time::Duration,
 };
@@ -61,7 +62,7 @@ struct MemoryEntry {
 /// track's storage lifecycle). Owned by the single listener task, so it needs
 /// no synchronization.
 pub(crate) struct TrackAnalysisCache {
-    pools: Pools,
+    bytes: ByteBuffer,
     chunk_duration: Duration,
     mem: HashMap<ResourceKey, Vec<MemoryEntry>>,
     /// Active analysis configuration, per artifact: a stored artifact whose
@@ -76,11 +77,11 @@ pub(crate) struct TrackAnalysisCache {
 impl TrackAnalysisCache {
     pub(crate) fn new(
         fingerprint: AnalysisFingerprint,
-        pools: Pools,
+        pools: &Pools,
         chunk_seconds: NonZeroU32,
     ) -> Self {
         Self {
-            pools,
+            bytes: pools.get::<u8>(),
             chunk_duration: Duration::from_secs(u64::from(chunk_seconds.get())),
             fingerprint,
             mem: HashMap::new(),
@@ -112,7 +113,7 @@ impl TrackAnalysisCache {
     }
 
     fn load_disk(
-        &self,
+        &mut self,
         target: &AnalysisTarget,
         source_sample_rate: NonZeroU32,
     ) -> Option<AnalysisProgress> {
@@ -123,22 +124,24 @@ impl TrackAnalysisCache {
             _ => return None,
         }
         let reader = target.store.open_resource(resource, None).ok()?;
-        let mut bytes = self.pools.get::<u8>();
-        reader.read_into(&mut bytes).ok()?;
-        match AnalysisFile::parse(&bytes, &self.fingerprint) {
-            Ok(file)
-                if file.spec().source_sample_rate() == source_sample_rate
-                    && file.spec().matches_chunk_duration(self.chunk_duration) =>
-            {
-                debug!("track analysis cache: disk hit");
-                Some(file.into())
+        let progress = reader.read_into(&mut self.bytes).ok().and_then(|_| {
+            match AnalysisFile::parse(&self.bytes, &self.fingerprint) {
+                Ok(file)
+                    if file.spec().source_sample_rate() == source_sample_rate
+                        && file.spec().matches_chunk_duration(self.chunk_duration) =>
+                {
+                    debug!("track analysis cache: disk hit");
+                    Some(file.into())
+                }
+                Ok(_) => None,
+                Err(e) => {
+                    warn!(%e, ?resource, "track analysis cache: ignoring stale/unreadable progress");
+                    None
+                }
             }
-            Ok(_) => None,
-            Err(e) => {
-                warn!(%e, ?resource, "track analysis cache: ignoring stale/unreadable progress");
-                None
-            }
-        }
+        });
+        self.bytes.normalize();
+        progress
     }
 
     /// Store the latest publication in the bounded memory tier.
@@ -208,7 +211,11 @@ mod tests {
             AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState, Coverage,
             FrameRange, TrackAnalysis, Waveform,
         },
-        assets::{AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, StorageBackend},
+        assets::{
+            AcquisitionResult, AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource,
+            StorageBackend, WriteSide,
+        },
+        bufpool::{OverallBudget, PoolConfig},
         file::File,
         prelude::ResourceSrc,
     };
@@ -239,6 +246,18 @@ mod tests {
 
     fn test_pools() -> Pools {
         pools::build().expect("valid app pool policy")
+    }
+
+    fn scratch_pools() -> Pools {
+        pools::tests::build_with(
+            OverallBudget(4 * 1024 * 1024),
+            PoolConfig::builder()
+                .max_buffers(128)
+                .max_retained_capacity(2 * 1024 * 1024)
+                .build(),
+            PoolConfig::builder().max_buffers(8).build(),
+        )
+        .expect("valid scratch test pool policy")
     }
 
     fn progress(analysis: TrackAnalysis) -> AnalysisProgress {
@@ -315,7 +334,143 @@ mod tests {
     }
 
     fn analysis_cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new(fp(), test_pools(), chunk_seconds())
+        TrackAnalysisCache::new(fp(), &test_pools(), chunk_seconds())
+    }
+
+    #[kithara::test]
+    fn disk_reads_reuse_cache_scratch() {
+        const BLOB_BYTES: usize = 64 * 1024;
+
+        let pools = scratch_pools();
+        let directory = tempfile::tempdir().expect("temporary disk store");
+        let store = AppStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: directory.path().into(),
+            })
+            .build();
+        let target = target(&store, "scratch");
+        let AcquisitionResult::Pending(writer) = store
+            .acquire_resource(target.key(), None)
+            .expect("analysis resource is acquired")
+        else {
+            panic!("new analysis resource must be pending");
+        };
+        writer
+            .write_at(0, &vec![0; BLOB_BYTES])
+            .expect("invalid analysis blob is written");
+        drop(
+            writer
+                .commit(Some(BLOB_BYTES as u64))
+                .expect("invalid analysis blob is committed"),
+        );
+
+        let mut cache = TrackAnalysisCache::new(fp(), &pools, chunk_seconds());
+        let primed = (0..3)
+            .map(|_| {
+                pools
+                    .get_with_len::<u8>(1)
+                    .expect("small scratch buffer is admitted")
+            })
+            .collect::<Vec<_>>();
+        drop(primed);
+        let before = pools.stats().allocated_bytes;
+
+        assert!(cache.get(&target, rate()).is_none());
+        let after_first = pools.stats().allocated_bytes;
+        assert!(after_first > before, "the first full read grows scratch");
+        assert!(cache.get(&target, rate()).is_none());
+        assert!(cache.get(&target, rate()).is_none());
+
+        assert_eq!(
+            pools.stats().allocated_bytes,
+            after_first,
+            "later full reads must reuse the cache-owned allocation"
+        );
+    }
+
+    #[kithara::test]
+    fn oversized_disk_read_does_not_stay_charged_to_the_cache() {
+        const RETAINED_BYTES: usize = 2 * 1024 * 1024;
+
+        let pools = scratch_pools();
+        let directory = tempfile::tempdir().expect("temporary disk store");
+        let store = AppStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: directory.path().into(),
+            })
+            .build();
+        let target = target(&store, "oversized-scratch");
+        let AcquisitionResult::Pending(writer) = store
+            .acquire_resource(target.key(), None)
+            .expect("analysis resource is acquired")
+        else {
+            panic!("new analysis resource must be pending");
+        };
+        let blob = vec![0; RETAINED_BYTES + 1];
+        writer
+            .write_at(0, &blob)
+            .expect("oversized analysis blob is written");
+        drop(
+            writer
+                .commit(Some(blob.len() as u64))
+                .expect("oversized analysis blob is committed"),
+        );
+
+        let mut cache = TrackAnalysisCache::new(fp(), &pools, chunk_seconds());
+        let baseline = pools.stats().allocated_bytes;
+
+        assert!(cache.get(&target, rate()).is_none());
+        assert_eq!(
+            pools.stats().allocated_bytes,
+            baseline,
+            "cache-owned scratch above the retention cap must be released"
+        );
+    }
+
+    #[kithara::test]
+    fn invalid_disk_blob_does_not_stay_charged_to_the_cache() {
+        const BLOB_BYTES: usize = 64 * 1024;
+
+        let pools = pools::tests::build_with(
+            OverallBudget(4 * 1024 * 1024),
+            PoolConfig::builder()
+                .max_buffers(128)
+                .max_retained_capacity(1)
+                .build(),
+            PoolConfig::builder().max_buffers(8).build(),
+        )
+        .expect("valid low-retention pool policy");
+        let directory = tempfile::tempdir().expect("temporary disk store");
+        let store = AppStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: directory.path().into(),
+            })
+            .build();
+        let target = target(&store, "failed-scratch");
+        let AcquisitionResult::Pending(writer) = store
+            .acquire_resource(target.key(), None)
+            .expect("analysis resource is acquired")
+        else {
+            panic!("new analysis resource must be pending");
+        };
+        writer
+            .write_at(0, &vec![0; BLOB_BYTES])
+            .expect("invalid analysis blob is written");
+        drop(
+            writer
+                .commit(Some(BLOB_BYTES as u64))
+                .expect("invalid analysis blob is committed"),
+        );
+
+        let mut cache = TrackAnalysisCache::new(fp(), &pools, chunk_seconds());
+        let baseline = pools.stats().allocated_bytes;
+
+        assert!(cache.get(&target, rate()).is_none());
+        assert_eq!(
+            pools.stats().allocated_bytes,
+            baseline,
+            "failed full read must release cache-owned scratch above the retention cap"
+        );
     }
 
     #[kithara::test]

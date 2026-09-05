@@ -15,6 +15,8 @@ pub struct DispatcherConfig {
         with = |observer: impl Observer| Box::new(observer)
     )]
     pub(crate) observer: Box<dyn Observer>,
+    #[builder(default = Duration::from_millis(10))]
+    pub(crate) backpressure_poll_interval: Duration,
     #[builder(default = Duration::from_millis(100))]
     pub(crate) idle_timeout: Duration,
     #[builder(default = Duration::from_millis(10))]

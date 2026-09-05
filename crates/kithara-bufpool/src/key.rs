@@ -117,7 +117,10 @@ impl<T, const SHARDS: usize> sealed::Sealed for VecKey<T, SHARDS> {}
 #[doc(hidden)]
 pub struct VecCore<T, const SHARDS: usize>(kithara_platform::sync::Arc<Core<SHARDS, Vec<T>, true>>);
 
-impl<T, const SHARDS: usize> PoolKey for VecKey<T, SHARDS> {
+impl<T, const SHARDS: usize> PoolKey for VecKey<T, SHARDS>
+where
+    T: Send + 'static,
+{
     type Buffer = PooledVec<T, SHARDS>;
     type Core = VecCore<T, SHARDS>;
     type Item = T;
@@ -128,8 +131,8 @@ impl<T, const SHARDS: usize> PoolKey for VecKey<T, SHARDS> {
         _access: PoolAccess,
     ) -> Result<Self::Core, PoolError> {
         let limit = context.pool_limit(config.max_share)?;
-        Core::new(config, context.region_budget(), limit)
-            .map(kithara_platform::sync::Arc::new)
+        context
+            .core::<SHARDS, Vec<T>, true>(config, limit)
             .map(VecCore)
     }
 
@@ -144,7 +147,7 @@ impl<T, const SHARDS: usize> PoolKey for VecKey<T, SHARDS> {
 
 impl<T, const SHARDS: usize> PoolKeyWithLen for VecKey<T, SHARDS>
 where
-    T: Clone + Default,
+    T: Clone + Default + Send + 'static,
 {
     fn __get_with_len(
         core: &Self::Core,
@@ -177,8 +180,8 @@ impl<const SHARDS: usize> PoolKey for StringKey<SHARDS> {
         _access: PoolAccess,
     ) -> Result<Self::Core, PoolError> {
         let limit = context.pool_limit(config.max_share)?;
-        Core::new(config, context.region_budget(), limit)
-            .map(kithara_platform::sync::Arc::new)
+        context
+            .core::<SHARDS, String, true>(config, limit)
             .map(StringCore)
     }
 
@@ -212,8 +215,8 @@ impl PoolKey for u8 {
         _access: PoolAccess,
     ) -> Result<Self::Core, PoolError> {
         let limit = context.pool_limit(config.max_share)?;
-        Core::new(config, context.region_budget(), limit)
-            .map(kithara_platform::sync::Arc::new)
+        context
+            .core::<32, Vec<Self>, false>(config, limit)
             .map(ByteCore)
     }
 
@@ -251,8 +254,8 @@ impl PoolKey for f32 {
         _access: PoolAccess,
     ) -> Result<Self::Core, PoolError> {
         let limit = context.pool_limit(config.max_share)?;
-        Core::new(config, context.region_budget(), limit)
-            .map(kithara_platform::sync::Arc::new)
+        context
+            .core::<8, Vec<Self>, false>(config, limit)
             .map(SampleCore)
     }
 

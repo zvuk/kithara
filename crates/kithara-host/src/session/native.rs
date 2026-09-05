@@ -88,11 +88,18 @@ fn engine_thread<B: AudioBackend, S>(
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
+    requested_max_block_frames: Option<NonZeroU32>,
     start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let mut state = SessionState::<B, S>::new(root, root_view, sample_rate, start_stream_fn);
+    let mut state = SessionState::<B, S>::new(
+        root,
+        root_view,
+        sample_rate,
+        requested_max_block_frames,
+        start_stream_fn,
+    );
     debug!("[KITHARA-ROUTE] native session worker started");
     while let Ok(HostCmdMsg { cmd, reply_tx }) = cmd_rx.recv() {
         if matches!(&cmd, HostCmd::Shutdown) {
@@ -113,6 +120,7 @@ fn spawn_session_client<B, S>(
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
+    requested_max_block_frames: Option<NonZeroU32>,
     start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 ) -> Arc<SessionClient<S>>
 where
@@ -121,7 +129,14 @@ where
 {
     let (cmd_tx, cmd_rx) = mpsc::channel::<HostCmdMsg<S>>();
     spawn_named(thread_name, move || {
-        engine_thread::<B, S>(cmd_rx, root, root_view, sample_rate, start_stream_fn);
+        engine_thread::<B, S>(
+            cmd_rx,
+            root,
+            root_view,
+            sample_rate,
+            requested_max_block_frames,
+            start_stream_fn,
+        );
     });
     Arc::new(SessionClient {
         cmd_tx: Mutex::new(cmd_tx),
@@ -174,6 +189,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         root,
         root_view,
         sample_rate,
+        output_block_frames,
         move |ctx, sample_rate| start_stream_cpal(ctx, sample_rate, output_block_frames),
     )
 }

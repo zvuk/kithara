@@ -1,13 +1,13 @@
 use std::num::NonZeroU32;
 
-use kithara_audio::AudioDecoderConfig;
+use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptions};
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 
 #[cfg(test)]
 use super::super::core::PlayerImpl;
 use super::super::core::PlayerRuntime;
-use crate::resource::ResourceConfig;
+use crate::{PlayError, resource::ResourceConfig};
 
 struct ConfigPrep<'a, S> {
     player: &'a PlayerRuntime<S>,
@@ -17,7 +17,7 @@ impl<S> ConfigPrep<'_, S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    fn prepare<B>(&self, config: ResourceConfig<S, B>) -> ResourceConfig<S, B>
+    fn prepare<B>(&self, config: ResourceConfig<S, B>) -> Result<ResourceConfig<S, B>, PlayError>
     where
         B: Clone + Default,
     {
@@ -31,23 +31,44 @@ where
         let warp = self.player.core.warp.clone();
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
+        let resampler = match config.decoder.resampler().cloned() {
+            Some(settings) => Some(settings),
+            None => self
+                .player
+                .core
+                .engine
+                .stream_shape()?
+                .map(|shape| {
+                    let chunk_size =
+                        usize::try_from(shape.max_block_frames.get()).map_err(|_| {
+                            PlayError::Internal("session output block exceeds usize".into())
+                        })?;
+                    Ok::<_, PlayError>(
+                        DecoderResamplerSettings::builder()
+                            .backend(B::default())
+                            .options(ResamplerOptions::builder().chunk_size(chunk_size).build())
+                            .build(),
+                    )
+                })
+                .transpose()?,
+        };
         let decoder = AudioDecoderConfig::builder()
             .backend(config.decoder.backend())
             .gapless_mode(self.player.core.gapless_mode)
-            .maybe_resampler(config.decoder.resampler().cloned())
+            .maybe_resampler(resampler)
             .build();
-        ResourceConfig {
+        Ok(ResourceConfig {
             bus,
             cancel,
             worker: Some(self.player.core.worker.clone()),
-            consumer_wake_mode: self.player.core.engine.consumer_wake_mode(),
+            consumer_wake_mode: Some(self.player.core.engine.consumer_wake_mode()),
             block_on_underrun: self.player.core.block_on_underrun,
             host_sample_rate,
             decoder,
             warp,
             engine_load: Some(Arc::clone(&self.player.core.engine_load)),
             ..config
-        }
+        })
     }
 }
 
@@ -63,8 +84,13 @@ where
     /// pre-initialised with the correct ratio. Callers that want a shared HTTP
     /// pool / tokio runtime must build their own downloader and attach it via
     /// [`ResourceConfig::with_downloader`] before passing the config in.
-    #[must_use]
-    pub fn prepare_config<B>(&self, config: ResourceConfig<S, B>) -> ResourceConfig<S, B>
+    /// # Errors
+    ///
+    /// Returns an error when the bound session cannot report its output shape.
+    pub fn prepare_config<B>(
+        &self,
+        config: ResourceConfig<S, B>,
+    ) -> Result<ResourceConfig<S, B>, PlayError>
     where
         B: Clone + Default,
     {
@@ -81,7 +107,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        PlayError, PlayWorker, PlayWorkerConfig,
+        PlayError, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, StreamShape,
         player::PlayerConfig,
         resource::ResourceSrc,
         session::{Cmd, Reply, SessionDispatcher, testing},
@@ -124,15 +150,20 @@ mod tests {
                 .build(),
         );
 
-        let prepared = player.prepare_config(resource_config("https://example.com/song.mp3"));
+        let prepared = player
+            .prepare_config(resource_config("https://example.com/song.mp3"))
+            .expect("test session answers stream-shape queries");
         assert_eq!(
             prepared.consumer_wake_mode,
-            ConsumerWakeMode::ImmediateOffRt
+            Some(ConsumerWakeMode::ImmediateOffRt)
         );
+        assert!(prepared.decoder.resampler().is_none());
         let audio = prepared.build_file_config(player.worker(), None);
         assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
 
-        let prepared = player.prepare_config(resource_config("https://example.com/live.m3u8"));
+        let prepared = player
+            .prepare_config(resource_config("https://example.com/live.m3u8"))
+            .expect("test session answers stream-shape queries");
         let audio = prepared
             .build_hls_config(player.worker(), None)
             .expect("valid HLS config");
@@ -140,26 +171,83 @@ mod tests {
     }
 
     #[kithara::test]
-    fn prepare_config_overwrites_a_builder_declared_wake_mode() {
+    #[kithara::test]
+    fn prepare_config_sizes_default_resampling_work_to_the_output_block() {
+        let shape = StreamShape::new(
+            NonZeroU32::new(128).expect("test block is non-zero"),
+            testing::TEST_SAMPLE_RATE,
+        );
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
-                .session(testing::test_session())
+                .session(testing::test_session_with_shape(Some(shape)))
                 .build(),
         );
 
-        let src = ResourceSrc::parse("https://example.com/song.mp3").expect("valid test source");
-        let config = ResourceConfig::<TestPools>::for_src(src)
-            .store(AssetStore::builder(pools()).build())
-            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
-            .build();
+        let prepared = player
+            .prepare_config(resource_config("https://example.com/song.mp3"))
+            .expect("test session answers stream-shape queries");
 
-        let prepared = player.prepare_config(config);
         assert_eq!(
-            prepared.consumer_wake_mode,
-            ConsumerWakeMode::RealtimeDeferred,
-            "a player-managed resource cannot smuggle an off-RT capability past the session policy"
+            prepared
+                .decoder
+                .resampler()
+                .expect("known output shape installs decoder resampling settings")
+                .options()
+                .chunk_size,
+            128
+        );
+    }
+
+    #[kithara::test]
+    fn prepare_config_without_a_session_keeps_default_resampling_work() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker())
+                .build(),
+        );
+
+        let prepared = player
+            .prepare_config(resource_config("https://example.com/song.mp3"))
+            .expect("resources may be prepared before host insertion");
+
+        assert!(prepared.decoder.resampler().is_none());
+    }
+
+    #[kithara::test]
+    fn prepare_config_preserves_explicit_resampling_work() {
+        let explicit = DecoderResamplerSettings::builder()
+            .backend(PlaybackResamplerBackend::default())
+            .options(ResamplerOptions::builder().chunk_size(256).build())
+            .build();
+        let mut config = resource_config("https://example.com/song.mp3");
+        config.decoder = AudioDecoderConfig::builder().resampler(explicit).build();
+        let shape = StreamShape::new(
+            NonZeroU32::new(128).expect("test block is non-zero"),
+            testing::TEST_SAMPLE_RATE,
+        );
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker())
+                .session(testing::test_session_with_shape(Some(shape)))
+                .build(),
+        );
+
+        let prepared = player
+            .prepare_config(config)
+            .expect("test session answers stream-shape queries");
+
+        assert_eq!(
+            prepared
+                .decoder
+                .resampler()
+                .expect("explicit resampling settings remain installed")
+                .options()
+                .chunk_size,
+            256
         );
     }
 }

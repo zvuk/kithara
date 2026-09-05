@@ -92,13 +92,20 @@ fn assessment(artifacts: &Path) -> Result<String> {
 }
 
 fn duplication(artifacts: &Path, rows: usize) -> Result<String> {
-    let Some(report) = find(artifacts, &|path| {
+    let (report, flattened) = if let Some(report) = find(artifacts, &|path| {
         named(path, Consts::SIMILARITY_REPORT) && under(path, Consts::SIMILARITY_ARTIFACT)
-    })?
-    else {
-        return Ok(missing("Duplication", "similarity-report"));
+    })? {
+        (report, false)
+    } else {
+        let Some(report) = find(artifacts, &|path| named(path, Consts::SIMILARITY_REPORT))? else {
+            return Ok(missing("Duplication", "similarity-report"));
+        };
+        (report, true)
     };
     let text = read(&report)?;
+    if flattened && !text.starts_with("# Behavioral similarity") {
+        return Ok(missing("Duplication", "similarity-report"));
+    }
     let mut out = String::from("\n## Duplication\n\n");
     for line in text.lines().take(rows) {
         out.push_str(line);
@@ -487,6 +494,19 @@ mod tests {
         let report = duplication(temp.path(), 10).expect("duplication section");
 
         assert!(report.contains("| pair | score |"), "{report}");
+    }
+
+    #[test]
+    fn duplication_section_reads_a_flattened_single_artifact() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("abc1234/report.md"),
+            "# Behavioral similarity\n\n- Candidates: 42\n",
+        );
+
+        let report = duplication(temp.path(), 10).expect("duplication section");
+
+        assert!(report.contains("Candidates: 42"), "{report}");
     }
 
     #[test]

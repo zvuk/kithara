@@ -59,7 +59,8 @@ Do not re-derive these; each is owned by the named crate's `CONTEXT.md`.
   `finish_deferred` runs after and owns lifecycle events, the reader→peer wake,
   reader-demand filing, rebuild submission, and `Retired::drain`. Drop keeps one
   teardown flush after the scheduler's final pass, because terminal-slot removal
-  performs no further pass.
+  performs no further pass. A reader-born event on the RT path also arms the
+  worker so that the shell cannot leave that event parked in the deferred bus.
 
 ### Preload gate
 

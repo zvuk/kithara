@@ -201,6 +201,7 @@ pub(crate) struct SessionState<B: AudioBackend, S> {
     pub(super) start_stream_fn: StartStreamFn<B>,
     pub(super) stream_needs_restart: bool,
     pub(super) sample_rate_hint: u32,
+    pub(super) requested_max_block_frames: Option<NonZeroU32>,
     pub(super) transport: SessionTransportState,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
     pub(super) root: GroupState<PlayerMember>,
@@ -218,6 +219,7 @@ impl<B: AudioBackend, S> SessionState<B, S> {
         root: GroupState<PlayerMember>,
         root_view: RootView,
         sample_rate: NonZeroU32,
+        requested_max_block_frames: Option<NonZeroU32>,
         start_stream_fn: F,
     ) -> Self
     where
@@ -233,6 +235,7 @@ impl<B: AudioBackend, S> SessionState<B, S> {
             mix_tap: None,
             next_player_id: 1,
             sample_rate_hint: sample_rate.get(),
+            requested_max_block_frames,
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,

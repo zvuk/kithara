@@ -231,7 +231,6 @@ impl<'a> HostStorage<'a> {
         self.prune_host_trees("workspaces/tmp", Self::DAY)?;
         self.prune_scratch_trees(Self::DAY)?;
         self.prune_host_trees("workspaces/builds", Self::DAY)?;
-        self.prune_build_trees("workspaces/gitlab", Self::DAY)?;
         self.prune_host_trees("vm/overlays", Self::DAY)?;
         self.prune_host_trees("vm/android/avd", Self::DAY)?;
         self.prune_abandoned_job_vms(Self::DAY);
@@ -527,10 +526,6 @@ impl<'a> HostStorage<'a> {
 
     fn prune_host_trees(&self, relative: &str, age: Duration) -> Result<()> {
         self.prune_old_trees(&self.host_root, relative, age, Liveness::Ask)
-    }
-
-    fn prune_build_trees(&self, relative: &str, age: Duration) -> Result<()> {
-        self.prune_old_trees(&self.build_root, relative, age, Liveness::Ask)
     }
 
     /// Prune what the lanes leave behind in their scratch root.
@@ -1532,7 +1527,7 @@ mod tests {
     }
 
     #[test]
-    fn gitlab_workspace_pruning_uses_the_checkout_root() {
+    fn cleanup_leaves_gitlab_workspaces_to_the_runner() {
         let directory = tempfile::tempdir().unwrap();
         let host_root = directory.path().join("host");
         let build_root = directory.path().join("builds");
@@ -1540,19 +1535,28 @@ mod tests {
         fs::create_dir_all(&build_root).unwrap();
         let mut cfg = config(&host_root);
         cfg.host.build_root = Some(build_root.clone());
-        let process = Process::new(directory.path(), BTreeMap::new());
-        let storage = HostStorage::for_test(&cfg, &process).unwrap();
-        let selected = build_root.join("workspaces/gitlab/old");
-        let stale = host_root.join("workspaces/gitlab/old");
-        fs::create_dir_all(&selected).unwrap();
-        fs::create_dir_all(&stale).unwrap();
-
-        storage
-            .prune_build_trees("workspaces/gitlab", Duration::ZERO)
+        let runner = build_root.join("workspaces/gitlab/runner");
+        let checkout = runner.join("0/disrupt/kithara");
+        fs::create_dir_all(checkout.join("xtask")).unwrap();
+        fs::write(checkout.join("justfile"), "").unwrap();
+        fs::write(checkout.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::write(
+            checkout.join("xtask/Cargo.toml"),
+            "[package]\nname = \"xtask\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        fs::File::open(&runner)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(SystemTime::now() - 2 * HostStorage::DAY))
             .unwrap();
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
 
-        assert!(!selected.exists());
-        assert!(stale.exists());
+        storage.cleanup().unwrap();
+
+        assert!(checkout.join("justfile").is_file());
+        assert!(checkout.join("xtask/Cargo.toml").is_file());
     }
 
     #[test]

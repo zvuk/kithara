@@ -22,7 +22,7 @@ use crate::{
         Anchored, ControlAction, DropZone, InputOwner, ModuleChrome, Placement, Skin, UiEvent,
         Viewport, WheelSurface, Widget,
         document::{
-            Band, Ctx, Group, GroupMount, Host as DocumentHost, Measured as MeasuredPlan,
+            Ctx, Group, GroupMount, Host as DocumentHost, Measured as MeasuredPlan,
             Module as DocumentModule, PlacedMount, Popover as DocumentPopover, SplitMount,
         },
         placed, window_layers,
@@ -89,17 +89,21 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         }
         .measure(group.measure())
         .padding(padding(group.padding_x(), group.padding_y()));
+        let lit = group.lit().filter(|lit| self.ctx.flag(Some(lit.flag())));
         let element = wheeled(
             bordered(
                 filled(
                     container(flex).width(size.0).height(size.1),
-                    group.background(),
+                    lit.map_or_else(|| group.background(), |lit| lit.background()),
                     group.background_alpha(),
                     group.round(),
                     self.skin,
                 ),
                 group.frame(),
-                (group.frame_color(), group.frame_width()),
+                (
+                    lit.map_or_else(|| group.frame_color(), |lit| lit.frame_color()),
+                    group.frame_width(),
+                ),
                 size,
                 self.skin,
             ),
@@ -259,12 +263,16 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         Viewport::new(child, width, height, self.skin).into()
     }
 
-    fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
+    fn slot(
+        &mut self,
+        children: Vec<GroupMount<Self::Output>>,
+        size: Option<SizeSpec>,
+    ) -> Self::Output {
         let element = container(
             Flex::column(
                 children
                     .into_iter()
-                    .map(|child| (child, None, Band::ALWAYS)),
+                    .map(|child| (child.output, child.minimum, child.band)),
             )
             .spacing(self.skin.layout.grid_gap)
             .width(Length::Fill),

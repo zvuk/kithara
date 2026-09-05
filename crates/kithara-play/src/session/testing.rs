@@ -8,7 +8,7 @@ use kithara_platform::sync::{Arc, Mutex};
 
 use super::{AllocatedSlot, Cmd, Reply, SessionDispatcher, SessionSampleRate};
 use crate::{
-    PlayError, SessionDuckingMode, SharedEq, SlotId,
+    PlayError, SessionDuckingMode, SharedEq, SlotId, StreamShape,
     bridge::{NodeInputs, slot_channels},
 };
 
@@ -21,6 +21,7 @@ struct TestSession {
     next_player: AtomicU64,
     next_slot: AtomicU64,
     nodes: Mutex<Vec<NodeInputs>>,
+    shape: Option<StreamShape>,
 }
 
 impl<S> SessionDispatcher<S> for TestSession {
@@ -36,6 +37,7 @@ impl<S> SessionDispatcher<S> for TestSession {
                 Reply::SlotAllocated(AllocatedSlot::new(control, slot))
             }
             Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
+            Cmd::QueryStreamShape => Reply::StreamShape(self.shape),
             Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
             _ => Reply::Ok,
         };
@@ -48,9 +50,16 @@ impl<S> SessionDispatcher<S> for TestSession {
 }
 
 pub(crate) fn test_session<S>() -> Arc<dyn SessionDispatcher<S>> {
+    test_session_with_shape(None)
+}
+
+pub(crate) fn test_session_with_shape<S>(
+    shape: Option<StreamShape>,
+) -> Arc<dyn SessionDispatcher<S>> {
     Arc::new(TestSession {
         next_player: AtomicU64::new(1),
         next_slot: AtomicU64::new(0),
         nodes: Mutex::default(),
+        shape,
     })
 }

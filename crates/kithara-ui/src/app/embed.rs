@@ -233,6 +233,16 @@ where
         })
     }
 
+    /// The colour the control at `path` writes its text in right now.
+    ///
+    /// What a flag lights is a value the document reads rather than a shape it
+    /// stands in, so a harness reads it back the same way it reads a rect: by
+    /// the path the document gave the control.
+    #[cfg(any(test, feature = "capture"))]
+    pub fn ink_of(&self, path: &str) -> Option<Rgba> {
+        self.root.ink_of(self.state.widget_id(path)?)
+    }
+
     /// Takes what the document asked its window to do since the last call. A
     /// document that draws its own title bar asks to be dragged, minimised,
     /// maximised or closed this way; a host with no window can ignore it.

@@ -42,8 +42,10 @@ impl ByteBuffer {
             /// Returns an error when the requested capacity overflows, exceeds either
             /// hard budget, or cannot be allocated.
             pub fn ensure_len(&mut self, min_len: usize) -> Result<(), PoolError>;
-            /// Return the allocated buffer and continue with another empty guard.
+            /// Return the held allocation and continue with another empty guard.
             pub fn renew(&mut self);
+            /// Clear this guard and apply its configured retention policy in place.
+            pub fn normalize(&mut self);
             /// Shorten the buffer without changing its capacity.
             pub fn truncate(&mut self, len: usize);
             /// Append bytes under both hard budgets.

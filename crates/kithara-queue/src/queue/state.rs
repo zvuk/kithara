@@ -427,6 +427,7 @@ pub(crate) mod tests {
                     Reply::SlotAllocated(AllocatedSlot::new(control, slot))
                 }
                 Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
+                Cmd::QueryStreamShape => Reply::StreamShape(None),
                 Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
                 _ => Reply::Ok,
             };

@@ -108,8 +108,8 @@ just tooling xtask <args> -> _xtask-ready -> current: cached run
 The ignored `xtask/.xtask-cache` locator contains one absolute path to an
 immutable generation below the concrete worktree Git directory. A warm command
 reads that locator and starts the binary directly; it does not start Cargo or
-Git. Cargo is used only for a cold bootstrap or stale refresh, with its private
-target retained at `target/xtask-self-cache`.
+Git. Cargo is used only for a cold bootstrap or stale refresh, in the build
+directory `_xtask-bootstrap` names through `CARGO_TARGET_DIR`.
 
 The Just recipes only resolve the locator, ensure a current generation, and
 execute it. Rust owns freshness, single-flight locking, publication, leases,

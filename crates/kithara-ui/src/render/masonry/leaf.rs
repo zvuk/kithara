@@ -47,6 +47,9 @@ pub(super) enum Leaf {
         role: TextRoleSkin,
         padding_x: f32,
         color: Rgba,
+        /// The face this text shows while the flag it named reads true, beside
+        /// the one it shows otherwise. Text that named no flag keeps none.
+        lit: Option<TextFaces>,
         text: Box<TextContext>,
     },
     Custom {
@@ -205,6 +208,7 @@ impl Leaf {
                 padding_x,
                 color,
                 text,
+                ..
             } => {
                 if !content.is_empty() {
                     let max_width = (bounds.w - *padding_x * 2.0).max(0.0);
@@ -254,6 +258,37 @@ impl Leaf {
         widget.repaint()
     }
 
+    /// The colour this leaf writes its text in right now, where it writes any.
+    #[cfg(any(test, feature = "capture"))]
+    pub(crate) const fn ink(&self) -> Option<Rgba> {
+        match self {
+            Self::Text { color, .. } => Some(*color),
+            Self::Control(_)
+            | Self::Custom { .. }
+            | Self::Empty
+            | Self::Shader(_)
+            | Self::Vis(_) => None,
+        }
+    }
+
+    /// Shows the face the flag now reads for, answering whether the picture
+    /// changed.
+    pub(crate) fn light(&mut self, on: bool) -> bool {
+        let Self::Text {
+            role, color, lit, ..
+        } = self
+        else {
+            return false;
+        };
+        lit.is_some_and(|faces| {
+            let face = if on { faces.lit } else { faces.idle };
+            let moved = face.color != *color;
+            *role = face.role;
+            *color = face.color;
+            moved
+        })
+    }
+
     /// Takes what this leaf's endpoint now ctx. This is the one way a mounted
     /// leaf learns a new value without the tree being rebuilt around it.
     pub(crate) fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
@@ -278,6 +313,22 @@ impl Leaf {
         };
         shader.declaration()
     }
+}
+
+/// One face a run of text shows: the role it is dressed in, and the colour that
+/// role resolves to.
+#[derive(Clone, Copy)]
+pub(super) struct TextFace {
+    pub(super) role: TextRoleSkin,
+    pub(super) color: Rgba,
+}
+
+/// The two faces a run of text shows, where the document named a flag to choose
+/// between them.
+#[derive(Clone, Copy)]
+pub(super) struct TextFaces {
+    pub(super) idle: TextFace,
+    pub(super) lit: TextFace,
 }
 
 fn text_x(align: TextAlign, bounds: Rect, width: f32, padding_x: f32) -> f32 {

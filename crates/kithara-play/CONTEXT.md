@@ -256,10 +256,9 @@ a grid identity nor converts analysis facts into a second representation.
 `SessionDispatcher::consumer_wake_mode` is a **required** object-safe capability,
 not a trait default, so a wrapper cannot silently erase an off-RT capability by
 omission. `ConfigPrep` copies it into `ResourceConfig::consumer_wake_mode`,
-*unconditionally overwriting whatever the builder carried*, so a player-managed
-resource has no second source of wake policy; the builder setter exists only for
-direct `Resource` readers that never pass through a player
-(`prepare_config_overwrites_a_builder_declared_wake_mode` and siblings). The
+so a player-managed resource has no second source of wake policy. An unset field
+identifies a direct `Resource` reader and resolves to `ImmediateOffRt` while its
+config becomes an `AudioConfig`. The
 Host's `TransportCommitState` is the sole owner of when the session
 beat-to-frame relation changes: a stream restart drops the transport snapshot
 because the frame axis restarted, and the first block on the new axis reanchors

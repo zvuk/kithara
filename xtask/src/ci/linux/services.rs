@@ -292,7 +292,11 @@ fn unit(
         write!(unit, " --env {entry}")?;
     }
     for (volume, target) in &job.mounts {
-        write!(unit, " --mount type=volume,source={volume},target={target}")?;
+        let mount_type = Container::mount_type(volume);
+        write!(
+            unit,
+            " --mount type={mount_type},source={volume},target={target}"
+        )?;
     }
     for device in job.devices {
         write!(unit, " --device {}", device.display())?;
@@ -492,8 +496,8 @@ mod tests {
     #[test]
     fn each_runner_builds_in_a_directory_of_its_own() {
         let host = host_fixture();
-        let first = Container::mounts(host.runner("kithara-ci-octocat").expect("runner"));
-        let second = Container::mounts(host.runner("kithara-ci-hubot").expect("runner"));
+        let first = Container::mounts(&host, host.runner("kithara-ci-octocat").expect("runner"));
+        let second = Container::mounts(&host, host.runner("kithara-ci-hubot").expect("runner"));
 
         let target = |mounts: &[(String, &str)]| {
             mounts
@@ -504,6 +508,10 @@ mod tests {
                 .clone()
         };
         assert_ne!(target(&first), target(&second));
+        assert_eq!(
+            target(&first),
+            "/var/lib/kithara-ci/target/kithara-ci-octocat"
+        );
 
         for shared in ["/home/runner/.cargo", "/cache/sccache"] {
             let name = |mounts: &[(String, &str)]| {

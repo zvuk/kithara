@@ -60,7 +60,12 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
     let mut volumes: Vec<String> = host
         .runners
         .iter()
-        .flat_map(|runner| Container::mounts(runner).into_iter().map(|(name, _)| name))
+        .flat_map(|runner| {
+            Container::mounts(host, runner)
+                .into_iter()
+                .map(|(name, _)| name)
+        })
+        .filter(|name| Container::mount_type(name) == "volume")
         .collect();
     volumes.dedup();
     volumes.sort();
@@ -161,6 +166,10 @@ mod tests {
             );
         }
         assert!(yaml.contains("kithara-ci-sccache:/cache/sccache"), "{yaml}");
+        assert!(
+            yaml.contains("/var/lib/kithara-ci/target/kithara-ci-octocat:/cache/target"),
+            "{yaml}"
+        );
     }
 
     /// The Android runner reaches hardware a plain one must not, and Compose

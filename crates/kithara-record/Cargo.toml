@@ -9,6 +9,14 @@ description = "Storage-neutral master recording for Kithara."
 keywords = ["audio", "recording", "encoding"]
 categories = ["multimedia::audio"]
 
+[features]
+default = ["client-reqwest", "tls-rustls"]
+client-apple = ["kithara-encode/client-apple"]
+client-reqwest = ["kithara-encode/client-reqwest"]
+client-wreq = ["kithara-encode/client-wreq"]
+tls-native = ["kithara-encode/tls-native"]
+tls-rustls = ["kithara-encode/tls-rustls"]
+
 [dependencies]
 kithara-bufpool = { workspace = true }
 kithara-encode = { workspace = true, default-features = false }

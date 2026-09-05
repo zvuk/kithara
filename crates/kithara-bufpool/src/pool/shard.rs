@@ -26,16 +26,20 @@ where
         }
     }
 
-    pub(super) fn try_get(&self) -> Option<B> {
-        self.free.pop()
+    delegate::delegate! {
+        to self.free {
+            #[call(pop)]
+            pub(super) fn try_get(&self) -> Option<B>;
+            pub(super) fn len(&self) -> usize;
+        }
     }
 
-    pub(super) fn try_put(&self, mut value: B) -> Result<usize, B> {
+    pub(super) fn normalize(&self, value: &mut B) -> Option<usize> {
         const TRIM_HYSTERESIS: usize = 2;
 
         value.clear();
         if self.max_retained_capacity > 0 && value.capacity() > self.max_retained_capacity {
-            return Err(value);
+            return None;
         }
         if self.trim_capacity > 0
             && value.capacity() > self.trim_capacity.saturating_mul(TRIM_HYSTERESIS)
@@ -43,9 +47,15 @@ where
             value.shrink_to(self.trim_capacity);
         }
         if value.capacity() == 0 {
-            return Err(value);
+            return None;
         }
-        let kept = B::bytes_for_capacity(value.capacity()).unwrap_or(usize::MAX);
+        Some(B::bytes_for_capacity(value.capacity()).unwrap_or(usize::MAX))
+    }
+
+    pub(super) fn try_put(&self, mut value: B) -> Result<usize, B> {
+        let Some(kept) = self.normalize(&mut value) else {
+            return Err(value);
+        };
         self.free.push(value).map(|()| kept)
     }
 

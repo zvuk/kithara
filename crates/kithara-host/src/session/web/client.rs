@@ -119,6 +119,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         root,
         root_view,
         sample_rate,
+        None,
         start_stream_web_audio,
     ))));
     init_bridge_state();

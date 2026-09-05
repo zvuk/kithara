@@ -16,7 +16,7 @@
 //!    then validates every env reference in `app.yaml` and fails the
 //!    build listing all missing variables.
 //!
-//! `app.yaml` and `.env` are both `rerun-if-changed`.
+//! `app.yaml` and an existing `.env` are both `rerun-if-changed`.
 
 use std::{
     collections::HashMap,
@@ -174,7 +174,10 @@ fn main() {
     let dotenv_path = workspace_root.join(".env");
 
     println!("cargo:rerun-if-changed={}", app_yaml_path.display());
-    println!("cargo:rerun-if-changed={}", dotenv_path.display());
+    // Cargo treats a missing watched path as dirty on every build.
+    if dotenv_path.is_file() {
+        println!("cargo:rerun-if-changed={}", dotenv_path.display());
+    }
 
     let yaml_src = fs::read_to_string(&app_yaml_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", app_yaml_path.display()));

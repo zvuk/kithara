@@ -243,6 +243,7 @@ where
                     root,
                     root_view,
                     sample_rate,
+                    Some(max_block_frames),
                     start_stream,
                 )),
                 #[cfg(any(test, feature = "probe"))]

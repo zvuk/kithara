@@ -236,6 +236,15 @@ coverage:
     cargo llvm-cov nextest --no-report \
       --workspace --exclude kithara-fuzz \
       --cargo-profile test-release || test_rc=$?
+    cargo llvm-cov nextest --no-report \
+      -p kithara-ui \
+      --cargo-profile test-release \
+      --ignore-default-filter || test_rc=$?
+    cargo llvm-cov nextest --no-report \
+      -p kithara-app \
+      --cargo-profile test-release \
+      --ignore-default-filter \
+      -E 'package(kithara-app) & test(/^gui::/)' || test_rc=$?
     report_rc=0
     cargo llvm-cov report \
       --profile test-release \

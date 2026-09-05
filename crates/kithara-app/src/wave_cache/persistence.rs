@@ -9,6 +9,7 @@ use kithara::{
         AnalysisFile, AnalysisFileError, AnalysisFileSpec, AnalysisFileUpdate, AnalysisProgress,
     },
     assets::{AcquisitionResult, AssetReader, AssetWriter, AssetsError, ReadSide, WriteSide},
+    bufpool::ByteBuffer,
     platform::{
         CancelGroup,
         time::Duration,
@@ -211,6 +212,7 @@ async fn run_actor(
     chunk_duration: Duration,
     cancel: CancelGroup,
 ) {
+    let mut bytes = pools.get::<u8>();
     loop {
         let request = tokio::select! {
             biased;
@@ -222,18 +224,20 @@ async fn run_actor(
         };
         let revision = request.progress.analysis().revision();
         let key = request.target.key.clone();
-        let result = tokio::select! {
+        let (returned_bytes, result) = tokio::select! {
             biased;
             () = cancel.cancelled() => return,
             result = persist(
                 request.target,
                 request.progress,
                 runtime.clone(),
-                pools.clone(),
+                bytes,
                 chunk_duration,
                 cancel.clone(),
             ) => result,
         };
+        bytes = returned_bytes.unwrap_or_else(|| pools.get::<u8>());
+        bytes.normalize();
 
         let ack = match result {
             Ok(WriteOutcome::Committed { final_len }) => {
@@ -254,36 +258,44 @@ async fn persist(
     target: AnalysisTarget,
     progress: AnalysisProgress,
     runtime: Handle,
-    pools: Pools,
+    mut bytes: ByteBuffer,
     chunk_duration: Duration,
     cancel: CancelGroup,
-) -> Result<WriteOutcome, AnalysisPersistenceError> {
+) -> (
+    Option<ByteBuffer>,
+    Result<WriteOutcome, AnalysisPersistenceError>,
+) {
     let store = target.store;
     let key = target.key;
     let operation_store = store.clone();
     let operation_key = key.clone();
-    store
+    let result = store
         .with_resource_transaction(&key, move || {
             let job = spawn_blocking_on(&runtime, move || {
-                write_request(
+                let result = write_request(
                     &operation_store,
                     &operation_key,
                     &progress,
-                    &pools,
+                    &mut bytes,
                     chunk_duration,
                     &cancel,
-                )
+                );
+                (bytes, result)
             });
             AbortOnDrop::new(job).join()
         })
-        .await?
+        .await;
+    match result {
+        Ok((bytes, result)) => (Some(bytes), result),
+        Err(error) => (None, Err(error)),
+    }
 }
 
 fn write_request(
     store: &AppStore,
     key: &kithara::assets::ResourceKey,
     progress: &AnalysisProgress,
-    pools: &Pools,
+    bytes: &mut ByteBuffer,
     chunk_duration: Duration,
     cancel: &CancelGroup,
 ) -> Result<WriteOutcome, AnalysisPersistenceError> {
@@ -295,7 +307,7 @@ fn write_request(
             commit_generation(writer, &update, None, cancel)
         }
         AcquisitionResult::Ready(reader) => {
-            write_existing(reader, &spec, progress, pools, chunk_duration, cancel)
+            write_existing(reader, &spec, progress, bytes, chunk_duration, cancel)
         }
         _ => Err(AnalysisPersistenceError::InvalidResourceState),
     }
@@ -305,15 +317,14 @@ fn write_existing(
     reader: AssetReader<AppPools>,
     spec: &AnalysisFileSpec,
     progress: &AnalysisProgress,
-    pools: &Pools,
+    bytes: &mut ByteBuffer,
     chunk_duration: Duration,
     cancel: &CancelGroup,
 ) -> Result<WriteOutcome, AnalysisPersistenceError> {
-    let mut bytes = pools.get::<u8>();
-    reader.read_into(&mut bytes).map_err(AssetsError::from)?;
+    reader.read_into(bytes).map_err(AssetsError::from)?;
     ensure_active(cancel)?;
 
-    let update = match AnalysisFile::parse(&bytes, progress.analysis().fingerprint()) {
+    let update = match AnalysisFile::parse(bytes, progress.analysis().fingerprint()) {
         Ok(file) if file_matches(&file, spec, chunk_duration) => {
             let stored = file.latest().analysis().revision();
             let incoming = progress.analysis().revision();
@@ -541,7 +552,11 @@ mod tests {
     use ::kithara::{
         analysis::{AnalysisFingerprint, Coverage, FrameRange, TrackAnalysis},
         assets::{ReadSide, StorageBackend},
-        platform::{time::Duration, tokio::runtime::Handle},
+        bufpool::{OverallBudget, PoolConfig},
+        platform::{
+            time::Duration,
+            tokio::runtime::{Builder as RuntimeBuilder, Handle},
+        },
         prelude::ResourceSrc,
         worker::{DispatcherConfig, TaskConfig, WorkerConfig},
     };
@@ -634,6 +649,107 @@ mod tests {
             file.latest().analysis().coverage().frames(),
             3 * Consts::CHUNK_FRAMES
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn repeated_existing_generation_writes_reuse_actor_scratch() {
+        const RETAINED_BYTES: usize = 2 * 1024 * 1024;
+
+        let pools = pools::tests::build_with(
+            OverallBudget(4 * 1024 * 1024),
+            PoolConfig::builder()
+                .max_buffers(256)
+                .max_retained_capacity(RETAINED_BYTES)
+                .build(),
+            PoolConfig::builder().max_buffers(8).build(),
+        )
+        .expect("valid retained-scratch pool policy");
+        let directory = tempfile::tempdir().expect("temporary disk store");
+        let store = AppStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: directory.path().into(),
+            })
+            .build();
+        let resource = AppResourceConfig::for_src(
+            ResourceSrc::parse("https://analysis.test.invalid/repeated-persistence.mp3")
+                .expect("fixture source is valid"),
+        )
+        .store(store)
+        .discriminator("repeated-persistence-test")
+        .build();
+        let target = AnalysisTarget::for_config(&resource).expect("fixture target is valid");
+
+        let mut runtime_builder = RuntimeBuilder::new_multi_thread();
+        runtime_builder
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .enable_all();
+        let runtime = runtime_builder
+            .build()
+            .expect("dedicated persistence runtime");
+        let runtime_handle = runtime.handle().clone();
+
+        runtime.block_on(async {
+            let worker = Worker::new(WorkerConfig::new().with_runtime(runtime_handle.clone()));
+            let persistence = AnalysisPersistence::new(AnalysisPersistenceConfig::new(
+                worker,
+                pools.clone(),
+                NonZeroUsize::MIN,
+                Duration::from_secs(Consts::CHUNK_FRAMES),
+                DispatcherConfig::builder()
+                    .name("analysis-persistence-reuse-test")
+                    .build(),
+                TaskConfig::new(),
+            ))
+            .expect("persistence actor starts");
+            let progress = |revision| {
+                AnalysisProgress::try_from(analysis(revision, &[(0, 3 * Consts::CHUNK_FRAMES)]))
+                    .expect("settled progress is persistable")
+            };
+
+            persistence
+                .store(target.clone(), progress(1))
+                .await
+                .expect("initial generation commits");
+
+            let priming_pools = pools.clone();
+            spawn_blocking_on(&runtime_handle, move || {
+                let primed = (0..3)
+                    .map(|_| {
+                        priming_pools
+                            .get_with_len::<u8>(1)
+                            .expect("small blocking-shard buffer is admitted")
+                    })
+                    .collect::<Vec<_>>();
+                drop(primed);
+            })
+            .await
+            .expect("blocking-shard priming completes");
+            let baseline = pools.stats().allocated_bytes;
+
+            persistence
+                .store(target.clone(), progress(2))
+                .await
+                .expect("first replacement generation commits");
+            let after_first = pools.stats().allocated_bytes;
+            assert!(
+                after_first > baseline,
+                "the first existing-generation read must grow actor scratch"
+            );
+
+            for revision in 3..=5 {
+                persistence
+                    .store(target.clone(), progress(revision))
+                    .await
+                    .expect("later replacement generation commits");
+            }
+
+            assert_eq!(
+                pools.stats().allocated_bytes,
+                after_first,
+                "one actor must reuse one byte buffer across existing generations"
+            );
+        });
     }
 
     #[kithara::test(native, tokio)]

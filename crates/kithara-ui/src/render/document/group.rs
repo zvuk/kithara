@@ -1,5 +1,5 @@
 use crate::{
-    expand::SurfaceSpec,
+    expand::{Binding, SurfaceSpec},
     layout::{Axis, FrameCorners, FrameSides},
     module::{MeasureAxis, TextAlign},
     size::SizeSpec,
@@ -17,6 +17,8 @@ pub struct Group<'a> {
     pub(super) round: FrameCorners,
     pub(super) background: Option<ColorRole>,
     pub(super) background_alpha: Option<f32>,
+    /// The face this group shows instead while the flag it names reads true.
+    pub(super) lit: Option<Lit<'a>>,
     pub(super) frame: Option<FrameSides>,
     /// The axis whose room decides which of its children stand, when the
     /// document says its children come and go with the room.
@@ -79,6 +81,13 @@ impl Group<'_> {
         self.gap
     }
 
+    /// The face this group shows while the flag it names reads true, and the
+    /// flag. A group that names no flag has one face and answers `None`.
+    #[must_use]
+    pub const fn lit(&self) -> Option<Lit<'_>> {
+        self.lit
+    }
+
     /// The axis whose room decides which children stand, when they do.
     #[must_use]
     pub const fn measure(&self) -> Option<MeasureAxis> {
@@ -113,5 +122,39 @@ impl Group<'_> {
     #[must_use]
     pub const fn surface(&self) -> Option<&SurfaceSpec> {
         self.surface
+    }
+}
+
+/// The other face of a group, and the flag that decides which one stands.
+///
+/// The flag travels rather than its reading, because the two kinds of host read
+/// it at different moments: one resolves it afresh on every frame it draws, the
+/// other in place, into a tree it keeps across frames. A host handed only the
+/// reading freezes the face the document was mounted at.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct Lit<'a> {
+    pub(super) flag: &'a Binding,
+    pub(super) background: Option<ColorRole>,
+    pub(super) frame_color: ColorRole,
+}
+
+impl<'a> Lit<'a> {
+    /// Background role while the flag reads true.
+    #[must_use]
+    pub const fn background(&self) -> Option<ColorRole> {
+        self.background
+    }
+
+    /// The flag that decides between the two faces.
+    #[must_use]
+    pub const fn flag(&self) -> &'a Binding {
+        self.flag
+    }
+
+    /// Frame colour role while the flag reads true.
+    #[must_use]
+    pub const fn frame_color(&self) -> ColorRole {
+        self.frame_color
     }
 }

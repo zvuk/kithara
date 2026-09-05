@@ -4,7 +4,7 @@ use kithara_platform::{
     CancelToken,
     sync::mpsc::{self, TryRecvError},
     thread::yield_now,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use kithara_test_macros as kithara;
 
@@ -47,7 +47,7 @@ pub(super) fn run_loop(
         needs_reorder |= remove_terminal(&mut slots);
         report_outcome(observer.as_mut(), report);
         observer.on_event(Event::PassEnd);
-        park_after_outcome(wake, budgets, report.outcome, &mut progress_streak);
+        park_after_outcome(wake, budgets, report, &mut progress_streak);
     }
 }
 
@@ -262,10 +262,10 @@ fn report_outcome(observer: &mut dyn Observer, report: PassReport) {
 pub(super) fn park_after_outcome(
     wake: &Wake,
     budgets: SchedulerBudgets,
-    outcome: PassOutcome,
+    report: PassReport,
     progress_streak: &mut u32,
 ) {
-    match outcome {
+    match report.outcome {
         PassOutcome::Progress => {
             *progress_streak += 1;
             if *progress_streak >= budgets.fairness_yield_interval {
@@ -275,11 +275,43 @@ pub(super) fn park_after_outcome(
         }
         PassOutcome::Waiting | PassOutcome::UpstreamPending | PassOutcome::Backpressured => {
             *progress_streak = 0;
-            wake.wait_timeout(budgets.wait_timeout);
+            if report.backpressured_tasks > 0 {
+                wait_for_backpressure(wake, budgets);
+            } else {
+                wake.wait_timeout(budgets.wait_timeout);
+            }
         }
         PassOutcome::Idle => {
             *progress_streak = 0;
             wake.wait_timeout(budgets.idle_timeout);
+        }
+    }
+}
+
+#[kithara::measure(label = "worker.backpressure.wait")]
+#[kithara::hang_watchdog]
+fn wait_for_backpressure(wake: &Wake, budgets: SchedulerBudgets) {
+    let poll_interval = budgets.backpressure_poll_interval;
+    let deadline = budgets.wait_timeout;
+    if poll_interval.is_zero() || deadline.is_zero() {
+        wake.wait_timeout(Duration::ZERO);
+        return;
+    }
+
+    let started = Instant::now();
+    let mut remaining = deadline;
+    loop {
+        let wait = poll_interval.min(remaining);
+        let mut woken = false;
+        hang_park!(|watchdog_remaining| {
+            woken = wake.wait_timeout(wait.min(watchdog_remaining));
+        });
+        if woken {
+            return;
+        }
+        remaining = deadline.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return;
         }
     }
 }

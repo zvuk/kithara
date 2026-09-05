@@ -64,6 +64,24 @@ fn post_commit_replacement_uses_injected_pool() {
 }
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
+fn committed_resource_releases_working_capacity_to_the_shared_region() {
+    const IDLE_BYTES: usize = 32;
+    const WORKING_BYTES: usize = 64;
+    const REGION_BYTES: usize = IDLE_BYTES + WORKING_BYTES;
+
+    let pools = pools_with_budget(REGION_BYTES);
+    let writer = MemResource::new(CancelToken::never(), pools.get::<u8>());
+    writer.write_at(0, &[1; WORKING_BYTES]).unwrap();
+    let idle = pools.get_with_len::<u8>(IDLE_BYTES).unwrap();
+    drop(idle);
+    let _reader = writer.commit(Some(WORKING_BYTES as u64)).unwrap();
+
+    pools
+        .get_with_len::<f32>(REGION_BYTES / size_of::<f32>())
+        .expect("committed and idle working bytes must be reclaimable by another typed slot");
+}
+
+#[kithara::test(timeout(Duration::from_secs(1)))]
 fn test_write_and_read() {
     let res = create_resource();
 

@@ -86,19 +86,6 @@ pub(super) fn bordered<'a>(
     }
 }
 
-#[cfg(test)]
-pub(super) fn frame_tone(
-    frame_color: Option<ColorRole>,
-    active_frame_color: Option<ColorRole>,
-    active: bool,
-    skin: &Skin,
-) -> (ColorRole, f32) {
-    (
-        active_tone(frame_color, active_frame_color, active).unwrap_or(skin.divider.color),
-        skin.divider.width,
-    )
-}
-
 pub(super) fn effective_size(
     node: &ExpandedNode,
     skin: &Skin,
@@ -841,36 +828,6 @@ mod tests {
         );
 
         assert_eq!(radius.top_right, 0.0);
-    }
-
-    #[kithara::test]
-    fn a_node_naming_no_frame_colour_takes_the_skin_divider() {
-        let skin = builtin::skin();
-
-        assert_eq!(
-            frame_tone(None, None, false, skin),
-            (skin.divider.color, skin.divider.width)
-        );
-    }
-
-    #[kithara::test]
-    fn a_declared_frame_pair_switches_on_the_active_flag() {
-        let skin = builtin::skin();
-        let pair = |active| {
-            frame_tone(
-                Some(ColorRole::LineInner),
-                Some(ColorRole::Accent),
-                active,
-                skin,
-            )
-        };
-
-        assert_eq!(pair(true), (ColorRole::Accent, skin.divider.width));
-        assert_eq!(pair(false), (ColorRole::LineInner, skin.divider.width));
-        assert_eq!(
-            frame_tone(Some(ColorRole::LineHi), None, true, skin),
-            (ColorRole::LineHi, skin.divider.width)
-        );
     }
 
     #[kithara::test]

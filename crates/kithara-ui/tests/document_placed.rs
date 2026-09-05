@@ -132,8 +132,12 @@ impl Host for Spy<'_> {
         child
     }
 
-    fn slot(&mut self, children: Vec<Self::Output>, _size: Option<SizeSpec>) -> Self::Output {
-        Self::flatten(children)
+    fn slot(
+        &mut self,
+        children: Vec<GroupMount<Self::Output>>,
+        _size: Option<SizeSpec>,
+    ) -> Self::Output {
+        Self::flatten(children.into_iter().map(|cell| cell.output))
     }
 
     fn split(

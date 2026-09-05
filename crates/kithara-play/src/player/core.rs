@@ -387,7 +387,9 @@ mod tests {
         );
         let mut config = resource_config("https://example.com/song.mp3");
 
-        config = player.prepare_config(config);
+        config = player
+            .prepare_config(config)
+            .expect("test session answers stream-shape queries");
 
         assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
         assert!(
@@ -400,7 +402,9 @@ mod tests {
     fn prepare_config_per_track_cancel_is_child_of_player_master() {
         let player = player();
         let mut rc = resource_config("https://example.com/song.mp3");
-        rc = player.prepare_config(rc);
+        rc = player
+            .prepare_config(rc)
+            .expect("test session answers stream-shape queries");
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
         let observer = track_cancel.child();
@@ -425,7 +429,9 @@ mod tests {
                 .build(),
         );
         let mut rc = resource_config("https://example.com/song.mp3");
-        rc = player.prepare_config(rc);
+        rc = player
+            .prepare_config(rc)
+            .expect("test session answers stream-shape queries");
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
         let observer = track_cancel.child();

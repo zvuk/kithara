@@ -34,11 +34,20 @@ use crate::{
 pub(crate) struct EngineTarget {
     pub(super) plan: HostedControlPlan,
     pub(super) area: Rc<Cell<MasonryRect>>,
+    /// The widget that draws this control. It is the engine's own node only
+    /// when the control hosts its engine itself; a module handed to an engine
+    /// hosts one engine above every control in it, and Masonry paints the
+    /// widget that asked for paint rather than its children.
+    pub(super) node: WidgetId,
 }
 
 impl EngineTarget {
-    pub(super) fn new(area: Rc<Cell<MasonryRect>>, plan: HostedControlPlan) -> Option<Self> {
-        (!plan.descriptors().is_empty()).then_some(Self { plan, area })
+    pub(super) fn new(
+        node: WidgetId,
+        area: Rc<Cell<MasonryRect>>,
+        plan: HostedControlPlan,
+    ) -> Option<Self> {
+        (!plan.descriptors().is_empty()).then_some(Self { plan, area, node })
     }
 }
 
@@ -53,7 +62,23 @@ pub(super) struct OpenPicker {
 pub(super) struct Routed {
     pub(super) outcome: Outcome<HostAction>,
     pub(super) focused: bool,
-    pub(super) repaint: bool,
+    /// The widgets whose face the event changed, which are the widgets that
+    /// have to be painted again for it to be seen.
+    pub(super) repaint: Vec<WidgetId>,
+}
+
+/// The face one control an engine drives shows right now.
+///
+/// A face is read from the engine rather than kept, so it is the one thing that
+/// says whether an event changed what a control looks like. A control whose
+/// face the engine cannot answer for shows the value it was mounted with and
+/// is repainted when that value is re-read, not here.
+#[derive(PartialEq)]
+enum Face {
+    Table(Option<Drawn>),
+    Tree(Option<TreeDrawn>),
+    Picker(Option<PickerSnapshot>),
+    Unread,
 }
 
 #[derive(fieldwork::Fieldwork)]
@@ -189,18 +214,6 @@ impl HostedEngine {
         })
     }
 
-    fn picker_views(&self, engine: &Engine) -> Vec<PickerSnapshot> {
-        self.targets
-            .iter()
-            .filter_map(|target| {
-                let HostedControlPlan::Picker { path, .. } = &target.plan else {
-                    return None;
-                };
-                engine.picker_snapshot(path)
-            })
-            .collect()
-    }
-
     /// Re-reads every plan this engine drives against the frame just read.
     ///
     /// The tree stands between frames, so a plan resolved when the tree was
@@ -215,9 +228,7 @@ impl HostedEngine {
 
     pub(super) fn route(&self, input: Input<'_>, point: Option<Pt>) -> Routed {
         let mut engine = self.engine.borrow_mut();
-        let before = self.table_views(&engine, self.pointer.get());
-        let tree_before = self.tree_views(&engine, self.pointer.get());
-        let picker_before = self.picker_views(&engine);
+        let before = self.faces(&engine, self.pointer.get());
         if matches!(input, Input::Pointer(_) | Input::Wheel(_)) {
             self.pointer.set(point);
         }
@@ -233,13 +244,18 @@ impl HostedEngine {
         }
         let emission = engine.handle(input, &targets, Instant::now());
         let focused = engine.focused_path().is_some();
-        let menu_changed = picker_before != self.picker_views(&engine);
-        if menu_changed {
+        let after = self.faces(&engine, self.pointer.get());
+        if menu_changed(&before, &after) {
             self.menu_changed.set(true);
         }
-        let repaint = menu_changed
-            || before != self.table_views(&engine, self.pointer.get())
-            || tree_before != self.tree_views(&engine, self.pointer.get());
+        let repaint = self
+            .targets
+            .iter()
+            .zip(&before)
+            .zip(&after)
+            .filter(|((_, before), after)| before != after)
+            .map(|((target, _), _)| target.node)
+            .collect::<Vec<WidgetId>>();
         let Some(emission) = emission else {
             return Routed {
                 focused,
@@ -263,14 +279,21 @@ impl HostedEngine {
         self.menu.set(Some(layer));
     }
 
-    fn table_views(&self, engine: &Engine, point: Option<Pt>) -> Vec<Drawn> {
+    /// The face every control this engine drives shows, in target order.
+    fn faces(&self, engine: &Engine, point: Option<Pt>) -> Vec<Face> {
         self.targets
             .iter()
-            .filter_map(|target| {
-                let HostedControlPlan::Table(plan) = &target.plan else {
-                    return None;
-                };
-                plan.view(engine, point, target_bounds(target))
+            .map(|target| match &target.plan {
+                HostedControlPlan::Table(plan) => {
+                    Face::Table(plan.view(engine, point, target_bounds(target)))
+                }
+                HostedControlPlan::Tree(plan) => {
+                    Face::Tree(plan.view(engine, point, target_bounds(target)))
+                }
+                HostedControlPlan::Picker { path, .. } => {
+                    Face::Picker(engine.picker_snapshot(path))
+                }
+                _ => Face::Unread,
             })
             .collect()
     }
@@ -311,18 +334,6 @@ impl HostedEngine {
             let picture = plan.picture();
             Some((picture.row_count(), picture.query().to_owned()))
         })
-    }
-
-    fn tree_views(&self, engine: &Engine, point: Option<Pt>) -> Vec<TreeDrawn> {
-        self.targets
-            .iter()
-            .filter_map(|target| {
-                let HostedControlPlan::Tree(plan) = &target.plan else {
-                    return None;
-                };
-                plan.view(engine, point, target_bounds(target))
-            })
-            .collect()
     }
 
     delegate::delegate! {
@@ -371,6 +382,17 @@ impl EngineProjection {
             );
         }
     }
+}
+
+/// Whether a menu one of these controls raises has changed.
+///
+/// The menu is drawn by a layer of its own, outside the tree the control sits
+/// in, so it is repainted by the root rather than by the widget that raised it.
+fn menu_changed(before: &[Face], after: &[Face]) -> bool {
+    before
+        .iter()
+        .zip(after)
+        .any(|(before, after)| matches!(before, Face::Picker(_)) && before != after)
 }
 
 fn target_bounds(target: &EngineTarget) -> Rect {

@@ -7,6 +7,7 @@ mod wire {
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::{MixTapWriter, SlotControl},
         effects::eq::EqBandConfig,
+        rt::StreamShape,
     };
 
     pub type PlayerId = u64;
@@ -124,6 +125,7 @@ mod wire {
             reason: String,
         },
         QuerySampleRate,
+        QueryStreamShape,
         Tick,
     }
 
@@ -151,6 +153,7 @@ mod wire {
         SessionTransport(SessionTransportSnapshot),
         SlotAllocated(AllocatedSlot),
         SampleRate(SessionSampleRate),
+        StreamShape(Option<StreamShape>),
         Err(SessionError),
     }
 
@@ -212,7 +215,7 @@ mod handle {
     #[cfg(any(test, feature = "probe"))]
     use super::wire::PlayerLevel;
     use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionError, SessionSampleRate};
-    use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError};
+    use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError, rt::StreamShape};
 
     /// Handle used by resident players to reach their session owner.
     ///
@@ -239,6 +242,15 @@ mod handle {
                 Reply::SampleRate(sample_rate) => Ok(sample_rate),
                 _ => Err(PlayError::Internal(
                     "unexpected reply for session sample rate query".into(),
+                )),
+            }
+        }
+
+        fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
+            match self.exec_ok(Cmd::QueryStreamShape)? {
+                Reply::StreamShape(shape) => Ok(shape),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session stream-shape query".into(),
                 )),
             }
         }
@@ -332,6 +344,16 @@ mod handle {
                 pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError>;
                 pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
             }
+        }
+
+        pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
+            let dispatcher = self
+                .0
+                .binding
+                .lock()
+                .as_ref()
+                .map(|binding| Arc::clone(&binding.dispatcher));
+            dispatcher.map_or(Ok(None), |dispatcher| dispatcher.stream_shape())
         }
 
         #[must_use]

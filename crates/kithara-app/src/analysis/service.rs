@@ -66,7 +66,7 @@ impl AnalysisService {
         );
         let cache = TrackAnalysisCache::new(
             runner.fingerprint().clone(),
-            config.worker.pools().clone(),
+            config.worker.pools(),
             config.analysis_chunk_seconds,
         );
         let owner = Owner {

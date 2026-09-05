@@ -90,10 +90,20 @@ pub struct PlayerNodeProcessor {
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StreamShape {
     pub max_block_frames: NonZeroU32,
     pub sample_rate: NonZeroU32,
+}
+
+impl StreamShape {
+    #[must_use]
+    pub const fn new(max_block_frames: NonZeroU32, sample_rate: NonZeroU32) -> Self {
+        Self {
+            max_block_frames,
+            sample_rate,
+        }
+    }
 }
 
 impl PlayerNodeProcessor {

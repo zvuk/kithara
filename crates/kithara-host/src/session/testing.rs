@@ -163,7 +163,7 @@ where
         SyncMemberKind::Group,
     );
     let root_view = RootView::new(&root);
-    SessionState::new(root, root_view, sample_rate, start_stream_fn)
+    SessionState::new(root, root_view, sample_rate, None, start_stream_fn)
 }
 
 #[cfg(test)]

@@ -85,6 +85,7 @@ where
                 role,
                 padding_x: metrics.footer_pad,
                 color: self.skin.rgba(role.color),
+                lit: None,
                 text: Box::new(TextContext::from(self.skin.text_resources())),
             }),
             solve::Size::new(

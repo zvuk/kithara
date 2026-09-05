@@ -157,10 +157,9 @@ so playback can attach it without `kithara-audio`, `kithara-play`, or
 best-effort and never changes playback.
 
 The worker drains the transport on its own tick, where DSP is allowed, and folds
-**one block per descriptor**. Contiguous descriptors are never joined:
-`Runs::merge` finishes the frontier `MonoStream` and `Runs::open` starts a fresh
-one at every push boundary, so beat-resampler segmentation is a pure function of
-the producer's own chunk boundaries.
+**one block per descriptor**. A descriptor continuing a run is resampled through
+that run's own `MonoStream`, so the audio a producer contributes reaches the
+detector the same whatever its chunk boundaries are.
 
 `BeatAnalysisConfig<B>` owns beat tunables and a standalone resampler backend.
 Defaults are 1024-frame mono resampler blocks, 22 050 Hz detector input,
@@ -171,12 +170,13 @@ from the caller's typed region.
 
 The contiguous run, not the pass, owns the sequential `MonoStream`. A range
 decoded later cannot be pushed through the stream that produced an earlier one:
-a run keeps its stream only while it is the frontier, then flushes into its mono
-when another segment is appended. Every join is pinned to its implied detector
-frame, so rounding cannot accumulate into marker drift. Detector windows are
-fixed spans of the absolute detector-rate timeline and are detected once when
-complete, regardless of arrival order. Markers therefore agree across arrival
-orders within the resampler's splice tolerance.
+audio continuing a run goes through that run's stream, so the seam carries no
+step for an onset detector to read as a beat, and a run the arriving audio does
+not continue flushes its stream into its mono. Every join is pinned to its
+implied detector frame, so rounding cannot accumulate into marker drift. Detector
+windows are fixed spans of the absolute detector-rate timeline and are detected
+once when complete, regardless of arrival order. Markers therefore agree across
+arrival orders within the resampler's splice tolerance.
 
 A run reaching `detector_min_window_seconds` is detected immediately, then
 re-detected when its full window fills. Once the extent is known, the artifact is
@@ -184,12 +184,18 @@ spread across it at its own tempo while retaining detected marker positions. Run
 mono comes from sample guards acquired through `TrackAnalyzers`; the logical run
 set opens at most four runs of its own, and holds one more while it reads a
 stretch through to a run standing in front of it, while every physical
-allocation still competes under the region-wide hard byte budget. Its mono
+allocation still competes under the region-wide hard byte budget. That cap is
+the memory bound as much as the detection one: each run holds the resampler its
+audio continues, so a source arriving in scattered fragments cannot spend the
+region on resamplers and leave a reader without scratch. Its mono
 budget is five of what a run can hold with nothing for the detector to read: a
 hop in front of its first window and a window short of ready behind it. A run
 releases everything ahead of the window it still waits on, and a run that has
 fed no window releases nothing, since the audio in front of its first window
-belongs to a window starting before it. The hold therefore follows the detection backlog rather than the track
+belongs to a window starting before it. A released run shrinks its mono to what
+it still holds, so the charged capacity follows the hold budget rather than the
+widest span the run ever carried. The hold therefore follows the detection
+backlog rather than the track
 length. Audio past the budget is turned down rather than given up: it stays
 outside the beat coverage, and the pass reads it again once the detector frees
 room. That terminates because a hold at its budget always holds a window the

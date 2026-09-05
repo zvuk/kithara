@@ -3,9 +3,11 @@
 struct Consts;
 
 impl Consts {
+    const BYTE_MAX_BUFFERS: usize = 32;
+    const BYTE_MAX_RETAINED_CAPACITY: usize = 2 * 1024 * 1024;
     const DEFAULT_OVERALL_BYTES: usize = 256 * 1024 * 1024;
     const SAMPLE_MAX_BUFFERS: usize = 128;
-    const SAMPLE_TRIM_CAPACITY: usize = 200_000;
+    const SAMPLE_MAX_RETAINED_CAPACITY: usize = 200_000;
 }
 
 crate::pool_schema! {
@@ -84,13 +86,18 @@ pub fn byte_buffer(pools: &Pools) -> crate::ByteBuffer {
 }
 
 fn byte_config() -> crate::PoolConfig {
-    crate::PoolConfig::builder().max_buffers(usize::MAX).build()
+    crate::PoolConfig::builder()
+        .max_buffers(Consts::BYTE_MAX_BUFFERS)
+        .max_retained_capacity(Consts::BYTE_MAX_RETAINED_CAPACITY)
+        .max_share(crate::Percent::FULL)
+        .build()
 }
 
 fn sample_config() -> crate::PoolConfig {
     crate::PoolConfig::builder()
         .max_buffers(Consts::SAMPLE_MAX_BUFFERS)
-        .trim_capacity(Consts::SAMPLE_TRIM_CAPACITY)
+        .max_retained_capacity(Consts::SAMPLE_MAX_RETAINED_CAPACITY)
+        .max_share(crate::Percent::FULL)
         .build()
 }
 
@@ -109,5 +116,48 @@ mod tests {
         assert_eq!(&*samples, &[1.0, 2.0]);
         assert!(bytes.is_empty());
         assert!(pools.stats().allocated_bytes >= 2 * size_of::<f32>());
+    }
+
+    #[kithara::test]
+    fn returned_capacity_is_bounded() {
+        const BYTE_GUARDS: usize = 33;
+        const BYTE_COUNT_CAPACITY: usize = 1;
+        const BYTE_RETAINED_CAPACITY: usize = 2 * 1024 * 1024;
+        const OVERALL_BYTES: usize = 256 * 1024 * 1024;
+        const SAMPLE_RETAINED_CAPACITY: usize = 200_000;
+
+        let retained_pools = pools();
+        let baseline = retained_pools.stats().allocated_bytes;
+        assert_eq!(retained_pools.stats().max_bytes, OVERALL_BYTES);
+
+        let buffers = (0..BYTE_GUARDS)
+            .map(|_| {
+                retained_pools
+                    .get_with_len::<u8>(BYTE_COUNT_CAPACITY)
+                    .unwrap_or_else(|error| panic!("byte buffer: {error}"))
+            })
+            .collect::<Vec<_>>();
+        drop(buffers);
+        assert!(
+            retained_pools.stats().allocated_bytes <= baseline + BYTE_COUNT_CAPACITY,
+            "same-thread byte returns exceed one retained buffer"
+        );
+
+        let strict_pools = pools();
+        let baseline = strict_pools.stats().allocated_bytes;
+        let bytes = strict_pools
+            .get_with_len::<u8>(BYTE_RETAINED_CAPACITY + 1)
+            .unwrap_or_else(|error| panic!("oversized byte buffer: {error}"));
+        drop(bytes);
+        assert_eq!(strict_pools.stats().allocated_bytes, baseline);
+
+        let samples = strict_pools
+            .get_with_len::<f32>(SAMPLE_RETAINED_CAPACITY + 1)
+            .unwrap_or_else(|error| panic!("oversized sample buffer: {error}"));
+        drop(samples);
+        assert!(
+            strict_pools.stats().allocated_bytes <= baseline,
+            "oversized sample return exceeds baseline"
+        );
     }
 }

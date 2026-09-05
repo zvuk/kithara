@@ -9,7 +9,7 @@ use super::{
     custom::HostAction,
     menu::PickerLayer,
     mount::NodeLayout,
-    node::{Detent, Node},
+    node::{Detent, Faces, Node},
     picker::{EngineTarget, HostedEngine},
     popover::PopoverState,
     spot::Spot,
@@ -121,6 +121,13 @@ pub(crate) enum Watched {
         id: WidgetId,
         binding: Binding,
     },
+    /// A flow or a run of text that shows another face while the flag it names
+    /// reads true. What a flag lights is a value, so the face is swapped into
+    /// the node standing rather than settled where the tree is built.
+    Lit {
+        id: WidgetId,
+        flag: Binding,
+    },
 }
 /// Where one node stands, as the root reads it out of the tree.
 ///
@@ -187,7 +194,8 @@ pub struct MasonryNode<Action> {
 
 impl<Action> MasonryNode<Action> {
     pub(crate) fn add_engine_control(&mut self, plan: HostedControlPlan, prepend: bool) {
-        let Some(target) = EngineTarget::new(self.geometry(), plan) else {
+        let node = self.widget.id();
+        let Some(target) = EngineTarget::new(node, self.geometry(), plan) else {
             return;
         };
         let index = if prepend {
@@ -353,6 +361,19 @@ impl<Action> MasonryNode<Action> {
             node: self.widget.id(),
         });
         area
+    }
+
+    /// Remembers the flag this node is dressed by, and the two faces it chooses
+    /// between where the faces are the node's own rather than its leaf's, so the
+    /// root can read the flag again without building the tree afresh.
+    pub(crate) fn lights(&mut self, flag: Binding, faces: Option<Faces>) {
+        if let Some(faces) = faces {
+            self.widget.widget.set_faces(faces);
+        }
+        self.watched.push(Watched::Lit {
+            id: self.widget.id(),
+            flag,
+        });
     }
 
     /// Remembers that this node hides the blocks among its own children, so

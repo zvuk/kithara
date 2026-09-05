@@ -25,8 +25,8 @@ use super::{
     state::{SchedulerBudgets, Slot},
 };
 use crate::{
-    DispatcherConfig, Event, Observer, PassOutcome, Priority, Task, TaskConfig, TaskControl,
-    TaskId, TickResult, Wake,
+    DispatcherConfig, Event, Observer, PassOutcome, PassReport, Priority, Task, TaskConfig,
+    TaskControl, TaskId, TickResult, Wake,
 };
 
 struct FixedTask(TickResult);
@@ -224,12 +224,19 @@ impl Observer for Events {
 
 fn budgets() -> SchedulerBudgets {
     SchedulerBudgets {
+        backpressure_poll_interval: Duration::from_millis(10),
         fairness_yield_interval: 16,
         idle_timeout: Duration::from_millis(100),
         slow_tick_threshold: Duration::from_secs(1),
         task_burst: 32,
         wait_timeout: Duration::from_millis(10),
     }
+}
+
+fn pass_report(outcome: PassOutcome) -> PassReport {
+    let mut report = PassReport::new(0);
+    report.outcome = outcome;
+    report
 }
 
 #[kithara::test(native, flash(false))]
@@ -344,7 +351,7 @@ fn configured_slow_threshold_and_fairness_interval_are_load_bearing() {
     park_after_outcome(
         &Wake::default(),
         configured,
-        PassOutcome::Progress,
+        pass_report(PassOutcome::Progress),
         &mut streak,
     );
     assert_eq!(streak, 0);
@@ -381,6 +388,54 @@ fn scheduler_does_not_busy_spin_on_backpressure() {
     assert!(
         observed < 16,
         "backpressured task ran {observed} times in 80ms despite a 20ms park budget"
+    );
+}
+
+#[kithara::test(native, flash(false))]
+#[kithara::hang_watchdog]
+fn backpressure_poll_observes_a_deferred_edge_without_restarting_the_task() {
+    let ticks = Arc::new(AtomicUsize::new(0));
+    let (first_tick, first_tick_rx) = mpsc::channel();
+    let worker = crate::Worker::new(crate::WorkerConfig::new());
+    let dispatcher = worker.dispatcher(
+        DispatcherConfig::builder()
+            .name("backpressure-deferred-poll-test")
+            .backpressure_poll_interval(Duration::from_millis(2))
+            .wait_timeout(Duration::from_millis(500))
+            .build(),
+    );
+    let handle = dispatcher
+        .register(TaskConfig::new(), {
+            let ticks = Arc::clone(&ticks);
+            move |_| BackpressureCountingTask {
+                first_tick: Some(first_tick),
+                ticks,
+            }
+        })
+        .expect("backpressured task submission");
+
+    first_tick_rx
+        .recv_timeout(Instant::now() + Duration::from_secs(2))
+        .expect("backpressured task must start");
+    thread::sleep(Duration::from_millis(20));
+    let settled_ticks = ticks.load(Ordering::Relaxed);
+    thread::sleep(Duration::from_millis(20));
+    assert_eq!(
+        ticks.load(Ordering::Relaxed),
+        settled_ticks,
+        "poll timeouts must not restart the task"
+    );
+
+    handle.control().defer();
+    let deadline = Instant::now() + Duration::from_millis(100);
+    while ticks.load(Ordering::Relaxed) == settled_ticks && Instant::now() < deadline {
+        hang_tick!();
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        ticks.load(Ordering::Relaxed),
+        settled_ticks + 1,
+        "a deferred edge must end sliced backpressure waiting before the liveness timeout"
     );
 }
 
@@ -604,14 +659,30 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
     let wake = Wake::default();
     let mut configured = budgets();
     configured.fairness_yield_interval = 3;
+    configured.backpressure_poll_interval = Duration::ZERO;
     configured.idle_timeout = Duration::ZERO;
     configured.wait_timeout = Duration::ZERO;
     let mut streak = 0;
 
-    park_after_outcome(&wake, configured, PassOutcome::Progress, &mut streak);
-    park_after_outcome(&wake, configured, PassOutcome::Progress, &mut streak);
+    park_after_outcome(
+        &wake,
+        configured,
+        pass_report(PassOutcome::Progress),
+        &mut streak,
+    );
+    park_after_outcome(
+        &wake,
+        configured,
+        pass_report(PassOutcome::Progress),
+        &mut streak,
+    );
     assert_eq!(streak, 2);
-    park_after_outcome(&wake, configured, PassOutcome::Progress, &mut streak);
+    park_after_outcome(
+        &wake,
+        configured,
+        pass_report(PassOutcome::Progress),
+        &mut streak,
+    );
     assert_eq!(streak, 0);
 
     for outcome in [
@@ -621,7 +692,7 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
         PassOutcome::Idle,
     ] {
         streak = 2;
-        park_after_outcome(&wake, configured, outcome, &mut streak);
+        park_after_outcome(&wake, configured, pass_report(outcome), &mut streak);
         assert_eq!(streak, 0, "{outcome:?} must reset the progress streak");
     }
 }
@@ -675,6 +746,7 @@ fn task_handle_drop_releases_capacity_for_immediate_ordered_replacement() {
 fn dispatcher_builder_uses_scheduler_defaults() {
     let config = DispatcherConfig::builder().name("defaults-test").build();
 
+    assert_eq!(config.backpressure_poll_interval, Duration::from_millis(10));
     assert_eq!(config.capacity.get(), 64);
     assert_eq!(config.fairness_yield_interval.get(), 16);
     assert_eq!(config.idle_timeout, Duration::from_millis(100));
@@ -688,6 +760,7 @@ fn dispatcher_builder_uses_scheduler_defaults() {
 fn non_zero_budget_types_are_accepted_by_the_dispatcher_builder() {
     let _ = DispatcherConfig::builder()
         .name("budget-test")
+        .backpressure_poll_interval(Duration::ZERO)
         .capacity(NonZeroUsize::MIN)
         .fairness_yield_interval(NonZeroU32::MIN)
         .idle_timeout(Duration::ZERO)

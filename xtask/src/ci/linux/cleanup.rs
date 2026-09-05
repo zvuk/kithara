@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use tracing::info;
 
-use super::profile::LinuxHost;
+use super::{container::Container, profile::LinuxHost};
 use crate::ci::{build_cache, process::Process};
 
 /// Build cache older than this is rebuilt faster than it is worth keeping.
@@ -13,9 +13,10 @@ const BUILD_CACHE_AGE: &str = "168h";
 ///
 /// The machine is shared: other stacks keep images and volumes here, so a
 /// blanket `docker system prune` would take theirs. A live cache stays and is
-/// held to a budget instead: the per-runner `kithara-ci-target-*` contents are
-/// trimmed here, `kithara-ci-sccache` and `kithara-ci-fixtures` are what this
-/// exists to protect, and Cargo home is never touched. A volume of this
+/// held to a budget instead: the per-runner target directories under the
+/// configured cache root are trimmed here, `kithara-ci-sccache` and
+/// `kithara-ci-fixtures` are what this exists to protect, and Cargo home is
+/// never touched. A volume of this
 /// project's that no container is attached to any more is not a cache but a
 /// leftover, and it is reclaimed.
 ///
@@ -81,7 +82,7 @@ pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Resul
         ],
         "prune the build cache",
     );
-    let target_dirs = target_dirs(process)?;
+    let target_dirs = target_dirs(host);
     build_cache::enforce_budget(&target_dirs, host.build_cache_budget_bytes()?)?;
     Ok(())
 }
@@ -116,39 +117,12 @@ fn orphaned_volumes(listed: &str) -> Vec<&str> {
 }
 
 /// Where the live per-runner target caches sit on disk, so their contents can
-/// be held to a budget. Dead volumes are gone by the time this runs, so every
-/// name it returns still carries a link.
-fn target_dirs(process: &Process) -> Result<Vec<PathBuf>> {
-    const VOLUME_PREFIX: &str = "kithara-ci-target";
-
-    let filter = format!("name={VOLUME_PREFIX}");
-    let listed = process.capture(
-        "docker",
-        &["volume", "ls", "--filter", &filter, "--format", "{{.Name}}"],
-        "list project target volumes",
-    )?;
-    let mut names: Vec<&str> = listed
-        .lines()
-        .map(str::trim)
-        .filter(|name| name.starts_with(VOLUME_PREFIX))
-        .collect();
-    names.sort_unstable();
-
-    let mut target_dirs = Vec::with_capacity(names.len());
-    for name in names {
-        let label = format!("inspect project target volume {name}");
-        let mountpoint = process.capture(
-            "docker",
-            &["volume", "inspect", "--format", "{{.Mountpoint}}", name],
-            &label,
-        )?;
-        let path = PathBuf::from(mountpoint);
-        if !path.is_absolute() {
-            bail!("Docker target volume {name} returned a non-absolute mountpoint");
-        }
-        target_dirs.push(path);
-    }
-    Ok(target_dirs)
+/// be held to a budget.
+fn target_dirs(host: &LinuxHost) -> Vec<PathBuf> {
+    host.runners
+        .iter()
+        .map(|runner| Container::target_dir(host, runner))
+        .collect()
 }
 
 #[cfg(test)]
@@ -188,6 +162,18 @@ mod tests {
         assert!(
             orphaned_volumes("   \n\n").is_empty(),
             "whitespace is not a volume name"
+        );
+    }
+
+    #[test]
+    fn build_cache_budget_uses_the_profile_storage_root() {
+        let host = crate::ci::linux::profile::tests::host_fixture();
+        assert_eq!(
+            target_dirs(&host),
+            host.runners
+                .iter()
+                .map(|runner| host.cache_root.join("target").join(&runner.name))
+                .collect::<Vec<_>>()
         );
     }
 

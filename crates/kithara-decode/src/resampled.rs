@@ -149,22 +149,17 @@ where
     }
 
     fn drain_ready(&mut self) -> DecodeResult<Option<AudioChunk>> {
-        loop {
-            let input_frames = self.resampler.input_frames_next();
-            if self.input.frames().get() < input_frames {
-                break;
-            }
-            let process = self.process_block(input_frames)?;
-            if process.input_frames > input_frames {
-                return Err(DecodeError::InvalidData {
-                    detail: "decoder resampler consumed more frames than supplied",
-                });
-            }
-            if process.input_frames == 0 {
-                break;
-            }
-            self.drop_consumed(process.input_frames)?;
+        let input_frames = self.resampler.input_frames_next();
+        if self.input.frames().get() < input_frames {
+            return self.finish_output();
         }
+        let process = self.process_block(input_frames)?;
+        if process.input_frames > input_frames {
+            return Err(DecodeError::InvalidData {
+                detail: "decoder resampler consumed more frames than supplied",
+            });
+        }
+        self.drop_consumed(process.input_frames)?;
         self.finish_output()
     }
 
@@ -366,12 +361,12 @@ where
     #[kithara::measure(label = "decode.resampled.next")]
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
+            if let Some(output) = self.drain_ready()? {
+                return Ok(DecoderChunkOutcome::Chunk(output));
+            }
             match self.decoder.next_chunk()? {
                 DecoderChunkOutcome::Chunk(chunk) => {
                     self.append_chunk(&chunk)?;
-                    if let Some(output) = self.drain_ready()? {
-                        return Ok(DecoderChunkOutcome::Chunk(output));
-                    }
                 }
                 DecoderChunkOutcome::Pending(reason) => {
                     return Ok(DecoderChunkOutcome::Pending(reason));

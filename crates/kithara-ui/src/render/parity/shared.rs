@@ -40,7 +40,7 @@ impl EndpointRegistry for Endpoints {
 
 /// How the rect corpus compares the two hosts: one lays out in whole pixels and
 /// the other in fractions of one, so both edges are snapped before they meet.
-pub(super) fn snapped(rect: Rect) -> [f32; 4] {
+pub(in crate::render) fn snapped(rect: Rect) -> [f32; 4] {
     let x = rect.x.round();
     let y = rect.y.round();
     [
@@ -51,14 +51,14 @@ pub(super) fn snapped(rect: Rect) -> [f32; 4] {
     ]
 }
 
-pub(super) fn renderer() -> iced::Renderer {
+pub(in crate::render) fn renderer() -> iced::Renderer {
     FallbackRenderer::Secondary(TinySkiaRenderer::new(
         crate::render::fonts::SANS,
         iced::Pixels(14.0),
     ))
 }
 
-pub(super) fn collect_rows(layout: Layout<'_>, rows: &mut Vec<Rect>) {
+pub(in crate::render) fn collect_rows(layout: Layout<'_>, rows: &mut Vec<Rect>) {
     let mut children = layout.children().peekable();
     if children.peek().is_none() {
         let bounds = layout.bounds();

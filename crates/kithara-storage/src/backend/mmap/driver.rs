@@ -185,6 +185,7 @@ mod tests {
     use super::*;
     use crate::{
         Resource, ResourceRead, StorageError,
+        backend::traits::DriverIo,
         resource::{ResourceStatus, WaitOutcome},
     };
 
@@ -369,6 +370,27 @@ mod tests {
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 1024);
         assert!(buf.iter().all(|&b| b == 42));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn failed_post_commit_reopen_keeps_snapshot() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("original.dat");
+        let (mut driver, _) = MmapDriver::open(
+            MmapOptions::for_path(path)
+                .mode(OpenMode::ReadWrite)
+                .build(),
+        )
+        .unwrap();
+        driver.write_at(0, b"data", false).unwrap();
+        driver.commit(Some(4)).unwrap();
+
+        driver.path = dir.path().join("missing").join("resource.dat");
+        assert!(driver.write_at(0, b"lost", true).is_err());
+
+        let mut buf = [0; 4];
+        assert_eq!(driver.read_committed(0, &mut buf).unwrap(), Some(4));
+        assert_eq!(&buf, b"data");
     }
 
     fn create_resource_growing_by(dir: &TempDir, initial: u64, factor: u64) -> MmapResource {

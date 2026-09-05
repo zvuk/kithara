@@ -2871,29 +2871,38 @@ mod gesture_census {
     use std::rc::Rc;
 
     use kithara_test_utils::kithara;
+    use num_traits::cast::AsPrimitive;
 
     use super::{
         super::controls::Retained, CENSUS_SOURCES, CONTROL_CENSUS, FixtureReads, FixtureRegistry,
-        Handled, LATE_TABLE_ROWS, MasonryHost, MasonryRoot, MasonryState, PointerEvent,
+        Handled, LATE_TABLE_ROWS, MasonryHost, MasonryRoot, MasonryState, PointerEvent, Pt,
         ScrollDelta, fixture_registry, fixture_ui_with_sources, masonry_root, pointer_down,
         pointer_move, pointer_scroll, pointer_up,
     };
     use crate::{
+        app::App,
         builtin,
         compile::{CompiledNode, CompiledUi},
+        draw::Rect,
         expand::{Binding, ControlSpec, ExpandedNode},
         ids::{InternId, SourceUri},
         interact::Gestures,
         mount,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            ReadValue, Reads, Skin, UiEvent,
+            Clock, ReadValue, Reads, Skin, UiEvent,
             controls::{Draws, Gesture, Paint, Reading},
             document::{self, Ctx},
             hosted::hosted_control_plan,
             masonry::{HostAction, Painted},
+            parity::{
+                immediate::Immediate,
+                shared::{renderer, snapped},
+            },
+            tree,
         },
         shaping::FontPolicy,
+        view,
     };
 
     #[derive(Clone, Copy)]
@@ -3470,24 +3479,36 @@ mod gesture_census {
         name == "WindowDrag" && matches!(named, Named::Drag)
     }
 
-    fn driven(named: Named, control: &str, registry: &dyn EndpointRegistry, skin: &Skin) -> Answer {
-        let reads = DrivenReads;
-        let ui = fixture_ui_with_sources(
+    /// The document a census row is driven in: the control alone, filling the
+    /// window.
+    fn driven_document(control: &str, registry: &dyn EndpointRegistry) -> CompiledUi {
+        fixture_ui_with_sources(
             "gesture-drive",
             &format!(r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{control}])"#),
             registry,
             CENSUS_SOURCES,
-        );
+        )
+    }
+
+    /// The retained host with the document mounted and laid out, beside the
+    /// state that says where each path was put.
+    fn driven_root(ui: &CompiledUi, skin: &Skin) -> (MasonryRoot<UiEvent>, MasonryState) {
+        let reads = DrivenReads;
+        let state = MasonryState::default();
+        let host = MasonryHost::new(super::ctx(ui, &reads), skin).with_state(state.clone());
+        let output = document::render(&ui.root, super::ctx(ui, &reads), host);
+        let mut root = masonry_root(output, DRIVEN_WIDTH, DRIVEN_HEIGHT);
+        root.redraw()
+            .unwrap_or_else(|error| panic!("the driven control must lay out: {error}"));
+        (root, state)
+    }
+
+    fn driven(named: Named, control: &str, registry: &dyn EndpointRegistry, skin: &Skin) -> Answer {
+        let ui = driven_document(control, registry);
         let mut answer = Answer::default();
         for across in AIMS {
             for down in AIMS {
-                let state = MasonryState::default();
-                let host =
-                    MasonryHost::new(super::ctx(&ui, &reads), skin).with_state(state.clone());
-                let output = document::render(&ui.root, super::ctx(&ui, &reads), host);
-                let mut root = masonry_root(output, DRIVEN_WIDTH, DRIVEN_HEIGHT);
-                root.redraw()
-                    .unwrap_or_else(|error| panic!("the driven control must lay out: {error}"));
+                let (mut root, state) = driven_root(&ui, skin);
                 let (x, y) = aim(&root, &state, *across, *down);
                 answer = answer.or(at(named, &mut root, x, y));
             }
@@ -3512,6 +3533,128 @@ mod gesture_census {
                 pointer_scroll(x, y, ScrollDelta::LineDelta(0.0, -2.0)),
             ),
         }
+    }
+
+    /// An application standing in for the one a driven row has none of.
+    ///
+    /// The immediate host keeps nothing between frames, so what a control did
+    /// with a gesture shows only in what the document published and in whether
+    /// the tree took the event. This keeps the first; the driver answers the
+    /// second.
+    struct Driven<'a> {
+        published: Vec<UiEvent>,
+        skin: &'a Skin,
+    }
+
+    impl Reads for Driven<'_> {
+        fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+            DrivenReads.get(endpoint)
+        }
+    }
+
+    impl App for Driven<'_> {
+        fn document(&self) -> &str {
+            "fixture.klayout.ron"
+        }
+
+        fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+            with(self)
+        }
+
+        fn skin(&self) -> &Skin {
+            self.skin
+        }
+
+        fn update(&mut self, event: UiEvent) {
+            self.published.push(event);
+        }
+    }
+
+    /// How far apart the points the immediate census drives are.
+    ///
+    /// Four pixels is under the smallest box any control in the census was
+    /// laid out into, so a control that answers anywhere is reached.
+    const SWEEP: f32 = 4.0;
+
+    /// Plays one gesture at one point and says what the document did with it.
+    ///
+    /// A drag is measured by its travel, not by the press that starts it: a
+    /// control that answers the press and drops every move would otherwise
+    /// pass as a control that drags. The retained twin discards the same press
+    /// for the same reason.
+    ///
+    /// The travel is two moves rather than one because a recognizer may spend
+    /// the first fixing what the rest are measured from, and a drag played as
+    /// a single move is then below every threshold by construction.
+    fn played(named: Named, host: &mut Immediate<'_, Driven<'_>>, at: Pt) -> Answer {
+        match named {
+            Named::Press => {
+                let handled = host.click_at(at);
+                Answer {
+                    acted: !host.app().published.is_empty(),
+                    handled,
+                }
+            }
+            Named::Drag => {
+                host.press_at(at);
+                let started = host.app().published.len();
+                let first = host.hover_at(Pt {
+                    x: at.x + 2.0,
+                    y: at.y,
+                });
+                let second = host.hover_at(Pt {
+                    x: at.x + 24.0,
+                    y: at.y,
+                });
+                Answer {
+                    acted: host.app().published.len() > started,
+                    handled: first || second,
+                }
+            }
+            Named::Wheel => {
+                let handled = host.wheel_at(at, -2.0);
+                Answer {
+                    acted: !host.app().published.is_empty(),
+                    handled,
+                }
+            }
+        }
+    }
+
+    /// Drives the same gesture over the whole window on the immediate host.
+    ///
+    /// The retained twin aims at the box it laid the control into, because it
+    /// keeps a tree that can be asked. This host keeps none, and borrowing the
+    /// other host's box would make a control that answers on both look silent
+    /// here the moment the two lay it out differently - a question about
+    /// geometry, answered as if it were one about gestures. So this sweeps the
+    /// window instead, and the control answers if any point of it does.
+    fn driven_immediate(
+        named: Named,
+        control: &str,
+        registry: &dyn EndpointRegistry,
+        skin: &Skin,
+    ) -> Answer {
+        let ui = driven_document(control, registry);
+        let (width, height): (f32, f32) = (DRIVEN_WIDTH.as_(), DRIVEN_HEIGHT.as_());
+        let mut y = SWEEP / 2.0;
+        while y < height {
+            let mut x = SWEEP / 2.0;
+            while x < width {
+                let app = Driven {
+                    published: Vec::new(),
+                    skin,
+                };
+                let mut host = Immediate::mount(app, &ui, skin, (DRIVEN_WIDTH, DRIVEN_HEIGHT));
+                let answer = played(named, &mut host, Pt { x, y });
+                if !answer.silent() {
+                    return answer;
+                }
+                x += SWEEP;
+            }
+            y += SWEEP;
+        }
+        Answer::default()
     }
 
     /// Drives, on the retained host, the pointer gesture each control names.
@@ -3546,6 +3689,170 @@ mod gesture_census {
         assert_eq!(
             observed, expected,
             "the retained host answers a different set of pointer gestures than the controls name"
+        );
+    }
+
+    /// Drives, on the immediate host, the pointer gesture each control names.
+    ///
+    /// The twin of the census above. The two hosts route a pointer through
+    /// machinery with nothing in common - one against boxes read out of a tree
+    /// it keeps, the other by letting iced walk a tree it rebuilt - and a
+    /// control that answers on one and not the other draws exactly the same
+    /// picture. Driving both against the one table each declared its gestures
+    /// in is what makes that visible.
+    #[kithara::test]
+    fn every_control_answers_the_pointer_gesture_it_names_on_the_immediate_host() {
+        let registry = census_registry();
+        let skin = census_skin();
+
+        let mut observed = Vec::new();
+        let mut expected = Vec::new();
+        for (row, (_, _, control)) in ROWS.iter().zip(CONTROL_CENSUS) {
+            for named in [Named::Press, Named::Drag, Named::Wheel] {
+                if !named.declared_by(row.gestures) {
+                    continue;
+                }
+                let answers = !driven_immediate(named, control, &registry, &skin).silent();
+                observed.push(format!("{} {named:?}: {answers}", row.name));
+                expected.push(format!(
+                    "{} {named:?}: {}",
+                    row.name,
+                    !handed_over(row.name, named)
+                ));
+            }
+        }
+
+        assert_eq!(
+            observed, expected,
+            "the immediate host answers a different set of pointer gestures than the controls name"
+        );
+    }
+
+    /// The box the retained host laid a control into.
+    fn retained_box(control: &str, registry: &dyn EndpointRegistry, skin: &Skin) -> Rect {
+        let ui = driven_document(control, registry);
+        let (root, state) = driven_root(&ui, skin);
+        let widget = state
+            .widget_id("demo/control")
+            .and_then(|id| root.root().get_widget(id))
+            .unwrap_or_else(|| panic!("the retained host must mount {control} as a leaf"));
+        let origin = widget.ctx().window_origin();
+        let size = widget.ctx().size();
+        Rect {
+            x: origin.x.as_(),
+            y: origin.y.as_(),
+            w: size.width.as_(),
+            h: size.height.as_(),
+        }
+    }
+
+    /// The box the immediate host laid the same control into.
+    ///
+    /// The hosts disagree on how many nodes a control is: the retained one
+    /// mounts a single widget carrying the resolved size, and the immediate one
+    /// wraps the control's own element in a container of that size. Descending
+    /// through every node that stands alone reaches the surface both hosts
+    /// paint, and stopping at the first node that splits keeps a control that
+    /// lays out children - only `Tree` does - measured as the surface they are
+    /// painted on.
+    fn immediate_box(control: &str, registry: &dyn EndpointRegistry, skin: &Skin) -> Rect {
+        use iced::{
+            Size,
+            advanced::{
+                layout::{Layout, Limits},
+                widget::Tree,
+            },
+        };
+
+        let ui = driven_document(control, registry);
+        let reads = DrivenReads;
+        let mut element = tree::render(
+            &ui.root,
+            &ui,
+            &reads,
+            &view::EMPTY,
+            skin,
+            Clock::default(),
+            None,
+        );
+        let mut state = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut state,
+            &renderer(),
+            &Limits::new(
+                Size::ZERO,
+                Size::new(DRIVEN_WIDTH.as_(), DRIVEN_HEIGHT.as_()),
+            ),
+        );
+        let mut layout = Layout::new(&node);
+        loop {
+            let mut children = layout.children();
+            let Some(only) = children.next() else { break };
+            if children.next().is_some() {
+                break;
+            }
+            layout = only;
+        }
+        let bounds = layout.bounds();
+        Rect {
+            x: bounds.x,
+            y: bounds.y,
+            w: bounds.width,
+            h: bounds.height,
+        }
+    }
+
+    /// A button given a box paints all of it, on both hosts.
+    ///
+    /// Every `Button` a shipped document names declares a size, and the census
+    /// above cannot see that shape: it drives each control as the document
+    /// leaves it. The retained host mounts one widget of the declared box; the
+    /// immediate host wraps the button's own element in a container of that box
+    /// and lets the element ask for a width of its own, so a button that asks
+    /// for the width of its word is painted narrower than the box the document
+    /// gave it.
+    #[kithara::test]
+    fn a_button_given_a_box_paints_all_of_it_on_both_hosts() {
+        let registry = census_registry();
+        let skin = census_skin();
+        let control = r#"Button(id: "control", label: "PLAY", size: (w: Fixed(72.0), h: Fixed(28.0)), read: Model(id: "ui.menu.open"))"#;
+
+        assert_eq!(
+            snapped(immediate_box(control, &registry, &skin)),
+            snapped(retained_box(control, &registry, &skin)),
+            "the two hosts paint a button given the same box differently"
+        );
+    }
+
+    /// Both hosts lay the same control into the same box.
+    ///
+    /// A declared size reaches the two hosts through separate tables -
+    /// `length_for` on the immediate one, `control_length` on the retained one
+    /// - and a control whose painter measures its own width is where the two
+    /// can part: one gives the parent the painter's box and the other replaces
+    /// it with the skin's. No shipped document names such a size, so only a
+    /// census over every control keeps the two tables answering alike.
+    #[kithara::test]
+    fn every_control_is_laid_out_into_the_same_box_on_both_hosts() {
+        let registry = census_registry();
+        let skin = census_skin();
+
+        let mut retained = Vec::new();
+        let mut immediate = Vec::new();
+        for (name, _, control) in CONTROL_CENSUS {
+            retained.push(format!(
+                "{name}: {:?}",
+                snapped(retained_box(control, &registry, &skin))
+            ));
+            immediate.push(format!(
+                "{name}: {:?}",
+                snapped(immediate_box(control, &registry, &skin))
+            ));
+        }
+
+        assert_eq!(
+            retained, immediate,
+            "the two hosts lay the same control into different boxes"
         );
     }
 }
@@ -3861,6 +4168,12 @@ fn placed_at(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> T
         .transform()
 }
 
+/// A module id the facade hands to an engine, so the control inside it is
+/// mounted as `InputOwner::Engine` and the engine stands on the module rather
+/// than on the control. Every other fixture here names an id of its own, which
+/// is the shape where the two are the same node.
+const HOSTED_MODULE: &str = "gallery-table-tab";
+
 const DRIVEN: &str = r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
     Object(
         id: "travel",
@@ -3988,6 +4301,55 @@ fn a_mounted_table_repaints_the_row_under_the_pointer() {
         .unwrap_or_else(|error| panic!("hovered Table must repaint: {error}"));
 
     assert_ne!(hovered.encoding().draw_data, idle_draw_data);
+}
+
+/// A wheel over a list whose engine stands above it still repaints the list.
+///
+/// A module the document hands to an engine mounts its controls as
+/// `InputOwner::Engine`, so the engine is hosted on the module's content rather
+/// than on the table inside it. The offset a wheel moves is read where the
+/// table is drawn, and Masonry paints the widget that asked for paint and no
+/// other, so a repaint aimed anywhere else leaves the list standing still.
+#[kithara::test]
+fn a_mounted_table_repaints_after_scrolling_under_a_hosted_engine() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        HOSTED_MODULE,
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Table(
+                id: "tracks",
+                read: Model(id: "library.visible_tracks"),
+                columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)],
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = LateTrackReads {
+        loaded: Cell::new(true),
+    };
+    let output = document::render(
+        &ui.root,
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+    );
+    let mut root = masonry_root(output, 240, 160);
+    let (idle, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("unscrolled Table must draw: {error}"));
+    let idle_draw_data = idle.encoding().draw_data.clone();
+    let skin = builtin::skin();
+    let row_y = skin.table.header_height + skin.table.grid_gap + skin.table.row_height / 2.0;
+    root.handle_pointer_event(pointer_scroll(
+        20.0,
+        row_y.into(),
+        ScrollDelta::LineDelta(0.0, -1.0),
+    ))
+    .unwrap_or_else(|error| panic!("Table scroll must route: {error}"));
+    let (scrolled, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("scrolled Table must repaint: {error}"));
+
+    assert_ne!(scrolled.encoding().draw_data, idle_draw_data);
 }
 
 #[kithara::test]

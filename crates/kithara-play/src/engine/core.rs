@@ -19,6 +19,7 @@ use crate::{
     bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SharedEq, SlotControl},
     effects::eq::EqBandConfig,
     error::PlayError,
+    rt::StreamShape,
     session::{PlayerId, SessionBinding, SessionHandle, SessionSampleRate},
 };
 
@@ -98,6 +99,10 @@ impl<S> EngineImpl<S> {
 
     pub(crate) fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         self.session.consumer_wake_mode()
+    }
+
+    pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
+        self.session.stream_shape()
     }
 
     pub(crate) fn drain_slot_trash(&self, slot: SlotId) -> bool {

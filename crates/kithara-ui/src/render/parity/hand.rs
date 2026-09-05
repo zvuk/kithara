@@ -161,7 +161,8 @@ fn immediate_hand(drag: bool) -> mouse::Interaction {
     let (at, off) = over_and_off();
     let mut host = Immediate::mount(Tempo, &ui, builtin::skin(), Consts::CASE);
     if drag {
-        host.drag_from(at, off);
+        host.press_at(at);
+        host.hover_at(off);
     } else {
         host.hover_at(at);
         host.hover_at(off);

@@ -339,6 +339,30 @@ fn standalone_decoder_adapter_wraps_configured_backend() {
 }
 
 #[kithara::test(native, flash(false))]
+fn standalone_decoder_adapter_emits_one_resampler_block_per_call() {
+    let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
+    let mut decoder = decoder_over(
+        test_wav_with_frames(FRAMES * 2),
+        target_rate,
+        AdapterProbeBackend,
+    );
+
+    let first: AudioChunk = decoder
+        .next_chunk()
+        .expect("first chunk")
+        .try_into()
+        .expect("first adapter output chunk");
+    let second: AudioChunk = decoder
+        .next_chunk()
+        .expect("second chunk")
+        .try_into()
+        .expect("second adapter output chunk");
+
+    assert_eq!(first.frames(), FRAMES);
+    assert_eq!(second.frames(), FRAMES);
+}
+
+#[kithara::test(native, flash(false))]
 fn standalone_decoder_adapter_flushes_backend_delay_at_eof() {
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
     let mut decoder = decoder_with_resampler(target_rate, DelayedProbeBackend);
@@ -385,6 +409,7 @@ fn standalone_decoder_seek_reanchors_output_to_trimmed_target() {
         u64::try_from(test_frames(TARGET_RATE, TARGET)).expect("target frame fits u64");
 
     assert_eq!(output.meta.frame_offset, target_frame);
+    assert_eq!(output.frames(), FRAMES);
     assert_eq!(output.meta.timestamp, TARGET);
     assert_eq!(
         output.meta.timestamp,

@@ -78,6 +78,7 @@ perf = [
     "kithara-audio/perf",
     "kithara-decode/perf",
     "kithara-warp/perf",
+    "kithara-worker/perf",
 ]
 
 [dependencies]

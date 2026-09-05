@@ -7,6 +7,9 @@ mod custom;
 mod flex;
 mod host;
 mod leaf;
+#[cfg(test)]
+#[path = "../masonry_tree/lit.rs"]
+mod lit;
 mod menu;
 #[path = "../masonry_tree/mount.rs"]
 mod mount;

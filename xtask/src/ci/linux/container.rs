@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor};
 use crate::ci::{LINUX_LINKER_ENV, config::CiPins};
@@ -55,28 +55,45 @@ impl Container<'_> {
     /// them, and jobs on this machine run at the same time. Mounting the data
     /// without the lock leaves two of them unpacking one crate into one
     /// directory.
-    /// The volumes every runner shares, and the one it keeps to itself.
+    /// The cache mounts every runner shares, and the build directory it keeps
+    /// to itself under the host's configured cache root.
     ///
     /// The registry of downloaded crates is shared because that is what it is
     /// for, and the compiler cache because `sccache` keys on the inputs of a
     /// compilation, so one runner's entry is another's hit.
     ///
-    /// The build directory is not. Its artefacts are valid only for the exact
+    /// The build directory is not shared. Its artefacts are valid only for the exact
     /// features, profile and toolchain that produced them, so runners of
     /// different shapes reuse none of each other's and only contend for the
     /// same directory — which is how one grew past two hundred gigabytes while
     /// every job still compiled from source. Each runner keeps its own and
-    /// warms it with its own repeat work.
-    pub(super) fn mounts(runner: &LinuxRunner) -> Vec<(String, &'static str)> {
+    /// warms it with its own repeat work. A host path keeps that write-heavy
+    /// cache on the disk selected by the machine profile instead of wherever
+    /// Docker stores named volumes.
+    pub(super) fn mounts(host: &LinuxHost, runner: &LinuxRunner) -> Vec<(String, &'static str)> {
         vec![
             ("kithara-ci-cargo-home".to_owned(), "/home/runner/.cargo"),
             (
-                format!("kithara-ci-target-{}", runner.name),
+                Self::target_dir(host, runner)
+                    .to_string_lossy()
+                    .into_owned(),
                 "/cache/target",
             ),
             ("kithara-ci-sccache".to_owned(), "/cache/sccache"),
             ("kithara-ci-fixtures".to_owned(), "/cache/fixtures"),
         ]
+    }
+
+    pub(super) fn target_dir(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
+        host.cache_root.join("target").join(&runner.name)
+    }
+
+    pub(super) fn mount_type(source: &str) -> &'static str {
+        if Path::new(source).is_absolute() {
+            "bind"
+        } else {
+            "volume"
+        }
     }
 
     /// What the job is told about where to build and what to reuse.
@@ -129,7 +146,7 @@ pub(super) fn container<'a>(
         devices: &runner.devices,
         groups: &runner.groups,
         env_file: super::services::env_file(runner),
-        mounts: Container::mounts(runner),
+        mounts: Container::mounts(host, runner),
     }
 }
 
