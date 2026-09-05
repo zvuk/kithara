@@ -1,13 +1,27 @@
+active_lease_hours = 12
 admin_user = "operator"
+always_on_agents = ["colima", "gitlab-runner"]
 aggressive_cleanup_bytes = 270000000000
 android_home = "/Volumes/KitharaCI/toolchains/android"
 brew_root = "/opt/homebrew"
 build_cache_size = "100GB"
+cache_namespaces = [
+  ".kithara-ci-sccache-slots",
+  "bootstrap",
+  "gitlab-runner",
+  "quarantine",
+  "review",
+  "trusted",
+]
 cache_root_macos = "/Volumes/My Shared Files/kithara-cache"
 cache_root_linux = "/kithara-cache"
 cache_root_windows = "C:/KitharaCI/cache"
 ci_uid = 503
 ci_user = "kithara-ci"
+colima_profile = "kithara"
+cores = 10
+job_concurrency = 2
+log_limit_bytes = 20000000
 macos_guest_shared_root = "/Volumes/My Shared Files"
 macos_guest_user = "admin"
 macos_vm_bundle = "/Volumes/KitharaCI/vm/tart/vms/kithara-macos-base"
@@ -16,6 +30,7 @@ gitlab_url = "https://gitlab.example.com"
 host_root = "/Volumes/KitharaCI"
 host_xcode_developer_dir = "/Applications/Xcode.app/Contents/Developer"
 quota_bytes = 300000000000
+removable_roots = ["cache", "logs", "vm", "workspaces"]
 reject_bytes = 285000000000
 sccache_size = "4G"
 soft_cleanup_bytes = 240000000000

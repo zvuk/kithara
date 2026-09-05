@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
 use anyhow::{Context, Result, bail};
+use kithara_devtools::common::tools::ToolsConfig;
 use serde::{Deserialize, Serialize};
 
 /// Repository-relative location of the reviewed build pins.
@@ -233,6 +234,22 @@ impl CiPins {
             .map(String::as_str)
             .with_context(|| format!("CI pins have no cargo tool named {name}"))
     }
+
+    /// Every role that claims a version pin has to name one this repository
+    /// reviews. Without this the two files drift silently: a role keeps
+    /// resolving while its pin no longer exists, and the pin guarantees
+    /// nothing.
+    pub(crate) fn validate_tool_pins(&self, tools: &ToolsConfig) -> Result<()> {
+        for (role, pin) in tools.pinned_roles() {
+            if !self.cargo_tools.contains_key(pin) {
+                bail!(
+                    "tool role {role} pins {pin}, which .config/ci-pins.toml \
+                     [cargo_tools] does not declare"
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 fn is_sha256(value: &str) -> bool {
@@ -271,5 +288,35 @@ mod tests {
             let expected = lab["tools"][tool]["version"].as_str().unwrap();
             assert_eq!(pins.cargo_tool_version(tool).unwrap(), expected, "{tool}");
         }
+    }
+
+    #[test]
+    fn a_role_naming_an_unknown_pin_is_refused() {
+        let pins = CiPins::load(&workspace_root().join(".config/ci-pins.toml"))
+            .expect("the tracked pins load");
+        let tools: ToolsConfig = toml::from_str(
+            r#"
+            [ast-grep]
+            pin = "ast-grepp"
+            "#,
+        )
+        .expect("the tools table parses");
+
+        let error = pins
+            .validate_tool_pins(&tools)
+            .expect_err("a pin that does not exist must fail at load");
+
+        assert!(format!("{error:#}").contains("ast-grepp"));
+    }
+
+    #[test]
+    fn the_tracked_tools_table_agrees_with_the_tracked_pins() {
+        let root = workspace_root();
+        let pins = CiPins::load(&root.join(".config/ci-pins.toml")).expect("pins load");
+        let project =
+            kithara_devtools::common::project::ProjectConfig::load(root).expect("project loads");
+
+        pins.validate_tool_pins(&project.tools)
+            .expect("every configured role names a pin this repository reviews");
     }
 }

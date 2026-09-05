@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_devtools::Ctx;
+use kithara_devtools::{Ctx, common::tools::ToolsConfig};
 use sha2::{Digest, Sha256};
 
 use super::process::Process;
@@ -29,7 +29,7 @@ pub(crate) fn xcframework(
     let expected = expected_checksum(profile, &ctx.root.join(&ext.release.manifest))?;
 
     process.run(
-        "just",
+        ctx.config.tools.program("just"),
         &["platform", "apple", "release"],
         "Apple release artifacts",
     )?;
@@ -45,7 +45,7 @@ pub(crate) fn xcframework(
 
     if let Some(manifest_checksum) = expected {
         let primary = ctx.root.join(&ext.release.core_asset);
-        let actual_checksum = swift_checksum(process, &primary)?;
+        let actual_checksum = swift_checksum(process, &ctx.config.tools, &primary)?;
         if actual_checksum != manifest_checksum {
             bail!(
                 "{} checksum does not match the retained XCFramework: expected \
@@ -140,13 +140,18 @@ pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
     // it the manifest itself refuses to load, long before anything is
     // documented, so this job builds the framework it reads.
     process.run(
-        "just",
+        ctx.config.tools.program("just"),
         &["platform", "apple", "xcframework", "--profile", "debug"],
         "Apple XCFramework",
     )?;
-    process.run("just", &["platform", "apple", "doc"], "Apple documentation")?;
+    process.run(
+        ctx.config.tools.program("just"),
+        &["platform", "apple", "doc"],
+        "Apple documentation",
+    )?;
     zip_directory(
         process,
+        &ctx.config.tools,
         &ctx.root.join(&ext.release.docs_archive),
         &ctx.root.join(&ext.release.docs_asset),
     )?;
@@ -156,12 +161,13 @@ pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
 pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
     process.require_os("macos", "WASM release")?;
     process.run(
-        "just",
+        ctx.config.tools.program("just"),
         &["platform", "wasm", "build", "--profile", "release"],
         "release WASM bundle",
     )?;
     zip_directory(
         process,
+        &ctx.config.tools,
         &ctx.root.join(&ext.release.wasm_dist),
         &ctx.root.join(&ext.release.wasm_asset),
     )?;
@@ -175,7 +181,7 @@ pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> R
     // thirteen minutes for both ABIs in the debug profile, and the archive
     // then recreated the directories it had written and did the work again.
     process.run(
-        "just",
+        ctx.config.tools.program("just"),
         &["platform", "android", "aar"],
         "Android AAR release",
     )?;
@@ -192,7 +198,7 @@ pub(crate) fn publish(process: &Process, ctx: &Ctx, ext: &KitharaExt, channel: &
     // The jobs this one waits for take hours, and these tools are reached deep
     // inside the publish steps. Ask for them first, so a host that lacks one
     // says so before a release is built rather than after.
-    process.require_tools(&["cargo", "gh", "git", "unzip"])?;
+    process.require_tools(&["cargo", "gh", "git", ctx.config.tools.program("unzip")])?;
     let profile = ext.release.channel(channel)?;
     for variable in &profile.tokens {
         required_env(variable)?;
@@ -243,7 +249,12 @@ fn retained_assets(config: &ReleaseConfig) -> impl Iterator<Item = &str> {
     .filter(|name| !name.is_empty())
 }
 
-fn zip_directory(process: &Process, source: &Path, destination: &Path) -> Result<()> {
+fn zip_directory(
+    process: &Process,
+    tools: &ToolsConfig,
+    source: &Path,
+    destination: &Path,
+) -> Result<()> {
     if !source.is_dir() {
         bail!("release directory not found: {}", source.display());
     }
@@ -257,7 +268,7 @@ fn zip_directory(process: &Process, source: &Path, destination: &Path) -> Result
     let name = source
         .file_name()
         .with_context(|| format!("{} has no final component", source.display()))?;
-    let mut command = process.command("zip");
+    let mut command = process.command(tools.program("zip"));
     command
         .current_dir(parent)
         .args(["-r", "-y", "-q"])
@@ -280,9 +291,9 @@ fn copy_required(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn swift_checksum(process: &Process, path: &Path) -> Result<String> {
+fn swift_checksum(process: &Process, tools: &ToolsConfig, path: &Path) -> Result<String> {
     let output = process
-        .command("swift")
+        .command(tools.program("swift"))
         .args(["package", "compute-checksum"])
         .arg(path)
         .output()

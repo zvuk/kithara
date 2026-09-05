@@ -174,7 +174,7 @@ fn health_plan(ctx: &Ctx) -> StagePlan {
         .map(str::to_owned)
         .collect(),
         expected_artifacts: vec![
-            ctx.root.join("target/health-report.md"),
+            ctx.root.join(&ctx.config.health.report_path),
             ctx.root.join("target/quality-report.md"),
         ],
         hard_invariant: true,

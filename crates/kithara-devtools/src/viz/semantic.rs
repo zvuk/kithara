@@ -16,7 +16,6 @@ use super::{
 
 mod lsp;
 
-const SEMANTIC_TIMEOUT: Duration = Duration::from_secs(120);
 const SEMANTIC_SYMBOL_BUDGET: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -68,15 +67,26 @@ impl SemanticSummary {
     }
 }
 
-pub(crate) fn enrich(
-    graph: &mut EvidenceGraph,
-    root: &Path,
-    package: Option<&str>,
-    module: Option<&str>,
-    scenario: Option<&str>,
-    filter: &ArchitectureFilter,
-) -> SemanticSummary {
-    let eligible = select_symbols(graph, package, module, scenario, filter);
+/// One semantic-overlay run: which symbols to resolve, the rust-analyzer to
+/// resolve them with, and the budget it gets.
+pub(crate) struct EnrichRequest<'a> {
+    pub(crate) filter: &'a ArchitectureFilter,
+    pub(crate) root: &'a Path,
+    pub(crate) program: &'a str,
+    pub(crate) timeout: Duration,
+    pub(crate) module: Option<&'a str>,
+    pub(crate) package: Option<&'a str>,
+    pub(crate) scenario: Option<&'a str>,
+}
+
+pub(crate) fn enrich(graph: &mut EvidenceGraph, request: &EnrichRequest<'_>) -> SemanticSummary {
+    let eligible = select_symbols(
+        graph,
+        request.package,
+        request.module,
+        request.scenario,
+        request.filter,
+    );
     let skipped_symbols = eligible.len().saturating_sub(SEMANTIC_SYMBOL_BUDGET);
     let selected = eligible
         .into_iter()
@@ -87,7 +97,7 @@ pub(crate) fn enrich(
         return SemanticSummary::static_only("no source symbols selected for semantic resolution");
     }
 
-    let mut client = match Client::start(root, SEMANTIC_TIMEOUT) {
+    let mut client = match Client::start(request.program, request.root, request.timeout) {
         Ok(client) => client,
         Err(ClientError::Unavailable(message)) => {
             return SemanticSummary::static_only(message);
@@ -102,8 +112,8 @@ pub(crate) fn enrich(
         }
     };
 
-    let index = LocationIndex::new(graph, root);
-    let mut progress = match resolve_selected(graph, &index, &mut client, root, &selected) {
+    let index = LocationIndex::new(graph, request.root);
+    let mut progress = match resolve_selected(graph, &index, &mut client, request.root, &selected) {
         Ok(progress) => progress,
         Err((error, progress)) => {
             return failed_summary(&error, selected.len(), skipped_symbols, progress);

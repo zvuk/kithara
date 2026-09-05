@@ -23,8 +23,8 @@ pub(crate) struct TraceParams {
     pub(crate) test: String,
 }
 
-pub(crate) fn xctrace_command(out: &Path, binary: &Path, test: &str) -> Command {
-    let mut cmd = Command::new("xcrun");
+pub(crate) fn xctrace_command(program: &str, out: &Path, binary: &Path, test: &str) -> Command {
+    let mut cmd = Command::new(program);
     cmd.arg("xctrace")
         .arg("record")
         .arg("--template")
@@ -53,7 +53,12 @@ pub(crate) fn run(params: &TraceParams, project: &ProjectConfig) -> Result<()> {
     let out_dir = paths.run_dir.join("traces");
     fs::create_dir_all(&out_dir).with_context(|| format!("create {}", out_dir.display()))?;
     let out = out_dir.join(format!("{}.trace", sanitize(&params.test)));
-    let mut cmd = xctrace_command(&out, &suite.binary_path, &params.test);
+    let mut cmd = xctrace_command(
+        project.tools.program("xcrun"),
+        &out,
+        &suite.binary_path,
+        &params.test,
+    );
     cmd.current_dir(&suite.cwd);
     let status = cmd.status().context("run xctrace")?;
     if !status.success() {
@@ -70,6 +75,7 @@ mod tests {
     #[test]
     fn xctrace_command_shape() {
         let cmd = xctrace_command(
+            "xcrun",
             Path::new("/out/t.trace"),
             Path::new("/bin/suite_light-abc"),
             "offline::gapless",
@@ -96,6 +102,21 @@ mod tests {
                 "--exact",
                 "--nocapture"
             ]
+        );
+    }
+
+    #[test]
+    fn xctrace_command_uses_the_configured_program() {
+        let cmd = xctrace_command(
+            "/opt/pinned/bin/xcrun",
+            Path::new("/tmp/out.trace"),
+            Path::new("/tmp/suite"),
+            "case",
+        );
+
+        assert_eq!(
+            cmd.get_program(),
+            std::ffi::OsStr::new("/opt/pinned/bin/xcrun")
         );
     }
 }

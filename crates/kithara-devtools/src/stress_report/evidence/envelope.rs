@@ -12,14 +12,14 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{
-    AttemptDossier, MAX_SIGNATURE_EXAMPLES, SignatureCluster, add_signature,
+    AttemptDossier, SignatureCluster, add_signature,
     attempt::{
         AttemptKey, AttemptMetadata, AttemptOutcome, foreign_run, outcome_for, render_key,
         render_test,
     },
     normalize_signature, render_clusters, strip_ansi, wait_signatures,
 };
-use crate::common::project::StressEvidenceConfig;
+use crate::common::project::{StressEvidenceConfig, StressRenderBudgets};
 
 const MAX_ENVELOPE_BYTES: u64 = 4 * 1_024 * 1_024;
 const MAX_ENVELOPE_DIRECTORY_ENTRIES: usize = 100_000;
@@ -66,6 +66,7 @@ pub(super) struct Input<'a> {
     outcomes: &'a BTreeMap<AttemptKey, AttemptOutcome>,
     expected: &'a BTreeSet<AttemptKey>,
     evidence: &'a StressEvidenceConfig,
+    budgets: &'a StressRenderBudgets,
     run_id: Option<&'a str>,
 }
 
@@ -81,11 +82,13 @@ impl<'a> Input<'a> {
         expected: &'a BTreeSet<AttemptKey>,
         run_id: Option<&'a str>,
         evidence: &'a StressEvidenceConfig,
+        budgets: &'a StressRenderBudgets,
     ) -> Self {
         Self {
             outcomes,
             expected,
             evidence,
+            budgets,
             run_id,
         }
     }
@@ -159,17 +162,21 @@ pub(super) fn append(
         let test = render_test(&attempt.key);
         let outcome = outcome_for(&attempt, input.outcomes);
         let context = envelope.context.to_string();
-        let signature =
-            normalize_diagnostic(&format!("{}: {}", envelope.label, envelope.diagnostic));
+        let signature = normalize_diagnostic(
+            &format!("{}: {}", envelope.label, envelope.diagnostic),
+            input.budgets,
+        );
         if outcome == AttemptOutcome::Failed
             && let Some(dossier) = dossiers.get_mut(&attempt.key)
         {
             dossier.envelopes.insert(signature.clone());
             if dossier.flight_tail.is_empty() {
-                dossier.flight_tail = newest_groups(fold_flight_tail(&envelope.flight_probes));
+                dossier.flight_tail =
+                    newest_groups(fold_flight_tail(&envelope.flight_probes, input.budgets));
             }
             if dossier.event_tail.is_empty() {
-                dossier.event_tail = newest_groups(fold_flight_tail(&envelope.flight_events));
+                dossier.event_tail =
+                    newest_groups(fold_flight_tail(&envelope.flight_events, input.budgets));
             }
         }
         add_signature(
@@ -179,35 +186,19 @@ pub(super) fn append(
             &test,
             outcome,
             Some(context.as_str()),
+            input.budgets,
         );
-        for (lane, lines) in [
-            (&mut flight.events, &envelope.flight_events),
-            (&mut flight.probes, &envelope.flight_probes),
-        ] {
-            for line in lines
-                .iter()
-                .map(|line| normalize_flight_line(line))
-                .collect::<BTreeSet<_>>()
-            {
-                add_signature(lane, line, &attempt.display, &test, outcome, None);
-            }
-        }
+        add_flight_signatures(flight, &envelope, &attempt, &test, outcome, input.budgets);
         if let Some(payload) = payload {
-            for signature in wait_signatures(&payload, input.evidence) {
-                if outcome == AttemptOutcome::Failed
-                    && let Some(dossier) = dossiers.get_mut(&attempt.key)
-                {
-                    dossier.wait_graph.insert(signature.clone());
-                }
-                add_signature(
-                    wait_clusters,
-                    signature,
-                    &attempt.display,
-                    &test,
-                    outcome,
-                    None,
-                );
-            }
+            add_wait_signatures(
+                wait_clusters,
+                dossiers,
+                &payload,
+                &attempt,
+                &test,
+                outcome,
+                input,
+            );
         }
     }
     render_clusters(
@@ -215,6 +206,7 @@ pub(super) fn append(
         "Attempt-envelope progress signatures",
         &clusters,
         "These pair the stalled source location with the last observed progress point and the exact nextest attempt.",
+        input.budgets,
     );
     if foreign > 0 {
         let _ = writeln!(
@@ -238,8 +230,8 @@ pub(super) fn append(
     if !missing.is_empty() {
         let examples = missing
             .iter()
-            .take(MAX_SIGNATURE_EXAMPLES)
-            .map(|key| super::markdown_cell(&render_key(key)))
+            .take(input.budgets.signature_examples)
+            .map(|key| super::markdown_cell(&render_key(key), input.budgets))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(
@@ -249,6 +241,59 @@ pub(super) fn append(
         );
     }
     invalid == 0 && !files.limit_exceeded && missing.is_empty()
+}
+
+/// Cluster the flight-recorder tails of one envelope. Both lanes share the
+/// attempt attribution, so they differ only in which ring they came from.
+fn add_flight_signatures(
+    flight: &mut FlightClusters,
+    envelope: &AttemptEnvelope,
+    attempt: &AttemptMetadata,
+    test: &str,
+    outcome: AttemptOutcome,
+    budgets: &StressRenderBudgets,
+) {
+    for (lane, lines) in [
+        (&mut flight.events, &envelope.flight_events),
+        (&mut flight.probes, &envelope.flight_probes),
+    ] {
+        for line in lines
+            .iter()
+            .map(|line| normalize_flight_line(line, budgets))
+            .collect::<BTreeSet<_>>()
+        {
+            add_signature(lane, line, &attempt.display, test, outcome, None, budgets);
+        }
+    }
+}
+
+/// Cluster the wait-graph signatures carried by one envelope payload, and
+/// record them on the attempt's dossier when the attempt failed.
+fn add_wait_signatures(
+    wait_clusters: &mut BTreeMap<String, SignatureCluster>,
+    dossiers: &mut BTreeMap<AttemptKey, AttemptDossier>,
+    payload: &str,
+    attempt: &AttemptMetadata,
+    test: &str,
+    outcome: AttemptOutcome,
+    input: Input<'_>,
+) {
+    for signature in wait_signatures(payload, input.evidence, input.budgets) {
+        if outcome == AttemptOutcome::Failed
+            && let Some(dossier) = dossiers.get_mut(&attempt.key)
+        {
+            dossier.wait_graph.insert(signature.clone());
+        }
+        add_signature(
+            wait_clusters,
+            signature,
+            &attempt.display,
+            test,
+            outcome,
+            None,
+            input.budgets,
+        );
+    }
 }
 
 fn envelope_files(dir: &Path) -> Option<EnvelopeFiles> {
@@ -284,10 +329,10 @@ fn envelope_files(dir: &Path) -> Option<EnvelopeFiles> {
 /// The tick counter measures how long the watchdog watched, not what stalled.
 /// Left in the signature it split one stall into a cluster per attempt — the
 /// section grouped nothing exactly where grouping was its purpose.
-fn normalize_diagnostic(text: &str) -> String {
+fn normalize_diagnostic(text: &str, budgets: &StressRenderBudgets) -> String {
     static TICKS: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\b\d+ tick\(s\)").expect("tick counter regex"));
-    normalize_signature(&TICKS.replace_all(text, "<n> tick(s)"))
+    normalize_signature(&TICKS.replace_all(text, "<n> tick(s)"), budgets)
 }
 
 /// Flight lines carry per-call numeric fields (`seq=7`, `queue_len=12`) that
@@ -298,7 +343,7 @@ fn normalize_diagnostic(text: &str) -> String {
 /// Masked, the section named the file a probe fired from and erased the line
 /// inside it, so reading a signature meant opening the raw dump to find the
 /// site by hand — the one thing the section exists to spare.
-fn normalize_flight_line(line: &str) -> String {
+fn normalize_flight_line(line: &str, budgets: &StressRenderBudgets) -> String {
     static NUMERIC_FIELDS: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(\w+)=\d+\b").expect("numeric field regex"));
     let (line, _) = split_recorded_repeats(line);
@@ -310,7 +355,7 @@ fn normalize_flight_line(line: &str) -> String {
             format!("{key}=<n>")
         }
     });
-    normalize_signature(&masked)
+    normalize_signature(&masked, budgets)
 }
 
 /// The in-test recorder folds a line that repeats inside its window, so a
@@ -333,7 +378,7 @@ fn split_recorded_repeats(line: &str) -> (&str, usize) {
 /// drifting values do not split one loop into many rows, but each group shows
 /// its last firing's real field values — the tail is the verdict, and a
 /// verdict of `queue_head=<n>` names no cause.
-fn fold_flight_tail(lines: &[String]) -> Vec<String> {
+fn fold_flight_tail(lines: &[String], budgets: &StressRenderBudgets) -> Vec<String> {
     struct Group {
         key: String,
         display: String,
@@ -342,7 +387,7 @@ fn fold_flight_tail(lines: &[String]) -> Vec<String> {
     let mut folded: Vec<Group> = Vec::new();
     for line in lines {
         let (head, repeats) = split_recorded_repeats(line);
-        let key = normalize_flight_line(line);
+        let key = normalize_flight_line(line, budgets);
         let display = display_flight_line(head);
         match folded.last_mut() {
             Some(group) if group.key == key => {
@@ -444,9 +489,11 @@ mod tests {
     fn tick_counts_do_not_split_a_diagnostic_signature() {
         let first = normalize_diagnostic(
             "audio_worker_loop: stuck at observer.rs:173 | last progress at observer.rs:166 | 118 tick(s) since progress | timeout 1s",
+            &StressRenderBudgets::default(),
         );
         let second = normalize_diagnostic(
             "audio_worker_loop: stuck at observer.rs:173 | last progress at observer.rs:166 | 183 tick(s) since progress | timeout 1s",
+            &StressRenderBudgets::default(),
         );
 
         assert_eq!(first, second);
@@ -459,8 +506,14 @@ mod tests {
     /// attempt. Left in the signature it would split one cause per count.
     #[test]
     fn a_recorded_repeat_count_does_not_split_one_flight_line_into_many() {
-        let first = normalize_flight_line("DEBUG kithara_hls::settle: success (x7)");
-        let second = normalize_flight_line("DEBUG kithara_hls::settle: success (x31)");
+        let first = normalize_flight_line(
+            "DEBUG kithara_hls::settle: success (x7)",
+            &StressRenderBudgets::default(),
+        );
+        let second = normalize_flight_line(
+            "DEBUG kithara_hls::settle: success (x31)",
+            &StressRenderBudgets::default(),
+        );
 
         assert_eq!(first, second);
     }
@@ -470,10 +523,13 @@ mod tests {
     /// signature.
     #[test]
     fn a_folded_tail_sums_the_recorded_repeat_counts() {
-        let folded = fold_flight_tail(&[
-            "DEBUG kithara_hls::settle: success (x7)".to_owned(),
-            "DEBUG kithara_hls::settle: success (x5)".to_owned(),
-        ]);
+        let folded = fold_flight_tail(
+            &[
+                "DEBUG kithara_hls::settle: success (x7)".to_owned(),
+                "DEBUG kithara_hls::settle: success (x5)".to_owned(),
+            ],
+            &StressRenderBudgets::default(),
+        );
 
         assert_eq!(folded.len(), 1, "{folded:?}");
         assert!(folded[0].ends_with("(x12)"), "{folded:?}");
@@ -487,7 +543,7 @@ mod tests {
         let folded = fold_flight_tail(&[
             r#"TRACE kithara_hls_probe: probe="dispatch_from" caller_line=39 seq=100 variant=2 budget=2 queue_len=3 queue_head=26 cap=26"#.to_owned(),
             r#"TRACE kithara_hls_probe: probe="dispatch_from" caller_line=39 seq=101 variant=2 budget=2 queue_len=3 queue_head=27 cap=26"#.to_owned(),
-        ]);
+        ], &StressRenderBudgets::default());
 
         assert_eq!(folded.len(), 1, "one form is one group: {folded:?}");
         assert!(folded[0].contains("queue_head=27"), "{folded:?}");
@@ -503,7 +559,7 @@ mod tests {
     fn a_folded_tail_drops_the_recorder_counters() {
         let folded = fold_flight_tail(&[
             r#"TRACE kithara_hls_probe: probe="total_bytes" caller_line=11 seq=54634 thread_id=11876854719037224982 thread_seq=2249 install_id=1 variant=1 total=437160"#.to_owned(),
-        ]);
+        ], &StressRenderBudgets::default());
 
         assert!(!folded[0].contains("seq="), "{folded:?}");
         assert!(!folded[0].contains("thread_id="), "{folded:?}");
@@ -515,11 +571,14 @@ mod tests {
     /// firings (a moving byte offset) must not break one loop into many rows.
     #[test]
     fn drifting_values_do_not_split_a_tail_group() {
-        let folded = fold_flight_tail(&[
-            "DEBUG demo: read byte_offset=100".to_owned(),
-            "DEBUG demo: read byte_offset=200".to_owned(),
-            "DEBUG demo: read byte_offset=300".to_owned(),
-        ]);
+        let folded = fold_flight_tail(
+            &[
+                "DEBUG demo: read byte_offset=100".to_owned(),
+                "DEBUG demo: read byte_offset=200".to_owned(),
+                "DEBUG demo: read byte_offset=300".to_owned(),
+            ],
+            &StressRenderBudgets::default(),
+        );
 
         assert_eq!(folded.len(), 1, "{folded:?}");
         assert!(folded[0].contains("byte_offset=300"), "{folded:?}");
@@ -563,7 +622,13 @@ mod tests {
         assert!(append(
             &mut markdown,
             temp.path(),
-            Input::new(&outcomes, &BTreeSet::new(), Some("run"), &evidence),
+            Input::new(
+                &outcomes,
+                &BTreeSet::new(),
+                Some("run"),
+                &evidence,
+                &StressRenderBudgets::default(),
+            ),
             &mut BTreeMap::new(),
             &mut FlightClusters::default(),
             &mut dossiers,
@@ -598,7 +663,13 @@ mod tests {
         assert!(!append(
             &mut markdown,
             temp.path(),
-            Input::new(&outcomes, &expected, None, &evidence),
+            Input::new(
+                &outcomes,
+                &expected,
+                None,
+                &evidence,
+                &StressRenderBudgets::default(),
+            ),
             &mut BTreeMap::new(),
             &mut FlightClusters::default(),
             &mut BTreeMap::new(),
@@ -629,7 +700,13 @@ mod tests {
         assert!(!append(
             &mut markdown,
             temp.path(),
-            Input::new(&outcomes, &expected, Some("run"), &evidence),
+            Input::new(
+                &outcomes,
+                &expected,
+                Some("run"),
+                &evidence,
+                &StressRenderBudgets::default(),
+            ),
             &mut BTreeMap::new(),
             &mut FlightClusters::default(),
             &mut dossiers,
@@ -671,7 +748,13 @@ mod tests {
         assert!(append(
             &mut markdown,
             temp.path(),
-            Input::new(&outcomes, &expected, Some("run"), &evidence),
+            Input::new(
+                &outcomes,
+                &expected,
+                Some("run"),
+                &evidence,
+                &StressRenderBudgets::default(),
+            ),
             &mut waits,
             &mut FlightClusters::default(),
             &mut dossiers,
@@ -692,6 +775,7 @@ mod tests {
     fn a_probe_signature_keeps_the_source_line_it_fired_from() {
         let line = normalize_flight_line(
             r#"TRACE kithara_abr_probe: probe="decide" caller_file="crates/kithara-abr/src/state/decision.rs" caller_line=104"#,
+            &StressRenderBudgets::default(),
         );
         assert!(line.contains("caller_line=104"), "{line}");
     }
@@ -700,6 +784,7 @@ mod tests {
     fn a_probe_signature_still_masks_per_call_counters() {
         let line = normalize_flight_line(
             r#"TRACE kithara_abr_probe: probe="decide" caller_line=104 seq=7"#,
+            &StressRenderBudgets::default(),
         );
         assert!(line.contains("seq=<n>"), "{line}");
     }
@@ -745,7 +830,13 @@ mod tests {
         assert!(append(
             &mut markdown,
             temp.path(),
-            Input::new(&outcomes, &expected, Some("run"), &evidence),
+            Input::new(
+                &outcomes,
+                &expected,
+                Some("run"),
+                &evidence,
+                &StressRenderBudgets::default(),
+            ),
             &mut BTreeMap::new(),
             &mut flight,
             &mut dossiers,
@@ -798,7 +889,7 @@ mod tests {
 
     #[test]
     fn an_envelope_without_flight_fields_still_parses() {
-        assert!(fold_flight_tail(&[]).is_empty());
+        assert!(fold_flight_tail(&[], &StressRenderBudgets::default()).is_empty());
 
         let envelope: AttemptEnvelope = serde_json::from_str(
             r#"{"schema":"demo.hang.v1","label":"stalled","diagnostic":"none","nextest":{},"context":{}}"#,
@@ -830,7 +921,13 @@ mod tests {
         assert!(!append(
             &mut markdown,
             temp.path(),
-            Input::new(&outcomes, &expected, Some("run"), &evidence),
+            Input::new(
+                &outcomes,
+                &expected,
+                Some("run"),
+                &evidence,
+                &StressRenderBudgets::default(),
+            ),
             &mut BTreeMap::new(),
             &mut FlightClusters::default(),
             &mut BTreeMap::new(),

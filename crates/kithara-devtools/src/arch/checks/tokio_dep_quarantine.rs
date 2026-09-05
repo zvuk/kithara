@@ -32,7 +32,7 @@ impl Check for TokioDepQuarantine {
             let parsed: Value = toml::from_str(&text)
                 .with_context(|| format!("parse manifest: {}", manifest.display()))?;
 
-            for dep in production_tokio_deps(&parsed) {
+            for dep in production_tokio_deps(&parsed, &cfg.quarantined) {
                 violations.push(
                     Violation::deny(
                         ID,
@@ -56,26 +56,23 @@ impl Check for TokioDepQuarantine {
 /// and `[build-dependencies]` (test/build-time tokio — e.g. an axum test
 /// server's runtime — is not production coupling). Results are de-duplicated
 /// and ordered for stable keys.
-fn production_tokio_deps(manifest: &Value) -> Vec<String> {
+fn production_tokio_deps(manifest: &Value, quarantined: &[String]) -> Vec<String> {
     let mut found: BTreeSet<String> = BTreeSet::new();
-    collect_from_table(manifest.get("dependencies"), &mut found);
+    collect_from_table(manifest.get("dependencies"), quarantined, &mut found);
     if let Some(targets) = manifest.get("target").and_then(Value::as_table) {
         for spec in targets.values() {
-            collect_from_table(spec.get("dependencies"), &mut found);
+            collect_from_table(spec.get("dependencies"), quarantined, &mut found);
         }
     }
     found.into_iter().collect()
 }
 
-fn collect_from_table(table: Option<&Value>, out: &mut BTreeSet<String>) {
-    /// Crate names quarantined: a *production* (non-dev, non-build) dependency
-    /// on any of these is forbidden outside the platform owner / exemptions.
-    const QUARANTINED: &[&str] = &["tokio", "tokio-util", "tokio-stream"];
+fn collect_from_table(table: Option<&Value>, quarantined: &[String], out: &mut BTreeSet<String>) {
     let Some(table) = table.and_then(Value::as_table) else {
         return;
     };
     for key in table.keys() {
-        if QUARANTINED.contains(&key.as_str()) {
+        if quarantined.iter().any(|name| name == key) {
             out.insert(key.clone());
         }
     }
@@ -115,6 +112,10 @@ mod tests {
         toml::from_str(src).expect("toml")
     }
 
+    fn quarantined() -> Vec<String> {
+        crate::arch::config::TokioDepQuarantineThreshold::default().quarantined
+    }
+
     #[test]
     fn flags_plain_and_target_production_tokio() {
         let m = parse(
@@ -123,7 +124,10 @@ mod tests {
              [target.'cfg(unix)'.dependencies]\n\
              tokio-util = \"0.7\"\n",
         );
-        assert_eq!(production_tokio_deps(&m), vec!["tokio", "tokio-util"]);
+        assert_eq!(
+            production_tokio_deps(&m, &quarantined()),
+            vec!["tokio", "tokio-util"]
+        );
     }
 
     #[test]
@@ -136,11 +140,8 @@ mod tests {
              [build-dependencies]\n\
              tokio-stream = \"0.1\"\n",
         );
-        assert!(
-            production_tokio_deps(&m).is_empty(),
-            "got: {:?}",
-            production_tokio_deps(&m)
-        );
+        let deps = production_tokio_deps(&m, &quarantined());
+        assert!(deps.is_empty(), "got: {deps:?}");
     }
 
     #[test]
@@ -150,17 +151,14 @@ mod tests {
             "[target.'cfg(not(target_arch = \"wasm32\"))'.dev-dependencies]\n\
              tokio = { version = \"1\", features = [\"rt\"] }\n",
         );
-        assert!(
-            production_tokio_deps(&m).is_empty(),
-            "got: {:?}",
-            production_tokio_deps(&m)
-        );
+        let deps = production_tokio_deps(&m, &quarantined());
+        assert!(deps.is_empty(), "got: {deps:?}");
     }
 
     #[test]
     fn no_tokio_is_clean() {
         let m = parse("[dependencies]\nserde = \"1\"\nfutures = \"0.3\"\n");
-        assert!(production_tokio_deps(&m).is_empty());
+        assert!(production_tokio_deps(&m, &quarantined()).is_empty());
     }
 
     #[test]
@@ -171,6 +169,6 @@ mod tests {
              [target.'cfg(unix)'.dependencies]\n\
              tokio = { version = \"1\", features = [\"rt\"] }\n",
         );
-        assert_eq!(production_tokio_deps(&m), vec!["tokio"]);
+        assert_eq!(production_tokio_deps(&m, &quarantined()), vec!["tokio"]);
     }
 }

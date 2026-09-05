@@ -190,12 +190,23 @@ fn print_grouped(groups: &BTreeMap<String, RuleGroup>) {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, fs, path::PathBuf, process::Command};
+    use std::{
+        env,
+        ffi::OsStr,
+        fs,
+        io::Write as _,
+        path::{Path, PathBuf},
+        process::Command,
+    };
 
     use tempfile::tempdir;
 
     use super::*;
     use crate::common::project::ProjectConfig;
+
+    const PASS_ENV: &str = "DEVTOOLS_AUDIT_CLIPPY_PASS";
+    const PASS_LOG: &str = "DEVTOOLS_AUDIT_CLIPPY_LOG";
+    const PASS_EXIT: &str = "DEVTOOLS_AUDIT_CLIPPY_EXIT";
 
     fn command_args(command: &Command) -> Vec<String> {
         command
@@ -341,38 +352,55 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    fn pass(log: &Path, label: &str, exit: i32) -> Command {
+        let mut command = Command::new(env::current_exe().expect("current test executable"));
+        command
+            .args(crate::common::child_test_args(
+                module_path!(),
+                "append_pass_marker",
+            ))
+            .env(PASS_ENV, label)
+            .env(PASS_LOG, log)
+            .env(PASS_EXIT, exit.to_string());
+        command
+    }
+
+    #[test]
+    #[ignore = "subprocess entrypoint"]
+    fn append_pass_marker() {
+        let label = env::var(PASS_ENV).expect("pass label");
+        let log = env::var(PASS_LOG).expect("pass log path");
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .expect("open pass log");
+        writeln!(file, "{label}").expect("append pass marker");
+        let exit = env::var(PASS_EXIT)
+            .expect("pass exit code")
+            .parse()
+            .expect("pass exit code is an integer");
+        std::process::exit(exit);
+    }
+
     #[test]
     fn successful_fix_is_followed_by_report() {
         let temp = tempdir().expect("tempdir");
         let log = temp.path().join("passes.log");
-        let mut fix = Command::new("sh");
-        fix.args(["-c", "printf 'fix\\n' >> \"$1\"", "sh"])
-            .arg(&log);
-        let mut report = Command::new("sh");
-        report
-            .args(["-c", "printf 'report\\n' >> \"$1\"", "sh"])
-            .arg(&log);
 
-        run_clippy_passes(Some(fix), report, true).expect("fix and report");
+        run_clippy_passes(Some(pass(&log, "fix", 0)), pass(&log, "report", 0), true)
+            .expect("fix and report");
 
         assert_eq!(fs::read_to_string(log).expect("pass log"), "fix\nreport\n");
     }
 
-    #[cfg(unix)]
     #[test]
     fn failed_fix_stops_before_report() {
         let temp = tempdir().expect("tempdir");
         let log = temp.path().join("passes.log");
-        let mut fix = Command::new("sh");
-        fix.args(["-c", "printf 'fix\\n' >> \"$1\"; exit 7", "sh"])
-            .arg(&log);
-        let mut report = Command::new("sh");
-        report
-            .args(["-c", "printf 'report\\n' >> \"$1\"", "sh"])
-            .arg(&log);
 
-        let error = run_clippy_passes(Some(fix), report, false).expect_err("fix failure");
+        let error = run_clippy_passes(Some(pass(&log, "fix", 7)), pass(&log, "report", 0), false)
+            .expect_err("fix failure");
 
         assert!(format!("{error:#}").contains("cargo clippy audit fix failed (exit code Some(7))"));
         assert_eq!(fs::read_to_string(log).expect("pass log"), "fix\n");

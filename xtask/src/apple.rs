@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
-use kithara_devtools::Ctx;
+use kithara_devtools::{Ctx, common::tools::ToolsConfig};
 use plist::Value as PlistValue;
 use regex::Regex;
 
@@ -288,9 +288,10 @@ pub(crate) enum AppleCommand {
 
 pub(crate) fn run(cmd: AppleCommand, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
+    let tools = &ctx.config.tools;
     match cmd {
-        AppleCommand::Build { profile, target } => run_build(profile, target.as_deref()),
-        AppleCommand::Single { profile } => run_single(profile),
+        AppleCommand::Build { profile, target } => run_build(profile, target.as_deref(), tools),
+        AppleCommand::Single { profile } => run_single(profile, tools),
         AppleCommand::Run {
             simulator,
             scheme,
@@ -304,17 +305,18 @@ pub(crate) fn run(cmd: AppleCommand, ctx: &Ctx) -> Result<()> {
             debug,
             skip_framework,
             &ext.apple,
+            tools,
         ),
-        AppleCommand::Audit { path } => audit_symbols(&path, &ext.apple),
+        AppleCommand::Audit { path } => audit_symbols(&path, &ext.apple, tools),
         AppleCommand::Docgen { check } => apple_docgen::run(check, &ext.apple.docgen),
-        AppleCommand::Release => run_release(&ext.release, &ext.apple),
+        AppleCommand::Release => run_release(&ext.release, &ext.apple, tools),
     }
 }
 
 /// Run `nm` on every slice's static lib and fail if any
 /// software-backend symbol survived linking or the Apple dispatcher
 /// went missing.
-fn audit_symbols(xcframework_dir: &Path, apple: &AppleConfig) -> Result<()> {
+fn audit_symbols(xcframework_dir: &Path, apple: &AppleConfig, tools: &ToolsConfig) -> Result<()> {
     if !xcframework_dir.is_dir() {
         bail!(
             "xcframework path does not exist or is not a directory: {}",
@@ -335,12 +337,12 @@ fn audit_symbols(xcframework_dir: &Path, apple: &AppleConfig) -> Result<()> {
             ));
             continue;
         }
-        let output = Command::new(symbol_tool())
+        let output = Command::new(symbol_tool(tools))
             .arg(&lib)
             .output()
             .with_context(|| format!("invoke symbol audit on {}", lib.display()))?;
         let symbols = String::from_utf8_lossy(&output.stdout);
-        let strings = archive_strings(&lib)?;
+        let strings = archive_strings(&lib, tools)?;
         for needle in banned_symbol_needles {
             let count =
                 symbols.matches(needle.as_str()).count() + strings.matches(needle.as_str()).count();
@@ -375,8 +377,12 @@ fn audit_symbols(xcframework_dir: &Path, apple: &AppleConfig) -> Result<()> {
     Ok(())
 }
 
-fn symbol_tool() -> PathBuf {
-    rust_tool("llvm-nm").unwrap_or_else(|| PathBuf::from("nm"))
+/// The sysroot's `llvm-nm` when the toolchain ships one, and the configured
+/// `nm` otherwise. `archive_strings` resolves `strings` through the table for
+/// the same audit, so the fallback resolves too — half a configurable
+/// operation sends a machine that redirected one tool to the wrong other one.
+fn symbol_tool(tools: &ToolsConfig) -> PathBuf {
+    rust_tool("llvm-nm").unwrap_or_else(|| PathBuf::from(tools.program("nm")))
 }
 
 fn rust_tool(name: &str) -> Option<PathBuf> {
@@ -398,18 +404,23 @@ fn rust_tool(name: &str) -> Option<PathBuf> {
     None
 }
 
-fn archive_strings(lib: &Path) -> Result<String> {
-    let output = Command::new("strings")
+fn archive_strings(lib: &Path, tools: &ToolsConfig) -> Result<String> {
+    let program = tools.program("strings");
+    let output = Command::new(program)
         .arg(lib)
         .output()
-        .with_context(|| format!("invoke strings on {}", lib.display()))?;
+        .with_context(|| format!("invoke {program} on {}", lib.display()))?;
     if !output.status.success() {
-        bail!("strings failed for {}", lib.display());
+        bail!("{program} failed for {}", lib.display());
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
+fn run_build(
+    profile: crate::BuildProfile,
+    target: Option<&str>,
+    tools: &ToolsConfig,
+) -> Result<()> {
     match Command::new("cargo")
         .args(["swift", "--help"])
         .stdout(Stdio::null())
@@ -464,7 +475,7 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
     ]);
     cmd.current_dir(&crate_dir);
     cmd.env("IPHONEOS_DEPLOYMENT_TARGET", &deployment_target);
-    set_simulator_bindgen_args(&mut cmd)?;
+    set_simulator_bindgen_args(&mut cmd, tools)?;
 
     let status = cmd.status().context("failed to run cargo swift package")?;
     if !status.success() {
@@ -484,7 +495,7 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
     copy_dir_all(&xcf_src, &xcf_dst)
         .with_context(|| format!("copy {} -> {}", xcf_src.display(), xcf_dst.display()))?;
     if target.is_none() {
-        keep_arm64_ios_simulator_only(&xcf_dst)?;
+        keep_arm64_ios_simulator_only(&xcf_dst, tools)?;
     }
     if matches!(profile, crate::BuildProfile::Release) {
         relink_slices_with_lto(
@@ -492,8 +503,9 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
             &crate_dir,
             metadata.target_directory.as_std_path(),
             &deployment_target,
+            tools,
         )?;
-        strip_xcframework(&xcf_dst)?;
+        strip_xcframework(&xcf_dst, tools)?;
     }
 
     if let Some(parent) = swift_dst.parent() {
@@ -521,7 +533,11 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
 
     println!();
     println!("To build and test:");
-    println!("  cd {} && swift build && swift test", apple_dir.display());
+    let program = tools.program("swift");
+    println!(
+        "  cd {} && {program} build && {program} test",
+        apple_dir.display()
+    );
 
     if let Some(guard) = &mut hakari_guard {
         guard.restore()?;
@@ -542,8 +558,8 @@ fn normalize_generated_swift(src: &str) -> String {
 /// `signalsmith-stretch` runs `bindgen`, which derives clang's target from
 /// cargo's `TARGET`. For simulator slices that yields `arm64-apple-ios-sim`,
 /// but libclang wants `-simulator`; pin valid simulator triples and sysroot.
-fn set_simulator_bindgen_args(cmd: &mut Command) -> Result<()> {
-    let sim_sdk = sdk_path("iphonesimulator")?;
+fn set_simulator_bindgen_args(cmd: &mut Command, tools: &ToolsConfig) -> Result<()> {
+    let sim_sdk = sdk_path("iphonesimulator", tools)?;
     let sim_sdk = sim_sdk
         .to_str()
         .context("iphonesimulator SDK path is not UTF-8")?;
@@ -573,7 +589,7 @@ fn set_release_rustflags(cmd: &mut Command) {
     cmd.env("CARGO_ENCODED_RUSTFLAGS", flags);
 }
 
-fn run_release(release: &ReleaseConfig, apple: &AppleConfig) -> Result<()> {
+fn run_release(release: &ReleaseConfig, apple: &AppleConfig, tools: &ToolsConfig) -> Result<()> {
     let metadata = MetadataCommand::new()
         .exec()
         .context("failed to read cargo metadata")?;
@@ -588,22 +604,27 @@ fn run_release(release: &ReleaseConfig, apple: &AppleConfig) -> Result<()> {
     let apple_dir = root.join("apple");
     let internal = apple_dir.join("KitharaFFIInternal.xcframework");
 
-    run_build(crate::BuildProfile::Release, None)?;
-    audit_symbols(&internal, apple)?;
-    run_single(crate::BuildProfile::Release)?;
+    run_build(crate::BuildProfile::Release, None, tools)?;
+    audit_symbols(&internal, apple, tools)?;
+    run_single(crate::BuildProfile::Release, tools)?;
 
     let tmp = env::temp_dir();
     let internal_zip = tmp.join(&release.core_asset);
     let single_zip = tmp.join(&release.merged_asset);
-    zip_dir(&apple_dir, "KitharaFFIInternal.xcframework", &internal_zip)?;
+    zip_dir(
+        &apple_dir,
+        "KitharaFFIInternal.xcframework",
+        &internal_zip,
+        tools,
+    )?;
 
     let single_dir = release
         .merged_asset
         .strip_suffix(".zip")
         .context("release.merged_asset must end with .zip")?;
-    zip_dir(&apple_dir.join("dist"), single_dir, &single_zip)?;
+    zip_dir(&apple_dir.join("dist"), single_dir, &single_zip, tools)?;
 
-    let checksum = swift_checksum(&internal_zip)?;
+    let checksum = swift_checksum(&internal_zip, tools)?;
     let checksum_file = tmp.join(format!("{}.sha256", release.core_asset));
     fs::write(&checksum_file, format!("{checksum}\n"))
         .with_context(|| format!("write {}", checksum_file.display()))?;
@@ -628,6 +649,7 @@ fn relink_slices_with_lto(
     crate_dir: &Path,
     target_dir: &Path,
     deployment_target: &str,
+    tools: &ToolsConfig,
 ) -> Result<()> {
     require_dir(xcframework)?;
     for entry in
@@ -652,14 +674,16 @@ fn relink_slices_with_lto(
         println!("==> Relinking {} with fat LTO", lib.display());
         let archives = targets
             .iter()
-            .map(|target| build_slice_staticlib(crate_dir, target_dir, target, deployment_target))
+            .map(|target| {
+                build_slice_staticlib(crate_dir, target_dir, target, deployment_target, tools)
+            })
             .collect::<Result<Vec<_>>>()?;
         match archives.as_slice() {
             [thin] => {
                 fs::copy(thin, &lib)
                     .with_context(|| format!("copy {} -> {}", thin.display(), lib.display()))?;
             }
-            fat => lipo_create(fat, &lib)?,
+            fat => lipo_create(fat, &lib, tools)?,
         }
     }
     Ok(())
@@ -673,6 +697,7 @@ fn build_slice_staticlib(
     target_dir: &Path,
     target: &str,
     deployment_target: &str,
+    tools: &ToolsConfig,
 ) -> Result<PathBuf> {
     let mut cmd = Command::new("cargo");
     cmd.args(Consts::RELEASE_CARGO_ARGS);
@@ -692,7 +717,7 @@ fn build_slice_staticlib(
     cmd.current_dir(crate_dir);
     cmd.env("IPHONEOS_DEPLOYMENT_TARGET", deployment_target);
     set_release_rustflags(&mut cmd);
-    set_simulator_bindgen_args(&mut cmd)?;
+    set_simulator_bindgen_args(&mut cmd, tools)?;
 
     let status = cmd
         .status()
@@ -708,8 +733,9 @@ fn build_slice_staticlib(
     Ok(lib)
 }
 
-fn strip_xcframework(xcframework: &Path) -> Result<()> {
+fn strip_xcframework(xcframework: &Path, tools: &ToolsConfig) -> Result<()> {
     require_dir(xcframework)?;
+    let program = tools.program("strip");
     for entry in
         fs::read_dir(xcframework).with_context(|| format!("read {}", xcframework.display()))?
     {
@@ -722,19 +748,19 @@ fn strip_xcframework(xcframework: &Path) -> Result<()> {
             continue;
         }
         println!("==> Stripping {}", lib.display());
-        let status = Command::new("strip")
+        let status = Command::new(program)
             .args(["-S", "-x"])
             .arg(&lib)
             .status()
-            .with_context(|| format!("strip {}", lib.display()))?;
+            .with_context(|| format!("{program} {}", lib.display()))?;
         if !status.success() {
-            bail!("strip failed for {}", lib.display());
+            bail!("{program} failed for {}", lib.display());
         }
     }
     Ok(())
 }
 
-fn keep_arm64_ios_simulator_only(xcframework: &Path) -> Result<()> {
+fn keep_arm64_ios_simulator_only(xcframework: &Path, tools: &ToolsConfig) -> Result<()> {
     let fat = xcframework.join(Consts::IOS_SIMULATOR_FAT_SLICE);
     let thin = xcframework.join(Consts::IOS_SIMULATOR_SLICE);
     if fat.exists() {
@@ -745,7 +771,7 @@ fn keep_arm64_ios_simulator_only(xcframework: &Path) -> Result<()> {
             .with_context(|| format!("rename {} -> {}", fat.display(), thin.display()))?;
         let lib = thin.join("libkithara_ffi.a");
         let tmp = thin.join("libkithara_ffi.arm64.a");
-        lipo_thin(&lib, "arm64", &tmp)?;
+        lipo_thin(&lib, "arm64", &tmp, tools)?;
         fs::rename(&tmp, &lib)
             .with_context(|| format!("replace {} with {}", lib.display(), tmp.display()))?;
     } else if !thin.exists() {
@@ -799,35 +825,37 @@ fn update_ios_simulator_plist(xcframework: &Path) -> Result<()> {
     plist::to_file_xml(&plist, &root).with_context(|| format!("write {}", plist.display()))
 }
 
-fn zip_dir(parent: &Path, directory_name: &str, output: &Path) -> Result<()> {
+fn zip_dir(parent: &Path, directory_name: &str, output: &Path, tools: &ToolsConfig) -> Result<()> {
     let source = parent.join(directory_name);
     require_dir(&source)?;
     if output.exists() {
         fs::remove_file(output).with_context(|| format!("remove {}", output.display()))?;
     }
     println!("==> Zipping {} -> {}", source.display(), output.display());
-    let status = Command::new("zip")
+    let program = tools.program("zip");
+    let status = Command::new(program)
         .args(["-r", "-y"])
         .arg(output)
         .arg(directory_name)
         .current_dir(parent)
         .status()
-        .with_context(|| format!("zip {}", source.display()))?;
+        .with_context(|| format!("{program} {}", source.display()))?;
     if !status.success() {
-        bail!("zip failed for {}", source.display());
+        bail!("{program} failed for {}", source.display());
     }
     Ok(())
 }
 
-fn swift_checksum(zip: &Path) -> Result<String> {
-    let output = Command::new("swift")
+fn swift_checksum(zip: &Path, tools: &ToolsConfig) -> Result<String> {
+    let program = tools.program("swift");
+    let output = Command::new(program)
         .args(["package", "compute-checksum"])
         .arg(zip)
         .output()
-        .context("run swift package compute-checksum")?;
+        .with_context(|| format!("run {program} package compute-checksum"))?;
     if !output.status.success() {
         bail!(
-            "swift package compute-checksum failed: {}",
+            "{program} package compute-checksum failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -853,7 +881,7 @@ struct ArchBuild<'a> {
 /// merged into the framework binary, so a manual drag-in consumer needs no
 /// extra modules or flags. See `apple/README.md` for why the merge +
 /// `internal import` post-pass is necessary (`UniFFI` leaks `RustBuffer`).
-fn run_single(profile: crate::BuildProfile) -> Result<()> {
+fn run_single(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
     let metadata = MetadataCommand::new()
         .exec()
         .context("failed to read cargo metadata")?;
@@ -866,16 +894,16 @@ fn run_single(profile: crate::BuildProfile) -> Result<()> {
         false
     } else {
         println!("==> KitharaFFIInternal.xcframework not found — building it first");
-        run_build(profile, None)?;
+        run_build(profile, None, tools)?;
         true
     };
     require_dir(&internal)?;
-    keep_arm64_ios_simulator_only(&internal)?;
+    keep_arm64_ios_simulator_only(&internal, tools)?;
     if matches!(profile, crate::BuildProfile::Release) && !built_internal {
-        strip_xcframework(&internal)?;
+        strip_xcframework(&internal, tools)?;
     }
 
-    let rx_src = resolve_rxswift(&root)?;
+    let rx_src = resolve_rxswift(&root, tools)?;
     println!("==> RxSwift source: {}", rx_src.display());
 
     let temp = TempWorkDir::create(&format!(
@@ -896,7 +924,7 @@ fn run_single(profile: crate::BuildProfile) -> Result<()> {
         fs::remove_dir_all(&out).with_context(|| format!("remove {}", out.display()))?;
     }
 
-    build_single_xcframework(&merged, &internal, &rx_src, &work, &out, &spec)?;
+    build_single_xcframework(&merged, &internal, &rx_src, &work, &out, &spec, tools)?;
     verify_single(&out)?;
 
     println!("==> Done!");
@@ -906,16 +934,17 @@ fn run_single(profile: crate::BuildProfile) -> Result<()> {
 
 /// Resolve the pinned `RxSwift` checkout via `SwiftPM` (the merged module imports
 /// `RxSwift`, so its module must exist at compile time).
-fn resolve_rxswift(root: &Path) -> Result<PathBuf> {
+fn resolve_rxswift(root: &Path, tools: &ToolsConfig) -> Result<PathBuf> {
     println!("==> Resolving RxSwift via SwiftPM");
-    let status = Command::new("swift")
+    let program = tools.program("swift");
+    let status = Command::new(program)
         .args(["package", "resolve"])
         .current_dir(root)
         .env("KITHARA_LOCAL_DEV", "1")
         .status()
-        .context("failed to run swift package resolve")?;
+        .with_context(|| format!("failed to run {program} package resolve"))?;
     if !status.success() {
-        bail!("swift package resolve failed");
+        bail!("{program} package resolve failed");
     }
     let rx = root.join(".build/checkouts/RxSwift/Sources/RxSwift");
     if !rx.is_dir() {
@@ -1030,9 +1059,10 @@ fn build_single_xcframework(
     work: &Path,
     out: &Path,
     spec: &SingleFrameworkSpec,
+    tools: &ToolsConfig,
 ) -> Result<()> {
-    let ios_sdk = sdk_path("iphoneos")?;
-    let sim_sdk = sdk_path("iphonesimulator")?;
+    let ios_sdk = sdk_path("iphoneos", tools)?;
+    let sim_sdk = sdk_path("iphonesimulator", tools)?;
 
     let mm_dev = internal.join("ios-arm64/Headers/KitharaFFIInternal");
     let mm_sim = internal.join(format!(
@@ -1081,36 +1111,52 @@ fn build_single_xcframework(
         },
     ];
     for slice in &slices {
-        build_arch(slice, &msrc, &rx_files)?;
+        build_arch(slice, &msrc, &rx_files, tools)?;
     }
 
     let fw_ios = work.join("fw/ios");
     let fw_sim = work.join("fw/sim");
-    assemble_framework(&fw_ios, "iPhoneOS", &[&dev_out], spec)?;
-    assemble_framework(&fw_sim, "iPhoneSimulator", &[&sim_a_out], spec)?;
+    assemble_framework(&fw_ios, "iPhoneOS", &[&dev_out], spec, tools)?;
+    assemble_framework(&fw_sim, "iPhoneSimulator", &[&sim_a_out], spec, tools)?;
 
     let framework = format!("{}.framework", spec.framework_name);
-    create_xcframework(&[&fw_ios.join(&framework), &fw_sim.join(&framework)], out)
+    create_xcframework(
+        &[&fw_ios.join(&framework), &fw_sim.join(&framework)],
+        out,
+        tools,
+    )
 }
 
 /// Build one arch slice: temp `RxSwift` module, merged module, libtool merge.
-fn build_arch(arch: &ArchBuild, msrc: &[PathBuf], rx_files: &[PathBuf]) -> Result<()> {
+fn build_arch(
+    arch: &ArchBuild,
+    msrc: &[PathBuf],
+    rx_files: &[PathBuf],
+    tools: &ToolsConfig,
+) -> Result<()> {
     fs::create_dir_all(arch.rx_out)?;
     fs::create_dir_all(arch.out)?;
     println!("==> Compiling {} ({})", arch.module, arch.module_triple);
-    build_rxswift(arch.triple, arch.sdk, rx_files, arch.rx_out)?;
-    build_merged(arch, msrc)?;
+    build_rxswift(arch.triple, arch.sdk, rx_files, arch.rx_out, tools)?;
+    build_merged(arch, msrc, tools)?;
     libtool_merge(
         &arch.out.join(format!("lib{}Swift.a", arch.module)),
         arch.rust_lib,
         &arch.out.join(format!("{}.a", arch.module)),
+        tools,
     )
 }
 
 /// Build a temporary `RxSwift` static module for one arch (the consumer ships
 /// its own `RxSwift`; this only resolves the module at compile time).
-fn build_rxswift(triple: &str, sdk: &Path, rx_files: &[PathBuf], rx_out: &Path) -> Result<()> {
-    let mut cmd = Command::new("xcrun");
+fn build_rxswift(
+    triple: &str,
+    sdk: &Path,
+    rx_files: &[PathBuf],
+    rx_out: &Path,
+    tools: &ToolsConfig,
+) -> Result<()> {
+    let mut cmd = Command::new(tools.program("xcrun"));
     cmd.args([
         "swiftc",
         "-emit-module",
@@ -1134,8 +1180,8 @@ fn build_rxswift(triple: &str, sdk: &Path, rx_files: &[PathBuf], rx_out: &Path) 
 
 /// Compile the merged single module with library evolution, emitting a
 /// canonically-named `.swiftinterface`.
-fn build_merged(arch: &ArchBuild, msrc: &[PathBuf]) -> Result<()> {
-    let mut cmd = Command::new("xcrun");
+fn build_merged(arch: &ArchBuild, msrc: &[PathBuf], tools: &ToolsConfig) -> Result<()> {
+    let mut cmd = Command::new(tools.program("xcrun"));
     cmd.args([
         "swiftc",
         "-emit-module",
@@ -1174,14 +1220,20 @@ fn build_merged(arch: &ArchBuild, msrc: &[PathBuf]) -> Result<()> {
 }
 
 /// Merge the Swift static lib and the Rust static lib into one archive.
-fn libtool_merge(swift_lib: &Path, rust_lib: &Path, out_lib: &Path) -> Result<()> {
-    let mut cmd = Command::new("libtool");
+fn libtool_merge(
+    swift_lib: &Path,
+    rust_lib: &Path,
+    out_lib: &Path,
+    tools: &ToolsConfig,
+) -> Result<()> {
+    let program = tools.program("libtool");
+    let mut cmd = Command::new(program);
     cmd.arg("-static")
         .arg("-o")
         .arg(out_lib)
         .arg(swift_lib)
         .arg(rust_lib);
-    run_quiet(&mut cmd, "libtool merge")
+    run_quiet(&mut cmd, &format!("{program} merge"))
 }
 
 /// Assemble a `.framework` for one platform from one or more arch slices.
@@ -1190,6 +1242,7 @@ fn assemble_framework(
     platform: &str,
     slices: &[&Path],
     spec: &SingleFrameworkSpec,
+    tools: &ToolsConfig,
 ) -> Result<()> {
     let name = &spec.framework_name;
     let fw = fw_dir.join(format!("{name}.framework"));
@@ -1199,13 +1252,14 @@ fn assemble_framework(
     let modules = fw.join(format!("Modules/{name}.swiftmodule"));
     fs::create_dir_all(&modules)?;
 
-    let mut lipo = Command::new("lipo");
+    let program = tools.program("lipo");
+    let mut lipo = Command::new(program);
     lipo.arg("-create");
     for slice in slices {
         lipo.arg(slice.join(format!("{name}.a")));
     }
     lipo.arg("-output").arg(fw.join(name));
-    run_quiet(&mut lipo, "lipo framework binary")?;
+    run_quiet(&mut lipo, &format!("{program} framework binary"))?;
 
     for slice in slices {
         let mut module_triple = None;
@@ -1237,8 +1291,8 @@ fn assemble_framework(
 }
 
 /// Bundle the per-platform `.framework`s into the final `XCFramework`.
-fn create_xcframework(frameworks: &[&Path], out: &Path) -> Result<()> {
-    let mut cmd = Command::new("xcodebuild");
+fn create_xcframework(frameworks: &[&Path], out: &Path, tools: &ToolsConfig) -> Result<()> {
+    let mut cmd = Command::new(tools.program("xcodebuild"));
     cmd.arg("-create-xcframework");
     for fw in frameworks {
         cmd.arg("-framework").arg(fw);
@@ -1286,13 +1340,14 @@ fn verify_single(out: &Path) -> Result<()> {
 /// SDK's own modules under each: `iPhoneSimulator26.5.sdk/…/module.modulemap:
 /// error: redefinition of module 'SwiftShims'`, previously defined under
 /// `iPhoneSimulator.sdk/…`. Resolving here leaves one spelling downstream.
-fn sdk_path(sdk: &str) -> Result<PathBuf> {
-    let output = Command::new("xcrun")
+fn sdk_path(sdk: &str, tools: &ToolsConfig) -> Result<PathBuf> {
+    let program = tools.program("xcrun");
+    let output = Command::new(program)
         .args(["--sdk", sdk, "--show-sdk-path"])
         .output()
-        .with_context(|| format!("xcrun --show-sdk-path {sdk}"))?;
+        .with_context(|| format!("{program} --show-sdk-path {sdk}"))?;
     if !output.status.success() {
-        bail!("xcrun --show-sdk-path {sdk} failed");
+        bail!("{program} --show-sdk-path {sdk} failed");
     }
     let reported = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string());
     reported
@@ -1301,16 +1356,18 @@ fn sdk_path(sdk: &str) -> Result<PathBuf> {
 }
 
 /// Extract a single arch from a fat static lib.
-fn lipo_create(thin: &[PathBuf], out: &Path) -> Result<()> {
-    let mut cmd = Command::new("lipo");
+fn lipo_create(thin: &[PathBuf], out: &Path, tools: &ToolsConfig) -> Result<()> {
+    let program = tools.program("lipo");
+    let mut cmd = Command::new(program);
     cmd.arg("-create").args(thin).arg("-output").arg(out);
-    run_quiet(&mut cmd, "lipo create")
+    run_quiet(&mut cmd, &format!("{program} create"))
 }
 
-fn lipo_thin(fat: &Path, arch: &str, out: &Path) -> Result<()> {
-    let mut cmd = Command::new("lipo");
+fn lipo_thin(fat: &Path, arch: &str, out: &Path, tools: &ToolsConfig) -> Result<()> {
+    let program = tools.program("lipo");
+    let mut cmd = Command::new(program);
     cmd.arg(fat).arg("-thin").arg(arch).arg("-output").arg(out);
-    run_quiet(&mut cmd, "lipo thin")
+    run_quiet(&mut cmd, &format!("{program} thin"))
 }
 
 fn require_dir(path: &Path) -> Result<()> {
@@ -1424,6 +1481,7 @@ fn run_app(
     debug: bool,
     skip_framework: bool,
     apple: &AppleConfig,
+    tools: &ToolsConfig,
 ) -> Result<()> {
     let scheme = match scheme {
         Some(scheme) => scheme.to_owned(),
@@ -1449,11 +1507,11 @@ fn run_app(
         // The demo links `KitharaFFIInternal.xcframework`, so the
         // XCFramework must exist before xcodebuild can resolve the
         // package graph; refresh it the same way `run_build` does.
-        run_build(profile, None)?;
+        run_build(profile, None, tools)?;
     }
 
-    let uuid = resolve_simulator_uuid(&simulator)?;
-    boot_simulator(&uuid)?;
+    let uuid = resolve_simulator_uuid(&simulator, tools)?;
+    boot_simulator(&uuid, tools)?;
     open_simulator_app();
 
     let configuration = match profile {
@@ -1463,7 +1521,8 @@ fn run_app(
 
     println!("==> Building {scheme} ({configuration}) for simulator {simulator}");
     let destination = format!("platform=iOS Simulator,id={uuid}");
-    let mut build = Command::new("xcodebuild");
+    let program = tools.program("xcodebuild");
+    let mut build = Command::new(program);
     build
         .args([
             "-project",
@@ -1479,15 +1538,18 @@ fn run_app(
             "build",
         ])
         .current_dir(&demo_dir);
-    let status = build.status().context("failed to run xcodebuild")?;
+    let status = build
+        .status()
+        .with_context(|| format!("failed to run {program}"))?;
     if !status.success() {
-        bail!("xcodebuild failed");
+        bail!("{program} failed");
     }
 
     let app_path = locate_built_app(&demo_dir, &scheme, configuration)?;
 
     println!("==> Installing {} on simulator", app_path.display());
-    let status = Command::new("xcrun")
+    let program = tools.program("xcrun");
+    let status = Command::new(program)
         .args([
             "simctl",
             "install",
@@ -1495,13 +1557,13 @@ fn run_app(
             app_path.to_str().context(".app path is not UTF-8")?,
         ])
         .status()
-        .context("failed to run `xcrun simctl install`")?;
+        .with_context(|| format!("failed to run `{program} simctl install`"))?;
     if !status.success() {
         bail!("simctl install failed");
     }
 
     println!("==> Launching {bundle_id}");
-    let mut launch = Command::new("xcrun");
+    let mut launch = Command::new(program);
     launch.args(["simctl", "launch"]);
     if debug {
         // Suspends the app on entry so `lldb -p <pid>` (or Zed's
@@ -1512,7 +1574,7 @@ fn run_app(
     launch.args([&uuid, bundle_id]);
     let output = launch
         .output()
-        .context("failed to run `xcrun simctl launch`")?;
+        .with_context(|| format!("failed to run `{program} simctl launch`"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!("simctl launch failed: {stderr}");
@@ -1529,22 +1591,25 @@ fn run_app(
             println!("    Or in Zed: pick the `iOS demo: attach (debug)` configuration.");
         } else {
             println!("    Could not parse the PID from `simctl launch` output.");
-            println!("    Find it manually: xcrun simctl spawn {uuid} ps -A | grep KitharaDemo");
+            println!(
+                "    Find it manually: {program} simctl spawn {uuid} ps -A | grep KitharaDemo"
+            );
         }
     }
 
     Ok(())
 }
 
-fn resolve_simulator_uuid(name_or_uuid: &str) -> Result<String> {
+fn resolve_simulator_uuid(name_or_uuid: &str, tools: &ToolsConfig) -> Result<String> {
     // If the argument already looks like a UUID, accept it as-is.
     if name_or_uuid.len() == 36 && name_or_uuid.chars().filter(|c| *c == '-').count() == 4 {
         return Ok(name_or_uuid.to_owned());
     }
-    let output = Command::new("xcrun")
+    let program = tools.program("xcrun");
+    let output = Command::new(program)
         .args(["simctl", "list", "devices", "available"])
         .output()
-        .context("failed to run `xcrun simctl list devices available`")?;
+        .with_context(|| format!("failed to run `{program} simctl list devices available`"))?;
     if !output.status.success() {
         bail!("simctl list devices failed");
     }
@@ -1565,18 +1630,19 @@ fn resolve_simulator_uuid(name_or_uuid: &str) -> Result<String> {
             }
         }
     }
-    bail!("simulator '{name_or_uuid}' not found in `xcrun simctl list`")
+    bail!("simulator '{name_or_uuid}' not found in `{program} simctl list`")
 }
 
-fn boot_simulator(uuid: &str) -> Result<()> {
+fn boot_simulator(uuid: &str, tools: &ToolsConfig) -> Result<()> {
     // `simctl boot` is a no-op (and exits 149 / "Unable to boot") when
     // the device is already booted; treat that as success.
-    let status = Command::new("xcrun")
+    let program = tools.program("xcrun");
+    let status = Command::new(program)
         .args(["simctl", "boot", uuid])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .context("failed to run `xcrun simctl boot`")?;
+        .with_context(|| format!("failed to run `{program} simctl boot`"))?;
     let _ = status;
     Ok(())
 }
@@ -1690,6 +1756,71 @@ public struct FfiConverterTypeTrackId {
         assert_eq!(
             normalize_generated_swift(src),
             "public struct Value {\n\tlet id: UInt64\n}\n"
+        );
+    }
+
+    /// Every process this module starts names an owner. Three spellings stay
+    /// literal on purpose: `cargo` and `rustc` are toolchain ground, and `open`
+    /// is a macOS system binary. Everything else resolves through the table,
+    /// `symbol_tool` included.
+    ///
+    /// Accounting for the argument rather than searching for one spelling is
+    /// what makes this bite: a constant or a `PathBuf::from` evades a text
+    /// search for `Command::new("xcrun")` and fails here. The one hoisted
+    /// local allowed is `program`, which lets a diagnostic interpolate the
+    /// spelling that actually ran; its binding is held to the same owners, so
+    /// the hoist cannot smuggle a literal past the first census.
+    #[test]
+    fn every_process_this_module_starts_has_a_declared_owner() {
+        let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/apple.rs"))
+            .expect("this source is readable");
+        let (production, _) = source
+            .split_once("\n#[cfg(test)]")
+            .expect("this source carries a test module to cut the production half at");
+
+        let resolvers = ["tools.program(", "symbol_tool("];
+        let owned = [
+            "tools.program(",
+            "symbol_tool(",
+            "program)",
+            "\"cargo\"",
+            "\"open\"",
+            "\"rustc\"",
+        ];
+        let opener = "Command::new(";
+        let mut spawns = 0;
+        let mut unowned: Vec<&str> = Vec::new();
+        for (at, _) in production.match_indices(opener) {
+            if production[..at].ends_with(|char: char| char.is_alphanumeric() || char == '_') {
+                continue;
+            }
+            spawns += 1;
+            let argument = &production[at + opener.len()..];
+            if !owned.iter().any(|form| argument.starts_with(form)) {
+                unowned.push(argument.lines().next().unwrap_or(argument));
+            }
+        }
+
+        let binder = "let program = ";
+        let mut bindings = 0;
+        let mut unresolved: Vec<&str> = Vec::new();
+        for (at, _) in production.match_indices(binder) {
+            bindings += 1;
+            let source = &production[at + binder.len()..];
+            if !resolvers.iter().any(|form| source.starts_with(form)) {
+                unresolved.push(source.lines().next().unwrap_or(source));
+            }
+        }
+
+        assert!(spawns > 0, "this module starts processes");
+        assert!(bindings > 0, "this module binds resolved programs");
+        assert!(
+            unowned.is_empty(),
+            "these spawns name a program no owner declares: {unowned:?}"
+        );
+        assert!(
+            unresolved.is_empty(),
+            "these `program` bindings skip the table: {unresolved:?}"
         );
     }
 

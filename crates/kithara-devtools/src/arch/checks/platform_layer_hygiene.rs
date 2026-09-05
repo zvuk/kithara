@@ -5,9 +5,12 @@ use proc_macro2::{TokenStream, TokenTree};
 use syn::{ItemUse, UseTree, visit::Visit};
 
 use super::{Check, Context};
-use crate::common::{
-    violation::Violation,
-    walker::{relative_to, workspace_rs_files_scoped},
+use crate::{
+    arch::config::PlatformLayerHygieneThreshold,
+    common::{
+        violation::Violation,
+        walker::{relative_to, workspace_rs_files_scoped},
+    },
 };
 
 pub(crate) const ID: &str = "platform_layer_hygiene";
@@ -20,6 +23,7 @@ impl Check for PlatformLayerHygiene {
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        let cfg = &ctx.config.thresholds.platform_layer_hygiene;
         let mut violations = Vec::new();
 
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
@@ -27,7 +31,7 @@ impl Check for PlatformLayerHygiene {
             let rel_str = rel.to_string_lossy().replace('\\', "/");
             let content = fs::read_to_string(&path)?;
 
-            if !owns_raw_arc(&rel_str) {
+            if !owns_raw_arc(&rel_str, cfg) {
                 for line_num in scan_raw_arc(&content)? {
                     violations.push(
                         Violation::deny(
@@ -41,7 +45,7 @@ impl Check for PlatformLayerHygiene {
                 }
             }
 
-            if !in_scope(&rel_str) {
+            if !in_scope(&rel_str, cfg) {
                 continue;
             }
             for (line_num, primitive) in scan_source(&content) {
@@ -62,12 +66,8 @@ impl Check for PlatformLayerHygiene {
     }
 }
 
-fn owns_raw_arc(rel_str: &str) -> bool {
-    matches!(
-        rel_str,
-        "crates/kithara-platform/src/system/ownership.rs"
-            | "crates/kithara-platform/src/wasm/sync/mod.rs"
-    )
+fn owns_raw_arc(rel_str: &str, cfg: &PlatformLayerHygieneThreshold) -> bool {
+    cfg.arc_owner_files.iter().any(|file| file == rel_str)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -172,27 +172,24 @@ fn flatten_tokens(stream: TokenStream, out: &mut Vec<FlatToken>) {
     }
 }
 
-fn in_scope(rel_str: &str) -> bool {
-    const PLATFORM_ROOT: &str = "crates/kithara-platform/src/";
-    let Some(inner) = rel_str.strip_prefix(PLATFORM_ROOT) else {
+fn in_scope(rel_str: &str, cfg: &PlatformLayerHygieneThreshold) -> bool {
+    let Some(inner) = rel_str.strip_prefix(cfg.root.as_str()) else {
         return false;
     };
-    if inner.starts_with("backend/")
-        || inner.starts_with("system/")
-        || inner.starts_with("loom/")
-        || inner.starts_with("wasm/")
+    if cfg
+        .excluded_subtrees
+        .iter()
+        .any(|prefix| inner.starts_with(prefix.as_str()))
     {
         return false;
     }
-    !is_impl_subtree(inner)
+    !is_impl_subtree(inner, cfg)
 }
 
-fn is_impl_subtree(inner: &str) -> bool {
-    inner.starts_with("flash/sync/")
-        || inner.starts_with("flash/tokio/")
-        || inner.starts_with("flash/system/")
-        || inner.starts_with("common/cancel/")
-        || inner == "common/time.rs"
+fn is_impl_subtree(inner: &str, cfg: &PlatformLayerHygieneThreshold) -> bool {
+    cfg.impl_subtrees
+        .iter()
+        .any(|entry| inner.starts_with(entry.as_str()) || inner == entry)
 }
 
 fn scan_source(content: &str) -> Vec<(usize, &'static str)> {
@@ -365,7 +362,10 @@ second ownership type.";
 mod tests {
     use anyhow::Result;
 
-    use super::{in_scope, is_impl_subtree, owns_raw_arc, scan_raw_arc, scan_source};
+    use super::{
+        PlatformLayerHygieneThreshold, in_scope, is_impl_subtree, owns_raw_arc, scan_raw_arc,
+        scan_source,
+    };
 
     #[test]
     fn flags_raw_parking_lot_and_web_time_and_std_lock() {
@@ -406,14 +406,20 @@ mod tests {
 
     #[test]
     fn raw_arc_owner_is_exact() {
+        let cfg = PlatformLayerHygieneThreshold::default();
         assert!(owns_raw_arc(
-            "crates/kithara-platform/src/system/ownership.rs"
+            "crates/kithara-platform/src/system/ownership.rs",
+            &cfg
         ));
-        assert!(owns_raw_arc("crates/kithara-platform/src/wasm/sync/mod.rs"));
+        assert!(owns_raw_arc(
+            "crates/kithara-platform/src/wasm/sync/mod.rs",
+            &cfg
+        ));
         assert!(!owns_raw_arc(
-            "crates/kithara-platform/src/system/sync/mutex.rs"
+            "crates/kithara-platform/src/system/sync/mutex.rs",
+            &cfg
         ));
-        assert!(!owns_raw_arc("crates/kithara-audio/src/audio.rs"));
+        assert!(!owns_raw_arc("crates/kithara-audio/src/audio.rs", &cfg));
     }
 
     #[test]
@@ -435,52 +441,74 @@ mod tests {
 
     #[test]
     fn scope_excludes_backend_and_impl_subtrees() {
+        let cfg = PlatformLayerHygieneThreshold::default();
         // Backend impls and primitive sub-trees are NOT in scope.
         assert!(!in_scope(
-            "crates/kithara-platform/src/system/sync/mutex.rs"
+            "crates/kithara-platform/src/system/sync/mutex.rs",
+            &cfg
         ));
         assert!(!in_scope(
-            "crates/kithara-platform/src/backend/flash_system/mutex.rs"
-        ));
-        assert!(!in_scope("crates/kithara-platform/src/loom/sync/mutex.rs"));
-        assert!(!in_scope("crates/kithara-platform/src/wasm/sync/mutex.rs"));
-        assert!(!in_scope(
-            "crates/kithara-platform/src/flash/tokio/semaphore.rs"
+            "crates/kithara-platform/src/backend/flash_system/mutex.rs",
+            &cfg
         ));
         assert!(!in_scope(
-            "crates/kithara-platform/src/flash/sync/notify.rs"
+            "crates/kithara-platform/src/loom/sync/mutex.rs",
+            &cfg
         ));
         assert!(!in_scope(
-            "crates/kithara-platform/src/flash/system/inner.rs"
+            "crates/kithara-platform/src/wasm/sync/mutex.rs",
+            &cfg
         ));
         assert!(!in_scope(
-            "crates/kithara-platform/src/common/cancel/node.rs"
+            "crates/kithara-platform/src/flash/tokio/semaphore.rs",
+            &cfg
         ));
-        assert!(!in_scope("crates/kithara-platform/src/common/time.rs"));
+        assert!(!in_scope(
+            "crates/kithara-platform/src/flash/sync/notify.rs",
+            &cfg
+        ));
+        assert!(!in_scope(
+            "crates/kithara-platform/src/flash/system/inner.rs",
+            &cfg
+        ));
+        assert!(!in_scope(
+            "crates/kithara-platform/src/common/cancel/node.rs",
+            &cfg
+        ));
+        assert!(!in_scope(
+            "crates/kithara-platform/src/common/time.rs",
+            &cfg
+        ));
         // Other crates are out of scope (this guard is platform-only).
-        assert!(!in_scope("crates/kithara-audio/src/audio.rs"));
+        assert!(!in_scope("crates/kithara-audio/src/audio.rs", &cfg));
     }
 
     #[test]
     fn scope_includes_cross_backend_flash_and_common() {
+        let cfg = PlatformLayerHygieneThreshold::default();
         // Consumer-facing flash control surface + shared common modules ARE
-        assert!(in_scope("crates/kithara-platform/src/flash/api.rs"));
-        assert!(in_scope("crates/kithara-platform/src/flash/ctx.rs"));
-        assert!(in_scope("crates/kithara-platform/src/flash/time.rs"));
+        assert!(in_scope("crates/kithara-platform/src/flash/api.rs", &cfg));
+        assert!(in_scope("crates/kithara-platform/src/flash/ctx.rs", &cfg));
+        assert!(in_scope("crates/kithara-platform/src/flash/time.rs", &cfg));
         assert!(in_scope(
-            "crates/kithara-platform/src/common/flash_inert.rs"
+            "crates/kithara-platform/src/common/flash_inert.rs",
+            &cfg
         ));
-        assert!(in_scope("crates/kithara-platform/src/common/maybe_send.rs"));
+        assert!(in_scope(
+            "crates/kithara-platform/src/common/maybe_send.rs",
+            &cfg
+        ));
     }
 
     #[test]
     fn impl_subtree_classification() {
-        assert!(is_impl_subtree("flash/sync/notify.rs"));
-        assert!(is_impl_subtree("flash/tokio/mpsc.rs"));
-        assert!(is_impl_subtree("flash/system/pace.rs"));
-        assert!(is_impl_subtree("common/cancel/token.rs"));
-        assert!(is_impl_subtree("common/time.rs"));
-        assert!(!is_impl_subtree("flash/api.rs"));
-        assert!(!is_impl_subtree("common/maybe_send.rs"));
+        let cfg = PlatformLayerHygieneThreshold::default();
+        assert!(is_impl_subtree("flash/sync/notify.rs", &cfg));
+        assert!(is_impl_subtree("flash/tokio/mpsc.rs", &cfg));
+        assert!(is_impl_subtree("flash/system/pace.rs", &cfg));
+        assert!(is_impl_subtree("common/cancel/token.rs", &cfg));
+        assert!(is_impl_subtree("common/time.rs", &cfg));
+        assert!(!is_impl_subtree("flash/api.rs", &cfg));
+        assert!(!is_impl_subtree("common/maybe_send.rs", &cfg));
     }
 }

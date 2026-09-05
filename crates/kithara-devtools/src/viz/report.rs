@@ -6,11 +6,10 @@ use super::{
     metrics::ArchitectureMetrics,
     view::{DiagramModel, EvidenceStyle},
 };
+use crate::common::project::ArchitectureRenderBudgets;
 
 const DEGREE_FINDING_THRESHOLD: usize = 4;
 const LONG_CHAIN_THRESHOLD: usize = 6;
-const MAX_FINDINGS: usize = 12;
-const MAX_RELATIONS: usize = 20;
 
 pub(crate) fn render_metrics(metrics: &ArchitectureMetrics) -> String {
     let confirmed = &metrics.confirmed;
@@ -139,7 +138,7 @@ fn metric_value(value: Option<f64>) -> String {
     value.map_or_else(|| "n/a".to_string(), |value| format!("{value:.3}"))
 }
 
-pub(crate) fn render(model: &DiagramModel) -> String {
+pub(crate) fn render(model: &DiagramModel, budgets: &ArchitectureRenderBudgets) -> String {
     let analysis = analyze(model);
     let mut output = String::from("## Diagram analysis\n\n");
     output.push_str(&format!(
@@ -211,7 +210,7 @@ pub(crate) fn render(model: &DiagramModel) -> String {
     if model.edges.is_empty() {
         output.push_str("- No relation crosses the visible contours.\n\n");
     } else {
-        for edge in model.edges.iter().take(MAX_RELATIONS) {
+        for edge in model.edges.iter().take(budgets.relations) {
             let count = if edge.count > 1 {
                 format!(" x{}", edge.count)
             } else {
@@ -237,10 +236,10 @@ pub(crate) fn render(model: &DiagramModel) -> String {
             }
             output.push('\n');
         }
-        if model.edges.len() > MAX_RELATIONS {
+        if model.edges.len() > budgets.relations {
             output.push_str(&format!(
                 "- {} more visible relations are retained in `projection.json`.\n",
-                model.edges.len() - MAX_RELATIONS
+                model.edges.len() - budgets.relations
             ));
         }
         output.push('\n');
@@ -250,7 +249,7 @@ pub(crate) fn render(model: &DiagramModel) -> String {
     if analysis.findings.is_empty() {
         output.push_str("- No branching, convergence, cycle, ownership, or long-chain finding crossed the configured visible thresholds.\n");
     } else {
-        for finding in analysis.findings.iter().take(MAX_FINDINGS) {
+        for finding in analysis.findings.iter().take(budgets.findings) {
             output.push_str(&format!(
                 "- **{}** at {}: {}",
                 finding.kind,
@@ -539,7 +538,7 @@ mod tests {
             hidden_nodes: 0,
         };
 
-        let report = render(&model);
+        let report = render(&model, &ArchitectureRenderBudgets::default());
 
         assert!(report.contains("High fan-out"));
         assert!(report.contains(&mermaid::node_id(&model.nodes[0].id)));
@@ -556,9 +555,48 @@ mod tests {
             hidden_nodes: 7,
         };
 
-        let report = render(&model);
+        let report = render(&model, &ArchitectureRenderBudgets::default());
 
         assert!(report.contains("7 nodes are outside this selected projection"));
         assert!(report.contains("no finding above describes a hidden node"));
+    }
+
+    /// The relation list is bounded by config, not by a constant: a project
+    /// that lowers the budget sees a shorter list and an accurate remainder.
+    #[test]
+    fn a_lowered_relation_budget_shortens_the_relation_list() {
+        let nodes = ["root", "a", "b", "c", "d"]
+            .into_iter()
+            .map(node)
+            .collect::<Vec<_>>();
+        let edges = nodes[1..]
+            .iter()
+            .map(|target| DiagramEdge {
+                source: nodes[0].id.clone(),
+                target: target.id.clone(),
+                kind: EdgeKind::Calls,
+                style: EvidenceStyle::Resolved,
+                count: 1,
+                details: vec!["root -> target".to_string()],
+                origins: vec!["test".to_string()],
+            })
+            .collect();
+        let model = DiagramModel {
+            nodes,
+            edges,
+            kind: ViewKind::Overview,
+            lod: crate::viz::view::DetailLevel::Full,
+            groups: Vec::new(),
+            hidden_nodes: 0,
+        };
+        let budgets = ArchitectureRenderBudgets {
+            relations: 2,
+            ..ArchitectureRenderBudgets::default()
+        };
+
+        let report = render(&model, &budgets);
+
+        assert_eq!(report.matches("]--> ").count(), 2);
+        assert!(report.contains("- 2 more visible relations are retained in `projection.json`.\n"));
     }
 }

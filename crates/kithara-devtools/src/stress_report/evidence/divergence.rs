@@ -5,10 +5,8 @@ use std::{collections::BTreeMap, fmt::Write as _, sync::LazyLock};
 use regex::Regex;
 
 use super::{clean_lines, line};
-use crate::junit::CaseTiming;
+use crate::{common::project::StressRenderBudgets, junit::CaseTiming};
 
-const MAX_DIVERGENCE_ROWS: usize = 40;
-const MAX_PASS_ONLY_ROWS_PER_TEST: usize = 5;
 /// Below this repetition count a line is retry noise, not a spin.
 const SPIN_MIN_REPEATS: u64 = 16;
 /// Failing attempts must out-repeat passing ones by this factor to call a spin.
@@ -46,13 +44,13 @@ struct Side {
 }
 
 impl Side {
-    fn record(&mut self, output: &str) {
+    fn record(&mut self, output: &str, budgets: &StressRenderBudgets) {
         self.total += 1;
         if output.trim().is_empty() {
             return;
         }
         self.stored += 1;
-        for (template, reps) in templates(output) {
+        for (template, reps) in templates(output, budgets) {
             self.presence
                 .entry(template)
                 .and_modify(|presence| {
@@ -88,7 +86,11 @@ struct Row {
     passed_stored: usize,
 }
 
-pub(super) fn append(out: &mut String, cases: &[CaseTiming]) -> bool {
+pub(super) fn append(
+    out: &mut String,
+    cases: &[CaseTiming],
+    budgets: &StressRenderBudgets,
+) -> bool {
     let mut groups = BTreeMap::<String, Group>::new();
     for case in cases {
         if case.iteration.is_none() {
@@ -102,7 +104,7 @@ pub(super) fn append(out: &mut String, cases: &[CaseTiming]) -> bool {
         } else {
             &mut group.passed
         };
-        side.record(&case.output);
+        side.record(&case.output, budgets);
     }
 
     let mut rows = Vec::new();
@@ -119,7 +121,7 @@ pub(super) fn append(out: &mut String, cases: &[CaseTiming]) -> bool {
             continue;
         }
         collect_failure_rows(test, group, &mut rows);
-        dropped_pass_only += collect_pass_only_rows(test, group, &mut rows);
+        dropped_pass_only += collect_pass_only_rows(test, group, &mut rows, budgets);
     }
 
     if rows.is_empty() && gaps.is_empty() {
@@ -132,7 +134,7 @@ pub(super) fn append(out: &mut String, cases: &[CaseTiming]) -> bool {
             .then_with(|| left.test.cmp(&right.test))
             .then_with(|| left.template.cmp(&right.template))
     });
-    render(out, &rows, &gaps, dropped_pass_only);
+    render(out, &rows, &gaps, dropped_pass_only, budgets);
     gaps.is_empty()
 }
 
@@ -166,7 +168,12 @@ fn collect_failure_rows(test: &str, group: &Group, rows: &mut Vec<Row>) {
     }
 }
 
-fn collect_pass_only_rows(test: &str, group: &Group, rows: &mut Vec<Row>) -> usize {
+fn collect_pass_only_rows(
+    test: &str,
+    group: &Group,
+    rows: &mut Vec<Row>,
+    budgets: &StressRenderBudgets,
+) -> usize {
     let mut kept = 0usize;
     let mut dropped = 0usize;
     for (template, passed) in &group.passed.presence {
@@ -178,7 +185,7 @@ fn collect_pass_only_rows(test: &str, group: &Group, rows: &mut Vec<Row>) -> usi
         if failed_attempts * 2 > group.failed.stored {
             continue;
         }
-        if kept == MAX_PASS_ONLY_ROWS_PER_TEST {
+        if kept == budgets.pass_only_rows_per_test {
             dropped += 1;
             continue;
         }
@@ -198,7 +205,13 @@ fn collect_pass_only_rows(test: &str, group: &Group, rows: &mut Vec<Row>) -> usi
     dropped
 }
 
-fn render(out: &mut String, rows: &[Row], gaps: &[String], dropped_pass_only: usize) {
+fn render(
+    out: &mut String,
+    rows: &[Row],
+    gaps: &[String],
+    dropped_pass_only: usize,
+    budgets: &StressRenderBudgets,
+) {
     out.push_str(
         "\n## Outcome-divergent runtime lines\n\nEach row is a tracing line whose presence or repetition separates failing attempts from passing attempts of one test. The target in the line names the module that emitted it — the nearest stored evidence to a cause. Numbers, durations, and volatile ids are normalized; counts are over attempts with stored output.\n",
     );
@@ -206,7 +219,7 @@ fn render(out: &mut String, rows: &[Row], gaps: &[String], dropped_pass_only: us
         out.push_str(
             "\n| test | divergence | runtime line | failed | passed | repeats in failed | repeats in passed |\n|---|---|---|---:|---:|---|---|\n",
         );
-        for row in rows.iter().take(MAX_DIVERGENCE_ROWS) {
+        for row in rows.iter().take(budgets.divergence_rows) {
             let _ = writeln!(
                 out,
                 "| {} | {} | `{}` | {}/{} | {}/{} | {} | {} |",
@@ -221,17 +234,19 @@ fn render(out: &mut String, rows: &[Row], gaps: &[String], dropped_pass_only: us
                 render_reps(row.passed_reps),
             );
         }
-        if rows.len() > MAX_DIVERGENCE_ROWS {
+        if rows.len() > budgets.divergence_rows {
+            let shown = budgets.divergence_rows;
             let _ = writeln!(
                 out,
-                "\nShowing the first {MAX_DIVERGENCE_ROWS} of {} divergent lines. Raw artifacts are exhaustive.",
+                "\nShowing the first {shown} of {} divergent lines. Raw artifacts are exhaustive.",
                 rows.len(),
             );
         }
         if dropped_pass_only > 0 {
             let _ = writeln!(
                 out,
-                "\nDropped `{dropped_pass_only}` pass-only lines beyond the per-test bound of {MAX_PASS_ONLY_ROWS_PER_TEST}. Raw artifacts are exhaustive.",
+                "\nDropped `{dropped_pass_only}` pass-only lines beyond the per-test bound of {bound}. Raw artifacts are exhaustive.",
+                bound = budgets.pass_only_rows_per_test,
             );
         }
     }
@@ -253,17 +268,17 @@ fn render_reps(reps: Option<(u64, u64)>) -> String {
     }
 }
 
-fn templates(output: &str) -> BTreeMap<String, u64> {
+fn templates(output: &str, budgets: &StressRenderBudgets) -> BTreeMap<String, u64> {
     let mut templates = BTreeMap::new();
     for line in clean_lines(output) {
-        if let Some(template) = runtime_template(&line) {
+        if let Some(template) = runtime_template(&line, budgets) {
             *templates.entry(template).or_insert(0u64) += 1;
         }
     }
     templates
 }
 
-fn runtime_template(line: &str) -> Option<String> {
+fn runtime_template(line: &str, budgets: &StressRenderBudgets) -> Option<String> {
     static RUNTIME: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
             r"^(?:\S+\s+)??(TRACE|DEBUG|INFO|WARN|ERROR)\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z0-9_]+)+:.*)$",
@@ -271,17 +286,17 @@ fn runtime_template(line: &str) -> Option<String> {
         .expect("runtime line regex")
     });
     let captures = RUNTIME.captures(line)?;
-    Some(normalize_template(&format!(
-        "{} {}",
-        &captures[1], &captures[2]
-    )))
+    Some(normalize_template(
+        &format!("{} {}", &captures[1], &captures[2]),
+        budgets,
+    ))
 }
 
-fn normalize_template(text: &str) -> String {
+fn normalize_template(text: &str, budgets: &StressRenderBudgets) -> String {
     static NUMBER: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\b\d+(?:\.\d+)?\b").expect("number regex"));
     NUMBER
-        .replace_all(&line::normalize(text), "<n>")
+        .replace_all(&line::normalize(text, budgets), "<n>")
         .into_owned()
 }
 
@@ -331,7 +346,7 @@ mod tests {
         ];
         let mut out = String::new();
 
-        assert!(append(&mut out, &cases));
+        assert!(append(&mut out, &cases, &StressRenderBudgets::default()));
 
         assert!(out.contains("only in failures"), "{out}");
         assert!(out.contains("seek::recover"), "{out}");
@@ -351,7 +366,7 @@ mod tests {
         ];
         let mut out = String::new();
 
-        append(&mut out, &cases);
+        append(&mut out, &cases, &StressRenderBudgets::default());
 
         assert_eq!(out.matches("only in failures").count(), 1, "{out}");
     }
@@ -367,7 +382,7 @@ mod tests {
         ];
         let mut out = String::new();
 
-        assert!(append(&mut out, &cases));
+        assert!(append(&mut out, &cases, &StressRenderBudgets::default()));
 
         assert!(!out.contains("Outcome-divergent"), "{out}");
     }
@@ -385,7 +400,7 @@ mod tests {
         ];
         let mut out = String::new();
 
-        assert!(append(&mut out, &cases));
+        assert!(append(&mut out, &cases, &StressRenderBudgets::default()));
 
         assert!(out.contains("spins in failures"), "{out}");
         assert!(out.contains("x300-x1700"), "{out}");
@@ -403,7 +418,7 @@ mod tests {
         ];
         let mut out = String::new();
 
-        assert!(append(&mut out, &cases));
+        assert!(append(&mut out, &cases, &StressRenderBudgets::default()));
 
         assert!(out.contains("failures never reach it"), "{out}");
         assert!(out.contains("playback completed"), "{out}");
@@ -422,7 +437,7 @@ mod tests {
         ];
         let mut out = String::new();
 
-        assert!(!append(&mut out, &cases));
+        assert!(!append(&mut out, &cases, &StressRenderBudgets::default()));
 
         assert!(out.contains("store-success-output"), "{out}");
         assert!(out.contains("demo::tests seek"), "{out}");
@@ -433,14 +448,29 @@ mod tests {
     /// template requires a level and a module-path target.
     #[test]
     fn only_level_and_target_shaped_lines_become_templates() {
-        assert!(runtime_template("error: package ID specification").is_none());
-        assert!(runtime_template("ERROR without a target follows").is_none());
-        let template =
-            runtime_template(&recover_line(1, "4.5s")).expect("tracing line is a template");
+        assert!(
+            runtime_template(
+                "error: package ID specification",
+                &StressRenderBudgets::default(),
+            )
+            .is_none()
+        );
+        assert!(
+            runtime_template(
+                "ERROR without a target follows",
+                &StressRenderBudgets::default(),
+            )
+            .is_none()
+        );
+        let template = runtime_template(&recover_line(1, "4.5s"), &StressRenderBudgets::default())
+            .expect("tracing line is a template");
         assert!(template.contains("epoch=<n>"), "{template}");
         assert!(template.contains("position=<duration>"), "{template}");
-        let bare = runtime_template("DEBUG kithara_audio::pipeline: tick 12")
-            .expect("line without timestamp is a template");
+        let bare = runtime_template(
+            "DEBUG kithara_audio::pipeline: tick 12",
+            &StressRenderBudgets::default(),
+        )
+        .expect("line without timestamp is a template");
         assert!(bare.contains("tick <n>"), "{bare}");
     }
 }

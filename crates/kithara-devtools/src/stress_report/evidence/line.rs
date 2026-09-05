@@ -8,6 +8,7 @@ use super::{
     line_reader::for_each_bounded_line,
     normalize_signature, render_clusters,
 };
+use crate::common::project::StressRenderBudgets;
 
 const MAX_LINE_BYTES: usize = 64 * 1_024;
 const MAX_RECORDS: usize = 250_000;
@@ -19,6 +20,7 @@ pub(super) fn append(
     outcomes: &BTreeMap<AttemptKey, AttemptOutcome>,
     run_id: Option<&str>,
     dossiers: &mut BTreeMap<AttemptKey, AttemptDossier>,
+    budgets: &StressRenderBudgets,
 ) -> bool {
     let mut clusters = BTreeMap::<String, SignatureCluster>::new();
     let mut foreign = 0usize;
@@ -42,7 +44,7 @@ pub(super) fn append(
         }
         let outcome = outcome_for(&attempt, outcomes);
         let test = render_test(&attempt.key);
-        let signature = normalize(evidence);
+        let signature = normalize(evidence, budgets);
         if outcome == AttemptOutcome::Failed
             && let Some(dossier) = dossiers.get_mut(&attempt.key)
         {
@@ -55,6 +57,7 @@ pub(super) fn append(
             &test,
             outcome,
             None,
+            budgets,
         );
         ControlFlow::Continue(())
     });
@@ -71,6 +74,7 @@ pub(super) fn append(
         "Line-evidence cause signatures",
         &clusters,
         "A repeated CPU-spin poll is strong runtime evidence. A low-CPU blocked-wait signature remains a candidate until a wait-graph edge or same-revision low-pressure A/B confirms it. Durations are normalized so scheduling jitter does not split a cluster.",
+        budgets,
     );
     if foreign > 0 {
         let _ = writeln!(
@@ -97,12 +101,12 @@ pub(super) fn append(
     unreadable == 0 && !read.stopped_early
 }
 
-pub(super) fn normalize(text: &str) -> String {
+pub(super) fn normalize(text: &str, budgets: &StressRenderBudgets) -> String {
     static DURATION: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"\b\d+(?:\.\d+)?(?:ns|us|\x{00B5}s|ms|s)\b").expect("duration regex")
     });
     let normalized = DURATION.replace_all(text, "<duration>");
-    normalize_signature(&normalized)
+    normalize_signature(&normalized, budgets)
 }
 
 #[cfg(test)]
@@ -158,6 +162,7 @@ mod tests {
             &outcomes,
             Some("run"),
             &mut dossiers,
+            &StressRenderBudgets::default(),
         ));
 
         assert!(markdown.contains("| 1 | 1 | 0 |"), "{markdown}");
@@ -188,6 +193,7 @@ mod tests {
             &BTreeMap::new(),
             Some("run"),
             &mut BTreeMap::new(),
+            &StressRenderBudgets::default(),
         ));
         assert!(markdown.contains("invalid nextest metadata"));
     }
@@ -195,7 +201,10 @@ mod tests {
     #[test]
     fn normalization_removes_timing_jitter() {
         assert_eq!(
-            normalize("single poll took 12\u{b5}s budget 4.5ms"),
+            normalize(
+                "single poll took 12\u{b5}s budget 4.5ms",
+                &StressRenderBudgets::default()
+            ),
             "single poll took <duration> budget <duration>"
         );
     }

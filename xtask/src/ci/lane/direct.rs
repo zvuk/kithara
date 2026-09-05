@@ -59,7 +59,7 @@ pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
     let vars = executor_vars(env::var_os("CARGO_TARGET_DIR"));
     let process = Process::new(&ctx.root, vars);
-    declared::run(&process, lane, &pins, args.kind)
+    declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)
 }
 
 #[cfg(test)]

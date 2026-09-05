@@ -29,12 +29,17 @@ pub struct TyposArgs {
     pub fix: bool,
 }
 
-pub(crate) fn run(args: &TyposArgs, _ctx: &Ctx) -> Result<()> {
-    check_tool("typos", &["--version"], Consts::INSTALL_HINT)?;
+pub(crate) fn run(args: &TyposArgs, ctx: &Ctx) -> Result<()> {
+    let program = ctx.config.tools.program("typos");
+    check_tool(
+        program,
+        &["--version"],
+        ctx.config.tools.install_hint("typos", Consts::INSTALL_HINT),
+    )?;
     if args.fix {
         ensure_clean_tree(args.allow_dirty, "typos")?;
     }
-    let mut cmd = Command::new("typos");
+    let mut cmd = Command::new(program);
     cmd.arg("--config")
         .arg(Consts::CONFIG_PATH)
         .arg("--isolated");

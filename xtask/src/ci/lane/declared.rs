@@ -1,6 +1,7 @@
 use std::env;
 
 use anyhow::{Context, Result, bail};
+use kithara_devtools::common::tools::ToolsConfig;
 use toml::Value;
 
 use crate::{
@@ -20,6 +21,7 @@ pub(crate) fn run(
     process: &Process,
     lane: &CiLaneConfig,
     pins: &CiPins,
+    tools: &ToolsConfig,
     kind: PipelineKind,
 ) -> Result<()> {
     let kind = kind_name(kind);
@@ -30,21 +32,21 @@ pub(crate) fn run(
         process.require_os(os, &lane.label)?;
     }
     if !lane.tools.is_empty() {
-        let tools: Vec<&str> = lane.tools.iter().map(String::as_str).collect();
-        process.require_tools(&tools)?;
+        let required: Vec<&str> = lane.tools.iter().map(|role| tools.program(role)).collect();
+        process.require_tools(&required)?;
     }
     if !lane.left_behind.is_empty() {
         process.require_left_behind(&lane.left_behind, &lane.left_behind_by)?;
     }
     for check in &lane.pinned {
-        require_pinned_version(process, check, pins)?;
+        require_pinned_version(process, check, pins, tools)?;
     }
     for step in &lane.steps {
-        let program = step.program.as_deref().unwrap_or(&lane.program);
-        let mut command = if program == SELF_PROGRAM {
+        let role = step.program.as_deref().unwrap_or(&lane.program);
+        let mut command = if role == SELF_PROGRAM {
             process.command(&env::current_exe().context("locating the running xtask executable")?)
         } else {
-            process.command(program)
+            process.command(tools.program(role))
         };
         let args = step.args_by_kind.get(&kind).unwrap_or(&step.args);
         for arg in args {
@@ -83,11 +85,16 @@ fn resolve(value: &str, process: &Process, pins: &CiPins) -> Result<String> {
     Ok(filled)
 }
 
-fn require_pinned_version(process: &Process, check: &CiLanePin, pins: &CiPins) -> Result<()> {
+fn require_pinned_version(
+    process: &Process,
+    check: &CiLanePin,
+    pins: &CiPins,
+    tools: &ToolsConfig,
+) -> Result<()> {
     let expected = pin(pins, &check.pin)?;
     let args: Vec<&str> = check.args.iter().map(String::as_str).collect();
     let label = format!("read {} version", check.tool);
-    let actual = process.capture(&check.tool, &args, &label)?;
+    let actual = process.capture(tools.program(&check.tool), &args, &label)?;
     let Some(prefix) = check.line_prefix.as_deref() else {
         if !actual.split_whitespace().any(|part| part == expected) {
             bail!(

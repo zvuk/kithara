@@ -7,23 +7,25 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use kithara_devtools::common::tools::ToolsConfig;
 
 use crate::ci::{config::CiConfig, process::Process, xcresult};
 
 /// The two Apple lanes a parameter cannot describe. Both hold something open
 /// for the length of a run - a package cache, a server, a simulator - and one
 /// of them answers with the test's outcome rather than the build's.
-fn preflight(process: &Process, config: &CiConfig) -> Result<()> {
+fn preflight(process: &Process, config: &CiConfig, tools: &ToolsConfig) -> Result<()> {
     process.require_os("macos", "Apple")?;
+    let xcodebuild = tools.program("xcodebuild");
     process.require_tools(&[
         "cargo",
-        "just",
-        "sccache",
-        "swift",
-        "xcodebuild",
-        "xcodegen",
+        tools.program("just"),
+        tools.program("sccache"),
+        tools.program("swift"),
+        xcodebuild,
+        tools.program("xcodegen"),
     ])?;
-    let version = process.capture("xcodebuild", &["-version"], "xcodebuild -version")?;
+    let version = process.capture(xcodebuild, &["-version"], "xcodebuild -version")?;
     let actual = version
         .lines()
         .next()
@@ -38,19 +40,24 @@ fn preflight(process: &Process, config: &CiConfig) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn swift_test(process: &Process, config: &CiConfig, swiftpm_cache: &Path) -> Result<()> {
-    preflight(process, config)?;
+pub(crate) fn swift_test(
+    process: &Process,
+    config: &CiConfig,
+    tools: &ToolsConfig,
+    swiftpm_cache: &Path,
+) -> Result<()> {
+    preflight(process, config, tools)?;
     // The Swift package resolves the framework from the debug build tree, so
     // this job builds it too. Repeated work is nearly free — the jobs share a
     // target directory on the executor — and it keeps the job self-contained.
-    build_xcframework(process)?;
+    build_xcframework(process, tools)?;
     // SwiftPM writes xUnit on request, so this lane needs no conversion.
     let report = process.root().join("target/xcresult/swift-test.junit.xml");
     if let Some(parent) = report.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    let mut command = process.command("swift");
+    let mut command = process.command(tools.program("swift"));
     command
         .env("KITHARA_LOCAL_DEV", "1")
         .arg("test")
@@ -66,10 +73,10 @@ pub(crate) fn swift_test(process: &Process, config: &CiConfig, swiftpm_cache: &P
 /// one, so this lane owns its lifetime: the guard stops the server however the
 /// job ends, because one left holding the port fails the next run with nothing
 /// more informative than a bind error.
-pub(crate) fn ios_test(process: &Process, config: &CiConfig) -> Result<()> {
-    preflight(process, config)?;
+pub(crate) fn ios_test(process: &Process, config: &CiConfig, tools: &ToolsConfig) -> Result<()> {
+    preflight(process, config, tools)?;
     let server = TestServer::start(process)?;
-    let mut command = process.command("just");
+    let mut command = process.command(tools.program("just"));
     command
         .env("KITHARA_LOCAL_DEV", "1")
         .env("KITHARA_TEST_SERVER_URL", server.url())
@@ -84,6 +91,7 @@ pub(crate) fn ios_test(process: &Process, config: &CiConfig) -> Result<()> {
     if bundle.exists() {
         xcresult::write_junit(
             process,
+            tools.program("xcrun"),
             &bundle,
             &process.root().join("target/xcresult/ios-test.junit.xml"),
         )?;
@@ -166,9 +174,9 @@ impl Drop for TestServer {
     }
 }
 
-fn build_xcframework(process: &Process) -> Result<()> {
+fn build_xcframework(process: &Process, tools: &ToolsConfig) -> Result<()> {
     process.run(
-        "just",
+        tools.program("just"),
         &["platform", "apple", "xcframework", "--profile", "debug"],
         "Apple XCFramework",
     )

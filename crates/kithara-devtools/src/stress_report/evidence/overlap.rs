@@ -3,8 +3,8 @@ use std::{
     collections::{BTreeMap, BTreeSet, BinaryHeap},
 };
 
-use super::{MAX_SIGNATURE_EXAMPLES, attempt::AttemptKey, duration_ms, parse_timestamp_ms};
-use crate::junit::CaseTiming;
+use super::{attempt::AttemptKey, duration_ms, parse_timestamp_ms};
+use crate::{common::project::StressRenderBudgets, junit::CaseTiming};
 
 #[derive(Debug)]
 struct Interval {
@@ -17,6 +17,7 @@ struct Interval {
 pub(super) fn for_targets(
     cases: &[CaseTiming],
     targets: &BTreeSet<AttemptKey>,
+    budgets: &StressRenderBudgets,
 ) -> BTreeMap<AttemptKey, BTreeSet<String>> {
     let mut intervals = cases.iter().filter_map(interval).collect::<Vec<Interval>>();
     intervals.sort_by_key(|interval| (interval.start, interval.end));
@@ -43,7 +44,7 @@ pub(super) fn for_targets(
         if targets.contains(&intervals[current].key) {
             let row = overlaps.entry(intervals[current].key.clone()).or_default();
             for index in &active {
-                if row.len() == MAX_SIGNATURE_EXAMPLES {
+                if row.len() == budgets.signature_examples {
                     break;
                 }
                 if intervals[*index].key != intervals[current].key {
@@ -54,7 +55,7 @@ pub(super) fn for_targets(
         for index in &active_failed {
             if intervals[*index].key != intervals[current].key
                 && let Some(row) = overlaps.get_mut(&intervals[*index].key)
-                && row.len() < MAX_SIGNATURE_EXAMPLES
+                && row.len() < budgets.signature_examples
             {
                 row.insert(intervals[current].test.clone());
             }
@@ -122,7 +123,7 @@ mod tests {
                 iteration: 0,
             },
         ]);
-        let overlaps = for_targets(&cases, &targets);
+        let overlaps = for_targets(&cases, &targets, &StressRenderBudgets::default());
 
         assert_eq!(
             overlaps
@@ -158,7 +159,11 @@ mod tests {
             iteration: 0,
         };
 
-        let overlaps = for_targets(&cases, &BTreeSet::from([only_a.clone()]));
+        let overlaps = for_targets(
+            &cases,
+            &BTreeSet::from([only_a.clone()]),
+            &StressRenderBudgets::default(),
+        );
 
         assert_eq!(overlaps.len(), 1);
         assert_eq!(
@@ -187,11 +192,15 @@ mod tests {
             iteration: 0,
         };
 
-        let overlaps = for_targets(&cases, &BTreeSet::from([target.clone()]));
+        let overlaps = for_targets(
+            &cases,
+            &BTreeSet::from([target.clone()]),
+            &StressRenderBudgets::default(),
+        );
 
         assert_eq!(
             overlaps.get(&target).expect("target").len(),
-            MAX_SIGNATURE_EXAMPLES
+            StressRenderBudgets::default().signature_examples
         );
     }
 }

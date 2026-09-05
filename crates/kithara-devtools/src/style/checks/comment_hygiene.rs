@@ -673,11 +673,6 @@ const fn range_overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 
-/// Annotations an author reached for instead of writing documentation. A block
-/// carrying one is never promoted to `///`: publishing `WHY:` as rendered docs
-/// would launder the note rather than answer it, so it stays for a human.
-const PROSE_MARKERS: &[&str] = &["WHY:", "NOTE:", "TODO:", "FIXME:", "XXX:", "HACK:"];
-
 /// Start lines of everything that can carry a doc comment. A statement cannot,
 /// which is why a comment inside a function body has no doc position to move to
 /// and has to be answered by the code instead.
@@ -757,9 +752,10 @@ fn conversion_targets(
         if has_allowed_marker(&first.body_trimmed, &cfg.allowed_inline_markers) {
             continue;
         }
-        if PROSE_MARKERS
+        if cfg
+            .prose_markers
             .iter()
-            .any(|m| first.body_trimmed.starts_with(m))
+            .any(|marker| first.body_trimmed.starts_with(marker.as_str()))
         {
             continue;
         }

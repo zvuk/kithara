@@ -48,9 +48,11 @@ pub(crate) struct PublishArgs {
 
 pub(crate) fn run(args: &PublishArgs, ctx: &Ctx) -> Result<()> {
     check_tool(
-        "cargo-hakari",
+        ctx.config.tools.program("cargo-hakari"),
         &["hakari", "--version"],
-        "cargo install cargo-hakari",
+        ctx.config
+            .tools
+            .install_hint("cargo-hakari", "cargo install cargo-hakari"),
     )?;
 
     let order = resolve_publish_order()?;

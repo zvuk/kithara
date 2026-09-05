@@ -5,21 +5,16 @@ use quote::ToTokens;
 use syn::{Field, Fields, GenericArgument, Item, ItemStruct, PathArguments, Type, TypePath};
 
 use super::{Check, Context};
-use crate::common::{
-    suppress::Suppressions,
-    violation::Violation,
-    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+use crate::{
+    arch::config::FieldPassthroughThreshold,
+    common::{
+        suppress::Suppressions,
+        violation::Violation,
+        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+    },
 };
 
 pub(crate) const ID: &str = "field_passthrough";
-
-struct Consts;
-
-impl Consts {
-    const MAX_DEPTH: usize = 8;
-    const TRANSPARENT_WRAPPERS: &'static [&'static str] =
-        &["Arc", "Rc", "Box", "RefCell", "Cell", "Mutex", "RwLock"];
-}
 
 pub(crate) struct FieldPassthrough;
 
@@ -64,25 +59,30 @@ impl Check for FieldPassthrough {
             };
             let rel_str = rel.to_string_lossy().replace('\\', "/");
             suppressions.insert(rel_str.clone(), Suppressions::parse(src));
-            collect_structs(&rel_str, &file.items, &mut all);
+            collect_structs(&rel_str, &file.items, &mut all, cfg);
         }
         let mut out = Vec::new();
-        emit_violations(&all, &suppressions, &mut out);
+        emit_violations(&all, &suppressions, &mut out, cfg);
         out.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(out)
     }
 }
 
-fn collect_structs(rel: &str, items: &[Item], out: &mut Vec<StructDecl>) {
+fn collect_structs(
+    rel: &str,
+    items: &[Item],
+    out: &mut Vec<StructDecl>,
+    cfg: &FieldPassthroughThreshold,
+) {
     for item in items {
         match item {
             Item::Mod(m) => {
                 if let Some((_, inner)) = &m.content {
-                    collect_structs(rel, inner, out);
+                    collect_structs(rel, inner, out, cfg);
                 }
             }
             Item::Struct(s) => {
-                if let Some(decl) = struct_decl(rel, s) {
+                if let Some(decl) = struct_decl(rel, s, cfg) {
                     out.push(decl);
                 }
             }
@@ -91,14 +91,14 @@ fn collect_structs(rel: &str, items: &[Item], out: &mut Vec<StructDecl>) {
     }
 }
 
-fn struct_decl(rel: &str, s: &ItemStruct) -> Option<StructDecl> {
+fn struct_decl(rel: &str, s: &ItemStruct, cfg: &FieldPassthroughThreshold) -> Option<StructDecl> {
     let Fields::Named(named) = &s.fields else {
         return None;
     };
     let mut fields = Vec::new();
     for f in &named.named {
         let Some(ident) = &f.ident else { continue };
-        let peeled = peel_wrappers(&f.ty);
+        let peeled = peel_wrappers(&f.ty, cfg);
         fields.push(StructField {
             sig: FieldSig {
                 name: ident.to_string(),
@@ -120,16 +120,20 @@ fn has_delegate_attr(f: &Field) -> bool {
     f.attrs.iter().any(|a| a.path().is_ident("delegate"))
 }
 
-/// Strip `&T`, `&mut T`, and the transparent owning wrappers (`Arc<T>`,
-/// `Rc<T>`, `Box<T>`, `RefCell<T>`, `Cell<T>`, `Mutex<T>`, `RwLock<T>`).
-fn peel_wrappers(ty: &Type) -> Type {
+/// Strip `&T`, `&mut T`, and the transparent owning wrappers the
+/// `transparent_wrappers` threshold names.
+fn peel_wrappers(ty: &Type, cfg: &FieldPassthroughThreshold) -> Type {
     match ty {
-        Type::Reference(r) => peel_wrappers(&r.elem),
+        Type::Reference(r) => peel_wrappers(&r.elem, cfg),
         Type::Path(tp) => {
             let Some(seg) = tp.path.segments.last() else {
                 return ty.clone();
             };
-            if !Consts::TRANSPARENT_WRAPPERS.contains(&seg.ident.to_string().as_str()) {
+            if !cfg
+                .transparent_wrappers
+                .iter()
+                .any(|wrapper| wrapper == &seg.ident.to_string())
+            {
                 return ty.clone();
             }
             let PathArguments::AngleBracketed(args) = &seg.arguments else {
@@ -139,7 +143,7 @@ fn peel_wrappers(ty: &Type) -> Type {
                 GenericArgument::Type(t) => Some(t),
                 _ => None,
             });
-            inner.map_or_else(|| ty.clone(), peel_wrappers)
+            inner.map_or_else(|| ty.clone(), |inner| peel_wrappers(inner, cfg))
         }
         _ => ty.clone(),
     }
@@ -180,8 +184,9 @@ fn reachable_sigs<'a>(
     out: &mut HashSet<FieldSig>,
     visited: &mut HashSet<String>,
     depth: usize,
+    cfg: &FieldPassthroughThreshold,
 ) {
-    if depth >= Consts::MAX_DEPTH {
+    if depth >= cfg.max_depth {
         return;
     }
     if !visited.insert(start.to_string()) {
@@ -193,7 +198,7 @@ fn reachable_sigs<'a>(
     for f in &decl.fields {
         out.insert(f.sig.clone());
         if let Some(leaf) = &f.leaf_struct {
-            reachable_sigs(leaf, by_name, out, visited, depth + 1);
+            reachable_sigs(leaf, by_name, out, visited, depth + 1, cfg);
         }
     }
 }
@@ -202,6 +207,7 @@ fn emit_violations(
     all: &[StructDecl],
     suppressions: &HashMap<String, Suppressions>,
     out: &mut Vec<Violation>,
+    cfg: &FieldPassthroughThreshold,
 ) {
     let by_name: BTreeMap<&str, &StructDecl> = all.iter().map(|d| (d.name.as_str(), d)).collect();
     let empty = Suppressions::default();
@@ -216,7 +222,7 @@ fn emit_violations(
             let mut reachable: HashSet<FieldSig> = HashSet::new();
             let mut visited: HashSet<String> = HashSet::new();
             visited.insert(outer.name.clone());
-            reachable_sigs(inner_struct, &by_name, &mut reachable, &mut visited, 0);
+            reachable_sigs(inner_struct, &by_name, &mut reachable, &mut visited, 0, cfg);
             for peer in &outer.fields {
                 if peer.sig.name == outer_field.sig.name {
                     continue;
@@ -264,10 +270,11 @@ mod tests {
         let mut suppressions = HashMap::new();
         suppressions.insert("fixture.rs".to_string(), suppress);
         let file: syn::File = syn::parse_str(src).expect("valid Rust source");
+        let cfg = FieldPassthroughThreshold::default();
         let mut structs = Vec::new();
-        collect_structs("fixture.rs", &file.items, &mut structs);
+        collect_structs("fixture.rs", &file.items, &mut structs, &cfg);
         let mut out = Vec::new();
-        emit_violations(&structs, &suppressions, &mut out);
+        emit_violations(&structs, &suppressions, &mut out, &cfg);
         out.len()
     }
 

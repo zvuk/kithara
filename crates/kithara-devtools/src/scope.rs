@@ -2,7 +2,10 @@ use anyhow::Result;
 use cargo_metadata::MetadataCommand;
 use clap::Args;
 
-use crate::common::scope::{Scope, Tool};
+use crate::common::{
+    project::ProjectConfig,
+    scope::{Scope, Tool},
+};
 
 #[derive(Debug, Args)]
 pub struct ScopeArgs {
@@ -16,7 +19,12 @@ pub struct ScopeArgs {
 pub(crate) fn run(args: &ScopeArgs) -> Result<()> {
     let metadata = build_metadata()?;
     let workspace_root = metadata.workspace_root.as_std_path();
-    let scope = Scope::resolve(&args.tokens, workspace_root)?;
+    let project = ProjectConfig::load(workspace_root)?;
+    let scope = Scope::resolve(
+        &args.tokens,
+        workspace_root,
+        &project.workspace_scan.top_level_dirs,
+    )?;
     let flags = scope.flags_for(args.for_tool);
     println!("{}", flags.join(" "));
     Ok(())

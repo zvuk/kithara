@@ -24,9 +24,6 @@ impl Consts {
         "not found in registry",
         "Library not loaded",
     ];
-    const LOGS_DIR: &'static str = "target/health-logs";
-    const REPORT_PATH: &'static str = "target/health-report.md";
-    const STDOUT_TAIL_LINES: usize = 80;
 }
 
 #[derive(Debug, Args)]
@@ -122,7 +119,7 @@ struct StageResult {
 
 pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
     let project = ProjectConfig::load(Path::new("."))?;
-    let logs_dir = PathBuf::from(Consts::LOGS_DIR);
+    let logs_dir = PathBuf::from(&project.health.logs_dir);
     fs::create_dir_all(&logs_dir).context("create health-logs directory")?;
 
     let stages = build_stages(&project)?;
@@ -136,7 +133,7 @@ pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
     }
 
     let total = total_start.elapsed();
-    write_report(&results, total, &logs_dir, &project.project.name)?;
+    write_report(&results, total, &logs_dir, &project)?;
 
     let failed = results.iter().filter(|r| r.status == Status::Fail).count();
     println!();
@@ -146,7 +143,7 @@ pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
         failed,
         format_duration(total),
     );
-    println!("report: {}", Consts::REPORT_PATH);
+    println!("report: {}", project.health.report_path);
     if failed > 0 {
         std::process::exit(1);
     }
@@ -444,7 +441,7 @@ fn write_report(
     results: &[StageResult],
     total: Duration,
     logs_dir: &Path,
-    project_name: &str,
+    project: &ProjectConfig,
 ) -> Result<()> {
     let mut out = String::new();
     let timestamp = utc_timestamp();
@@ -452,10 +449,10 @@ fn write_report(
     let failed = results.iter().filter(|r| r.status == Status::Fail).count();
     let overall = if failed == 0 { "PASS" } else { "FAIL" };
 
-    let title = if project_name.is_empty() {
+    let title = if project.project.name.is_empty() {
         "health report".to_owned()
     } else {
-        format!("{project_name} health report")
+        format!("{} health report", project.project.name)
     };
     let _ = write!(out, "# {title}\n\n");
     let _ = writeln!(out, "- generated_at_utc: {timestamp}");
@@ -502,19 +499,19 @@ fn write_report(
         if let Some(note) = &r.note {
             let _ = write!(out, "note: {note}\n\n");
         }
-        let tail = read_log_tail(&log_path, Consts::STDOUT_TAIL_LINES);
+        let tail = read_log_tail(&log_path, project.health.stdout_tail_lines);
         if !tail.is_empty() {
             let _ = write!(
                 out,
                 "<details><summary>last {} log lines (full: `{}`)</summary>\n\n```\n{}\n```\n\n</details>\n\n",
-                Consts::STDOUT_TAIL_LINES,
+                project.health.stdout_tail_lines,
                 log_path.display(),
                 tail,
             );
         }
     }
 
-    fs::write(Consts::REPORT_PATH, out).context("write health report")?;
+    fs::write(&project.health.report_path, out).context("write health report")?;
     Ok(())
 }
 

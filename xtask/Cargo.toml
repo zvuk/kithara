@@ -5,6 +5,10 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 publish = false
+# `.cargo/config.toml` aliases `cargo xtask` to `cargo run --package xtask`, which
+# refuses to pick when the package carries several binaries. `src/bin/fake-tool.rs`
+# is the second one, so the entry point has to be named here.
+default-run = "xtask"
 
 [dependencies]
 kithara-devtools = { workspace = true }

@@ -2,7 +2,7 @@ use std::{env, fs, path::Path, process::Command, sync::LazyLock};
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
-use kithara_devtools::{Ctx, util::check_tool};
+use kithara_devtools::{Ctx, common::tools::ToolsConfig, util::check_tool};
 use regex::Regex;
 
 use crate::config::{KitharaExt, WasmConfig};
@@ -31,9 +31,10 @@ pub(crate) enum WasmCommand {
 
 pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
+    let tools = &ctx.config.tools;
     match cmd {
-        WasmCommand::Build { profile } => run_build(profile),
-        WasmCommand::SizeCheck { profile } => run_size_check(profile),
+        WasmCommand::Build { profile } => run_build(profile, tools),
+        WasmCommand::SizeCheck { profile } => run_size_check(profile, tools),
         WasmCommand::Postbuild { staging_dir } => run_postbuild(&staging_dir, &ext.wasm),
     }
 }
@@ -74,8 +75,13 @@ fn check_rust_component_nightly(component: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_build(profile: crate::BuildProfile) -> Result<()> {
-    check_tool("trunk", &["--version"], "cargo install trunk")?;
+fn run_build(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
+    let program = tools.program("trunk");
+    check_tool(
+        program,
+        &["--version"],
+        tools.install_hint("trunk", "cargo install trunk"),
+    )?;
     let toolchain = nightly_toolchain();
     check_tool(
         "rustup",
@@ -95,7 +101,7 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     let wasm_dir = root.join("crates/kithara-ffi");
 
     println!("==> Building kithara-ffi (wasm32)");
-    let mut cmd = Command::new("trunk");
+    let mut cmd = Command::new(program);
     cmd.args(["build", "--config", "Trunk.toml"]);
     if matches!(profile, crate::BuildProfile::Release) {
         cmd.arg("--release");
@@ -136,8 +142,8 @@ struct SlimConfig {
 /// and the crate declares it for every other one. Trunk already carries the
 /// right selection in `index.html`, so the check builds what ships and weighs
 /// that.
-fn run_size_check(profile: crate::BuildProfile) -> Result<()> {
-    run_build(profile)?;
+fn run_size_check(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
+    run_build(profile, tools)?;
 
     let metadata = MetadataCommand::new().exec().context("cargo metadata")?;
     let root = metadata.workspace_root.as_std_path();

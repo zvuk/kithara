@@ -19,6 +19,7 @@ use super::{
     semantic::{SemanticState, SemanticSummary},
     view::DiagramModel,
 };
+use crate::common::project::ArchitectureRenderBudgets;
 
 const SCHEMA_VERSION: u32 = 5;
 
@@ -73,6 +74,7 @@ struct PartitionPage<'a> {
 pub(crate) struct ArtifactRequest<'a> {
     pub(crate) filter: &'a ArchitectureFilter,
     pub(crate) metrics: &'a ArchitectureMetrics,
+    pub(crate) budgets: &'a ArchitectureRenderBudgets,
     pub(crate) model: &'a DiagramModel,
     pub(crate) diagrams: &'a DiagramSet,
     pub(crate) graph: &'a EvidenceGraph,
@@ -233,7 +235,7 @@ fn page_document(request: &ArtifactRequest<'_>, page: &DiagramPage) -> String {
         .contours
         .get(&page.path)
         .map_or_else(String::new, |metrics| report::render_metrics(metrics));
-    let analysis = report::render(&page.model);
+    let analysis = report::render(&page.model, request.budgets);
     format!(
         "# {}\n\n{}\n\n```mermaid\n{}```\n\n{}{}{}",
         page.label, navigation, page.mermaid, metrics, analysis, children
@@ -241,7 +243,7 @@ fn page_document(request: &ArtifactRequest<'_>, page: &DiagramPage) -> String {
 }
 
 fn architecture_document(request: &ArtifactRequest<'_>) -> String {
-    let analysis = report::render(request.model);
+    let analysis = report::render(request.model, request.budgets);
     let metrics = report::render_metrics(request.metrics);
     let evidence = evidence_summary(request.semantic, request.runtime);
     format!(

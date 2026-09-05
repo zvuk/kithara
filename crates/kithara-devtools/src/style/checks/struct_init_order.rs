@@ -57,7 +57,7 @@ impl Check for StructInitOrder {
                 if rw.is_empty() {
                     break;
                 }
-                if pass == MAX_FIX_PASSES {
+                if pass == cfg.max_fix_passes {
                     skipped.insert(format!("{rel}: nested reorder did not converge"));
                     break;
                 }
@@ -127,8 +127,6 @@ impl<'ast> Visit<'ast> for FixVisitor<'_, '_> {
         visit::visit_expr_struct(self, e);
     }
 }
-
-const MAX_FIX_PASSES: usize = 8;
 
 /// Reorder one `Foo { ... }` literal in place. Returns `Ok(true)` when a
 /// reorder was staged, `Ok(false)` when the literal was already ordered or
@@ -410,6 +408,7 @@ mod fix_tests {
     fn default_cfg() -> StructInitOrderConfig {
         StructInitOrderConfig {
             shorthand_first: true,
+            ..StructInitOrderConfig::default()
         }
     }
 
@@ -646,6 +645,7 @@ mod detect_tests {
     fn default_cfg() -> StructInitOrderConfig {
         StructInitOrderConfig {
             shorthand_first: true,
+            ..StructInitOrderConfig::default()
         }
     }
 

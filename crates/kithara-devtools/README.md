@@ -51,7 +51,9 @@ Everything project-specific comes from `.config/xtask.toml`, parsed once into
 the context. The file is optional: a project with none gets documented code
 defaults. A project puts its own sections under `[ext.*]`, which the core passes
 through untouched, and registers only its own heavyweight commands as deep
-stages. Quality Lab intentionally keeps a separate, **required**
+stages. External programs are addressed by role under `[tools.<role>]`, so a
+project that installs them elsewhere sets a path instead of patching the core.
+Quality Lab intentionally keeps a separate, **required**
 `.config/quality-lab.toml` so heavyweight analyzers never reach the fast lint
 path. The ownership rules, the schema's strictness, and what each section is
 allowed to declare are in [`CONTEXT.md`](CONTEXT.md).

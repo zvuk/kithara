@@ -69,13 +69,13 @@ pub(super) fn collect(
             &mut output,
         )?;
     }
-    let health = root.join("target/health-report.md");
+    let health = root.join(&ctx.config.health.report_path);
     let current_health = stages.iter().any(|stage| {
         stage.name == "health"
             && stage
                 .evidence_artifacts
                 .iter()
-                .any(|artifact| artifact == "target/health-report.md")
+                .any(|artifact| artifact == &ctx.config.health.report_path)
     });
     if current_health {
         output.findings.extend(health_findings(&health, scope)?);

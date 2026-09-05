@@ -125,7 +125,7 @@ fn remove_secret_environment(command: &mut Command) {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, time::Duration};
+    use std::{env, ffi::OsStr, fs, io, thread, time::Duration};
 
     use tempfile::tempdir;
 
@@ -134,7 +134,7 @@ mod tests {
     /// Budget for the tests whose subject is not the budget.
     ///
     /// [`terminates_timed_out_process`] owns the timeout contract and proves it
-    /// against a script that never finishes on its own. Everywhere else a
+    /// against a child that never finishes on its own. Everywhere else a
     /// reachable budget can only decide the outcome by firing, and a killed
     /// child reports no exit code — so a busy host would quietly substitute
     /// "the machine was slow" for the exit-status mapping under test.
@@ -172,68 +172,88 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    const CHILD_ENV: &str = "DEVTOOLS_PROCESS_CHILD";
+    const CHILD_EMIT: &str = "emit";
+    const CHILD_SLEEP: &str = "sleep";
+    const CHILD_EXIT_CODE: i32 = 3;
+    const STDOUT_MARKER: &str = "devtools-process-stdout-marker";
+    const STDERR_MARKER: &str = "devtools-process-stderr-marker";
+
     #[test]
     fn captures_output_and_exit_status() {
-        use std::os::unix::fs::PermissionsExt;
-
         let temp = tempdir().expect("tempdir");
-        let script = temp.path().join("fake-tool");
-        fs::write(
-            &script,
-            "#!/bin/sh\nprintf 'native report\\n'\nprintf 'diagnostic\\n' >&2\nexit 3\n",
-        )
-        .expect("script");
-        let mut permissions = fs::metadata(&script).expect("metadata").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script, permissions).expect("permissions");
         let stdout = temp.path().join("stdout.log");
         let stderr = temp.path().join("stderr.log");
-        let args = Vec::new();
+        let executable = env::current_exe().expect("current test executable");
+        let args = crate::common::child_test_args(module_path!(), "emit_child_streams");
 
-        let outcome = run_process(&ProcessRequest {
-            program: script.to_str().expect("UTF-8 path"),
-            args: &args,
-            cwd: temp.path(),
-            stdout_path: &stdout,
-            stderr_path: &stderr,
-            timeout: NOT_UNDER_TEST,
-        })
+        let outcome = run_process_with_env(
+            &ProcessRequest {
+                program: executable.to_str().expect("UTF-8 path"),
+                args: &args,
+                cwd: temp.path(),
+                stdout_path: &stdout,
+                stderr_path: &stderr,
+                timeout: NOT_UNDER_TEST,
+            },
+            &[(CHILD_ENV, OsStr::new(CHILD_EMIT))],
+        )
         .expect("process");
 
-        assert_eq!(outcome.status.code(), Some(3));
-        assert_eq!(
-            fs::read_to_string(stdout).expect("stdout"),
-            "native report\n"
+        let out = fs::read_to_string(&stdout).expect("stdout");
+        let err = fs::read_to_string(&stderr).expect("stderr");
+        assert_eq!(outcome.status.code(), Some(CHILD_EXIT_CODE));
+        assert!(out.contains(STDOUT_MARKER), "stdout file: {out}");
+        assert!(
+            !out.contains(STDERR_MARKER),
+            "stderr leaked into stdout: {out}"
         );
-        assert_eq!(fs::read_to_string(stderr).expect("stderr"), "diagnostic\n");
+        assert!(err.contains(STDERR_MARKER), "stderr file: {err}");
+        assert!(
+            !err.contains(STDOUT_MARKER),
+            "stdout leaked into stderr: {err}"
+        );
         assert!(!outcome.timed_out);
     }
 
-    #[cfg(unix)]
     #[test]
     fn terminates_timed_out_process() {
-        use std::os::unix::fs::PermissionsExt;
-
         let temp = tempdir().expect("tempdir");
-        let script = temp.path().join("slow-tool");
-        fs::write(&script, "#!/bin/sh\nsleep 5\n").expect("script");
-        let mut permissions = fs::metadata(&script).expect("metadata").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script, permissions).expect("permissions");
-        let args = Vec::new();
+        let executable = env::current_exe().expect("current test executable");
+        let args = crate::common::child_test_args(module_path!(), "sleep_past_any_budget");
 
-        let outcome = run_process(&ProcessRequest {
-            program: script.to_str().expect("UTF-8 path"),
-            args: &args,
-            cwd: temp.path(),
-            stdout_path: &temp.path().join("stdout.log"),
-            stderr_path: &temp.path().join("stderr.log"),
-            timeout: Duration::from_millis(30),
-        })
+        let outcome = run_process_with_env(
+            &ProcessRequest {
+                program: executable.to_str().expect("UTF-8 path"),
+                args: &args,
+                cwd: temp.path(),
+                stdout_path: &temp.path().join("stdout.log"),
+                stderr_path: &temp.path().join("stderr.log"),
+                timeout: Duration::from_millis(30),
+            },
+            &[(CHILD_ENV, OsStr::new(CHILD_SLEEP))],
+        )
         .expect("process");
 
         assert!(outcome.timed_out);
         assert!(outcome.duration < Duration::from_secs(2));
+    }
+
+    #[test]
+    #[ignore = "subprocess entrypoint"]
+    fn emit_child_streams() {
+        assert_eq!(env::var(CHILD_ENV).as_deref(), Ok(CHILD_EMIT));
+        println!("{STDOUT_MARKER}");
+        eprintln!("{STDERR_MARKER}");
+        io::Write::flush(&mut io::stdout()).expect("flush stdout");
+        io::Write::flush(&mut io::stderr()).expect("flush stderr");
+        std::process::exit(CHILD_EXIT_CODE);
+    }
+
+    #[test]
+    #[ignore = "subprocess entrypoint"]
+    fn sleep_past_any_budget() {
+        assert_eq!(env::var(CHILD_ENV).as_deref(), Ok(CHILD_SLEEP));
+        thread::sleep(Duration::from_secs(5));
     }
 }

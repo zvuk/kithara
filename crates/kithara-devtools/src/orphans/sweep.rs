@@ -19,7 +19,6 @@ struct Consts;
 impl Consts {
     const INSTALL_HINT: &'static str = "cargo install cargo-modules";
     const MARKER: &'static str = "orphaned module `";
-    const MAX_PARALLELISM: usize = 4;
     /// A cgroup v2 job container reports its own cap here; a machine without
     /// one has no such file and is bounded by its cores alone.
     const MEMORY_MAX: &'static str = "/sys/fs/cgroup/memory.max";
@@ -92,10 +91,13 @@ struct Merged {
 }
 
 pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
+    let program: Arc<str> = Arc::from(ctx.config.tools.program("cargo-modules"));
     check_tool(
-        "cargo-modules",
+        &program,
         &["modules", "--version"],
-        Consts::INSTALL_HINT,
+        ctx.config
+            .tools
+            .install_hint("cargo-modules", Consts::INSTALL_HINT),
     )?;
 
     if args.packages.is_empty() && args.audit_mode {
@@ -127,7 +129,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
 
     let cpus = thread::available_parallelism().map_or(1, NonZero::get);
     let memory = memory_limit();
-    let parallelism = workers(cpus, memory);
+    let parallelism = workers(cpus, memory, ctx.config.orphans.max_parallelism);
     let cap = memory.map_or_else(
         || "no memory cap".to_owned(),
         |bytes| format!("{} MiB memory cap", bytes / (1024 * 1024)),
@@ -146,6 +148,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
         let queue = Arc::clone(&queue);
         let reports = Arc::clone(&reports);
         let root = Arc::clone(&root);
+        let program = Arc::clone(&program);
         handles.push(thread::spawn(move || {
             loop {
                 let job = {
@@ -153,7 +156,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
                     queue.pop()
                 };
                 let Some(job) = job else { break };
-                let report = examine(&job, &root);
+                let report = examine(&job, &root, &program);
                 reports
                     .lock()
                     .expect("BUG: orphans reports mutex poisoned")
@@ -177,18 +180,18 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
 /// How many runs the job has room for. A fixed count answers to the machine
 /// the sweep was written on, and a CI container holds fewer rust-analyzer
 /// databases than that: the kernel kills the job before it reports anything.
-fn workers(cpus: usize, memory: Option<u64>) -> usize {
-    let by_memory = memory.map_or(Consts::MAX_PARALLELISM, |bytes| {
-        usize::try_from(bytes / Consts::WORKER_MEMORY).unwrap_or(Consts::MAX_PARALLELISM)
+fn workers(cpus: usize, memory: Option<u64>, max_parallelism: usize) -> usize {
+    let by_memory = memory.map_or(max_parallelism, |bytes| {
+        usize::try_from(bytes / Consts::WORKER_MEMORY).unwrap_or(max_parallelism)
     });
-    cpus.min(by_memory).clamp(1, Consts::MAX_PARALLELISM)
+    cpus.min(by_memory).clamp(1, max_parallelism)
 }
 
 /// What to report when a run fails. A tool that explained itself is quoted as
 /// it stands; one that ended without a word is named by how it ended.
-fn failure(status: &str, text: &str) -> String {
+fn failure(program: &str, status: &str, text: &str) -> String {
     if text.trim().is_empty() {
-        return format!("cargo modules ended with {status} and produced no output");
+        return format!("{program} ended with {status} and produced no output");
     }
     text.to_owned()
 }
@@ -291,15 +294,15 @@ fn verdict(reports: &BTreeMap<String, Merged>, root: &Path, deny: bool) -> Resul
 
 /// Asks the tool, then asks the source. A module the tool cannot resolve in
 /// this configuration is only an orphan when nothing declares it.
-fn examine(job: &Job, root: &Path) -> Report {
-    let output = Command::new("cargo")
+fn examine(job: &Job, root: &Path, program: &str) -> Report {
+    let output = Command::new(program)
         .args(["modules", "orphans", "--cfg-test"])
         .args(&job.selector)
         .args(["--package", &job.package])
         .output();
     let output = match output {
         Ok(output) => output,
-        Err(err) => return Report::failed(job, format!("cargo modules did not start: {err}")),
+        Err(err) => return Report::failed(job, format!("{program} did not start: {err}")),
     };
     let text = format!(
         "{}{}",
@@ -308,7 +311,7 @@ fn examine(job: &Job, root: &Path) -> Report {
     );
     let found = findings(&text, root);
     if found.is_empty() && !output.status.success() {
-        return Report::failed(job, failure(&output.status.to_string(), &text));
+        return Report::failed(job, failure(program, &output.status.to_string(), &text));
     }
     let declared = match declared_files(&job.src) {
         Ok(declared) => declared,
@@ -426,6 +429,7 @@ fn is_library(target: &cargo_metadata::Target) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::project::ProjectConfig;
 
     fn parse(line: &str) -> Option<Finding> {
         finding(line, Path::new("/workspace"))
@@ -490,13 +494,27 @@ mod tests {
     /// job that ran out of room.
     #[test]
     fn a_run_that_said_nothing_reports_how_it_ended() {
-        assert!(failure("signal: 9 (SIGKILL)", "").contains("signal: 9 (SIGKILL)"));
+        assert!(
+            failure("cargo-modules", "signal: 9 (SIGKILL)", "").contains("signal: 9 (SIGKILL)")
+        );
+    }
+
+    /// The program is configurable, so a message naming `cargo-modules` while
+    /// something else ran would send the reader to a binary that never started.
+    /// Seeded off the role name, which a message that ignored its argument
+    /// could still print.
+    #[test]
+    fn a_run_that_said_nothing_names_the_program_that_ran() {
+        assert!(
+            failure("/opt/pinned/bin/cargo-modules", "exit status: 1", "")
+                .contains("/opt/pinned/bin/cargo-modules")
+        );
     }
 
     #[test]
     fn a_run_that_explained_itself_keeps_its_own_words() {
         assert_eq!(
-            failure("exit status: 1", "error: no such package"),
+            failure("cargo-modules", "exit status: 1", "error: no such package"),
             "error: no such package"
         );
     }
@@ -505,23 +523,45 @@ mod tests {
     /// that holds three apiece is what the kernel killed the sweep for.
     #[test]
     fn a_capped_container_runs_what_its_memory_holds() {
-        assert_eq!(workers(3, Some(8 * GIB)), 2);
+        assert_eq!(
+            workers(
+                3,
+                Some(8 * GIB),
+                ProjectConfig::default().orphans.max_parallelism
+            ),
+            2
+        );
     }
 
     #[test]
     fn a_machine_without_a_cap_runs_the_maximum() {
-        assert_eq!(workers(16, None), Consts::MAX_PARALLELISM);
+        let max_parallelism = ProjectConfig::default().orphans.max_parallelism;
+        assert_eq!(workers(16, None, max_parallelism), max_parallelism);
     }
 
     /// A cap too small for even one run still has to sweep, one at a time.
     #[test]
     fn a_cap_below_one_run_still_runs_one() {
-        assert_eq!(workers(3, Some(GIB)), 1);
+        assert_eq!(
+            workers(
+                3,
+                Some(GIB),
+                ProjectConfig::default().orphans.max_parallelism
+            ),
+            1
+        );
     }
 
     #[test]
     fn fewer_cores_than_memory_allows_run_one_per_core() {
-        assert_eq!(workers(2, Some(64 * GIB)), 2);
+        assert_eq!(
+            workers(
+                2,
+                Some(64 * GIB),
+                ProjectConfig::default().orphans.max_parallelism
+            ),
+            2
+        );
     }
 
     fn report(label: &str, orphans: Vec<Finding>, declared: Vec<PathBuf>) -> Report {

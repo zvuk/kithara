@@ -8,9 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use super::model::{AnalysisStatus, Assessment, ToolCoverage, Verdict};
-
-const MAX_RENDERED_FINDINGS: usize = 100;
-const MAX_ARCHITECTURE_HOTSPOTS: usize = 30;
+use crate::common::project::QualityRenderBudgets;
 
 pub(super) struct ArtifactSet {
     pub(super) document: PathBuf,
@@ -28,7 +26,11 @@ struct Manifest {
     schema_version: u32,
 }
 
-pub(super) fn write(assessment: &Assessment, root: &Path) -> Result<ArtifactSet> {
+pub(super) fn write(
+    assessment: &Assessment,
+    root: &Path,
+    budgets: &QualityRenderBudgets,
+) -> Result<ArtifactSet> {
     let output = &assessment.output_directory;
     fs::create_dir_all(output.join("stages"))
         .with_context(|| format!("create assessment stages: {}", output.display()))?;
@@ -55,7 +57,7 @@ pub(super) fn write(assessment: &Assessment, root: &Path) -> Result<ArtifactSet>
         },
     )?;
     let document = output.join("assessment.md");
-    fs::write(&document, markdown(assessment, root))
+    fs::write(&document, markdown(assessment, root, budgets))
         .with_context(|| format!("write assessment report: {}", document.display()))?;
     Ok(ArtifactSet { document })
 }
@@ -116,14 +118,14 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
         .with_context(|| format!("write quality assessment: {}", path.display()))
 }
 
-fn markdown(assessment: &Assessment, root: &Path) -> String {
+fn markdown(assessment: &Assessment, root: &Path, budgets: &QualityRenderBudgets) -> String {
     let mut output = header(assessment);
     output.push_str(verdict_guidance(assessment));
     append_comparison(&mut output, assessment);
-    append_signals(&mut output, assessment);
+    append_signals(&mut output, assessment, budgets);
     append_coverage(&mut output, assessment);
     append_stages(&mut output, assessment);
-    append_findings(&mut output, assessment);
+    append_findings(&mut output, assessment, budgets);
     output.push_str(&format!(
         "\n## Interpretation contract\n\n\
          The tool verdict is deterministic and based on repository evidence. An agent may add \
@@ -185,7 +187,7 @@ fn append_comparison(output: &mut String, assessment: &Assessment) {
     }
 }
 
-fn append_signals(output: &mut String, assessment: &Assessment) {
+fn append_signals(output: &mut String, assessment: &Assessment, budgets: &QualityRenderBudgets) {
     output.push_str(
         "## Diagnostic signals\n\n\
          | Scope | Tool | Metric | Value | State | Evidence |\n\
@@ -223,7 +225,8 @@ fn append_signals(output: &mut String, assessment: &Assessment) {
             .iter()
             .filter(|signal| signal.scope == assessment.scope.name)
             .count();
-        let rendered_limit = primary_count + MAX_ARCHITECTURE_HOTSPOTS;
+        let hotspots = budgets.architecture_hotspots;
+        let rendered_limit = primary_count + hotspots;
         signals.truncate(rendered_limit);
         for signal in signals {
             output.push_str(&format!(
@@ -239,7 +242,7 @@ fn append_signals(output: &mut String, assessment: &Assessment) {
         }
         output.push_str(&format!(
             "\nThe table keeps scope-level signals and the top \
-             {MAX_ARCHITECTURE_HOTSPOTS} architecture hotspots. All {} signals remain in \
+             {hotspots} architecture hotspots. All {} signals remain in \
              `assessment.json`.\n\n",
             assessment.signals.len()
         ));
@@ -286,7 +289,7 @@ fn append_stages(output: &mut String, assessment: &Assessment) {
     }
 }
 
-fn append_findings(output: &mut String, assessment: &Assessment) {
+fn append_findings(output: &mut String, assessment: &Assessment, budgets: &QualityRenderBudgets) {
     output.push_str(
         "\n## Prioritized findings\n\n\
          | Debt | Tool | Category | Location | Recommended action |\n\
@@ -302,7 +305,8 @@ fn append_findings(output: &mut String, assessment: &Assessment) {
                 .cmp(&left.debt_units)
                 .then_with(|| left.id.cmp(&right.id))
         });
-        for finding in findings.iter().take(MAX_RENDERED_FINDINGS) {
+        let rendered = budgets.findings;
+        for finding in findings.iter().take(rendered) {
             output.push_str(&format!(
                 "| {} | {} | {} | {} | {} |\n",
                 finding.debt_units,
@@ -312,9 +316,9 @@ fn append_findings(output: &mut String, assessment: &Assessment) {
                 escape(&finding.recommended_action),
             ));
         }
-        if findings.len() > MAX_RENDERED_FINDINGS {
+        if findings.len() > rendered {
             output.push_str(&format!(
-                "\nThe table shows the first {MAX_RENDERED_FINDINGS} of {} prioritized findings. \
+                "\nThe table shows the first {rendered} of {} prioritized findings. \
                  Every finding remains available in `assessment.json`; no evidence was removed \
                  from analysis.\n",
                 findings.len()

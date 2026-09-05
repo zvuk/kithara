@@ -60,20 +60,25 @@ impl RunnerManager<'_> {
             .with_context(|| format!("creating Docker build context {}", context.display()))?;
         let result = (|| {
             let mut command = self.process.command(self.config.host.brew_tool("docker"));
-            command.env("DOCKER_HOST", docker_host(&home)).args([
-                "buildx",
-                "build",
-                "--file",
-                path_text(dockerfile)?,
-                "--load",
-                "--platform",
-                "linux/arm64",
-                "--progress",
-                "plain",
-                "--provenance=false",
-                "--tag",
-                &self.config.pins.linux_image,
-            ]);
+            command
+                .env(
+                    "DOCKER_HOST",
+                    docker_host(&home, &self.config.host.colima_profile),
+                )
+                .args([
+                    "buildx",
+                    "build",
+                    "--file",
+                    path_text(dockerfile)?,
+                    "--load",
+                    "--platform",
+                    "linux/arm64",
+                    "--progress",
+                    "plain",
+                    "--provenance=false",
+                    "--tag",
+                    &self.config.pins.linux_image,
+                ]);
             for (name, value) in linux_build_args(&self.config.pins)? {
                 command.arg("--build-arg").arg(format!("{name}={value}"));
             }
@@ -147,7 +152,10 @@ impl RunnerManager<'_> {
         for check in checks {
             let mut command = self.process.command(self.config.host.brew_tool("docker"));
             command
-                .env("DOCKER_HOST", docker_host(&home))
+                .env(
+                    "DOCKER_HOST",
+                    docker_host(&home, &self.config.host.colima_profile),
+                )
                 .args(["run", "--rm", &self.config.pins.linux_image])
                 .args(&check);
             self.process
@@ -473,13 +481,18 @@ impl RunnerManager<'_> {
 
     pub(super) fn linux_image_digest(&self, home: &Path) -> Result<String> {
         let mut command = self.process.command(self.config.host.brew_tool("docker"));
-        command.env("DOCKER_HOST", docker_host(home)).args([
-            "image",
-            "inspect",
-            "--format",
-            "{{.Id}}",
-            &self.config.pins.linux_image,
-        ]);
+        command
+            .env(
+                "DOCKER_HOST",
+                docker_host(home, &self.config.host.colima_profile),
+            )
+            .args([
+                "image",
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                &self.config.pins.linux_image,
+            ]);
         let output = command
             .output()
             .context("starting Docker image inspection")?;

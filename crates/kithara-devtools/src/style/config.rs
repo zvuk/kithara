@@ -128,18 +128,29 @@ pub(crate) struct StructInitOrderConfig {
     /// fields (`Foo { z: expr }`).
     #[serde(default = "default_shorthand_first")]
     pub(crate) shorthand_first: bool,
+    /// Rewrite passes the fix makes over one file before it gives up.
+    /// Reordering a literal moves the literals nested inside it, so each pass
+    /// exposes the next nesting level and a file needs as many passes as it
+    /// has levels.
+    #[serde(default = "default_max_fix_passes")]
+    pub(crate) max_fix_passes: usize,
 }
 
 impl Default for StructInitOrderConfig {
     fn default() -> Self {
         Self {
             shorthand_first: default_shorthand_first(),
+            max_fix_passes: default_max_fix_passes(),
         }
     }
 }
 
 const fn default_shorthand_first() -> bool {
     true
+}
+
+const fn default_max_fix_passes() -> usize {
+    8
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,6 +167,12 @@ pub(crate) struct CommentHygieneConfig {
     /// `comment_hygiene` sub-check.
     #[serde(default = "default_exclude_paths")]
     pub(crate) exclude_paths: Vec<String>,
+    /// Annotations an author reached for instead of writing documentation. A
+    /// block carrying one is never promoted to `///`: publishing `WHY:` as
+    /// rendered docs would launder the note rather than answer it, so it stays
+    /// for a human.
+    #[serde(default = "default_prose_markers")]
+    pub(crate) prose_markers: Vec<String>,
     /// Density threshold in percent (0..=100): a fn body where the share
     /// of non-doc inline `//` lines strictly exceeds this is flagged.
     #[serde(default = "default_fn_density_threshold_pct")]
@@ -187,6 +204,7 @@ impl Default for CommentHygieneConfig {
             fn_density_min_body_lines: default_fn_density_min_body_lines(),
             allowed_inline_markers: default_allowed_inline_markers(),
             exclude_paths: default_exclude_paths(),
+            prose_markers: default_prose_markers(),
         }
     }
 }
@@ -216,6 +234,13 @@ fn default_allowed_inline_markers() -> Vec<String> {
 
 fn default_exclude_paths() -> Vec<String> {
     ["**/build.rs", "**/tests/**/fixtures/**"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
+fn default_prose_markers() -> Vec<String> {
+    ["WHY:", "NOTE:", "TODO:", "FIXME:", "XXX:", "HACK:"]
         .iter()
         .map(|s| (*s).to_string())
         .collect()
@@ -267,18 +292,27 @@ pub(crate) struct NonEnglishTextConfig {
     /// as configuration, not baked-in check constants.
     #[serde(default = "default_non_english_exclude_paths")]
     pub(crate) exclude_paths: Vec<String>,
+    /// Characters of the offending line quoted in the violation message before
+    /// it is elided.
+    #[serde(default = "default_excerpt_chars")]
+    pub(crate) excerpt_chars: usize,
 }
 
 impl Default for NonEnglishTextConfig {
     fn default() -> Self {
         Self {
             exclude_paths: default_non_english_exclude_paths(),
+            excerpt_chars: default_excerpt_chars(),
         }
     }
 }
 
 fn default_non_english_exclude_paths() -> Vec<String> {
     default_tracked_text_exclude_paths()
+}
+
+const fn default_excerpt_chars() -> usize {
+    120
 }
 
 /// The one shape every crate README follows.
@@ -384,4 +418,51 @@ where
     let text = fs::read_to_string(path)
         .with_context(|| format!("read style config: {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("parse style config: {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_moved_style_defaults_match_the_constants_they_replace() {
+        let thresholds = ThresholdsConfig::default();
+
+        assert_eq!(
+            thresholds.comment_hygiene.prose_markers,
+            ["WHY:", "NOTE:", "TODO:", "FIXME:", "XXX:", "HACK:"]
+        );
+        assert_eq!(thresholds.non_english_text.excerpt_chars, 120);
+        assert_eq!(thresholds.struct_init_order.max_fix_passes, 8);
+    }
+
+    /// The other half of the same trap. A present table is filled key by key
+    /// from the per-field defaults and never from the written `Default`, so a
+    /// project that sets one key of a check must keep the check's other
+    /// subjects.
+    #[test]
+    fn a_partly_configured_check_keeps_the_keys_it_left_alone() {
+        let thresholds: ThresholdsConfig = toml::from_str(
+            r#"
+[comment_hygiene]
+inline_max_lines = 5
+
+[non_english_text]
+exclude_paths = ["docs/local/"]
+
+[struct_init_order]
+shorthand_first = false
+"#,
+        )
+        .expect("a partial style document");
+
+        assert_eq!(thresholds.comment_hygiene.inline_max_lines, 5);
+        assert_eq!(
+            thresholds.comment_hygiene.prose_markers,
+            ["WHY:", "NOTE:", "TODO:", "FIXME:", "XXX:", "HACK:"]
+        );
+        assert_eq!(thresholds.non_english_text.excerpt_chars, 120);
+        assert!(!thresholds.struct_init_order.shorthand_first);
+        assert_eq!(thresholds.struct_init_order.max_fix_passes, 8);
+    }
 }

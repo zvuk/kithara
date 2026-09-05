@@ -12,8 +12,8 @@ use kithara_devtools::{Ctx, lease, lock::FileLock};
 use tracing::warn;
 
 use super::{
-    HOST_JOB_CONCURRENCY, LINUX_LINKER_ENV, SCCACHE_SLOT_CACHE_NAMESPACE,
-    SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache, config::CiConfig, run::CacheGroup,
+    LINUX_LINKER_ENV, SCCACHE_SLOT_CACHE_NAMESPACE, SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache,
+    config::CiConfig, run::CacheGroup,
 };
 
 pub(crate) const PROVISIONED_LINUX_IMAGE_ENV: &str = "KITHARA_CI_PROVISIONED_LINUX_IMAGE";
@@ -25,7 +25,7 @@ struct SccacheSlot {
 }
 
 impl SccacheSlot {
-    fn acquire_shared(shared_root: &Path) -> Result<Self> {
+    fn acquire_shared(shared_root: &Path, slots: usize) -> Result<Self> {
         let lock_root = shared_root.join(SCCACHE_SLOT_CONTROL_NAMESPACE);
         fs::create_dir_all(&lock_root).with_context(|| {
             format!(
@@ -33,7 +33,7 @@ impl SccacheSlot {
                 lock_root.display()
             )
         })?;
-        for index in 0..HOST_JOB_CONCURRENCY {
+        for index in 0..slots {
             let path = lock_root.join(format!("slot-{index}.lock"));
             let file = OpenOptions::new()
                 .create(true)
@@ -51,7 +51,7 @@ impl SccacheSlot {
                 }
             }
         }
-        bail!("all {HOST_JOB_CONCURRENCY} host sccache slots are already in use")
+        bail!("all {slots} host sccache slots are already in use")
     }
 
     const fn index(&self) -> usize {
@@ -101,16 +101,16 @@ fn parse_decimal_id(name: &str, value: &str) -> Result<u64> {
         .with_context(|| format!("{name} must be a decimal integer"))
 }
 
-fn disposable_slot(value: Option<&str>) -> Result<usize> {
+fn disposable_slot(value: Option<&str>, slots: usize) -> Result<usize> {
     let value = value.context("CI_CONCURRENT_ID must identify the disposable runner slot")?;
     if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        bail!("CI_CONCURRENT_ID must be a decimal slot in 0..{HOST_JOB_CONCURRENCY}");
+        bail!("CI_CONCURRENT_ID must be a decimal slot in 0..{slots}");
     }
     let slot = value
         .parse::<usize>()
         .context("CI_CONCURRENT_ID must fit in usize")?;
-    if slot >= HOST_JOB_CONCURRENCY {
-        bail!("CI_CONCURRENT_ID must be a decimal slot in 0..{HOST_JOB_CONCURRENCY}");
+    if slot >= slots {
+        bail!("CI_CONCURRENT_ID must be a decimal slot in 0..{slots}");
     }
     Ok(slot)
 }
@@ -212,14 +212,14 @@ impl PreparedSccache {
             CacheGroup::Linux => {
                 let concurrent_id = env::var("CI_CONCURRENT_ID")
                     .context("CI_CONCURRENT_ID must identify the disposable runner slot")?;
-                let slot = disposable_slot(Some(&concurrent_id))?;
+                let slot = disposable_slot(Some(&concurrent_id), config.host.job_concurrency)?;
                 Ok(Some(Self {
                     paths: SccachePaths::disposable(cache_root, slot, &cache_size),
                     _slot: None,
                 }))
             }
             CacheGroup::Macos | CacheGroup::Host => {
-                let slot = SccacheSlot::acquire_shared(shared_root)?;
+                let slot = SccacheSlot::acquire_shared(shared_root, config.host.job_concurrency)?;
                 let paths = SccachePaths::shared(cache_root, slot.index(), &cache_size);
                 Ok(Some(Self {
                     paths,
@@ -274,7 +274,7 @@ impl CiEnvironment {
         let target_scope = format!("{}-{platform}", trust.as_str());
         let cache_root = shared_root.join(trust.as_str()).join(&platform);
         let (target, target_lease) =
-            prepare_build_target(&project_root, &shared_root, &target_scope)?;
+            prepare_build_target(&project_root, &shared_root, &target_scope, config)?;
 
         ensure_room_for_a_job(config, &shared_root)?;
 
@@ -497,9 +497,10 @@ fn build_target_dir(
     target_is_linux: bool,
     gitlab: bool,
     concurrent_id: Option<&str>,
+    slots: usize,
 ) -> Result<PathBuf> {
     if target_is_linux && gitlab {
-        let slot = disposable_slot(concurrent_id)?;
+        let slot = disposable_slot(concurrent_id, slots)?;
         return Ok(shared_root
             .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
             .join(format!("{target_scope}-slot-{slot}")));
@@ -511,6 +512,7 @@ fn prepare_build_target(
     project_root: &Path,
     shared_root: &Path,
     target_scope: &str,
+    config: &CiConfig,
 ) -> Result<(PathBuf, Option<lease::Lease>)> {
     let concurrent_id = env::var("CI_CONCURRENT_ID").ok();
     let target = build_target_dir(
@@ -520,6 +522,7 @@ fn prepare_build_target(
         cfg!(target_os = "linux"),
         is_gitlab(),
         concurrent_id.as_deref(),
+        config.host.job_concurrency,
     )?;
     fs::create_dir_all(&target)
         .with_context(|| format!("creating CI build cache {}", target.display()))?;
@@ -699,21 +702,23 @@ mod tests {
 
     #[test]
     fn shared_shell_slots_are_exclusive_and_reusable() {
+        const SLOTS: usize = 2;
+
         let directory = tempfile::tempdir().unwrap();
 
-        let held: Vec<SccacheSlot> = (0..HOST_JOB_CONCURRENCY)
-            .map(|_| SccacheSlot::acquire_shared(directory.path()).unwrap())
+        let held: Vec<SccacheSlot> = (0..SLOTS)
+            .map(|_| SccacheSlot::acquire_shared(directory.path(), SLOTS).unwrap())
             .collect();
 
         for (expected, slot) in held.iter().enumerate() {
             assert_eq!(slot.index(), expected);
         }
-        assert!(SccacheSlot::acquire_shared(directory.path()).is_err());
+        assert!(SccacheSlot::acquire_shared(directory.path(), SLOTS).is_err());
         let mut held = held;
         let first = held.remove(0);
         drop(first);
         assert_eq!(
-            SccacheSlot::acquire_shared(directory.path())
+            SccacheSlot::acquire_shared(directory.path(), SLOTS)
                 .unwrap()
                 .index(),
             0
@@ -742,18 +747,22 @@ mod tests {
 
     #[test]
     fn disposable_slot_rejects_the_concurrency_boundary() {
-        assert!(disposable_slot(Some(&HOST_JOB_CONCURRENCY.to_string())).is_err());
-        assert!(disposable_slot(Some(&(HOST_JOB_CONCURRENCY - 1).to_string())).is_ok());
-        assert!(disposable_slot(None).is_err());
-        assert!(disposable_slot(Some("slot-1")).is_err());
+        const SLOTS: usize = 2;
+
+        assert!(disposable_slot(Some(&SLOTS.to_string()), SLOTS).is_err());
+        assert!(disposable_slot(Some(&(SLOTS - 1).to_string()), SLOTS).is_ok());
+        assert!(disposable_slot(None, SLOTS).is_err());
+        assert!(disposable_slot(Some("slot-1"), SLOTS).is_err());
     }
 
     #[test]
     fn disposable_slots_use_concurrent_id_for_disk_only() {
+        const SLOTS: usize = 2;
+
         let root = Path::new("/cache/review/linux-aarch64");
 
-        assert_eq!(disposable_slot(Some("0")).unwrap(), 0);
-        assert_eq!(disposable_slot(Some("1")).unwrap(), 1);
+        assert_eq!(disposable_slot(Some("0"), SLOTS).unwrap(), 0);
+        assert_eq!(disposable_slot(Some("1"), SLOTS).unwrap(), 1);
         let paths = SccachePaths::disposable(root, 1, "25G");
         assert_eq!(paths.directory, root.join("sccache-slots/slot-1"));
         assert_eq!(paths.server_uds, None);
@@ -1046,6 +1055,7 @@ mod tests {
             true,
             true,
             Some("1"),
+            3,
         )
         .unwrap();
 
@@ -1064,6 +1074,7 @@ mod tests {
             false,
             true,
             Some("1"),
+            3,
         )
         .unwrap();
 

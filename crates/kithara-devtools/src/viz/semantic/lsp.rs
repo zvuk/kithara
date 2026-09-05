@@ -206,8 +206,12 @@ impl Client {
         Ok(())
     }
 
-    pub(super) fn start(root: &Path, timeout: Duration) -> Result<Self, ClientError> {
-        let mut child = Command::new("rust-analyzer")
+    pub(super) fn start(
+        program: &str,
+        root: &Path,
+        timeout: Duration,
+    ) -> Result<Self, ClientError> {
+        let mut child = Command::new(program)
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -215,7 +219,7 @@ impl Client {
             .spawn()
             .map_err(|error| {
                 if error.kind() == std::io::ErrorKind::NotFound {
-                    ClientError::Unavailable("rust-analyzer is not available on PATH".to_string())
+                    ClientError::Unavailable(format!("{program} is not available on PATH"))
                 } else {
                     ClientError::Io(error)
                 }

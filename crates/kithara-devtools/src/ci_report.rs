@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
@@ -8,7 +9,10 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::Value;
 
-use crate::{Ctx, common::project::CiReportConfig};
+use crate::{
+    Ctx,
+    common::project::{HealthConfig, ProjectConfig},
+};
 
 /// Names the producing tools own. They are contracts with those tools rather
 /// than policy, so they stay here while how much of each to carry lives in
@@ -19,7 +23,6 @@ impl Consts {
     const ASSESSMENT_MANIFEST: &'static str = "manifest.json";
     const CRAP_DIRECTORY: &'static str = "cargo-crap";
     const CRAP_REPORT: &'static str = "report.md";
-    const HEALTH_REPORT: &'static str = "health-report.md";
     const METRICS: &'static str = "metrics.json";
     const SIMILARITY_ARTIFACT: &'static str = "similarity-report";
     const SIMILARITY_REPORT: &'static str = "report.md";
@@ -35,7 +38,7 @@ pub struct CiReportArgs {
 }
 
 pub(crate) fn run(args: &CiReportArgs, ctx: &Ctx) -> Result<()> {
-    let report = render(&args.artifacts, &ctx.config.ci_report)?;
+    let report = render(&args.artifacts, &ctx.config)?;
     let target = ctx.root.join("target");
     fs::create_dir_all(&target).with_context(|| format!("create {}", target.display()))?;
     let output = target.join("consolidated-quality-report.md");
@@ -51,14 +54,25 @@ pub(crate) fn run(args: &CiReportArgs, ctx: &Ctx) -> Result<()> {
 /// by nobody - the collector waited for three of the five jobs and rendered
 /// what those three left. A measurement taken, uploaded and never opened is
 /// the same cost as one that was never taken.
-fn render(artifacts: &Path, config: &CiReportConfig) -> Result<String> {
+fn render(artifacts: &Path, config: &ProjectConfig) -> Result<String> {
+    let budgets = &config.ci_report;
     let mut out = String::new();
     out.push_str(&assessment(artifacts)?);
-    out.push_str(&health(artifacts)?);
-    out.push_str(&coverage_risk(artifacts, config.crap_rows)?);
-    out.push_str(&architecture(artifacts, config.top_contours)?);
-    out.push_str(&duplication(artifacts, config.similarity_rows)?);
+    out.push_str(&health(artifacts, health_report_name(&config.health)?)?);
+    out.push_str(&coverage_risk(artifacts, budgets.crap_rows)?);
+    out.push_str(&architecture(artifacts, budgets.top_contours)?);
+    out.push_str(&duplication(artifacts, budgets.similarity_rows)?);
     Ok(out)
+}
+
+/// The health report is this workspace's own artifact rather than a foreign
+/// tool's, so the file to look for is the tail of the path the health command
+/// was configured to write, not a second spelling of it.
+fn health_report_name(config: &HealthConfig) -> Result<&str> {
+    Path::new(&config.report_path)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .with_context(|| format!("health.report_path names no file: {}", config.report_path))
 }
 
 /// The assessment's own headline, read from the manifest it publishes for
@@ -119,8 +133,8 @@ fn duplication(artifacts: &Path, rows: usize) -> Result<String> {
     Ok(out)
 }
 
-fn health(artifacts: &Path) -> Result<String> {
-    let Some(report) = find(artifacts, &|path| named(path, Consts::HEALTH_REPORT))? else {
+fn health(artifacts: &Path, report_name: &str) -> Result<String> {
+    let Some(report) = find(artifacts, &|path| named(path, report_name))? else {
         return Ok(missing("Workspace health", "health-report"));
     };
     let text = read(&report)?;
@@ -281,7 +295,6 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::common::project::ProjectConfig;
 
     fn write(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
@@ -317,7 +330,7 @@ mod tests {
             "# health report\n\n## Summary\n\n| 1 | orphans | FAIL |\n\n## Stage details\n\nlog tail\n",
         );
 
-        let report = health(temp.path()).expect("health section");
+        let report = health(temp.path(), "health-report.md").expect("health section");
 
         assert!(!report.contains("log tail"));
     }
@@ -330,7 +343,7 @@ mod tests {
             "# musicbox health report\n\n## Summary\n\n| 1 | orphans | FAIL |\n\n## Stage details\n\nlog tail\n",
         );
 
-        let report = health(temp.path()).expect("health section");
+        let report = health(temp.path(), "health-report.md").expect("health section");
 
         assert!(report.contains("## Workspace health"));
         assert!(report.contains("| 1 | orphans | FAIL |"));
@@ -344,7 +357,7 @@ mod tests {
             "# unrelated report\n",
         );
 
-        let error = health(temp.path()).expect_err("unexpected title");
+        let error = health(temp.path(), "health-report.md").expect_err("unexpected title");
 
         assert!(error.to_string().contains("unexpected title"), "{error:#}");
     }
@@ -426,11 +439,32 @@ mod tests {
         assert!(report.contains("- Architecture complexity index: 15.6"));
     }
 
+    /// The health command writes where `health.report_path` says, and this
+    /// report goes looking for what it wrote. Reading the name from the default
+    /// cannot tell the two apart, so this moves the key and expects the search
+    /// to follow it.
+    #[test]
+    fn the_health_section_looks_for_the_configured_report_name() {
+        let temp = tempdir().expect("tempdir");
+        let mut config = ProjectConfig::default();
+        config.health.report_path = "target/renamed-health.md".to_owned();
+        write(
+            &temp.path().join("health-report/renamed-health.md"),
+            "# health report\n\n| 1 | orphans | FAIL |\n",
+        );
+
+        let name = health_report_name(&config.health).expect("a configured report name");
+        let report = health(temp.path(), name).expect("health section");
+
+        assert_eq!(name, "renamed-health.md");
+        assert!(report.contains("| 1 | orphans | FAIL |"), "{report}");
+    }
+
     #[test]
     fn a_missing_artifact_is_stated_rather_than_dropped() {
         let temp = tempdir().expect("tempdir");
 
-        let report = render(temp.path(), &CiReportConfig::default()).expect("report");
+        let report = render(temp.path(), &ProjectConfig::default()).expect("report");
 
         assert!(report.contains("No `health-report` artifact in this run."));
     }
@@ -439,17 +473,17 @@ mod tests {
     /// that inlines nothing still looks like a report.
     #[test]
     fn the_default_configuration_carries_crap_rows() {
-        assert!(CiReportConfig::default().crap_rows > 0);
+        assert!(ProjectConfig::default().ci_report.crap_rows > 0);
     }
 
     #[test]
     fn the_default_configuration_carries_contours() {
-        assert!(CiReportConfig::default().top_contours > 0);
+        assert!(ProjectConfig::default().ci_report.top_contours > 0);
     }
 
     #[test]
     fn the_default_configuration_carries_similarity_rows() {
-        assert!(CiReportConfig::default().similarity_rows > 0);
+        assert!(ProjectConfig::default().ci_report.similarity_rows > 0);
     }
 
     #[test]

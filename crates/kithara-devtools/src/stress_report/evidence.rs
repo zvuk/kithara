@@ -11,8 +11,11 @@ use std::{
 use regex::Regex;
 
 use self::attempt::{AttemptKey, AttemptOutcome, attempt_outcomes};
-use super::{MAX_FAILURE_ROWS, StressReportArgs, markdown_cell, test_id};
-use crate::{common::project::StressEvidenceConfig, junit::CaseTiming};
+use super::{StressReportArgs, markdown_cell, test_id};
+use crate::{
+    common::project::{StressEvidenceConfig, StressRenderBudgets},
+    junit::CaseTiming,
+};
 
 mod attempt;
 mod divergence;
@@ -25,8 +28,6 @@ mod pressure;
 /// Payload lines kept after a panic header: the assertion's message and, for
 /// `assert_eq!`, its `left` and `right`.
 const PANIC_DETAIL_LINES: usize = 4;
-const MAX_SIGNATURE_ROWS: usize = 100;
-pub(super) const MAX_SIGNATURE_EXAMPLES: usize = 5;
 
 #[derive(Debug, Default)]
 struct SignatureCluster {
@@ -72,6 +73,7 @@ pub(super) fn append_correlated_evidence(
     run_id: Option<&str>,
     args: &StressReportArgs,
 ) -> bool {
+    let budgets = &args.render;
     let failed = cases.iter().filter(|case| case.failed).collect::<Vec<_>>();
     let expected_envelopes = failed
         .iter()
@@ -82,9 +84,9 @@ pub(super) fn append_correlated_evidence(
     let dossier_keys = failed
         .iter()
         .filter_map(|case| attempt_key(case))
-        .take(MAX_FAILURE_ROWS)
+        .take(budgets.failure_rows)
         .collect::<BTreeSet<_>>();
-    let mut overlaps = overlap::for_targets(cases, &dossier_keys);
+    let mut overlaps = overlap::for_targets(cases, &dossier_keys, budgets);
     let mut dossiers = failed
         .iter()
         .filter_map(|case| {
@@ -94,10 +96,11 @@ pub(super) fn append_correlated_evidence(
             }
             let dossier = AttemptDossier {
                 display: attempt_id(case, run_id),
-                test: test_id(case),
-                symptom: failure_signature(case, &args.evidence),
-                backtrace: backtrace_signature(&case.output, &args.evidence).unwrap_or_default(),
-                wait_graph: wait_signatures(&case.output, &args.evidence)
+                test: test_id(case, budgets),
+                symptom: failure_signature(case, &args.evidence, budgets),
+                backtrace: backtrace_signature(&case.output, &args.evidence, budgets)
+                    .unwrap_or_default(),
+                wait_graph: wait_signatures(&case.output, &args.evidence, budgets)
                     .into_iter()
                     .collect(),
                 co_runners: overlaps.remove(&key).unwrap_or_default(),
@@ -111,36 +114,14 @@ pub(super) fn append_correlated_evidence(
     let mut waits = BTreeMap::new();
     let mut complete = true;
     for case in &failed {
-        let attempt = attempt_id(case, run_id);
-        let test = test_id(case);
-        add_signature(
+        add_case_signatures(
+            case,
+            run_id,
+            args,
             &mut symptoms,
-            failure_signature(case, &args.evidence),
-            &attempt,
-            &test,
-            AttemptOutcome::Failed,
-            None,
+            &mut backtraces,
+            &mut waits,
         );
-        if let Some(signature) = backtrace_signature(&case.output, &args.evidence) {
-            add_signature(
-                &mut backtraces,
-                signature,
-                &attempt,
-                &test,
-                AttemptOutcome::Failed,
-                None,
-            );
-        }
-        for signature in wait_signatures(&case.output, &args.evidence) {
-            add_signature(
-                &mut waits,
-                signature,
-                &attempt,
-                &test,
-                AttemptOutcome::Failed,
-                None,
-            );
-        }
     }
 
     render_clusters(
@@ -148,14 +129,16 @@ pub(super) fn append_correlated_evidence(
         "Failure symptom clusters",
         &symptoms,
         "The terminal panic or timeout. This locates the observed endpoint, not necessarily its cause.",
+        budgets,
     );
     render_clusters(
         out,
         "Backtrace overlays",
         &backtraces,
         "The first project frames shared by failing attempts. Wrapper and address noise is removed.",
+        budgets,
     );
-    complete &= divergence::append(out, cases);
+    complete &= divergence::append(out, cases, budgets);
     if let Some(path) = &args.line_log {
         complete &= line::append(
             out,
@@ -164,6 +147,7 @@ pub(super) fn append_correlated_evidence(
             &outcomes,
             run_id,
             &mut dossiers,
+            budgets,
         );
     }
     let mut flight = envelope::FlightClusters::default();
@@ -171,7 +155,13 @@ pub(super) fn append_correlated_evidence(
         complete &= envelope::append(
             out,
             path,
-            envelope::Input::new(&outcomes, &expected_envelopes, run_id, &args.evidence),
+            envelope::Input::new(
+                &outcomes,
+                &expected_envelopes,
+                run_id,
+                &args.evidence,
+                budgets,
+            ),
             &mut waits,
             &mut flight,
             &mut dossiers,
@@ -189,26 +179,75 @@ pub(super) fn append_correlated_evidence(
         "Wait-graph signatures",
         &waits,
         "Repeated holders, waiters, or quiescence pins are causal candidates. Task IDs and timing counters are removed. An optional backtrace belongs to the snapshot caller, not necessarily to a holder or waiter.",
+        budgets,
     );
     render_clusters(
         out,
         "Flight probe signatures",
         &flight.probes,
         "Probe firings recorded in the in-memory flight ring at dump time. Only failing attempts write dumps, so the failed column counts how many of them carried the line; numeric field values are normalized. A `waiting branch` line names the step that kept ticking the hang watchdog.",
+        budgets,
     );
     render_clusters(
         out,
         "Flight event signatures",
         &flight.events,
         "DEBUG events from the flight ring at dump time — the state transitions immediately preceding the failure, independent of the stdout filter.",
+        budgets,
     );
     if let Some(path) = &args.pressure_log {
         let (points, pressure_complete) = pressure::append(out, path);
         complete &= pressure_complete;
         pressure::correlate(&mut dossiers, cases, &points);
     }
-    render_attempt_dossiers(out, &dossiers, failed.len());
+    render_attempt_dossiers(out, &dossiers, failed.len(), budgets);
     complete
+}
+
+/// Index one failed attempt under its symptom, its backtrace overlay, and
+/// every wait-graph signature its output carries.
+fn add_case_signatures(
+    case: &CaseTiming,
+    run_id: Option<&str>,
+    args: &StressReportArgs,
+    symptoms: &mut BTreeMap<String, SignatureCluster>,
+    backtraces: &mut BTreeMap<String, SignatureCluster>,
+    waits: &mut BTreeMap<String, SignatureCluster>,
+) {
+    let budgets = &args.render;
+    let attempt = attempt_id(case, run_id);
+    let test = test_id(case, budgets);
+    add_signature(
+        symptoms,
+        failure_signature(case, &args.evidence, budgets),
+        &attempt,
+        &test,
+        AttemptOutcome::Failed,
+        None,
+        budgets,
+    );
+    if let Some(signature) = backtrace_signature(&case.output, &args.evidence, budgets) {
+        add_signature(
+            backtraces,
+            signature,
+            &attempt,
+            &test,
+            AttemptOutcome::Failed,
+            None,
+            budgets,
+        );
+    }
+    for signature in wait_signatures(&case.output, &args.evidence, budgets) {
+        add_signature(
+            waits,
+            signature,
+            &attempt,
+            &test,
+            AttemptOutcome::Failed,
+            None,
+            budgets,
+        );
+    }
 }
 
 fn attempt_key(case: &CaseTiming) -> Option<AttemptKey> {
@@ -226,6 +265,7 @@ fn add_signature(
     test: &str,
     outcome: AttemptOutcome,
     detail: Option<&str>,
+    budgets: &StressRenderBudgets,
 ) {
     let cluster = clusters.entry(signature).or_default();
     match outcome {
@@ -238,9 +278,9 @@ fn add_signature(
         cluster.tests.insert(test.to_owned());
     }
     if let Some(detail) = detail
-        && cluster.details.len() < MAX_SIGNATURE_EXAMPLES
+        && cluster.details.len() < budgets.signature_examples
     {
-        cluster.details.insert(markdown_cell(detail));
+        cluster.details.insert(markdown_cell(detail, budgets));
     }
 }
 
@@ -249,6 +289,7 @@ fn render_clusters(
     heading: &str,
     clusters: &BTreeMap<String, SignatureCluster>,
     explanation: &str,
+    budgets: &StressRenderBudgets,
 ) {
     if clusters.is_empty() {
         return;
@@ -264,13 +305,13 @@ fn render_clusters(
         out,
         "\n## {heading}\n\n{explanation}\n\n| signature | failed | passed | unattributed | tests | examples |\n|---|---:|---:|---:|---:|---|\n"
     );
-    for (signature, cluster) in rows.iter().take(MAX_SIGNATURE_ROWS) {
+    for (signature, cluster) in rows.iter().take(budgets.signature_rows) {
         let examples = cluster
             .failed_attempts
             .iter()
             .chain(cluster.passed_attempts.iter())
             .chain(cluster.unattributed_attempts.iter())
-            .take(MAX_SIGNATURE_EXAMPLES)
+            .take(budgets.signature_examples)
             .cloned()
             .collect::<Vec<_>>()
             .join("<br>");
@@ -282,19 +323,20 @@ fn render_clusters(
         let _ = writeln!(
             out,
             "| `{}` | {} | {} | {} | {} | {}{} |",
-            markdown_cell(signature),
+            markdown_cell(signature, budgets),
             cluster.failed_attempts.len(),
             cluster.passed_attempts.len(),
             cluster.unattributed_attempts.len(),
             cluster.tests.len(),
-            markdown_cell(&examples),
+            markdown_cell(&examples, budgets),
             detail,
         );
     }
-    if rows.len() > MAX_SIGNATURE_ROWS {
+    if rows.len() > budgets.signature_rows {
+        let rows_shown = budgets.signature_rows;
         let _ = writeln!(
             out,
-            "\nShowing the first {MAX_SIGNATURE_ROWS} of {} signatures. Raw artifacts are exhaustive.",
+            "\nShowing the first {rows_shown} of {} signatures. Raw artifacts are exhaustive.",
             rows.len()
         );
     }
@@ -310,7 +352,11 @@ fn attempt_id(case: &CaseTiming, run_id: Option<&str>) -> String {
     )
 }
 
-fn failure_signature(case: &CaseTiming, evidence: &StressEvidenceConfig) -> String {
+fn failure_signature(
+    case: &CaseTiming,
+    evidence: &StressEvidenceConfig,
+    budgets: &StressRenderBudgets,
+) -> String {
     let lines = clean_lines(&case.output);
     for (index, line) in lines.iter().enumerate() {
         if evidence
@@ -324,10 +370,10 @@ fn failure_signature(case: &CaseTiming, evidence: &StressEvidenceConfig) -> Stri
                 .filter_map(|marker| line.find(marker))
                 .min()
                 .map_or(line.as_str(), |index| &line[..index]);
-            return normalize_signature(summary);
+            return normalize_signature(summary, budgets);
         }
         if is_timeout_line(line) {
-            return normalize_signature(line);
+            return normalize_signature(line, budgets);
         }
         if is_panic_header(line) {
             // The header arrives twice — nextest puts it in the failure
@@ -353,12 +399,12 @@ fn failure_signature(case: &CaseTiming, evidence: &StressEvidenceConfig) -> Stri
             } else {
                 format!(": {}", detail.join(" "))
             };
-            return normalize_signature(&format!("{head}{detail}"));
+            return normalize_signature(&format!("{head}{detail}"), budgets);
         }
     }
     lines.first().map_or_else(
         || "failure output unavailable".to_owned(),
-        |line| normalize_signature(line),
+        |line| normalize_signature(line, budgets),
     )
 }
 
@@ -387,7 +433,11 @@ fn is_junit_timeout(line: &str) -> bool {
     line == "test timeout" || line.starts_with("test timeout:")
 }
 
-pub(super) fn backtrace_signature(output: &str, evidence: &StressEvidenceConfig) -> Option<String> {
+pub(super) fn backtrace_signature(
+    output: &str,
+    evidence: &StressEvidenceConfig,
+    budgets: &StressRenderBudgets,
+) -> Option<String> {
     static SOURCE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./-]+\.rs:\d+(?::\d+)?")
             .expect("source-location regex")
@@ -403,7 +453,7 @@ pub(super) fn backtrace_signature(output: &str, evidence: &StressEvidenceConfig)
                 .any(|excluded| frame.contains(excluded))
         })
         .fold(Vec::<String>::new(), |mut frames, frame| {
-            if frames.len() < MAX_SIGNATURE_EXAMPLES && !frames.contains(&frame) {
+            if frames.len() < budgets.signature_examples && !frames.contains(&frame) {
                 frames.push(frame);
             }
             frames
@@ -411,7 +461,11 @@ pub(super) fn backtrace_signature(output: &str, evidence: &StressEvidenceConfig)
     (!frames.is_empty()).then(|| frames.join(" -> "))
 }
 
-fn wait_signatures(output: &str, evidence: &StressEvidenceConfig) -> Vec<String> {
+fn wait_signatures(
+    output: &str,
+    evidence: &StressEvidenceConfig,
+    budgets: &StressRenderBudgets,
+) -> Vec<String> {
     let mut signatures = BTreeSet::new();
     let mut context = "wait graph".to_owned();
     let mut primitive = None::<String>;
@@ -423,7 +477,7 @@ fn wait_signatures(output: &str, evidence: &StressEvidenceConfig) -> Vec<String>
             .as_deref()
             .and_then(|marker| trimmed.split(marker).nth(1))
         {
-            context = normalize_signature(value);
+            context = normalize_signature(value, budgets);
             continue;
         }
         if trimmed.starts_with('#')
@@ -432,7 +486,7 @@ fn wait_signatures(output: &str, evidence: &StressEvidenceConfig) -> Vec<String>
                 .as_deref()
                 .is_some_and(|marker| trimmed.contains(marker))
         {
-            primitive = Some(normalize_wait(trimmed));
+            primitive = Some(normalize_wait(trimmed, budgets));
             holder = None;
             continue;
         }
@@ -441,7 +495,7 @@ fn wait_signatures(output: &str, evidence: &StressEvidenceConfig) -> Vec<String>
             .as_deref()
             .is_some_and(|marker| trimmed.contains(marker))
         {
-            holder = Some(normalize_wait(trimmed));
+            holder = Some(normalize_wait(trimmed, budgets));
             continue;
         }
         if evidence
@@ -457,7 +511,7 @@ fn wait_signatures(output: &str, evidence: &StressEvidenceConfig) -> Vec<String>
             ]
             .into_iter()
             .flatten()
-            .map(normalize_wait)
+            .map(|edge| normalize_wait(edge, budgets))
             .collect::<Vec<_>>()
             .join(" | ");
             signatures.insert(edge);
@@ -468,7 +522,11 @@ fn wait_signatures(output: &str, evidence: &StressEvidenceConfig) -> Vec<String>
             .iter()
             .any(|needle| trimmed.contains(needle))
         {
-            signatures.insert(format!("{} | {}", context, normalize_wait(trimmed)));
+            signatures.insert(format!(
+                "{} | {}",
+                context,
+                normalize_wait(trimmed, budgets)
+            ));
         }
     }
     signatures.into_iter().collect()
@@ -478,6 +536,7 @@ fn render_attempt_dossiers(
     out: &mut String,
     dossiers: &BTreeMap<AttemptKey, AttemptDossier>,
     failed_attempts: usize,
+    budgets: &StressRenderBudgets,
 ) {
     if dossiers.is_empty() {
         return;
@@ -485,21 +544,21 @@ fn render_attempt_dossiers(
     out.push_str(
         "\n## Failed-attempt evidence overlay\n\nEach bounded example row joins the terminal symptom with same-attempt runtime evidence; raw artifacts remain exhaustive. Empty cells mean that source emitted no attributable record. The flight and event tails are ordered, oldest first, with `(xN)` marking consecutive repeats of one line; each group shows its last firing's field values, so the newest group carries the exact state the attempt died in. Co-runners and pressure are correlation candidates, not causes.\n\n| attempt | symptom | project frames | wait graph | line evidence | envelope | flight tail | event tail | pressure | co-running tests |\n|---|---|---|---|---|---|---|---|---|---|\n",
     );
-    for dossier in dossiers.values().take(MAX_FAILURE_ROWS) {
+    for dossier in dossiers.values().take(budgets.failure_rows) {
         let _ = writeln!(
             out,
             "| `{}`<br>{} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-            markdown_cell(&dossier.display),
-            markdown_cell(&dossier.test),
-            markdown_cell(&dossier.symptom),
-            markdown_cell(&dossier.backtrace),
-            render_set(&dossier.wait_graph),
-            render_set(&dossier.lines),
-            render_set(&dossier.envelopes),
-            render_ordered(&dossier.flight_tail),
-            render_ordered(&dossier.event_tail),
-            markdown_cell(&dossier.pressure),
-            render_set(&dossier.co_runners),
+            markdown_cell(&dossier.display, budgets),
+            markdown_cell(&dossier.test, budgets),
+            markdown_cell(&dossier.symptom, budgets),
+            markdown_cell(&dossier.backtrace, budgets),
+            render_set(&dossier.wait_graph, budgets),
+            render_set(&dossier.lines, budgets),
+            render_set(&dossier.envelopes, budgets),
+            render_ordered(&dossier.flight_tail, budgets),
+            render_ordered(&dossier.event_tail, budgets),
+            markdown_cell(&dossier.pressure, budgets),
+            render_set(&dossier.co_runners, budgets),
         );
     }
     if failed_attempts > dossiers.len() {
@@ -513,22 +572,22 @@ fn render_attempt_dossiers(
 
 /// Ordered evidence cell: the sequence is the meaning, so no sorting and no
 /// truncation beyond what the producer already bounded.
-fn render_ordered(values: &[String]) -> String {
+fn render_ordered(values: &[String], budgets: &StressRenderBudgets) -> String {
     values
         .iter()
-        .map(|value| markdown_cell(value))
+        .map(|value| markdown_cell(value, budgets))
         .collect::<Vec<_>>()
         .join("<br>")
 }
 
-fn render_set(values: &BTreeSet<String>) -> String {
+fn render_set(values: &BTreeSet<String>, budgets: &StressRenderBudgets) -> String {
     let rendered = values
         .iter()
-        .take(MAX_SIGNATURE_EXAMPLES)
-        .map(|value| markdown_cell(value))
+        .take(budgets.signature_examples)
+        .map(|value| markdown_cell(value, budgets))
         .collect::<Vec<_>>()
         .join("<br>");
-    if values.len() > MAX_SIGNATURE_EXAMPLES {
+    if values.len() > budgets.signature_examples {
         format!("{rendered}<br>... ({} total)", values.len())
     } else {
         rendered
@@ -550,7 +609,7 @@ pub(super) fn strip_ansi(text: &str) -> String {
     ANSI.replace_all(text, "").into_owned()
 }
 
-fn normalize_signature(text: &str) -> String {
+fn normalize_signature(text: &str, budgets: &StressRenderBudgets) -> String {
     static VOLATILE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_ns|_ms)|pid|task|thread|id|dump|polls)=[^\s,;]+")
             .expect("volatile diagnostic regex")
@@ -570,10 +629,10 @@ fn normalize_signature(text: &str) -> String {
     let text = VOLATILE.replace_all(&text, "$1=<volatile>");
     let text = PANIC_THREAD.replace_all(&text, "panicked at");
     let text = HEX.replace_all(&text, "0x<address>");
-    markdown_cell(text.trim())
+    markdown_cell(text.trim(), budgets)
 }
 
-fn normalize_wait(text: &str) -> String {
+fn normalize_wait(text: &str, budgets: &StressRenderBudgets) -> String {
     static IDS: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
             r"(?:#\d+|\b[A-Za-z_][A-Za-z0-9_]*id=[^\s]+|\b[A-Za-z_][A-Za-z0-9_:]*Key\([^)]*\))",
@@ -581,7 +640,7 @@ fn normalize_wait(text: &str) -> String {
         .expect("wait-graph identity regex")
     });
     let normalized = IDS.replace_all(text, "<id>");
-    normalize_signature(&normalized)
+    normalize_signature(&normalized, budgets)
 }
 
 fn duration_ms(secs: f64) -> u64 {
@@ -728,7 +787,10 @@ mod tests {
 
     #[test]
     fn signature_normalization_keeps_field_names_and_removes_jitter() {
-        let normalized = normalize_signature("pid=42 task=7 address=0xfeed");
+        let normalized = normalize_signature(
+            "pid=42 task=7 address=0xfeed",
+            &StressRenderBudgets::default(),
+        );
         assert_eq!(
             normalized,
             "pid=<volatile> task=<volatile> address=0x<address>"
@@ -740,7 +802,10 @@ mod tests {
     /// The gate state beside it is the discriminator and must survive.
     #[test]
     fn a_pinning_tasks_poll_count_does_not_split_one_cause_into_many() {
-        let normalized = normalize_signature("active_async holder polls=41231 state=Runnable");
+        let normalized = normalize_signature(
+            "active_async holder polls=41231 state=Runnable",
+            &StressRenderBudgets::default(),
+        );
         assert_eq!(
             normalized,
             "active_async holder polls=<volatile> state=Runnable"
@@ -761,6 +826,7 @@ mod tests {
         let signatures = wait_signatures(
             &format!("[wait dump] audio_worker_loop\n{ENGINE_COUNTERS}\n"),
             &evidence,
+            &StressRenderBudgets::default(),
         );
 
         assert!(
@@ -774,7 +840,7 @@ mod tests {
     /// one whose work never started.
     #[test]
     fn a_pacing_signature_keeps_the_real_io_count() {
-        let normalized = normalize_wait(ENGINE_COUNTERS);
+        let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
 
         assert!(normalized.contains("real_io=0"), "{normalized}");
     }
@@ -784,7 +850,7 @@ mod tests {
     /// work in flight.
     #[test]
     fn a_pacing_signature_keeps_the_pace_anchor_state() {
-        let normalized = normalize_wait(ENGINE_COUNTERS);
+        let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
 
         assert!(normalized.contains("pace_anchor=none"), "{normalized}");
     }
@@ -793,7 +859,7 @@ mod tests {
     /// give each hang a cluster of its own.
     #[test]
     fn a_pacing_signature_drops_the_virtual_clock() {
-        let normalized = normalize_wait(ENGINE_COUNTERS);
+        let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
 
         assert!(
             normalized.contains("virtual_now_ns=<volatile>"),
@@ -822,7 +888,7 @@ mod tests {
         let mut failed = case("warms_pool", 0, true, 1.0);
         failed.output = panic_output("971370");
 
-        let signature = failure_signature(&failed, &evidence());
+        let signature = failure_signature(&failed, &evidence(), &StressRenderBudgets::default());
 
         assert!(
             signature.contains("a warmed pool must serve"),
@@ -840,7 +906,7 @@ mod tests {
         let mut failed = case("warms_pool", 0, true, 1.0);
         failed.output = panic_output("971370");
 
-        let signature = failure_signature(&failed, &evidence());
+        let signature = failure_signature(&failed, &evidence(), &StressRenderBudgets::default());
 
         assert!(!signature.contains("demo::warms_pool"), "{signature}");
         assert!(signature.contains("tests/demo.rs:166:5"), "{signature}");
@@ -858,8 +924,8 @@ mod tests {
         second.output = panic_output("208442");
 
         assert_eq!(
-            failure_signature(&first, &evidence()),
-            failure_signature(&second, &evidence())
+            failure_signature(&first, &evidence(), &StressRenderBudgets::default()),
+            failure_signature(&second, &evidence(), &StressRenderBudgets::default())
         );
     }
 
@@ -870,7 +936,7 @@ mod tests {
         let mut failed = case("warms_pool", 0, true, 1.0);
         failed.output = panic_output("971370");
 
-        let signature = failure_signature(&failed, &evidence());
+        let signature = failure_signature(&failed, &evidence(), &StressRenderBudgets::default());
 
         assert_eq!(signature.matches("panicked at").count(), 1, "{signature}");
     }
@@ -880,7 +946,7 @@ mod tests {
         let mut failed = case("seek", 0, true, 1.0);
         failed.output = "[hang] detected: pre-kill ts_ms=42 pid=7 dump=/tmp/hang-42.json [still running] \u{2014} {\"nextest\":{\"attempt_id\":\"run:a\"}}".to_owned();
 
-        let signature = failure_signature(&failed, &evidence());
+        let signature = failure_signature(&failed, &evidence(), &StressRenderBudgets::default());
 
         assert_eq!(
             signature,
@@ -897,7 +963,7 @@ mod tests {
                 .to_owned();
 
         assert_eq!(
-            failure_signature(&failed, &evidence()),
+            failure_signature(&failed, &evidence(), &StressRenderBudgets::default()),
             "[hang] detected: pre-kill ts_ms=<volatile>"
         );
     }

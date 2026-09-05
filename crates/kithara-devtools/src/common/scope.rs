@@ -19,8 +19,6 @@ pub enum Tool {
     Orphans,
 }
 
-const TOP_LEVEL_DIRS: &[&str] = &["tests", "xtask", "benches"];
-
 #[derive(Debug)]
 enum ScopeToken {
     Crate(String),
@@ -28,7 +26,11 @@ enum ScopeToken {
     NonCratePath(PathBuf),
 }
 
-fn classify_token(tok: &str, workspace_root: &Path) -> Result<ScopeToken> {
+fn classify_token(
+    tok: &str,
+    workspace_root: &Path,
+    top_level_dirs: &[String],
+) -> Result<ScopeToken> {
     let norm = tok.strip_prefix("./").unwrap_or(tok);
     let path = Path::new(norm);
     let mut comps = path.components();
@@ -42,7 +44,7 @@ fn classify_token(tok: &str, workspace_root: &Path) -> Result<ScopeToken> {
             path: PathBuf::from(norm),
         });
     }
-    if TOP_LEVEL_DIRS.contains(&first.as_str()) {
+    if top_level_dirs.iter().any(|dir| dir == &first) {
         return Ok(ScopeToken::NonCratePath(PathBuf::from(norm)));
     }
     if workspace_root.join("crates").join(norm).is_dir() {
@@ -232,10 +234,14 @@ impl Scope {
     ///
     /// Returns an error if any token is not a known crate name, crate path,
     /// or supported top-level workspace path.
-    pub fn resolve(tokens: &[String], workspace_root: &Path) -> Result<Self> {
+    pub fn resolve(
+        tokens: &[String],
+        workspace_root: &Path,
+        top_level_dirs: &[String],
+    ) -> Result<Self> {
         let mut scope = Self::default();
         for tok in tokens {
-            match classify_token(tok, workspace_root)? {
+            match classify_token(tok, workspace_root, top_level_dirs)? {
                 ScopeToken::Crate(name) => scope.crates.push(name),
                 ScopeToken::CratePath { path } => scope.paths.push(path),
                 ScopeToken::NonCratePath(p) => {
@@ -295,6 +301,7 @@ pub fn packages_in_scope<'a>(metadata: &'a Metadata, scope: &Scope) -> Vec<&'a P
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::project::ProjectConfig;
 
     #[test]
     fn empty_scope_roots_default_to_crates_dir() {
@@ -420,25 +427,41 @@ mod tests {
 
     #[test]
     fn classify_unknown_scope_errors() {
-        let err = classify_token("foobar_nonsense", Path::new("/nonexistent"));
+        let err = classify_token(
+            "foobar_nonsense",
+            Path::new("/nonexistent"),
+            &ProjectConfig::default().workspace_scan.top_level_dirs,
+        );
         assert!(err.is_err());
     }
 
     #[test]
     fn classify_top_level_dirs_are_noncrate_paths() {
-        let res = classify_token("tests/tests", Path::new("/nonexistent"));
+        let res = classify_token(
+            "tests/tests",
+            Path::new("/nonexistent"),
+            &ProjectConfig::default().workspace_scan.top_level_dirs,
+        );
         assert!(matches!(res, Ok(ScopeToken::NonCratePath(_))));
     }
 
     #[test]
     fn classify_crates_path_extracts_path() {
-        let res = classify_token("crates/kithara-abr/src", Path::new("/nonexistent"));
+        let res = classify_token(
+            "crates/kithara-abr/src",
+            Path::new("/nonexistent"),
+            &ProjectConfig::default().workspace_scan.top_level_dirs,
+        );
         assert!(matches!(res, Ok(ScopeToken::CratePath { .. })));
     }
 
     #[test]
     fn classify_strips_leading_dot_slash() {
-        let res = classify_token("./xtask/src", Path::new("/nonexistent"));
+        let res = classify_token(
+            "./xtask/src",
+            Path::new("/nonexistent"),
+            &ProjectConfig::default().workspace_scan.top_level_dirs,
+        );
         assert!(matches!(res, Ok(ScopeToken::NonCratePath(_))));
     }
 }

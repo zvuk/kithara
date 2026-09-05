@@ -9,7 +9,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 
 use crate::{
-    Ctx, manifest,
+    Ctx,
+    common::tools::ToolsConfig,
+    manifest,
     manifest::{DependencyOrderArgs, ManifestArgs, ManifestCommand},
     util::{check_tool, ensure_clean_tree},
     verdict::ChildFailure,
@@ -53,8 +55,8 @@ enum PathFormatTarget {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct PathFormatCommand {
-    program: &'static str,
+struct PathFormatCommand<'a> {
+    program: &'a str,
     args: Vec<OsString>,
 }
 
@@ -74,7 +76,7 @@ pub(crate) fn run(args: &FormatArgs, ctx: &Ctx) -> Result<()> {
 ///
 /// # Errors
 /// Returns an error if path resolution or formatting fails.
-pub fn format_path(root: &Path, path: &Path) -> Result<()> {
+pub fn format_path(root: &Path, path: &Path, tools: &ToolsConfig) -> Result<()> {
     let root = fs::canonicalize(root)
         .with_context(|| format!("resolve formatting root {}", root.display()))?;
     let candidate = if path.is_absolute() {
@@ -94,7 +96,7 @@ pub fn format_path(root: &Path, path: &Path) -> Result<()> {
     let Some(target) = path_format_target(&path) else {
         return Ok(());
     };
-    let command = path_format_command(target, &root, &path);
+    let command = path_format_command(target, &root, &path, tools);
     let status = Command::new(command.program)
         .current_dir(&root)
         .args(&command.args)
@@ -131,7 +133,12 @@ fn path_format_target(path: &Path) -> Option<PathFormatTarget> {
     }
 }
 
-fn path_format_command(target: PathFormatTarget, root: &Path, path: &Path) -> PathFormatCommand {
+fn path_format_command<'a>(
+    target: PathFormatTarget,
+    root: &Path,
+    path: &Path,
+    tools: &'a ToolsConfig,
+) -> PathFormatCommand<'a> {
     match target {
         PathFormatTarget::Rust => PathFormatCommand {
             program: "rustup",
@@ -149,11 +156,11 @@ fn path_format_command(target: PathFormatTarget, root: &Path, path: &Path) -> Pa
             ],
         },
         PathFormatTarget::Toml => PathFormatCommand {
-            program: "taplo",
+            program: tools.program("taplo"),
             args: vec!["format".into(), path.as_os_str().to_owned()],
         },
         PathFormatTarget::Json => PathFormatCommand {
-            program: "tidy-json",
+            program: tools.program("tidy-json"),
             args: vec![
                 "--indent".into(),
                 "2".into(),
@@ -184,9 +191,9 @@ fn run_target(target: FormatTarget, check: bool, ctx: &Ctx) -> Result<()> {
     match target {
         FormatTarget::Rust => run_rustfmt(check),
         FormatTarget::Manifest => run_manifest_format(check, ctx),
-        FormatTarget::Toml => run_toml_format(check),
-        FormatTarget::Json => run_json_format(check),
-        FormatTarget::Markdown => run_markdown_format(check),
+        FormatTarget::Toml => run_toml_format(check, ctx),
+        FormatTarget::Json => run_json_format(check, ctx),
+        FormatTarget::Markdown => run_markdown_format(check, ctx),
     }
 }
 
@@ -226,7 +233,9 @@ fn run_manifest_format(check: bool, ctx: &Ctx) -> Result<()> {
         check_tool(
             "cargo",
             &["sort", "--version"],
-            "cargo install --locked cargo-sort",
+            ctx.config
+                .tools
+                .install_hint("cargo-sort", "cargo install --locked cargo-sort"),
         )?;
         run_status(
             "cargo",
@@ -251,21 +260,31 @@ fn run_manifest_format(check: bool, ctx: &Ctx) -> Result<()> {
     )
 }
 
-fn run_toml_format(check: bool) -> Result<()> {
-    check_tool("taplo", &["--version"], "cargo install --locked taplo-cli")?;
+fn run_toml_format(check: bool, ctx: &Ctx) -> Result<()> {
+    let program = ctx.config.tools.program("taplo");
+    check_tool(
+        program,
+        &["--version"],
+        ctx.config
+            .tools
+            .install_hint("taplo", "cargo install --locked taplo-cli"),
+    )?;
     let files = collect_files(Path::new("."), FileKind::Toml)?;
     let mut args = vec!["format"];
     if check {
         args.push("--check");
     }
-    run_path_status("taplo", &args, &files)
+    run_path_status(program, &args, &files)
 }
 
-fn run_json_format(check: bool) -> Result<()> {
+fn run_json_format(check: bool, ctx: &Ctx) -> Result<()> {
+    let program = ctx.config.tools.program("tidy-json");
     check_tool(
-        "tidy-json",
+        program,
         &["--version"],
-        "cargo install --locked tidy-json",
+        ctx.config
+            .tools
+            .install_hint("tidy-json", "cargo install --locked tidy-json"),
     )?;
     let files = collect_files(Path::new("."), FileKind::Json)?;
     let mut args = vec!["--indent", "2"];
@@ -274,14 +293,17 @@ fn run_json_format(check: bool) -> Result<()> {
     } else {
         args.push("--write");
     }
-    run_path_status("tidy-json", &args, &files)
+    run_path_status(program, &args, &files)
 }
 
-fn run_markdown_format(check: bool) -> Result<()> {
+fn run_markdown_format(check: bool, ctx: &Ctx) -> Result<()> {
+    let program = ctx.config.tools.program("mdfmt");
     check_tool(
-        "mdfmt",
+        program,
         &["--version"],
-        "cargo install --locked md-formatter",
+        ctx.config
+            .tools
+            .install_hint("mdfmt", "cargo install --locked md-formatter"),
     )?;
 
     let mut args = vec![
@@ -317,7 +339,7 @@ fn run_markdown_format(check: bool) -> Result<()> {
     } else {
         args.push("--write");
     }
-    run_status("mdfmt", &args)
+    run_status(program, &args)
 }
 
 fn run_status(program: &str, args: &[&str]) -> Result<()> {
@@ -476,6 +498,27 @@ mod tests {
         FileKind, PathFormatTarget, format_path, matches_file_kind, nightly_toolchain,
         path_format_command, should_skip_dir,
     };
+    use crate::common::tools::ToolsConfig;
+
+    #[test]
+    fn a_configured_formatter_reaches_the_path_command() {
+        let tools: ToolsConfig = toml::from_str(
+            r#"
+            [taplo]
+            program = "/opt/pinned/bin/taplo"
+            "#,
+        )
+        .expect("the tools table parses");
+
+        let command = path_format_command(
+            PathFormatTarget::Toml,
+            Path::new("/root"),
+            Path::new("/root/a.toml"),
+            &tools,
+        );
+
+        assert_eq!(command.program, "/opt/pinned/bin/taplo");
+    }
 
     #[test]
     fn path_formatter_skips_cargo_manifest() -> Result<()> {
@@ -483,7 +526,7 @@ mod tests {
         let manifest = root.path().join("Cargo.toml");
         fs::write(&manifest, "[package]\nname='example'\n")?;
 
-        format_path(root.path(), &manifest)?;
+        format_path(root.path(), &manifest, &ToolsConfig::default())?;
 
         assert_eq!(fs::read_to_string(manifest)?, "[package]\nname='example'\n");
         Ok(())
@@ -496,7 +539,8 @@ mod tests {
         let path = outside.path().join("outside.rs");
         fs::write(&path, "fn outside() {}\n")?;
 
-        let error = format_path(root.path(), &path).expect_err("outside path must fail");
+        let error = format_path(root.path(), &path, &ToolsConfig::default())
+            .expect_err("outside path must fail");
 
         assert!(format!("{error:#}").contains("outside formatting root"));
         Ok(())
@@ -508,8 +552,9 @@ mod tests {
         let rust = Path::new("/repo/crates/example/src/lib.rs");
         let toml = Path::new("/repo/.config/example.toml");
         let json = Path::new("/repo/tests/example.jsonc");
+        let tools = ToolsConfig::default();
 
-        let rust_command = path_format_command(PathFormatTarget::Rust, root, rust);
+        let rust_command = path_format_command(PathFormatTarget::Rust, root, rust, &tools);
         assert_eq!(rust_command.program, "rustup");
         assert_eq!(rust_command.args.first(), Some(&OsString::from("run")));
         assert!(
@@ -529,11 +574,11 @@ mod tests {
         );
         assert_eq!(rust_command.args.last(), Some(&rust.as_os_str().to_owned()));
 
-        let toml_command = path_format_command(PathFormatTarget::Toml, root, toml);
+        let toml_command = path_format_command(PathFormatTarget::Toml, root, toml, &tools);
         assert_eq!(toml_command.program, "taplo");
         assert_eq!(toml_command.args, [OsString::from("format"), toml.into()]);
 
-        let json_command = path_format_command(PathFormatTarget::Json, root, json);
+        let json_command = path_format_command(PathFormatTarget::Json, root, json, &tools);
         assert_eq!(json_command.program, "tidy-json");
         assert_eq!(json_command.args.last(), Some(&json.as_os_str().to_owned()));
         assert!(json_command.args.iter().any(|arg| arg == "--write"));

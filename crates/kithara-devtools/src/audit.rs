@@ -39,7 +39,11 @@ pub(crate) fn run(args: &AuditArgs, ctx: &Ctx) -> Result<()> {
         run_autofix(ctx);
     }
 
-    let scope = match Scope::resolve(&args.scope, &ctx.root) {
+    let scope = match Scope::resolve(
+        &args.scope,
+        &ctx.root,
+        &ctx.config.workspace_scan.top_level_dirs,
+    ) {
         Ok(scope) => scope,
         Err(error) => {
             eprintln!("{error:#}");

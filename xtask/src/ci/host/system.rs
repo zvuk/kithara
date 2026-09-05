@@ -605,6 +605,40 @@ mod tests {
         );
     }
 
+    /// One tool, one address. The privileged bootstrap spells `xcodebuild`
+    /// absolutely because it runs as root, where `PATH` must not decide. The
+    /// lane reads the same Xcode's version through the config, so every
+    /// spelling here has to be the one the config answers with — otherwise a
+    /// lane can pass a version check the host never made.
+    #[test]
+    fn the_bootstrap_spells_xcodebuild_the_way_the_config_resolves_it() {
+        let root = crate::ci::config::workspace_root();
+        let project = kithara_devtools::common::project::ProjectConfig::load(root)
+            .expect("the project config loads");
+        let source = fs::read_to_string(root.join("xtask/src/ci/host/system.rs"))
+            .expect("this source is readable");
+        let (bootstrap, _) = source
+            .split_once("\n#[cfg(test)]")
+            .expect("this source carries a test module to cut the production half at");
+
+        let configured = project.tools.program("xcodebuild");
+        let spellings: Vec<&str> = bootstrap
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|literal| literal.ends_with("xcodebuild"))
+            .collect();
+
+        assert!(!spellings.is_empty(), "the bootstrap spawns xcodebuild");
+        for spelling in spellings {
+            assert_eq!(
+                spelling, configured,
+                "the bootstrap spells xcodebuild differently from what the \
+                 config resolves to"
+            );
+        }
+    }
+
     #[test]
     fn layout_prepares_the_selected_checkout_root() {
         let mut config = crate::ci::config::fixture();

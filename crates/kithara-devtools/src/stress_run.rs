@@ -9,6 +9,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 
 use crate::{
+    common::project::StressRenderBudgets,
     stress::{run_output, run_stderr_output},
     stress_report::{
         MAX_INVENTORY_BYTES, read_bounded_utf8, validate_inventory, validate_primary_evidence,
@@ -29,6 +30,7 @@ pub(crate) struct StressRunSpec {
     pub(crate) count: usize,
     pub(crate) max_count: usize,
     pub(crate) max_test_threads: usize,
+    pub(crate) render: StressRenderBudgets,
 }
 
 /// Lists the exact selection, validates it, then runs every selected test.
@@ -93,7 +95,7 @@ pub(crate) fn run(
     run.current_dir(subject_root);
     configure(&mut run);
     run_child(&mut run, log_path)?;
-    validate_primary_evidence(&args.inventory, &args.junit, args.count)
+    validate_primary_evidence(&args.inventory, &args.junit, args.count, &args.render)
 }
 
 pub(crate) fn validate(args: &StressRunSpec) -> Result<()> {
@@ -232,7 +234,8 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let (inventory, junit) = evidence_paths(&temp, PASSED_JUNIT);
 
-        validate_primary_evidence(&inventory, &junit, 1).expect("passed JUnit must be clean");
+        validate_primary_evidence(&inventory, &junit, 1, &StressRenderBudgets::default())
+            .expect("passed JUnit must be clean");
     }
 
     #[test]
@@ -240,8 +243,9 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let (inventory, junit) = evidence_paths(&temp, EARLY_FAILED_JUNIT);
 
-        let error = validate_primary_evidence(&inventory, &junit, 2)
-            .expect_err("failed attempt must fail closed");
+        let error =
+            validate_primary_evidence(&inventory, &junit, 2, &StressRenderBudgets::default())
+                .expect_err("failed attempt must fail closed");
 
         assert!(
             error.downcast_ref::<crate::verdict::NotClean>().is_some(),
@@ -257,8 +261,9 @@ mod tests {
             r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z"/>"#,
         );
 
-        let empty_error = validate_primary_evidence(&inventory, &empty, 2)
-            .expect_err("empty JUnit must fail closed");
+        let empty_error =
+            validate_primary_evidence(&inventory, &empty, 2, &StressRenderBudgets::default())
+                .expect_err("empty JUnit must fail closed");
 
         assert!(
             empty_error
@@ -269,8 +274,9 @@ mod tests {
 
         let partial = temp.path().join("partial.xml");
         fs::write(&partial, PASSED_JUNIT).expect("write partial JUnit fixture");
-        let partial_error = validate_primary_evidence(&inventory, &partial, 2)
-            .expect_err("partial JUnit must fail closed");
+        let partial_error =
+            validate_primary_evidence(&inventory, &partial, 2, &StressRenderBudgets::default())
+                .expect_err("partial JUnit must fail closed");
 
         assert!(
             partial_error

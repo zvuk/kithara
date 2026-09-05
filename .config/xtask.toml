@@ -2450,6 +2450,72 @@ command = ["just", "platform", "android", "aar"]
 tools = ["android-aar"]
 hard_invariant = true
 
+# External programs this repository addresses by role rather than by a literal
+# spelled at a call site. A role listed with no `program` resolves to its own
+# name, so an entry earns its place only by carrying a pin, an install hint, or
+# a spelling the machine needs. `git`, `cargo`, `gh` and `rustup` are absent on
+# purpose: they are the ground the project stands on, not tools it chooses.
+
+[tools.ast-grep]
+pin = "ast-grep"
+
+[tools.typos]
+pin = "typos-cli"
+install_hint = "cargo install typos-cli"
+
+[tools.similarity-rs]
+pin = "similarity-rs"
+install_hint = "cargo install similarity-rs"
+
+[tools.sccache]
+pin = "sccache"
+
+[tools.cargo-modules]
+pin = "cargo-modules"
+install_hint = "cargo install cargo-modules"
+
+[tools.cargo-semver-checks]
+pin = "cargo-semver-checks"
+install_hint = "cargo install cargo-semver-checks"
+
+[tools.cargo-hakari]
+pin = "cargo-hakari"
+install_hint = "cargo install cargo-hakari"
+
+[tools.cargo-ndk]
+pin = "cargo-ndk"
+install_hint = "cargo install cargo-ndk"
+
+[tools.cargo-sort]
+pin = "cargo-sort"
+install_hint = "cargo install --locked cargo-sort"
+
+[tools.just]
+pin = "just"
+install_hint = "brew install just"
+
+[tools.mdfmt]
+pin = "md-formatter"
+install_hint = "cargo install --locked md-formatter"
+
+[tools.taplo]
+pin = "taplo-cli"
+install_hint = "cargo install --locked taplo-cli"
+
+[tools.tidy-json]
+pin = "tidy-json"
+install_hint = "cargo install --locked tidy-json"
+
+[tools.trunk]
+pin = "trunk"
+install_hint = "cargo install trunk"
+
+# The privileged host bootstrap spells this absolutely because it runs as root.
+# The lane has to reach the same binary, so the address lives here rather than
+# in two call sites that can drift apart.
+[tools.xcodebuild]
+program = "/usr/bin/xcodebuild"
+
 [ext.apple]
 # Demo app launched by `just platform apple demo`.
 default_simulator = "iPhone 17 Pro Max"

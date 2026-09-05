@@ -24,8 +24,11 @@ pub(super) fn run(input: &HookInput, root: &Path) -> Result<()> {
         name => bail!("unsupported file-edit hook tool `{name}`"),
     };
 
+    let project = kithara_devtools::common::project::ProjectConfig::load(root)
+        .with_context(|| format!("loading the project config under {}", root.display()))?;
+
     for path in paths {
-        kithara_devtools::format::format_path(root, &path)
+        kithara_devtools::format::format_path(root, &path, &project.tools)
             .with_context(|| format!("format edited path {}", path.display()))?;
     }
     Ok(())

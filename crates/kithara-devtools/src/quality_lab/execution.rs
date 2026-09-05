@@ -414,14 +414,11 @@ fn duration_ms(duration: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+    use std::{env, path::PathBuf};
 
-    #[cfg(unix)]
     use tempfile::TempDir;
 
     use super::*;
-    #[cfg(unix)]
     use crate::quality_lab::adapter::{InvocationSpec, ReportKind};
 
     /// Budget for the tests whose subject is not the budget.
@@ -430,8 +427,17 @@ mod tests {
     /// [`Status`]. A reachable budget can only change that by killing the
     /// child, which reports no exit code and lands in the tool-error arm — so
     /// on a busy host the assertion would be answering a question about the
-    /// machine. The budget-exhausted arms are proven by their own scripts.
+    /// machine. The budget-exhausted arms are proven by their own doubles.
     const NOT_UNDER_TEST: Duration = Duration::MAX;
+
+    /// The name of the double's binary target.
+    const DOUBLE: &str = "kithara-devtools-fake-tool";
+
+    /// The version the double answers `--version` with.
+    ///
+    /// It reaches the double through its behaviour file rather than being
+    /// compiled into it, so this test and the double cannot drift apart.
+    const DOUBLE_VERSION: &str = "1.2.3";
 
     #[test]
     fn version_matching_rejects_prefix_versions() {
@@ -440,7 +446,6 @@ mod tests {
         assert!(!contains_exact_version("rustqual v1.8.1", "1.8.1"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn maps_expected_nonzero_exit_to_findings_after_version_check() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -453,7 +458,7 @@ mod tests {
             &spec,
             temp.path(),
             temp.path(),
-            "1.2.3",
+            DOUBLE_VERSION,
             started,
             budget,
             &mut invocations,
@@ -474,7 +479,6 @@ mod tests {
         assert_eq!(invocations.len(), 2);
     }
 
-    #[cfg(unix)]
     #[test]
     fn malformed_native_output_is_a_tool_error() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -497,24 +501,44 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
-    fn fake_spec(temp: &TempDir, report: &str, exit_code: i32) -> ToolSpec {
-        let script = temp.path().join("fake-tool");
-        let body = format!(
-            "#!/bin/sh\n\
-             if [ \"$1\" = \"--version\" ]; then\n\
-               printf 'fake-tool 1.2.3\\n'\n\
-               exit 0\n\
-             fi\n\
-             printf '%s\\n' '{report}'\n\
-             exit {exit_code}\n"
+    /// The double's file name, which keeps the platform's executable suffix.
+    ///
+    /// Windows refuses to start a file that has lost its `.exe`, so the copy
+    /// each test makes is named the same way as the binary Cargo built.
+    fn double_name() -> String {
+        format!("{DOUBLE}{}", env::consts::EXE_SUFFIX)
+    }
+
+    /// Where Cargo put the double, which a unit test cannot ask it for.
+    ///
+    /// `CARGO_BIN_EXE_` is an integration-test macro, and reaching it would
+    /// mean publishing this module. The test binary sits one directory below
+    /// where Cargo writes binary targets.
+    fn double() -> PathBuf {
+        let harness = env::current_exe().expect("current test executable");
+        let built = harness
+            .parent()
+            .and_then(Path::parent)
+            .expect("the test binary sits under a target directory")
+            .join(double_name());
+        assert!(
+            built.is_file(),
+            "{} is not built; run `cargo build -p kithara-devtools --bin {DOUBLE}` first",
+            built.display()
         );
-        fs::write(&script, body).expect("script");
-        let mut permissions = fs::metadata(&script).expect("metadata").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script, permissions).expect("permissions");
+        built
+    }
+
+    fn fake_spec(temp: &TempDir, report: &str, exit_code: i32) -> ToolSpec {
+        let program = temp.path().join(double_name());
+        fs::copy(double(), &program).expect("copy the double");
+        fs::write(
+            program.with_extension("behaviour"),
+            format!("{DOUBLE} {DOUBLE_VERSION}\n{exit_code}\n{report}\n"),
+        )
+        .expect("behaviour");
         ToolSpec {
-            program: script.to_string_lossy().into_owned(),
+            program: program.to_string_lossy().into_owned(),
             version_args: &["--version"],
             invocations: vec![InvocationSpec {
                 name: "analyze",

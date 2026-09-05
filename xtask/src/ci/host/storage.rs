@@ -13,9 +13,12 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use super::runner_images::JobVm;
+use super::{
+    runner_images::JobVm,
+    runners::{docker_host, docker_socket},
+};
 use crate::ci::{
-    SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache,
+    build_cache,
     config::CiConfig,
     environment::{CacheTrust, scratch_root},
     process::Process,
@@ -67,13 +70,6 @@ impl Agents {
     /// A host with no launchd has no agents to be wrong about, and the Linux
     /// executor runs this same command.
     const ABSENT: &'static str = "not-applicable";
-    /// The agents that must hold a process for work to reach this host.
-    ///
-    /// `cleanup` and `health` are periodic and spend nearly all their life
-    /// loaded with nothing running, so a missing process says nothing about
-    /// them. These two are `KeepAlive`, and a missing process means work has
-    /// stopped.
-    const ALWAYS_ON: &'static [&'static str] = &["colima", "gitlab-runner"];
 }
 
 #[derive(Serialize)]
@@ -132,26 +128,7 @@ impl Volume {
 }
 
 impl<'a> HostStorage<'a> {
-    const ACTIVE_LEASE: Duration = Duration::from_secs(12 * 60 * 60);
-    /// The profile `install-services` starts the Linux guest under.
-    const COLIMA_PROFILE: &'static str = "kithara";
     const DAY: Duration = Duration::from_secs(24 * 60 * 60);
-    const LOG_LIMIT_BYTES: u64 = 20_000_000;
-    const REMOVABLE_ROOTS: &'static [&'static str] = &["cache", "logs", "vm", "workspaces"];
-    /// The cache namespaces this repository still writes to.
-    ///
-    /// The steps below prune by name, so a namespace that stops being written
-    /// to becomes invisible rather than stale, and nothing ever comes back for
-    /// it. Six gigabytes of `cargo-reapi` stores sat here after that tool came
-    /// off the CI path. Anything not named here is pruned on its own age.
-    const CACHE_NAMESPACES: &'static [&'static str] = &[
-        SCCACHE_SLOT_CONTROL_NAMESPACE,
-        "bootstrap",
-        "gitlab-runner",
-        "quarantine",
-        "review",
-        "trusted",
-    ];
 
     pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Result<Self> {
         let host_root = config.host.host_root.clone();
@@ -388,18 +365,21 @@ impl<'a> HostStorage<'a> {
     ///
     /// On a host with no launchd there is nothing to say, and this must not
     /// invent a fault: the Linux executor runs the same command.
-    fn agent_states(&self) -> BTreeMap<&'static str, &'static str> {
+    fn agent_states(&self) -> BTreeMap<&'a str, &'static str> {
         if !Path::new(Agents::LAUNCHCTL).is_file() {
-            return Agents::ALWAYS_ON
+            return self
+                .config
+                .host
+                .always_on_agents
                 .iter()
-                .map(|name| (*name, Agents::ABSENT))
+                .map(|name| (name.as_str(), Agents::ABSENT))
                 .collect();
         }
         let listing = self
             .process
             .capture(Agents::LAUNCHCTL, &["list"], "launchd agent listing")
             .unwrap_or_default();
-        agent_states_from(&listing)
+        agent_states_from(&listing, &self.config.host.always_on_agents)
     }
 
     /// What is left on the volume with the least to spare — the one the pressure
@@ -506,7 +486,13 @@ impl<'a> HostStorage<'a> {
             let entry = entry?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if Self::CACHE_NAMESPACES.contains(&name.as_ref()) {
+            if self
+                .config
+                .host
+                .cache_namespaces
+                .iter()
+                .any(|namespace| namespace == name.as_ref())
+            {
                 continue;
             }
             let path = entry.path();
@@ -628,7 +614,7 @@ impl<'a> HostStorage<'a> {
         {
             let path = entry?.path();
             if path.extension().and_then(|extension| extension.to_str()) != Some("log")
-                || fs::symlink_metadata(&path)?.len() <= Self::LOG_LIMIT_BYTES
+                || fs::symlink_metadata(&path)?.len() <= self.config.host.log_limit_bytes
             {
                 continue;
             }
@@ -653,8 +639,8 @@ impl<'a> HostStorage<'a> {
     }
 
     fn active(&self, path: &Path) -> bool {
-        let lease_active = Self::lease_directory_active(&path.join(".kithara-ci-leases"));
-        let legacy_active = Self::legacy_marker_active(&path.join(".kithara-ci-active"));
+        let lease_active = self.lease_directory_active(&path.join(".kithara-ci-leases"));
+        let legacy_active = self.legacy_marker_active(&path.join(".kithara-ci-active"));
         if lease_active || legacy_active {
             return true;
         }
@@ -666,9 +652,9 @@ impl<'a> HostStorage<'a> {
             .is_ok_and(|output| output.status.success())
     }
 
-    fn lease_directory_active(leases: &Path) -> bool {
+    fn lease_directory_active(&self, leases: &Path) -> bool {
         match fs::symlink_metadata(leases) {
-            Ok(metadata) if metadata.file_type().is_dir() => Self::owner_lease_active(leases),
+            Ok(metadata) if metadata.file_type().is_dir() => self.owner_lease_active(leases),
             Ok(_) => {
                 warn!(path = %leases.display(), "unsupported CI cache lease directory type");
                 true
@@ -681,10 +667,10 @@ impl<'a> HostStorage<'a> {
         }
     }
 
-    fn legacy_marker_active(legacy: &Path) -> bool {
+    fn legacy_marker_active(&self, legacy: &Path) -> bool {
         match fs::symlink_metadata(legacy) {
             Ok(metadata) if metadata.file_type().is_file() => {
-                Self::lease_is_fresh(legacy, &metadata)
+                self.lease_is_fresh(legacy, &metadata)
             }
             Ok(_) => {
                 warn!(path = %legacy.display(), "unsupported legacy CI cache lease type");
@@ -698,7 +684,7 @@ impl<'a> HostStorage<'a> {
         }
     }
 
-    fn owner_lease_active(directory: &Path) -> bool {
+    fn owner_lease_active(&self, directory: &Path) -> bool {
         let entries = match fs::read_dir(directory) {
             Ok(entries) => entries,
             Err(error) => {
@@ -730,13 +716,14 @@ impl<'a> HostStorage<'a> {
                     continue;
                 }
             };
-            active |= Self::lease_is_fresh(&path, &metadata);
+            active |= self.lease_is_fresh(&path, &metadata);
         }
         active
     }
 
-    fn lease_is_fresh(marker: &Path, metadata: &fs::Metadata) -> bool {
-        match older_than(metadata, Self::ACTIVE_LEASE) {
+    fn lease_is_fresh(&self, marker: &Path, metadata: &fs::Metadata) -> bool {
+        let lease = Duration::from_secs(self.config.host.active_lease_hours * 60 * 60);
+        match older_than(metadata, lease) {
             Ok(false) => true,
             Ok(true) => {
                 warn!(path = %marker.display(), "removing stale CI cache lease");
@@ -852,14 +839,17 @@ impl<'a> HostStorage<'a> {
 
     fn prune_docker_cache(&self, age: &str) {
         let home = self.host_root.join("home").join(&self.config.host.ci_user);
-        let socket = home.join(".colima/kithara/docker.sock");
+        let socket = docker_socket(&home, &self.config.host.colima_profile);
         let docker = self.config.host.brew_tool("docker");
         if !socket.exists() || !docker.is_file() {
             return;
         }
         let mut command = self.process.command(docker);
         command
-            .env("DOCKER_HOST", format!("unix://{}", socket.display()))
+            .env(
+                "DOCKER_HOST",
+                docker_host(&home, &self.config.host.colima_profile),
+            )
             .args(["builder", "prune", "--force", "--filter"])
             .arg(format!("until={age}"));
         if let Err(error) = self
@@ -889,7 +879,7 @@ impl<'a> HostStorage<'a> {
         command.env("COLIMA_HOME", home.join(".colima")).args([
             "ssh",
             "--profile",
-            Self::COLIMA_PROFILE,
+            self.config.host.colima_profile.as_str(),
             "--",
             "sudo",
             "fstrim",
@@ -926,7 +916,12 @@ impl<'a> HostStorage<'a> {
         info!("recycling the Linux guest to reclaim volume space");
         if let Err(error) = self.process.run(
             &colima.display().to_string(),
-            &["delete", "--force", "--profile", Self::COLIMA_PROFILE],
+            &[
+                "delete",
+                "--force",
+                "--profile",
+                self.config.host.colima_profile.as_str(),
+            ],
             "recycle the Linux guest",
         ) {
             warn!(%error, "could not recycle the Linux guest");
@@ -942,7 +937,7 @@ impl<'a> HostStorage<'a> {
         command.env("LIMA_HOME", home.join(".colima/_lima")).args([
             "disk",
             "delete",
-            &Self::linux_guest_disk(),
+            &self.linux_guest_disk(),
         ]);
         if let Err(error) = self
             .process
@@ -953,12 +948,12 @@ impl<'a> HostStorage<'a> {
     }
 
     /// colima names the disk after the profile it belongs to.
-    fn linux_guest_disk() -> String {
-        format!("colima-{}", Self::COLIMA_PROFILE)
+    fn linux_guest_disk(&self) -> String {
+        format!("colima-{}", self.config.host.colima_profile)
     }
 
     fn is_removable(&self, target: &Path) -> bool {
-        is_removable_under(&self.host_root, target, Self::REMOVABLE_ROOTS)
+        is_removable_under(&self.host_root, target, &self.config.host.removable_roots)
             || is_removable_under(&self.build_root, target, &["workspaces"])
             || is_removable_under(
                 &self.scratch_root,
@@ -1056,7 +1051,7 @@ fn tree_bytes(path: &Path) -> u64 {
     total
 }
 
-fn is_removable_under(root: &Path, target: &Path, removable_roots: &[&str]) -> bool {
+fn is_removable_under(root: &Path, target: &Path, removable_roots: &[impl AsRef<str>]) -> bool {
     if !root.is_absolute() || !target.is_absolute() {
         return false;
     }
@@ -1069,7 +1064,7 @@ fn is_removable_under(root: &Path, target: &Path, removable_roots: &[&str]) -> b
     };
     removable_roots
         .iter()
-        .any(|allowed| first == std::ffi::OsStr::new(allowed))
+        .any(|allowed| first == std::ffi::OsStr::new(allowed.as_ref()))
         && components.next().is_some()
         && relative
             .components()
@@ -1093,8 +1088,11 @@ pub(super) fn pressure_for(available: u64, soft: u64, aggressive: u64, reject: u
 /// `launchctl list` prints `PID  status  label`, and the dash in the PID column
 /// is the point: an agent restarted by `KeepAlive` stays loaded while holding no
 /// process, which is what a crash loop looks like from outside.
-fn agent_states_from(listing: &str) -> BTreeMap<&'static str, &'static str> {
-    Agents::ALWAYS_ON
+fn agent_states_from<'a>(
+    listing: &str,
+    always_on: &'a [String],
+) -> BTreeMap<&'a str, &'static str> {
+    always_on
         .iter()
         .map(|name| {
             let label = format!("com.zvuk.kithara-ci.{name}");
@@ -1113,7 +1111,7 @@ fn agent_states_from(listing: &str) -> BTreeMap<&'static str, &'static str> {
                     })
                 })
                 .unwrap_or("not-loaded");
-            (*name, state)
+            (name.as_str(), state)
         })
         .collect()
 }
@@ -1172,10 +1170,10 @@ fn unix_time() -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs::FileTimes, time::SystemTime};
+    use std::{collections::BTreeMap, ffi::OsString, fs::FileTimes, time::SystemTime};
 
     use super::*;
-    use crate::ci::config::fixture;
+    use crate::ci::{config::fixture, host::testing::install_double};
 
     fn config(root: &Path) -> CiConfig {
         let mut config = fixture();
@@ -1249,25 +1247,21 @@ mod tests {
 
     /// A tempdir has more than the sixty bytes this config calls a floor, so the
     /// run below is `Normal` — the pressure that used to skip the trim entirely.
-    #[cfg(unix)]
     #[test]
     fn the_guest_is_trimmed_even_with_nothing_under_pressure() {
-        use std::os::unix::fs::PermissionsExt;
-
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
-        let bin = cfg.host.brew_root.join("bin");
-        fs::create_dir_all(&bin).unwrap();
+        install_double(&cfg.host.brew_root.join("bin"), "colima");
         let asked = directory.path().join("asked");
-        fs::write(
-            bin.join("colima"),
-            format!("#!/bin/sh\necho \"$@\" > {}\n", asked.display()),
-        )
-        .unwrap();
-        fs::set_permissions(bin.join("colima"), fs::Permissions::from_mode(0o755)).unwrap();
 
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let process = Process::new(
+            directory.path(),
+            BTreeMap::from([(
+                OsString::from("KITHARA_TEST_TRACE"),
+                asked.clone().into_os_string(),
+            )]),
+        );
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
         assert_eq!(storage.worst_pressure().unwrap().0, Pressure::Normal);
         storage.cleanup().unwrap();
@@ -1290,12 +1284,20 @@ mod tests {
 
     #[test]
     fn legacy_macos_runner_is_not_health_owned() {
-        assert!(!agent_states_from(CRASH_LOOP_LISTING).contains_key("macos-runner"));
+        let host = fixture().host;
+
+        assert!(
+            !agent_states_from(CRASH_LOOP_LISTING, &host.always_on_agents)
+                .contains_key("macos-runner")
+        );
     }
 
     #[test]
     fn the_agents_still_holding_a_process_read_as_running() {
-        let states = agent_states_from(CRASH_LOOP_LISTING);
+        let host = fixture().host;
+
+        let states = agent_states_from(CRASH_LOOP_LISTING, &host.always_on_agents);
+
         assert_eq!(states.get("gitlab-runner"), Some(&"running"));
         assert_eq!(states.get("colima"), Some(&"running"));
     }
@@ -1304,8 +1306,14 @@ mod tests {
     /// dying, and reads differently so an operator knows which to fix.
     #[test]
     fn an_agent_missing_from_the_listing_reads_as_not_loaded() {
+        let host = fixture().host;
+
         assert_eq!(
-            agent_states_from("82778\t0\tcom.zvuk.kithara-ci.gitlab-runner\n").get("colima"),
+            agent_states_from(
+                "82778\t0\tcom.zvuk.kithara-ci.gitlab-runner\n",
+                &host.always_on_agents
+            )
+            .get("colima"),
             Some(&"not-loaded")
         );
     }
@@ -1398,10 +1406,10 @@ mod tests {
     #[test]
     fn cleanup_never_leaves_the_ci_root() {
         let directory = tempfile::tempdir().unwrap();
-        for name in HostStorage::REMOVABLE_ROOTS {
+        let cfg = config(directory.path());
+        for name in &cfg.host.removable_roots {
             fs::create_dir_all(directory.path().join(name)).unwrap();
         }
-        let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
         let safe = directory.path().join("workspaces/tmp/old");
@@ -1562,10 +1570,10 @@ mod tests {
     #[test]
     fn active_marker_pins_a_workspace() {
         let directory = tempfile::tempdir().unwrap();
-        for name in HostStorage::REMOVABLE_ROOTS {
+        let cfg = config(directory.path());
+        for name in &cfg.host.removable_roots {
             fs::create_dir_all(directory.path().join(name)).unwrap();
         }
-        let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
         let workspace = directory.path().join("workspaces/tmp/current");
@@ -1584,15 +1592,16 @@ mod tests {
         let stale = leases.join("job-28");
         fs::write(&fresh, b"").unwrap();
         fs::write(&stale, b"").unwrap();
-        let stale_time = SystemTime::now() - HostStorage::ACTIVE_LEASE - Duration::from_secs(1);
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        let lease = Duration::from_secs(cfg.host.active_lease_hours * 60 * 60);
+        let stale_time = SystemTime::now() - lease - Duration::from_secs(1);
         fs::File::options()
             .write(true)
             .open(&stale)
             .unwrap()
             .set_times(FileTimes::new().set_modified(stale_time))
             .unwrap();
-        let mut cfg = config(directory.path());
-        cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
         storage.set_pressure_sequence([
@@ -1699,34 +1708,45 @@ mod tests {
         assert!(!review.exists());
     }
 
-    /// A `tart` that answers a listing and records what else it was asked for.
-    #[cfg(unix)]
-    fn fake_tart(cfg: &mut CiConfig, root: &Path, running: bool) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
+    /// A `tart` that records what it was asked for.
+    fn fake_tart(cfg: &mut CiConfig, root: &Path) -> PathBuf {
         cfg.host.brew_root = root.join("brew");
-        let bin = cfg.host.brew_root.join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        let asked = root.join("asked");
-        let tart = bin.join("tart");
-        fs::write(
-            &tart,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = list ]; then printf '%s' \
-                 '[{{\"Name\":\"kithara-ci-job\",\"Running\":{running},\"State\":\"stopped\"}},\
-                 {{\"Name\":\"kithara-macos-base\",\"Running\":false,\"State\":\"stopped\"}}]'; \
-                 exit 0; fi\nprintf '%s' \"$*\" > {}\n",
-                asked.display()
+        install_double(&cfg.host.brew_root.join("bin"), "tart");
+        root.join("asked")
+    }
+
+    /// The environment a `tart` double answers a listing from.
+    fn tart_vars(asked: &Path, running: bool) -> BTreeMap<OsString, OsString> {
+        BTreeMap::from([
+            (
+                OsString::from("KITHARA_TEST_TRACE"),
+                asked.to_path_buf().into_os_string(),
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&tart, fs::Permissions::from_mode(0o755)).unwrap();
-        asked
+            (
+                OsString::from("KITHARA_TEST_STDOUT"),
+                OsString::from(format!(
+                    "[{{\"Name\":\"kithara-ci-job\",\"Running\":{running},\"State\":\"stopped\"}},\
+                     {{\"Name\":\"kithara-macos-base\",\"Running\":false,\"State\":\"stopped\"}}]"
+                )),
+            ),
+        ])
+    }
+
+    /// What `tart` was asked for other than the listing every run begins with.
+    ///
+    /// The listing is how the code under test decides, so its presence in the
+    /// trace carries no verdict; what follows it does.
+    fn asked_beyond_listing(asked: &Path) -> Vec<String> {
+        fs::read_to_string(asked)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.starts_with("list"))
+            .map(str::to_owned)
+            .collect()
     }
 
     /// Lay out `<TART_HOME>/vms` with a base bundle and, optionally, a clone
     /// whose parts were last written `since` ago.
-    #[cfg(unix)]
     fn tart_vms(cfg: &mut CiConfig, root: &Path, clone_age: Option<Duration>) {
         let vms = root.join("vm/tart/vms");
         cfg.host.macos_vm_bundle = vms.join("kithara-macos-base");
@@ -1753,22 +1773,21 @@ mod tests {
     /// divergence the dead runner wrote, not the size a directory walk reads
     /// off a copy-on-write clone. Driven through `cleanup` rather than the
     /// step alone, because a step nothing calls frees nothing.
-    #[cfg(unix)]
     #[test]
     fn an_abandoned_job_vm_is_deleted() {
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
-        let asked = fake_tart(&mut cfg, directory.path(), false);
+        let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let process = Process::new(directory.path(), tart_vars(&asked, false));
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
         storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
 
         storage.cleanup().unwrap();
 
         assert_eq!(
-            fs::read_to_string(&asked).unwrap_or_default(),
-            "delete kithara-ci-job",
+            asked_beyond_listing(&asked),
+            ["delete kithara-ci-job"],
             "an abandoned clone must be handed back to tart"
         );
     }
@@ -1776,14 +1795,13 @@ mod tests {
     /// The base bundle is the one thing here that cannot be remade without a
     /// person and an IPSW, so it is named out of the sweep rather than aged out
     /// of it: with no clone beside it, cleanup must ask tart for nothing.
-    #[cfg(unix)]
     #[test]
     fn the_base_bundle_is_never_a_delete_candidate() {
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
-        let asked = fake_tart(&mut cfg, directory.path(), false);
+        let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), None);
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let process = Process::new(directory.path(), tart_vars(&asked, false));
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
         storage.prune_abandoned_job_vms(HostStorage::DAY);
@@ -1798,20 +1816,19 @@ mod tests {
     /// A guest serves every job it is offered and writes nothing to its bundle
     /// while it waits, so an idle runner looks exactly as stale as a dead one.
     /// Liveness is what separates them.
-    #[cfg(unix)]
     #[test]
     fn a_job_vm_a_runner_serves_from_survives() {
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
-        let asked = fake_tart(&mut cfg, directory.path(), true);
+        let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let process = Process::new(directory.path(), tart_vars(&asked, true));
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
         storage.prune_abandoned_job_vms(HostStorage::DAY);
 
         assert!(
-            !asked.exists(),
+            asked_beyond_listing(&asked).is_empty(),
             "a running guest must not be taken from the runner serving jobs on it"
         );
     }
@@ -1820,14 +1837,13 @@ mod tests {
     /// guest answers, which is up to two hundred seconds — longer than the five
     /// minutes this runs on. Deleting it there fails the boot and takes the
     /// runner down with it.
-    #[cfg(unix)]
     #[test]
     fn a_freshly_cloned_job_vm_survives() {
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
-        let asked = fake_tart(&mut cfg, directory.path(), false);
+        let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), Some(Duration::ZERO));
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let process = Process::new(directory.path(), tart_vars(&asked, false));
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
         storage.prune_abandoned_job_vms(HostStorage::DAY);

@@ -623,6 +623,14 @@ pub(crate) struct RetryFallbackConfig {
     pub(crate) allowed_idents: Vec<String>,
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
+    /// Identifiers this check refuses outright. Matched case-insensitively
+    /// against the whole name, so only an exact spelling trips them.
+    #[serde(default = "default_retry_forbidden_idents")]
+    pub(crate) forbidden_idents: Vec<String>,
+    /// Name fragments this check refuses. Matched case-insensitively anywhere
+    /// in the name, which is what catches `read_or_fallback` and friends.
+    #[serde(default = "default_retry_forbidden_substrings")]
+    pub(crate) forbidden_substrings: Vec<String>,
 }
 
 impl Default for RetryFallbackConfig {
@@ -630,8 +638,44 @@ impl Default for RetryFallbackConfig {
         Self {
             allowed_idents: Vec::new(),
             exempt_files: default_exempt_files(),
+            forbidden_idents: default_retry_forbidden_idents(),
+            forbidden_substrings: default_retry_forbidden_substrings(),
         }
     }
+}
+
+fn default_retry_forbidden_idents() -> Vec<String> {
+    [
+        "attempt",
+        "attempts",
+        "retry",
+        "retries",
+        "retry_count",
+        "retry_limit",
+        "max_attempts",
+        "max_retries",
+        "fallback",
+        "fall_back",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+fn default_retry_forbidden_substrings() -> Vec<String> {
+    [
+        "_retry",
+        "_retries",
+        "_with_retries",
+        "_with_retry",
+        "_with_fallback",
+        "_or_fallback",
+        "_or_retry",
+        "try_or_",
+        "try_then_",
+        "fallback_",
+    ]
+    .map(String::from)
+    .to_vec()
 }
 
 fn load_optional<T>(path: &Path) -> Result<T>
@@ -661,5 +705,26 @@ mod tests {
                 .is_empty()
         );
         Ok(())
+    }
+
+    #[test]
+    fn the_moved_idioms_defaults_match_the_constants_they_replace() {
+        let thresholds = ThresholdsConfig::default();
+
+        assert_eq!(thresholds.retry_fallback.forbidden_idents.len(), 10);
+        assert!(
+            thresholds
+                .retry_fallback
+                .forbidden_idents
+                .iter()
+                .any(|name| name == "max_retries")
+        );
+        assert!(
+            thresholds
+                .retry_fallback
+                .forbidden_substrings
+                .iter()
+                .any(|fragment| fragment == "_or_fallback")
+        );
     }
 }

@@ -170,7 +170,7 @@ fn run_lane(
     // Before the verdict rather than after it: a red lane is exactly when the
     // build's share of the wall clock needs explaining, and reporting after the
     // early return would print the number only for lanes that passed.
-    sccache::report_stats();
+    sccache::report_stats(project.tools.program("sccache"));
     if !status.success() {
         return Err(ChildFailure::inherited(
             format!("test lane `{lane_name}`"),
@@ -722,6 +722,7 @@ mod tests {
             perf: PerfConfig::default(),
             stress: StressConfig::default(),
             ext: toml::Table::default(),
+            tools: crate::common::tools::ToolsConfig::default(),
         }
     }
 

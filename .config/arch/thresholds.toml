@@ -138,6 +138,26 @@ exempt_crates = [
   "kithara-probe-macros",
 ]
 
+[platform_layer_hygiene]
+# The crate that owns the platform abstraction. Files under it consume the
+# abstraction; the sub-trees below implement it or are the backends it wraps,
+# so naming a primitive there is the job, not a violation.
+root = "crates/kithara-platform/src/"
+excluded_subtrees = ["backend/", "system/", "loom/", "wasm/"]
+impl_subtrees = [
+  "flash/sync/",
+  "flash/tokio/",
+  "flash/system/",
+  "common/cancel/",
+  "common/time.rs",
+]
+# The ownership primitive itself, and the wasm shim that has no platform Arc to
+# reach for.
+arc_owner_files = [
+  "crates/kithara-platform/src/system/ownership.rs",
+  "crates/kithara-platform/src/wasm/sync/mod.rs",
+]
+
 [cancel_root_sites]
 # Crates whose production *is* test scaffolding (helpers, mocks): their
 # hard-coded `CancelToken::root()` / `CancelToken::never()` calls are

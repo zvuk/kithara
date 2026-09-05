@@ -32,7 +32,7 @@ impl Check for NonEnglishText {
             let Ok(src) = fs::read_to_string(&path) else {
                 continue;
             };
-            violations.extend(scan_lines(&rel, &src));
+            violations.extend(scan_lines(&rel, &src, cfg.excerpt_chars));
         }
         violations.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(violations)
@@ -57,10 +57,10 @@ fn scan_content(
     if path_excluded(&excludes, rel) {
         return Vec::new();
     }
-    scan_lines(rel, src)
+    scan_lines(rel, src, cfg.excerpt_chars)
 }
 
-fn scan_lines(rel: &str, src: &str) -> Vec<Violation> {
+fn scan_lines(rel: &str, src: &str, excerpt_chars: usize) -> Vec<Violation> {
     src.lines()
         .enumerate()
         .filter_map(|(idx, line)| {
@@ -73,7 +73,7 @@ fn scan_lines(rel: &str, src: &str) -> Vec<Violation> {
                 format!("{rel}:{line_no}"),
                 format!(
                     "Cyrillic text is not allowed in tracked text files at line {line_no}: {}",
-                    excerpt(line)
+                    excerpt(line, excerpt_chars)
                 ),
             ))
         })
@@ -84,12 +84,11 @@ fn is_cyrillic(ch: char) -> bool {
     ('\u{0400}'..='\u{052F}').contains(&ch)
 }
 
-fn excerpt(line: &str) -> String {
-    const LIMIT: usize = 120;
+fn excerpt(line: &str, limit: usize) -> String {
     let trimmed = line.trim();
     let mut out = String::new();
     for (idx, ch) in trimmed.chars().enumerate() {
-        if idx == LIMIT {
+        if idx == limit {
             out.push_str("...");
             break;
         }
@@ -136,6 +135,7 @@ mod tests {
     fn excludes_configured_paths() {
         let cfg = NonEnglishTextConfig {
             exclude_paths: vec!["docs/plans/**".to_string()],
+            ..NonEnglishTextConfig::default()
         };
         let src = format!("{}\n", cyrillic_sample());
         let violations = scan_content(&cfg, "docs/plans/local.md", &src);

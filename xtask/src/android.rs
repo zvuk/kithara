@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
 use kithara_devtools::{
     Ctx,
+    common::tools::ToolsConfig,
     util::{check_rust_target, check_tool},
 };
 
@@ -63,20 +64,28 @@ pub(crate) enum AndroidCommand {
 
 pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
+    let tools = &ctx.config.tools;
     match cmd {
-        AndroidCommand::Build { profile } => run_build(profile, &ext.android),
-        AndroidCommand::Aar => run_aar(&ext.android),
+        AndroidCommand::Build { profile } => run_build(profile, &ext.android, tools),
+        AndroidCommand::Aar => run_aar(&ext.android, tools),
         AndroidCommand::Run {
             profile,
             avd,
             debug,
             skip_build,
-        } => run_app(profile, avd.as_deref(), debug, skip_build, &ext.android),
+        } => run_app(
+            profile,
+            avd.as_deref(),
+            debug,
+            skip_build,
+            &ext.android,
+            tools,
+        ),
         AndroidCommand::Test {
             profile,
             avd,
             skip_build,
-        } => run_tests(profile, avd.as_deref(), skip_build, &ext.android),
+        } => run_tests(profile, avd.as_deref(), skip_build, &ext.android, tools),
     }
 }
 
@@ -109,13 +118,21 @@ fn recreate_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Result<()> {
+pub(crate) fn run_build(
+    profile: BuildProfile,
+    android: &AndroidConfig,
+    tools: &ToolsConfig,
+) -> Result<()> {
     const RUST_TARGETS: &[(&str, &str)] = &[
         ("aarch64-linux-android", "arm64-v8a"),
         ("x86_64-linux-android", "x86_64"),
     ];
 
-    check_tool("cargo", &["ndk", "--help"], "cargo install cargo-ndk")?;
+    check_tool(
+        "cargo",
+        &["ndk", "--help"],
+        tools.install_hint("cargo-ndk", "cargo install cargo-ndk"),
+    )?;
     check_tool("rustup", &["--version"], "https://rustup.rs")?;
 
     for (target, _) in RUST_TARGETS {
@@ -250,8 +267,8 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
     Ok(())
 }
 
-fn run_aar(android: &AndroidConfig) -> Result<()> {
-    run_build(BuildProfile::Release, android)?;
+fn run_aar(android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
+    run_build(BuildProfile::Release, android, tools)?;
 
     let metadata = MetadataCommand::new()
         .exec()
@@ -325,6 +342,7 @@ fn prepare_device(
     skip_build: bool,
     screen: Screen,
     android: &AndroidConfig,
+    tools: &ToolsConfig,
 ) -> Result<Device> {
     let sdk_root = android_sdk_root()?;
     let adb = sdk_root.join("platform-tools/adb");
@@ -344,7 +362,7 @@ fn prepare_device(
     }
 
     if !skip_build {
-        run_build(profile, android)?;
+        run_build(profile, android, tools)?;
     }
 
     let avd_name = match avd {
@@ -368,8 +386,9 @@ fn run_tests(
     avd: Option<&str>,
     skip_build: bool,
     android: &AndroidConfig,
+    tools: &ToolsConfig,
 ) -> Result<()> {
-    let device = prepare_device(profile, avd, skip_build, Screen::Headless, android)?;
+    let device = prepare_device(profile, avd, skip_build, Screen::Headless, android, tools)?;
 
     println!("==> Running instrumented tests via gradle");
     let tests = Command::new(&device.gradlew)
@@ -409,12 +428,13 @@ fn run_app(
     debug: bool,
     skip_build: bool,
     android: &AndroidConfig,
+    tools: &ToolsConfig,
 ) -> Result<()> {
     let Device {
         adb,
         android_root,
         gradlew,
-    } = prepare_device(profile, avd, skip_build, Screen::Windowed, android)?;
+    } = prepare_device(profile, avd, skip_build, Screen::Windowed, android, tools)?;
 
     println!("==> Installing demo APK via gradle");
     let gradle_task = match profile {

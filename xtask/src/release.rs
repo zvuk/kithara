@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_devtools::{Ctx, util::check_tool};
+use kithara_devtools::{Ctx, common::tools::ToolsConfig, util::check_tool};
 use serde_json::{Value, json};
 
 use crate::config::{KitharaExt, ReleaseConfig};
@@ -66,26 +66,31 @@ enum ReleaseCommand {
 pub(crate) fn run(args: &ReleaseArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     let cfg = &ext.release;
+    let tools = &ctx.config.tools;
     match &args.command {
-        ReleaseCommand::Prepare { version, zip } => prepare(cfg, version, zip.as_deref()),
-        ReleaseCommand::Publish { r#ref, artifacts } => publish(cfg, r#ref, artifacts.as_deref()),
-        ReleaseCommand::Pages { r#ref, artifacts } => pages(cfg, r#ref, artifacts.as_deref()),
+        ReleaseCommand::Prepare { version, zip } => prepare(cfg, version, zip.as_deref(), tools),
+        ReleaseCommand::Publish { r#ref, artifacts } => {
+            publish(cfg, r#ref, artifacts.as_deref(), tools)
+        }
+        ReleaseCommand::Pages { r#ref, artifacts } => {
+            pages(cfg, r#ref, artifacts.as_deref(), tools)
+        }
     }
 }
 
 pub(crate) fn publish_retained(ctx: &Ctx, git_ref: &str, artifacts: &Path) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
-    publish(&ext.release, git_ref, Some(artifacts))
+    publish(&ext.release, git_ref, Some(artifacts), &ctx.config.tools)
 }
 
 pub(crate) fn publish_pages_retained(ctx: &Ctx, git_ref: &str, artifacts: &Path) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
-    pages(&ext.release, git_ref, Some(artifacts))
+    pages(&ext.release, git_ref, Some(artifacts), &ctx.config.tools)
 }
 
 pub(crate) fn publish_nightly_retained(ctx: &Ctx, git_ref: &str, artifacts: &Path) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
-    publish_nightly(&ext.release, git_ref, artifacts)
+    publish_nightly(&ext.release, git_ref, artifacts, &ctx.config.tools)
 }
 
 /// The rolling build channel. A nightly is not a version: it carries no
@@ -94,7 +99,12 @@ pub(crate) fn publish_nightly_retained(ctx: &Ctx, git_ref: &str, artifacts: &Pat
 /// it, and every run replaces that tag, its release, and its package files
 /// wholesale, because an asset cannot take new bytes under a name a release
 /// already uses. A consumer pins the tag once and follows the branch.
-fn publish_nightly(cfg: &ReleaseConfig, git_ref: &str, artifacts: &Path) -> Result<()> {
+fn publish_nightly(
+    cfg: &ReleaseConfig,
+    git_ref: &str,
+    artifacts: &Path,
+    tools: &ToolsConfig,
+) -> Result<()> {
     require_config(cfg)?;
     check_tool("gh", &["--version"], "brew install gh")?;
     if cfg.nightly_tag.is_empty() {
@@ -103,13 +113,13 @@ fn publish_nightly(cfg: &ReleaseConfig, git_ref: &str, artifacts: &Path) -> Resu
     let tag = cfg.nightly_tag.as_str();
     let sha = git_capture(&["rev-parse", git_ref])?;
     let assets = nightly_assets(cfg, artifacts)?;
-    let notes = nightly_notes(cfg, &sha, &assets)?;
+    let notes = nightly_notes(cfg, &sha, &assets, tools)?;
     println!(
         "Nightly {tag} from {git_ref} ({short})",
         short = &sha[..12.min(sha.len())]
     );
 
-    replace_github_nightly(cfg, tag, &sha, &notes, &assets)?;
+    replace_github_nightly(cfg, tag, &sha, &notes, &assets, tools)?;
     replace_gitlab_nightly(cfg, tag, &sha, &notes, &assets)?;
 
     println!();
@@ -154,7 +164,12 @@ fn nightly_assets(cfg: &ReleaseConfig, artifacts: &Path) -> Result<Vec<PathBuf>>
     Ok(assets)
 }
 
-fn nightly_notes(cfg: &ReleaseConfig, sha: &str, assets: &[PathBuf]) -> Result<String> {
+fn nightly_notes(
+    cfg: &ReleaseConfig,
+    sha: &str,
+    assets: &[PathBuf],
+    tools: &ToolsConfig,
+) -> Result<String> {
     let date = git_capture(&["show", "-s", "--format=%cI", sha])?;
     let subject = git_capture(&["show", "-s", "--format=%s", sha])?;
     let mut notes = format!(
@@ -163,7 +178,7 @@ fn nightly_notes(cfg: &ReleaseConfig, sha: &str, assets: &[PathBuf]) -> Result<S
     );
     for asset in assets {
         let name = file_name(asset)?;
-        let checksum = sha256(asset)?;
+        let checksum = sha256(asset, tools)?;
         let _ = writeln!(notes, "- `{name}` — `{checksum}`");
     }
     let _ = writeln!(
@@ -182,6 +197,7 @@ fn replace_github_nightly(
     sha: &str,
     notes: &str,
     assets: &[PathBuf],
+    tools: &ToolsConfig,
 ) -> Result<()> {
     let repo = &cfg.github_repo;
     // The commit has to be in the mirror before the old release is taken down.
@@ -248,7 +264,7 @@ fn replace_github_nightly(
 
     for asset in assets {
         let name = file_name(asset)?;
-        verify_github_asset(repo, tag, &name, &sha256(asset)?)?;
+        verify_github_asset(repo, tag, &name, &sha256(asset, tools)?, tools)?;
     }
     Ok(())
 }
@@ -337,7 +353,12 @@ fn file_name(path: &Path) -> Result<String> {
         .with_context(|| format!("{} has no file name", path.display()))
 }
 
-fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()> {
+fn prepare(
+    cfg: &ReleaseConfig,
+    version: &str,
+    zip: Option<&Path>,
+    tools: &ToolsConfig,
+) -> Result<()> {
     require_config(cfg)?;
     validate_version(version)?;
 
@@ -345,10 +366,15 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
     let zip = if let Some(path) = zip {
         path
     } else {
-        check_tool("just", &["--version"], "brew install just")?;
+        let just = tools.program("just");
+        check_tool(
+            just,
+            &["--version"],
+            tools.install_hint("just", "brew install just"),
+        )?;
         println!("Building XCFramework (just platform apple release)...");
         run_step(
-            Command::new("just").args(["platform", "apple", "release"]),
+            Command::new(just).args(["platform", "apple", "release"]),
             "just platform apple release",
         )?;
         built = env::temp_dir().join(&cfg.core_asset);
@@ -358,7 +384,7 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
         bail!("zip not found: {}", zip.display());
     }
 
-    let checksum = swift_checksum(zip)?;
+    let checksum = swift_checksum(zip, tools)?;
     println!("Checksum: {checksum}");
 
     let manifest_path = cfg.manifest.as_str();
@@ -383,7 +409,7 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
             fs::copy(&built, &dest)
                 .with_context(|| format!("cache {} to {}", cfg.merged_asset, dest.display()))?;
             println!("Cached artifact: {}", dest.display());
-            let checksum = sha256(&built)?;
+            let checksum = sha256(&built, tools)?;
             println!("Checksum {}: {}", cfg.merged_asset, checksum);
         } else {
             println!(
@@ -394,12 +420,19 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
         }
     }
 
-    stage_dir_asset(&tag, &cfg.docs_asset, &cfg.docs_archive, "documentation")?;
+    stage_dir_asset(
+        &tag,
+        &cfg.docs_asset,
+        &cfg.docs_archive,
+        "documentation",
+        tools,
+    )?;
     stage_dir_asset(
         &tag,
         &cfg.wasm_asset,
         &cfg.wasm_dist,
         "wasm gh-pages bundle",
+        tools,
     )?;
 
     println!();
@@ -416,7 +449,13 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
 /// release cache. A disabled channel (empty `asset`) is a no-op; a missing
 /// source dir prints a note and is skipped so a release without that artifact
 /// still succeeds.
-fn stage_dir_asset(tag: &str, asset: &str, source_rel: &str, label: &str) -> Result<()> {
+fn stage_dir_asset(
+    tag: &str,
+    asset: &str,
+    source_rel: &str,
+    label: &str,
+    tools: &ToolsConfig,
+) -> Result<()> {
     if asset.is_empty() {
         return Ok(());
     }
@@ -435,12 +474,12 @@ fn stage_dir_asset(tag: &str, asset: &str, source_rel: &str, label: &str) -> Res
         .and_then(|n| n.to_str())
         .with_context(|| format!("{source_rel} has no final component"))?;
     let dest = cache_named(tag, asset)?;
-    zip_dir(parent, name, &dest)?;
+    zip_dir(parent, name, &dest, tools)?;
     println!("Cached artifact: {} ({label})", dest.display());
     Ok(())
 }
 
-fn zip_dir(parent: &Path, directory_name: &str, output: &Path) -> Result<()> {
+fn zip_dir(parent: &Path, directory_name: &str, output: &Path, tools: &ToolsConfig) -> Result<()> {
     if output.exists() {
         fs::remove_file(output).with_context(|| format!("remove {}", output.display()))?;
     }
@@ -448,7 +487,7 @@ fn zip_dir(parent: &Path, directory_name: &str, output: &Path) -> Result<()> {
         fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
     run_step(
-        Command::new("zip")
+        Command::new(tools.program("zip"))
             .args(["-r", "-y", "-q"])
             .arg(output)
             .arg(directory_name)
@@ -457,7 +496,12 @@ fn zip_dir(parent: &Path, directory_name: &str, output: &Path) -> Result<()> {
     )
 }
 
-fn publish(cfg: &ReleaseConfig, git_ref: &str, artifacts: Option<&Path>) -> Result<()> {
+fn publish(
+    cfg: &ReleaseConfig,
+    git_ref: &str,
+    artifacts: Option<&Path>,
+    tools: &ToolsConfig,
+) -> Result<()> {
     require_config(cfg)?;
     check_tool("gh", &["--version"], "brew install gh")?;
 
@@ -471,7 +515,7 @@ fn publish(cfg: &ReleaseConfig, git_ref: &str, artifacts: Option<&Path>) -> Resu
     let zip = artifact_path(&tag, &cfg.core_asset, artifacts)?;
     let zip = match zip.is_file() {
         true => {
-            let actual = sha256(&zip)?;
+            let actual = sha256(&zip, tools)?;
             if actual != checksum {
                 bail!(
                     "cached {} sha256 {actual} does not match {} checksum {checksum}; \
@@ -485,11 +529,11 @@ fn publish(cfg: &ReleaseConfig, git_ref: &str, artifacts: Option<&Path>) -> Resu
         false => None,
     };
 
-    let notes = release_notes(cfg, &tag, &sha, &checksum, artifacts)?;
+    let notes = release_notes(cfg, &tag, &sha, &checksum, artifacts, tools)?;
 
-    publish_github(cfg, &tag, &sha, &notes, &checksum, zip.as_deref())?;
+    publish_github(cfg, &tag, &sha, &notes, &checksum, zip.as_deref(), tools)?;
     publish_gitlab(cfg, &tag, &sha, &notes, &checksum, zip.as_deref())?;
-    publish_extras(cfg, &tag, artifacts)?;
+    publish_extras(cfg, &tag, artifacts, tools)?;
     sync_gitlab_distribution_links(cfg, &tag)?;
 
     println!();
@@ -512,6 +556,7 @@ fn publish_github(
     notes: &str,
     checksum: &str,
     zip: Option<&Path>,
+    tools: &ToolsConfig,
 ) -> Result<()> {
     let repo = &cfg.github_repo;
     let view = Command::new("gh")
@@ -560,12 +605,12 @@ fn publish_github(
             ]),
             "gh release create",
         )?;
-        verify_github_asset(repo, tag, &cfg.core_asset, checksum)?;
+        verify_github_asset(repo, tag, &cfg.core_asset, checksum, tools)?;
         return Ok(());
     }
 
     let zip = zip_required(zip, cfg, tag)?;
-    upload_github_asset(repo, tag, zip)
+    upload_github_asset(repo, tag, zip, tools)
 }
 
 fn publish_gitlab(
@@ -658,12 +703,17 @@ fn publish_gitlab(
 /// Publish the secondary cached assets — the single self-contained framework
 /// and the documentation archive — to the GitHub release and the `GitLab`
 /// generic registry so manual integrations download the same bytes.
-fn publish_extras(cfg: &ReleaseConfig, tag: &str, artifacts: Option<&Path>) -> Result<()> {
-    upload_extra_asset(cfg, tag, &cfg.merged_asset, true, artifacts)?;
+fn publish_extras(
+    cfg: &ReleaseConfig,
+    tag: &str,
+    artifacts: Option<&Path>,
+    tools: &ToolsConfig,
+) -> Result<()> {
+    upload_extra_asset(cfg, tag, &cfg.merged_asset, true, artifacts, tools)?;
     for name in &cfg.platform_assets {
-        upload_extra_asset(cfg, tag, name, true, artifacts)?;
+        upload_extra_asset(cfg, tag, name, true, artifacts, tools)?;
     }
-    upload_extra_asset(cfg, tag, &cfg.docs_asset, false, artifacts)?;
+    upload_extra_asset(cfg, tag, &cfg.docs_asset, false, artifacts, tools)?;
     Ok(())
 }
 
@@ -677,6 +727,7 @@ fn upload_extra_asset(
     name: &str,
     required: bool,
     artifacts: Option<&Path>,
+    tools: &ToolsConfig,
 ) -> Result<()> {
     if name.is_empty() {
         return Ok(());
@@ -692,21 +743,30 @@ fn upload_extra_asset(
         println!("[release] {name} not cached — skipping (run prepare to include it)");
         return Ok(());
     }
-    upload_github_asset(&cfg.github_repo, tag, &zip)?;
-    upload_gitlab_asset(cfg, tag, name, &zip)?;
+    upload_github_asset(&cfg.github_repo, tag, &zip, tools)?;
+    upload_gitlab_asset(cfg, tag, name, &zip, tools)?;
     Ok(())
 }
 
 /// Deploy the prepared wasm bundle to GitHub Pages classic: force-orphan a
 /// single commit onto the configured branch and push it. Idempotent — every
 /// deploy replaces the branch contents wholesale.
-fn pages(cfg: &ReleaseConfig, git_ref: &str, artifacts: Option<&Path>) -> Result<()> {
+fn pages(
+    cfg: &ReleaseConfig,
+    git_ref: &str,
+    artifacts: Option<&Path>,
+    tools: &ToolsConfig,
+) -> Result<()> {
     if cfg.pages_branch.is_empty() || cfg.wasm_asset.is_empty() {
         bail!("release.pages_branch / release.wasm_asset must be set in .config/xtask.toml");
     }
     check_tool("git", &["--version"], "https://git-scm.com")?;
     check_tool("gh", &["--version"], "brew install gh")?;
-    check_tool("unzip", &["-v"], "unzip is part of the base system")?;
+    check_tool(
+        tools.program("unzip"),
+        &["-v"],
+        tools.install_hint("unzip", "unzip is part of the base system"),
+    )?;
     run_step(
         Command::new("gh").args(["auth", "setup-git"]),
         "gh auth setup-git",
@@ -735,7 +795,7 @@ fn pages(cfg: &ReleaseConfig, git_ref: &str, artifacts: Option<&Path>) -> Result
     }
     fs::create_dir_all(&staging).with_context(|| format!("create {}", staging.display()))?;
     run_step(
-        Command::new("unzip")
+        Command::new(tools.program("unzip"))
             .arg("-q")
             .arg(&zip)
             .arg("-d")
@@ -883,13 +943,13 @@ fn sync_gitlab_distribution_links(cfg: &ReleaseConfig, tag: &str) -> Result<()> 
 }
 
 /// Upload (or replace) one asset on an existing GitHub release.
-fn upload_github_asset(repo: &str, tag: &str, file: &Path) -> Result<()> {
+fn upload_github_asset(repo: &str, tag: &str, file: &Path, tools: &ToolsConfig) -> Result<()> {
     let name = file
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let checksum = sha256(file)?;
-    match github_asset_sha256(repo, tag, &name)? {
+    let checksum = sha256(file, tools)?;
+    match github_asset_sha256(repo, tag, &name, tools)? {
         Some(existing) if existing == checksum => {
             println!("[github] asset {name} already uploaded with matching checksum");
             return Ok(());
@@ -907,11 +967,17 @@ fn upload_github_asset(repo: &str, tag: &str, file: &Path) -> Result<()> {
             .arg(file),
         "gh release upload",
     )?;
-    verify_github_asset(repo, tag, &name, &checksum)
+    verify_github_asset(repo, tag, &name, &checksum, tools)
 }
 
-fn verify_github_asset(repo: &str, tag: &str, name: &str, expected: &str) -> Result<()> {
-    let actual = github_asset_sha256(repo, tag, name)?
+fn verify_github_asset(
+    repo: &str,
+    tag: &str,
+    name: &str,
+    expected: &str,
+    tools: &ToolsConfig,
+) -> Result<()> {
+    let actual = github_asset_sha256(repo, tag, name, tools)?
         .with_context(|| format!("github asset {name} is missing after upload"))?;
     if actual != expected {
         bail!("github asset {name} has sha256 {actual}, expected {expected}");
@@ -919,7 +985,12 @@ fn verify_github_asset(repo: &str, tag: &str, name: &str, expected: &str) -> Res
     Ok(())
 }
 
-fn github_asset_sha256(repo: &str, tag: &str, name: &str) -> Result<Option<String>> {
+fn github_asset_sha256(
+    repo: &str,
+    tag: &str,
+    name: &str,
+    tools: &ToolsConfig,
+) -> Result<Option<String>> {
     let release = gh_json(&["api", &format!("repos/{repo}/releases/tags/{tag}")])?;
     let Some(asset) = release["assets"]
         .as_array()
@@ -963,7 +1034,7 @@ fn github_asset_sha256(repo: &str, tag: &str, name: &str) -> Result<Option<Strin
             ]),
             "gh release download",
         )?;
-        sha256(&download_dir.join(name)).map(Some)
+        sha256(&download_dir.join(name), tools).map(Some)
     })();
     fs::remove_dir_all(&download_dir)
         .with_context(|| format!("remove {}", download_dir.display()))?;
@@ -971,10 +1042,16 @@ fn github_asset_sha256(repo: &str, tag: &str, name: &str) -> Result<Option<Strin
 }
 
 /// Mirror one asset to the `GitLab` generic package registry under the tag.
-fn upload_gitlab_asset(cfg: &ReleaseConfig, tag: &str, name: &str, file: &Path) -> Result<()> {
+fn upload_gitlab_asset(
+    cfg: &ReleaseConfig,
+    tag: &str,
+    name: &str,
+    file: &Path,
+    tools: &ToolsConfig,
+) -> Result<()> {
     let token = gitlab_token(&cfg.gitlab_host)?;
     let api = GitlabApi::new(cfg, &token)?;
-    let actual_sha = sha256(file)?;
+    let actual_sha = sha256(file, tools)?;
     match api.package_file_sha(tag, name)? {
         Some(existing_sha) if existing_sha == actual_sha => {
             println!("[gitlab] package asset {name} already uploaded");
@@ -1281,6 +1358,7 @@ fn release_notes(
     sha: &str,
     checksum: &str,
     artifacts: Option<&Path>,
+    tools: &ToolsConfig,
 ) -> Result<String> {
     let version = tag.trim_start_matches('v');
     let body = changelog_section(sha, version)
@@ -1291,7 +1369,7 @@ fn release_notes(
     let single_checksum = if !cfg.merged_asset.is_empty() {
         let single = artifact_path(tag, &cfg.merged_asset, artifacts)?;
         if single.is_file() {
-            Some(sha256(&single)?)
+            Some(sha256(&single, tools)?)
         } else {
             None
         }
@@ -1553,36 +1631,41 @@ fn manifest_field(manifest: &str, key: &str) -> Result<String> {
         .with_context(|| format!("`let {key} = \"...\"` not found in release manifest"))
 }
 
-fn swift_checksum(zip: &Path) -> Result<String> {
-    let output = Command::new("swift")
+fn swift_checksum(zip: &Path, tools: &ToolsConfig) -> Result<String> {
+    let program = tools.program("swift");
+    let output = Command::new(program)
         .args(["package", "compute-checksum"])
         .arg(zip)
         .output()
-        .context("run swift package compute-checksum")?;
+        .with_context(|| format!("run {program} package compute-checksum"))?;
     if !output.status.success() {
         bail!(
-            "swift package compute-checksum failed: {}",
+            "{program} package compute-checksum failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn sha256(path: &Path) -> Result<String> {
-    let output = Command::new("shasum")
+fn sha256(path: &Path, tools: &ToolsConfig) -> Result<String> {
+    let program = tools.program("shasum");
+    let output = Command::new(program)
         .args(["-a", "256"])
         .arg(path)
         .output()
-        .context("run shasum -a 256")?;
+        .with_context(|| format!("run {program} -a 256"))?;
     if !output.status.success() {
-        bail!("shasum failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "{program} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     stdout
         .split_whitespace()
         .next()
         .map(str::to_string)
-        .context("empty shasum output")
+        .with_context(|| format!("empty {program} output"))
 }
 
 fn git_capture(args: &[&str]) -> Result<String> {

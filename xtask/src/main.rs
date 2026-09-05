@@ -148,6 +148,22 @@ mod tests {
         assert!(Cli::try_parse_from(["xtask", "self-cache", "probe"]).is_ok());
     }
 
+    /// `.cargo/config.toml` aliases `cargo xtask` to `cargo run --package xtask`,
+    /// which refuses to pick when the package carries several binaries.
+    /// `src/bin/fake-tool.rs` is the second one, so the manifest has to name this
+    /// file's binary as the default or every `cargo xtask` invocation fails.
+    #[test]
+    fn the_cargo_xtask_alias_resolves_to_this_binary() {
+        let manifest: toml::Table = include_str!("../Cargo.toml").parse().unwrap();
+
+        assert_eq!(
+            manifest["package"]
+                .get("default-run")
+                .and_then(toml::Value::as_str),
+            Some("xtask")
+        );
+    }
+
     #[test]
     fn quality_lab_commands_are_nested_under_quality() {
         assert!(Cli::try_parse_from(["xtask", "quality", "lab", "list"]).is_ok());

@@ -366,10 +366,10 @@ mod tests {
         let executable = env::current_exe().expect("current test executable");
         let mut command = Command::new(executable);
         command
-            .arg(child_test_name("emit_child_output"))
-            .arg("--exact")
-            .arg("--ignored")
-            .arg("--nocapture")
+            .args(crate::common::child_test_args(
+                module_path!(),
+                "emit_child_output",
+            ))
             .env(CHILD_ENV, CHILD_ENV_VALUE);
 
         let status = run(&mut command, &log_path).expect("capture child output");
@@ -387,10 +387,10 @@ mod tests {
         let executable = env::current_exe().expect("current test executable");
         let mut command = Command::new(executable);
         command
-            .arg(child_test_name("emit_then_block"))
-            .arg("--exact")
-            .arg("--ignored")
-            .arg("--nocapture")
+            .args(crate::common::child_test_args(
+                module_path!(),
+                "emit_then_block",
+            ))
             .stdin(Stdio::piped())
             .env(CHILD_ENV, BLOCK_CHILD_ENV_VALUE)
             .env(CHILD_COMPLETION_FILE, &completion);
@@ -461,12 +461,6 @@ mod tests {
         fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
             Err(io::Error::other("injected sink failure"))
         }
-    }
-
-    fn child_test_name(name: &str) -> String {
-        let module = module_path!();
-        let module = module.split_once("::").map_or(module, |(_, module)| module);
-        format!("{module}::{name}")
     }
 
     fn contains(bytes: &[u8], needle: &[u8]) -> bool {

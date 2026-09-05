@@ -91,7 +91,7 @@ fn add_exclude_globs(cmd: &mut Command, ctx: &Ctx) {
 }
 
 fn run_native(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
-    let mut cmd = Command::new("ast-grep");
+    let mut cmd = Command::new(ctx.config.tools.program("ast-grep"));
     cmd.arg("scan")
         .arg("--config")
         .arg("sgconfig.yml")
@@ -146,7 +146,7 @@ fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) {
 fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     let project = &ctx.config;
 
-    let mut cmd = Command::new("ast-grep");
+    let mut cmd = Command::new(ctx.config.tools.program("ast-grep"));
     cmd.arg("scan")
         .arg("--config")
         .arg("sgconfig.yml")
@@ -172,7 +172,7 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     // `files:`/`ignores:` are the only scope, then replace its prod-only group.
     for rule_id in &project.lint_exclude.scan_all_rules {
         let rule_file = format!(".config/ast-grep/{rule_id}.yml");
-        let mut rule_cmd = Command::new("ast-grep");
+        let mut rule_cmd = Command::new(ctx.config.tools.program("ast-grep"));
         rule_cmd
             .arg("scan")
             .arg("--rule")

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
-use crate::ci::HOST_JOB_CONCURRENCY;
+use crate::ci::SCCACHE_SLOT_CONTROL_NAMESPACE;
 
 /// Directory every Unix executor reads the installed host profile from.
 pub(crate) const LANE_CONFIG_DIR: &str = "/etc/kithara-ci";
@@ -24,19 +24,61 @@ pub(crate) const MAC_CONFIG_PATH: &str = "/etc/kithara-ci/mac-host.toml";
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CiHost {
+    /// How long a cache lease keeps its tree alive before cleanup breaks it.
+    #[serde(default = "default_active_lease_hours")]
+    pub(crate) active_lease_hours: u64,
     pub(crate) admin_user: String,
     pub(crate) aggressive_cleanup_bytes: u64,
+    /// The agents that must hold a process for work to reach this host.
+    ///
+    /// `cleanup` and `health` are periodic and spend nearly all their life
+    /// loaded with nothing running, so a missing process says nothing about
+    /// them. These are `KeepAlive`, and a missing process means work stopped.
+    #[serde(default = "default_always_on_agents")]
+    pub(crate) always_on_agents: Vec<String>,
     pub(crate) android_home: PathBuf,
     pub(crate) brew_root: PathBuf,
     /// Positive decimal gigabytes, such as `25GB`. Defaulted: installed
     /// profiles predate it, and refusing to load would kill the cleanup.
     #[serde(default = "default_build_cache_size")]
     pub(crate) build_cache_size: String,
+    /// The cache namespaces this repository still writes to.
+    ///
+    /// Cleanup prunes by name, so a namespace that stops being written to
+    /// becomes invisible rather than stale, and nothing ever comes back for it.
+    /// Six gigabytes of `cargo-reapi` stores sat here after that tool came off
+    /// the CI path. Anything not named here is pruned on its own age.
+    #[serde(default = "default_cache_namespaces")]
+    pub(crate) cache_namespaces: Vec<String>,
     pub(crate) cache_root_macos: PathBuf,
     pub(crate) cache_root_linux: PathBuf,
     pub(crate) cache_root_windows: PathBuf,
     pub(crate) ci_uid: u32,
     pub(crate) ci_user: String,
+    /// The profile `install-services` starts the Linux guest under.
+    #[serde(default = "default_colima_profile")]
+    pub(crate) colima_profile: String,
+    /// Cores this machine has.
+    ///
+    /// Job admission and per-job Cargo workers are both carved out of this, and
+    /// nothing else states the relation: raising the first without lowering the
+    /// second is how a machine ends up with more compilers than cores and no
+    /// room left for the runner, sccache, and the linkers. Defaulted: installed
+    /// profiles predate the field, and refusing to load would kill every lane.
+    #[serde(default = "default_cores")]
+    pub(crate) cores: usize,
+    /// Maximum jobs admitted at once.
+    ///
+    /// Runner rendering and per-job cache partitioning share this value.
+    /// Raising it buys wall-clock and costs disk: every admitted job carries
+    /// its own checkout and `target`, and those are what the volume runs out
+    /// of. The compiler cache follows on its own - the host's budget is divided
+    /// between the slots. Defaulted for the same reason `cores` is.
+    #[serde(default = "default_job_concurrency")]
+    pub(crate) job_concurrency: usize,
+    /// Size a host log is rotated at.
+    #[serde(default = "default_log_limit_bytes")]
+    pub(crate) log_limit_bytes: u64,
     pub(crate) macos_guest_shared_root: PathBuf,
     pub(crate) macos_guest_user: String,
     /// Locally built macOS VM bundle cloned for every job.
@@ -54,6 +96,9 @@ pub(crate) struct CiHost {
     pub(crate) host_xcode_developer_dir: PathBuf,
     pub(crate) quota_bytes: u64,
     pub(crate) reject_bytes: u64,
+    /// The trees directly below a CI root that cleanup may remove whole.
+    #[serde(default = "default_removable_roots")]
+    pub(crate) removable_roots: Vec<String>,
     /// Aggregate whole-gigabyte sccache budget, divided between host jobs.
     pub(crate) sccache_size: String,
     pub(crate) soft_cleanup_bytes: u64,
@@ -125,6 +170,17 @@ impl CiHost {
                 bail!("CI host profile {name} must not be empty");
             }
         }
+        if self.job_concurrency == 0 {
+            bail!("CI host profile job_concurrency must admit at least one job");
+        }
+        if self.cores.saturating_sub(1) < self.job_concurrency {
+            bail!(
+                "CI host profile cores ({}) leave fewer than job_concurrency ({}) spare workers; \
+                 every job would build single-threaded",
+                self.cores,
+                self.job_concurrency
+            );
+        }
         self.sccache_slot_size()?;
         if self.build_cache_size.trim().is_empty() {
             bail!("CI host profile build_cache_size must not be empty");
@@ -136,6 +192,18 @@ impl CiHost {
             || self.reject_bytes >= self.quota_bytes
         {
             bail!("CI disk thresholds must satisfy 0 < soft < aggressive < reject < quota");
+        }
+        if self.active_lease_hours == 0 {
+            bail!(
+                "CI host profile active_lease_hours must be at least one hour; at zero every \
+                 lease reads as stale and cleanup takes the workspace a running job holds"
+            );
+        }
+        if self.colima_profile.trim().is_empty() {
+            bail!(
+                "CI host profile colima_profile must name an instance; an empty name addresses \
+                 the wrong Docker socket instead of failing"
+            );
         }
         if self.ci_uid == 0 || self.sync_uid == 0 || self.ci_uid == self.sync_uid {
             bail!("CI and synchronization UIDs must be distinct non-root values");
@@ -219,15 +287,15 @@ impl CiHost {
             .context("CI host profile sccache_size must fit in usize gigabytes")?;
         // Divided down, not required to divide evenly. Demanding a multiple
         // made the slot count a property of a hand-written file on the host:
-        // raising `HOST_JOB_CONCURRENCY` would fail every job on a machine
+        // raising `job_concurrency` would fail every job on a machine
         // whose budget no longer divided, until somebody edited a file that
         // lives nowhere in this repository. A gigabyte lost to rounding is the
         // cheaper trade.
-        let slot = gigabytes / HOST_JOB_CONCURRENCY;
+        let slot = gigabytes / self.job_concurrency;
         if slot == 0 {
             bail!(
-                "CI host profile sccache_size must leave a whole gigabyte to each of \
-                 {HOST_JOB_CONCURRENCY} jobs"
+                "CI host profile sccache_size must leave a whole gigabyte to each of {} jobs",
+                self.job_concurrency
             );
         }
         Ok(format!("{slot}G"))
@@ -314,6 +382,56 @@ pub(crate) fn default_build_cache_size() -> String {
     "25GB".to_owned()
 }
 
+/// The Mac mini this fleet was sized on.
+const fn default_cores() -> usize {
+    10
+}
+
+/// Two admitted jobs: what the disk budget and the core count agree on. Two
+/// keep the required parallelism while leaving four Cargo workers to each on
+/// this ten-core host; three measured slower and evicted a third test tree.
+const fn default_job_concurrency() -> usize {
+    2
+}
+
+const fn default_active_lease_hours() -> u64 {
+    12
+}
+
+fn default_always_on_agents() -> Vec<String> {
+    ["colima", "gitlab-runner"].map(String::from).to_vec()
+}
+
+fn default_colima_profile() -> String {
+    "kithara".to_owned()
+}
+
+const fn default_log_limit_bytes() -> u64 {
+    20_000_000
+}
+
+fn default_removable_roots() -> Vec<String> {
+    ["cache", "logs", "vm", "workspaces"]
+        .map(String::from)
+        .to_vec()
+}
+
+/// The sccache slot control directory is named once, in
+/// [`SCCACHE_SLOT_CONTROL_NAMESPACE`], so a profile that never overrides this
+/// key cannot spell it a second way.
+fn default_cache_namespaces() -> Vec<String> {
+    [
+        SCCACHE_SLOT_CONTROL_NAMESPACE,
+        "bootstrap",
+        "gitlab-runner",
+        "quarantine",
+        "review",
+        "trusted",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
 pub(crate) fn parse_build_cache_size(value: &str) -> Result<u64, BuildCacheSizeError> {
     const BYTES_PER_GIGABYTE: u64 = 1_000_000_000;
 
@@ -368,7 +486,7 @@ mod tests {
 
         assert_eq!(
             host.sccache_slot_size().unwrap(),
-            format!("{}G", 60 / HOST_JOB_CONCURRENCY)
+            format!("{}G", 60 / host.job_concurrency)
         );
     }
 
@@ -378,19 +496,17 @@ mod tests {
     #[test]
     fn an_indivisible_sccache_budget_is_rounded_down() {
         let mut host = super::super::fixture().host;
+        host.job_concurrency = 3;
         host.sccache_size = "50G".to_owned();
 
-        assert_eq!(
-            host.sccache_slot_size().unwrap(),
-            format!("{}G", 50 / HOST_JOB_CONCURRENCY)
-        );
+        assert_eq!(host.sccache_slot_size().unwrap(), "16G");
         assert!(host.validate().is_ok());
     }
 
     #[test]
     fn ci_host_rejects_a_budget_too_small_to_share() {
         let mut host = super::super::fixture().host;
-        host.sccache_size = format!("{}G", HOST_JOB_CONCURRENCY - 1);
+        host.sccache_size = format!("{}G", host.job_concurrency - 1);
 
         assert!(host.validate().is_err());
     }
@@ -497,5 +613,166 @@ mod tests {
         assert_eq!(host.free_bytes_for_a_job(), 15);
         assert!(host.validate().is_ok());
         assert!(host.free_bytes_for_a_job() > 0);
+    }
+
+    /// Seeded away from the defaults on both sides: a baseline read from the
+    /// default cannot prove the check fires.
+    #[test]
+    fn a_profile_with_fewer_usable_cores_than_jobs_is_refused() {
+        let mut host = super::super::fixture().host;
+        host.cores = 4;
+        host.job_concurrency = 5;
+
+        let error = host
+            .validate()
+            .expect_err("a machine that cannot give each job a worker must not load");
+
+        assert!(format!("{error:#}").contains("job_concurrency"));
+    }
+
+    #[test]
+    fn a_profile_that_admits_no_job_at_all_is_refused() {
+        let mut host = super::super::fixture().host;
+        host.job_concurrency = 0;
+
+        assert!(host.validate().is_err());
+    }
+
+    /// Zero is not a short lease: `older_than` reads every marker as expired,
+    /// so the sweep takes the workspace the running job is building in.
+    #[test]
+    fn a_profile_whose_lease_expires_immediately_is_refused() {
+        let mut host = super::super::fixture().host;
+        host.active_lease_hours = 0;
+
+        let error = host
+            .validate()
+            .expect_err("a lease that is stale on creation must not load");
+
+        assert!(format!("{error:#}").contains("active_lease_hours"));
+    }
+
+    /// An unnamed profile does not fail: it addresses `.colima/docker.sock`,
+    /// which is some other instance's socket or nothing at all.
+    #[test]
+    fn a_profile_without_a_colima_instance_name_is_refused() {
+        let mut host = super::super::fixture().host;
+        host.colima_profile = "  ".to_owned();
+
+        let error = host
+            .validate()
+            .expect_err("an unnamed colima instance must not load");
+
+        assert!(format!("{error:#}").contains("colima_profile"));
+    }
+
+    #[test]
+    fn a_profile_that_leaves_each_job_a_worker_loads() {
+        let mut host = super::super::fixture().host;
+        host.cores = 4;
+        host.job_concurrency = 3;
+
+        host.validate()
+            .expect("three jobs fit in three spare cores");
+    }
+
+    /// The tracked fixture still describes the machine the constants described.
+    #[test]
+    fn the_fixture_profile_keeps_todays_topology() {
+        let host = super::super::fixture().host;
+
+        assert_eq!(host.cores, 10);
+        assert_eq!(host.job_concurrency, 2);
+    }
+
+    /// The tracked fixture is the operator's field catalogue
+    /// (`docs/guides/ci-host.md`), so it spells the sccache slot directory a
+    /// second time. This is the only place that spelling can drift from
+    /// [`SCCACHE_SLOT_CONTROL_NAMESPACE`] without a compiler error.
+    #[test]
+    fn the_fixture_names_the_slot_control_directory_the_way_the_code_does() {
+        let host = super::super::fixture().host;
+
+        assert_eq!(
+            host.cache_namespaces.first().map(String::as_str),
+            Some(SCCACHE_SLOT_CONTROL_NAMESPACE)
+        );
+    }
+
+    /// An installed profile predating the fields must still load: the binary
+    /// reaches every host before its profile does, and one that refused would
+    /// take every lane down with it.
+    #[test]
+    fn a_profile_without_a_topology_still_loads() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("mac-host.toml");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-mac-host.toml");
+        let text = fs::read_to_string(&source).expect("fixture profile");
+        let without: String = text
+            .lines()
+            .filter(|line| {
+                let line = line.trim_start();
+                !line.starts_with("cores") && !line.starts_with("job_concurrency")
+            })
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert!(
+            !without.contains("cores") && !without.contains("job_concurrency"),
+            "the stripped profile must really lack the keys, or the defaults below \
+             prove nothing: the fixture already carries today's values"
+        );
+        fs::write(&path, without).expect("write profile");
+
+        let host = CiHost::load(&path).expect("a profile without a topology loads");
+
+        assert_eq!(host.cores, 10);
+        assert_eq!(host.job_concurrency, 2);
+    }
+
+    /// Every moved value keeps today's setting, so a profile that configures
+    /// none of them behaves exactly as the constants did.
+    ///
+    /// Installed profiles predate all six keys, so the defaults are not a
+    /// corner case: they are what every host on the fleet actually loads.
+    #[test]
+    fn the_storage_policy_defaults_match_the_constants_they_replace() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ci-host.toml");
+        let host = super::super::fixture().host;
+        host.write(&path).unwrap();
+        let mut emitted: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        for key in [
+            "always_on_agents",
+            "colima_profile",
+            "active_lease_hours",
+            "log_limit_bytes",
+            "removable_roots",
+            "cache_namespaces",
+        ] {
+            assert!(
+                emitted.remove(key).is_some(),
+                "the profile must round-trip {key} so an operator can override it"
+            );
+        }
+        fs::write(&path, toml::to_string_pretty(&emitted).unwrap()).unwrap();
+
+        let host = CiHost::load(&path).unwrap();
+
+        assert_eq!(host.always_on_agents, ["colima", "gitlab-runner"]);
+        assert_eq!(host.colima_profile, "kithara");
+        assert_eq!(host.active_lease_hours, 12);
+        assert_eq!(host.log_limit_bytes, 20_000_000);
+        assert_eq!(host.removable_roots, ["cache", "logs", "vm", "workspaces"]);
+        assert_eq!(
+            host.cache_namespaces,
+            [
+                SCCACHE_SLOT_CONTROL_NAMESPACE,
+                "bootstrap",
+                "gitlab-runner",
+                "quarantine",
+                "review",
+                "trusted"
+            ]
+        );
     }
 }

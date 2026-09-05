@@ -65,7 +65,7 @@ impl RunnerManager<'_> {
         // Without it `xcodebuild` cannot load `IDESimulatorFoundation`, which
         // it needs for the simulator slices of the XCFramework.
         sudo(
-            &["xcodebuild", "-runFirstLaunch"],
+            &["/usr/bin/xcodebuild", "-runFirstLaunch"],
             "install guest Xcode system content",
         )?;
         // The host enables both of these once, when it is provisioned. The

@@ -38,8 +38,8 @@ pub(crate) struct ProfileParams {
     pub(crate) timeout_secs: u64,
 }
 
-pub(crate) fn samply_command(out: &Path, binary: &Path, test: &str) -> Command {
-    let mut cmd = Command::new("samply");
+pub(crate) fn samply_command(program: &str, out: &Path, binary: &Path, test: &str) -> Command {
+    let mut cmd = Command::new(program);
     cmd.arg("record")
         .arg("--unstable-presymbolicate")
         .arg("--save-only")
@@ -321,6 +321,7 @@ pub(crate) fn run(params: &ProfileParams, project: &ProjectConfig) -> Result<()>
     let out_root = paths.profiles_dir(&params.lane);
     let mut isolated = Vec::new();
     let selected = slow.tests.iter().take(params.limit.unwrap_or(usize::MAX));
+    let program = project.tools.program("samply");
     for test in selected {
         let Some(suite) = suites.get(&test.suite) else {
             println!(
@@ -332,13 +333,16 @@ pub(crate) fn run(params: &ProfileParams, project: &ProjectConfig) -> Result<()>
         let dir = out_root.join(sanitize(&test.suite));
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         let out = dir.join(format!("{}.profile.json", sanitize(&test.name)));
-        let mut cmd = samply_command(&out, &suite.binary_path, &test.name);
+        let mut cmd = samply_command(program, &out, &suite.binary_path, &test.name);
         cmd.current_dir(&suite.cwd);
         let clock = Instant::now();
         let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                bail!("samply not found on PATH - install with `cargo install samply`")
+                bail!(
+                    "{program} not found on PATH - install with `{}`",
+                    project.tools.install_hint("samply", "cargo install samply")
+                )
             }
             Err(err) => return Err(err).context("spawn samply"),
         };
@@ -378,6 +382,7 @@ mod tests {
     #[test]
     fn samply_command_shape() {
         let cmd = samply_command(
+            "samply",
             Path::new("/out/p.profile.json"),
             Path::new("/bin/suite_light-abc"),
             "offline::gapless",
@@ -402,6 +407,21 @@ mod tests {
                 "--exact",
                 "--nocapture"
             ]
+        );
+    }
+
+    #[test]
+    fn samply_command_uses_the_configured_program() {
+        let cmd = samply_command(
+            "/opt/pinned/bin/samply",
+            Path::new("/tmp/out.json"),
+            Path::new("/tmp/suite"),
+            "case",
+        );
+
+        assert_eq!(
+            cmd.get_program(),
+            std::ffi::OsStr::new("/opt/pinned/bin/samply")
         );
     }
 

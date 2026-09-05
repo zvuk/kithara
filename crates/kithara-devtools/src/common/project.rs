@@ -29,6 +29,7 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub ext: Table,
     pub test: TestCommandConfig,
+    pub tools: crate::common::tools::ToolsConfig,
     #[serde(default, rename = "workspace-scan")]
     pub workspace_scan: WorkspaceScan,
 }
@@ -38,6 +39,7 @@ pub struct ProjectConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct ArchitectureConfig {
     pub filters: ArchitectureFilterConfig,
+    pub render: ArchitectureRenderBudgets,
     pub runtime: ArchitectureRuntimeConfig,
 }
 
@@ -49,11 +51,48 @@ pub struct ArchitectureFilterConfig {
     pub exclude_modules: Vec<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+/// How much of a diagram's finding set the architecture report renders.
+#[derive(Debug, Deserialize)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct ArchitectureRenderBudgets {
+    pub findings: usize,
+    pub relations: usize,
+}
+
+impl Default for ArchitectureRenderBudgets {
+    fn default() -> Self {
+        Self {
+            findings: 12,
+            relations: 20,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct ArchitectureRuntimeConfig {
     pub scenarios: Vec<RuntimeScenarioConfig>,
+    /// Wall-clock budget for the rust-analyzer session the semantic overlay
+    /// runs on. Workspace loading and every call-hierarchy request share the
+    /// one deadline, so the overlay reports `timed_out` rather than holding
+    /// the visualization open indefinitely.
+    #[serde(default = "default_semantic_timeout_secs")]
+    pub semantic_timeout_secs: u64,
+}
+
+impl Default for ArchitectureRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            scenarios: Vec::new(),
+            semantic_timeout_secs: default_semantic_timeout_secs(),
+        }
+    }
+}
+
+const fn default_semantic_timeout_secs() -> u64 {
+    120
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -193,19 +232,55 @@ impl Default for CiReportConfig {
 }
 
 /// Workspace-wide Rust file scan exclusions.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkspaceScan {
     pub exclude: Vec<String>,
+    /// Directories a scope token may name outside `crates/`. A token whose
+    /// first component is one of these resolves to a workspace path rather
+    /// than to a crate.
+    #[serde(default = "default_top_level_dirs")]
+    pub top_level_dirs: Vec<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+impl Default for WorkspaceScan {
+    fn default() -> Self {
+        Self {
+            exclude: Vec::new(),
+            top_level_dirs: default_top_level_dirs(),
+        }
+    }
+}
+
+fn default_top_level_dirs() -> Vec<String> {
+    ["tests", "xtask", "benches"].map(String::from).to_vec()
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OrphansConfig {
     /// Packages excluded from the default `cargo modules orphans` sweep
     /// (generated/helper/macro crates and per-target-gated crates that the
     /// default rust-analyzer view flags as false-positive orphans).
     pub exclude_packages: Vec<String>,
+    /// Upper bound on concurrent `cargo modules` runs. Each holds a whole
+    /// rust-analyzer database, so the sweep is capped by what the job's
+    /// memory holds as well as by its cores.
+    #[serde(default = "default_orphans_max_parallelism")]
+    pub max_parallelism: usize,
+}
+
+impl Default for OrphansConfig {
+    fn default() -> Self {
+        Self {
+            exclude_packages: Vec::new(),
+            max_parallelism: default_orphans_max_parallelism(),
+        }
+    }
+}
+
+const fn default_orphans_max_parallelism() -> usize {
+    4
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -213,8 +288,29 @@ pub struct OrphansConfig {
 pub struct QualityConfig {
     /// Repository-specific heavyweight stages used by `quality assess --depth deep`.
     pub assessment: QualityAssessmentConfig,
+    pub render: QualityRenderBudgets,
     /// Trait directory whose every `pub trait` must carry workspace mock coverage.
     pub unimock_traits_dir: String,
+}
+
+/// How much of a quality assessment the artifact and the summary render.
+#[derive(Debug, Deserialize)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct QualityRenderBudgets {
+    pub architecture_hotspots: usize,
+    pub findings: usize,
+    pub summary_rows: usize,
+}
+
+impl Default for QualityRenderBudgets {
+    fn default() -> Self {
+        Self {
+            architecture_hotspots: 30,
+            findings: 100,
+            summary_rows: 5,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -286,11 +382,17 @@ pub struct ProjectIdentity {
     pub name: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HealthConfig {
     /// Package whose dependency closure the unsafe-code census is rooted at.
     pub geiger_package: String,
+    /// Directory the per-stage logs are written to.
+    #[serde(default = "default_health_logs_dir")]
+    pub logs_dir: String,
+    /// Document the run's verdict and per-stage log tails are written to.
+    #[serde(default = "default_health_report_path")]
+    pub report_path: String,
     /// Backend groups a crate refuses to be built without.
     pub feature_invariants: Vec<FeatureInvariant>,
     /// Crates excluded from the `cargo hack --feature-powerset` stage.
@@ -305,6 +407,38 @@ pub struct HealthConfig {
     pub machete_exclude: Vec<String>,
     /// Packages the semver stage compares against the baseline branch.
     pub semver_packages: Vec<String>,
+    /// Trailing log lines each stage inlines into the report before it sends
+    /// the reader to the full log on disk.
+    #[serde(default = "default_health_stdout_tail_lines")]
+    pub stdout_tail_lines: usize,
+}
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        Self {
+            geiger_package: String::new(),
+            logs_dir: default_health_logs_dir(),
+            report_path: default_health_report_path(),
+            feature_invariants: Vec::new(),
+            feature_powerset_exclude: Vec::new(),
+            lockbud_exclude: Vec::new(),
+            machete_exclude: Vec::new(),
+            semver_packages: Vec::new(),
+            stdout_tail_lines: default_health_stdout_tail_lines(),
+        }
+    }
+}
+
+fn default_health_logs_dir() -> String {
+    "target/health-logs".to_owned()
+}
+
+fn default_health_report_path() -> String {
+    "target/health-report.md".to_owned()
+}
+
+const fn default_health_stdout_tail_lines() -> usize {
+    80
 }
 
 /// A rule some crates state with `compile_error!`: this build needs a backend.
@@ -450,6 +584,7 @@ pub struct StressConfig {
     pub artifacts: StressArtifactConfig,
     pub environment: StressEnvironmentConfig,
     pub evidence: StressEvidenceConfig,
+    pub render: StressRenderBudgets,
     pub backend: String,
     /// The directory a lane builds into, relative to the checkout it builds.
     ///
@@ -561,6 +696,47 @@ pub struct StressEvidenceConfig {
     pub direct_markers: Vec<String>,
     pub envelope_suffix_markers: Vec<String>,
     pub source_excludes: Vec<String>,
+}
+
+/// How much of a stress finding set the report asks a human to read.
+///
+/// A budget, not a guard: exceeding it truncates a table, it does not refuse an
+/// artifact. The guards that refuse are the `MAX_*_BYTES` in `stress_report`
+/// and stay in code.
+///
+/// `signature_examples` is the one that reads wider than its name. It bounds
+/// the frames `backtrace_signature` folds into a failure's key, so lowering it
+/// makes two failures that diverge deep in the stack cluster as one. It shapes
+/// what the evidence says, not how wide a column is.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct StressRenderBudgets {
+    pub cell_chars: usize,
+    pub divergence_rows: usize,
+    pub failure_rows: usize,
+    pub finding_rows: usize,
+    pub iterations_per_test: usize,
+    pub pass_only_rows_per_test: usize,
+    pub problem_rows: usize,
+    pub signature_examples: usize,
+    pub signature_rows: usize,
+}
+
+impl Default for StressRenderBudgets {
+    fn default() -> Self {
+        Self {
+            cell_chars: 240,
+            divergence_rows: 40,
+            failure_rows: 100,
+            finding_rows: 100,
+            iterations_per_test: 20,
+            pass_only_rows_per_test: 5,
+            problem_rows: 100,
+            signature_examples: 5,
+            signature_rows: 100,
+        }
+    }
 }
 
 impl StressConfig {
@@ -904,6 +1080,12 @@ impl ProjectConfig {
                 );
             }
         }
+        if self.orphans.max_parallelism == 0 {
+            bail!(
+                "orphans.max_parallelism must admit at least one worker; the sweep clamps its \
+                 worker count into `1..=max_parallelism` and panics on an empty range"
+            );
+        }
         if self.stress.is_configured() {
             self.stress.validate()?;
             if !self.test.lanes.contains_key(&self.stress.lane) {
@@ -936,6 +1118,25 @@ mod architecture_tests {
         fs::create_dir(temp.path().join(".config")).expect("config dir");
         fs::write(temp.path().join(CONFIG_REL), text).expect("config");
         ProjectConfig::load(temp.path())
+    }
+
+    /// `workers` clamps into `1..=max_parallelism`, and `usize::clamp` panics
+    /// when the range is empty, so zero reaches the sweep as an abort rather
+    /// than as a setting.
+    #[test]
+    fn a_zero_orphan_worker_ceiling_is_refused() {
+        let error = load(
+            r#"
+[orphans]
+max_parallelism = 0
+"#,
+        )
+        .expect_err("a ceiling below one worker");
+
+        assert!(
+            format!("{error:#}").contains("max_parallelism"),
+            "{error:#}"
+        );
     }
 
     #[test]
@@ -1135,5 +1336,65 @@ tools = ["cargo-mutants"]
                 .to_string()
                 .contains("cannot be both configured and not applicable")
         );
+    }
+
+    #[test]
+    fn a_tools_table_reaches_the_project_config() {
+        let temp = tempdir().expect("tempdir");
+        fs::create_dir(temp.path().join(".config")).expect("create .config");
+        fs::write(
+            temp.path().join(".config/xtask.toml"),
+            r#"
+[tools.ast-grep]
+program = "ast-grep"
+pin = "ast-grep"
+"#,
+        )
+        .expect("write config");
+
+        let config = ProjectConfig::load(temp.path()).expect("the config loads");
+
+        assert_eq!(config.tools.program("ast-grep"), "ast-grep");
+    }
+
+    /// Every moved value keeps today's setting, so an unconfigured project
+    /// behaves exactly as the constants did. These four structs take
+    /// `#[serde(default)]` at the container, which makes this impl the
+    /// authority for every key a project does not spell out.
+    #[test]
+    fn the_moved_defaults_match_the_constants_they_replace() {
+        let config = ProjectConfig::default();
+
+        assert_eq!(
+            config.workspace_scan.top_level_dirs,
+            ["tests", "xtask", "benches"]
+        );
+        assert_eq!(config.health.logs_dir, "target/health-logs");
+        assert_eq!(config.health.report_path, "target/health-report.md");
+        assert_eq!(config.health.stdout_tail_lines, 80);
+        assert_eq!(config.orphans.max_parallelism, 4);
+        assert_eq!(config.architecture.runtime.semantic_timeout_secs, 120);
+    }
+
+    /// Every moved budget keeps today's setting, so a project that configures
+    /// none of them renders exactly what the constants rendered.
+    #[test]
+    fn the_render_budget_defaults_match_the_constants_they_replace() {
+        let config = ProjectConfig::default();
+
+        assert_eq!(config.stress.render.failure_rows, 100);
+        assert_eq!(config.stress.render.problem_rows, 100);
+        assert_eq!(config.stress.render.iterations_per_test, 20);
+        assert_eq!(config.stress.render.cell_chars, 240);
+        assert_eq!(config.stress.render.finding_rows, 100);
+        assert_eq!(config.stress.render.signature_rows, 100);
+        assert_eq!(config.stress.render.signature_examples, 5);
+        assert_eq!(config.stress.render.divergence_rows, 40);
+        assert_eq!(config.stress.render.pass_only_rows_per_test, 5);
+        assert_eq!(config.quality.render.findings, 100);
+        assert_eq!(config.quality.render.architecture_hotspots, 30);
+        assert_eq!(config.quality.render.summary_rows, 5);
+        assert_eq!(config.architecture.render.findings, 12);
+        assert_eq!(config.architecture.render.relations, 20);
     }
 }

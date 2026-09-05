@@ -38,7 +38,7 @@ impl Check for CancelRootSites {
             }
 
             let content = fs::read_to_string(&path)?;
-            for (line_num, pattern) in scan_source(&content) {
+            for (line_num, pattern) in scan_source(&content, &cfg.patterns) {
                 violations.push(
                     Violation::deny(
                         ID,
@@ -57,12 +57,11 @@ impl Check for CancelRootSites {
 /// `content` that sits in production code (outside `#[cfg(test)]` ranges and
 /// line comments). Path-level allowlist / exempt-crate / test-path skips are
 /// applied by [`CancelRootSites::run`] before this is called.
-fn scan_source(content: &str) -> Vec<(usize, &'static str)> {
-    /// Fresh-root minting calls denied outside the allowlist: the owning-master
-    /// `CancelToken::root` and the never-cancelled sentinel `CancelToken::never`.
-    /// Both root a new cancel tree; `.child()` (the sanctioned derivation) is
-    const PATTERNS: &[&str] = &["CancelToken::root", "CancelToken::never"];
-    if !PATTERNS.iter().any(|p| content.contains(p)) {
+fn scan_source(content: &str, patterns: &[String]) -> Vec<(usize, String)> {
+    if !patterns
+        .iter()
+        .any(|pattern| content.contains(pattern.as_str()))
+    {
         return Vec::new();
     }
     let Ok(file) = parse_file(content) else {
@@ -75,7 +74,10 @@ fn scan_source(content: &str) -> Vec<(usize, &'static str)> {
     let mut hits = Vec::new();
     for (idx, line) in content.lines().enumerate() {
         let code = strip_line_comment(line);
-        let Some(pattern) = PATTERNS.iter().find(|p| code.contains(**p)) else {
+        let Some(pattern) = patterns
+            .iter()
+            .find(|pattern| code.contains(pattern.as_str()))
+        else {
             continue;
         };
         let line_num = idx + 1;
@@ -85,7 +87,7 @@ fn scan_source(content: &str) -> Vec<(usize, &'static str)> {
         {
             continue;
         }
-        hits.push((line_num, *pattern));
+        hits.push((line_num, pattern.clone()));
     }
     hits
 }
@@ -281,33 +283,43 @@ mod tests {
 
     use super::{crate_is_exempt, is_test_or_bench_path, scan_source};
 
+    fn patterns() -> Vec<String> {
+        crate::arch::config::CancelRootSitesThreshold::default().patterns
+    }
+
     #[test]
     fn flags_root_and_never_in_production() {
         let src = "fn build() {\n    let a = CancelToken::root();\n    let b = CancelToken::never();\n}\n";
-        let hits = scan_source(src);
+        let hits = scan_source(src, &patterns());
         assert_eq!(
             hits,
-            vec![(2, "CancelToken::root"), (3, "CancelToken::never")]
+            vec![
+                (2, "CancelToken::root".to_owned()),
+                (3, "CancelToken::never".to_owned())
+            ]
         );
     }
 
     #[test]
     fn ignores_child_and_other_methods() {
         let src = "fn run(parent: CancelToken) {\n    let _ = parent.child();\n    let _ = parent.is_cancelled();\n}\n";
-        assert!(scan_source(src).is_empty(), "got: {:?}", scan_source(src));
+        let hits = scan_source(src, &patterns());
+        assert!(hits.is_empty(), "got: {hits:?}");
     }
 
     #[test]
     fn skips_cfg_test_modules() {
         let src = "fn prod() {\n    let _ = parent.child();\n}\n\n#[cfg(test)]\nmod tests {\n    fn t() {\n        let _ = CancelToken::root();\n    }\n}\n";
-        assert!(scan_source(src).is_empty(), "got: {:?}", scan_source(src));
+        let hits = scan_source(src, &patterns());
+        assert!(hits.is_empty(), "got: {hits:?}");
     }
 
     #[test]
     fn ignores_matches_in_comments() {
         let src =
             "fn f() {\n    // CancelToken::root() in a comment is not a mint\n    let _ = 1;\n}\n";
-        assert!(scan_source(src).is_empty(), "got: {:?}", scan_source(src));
+        let hits = scan_source(src, &patterns());
+        assert!(hits.is_empty(), "got: {hits:?}");
     }
 
     #[test]
@@ -326,5 +338,27 @@ mod tests {
         ));
         assert!(is_test_or_bench_path("crates/kithara-hls/src/tests/foo.rs"));
         assert!(!is_test_or_bench_path("crates/kithara-app/src/main.rs"));
+    }
+
+    #[test]
+    fn the_default_patterns_are_the_ones_the_check_shipped_with() {
+        let threshold = crate::arch::config::CancelRootSitesThreshold::default();
+
+        assert_eq!(
+            threshold.patterns,
+            ["CancelToken::root", "CancelToken::never"]
+        );
+    }
+
+    /// A project that names a different root-minting call gets that call
+    /// flagged, and stops getting the default one flagged.
+    #[test]
+    fn a_configured_pattern_replaces_the_default() {
+        let hits = scan_source(
+            "fn f() { Shutdown::forever(); CancelToken::root(); }\n",
+            &["Shutdown::forever".to_owned()],
+        );
+
+        assert_eq!(hits, vec![(1, "Shutdown::forever".to_owned())]);
     }
 }

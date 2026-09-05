@@ -199,8 +199,15 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
     )?;
     writeln!(io::stdout().lock(), "==> {}", artifacts.document.display())?;
 
-    check_tool("similarity-rs", &["--version"], Consts::INSTALL_HINT)?;
-    let mut cmd = Command::new("similarity-rs");
+    let program = ctx.config.tools.program("similarity-rs");
+    check_tool(
+        program,
+        &["--version"],
+        ctx.config
+            .tools
+            .install_hint("similarity-rs", Consts::INSTALL_HINT),
+    )?;
+    let mut cmd = Command::new(program);
     cmd.current_dir(&ctx.root);
     cmd.arg("--threshold").arg(threshold);
     cmd.arg("--min-lines").arg(min_lines);

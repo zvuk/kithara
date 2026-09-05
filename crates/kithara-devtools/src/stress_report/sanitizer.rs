@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::evidence::{backtrace_signature, strip_ansi};
-use crate::common::project::StressEvidenceConfig;
+use crate::common::project::{StressEvidenceConfig, StressRenderBudgets};
 
 /// Written to the lane log before each attempt so findings can be attributed.
 pub(crate) const ATTEMPT_MARKER: &str = "[kithara_stress] attempt ";
@@ -20,19 +20,23 @@ pub(crate) type Findings = BTreeMap<String, BTreeSet<usize>>;
 
 /// Groups a log's sanitizer findings by what they say, not by how often the
 /// process died.
-pub(crate) fn findings(log: &str, evidence: &StressEvidenceConfig) -> Findings {
+pub(crate) fn findings(
+    log: &str,
+    evidence: &StressEvidenceConfig,
+    budgets: &StressRenderBudgets,
+) -> Findings {
     let clean = strip_ansi(log);
     let mut findings = Findings::new();
     let mut attempt = 0;
     let mut block: Option<Block> = None;
     for line in clean.lines() {
         if let Some(index) = attempt_index(line) {
-            finish(&mut block, attempt, &mut findings, evidence);
+            finish(&mut block, attempt, &mut findings, evidence, budgets);
             attempt = index;
             continue;
         }
         if let Some(kind) = error_kind(line) {
-            finish(&mut block, attempt, &mut findings, evidence);
+            finish(&mut block, attempt, &mut findings, evidence, budgets);
             block = Some(Block::new(kind));
             continue;
         }
@@ -42,9 +46,9 @@ pub(crate) fn findings(log: &str, evidence: &StressEvidenceConfig) -> Findings {
         if open.push(line) {
             continue;
         }
-        finish(&mut block, attempt, &mut findings, evidence);
+        finish(&mut block, attempt, &mut findings, evidence, budgets);
     }
-    finish(&mut block, attempt, &mut findings, evidence);
+    finish(&mut block, attempt, &mut findings, evidence, budgets);
     findings
 }
 
@@ -83,9 +87,9 @@ impl Block {
         true
     }
 
-    fn signature(&self, evidence: &StressEvidenceConfig) -> String {
+    fn signature(&self, evidence: &StressEvidenceConfig, budgets: &StressRenderBudgets) -> String {
         let call = self.call.as_deref().unwrap_or("unnamed call");
-        match backtrace_signature(&self.body, evidence) {
+        match backtrace_signature(&self.body, evidence, budgets) {
             Some(frames) => format!("{} `{call}` at {frames}", self.kind),
             None if self.stack => format!("{} `{call}` — stack not symbolized", self.kind),
             None => format!("{} `{call}`", self.kind),
@@ -107,10 +111,11 @@ fn finish(
     attempt: usize,
     findings: &mut Findings,
     evidence: &StressEvidenceConfig,
+    budgets: &StressRenderBudgets,
 ) {
     if let Some(open) = block.take() {
         findings
-            .entry(open.signature(evidence))
+            .entry(open.signature(evidence, budgets))
             .or_default()
             .insert(attempt);
     }
@@ -175,7 +180,7 @@ Intercepted call to real-time unsafe function `sched_yield` in real-time context
 
     #[test]
     fn a_finding_names_the_violated_contract_the_call_and_where_it_came_from() {
-        let found = findings(UNSAFE_CALL, &evidence());
+        let found = findings(UNSAFE_CALL, &evidence(), &StressRenderBudgets::default());
 
         let (signature, attempts) = found.iter().next().expect("one finding");
         assert!(signature.contains("RealtimeSanitizer: unsafe-library-call"));
@@ -191,7 +196,7 @@ Intercepted call to real-time unsafe function `sched_yield` in real-time context
     fn the_same_violation_on_two_attempts_is_one_finding_with_both_attempts() {
         let log = format!("{ATTEMPT_MARKER}0\n{UNSAFE_CALL}\n{ATTEMPT_MARKER}3\n{UNSAFE_CALL}");
 
-        let found = findings(&log, &evidence());
+        let found = findings(&log, &evidence(), &StressRenderBudgets::default());
 
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(
@@ -204,7 +209,7 @@ Intercepted call to real-time unsafe function `sched_yield` in real-time context
     fn two_different_violations_stay_apart() {
         let log = format!("{UNSAFE_CALL}\n{BLOCKING_CALL}");
 
-        let found = findings(&log, &evidence());
+        let found = findings(&log, &evidence(), &StressRenderBudgets::default());
 
         assert_eq!(found.len(), 2, "{found:?}");
     }
@@ -213,7 +218,7 @@ Intercepted call to real-time unsafe function `sched_yield` in real-time context
     /// attribute the next test's source locations to this violation.
     #[test]
     fn output_after_the_report_does_not_join_the_finding() {
-        let found = findings(UNSAFE_CALL, &evidence());
+        let found = findings(UNSAFE_CALL, &evidence(), &StressRenderBudgets::default());
 
         let signature = found.keys().next().expect("one finding");
         assert!(!signature.contains("rt_metrics"), "{signature}");
@@ -226,7 +231,7 @@ Intercepted call to real-time unsafe function `sched_yield` in real-time context
     /// looking in the wrong place.
     #[test]
     fn a_stack_the_symbolizer_never_resolved_is_declared_unsymbolized() {
-        let found = findings(UNSYMBOLIZED, &evidence());
+        let found = findings(UNSYMBOLIZED, &evidence(), &StressRenderBudgets::default());
 
         let signature = found.keys().next().expect("one finding");
         assert!(signature.contains("`sched_yield`"), "{signature}");
@@ -240,7 +245,7 @@ Intercepted call to real-time unsafe function `sched_yield` in real-time context
         let log = "==1==ERROR: RealtimeSanitizer: unsafe-library-call\n\
                    Intercepted call to real-time unsafe function `malloc` in real-time context!\n";
 
-        let found = findings(log, &evidence());
+        let found = findings(log, &evidence(), &StressRenderBudgets::default());
 
         let signature = found.keys().next().expect("one finding");
         assert!(!signature.contains("symbolized"), "{signature}");
@@ -248,6 +253,13 @@ Intercepted call to real-time unsafe function `sched_yield` in real-time context
 
     #[test]
     fn a_log_the_sanitizer_never_wrote_to_yields_nothing() {
-        assert!(findings("running 14 tests\ntest result: ok.\n", &evidence()).is_empty());
+        assert!(
+            findings(
+                "running 14 tests\ntest result: ok.\n",
+                &evidence(),
+                &StressRenderBudgets::default()
+            )
+            .is_empty()
+        );
     }
 }

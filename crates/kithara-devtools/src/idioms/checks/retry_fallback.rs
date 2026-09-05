@@ -6,44 +6,17 @@ use syn::{
 };
 
 use super::{Check, Context};
-use crate::common::{
-    parse::parse_file,
-    suppress::Suppressions,
-    violation::Violation,
-    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+use crate::{
+    common::{
+        parse::parse_file,
+        suppress::Suppressions,
+        violation::Violation,
+        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+    },
+    idioms::config::RetryFallbackConfig,
 };
 
 pub(crate) const ID: &str = "retry_fallback";
-
-struct Consts;
-
-impl Consts {
-    const FORBIDDEN_IDENTS: &'static [&'static str] = &[
-        "attempt",
-        "attempts",
-        "retry",
-        "retries",
-        "retry_count",
-        "retry_limit",
-        "max_attempts",
-        "max_retries",
-        "fallback",
-        "fall_back",
-    ];
-
-    const FORBIDDEN_SUBSTRINGS: &'static [&'static str] = &[
-        "_retry",
-        "_retries",
-        "_with_retries",
-        "_with_retry",
-        "_with_fallback",
-        "_or_fallback",
-        "_or_retry",
-        "try_or_",
-        "try_then_",
-        "fallback_",
-    ];
-}
 
 const EXPLANATION: &str = "\
 Detected a retry/attempt counter or try-then-fallback chain. Both \
@@ -100,7 +73,7 @@ impl Check for RetryFallback {
             };
             let suppress = Suppressions::parse(&source);
             let mut v = IdentVisitor {
-                allowed_idents: &cfg.allowed_idents,
+                cfg,
                 rel: &rel,
                 suppress: &suppress,
                 out: &mut violations,
@@ -113,9 +86,9 @@ impl Check for RetryFallback {
 }
 
 struct IdentVisitor<'a> {
+    cfg: &'a RetryFallbackConfig,
     suppress: &'a Suppressions,
     out: &'a mut Vec<Violation>,
-    allowed_idents: &'a [String],
     rel: &'a str,
     /// `true` while traversing inside a `#[cfg(test)]` module — test code
     /// can legitimately use names like `flags_max_retries_const` that
@@ -160,27 +133,24 @@ impl<'a> IdentVisitor<'a> {
     }
 }
 
-fn name_is_forbidden(name: &str, allowed_idents: &[String]) -> bool {
-    if allowed_idents.iter().any(|allowed| allowed == name) {
+fn name_is_forbidden(name: &str, cfg: &RetryFallbackConfig) -> bool {
+    if cfg.allowed_idents.iter().any(|allowed| allowed == name) {
         return false;
     }
     let lower = name.to_lowercase();
-    if Consts::FORBIDDEN_IDENTS
-        .iter()
-        .any(|forbidden| lower == *forbidden)
-    {
+    if cfg.forbidden_idents.contains(&lower) {
         return true;
     }
-    Consts::FORBIDDEN_SUBSTRINGS
+    cfg.forbidden_substrings
         .iter()
-        .any(|sub| lower.contains(*sub))
+        .any(|fragment| lower.contains(fragment.as_str()))
 }
 
 impl<'ast> Visit<'ast> for IdentVisitor<'_> {
     fn visit_field(&mut self, node: &'ast Field) {
         if let Some(ident) = &node.ident {
             let name = ident.to_string();
-            if name_is_forbidden(&name, self.allowed_idents) {
+            if name_is_forbidden(&name, self.cfg) {
                 self.flag(ident.span().start().line, &name, "field");
             }
         }
@@ -189,7 +159,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_impl_item_fn(&mut self, node: &'ast ImplItemFn) {
         let name = node.sig.ident.to_string();
-        if name_is_forbidden(&name, self.allowed_idents) {
+        if name_is_forbidden(&name, self.cfg) {
             self.flag(node.sig.ident.span().start().line, &name, "fn");
         }
         visit::visit_impl_item_fn(self, node);
@@ -197,7 +167,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_item_const(&mut self, node: &'ast ItemConst) {
         let name = node.ident.to_string();
-        if name_is_forbidden(&name, self.allowed_idents) {
+        if name_is_forbidden(&name, self.cfg) {
             self.flag(node.ident.span().start().line, &name, "const");
         }
         visit::visit_item_const(self, node);
@@ -205,7 +175,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_item_fn(&mut self, node: &'ast ItemFn) {
         let name = node.sig.ident.to_string();
-        if name_is_forbidden(&name, self.allowed_idents) {
+        if name_is_forbidden(&name, self.cfg) {
             self.flag(node.sig.ident.span().start().line, &name, "fn");
         }
         visit::visit_item_fn(self, node);
@@ -222,7 +192,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_item_static(&mut self, node: &'ast ItemStatic) {
         let name = node.ident.to_string();
-        if name_is_forbidden(&name, self.allowed_idents) {
+        if name_is_forbidden(&name, self.cfg) {
             self.flag(node.ident.span().start().line, &name, "static");
         }
         visit::visit_item_static(self, node);
@@ -230,7 +200,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
         let name = node.ident.to_string();
-        if name_is_forbidden(&name, self.allowed_idents) {
+        if name_is_forbidden(&name, self.cfg) {
             self.flag(node.ident.span().start().line, &name, "struct");
         }
         visit::visit_item_struct(self, node);
@@ -239,7 +209,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
     fn visit_local(&mut self, node: &'ast Local) {
         if let Pat::Ident(PatIdent { ident, .. }) = &node.pat {
             let name = ident.to_string();
-            if name_is_forbidden(&name, self.allowed_idents) {
+            if name_is_forbidden(&name, self.cfg) {
                 self.flag(ident.span().start().line, &name, "let");
             }
         }
@@ -258,13 +228,13 @@ mod tests {
     fn count_violations_with_allowed(source: &str, allowed_idents: &[&str]) -> usize {
         let file = syn::parse_file(source).expect("parse");
         let suppress = Suppressions::parse(source);
-        let allowed_idents = allowed_idents
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect::<Vec<_>>();
+        let cfg = RetryFallbackConfig {
+            allowed_idents: allowed_idents.iter().map(|s| (*s).to_owned()).collect(),
+            ..RetryFallbackConfig::default()
+        };
         let mut out = Vec::new();
         let mut v = IdentVisitor {
-            allowed_idents: &allowed_idents,
+            cfg: &cfg,
             rel: "test.rs",
             suppress: &suppress,
             out: &mut out,

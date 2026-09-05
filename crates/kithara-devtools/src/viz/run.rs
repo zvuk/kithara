@@ -1,6 +1,7 @@
 use std::{
     io::{self, Write as _},
     process::Command,
+    time::Duration,
 };
 
 use anyhow::{Result, bail};
@@ -13,7 +14,7 @@ use super::{
     mermaid,
     metrics::MetricsAnalyzer,
     scenario::{self, RunRequest, RuntimeSummary, ScenarioSummary},
-    semantic::{self, SemanticState, SemanticSummary},
+    semantic::{self, EnrichRequest, SemanticState, SemanticSummary},
     source,
     trace::TraceState,
     view::{DetailLevel, Projector, ViewKind, ViewRequest},
@@ -75,11 +76,15 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
     } else {
         semantic::enrich(
             &mut graph,
-            &ctx.root,
-            args.krate.as_deref(),
-            args.module.as_deref(),
-            args.scenario.as_deref(),
-            &filter,
+            &EnrichRequest {
+                filter: &filter,
+                root: &ctx.root,
+                program: ctx.config.tools.program("rust-analyzer"),
+                timeout: Duration::from_secs(ctx.config.architecture.runtime.semantic_timeout_secs),
+                module: args.module.as_deref(),
+                package: args.krate.as_deref(),
+                scenario: args.scenario.as_deref(),
+            },
         )
     };
     let request = ViewRequest {
@@ -112,6 +117,7 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
     let filter_summary = filter.summary(&graph);
     let artifacts = manifest::write(&ArtifactRequest {
         args,
+        budgets: &ctx.config.architecture.render,
         root: &ctx.root,
         revision: &revision,
         project: &ctx.config.project.name,

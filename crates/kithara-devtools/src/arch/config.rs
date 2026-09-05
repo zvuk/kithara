@@ -100,6 +100,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) no_lib_statics: NoLibStaticsThreshold,
     #[serde(default)]
+    pub(crate) platform_layer_hygiene: PlatformLayerHygieneThreshold,
+    #[serde(default)]
     pub(crate) pub_struct_open_fields: PubStructOpenFieldsThreshold,
     #[serde(default)]
     pub(crate) readme_presence: ReadmePresenceThreshold,
@@ -145,11 +147,38 @@ impl Default for MultiConstructorThreshold {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FieldPassthroughThreshold {
     #[serde(default)]
     pub(crate) exempt_files: Vec<String>,
+    /// How far a passthrough chain is followed before the check gives up.
+    #[serde(default = "default_field_passthrough_max_depth")]
+    pub(crate) max_depth: usize,
+    /// Types a field may be wrapped in without the wrapper counting as a level
+    /// of its own.
+    #[serde(default = "default_transparent_wrappers")]
+    pub(crate) transparent_wrappers: Vec<String>,
+}
+
+const fn default_field_passthrough_max_depth() -> usize {
+    8
+}
+
+fn default_transparent_wrappers() -> Vec<String> {
+    ["Arc", "Rc", "Box", "RefCell", "Cell", "Mutex", "RwLock"]
+        .map(String::from)
+        .to_vec()
+}
+
+impl Default for FieldPassthroughThreshold {
+    fn default() -> Self {
+        Self {
+            exempt_files: Vec::new(),
+            max_depth: default_field_passthrough_max_depth(),
+            transparent_wrappers: default_transparent_wrappers(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -531,7 +560,71 @@ pub(crate) struct NoLibStaticsThreshold {
     pub(crate) exempt_crates: Vec<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PlatformLayerHygieneThreshold {
+    /// Files sanctioned to name `std::sync::Arc` directly: the ownership
+    /// primitive itself and the wasm shim that has no platform Arc to reach
+    /// for.
+    #[serde(default = "default_arc_owner_files")]
+    pub(crate) arc_owner_files: Vec<String>,
+    /// Sub-directories of the root the check does not read: the backends and
+    /// the platform-specific trees whose job is to name the primitives the
+    /// rest of the crate must not.
+    #[serde(default = "default_platform_excluded_subtrees")]
+    pub(crate) excluded_subtrees: Vec<String>,
+    /// Sub-paths that implement the abstraction rather than consume it.
+    #[serde(default = "default_platform_impl_subtrees")]
+    pub(crate) impl_subtrees: Vec<String>,
+    /// Source root whose files this check governs, workspace-relative and
+    /// trailing-slashed.
+    #[serde(default = "default_platform_root")]
+    pub(crate) root: String,
+}
+
+fn default_arc_owner_files() -> Vec<String> {
+    [
+        "crates/kithara-platform/src/system/ownership.rs",
+        "crates/kithara-platform/src/wasm/sync/mod.rs",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+fn default_platform_excluded_subtrees() -> Vec<String> {
+    ["backend/", "system/", "loom/", "wasm/"]
+        .map(String::from)
+        .to_vec()
+}
+
+fn default_platform_impl_subtrees() -> Vec<String> {
+    [
+        "flash/sync/",
+        "flash/tokio/",
+        "flash/system/",
+        "common/cancel/",
+        "common/time.rs",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+fn default_platform_root() -> String {
+    "crates/kithara-platform/src/".to_owned()
+}
+
+impl Default for PlatformLayerHygieneThreshold {
+    fn default() -> Self {
+        Self {
+            arc_owner_files: default_arc_owner_files(),
+            excluded_subtrees: default_platform_excluded_subtrees(),
+            impl_subtrees: default_platform_impl_subtrees(),
+            root: default_platform_root(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CancelRootSitesThreshold {
     /// Relative file paths where minting a fresh cancel root
@@ -546,9 +639,31 @@ pub(crate) struct CancelRootSitesThreshold {
     /// Project-specific — supplied via config.
     #[serde(default)]
     pub(crate) exempt_crates: Vec<String>,
+    /// Fresh-root minting calls denied outside the allowlist: the owning-master
+    /// `CancelToken::root` and the never-cancelled sentinel
+    /// `CancelToken::never`. Both root a new cancel tree; `.child()` — the
+    /// sanctioned derivation — is not one of these.
+    #[serde(default = "default_cancel_root_patterns")]
+    pub(crate) patterns: Vec<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+fn default_cancel_root_patterns() -> Vec<String> {
+    ["CancelToken::root", "CancelToken::never"]
+        .map(String::from)
+        .to_vec()
+}
+
+impl Default for CancelRootSitesThreshold {
+    fn default() -> Self {
+        Self {
+            allowed_files: Vec::new(),
+            exempt_crates: Vec::new(),
+            patterns: default_cancel_root_patterns(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TokioDepQuarantineThreshold {
     /// Crates whose *production* tokio coupling is not yet migrated to the
@@ -563,6 +678,26 @@ pub(crate) struct TokioDepQuarantineThreshold {
     /// Project-specific — supplied via config.
     #[serde(default)]
     pub(crate) exempt_crates: Vec<String>,
+    /// Crate names quarantined: a *production* (non-dev, non-build) dependency
+    /// on any of these is forbidden outside the platform owner / exemptions.
+    #[serde(default = "default_quarantined_crates")]
+    pub(crate) quarantined: Vec<String>,
+}
+
+fn default_quarantined_crates() -> Vec<String> {
+    ["tokio", "tokio-util", "tokio-stream"]
+        .map(String::from)
+        .to_vec()
+}
+
+impl Default for TokioDepQuarantineThreshold {
+    fn default() -> Self {
+        Self {
+            allowed_crates: Vec::new(),
+            exempt_crates: Vec::new(),
+            quarantined: default_quarantined_crates(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -957,4 +1092,74 @@ fn load_optional<T: Default + for<'de> Deserialize<'de>>(path: &Path) -> Result<
     let text =
         fs::read_to_string(path).with_context(|| format!("read config: {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("parse config: {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A namespace with no `thresholds.toml` section must still know what it
+    /// looks for. A derived `Default` hands the check an empty list and the
+    /// ratchet goes quiet instead of failing.
+    #[test]
+    fn a_threshold_built_from_default_keeps_its_subjects() {
+        let thresholds = ThresholdsConfig::default();
+
+        assert_eq!(
+            thresholds.cancel_root_sites.patterns,
+            ["CancelToken::root", "CancelToken::never"]
+        );
+        assert_eq!(
+            thresholds.tokio_dep_quarantine.quarantined,
+            ["tokio", "tokio-util", "tokio-stream"]
+        );
+        assert_eq!(thresholds.field_passthrough.max_depth, 8);
+        assert_eq!(
+            thresholds.platform_layer_hygiene.root,
+            "crates/kithara-platform/src/"
+        );
+        assert_eq!(thresholds.platform_layer_hygiene.arc_owner_files.len(), 2);
+    }
+
+    /// The other half of the same trap. A present table takes the per-field
+    /// defaults, never the written `Default`, so a project that sets one key of
+    /// a threshold must keep the rest of that threshold's subjects.
+    #[test]
+    fn a_partly_configured_threshold_keeps_the_keys_it_left_alone() {
+        let thresholds: ThresholdsConfig = toml::from_str(
+            r#"
+[field_passthrough]
+exempt_files = ["crates/demo/src/lib.rs"]
+
+[cancel_root_sites]
+exempt_crates = ["kithara-demo"]
+
+[tokio_dep_quarantine]
+allowed_crates = ["kithara-demo"]
+
+[platform_layer_hygiene]
+excluded_subtrees = ["demo/"]
+"#,
+        )
+        .expect("a partial thresholds document");
+
+        assert_eq!(thresholds.field_passthrough.max_depth, 8);
+        assert_eq!(
+            thresholds.field_passthrough.transparent_wrappers,
+            ["Arc", "Rc", "Box", "RefCell", "Cell", "Mutex", "RwLock"]
+        );
+        assert_eq!(
+            thresholds.cancel_root_sites.patterns,
+            ["CancelToken::root", "CancelToken::never"]
+        );
+        assert_eq!(
+            thresholds.tokio_dep_quarantine.quarantined,
+            ["tokio", "tokio-util", "tokio-stream"]
+        );
+        assert_eq!(
+            thresholds.platform_layer_hygiene.root,
+            "crates/kithara-platform/src/"
+        );
+        assert_eq!(thresholds.platform_layer_hygiene.arc_owner_files.len(), 2);
+    }
 }

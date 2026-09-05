@@ -97,7 +97,7 @@ pub(crate) fn run(args: &AssessArgs, ctx: &Ctx) -> Result<()> {
     assessment.revision = draft.revision;
     assessment.content_digest = draft.content_digest;
     assessment.output_directory = draft.output_directory;
-    let artifacts = artifact::write(&assessment, &ctx.root)?;
+    let artifacts = artifact::write(&assessment, &ctx.root, &ctx.config.quality.render)?;
     writeln!(
         std::io::stdout().lock(),
         "==> {}",

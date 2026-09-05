@@ -26,11 +26,11 @@ fn set(value: Option<&OsStr>) -> bool {
 /// Best effort by construction. This is a measurement appended to a lane, and a
 /// lane's verdict is about the workspace, never about whether a cache daemon
 /// answered.
-pub(crate) fn report_stats() {
+pub(crate) fn report_stats(program: &str) {
     if !worth_reporting(in_ci(), env::var_os(WRAPPER).as_deref()) {
         return;
     }
-    match Command::new("sccache").arg("--show-stats").status() {
+    match Command::new(program).arg("--show-stats").status() {
         Ok(status) if status.success() => {}
         Ok(status) => eprintln!("sccache statistics were unavailable: {status}"),
         Err(error) => eprintln!("sccache statistics could not be collected: {error}"),

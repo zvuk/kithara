@@ -13,9 +13,7 @@ use super::{
     AssessmentDepth, AssessmentProfile, adapters, artifact, collect,
     model::{Assessment, CoverageStatus, StageStatus},
 };
-use crate::{Ctx, quality_lab::CRAP_THRESHOLD};
-
-const MAX_RENDERED_ROWS: usize = 5;
+use crate::{Ctx, common::project::QualityRenderBudgets, quality_lab::CRAP_THRESHOLD};
 
 #[derive(Deserialize)]
 struct CrapReport {
@@ -59,17 +57,25 @@ pub(crate) fn run(args: &SummaryArgs, ctx: &Ctx) -> Result<()> {
             .join(revision)
             .join("cargo-crap/report.json")
     });
-    let output = render(&directory, crap_report.as_deref())?;
+    let output = render(
+        &directory,
+        crap_report.as_deref(),
+        &ctx.config.quality.render,
+    )?;
     std::io::stdout().lock().write_all(output.as_bytes())?;
     Ok(())
 }
 
-fn render(directory: &Path, crap_report: Option<&Path>) -> Result<String> {
+fn render(
+    directory: &Path,
+    crap_report: Option<&Path>,
+    budgets: &QualityRenderBudgets,
+) -> Result<String> {
     let assessment = artifact::read(directory)?;
     let mut output = header(&assessment);
-    append_crap(&mut output, &assessment, crap_report)?;
-    append_architecture(&mut output, &assessment)?;
-    append_evidence_gaps(&mut output, &assessment)?;
+    append_crap(&mut output, &assessment, crap_report, budgets)?;
+    append_architecture(&mut output, &assessment, budgets)?;
+    append_evidence_gaps(&mut output, &assessment, budgets)?;
     output.push_str(
         "Full details are in the uploaded quality assessment artifact (`assessment.md` and `assessment.json`).\n",
     );
@@ -109,6 +115,7 @@ fn append_crap(
     output: &mut String,
     assessment: &Assessment,
     report_path: Option<&Path>,
+    budgets: &QualityRenderBudgets,
 ) -> Result<()> {
     output.push_str("## Coverage risk (CRAP)\n\n");
     let Some(report_path) = report_path.filter(|path| path.is_file()) else {
@@ -158,7 +165,7 @@ fn append_crap(
             "| Function | Location | Cyclomatic | Coverage | CRAP |\n\
              | --- | --- | ---: | ---: | ---: |\n",
         );
-        for entry in entries.iter().take(MAX_RENDERED_ROWS) {
+        for entry in entries.iter().take(budgets.summary_rows) {
             let location = format!("{}:{}", entry.file, entry.line);
             let coverage = entry
                 .coverage
@@ -173,15 +180,20 @@ fn append_crap(
                 entry.crap,
             )?;
         }
-        append_omitted(output, entries.len(), "CRAP")?;
+        append_omitted(output, entries.len(), "CRAP", budgets)?;
     } else {
         output.push_str("- Worst CRAP score: n/a\n\n_No function entries were reported._\n\n");
     }
     Ok(())
 }
 
-fn append_omitted(output: &mut String, rows: usize, label: &str) -> Result<()> {
-    let omitted = rows.saturating_sub(MAX_RENDERED_ROWS);
+fn append_omitted(
+    output: &mut String,
+    rows: usize,
+    label: &str,
+    budgets: &QualityRenderBudgets,
+) -> Result<()> {
+    let omitted = rows.saturating_sub(budgets.summary_rows);
     if omitted == 0 {
         output.push('\n');
     } else {
@@ -190,7 +202,11 @@ fn append_omitted(output: &mut String, rows: usize, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn append_architecture(output: &mut String, assessment: &Assessment) -> Result<()> {
+fn append_architecture(
+    output: &mut String,
+    assessment: &Assessment,
+    budgets: &QualityRenderBudgets,
+) -> Result<()> {
     output.push_str("## Architecture complexity\n\n");
     let mut signals = assessment
         .signals
@@ -212,7 +228,7 @@ fn append_architecture(output: &mut String, assessment: &Assessment) -> Result<(
         "| Scope | Architecture complexity index |\n\
          | --- | ---: |\n",
     );
-    for signal in signals.iter().take(MAX_RENDERED_ROWS) {
+    for signal in signals.iter().take(budgets.summary_rows) {
         writeln!(
             output,
             "| {} | {:.4} |",
@@ -220,10 +236,14 @@ fn append_architecture(output: &mut String, assessment: &Assessment) -> Result<(
             signal.value,
         )?;
     }
-    append_omitted(output, signals.len(), "architecture signal")
+    append_omitted(output, signals.len(), "architecture signal", budgets)
 }
 
-fn append_evidence_gaps(output: &mut String, assessment: &Assessment) -> Result<()> {
+fn append_evidence_gaps(
+    output: &mut String,
+    assessment: &Assessment,
+    budgets: &QualityRenderBudgets,
+) -> Result<()> {
     output.push_str("## Broken stages and evidence gaps\n\n### Broken stages\n\n");
     let mut broken = assessment
         .stages
@@ -238,7 +258,7 @@ fn append_evidence_gaps(output: &mut String, assessment: &Assessment) -> Result<
             "| Stage | Exit code | Note |\n\
              | --- | ---: | --- |\n",
         );
-        for stage in broken.iter().take(MAX_RENDERED_ROWS) {
+        for stage in broken.iter().take(budgets.summary_rows) {
             let exit_code = stage
                 .exit_code
                 .map_or_else(|| "n/a".to_owned(), |code| code.to_string());
@@ -250,7 +270,7 @@ fn append_evidence_gaps(output: &mut String, assessment: &Assessment) -> Result<
                 artifact::escape(&stage.note),
             )?;
         }
-        append_omitted(output, broken.len(), "broken stage")?;
+        append_omitted(output, broken.len(), "broken stage", budgets)?;
     }
 
     output.push_str("### Evidence-gap tools\n\n");
@@ -267,7 +287,7 @@ fn append_evidence_gaps(output: &mut String, assessment: &Assessment) -> Result<
             "| Tool | Note |\n\
              | --- | --- |\n",
         );
-        for coverage in gaps.iter().take(MAX_RENDERED_ROWS) {
+        for coverage in gaps.iter().take(budgets.summary_rows) {
             writeln!(
                 output,
                 "| {} | {} |",
@@ -275,7 +295,7 @@ fn append_evidence_gaps(output: &mut String, assessment: &Assessment) -> Result<
                 artifact::escape(&coverage.note),
             )?;
         }
-        append_omitted(output, gaps.len(), "evidence-gap tool")?;
+        append_omitted(output, gaps.len(), "evidence-gap tool", budgets)?;
     }
     Ok(())
 }
@@ -294,7 +314,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let directory = write_assessment(temp.path(), &[]);
 
-        let output = render(&directory, None).expect("summary");
+        let output = render(&directory, None, &QualityRenderBudgets::default()).expect("summary");
 
         assert!(output.contains("verdict **refactor**"));
         assert!(output.contains("| Debt units / threshold | 229 / 100 |"));
@@ -352,7 +372,8 @@ mod tests {
             }),
         );
 
-        let output = render(&directory, Some(&report)).expect("summary");
+        let output =
+            render(&directory, Some(&report), &QualityRenderBudgets::default()).expect("summary");
 
         assert!(output.contains("Functions analysed: 2"));
         assert!(output.contains("Above threshold (> 30.0): 1"));
@@ -368,7 +389,12 @@ mod tests {
         let directory = write_assessment(temp.path(), &[]);
         let missing_report = temp.path().join("cargo-crap/report.json");
 
-        let output = render(&directory, Some(&missing_report)).expect("summary without CRAP");
+        let output = render(
+            &directory,
+            Some(&missing_report),
+            &QualityRenderBudgets::default(),
+        )
+        .expect("summary without CRAP");
 
         assert!(output.contains(
             "- cargo-crap: status `not-applicable`; note: deep profile only; produce it with `just quality assess --depth deep`."
@@ -396,7 +422,8 @@ mod tests {
             .collect();
         write_json(&report, &json!({"entries": entries}));
 
-        let output = render(&directory, Some(&report)).expect("summary");
+        let output =
+            render(&directory, Some(&report), &QualityRenderBudgets::default()).expect("summary");
 
         assert!(
             output
@@ -405,12 +432,46 @@ mod tests {
         assert!(output.contains("_2 additional CRAP rows omitted._"));
     }
 
+    /// The CRAP table is bounded by config, not by a constant: a project that
+    /// lowers the budget renders fewer rows and reports the wider remainder.
+    #[test]
+    fn a_lowered_summary_row_budget_shortens_the_crap_table() {
+        let temp = tempdir().expect("tempdir");
+        let directory = write_assessment(temp.path(), &[]);
+        let report = temp.path().join("cargo-crap/report.json");
+        fs::create_dir_all(report.parent().expect("report parent")).expect("cargo-crap directory");
+        let entries: Vec<Value> = (1..=7)
+            .map(|value| {
+                json!({
+                    "file": "crate/file.rs",
+                    "function": format!("function{value}"),
+                    "line": value,
+                    "cyclomatic": f64::from(value),
+                    "coverage": null,
+                    "crap": f64::from(value)
+                })
+            })
+            .collect();
+        write_json(&report, &json!({"entries": entries}));
+        let budgets = QualityRenderBudgets {
+            summary_rows: 1,
+            ..QualityRenderBudgets::default()
+        };
+
+        let output = render(&directory, Some(&report), &budgets).expect("summary");
+
+        assert!(output.contains("| function7 | crate/file.rs:7 | 7.00 | n/a | 7.00 |"));
+        assert!(!output.contains("| function6 | crate/file.rs:6 | 6.00 | n/a | 6.00 |"));
+        assert!(output.contains("_6 additional CRAP rows omitted._"));
+    }
+
     #[test]
     fn missing_assessment_directory_error_names_the_path() {
         let temp = tempdir().expect("tempdir");
         let missing = temp.path().join("missing-assessment");
 
-        let error = render(&missing, None).expect_err("missing directory must fail");
+        let error = render(&missing, None, &QualityRenderBudgets::default())
+            .expect_err("missing directory must fail");
 
         assert!(error.to_string().contains(&missing.display().to_string()));
     }
@@ -422,7 +483,8 @@ mod tests {
         fs::create_dir_all(&directory).expect("assessment directory");
         let manifest = directory.join("manifest.json");
 
-        let error = render(&directory, None).expect_err("missing manifest must fail");
+        let error = render(&directory, None, &QualityRenderBudgets::default())
+            .expect_err("missing manifest must fail");
 
         assert!(error.to_string().contains(&manifest.display().to_string()));
     }
@@ -445,7 +507,8 @@ mod tests {
             manifest["files"]["assessment"] = json!(assessment_file);
             write_json(&manifest_path, &manifest);
 
-            let error = render(&directory, None).expect_err("unsafe pointer must fail");
+            let error = render(&directory, None, &QualityRenderBudgets::default())
+                .expect_err("unsafe pointer must fail");
 
             assert!(error.to_string().contains("files.assessment"));
             assert!(
@@ -476,7 +539,7 @@ mod tests {
             .collect();
         let directory = write_assessment(temp.path(), &signals);
 
-        let output = render(&directory, None).expect("summary");
+        let output = render(&directory, None, &QualityRenderBudgets::default()).expect("summary");
 
         assert!(output.contains("| crate-7 | 7.0000 |"));
         assert!(!output.contains("| crate-1 | 1.0000 |"));
@@ -533,7 +596,7 @@ mod tests {
         assessment["tool_coverage"] = Value::Array(coverage);
         write_json(&assessment_path, &assessment);
 
-        let output = render(&directory, None).expect("summary");
+        let output = render(&directory, None, &QualityRenderBudgets::default()).expect("summary");
 
         assert!(output.contains("| 00-portable\\|gates | 2 | first line second line |"));
         assert!(output.contains("| 00-cargo\\|geiger | tool unavailable |"));

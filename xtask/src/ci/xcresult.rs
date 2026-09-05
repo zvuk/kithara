@@ -10,10 +10,15 @@ use super::process::Process;
 /// Xcode writes no `JUnit` of its own, so without this the simulator lane — the
 /// one carrying every iOS regression — contributes nothing to a merge request's
 /// test report, and a reviewer sees a green job with no tests behind it.
-pub(crate) fn write_junit(process: &Process, bundle: &Path, output: &Path) -> Result<()> {
+pub(crate) fn write_junit(
+    process: &Process,
+    program: &str,
+    bundle: &Path,
+    output: &Path,
+) -> Result<()> {
     let path = bundle.to_string_lossy().into_owned();
     let json = process.capture(
-        "xcrun",
+        program,
         &[
             "xcresulttool",
             "get",
