@@ -228,7 +228,8 @@ impl Drop for ItemEventBridge {
 #[cfg(test)]
 mod tests {
     use kithara::{
-        events::{Event, FileError, FileEvent},
+        abr::{AbrMode, VariantIndex},
+        events::{AbrEvent, AbrReason, Event, FileError, FileEvent, VariantDuration, VariantInfo},
         platform::sync::{Arc, Mutex},
     };
 
@@ -236,7 +237,7 @@ mod tests {
     use crate::{
         item::{AudioPlayerItem, ItemView},
         observer::ItemObserver,
-        types::{FfiError, FfiItemConfig, FfiItemEvent},
+        types::{FfiError, FfiItemConfig, FfiItemEvent, FfiVariant},
     };
 
     #[derive(Default)]
@@ -284,6 +285,25 @@ mod tests {
         );
     }
 
+    fn variant(index: usize, bandwidth_bps: Option<u64>, name: Option<&str>) -> VariantInfo {
+        VariantInfo {
+            bandwidth_bps,
+            codecs: None,
+            container: None,
+            name: name.map(str::to_owned),
+            duration: VariantDuration::Unknown,
+            variant_index: VariantIndex::new(index),
+        }
+    }
+
+    fn dispatch_variant(
+        observer: &Arc<dyn ItemObserver>,
+        event: AbrEvent,
+        variants: &mut Vec<FfiVariant>,
+    ) {
+        ItemEventBridge::dispatch_variant_events(observer, &Event::Abr(event), variants);
+    }
+
     #[kithara::test]
     fn file_error_maps_to_item_failed() {
         let event = Event::File(FileEvent::Error {
@@ -323,5 +343,156 @@ mod tests {
         dispatch_file_error(&observer, &state);
 
         assert_eq!(observer_impl.take_events().len(), 2);
+    }
+
+    #[kithara::test]
+    fn registered_variants_preserve_metadata_and_apply_initial() {
+        let observer_impl = Arc::new(CollectingItemObserver::default());
+        let observer: Arc<dyn ItemObserver> = observer_impl.clone();
+        let mut variants = Vec::new();
+
+        dispatch_variant(
+            &observer,
+            AbrEvent::VariantsRegistered {
+                variants: vec![
+                    variant(0, Some(128_000), Some("low")),
+                    variant(1, None, Some("high")),
+                ],
+                initial: VariantIndex::new(1),
+            },
+            &mut variants,
+        );
+
+        assert_eq!(variants.len(), 2);
+        assert!(matches!(
+            observer_impl.take_events().as_slice(),
+            [
+                FfiItemEvent::VariantsDiscovered { variants },
+                FfiItemEvent::VariantApplied { variant },
+            ] if variants.len() == 2
+                && variants[0].index == 0
+                && variants[0].bandwidth_bps == 128_000
+                && variants[0].name.as_deref() == Some("low")
+                && variants[1].index == 1
+                && variants[1].bandwidth_bps == 0
+                && variants[1].name.as_deref() == Some("high")
+                && variant.index == 1
+                && variant.name.as_deref() == Some("high")
+        ));
+
+        dispatch_variant(
+            &observer,
+            AbrEvent::VariantsRegistered {
+                variants: Vec::new(),
+                initial: VariantIndex::new(9),
+            },
+            &mut variants,
+        );
+        assert!(variants.is_empty());
+        assert!(matches!(
+            observer_impl.take_events().as_slice(),
+            [FfiItemEvent::VariantsDiscovered { variants }] if variants.is_empty()
+        ));
+    }
+
+    #[kithara::test]
+    fn selected_and_applied_variants_use_known_metadata_or_fallback() {
+        let observer_impl = Arc::new(CollectingItemObserver::default());
+        let observer: Arc<dyn ItemObserver> = observer_impl.clone();
+        let mut variants = vec![FfiVariant {
+            index: 1,
+            bandwidth_bps: 256_000,
+            name: Some("known".into()),
+        }];
+
+        for event in [
+            AbrEvent::ModeChanged {
+                mode: AbrMode::Manual(VariantIndex::new(1)),
+            },
+            AbrEvent::ModeChanged {
+                mode: AbrMode::Manual(VariantIndex::new(2)),
+            },
+            AbrEvent::VariantApplied {
+                from: VariantIndex::new(0),
+                to: VariantIndex::new(1),
+                reason: AbrReason::ManualOverride,
+            },
+            AbrEvent::VariantApplied {
+                from: VariantIndex::new(1),
+                to: VariantIndex::new(3),
+                reason: AbrReason::UpSwitch,
+            },
+            AbrEvent::ModeChanged {
+                mode: AbrMode::Auto(None),
+            },
+        ] {
+            dispatch_variant(&observer, event, &mut variants);
+        }
+
+        assert!(matches!(
+            observer_impl.take_events().as_slice(),
+            [
+                FfiItemEvent::VariantSelected { variant: selected_known },
+                FfiItemEvent::VariantSelected { variant: selected_fallback },
+                FfiItemEvent::VariantApplied { variant: applied_known },
+                FfiItemEvent::VariantApplied { variant: applied_fallback },
+            ] if selected_known.index == 1
+                && selected_known.bandwidth_bps == 256_000
+                && selected_known.name.as_deref() == Some("known")
+                && selected_fallback.index == 2
+                && selected_fallback.bandwidth_bps == 0
+                && selected_fallback.name.is_none()
+                && applied_known.index == 1
+                && applied_known.bandwidth_bps == 256_000
+                && applied_known.name.as_deref() == Some("known")
+                && applied_fallback.index == 3
+                && applied_fallback.bandwidth_bps == 0
+                && applied_fallback.name.is_none()
+        ));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[kithara::test]
+    fn overflowing_variant_indices_are_filtered_or_skipped() {
+        let overflow = usize::try_from(u64::from(u32::MAX) + 1)
+            .expect("64-bit hosts can represent indices above u32::MAX");
+        let observer_impl = Arc::new(CollectingItemObserver::default());
+        let observer: Arc<dyn ItemObserver> = observer_impl.clone();
+        let mut variants = Vec::new();
+
+        dispatch_variant(
+            &observer,
+            AbrEvent::VariantsRegistered {
+                variants: vec![
+                    variant(0, Some(128_000), Some("valid")),
+                    variant(overflow, None, None),
+                ],
+                initial: VariantIndex::new(overflow),
+            },
+            &mut variants,
+        );
+        dispatch_variant(
+            &observer,
+            AbrEvent::ModeChanged {
+                mode: AbrMode::Manual(VariantIndex::new(overflow)),
+            },
+            &mut variants,
+        );
+        dispatch_variant(
+            &observer,
+            AbrEvent::VariantApplied {
+                from: VariantIndex::new(0),
+                to: VariantIndex::new(overflow),
+                reason: AbrReason::UpSwitch,
+            },
+            &mut variants,
+        );
+
+        assert_eq!(variants.len(), 1);
+        assert!(matches!(
+            observer_impl.take_events().as_slice(),
+            [FfiItemEvent::VariantsDiscovered { variants }]
+                if variants.len() == 1 && variants[0].index == 0
+        ));
     }
 }

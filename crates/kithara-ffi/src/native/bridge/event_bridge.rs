@@ -396,6 +396,8 @@ mod tests {
         types::{FfiItemConfig, FfiItemEvent},
     };
 
+    type QueueEventCase = (QueueEvent, fn(&FfiPlayerEvent) -> bool);
+
     #[derive(Default)]
     struct CollectingPlayerObserver {
         events: Mutex<Vec<FfiPlayerEvent>>,
@@ -803,6 +805,72 @@ mod tests {
                 auto_skipped: true,
             }] if *id == item_id && reason == "network timeout"
         ));
+    }
+
+    #[kithara::test]
+    fn queue_dispatch_forwards_every_remaining_host_event() {
+        let item_id = TrackId::from(17_u64);
+        let cases: [QueueEventCase; 7] = [
+            (
+                QueueEvent::TrackAdded {
+                    id: item_id,
+                    index: 2,
+                },
+                |event| matches!(event, FfiPlayerEvent::TrackAdded { item_id: id, index: 2 } if *id == TrackId::from(17_u64)),
+            ),
+            (
+                QueueEvent::TrackRemoved { id: item_id },
+                |event| matches!(event, FfiPlayerEvent::TrackRemoved { item_id: id } if *id == TrackId::from(17_u64)),
+            ),
+            (
+                QueueEvent::CurrentTrackChanged { id: Some(item_id) },
+                |event| matches!(event, FfiPlayerEvent::CurrentItemChanged { item_id: Some(id) } if *id == TrackId::from(17_u64)),
+            ),
+            (QueueEvent::QueueEnded, |event| {
+                matches!(event, FfiPlayerEvent::QueueEnded)
+            }),
+            (
+                QueueEvent::CrossfadeStarted {
+                    duration_seconds: 3.5,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiPlayerEvent::CrossfadeStarted {
+                            duration_seconds: 3.5
+                        }
+                    )
+                },
+            ),
+            (
+                QueueEvent::CrossfadeDurationChanged { seconds: 4.0 },
+                |event| {
+                    matches!(
+                        event,
+                        FfiPlayerEvent::CrossfadeDurationChanged { seconds: 4.0 }
+                    )
+                },
+            ),
+            (
+                QueueEvent::NextTrackReady {
+                    id: item_id,
+                    index: 3,
+                },
+                |event| matches!(event, FfiPlayerEvent::NextTrackReady { item_id: id, index: 3 } if *id == TrackId::from(17_u64)),
+            ),
+        ];
+        let observer_impl = Arc::new(CollectingPlayerObserver::default());
+        let observer: Arc<dyn PlayerObserver> = observer_impl.clone();
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+
+        for (source, preserves_contract) in &cases {
+            EventBridge::dispatch_queue_event(&observer, &items, source);
+            let events = observer_impl.take_events();
+            let [event] = events.as_slice() else {
+                panic!("expected one forwarded event for {source:?}, received {events:?}");
+            };
+            assert!(preserves_contract(event), "unexpected event: {event:?}");
+        }
     }
 
     async fn wait_for_status(

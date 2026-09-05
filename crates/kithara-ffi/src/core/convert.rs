@@ -577,28 +577,726 @@ impl TryFrom<&QueueEvent> for FfiPlayerEvent {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
+    use std::num::{NonZeroU32, NonZeroU64};
 
     use kithara::{
         events::{
-            AssetEvent, AudioEvent, CancelReason, DownloaderEvent, DrmEvent, EngineEvent, Event,
-            EvictReason, FileEvent, KeyFailureStage, KeySource, MediaTime, QueueEvent, RequestId,
-            RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind,
-            TotalBytesSource, TrackId,
+            AssetEvent, AudioCodecKind, AudioEvent, CancelReason, ContainerKind, DecodeErrorClass,
+            DecodeErrorKind, DecoderBackend, DecoderChangeCause, DecoderEvent, DjEvent,
+            DownloaderEvent, DrmEvent, EngineEvent, Event, EvictReason, FileEvent, FrameDomain,
+            GaplessSpan, HlsEvent, ItemRole, KeyFailureStage, KeySource, MediaTime,
+            PlaybackResamplerKind, PlayerStatus, QueueEvent, QueueRepeatMode, RequestId,
+            ResamplerKind, RouteChangeReason, RouteDescription, SessionEvent, SlotId,
+            StretchBackendKind, TimeControlStatus, TotalBytesSource, TrackFailureKind, TrackId,
+            TrackRef, TrackStatus,
         },
-        platform::time::Duration,
+        platform::{sync::Arc, time::Duration},
         play::PlayerEvent,
+        signal::AudioSpec,
     };
 
     use super::{FfiError, FfiItemEvent, FfiPlayerEvent, NotForwarded};
     use crate::types::{
-        FfiCancelReason, FfiEvictReason, FfiKeyFailureStage, FfiKeySource, FfiRouteChangeReason,
-        FfiStretchBackendKind, FfiTotalBytesSource,
+        FfiAdvanceReason, FfiAudioCodecKind, FfiCancelReason, FfiContainerKind,
+        FfiDecodeErrorClass, FfiDecodeErrorKind, FfiDecoderBackend, FfiDecoderChangeCause,
+        FfiEvictReason, FfiFrameDomain, FfiKeyFailureStage, FfiKeySource, FfiPlaybackResamplerKind,
+        FfiPlayerStatus, FfiRepeatMode, FfiResamplerKind, FfiRouteChangeReason,
+        FfiStretchBackendKind, FfiTimeControlStatus, FfiTotalBytesSource, FfiTrackFailureKind,
+        FfiTrackStatus,
     };
+
+    type ItemEventCase<T> = (T, fn(&FfiItemEvent) -> bool);
+    type PlayerEventCase<T> = (T, fn(&FfiPlayerEvent) -> bool);
 
     fn request_id(value: u64) -> RequestId {
         let id = NonZeroU64::new(value).expect("request id must be non-zero");
         RequestId::new(id)
+    }
+
+    fn audio_spec(channels: u16, sample_rate: u32) -> AudioSpec {
+        AudioSpec::new(
+            channels,
+            NonZeroU32::new(sample_rate).expect("sample rate must be non-zero"),
+        )
+    }
+
+    fn item_role(id: u64) -> ItemRole {
+        ItemRole::Leading(TrackRef::new(
+            TrackId::from(id),
+            SlotId::new(0),
+            Arc::from("test://track"),
+        ))
+    }
+
+    #[kithara::test]
+    fn event_routes_every_forwarded_domain() {
+        let item_events = [
+            Event::Decoder(DecoderEvent::ResamplerConfigured {
+                backend: ResamplerKind::Rubato,
+                input_rate: 44_100,
+                output_rate: 48_000,
+                channels: 2,
+                bypassed: false,
+            }),
+            Event::Audio(AudioEvent::DecoderReady {
+                base_offset: 17,
+                variant: Some(2),
+            }),
+            Event::Hls(HlsEvent::CacheComplete {
+                total_bytes: Some(1024),
+            }),
+            Event::Downloader(DownloaderEvent::RequestStarted {
+                request_id: request_id(1),
+                wait_in_queue: Duration::from_millis(250),
+            }),
+            Event::File(FileEvent::CacheComplete { total_bytes: 2048 }),
+            Event::Drm(DrmEvent::SegmentDecryptFailed {
+                variant: 3,
+                segment_index: 4,
+                detail: "bad key".into(),
+            }),
+        ];
+        for event in &item_events {
+            assert!(FfiItemEvent::try_from(event).is_ok(), "{event:?}");
+        }
+
+        let player_events = [
+            Event::Engine(EngineEvent::Started),
+            Event::Session(SessionEvent::RouteChanged {
+                reason: RouteChangeReason::Override,
+                previous_route: RouteDescription::default(),
+            }),
+            Event::Dj(DjEvent::KeylockChanged { on: true }),
+            Event::Asset(AssetEvent::Committed {
+                asset_root: "cache".into(),
+                rel_path: "track/file".into(),
+                final_len: Some(99),
+            }),
+            Event::Asset(AssetEvent::Failed {
+                asset_root: "cache".into(),
+                rel_path: "track/file".into(),
+                reason: "disk full".into(),
+            }),
+        ];
+        for event in &player_events {
+            assert!(FfiPlayerEvent::try_from(event).is_ok(), "{event:?}");
+        }
+
+        assert!(matches!(
+            FfiItemEvent::try_from(&Event::Engine(EngineEvent::Started)),
+            Err(NotForwarded)
+        ));
+        assert!(matches!(
+            FfiPlayerEvent::try_from(&Event::Audio(AudioEvent::OutputAvailable)),
+            Err(NotForwarded)
+        ));
+    }
+
+    #[kithara::test]
+    fn decoder_events_preserve_every_forwarded_contract() {
+        let cases: [ItemEventCase<DecoderEvent>; 4] = [
+            (
+                DecoderEvent::DecoderChanged {
+                    backend: DecoderBackend::Apple,
+                    codec: Some(AudioCodecKind::AacLc),
+                    container: Some(ContainerKind::Fmp4),
+                    sample_rate: 48_000,
+                    channels: 2,
+                    bit_depth: Some(24),
+                    bitrate: Some(320_000),
+                    epoch: 7,
+                    cause: DecoderChangeCause::VariantSwitch,
+                    variant: Some(3),
+                    base_offset: 4096,
+                    duration: Some(Duration::from_millis(2500)),
+                    gapless: Some(GaplessSpan::new(2112, 512)),
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::DecoderChanged {
+                            backend: FfiDecoderBackend::Apple,
+                            codec: Some(FfiAudioCodecKind::AacLc),
+                            container: Some(FfiContainerKind::Fmp4),
+                            sample_rate: 48_000,
+                            channels: 2,
+                            bit_depth: Some(24),
+                            bitrate: Some(320_000),
+                            epoch: 7,
+                            cause: FfiDecoderChangeCause::VariantSwitch,
+                            variant: Some(3),
+                            base_offset: 4096,
+                            duration_seconds: Some(2.5),
+                            gapless_leading: 2112,
+                            gapless_trailing: 512,
+                            has_gapless: true,
+                        }
+                    )
+                },
+            ),
+            (
+                DecoderEvent::DecodeError {
+                    class: DecodeErrorClass::Interrupted,
+                    kind: DecodeErrorKind::InvalidData,
+                    codec: Some(AudioCodecKind::Flac),
+                    detail: "truncated frame",
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::DecodeError {
+                            class: FfiDecodeErrorClass::Interrupted,
+                            kind: FfiDecodeErrorKind::InvalidData,
+                            codec: Some(FfiAudioCodecKind::Flac),
+                            detail,
+                        } if detail == "truncated frame"
+                    )
+                },
+            ),
+            (
+                DecoderEvent::GaplessResolved {
+                    leading_frames: 1024,
+                    trailing_frames: 256,
+                    domain: FrameDomain::Output,
+                    codec: Some(AudioCodecKind::Alac),
+                    sample_rate: 44_100,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::GaplessResolved {
+                            leading_frames: 1024,
+                            trailing_frames: 256,
+                            domain: FfiFrameDomain::Output,
+                            codec: Some(FfiAudioCodecKind::Alac),
+                            sample_rate: 44_100,
+                        }
+                    )
+                },
+            ),
+            (
+                DecoderEvent::ResamplerConfigured {
+                    backend: ResamplerKind::Glide,
+                    input_rate: 44_100,
+                    output_rate: 48_000,
+                    channels: 2,
+                    bypassed: false,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::ResamplerConfigured {
+                            backend: FfiResamplerKind::Glide,
+                            input_rate: 44_100,
+                            output_rate: 48_000,
+                            channels: 2,
+                            bypassed: false,
+                        }
+                    )
+                },
+            ),
+        ];
+
+        for (source, preserves_contract) in cases {
+            let event = FfiItemEvent::try_from(&source).expect("event must be forwarded");
+            assert!(preserves_contract(&event), "unexpected event: {event:?}");
+        }
+        assert!(matches!(
+            FfiItemEvent::try_from(&DecoderEvent::TransitionHold {
+                source_exhausted: true,
+            }),
+            Err(NotForwarded)
+        ));
+    }
+
+    #[kithara::test]
+    fn audio_events_preserve_every_forwarded_contract() {
+        let cases: [ItemEventCase<AudioEvent>; 11] = [
+            (
+                AudioEvent::FormatDetected {
+                    spec: audio_spec(2, 48_000),
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::AudioFormatDetected {
+                            channels: 2,
+                            sample_rate: 48_000,
+                        }
+                    )
+                },
+            ),
+            (
+                AudioEvent::FormatChanged {
+                    old: audio_spec(1, 44_100),
+                    new: audio_spec(2, 48_000),
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::AudioFormatChanged {
+                            old_channels: 1,
+                            old_sample_rate: 44_100,
+                            new_channels: 2,
+                            new_sample_rate: 48_000,
+                        }
+                    )
+                },
+            ),
+            (
+                AudioEvent::SeekComplete {
+                    position: Duration::from_millis(1250),
+                    seek_epoch: 3,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::SeekComplete {
+                            position_seconds: 1.25,
+                            epoch: 3,
+                        }
+                    )
+                },
+            ),
+            (
+                AudioEvent::SeekRejected {
+                    epoch: 4,
+                    target: Duration::from_millis(1500),
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::SeekRejected {
+                            epoch: 4,
+                            target_seconds: 1.5,
+                        }
+                    )
+                },
+            ),
+            (
+                AudioEvent::DecoderReady {
+                    base_offset: 2048,
+                    variant: Some(7),
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::DecoderReady {
+                            base_offset: 2048,
+                            variant: Some(7),
+                        }
+                    )
+                },
+            ),
+            (
+                AudioEvent::TrackFailed {
+                    failure: TrackFailureKind::RecreateFailed { offset: 99 },
+                    seek_epoch: 5,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::TrackFailed {
+                            reason: FfiTrackFailureKind::RecreateFailed { offset: 99 },
+                            epoch: 5,
+                        }
+                    )
+                },
+            ),
+            (
+                AudioEvent::UnderrunStarted {
+                    position_ms: 600,
+                    seek_epoch: 6,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::UnderrunStarted {
+                            position_ms: 600,
+                            epoch: 6,
+                        }
+                    )
+                },
+            ),
+            (
+                AudioEvent::UnderrunEnded {
+                    position_ms: 700,
+                    seek_epoch: 6,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::UnderrunEnded {
+                            position_ms: 700,
+                            epoch: 6,
+                        }
+                    )
+                },
+            ),
+            (
+                AudioEvent::BufferHealth {
+                    buffered_ms: 800,
+                    decoded_frontier_ms: 900,
+                    seek_epoch: 7,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::BufferHealth {
+                            buffered_ms: 800,
+                            decoded_frontier_ms: 900,
+                            epoch: 7,
+                        }
+                    )
+                },
+            ),
+            (
+                AudioEvent::EngineLoad {
+                    load: 0.25,
+                    ms_per_chunk: 3.5,
+                    realtime_factor: 0.5,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::EngineLoad {
+                            load: 0.25,
+                            ms_per_chunk: 3.5,
+                            realtime_factor: 0.5,
+                        }
+                    )
+                },
+            ),
+            (
+                AudioEvent::PlaybackResamplerConfigured {
+                    backend: PlaybackResamplerKind::Rubato,
+                    host_sample_rate: 48_000,
+                    source_sample_rate: 44_100,
+                    active: true,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::PlaybackResamplerConfigured {
+                            backend: FfiPlaybackResamplerKind::Rubato,
+                            host_sample_rate: 48_000,
+                            source_sample_rate: 44_100,
+                            active: true,
+                        }
+                    )
+                },
+            ),
+        ];
+
+        for (source, preserves_contract) in cases {
+            let event = FfiItemEvent::try_from(&source).expect("event must be forwarded");
+            assert!(preserves_contract(&event), "unexpected event: {event:?}");
+        }
+    }
+
+    #[kithara::test]
+    fn downloader_events_preserve_every_forwarded_contract() {
+        let network_error = || kithara::net::NetError::Network("offline".into());
+        let cases: [ItemEventCase<DownloaderEvent>; 9] = [
+            (
+                DownloaderEvent::RequestStarted {
+                    request_id: request_id(1),
+                    wait_in_queue: Duration::from_millis(250),
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::DownloadStarted {
+                            request_id: 1,
+                            wait_in_queue_seconds: 0.25
+                        }
+                    )
+                },
+            ),
+            (
+                DownloaderEvent::LoadSlow {
+                    request_id: request_id(2),
+                    elapsed: Duration::from_millis(500),
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::DownloadSlow {
+                            request_id: 2,
+                            elapsed_seconds: 0.5
+                        }
+                    )
+                },
+            ),
+            (
+                DownloaderEvent::RequestCompleted {
+                    request_id: request_id(3),
+                    bytes_transferred: 4096,
+                    duration: Duration::from_secs(2),
+                    bandwidth_bps: 16_384,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::DownloadCompleted {
+                            request_id: 3,
+                            bytes_transferred: 4096,
+                            duration_seconds: 2.0,
+                            bandwidth_bps: 16_384
+                        }
+                    )
+                },
+            ),
+            (
+                DownloaderEvent::RequestRetrying {
+                    request_id: request_id(4),
+                    attempt: 2,
+                    max_retries: 4,
+                    error: network_error(),
+                    backoff: Duration::from_millis(750),
+                },
+                |event| matches!(event, FfiItemEvent::DownloadRetrying { request_id: 4, attempt: 2, max_retries: 4, error, backoff_seconds: 0.75 } if error.contains("offline")),
+            ),
+            (
+                DownloaderEvent::BodyStalled {
+                    request_id: request_id(5),
+                    consumed: 1024,
+                    expected: Some(4096),
+                    stall: Duration::from_millis(125),
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::DownloadBodyStalled {
+                            request_id: 5,
+                            consumed: 1024,
+                            expected: Some(4096),
+                            stall_seconds: 0.125
+                        }
+                    )
+                },
+            ),
+            (
+                DownloaderEvent::BodyResumed {
+                    request_id: request_id(6),
+                    resume_number: 3,
+                    from_offset: 1024,
+                    honoured_range: true,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::DownloadBodyResumed {
+                            request_id: 6,
+                            resume_number: 3,
+                            from_offset: 1024,
+                            honoured_range: true
+                        }
+                    )
+                },
+            ),
+            (
+                DownloaderEvent::RetryExhausted {
+                    request_id: request_id(7),
+                    max_retries: 5,
+                    consumed: 2048,
+                    error: network_error(),
+                },
+                |event| matches!(event, FfiItemEvent::DownloadRetryExhausted { request_id: 7, max_retries: 5, consumed: 2048, error } if error.contains("offline")),
+            ),
+            (
+                DownloaderEvent::FirstByte {
+                    request_id: request_id(8),
+                    ttfb: Duration::from_millis(80),
+                    status: 206,
+                    partial: true,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::DownloadFirstByte {
+                            request_id: 8,
+                            ttfb_seconds: 0.08,
+                            status: 206,
+                            partial: true
+                        }
+                    )
+                },
+            ),
+            (
+                DownloaderEvent::RequestCancelled {
+                    request_id: request_id(9),
+                    reason: CancelReason::EpochCancel,
+                    bytes_transferred: 512,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiItemEvent::DownloadCancelled {
+                            request_id: 9,
+                            reason: FfiCancelReason::EpochCancel,
+                            bytes_transferred: 512
+                        }
+                    )
+                },
+            ),
+        ];
+
+        for (source, preserves_contract) in cases {
+            let event = FfiItemEvent::try_from(&source).expect("event must be forwarded");
+            assert!(preserves_contract(&event), "unexpected event: {event:?}");
+        }
+    }
+
+    #[kithara::test]
+    fn player_events_preserve_every_forwarded_contract() {
+        let cases: [PlayerEventCase<PlayerEvent>; 7] = [
+            (PlayerEvent::RateChanged { rate: 1.25 }, |event| {
+                matches!(event, FfiPlayerEvent::RateChanged { rate: 1.25 })
+            }),
+            (
+                PlayerEvent::StatusChanged {
+                    status: PlayerStatus::ReadyToPlay,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiPlayerEvent::StatusChanged {
+                            status: FfiPlayerStatus::ReadyToPlay
+                        }
+                    )
+                },
+            ),
+            (
+                PlayerEvent::TimeControlStatusChanged {
+                    status: TimeControlStatus::Playing,
+                    reason: None,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiPlayerEvent::TimeControlStatusChanged {
+                            status: FfiTimeControlStatus::Playing
+                        }
+                    )
+                },
+            ),
+            (PlayerEvent::VolumeChanged { volume: 0.75 }, |event| {
+                matches!(event, FfiPlayerEvent::VolumeChanged { volume: 0.75 })
+            }),
+            (PlayerEvent::MuteChanged { muted: true }, |event| {
+                matches!(event, FfiPlayerEvent::MuteChanged { muted: true })
+            }),
+            (
+                PlayerEvent::ItemDidPlayToEnd {
+                    item: item_role(10),
+                },
+                |event| matches!(event, FfiPlayerEvent::ItemDidPlayToEnd),
+            ),
+            (
+                PlayerEvent::ItemDidFail {
+                    item: item_role(11),
+                },
+                |event| matches!(event, FfiPlayerEvent::ItemDidFail { item_id: Some(id) } if *id == TrackId::from(11_u64)),
+            ),
+        ];
+
+        for (source, preserves_contract) in cases {
+            let event = FfiPlayerEvent::try_from(&source).expect("event must be forwarded");
+            assert!(preserves_contract(&event), "unexpected event: {event:?}");
+        }
+        assert!(matches!(
+            FfiPlayerEvent::try_from(&PlayerEvent::CurrentItemChanged),
+            Err(NotForwarded)
+        ));
+    }
+
+    #[kithara::test]
+    fn queue_events_preserve_every_forwarded_contract() {
+        let id = TrackId::from(21_u64);
+        let cases: [PlayerEventCase<QueueEvent>; 11] = [
+            (
+                QueueEvent::TrackAdded { id, index: 2 },
+                |event| matches!(event, FfiPlayerEvent::TrackAdded { item_id, index: 2 } if *item_id == TrackId::from(21_u64)),
+            ),
+            (
+                QueueEvent::TrackRemoved { id },
+                |event| matches!(event, FfiPlayerEvent::TrackRemoved { item_id } if *item_id == TrackId::from(21_u64)),
+            ),
+            (
+                QueueEvent::TrackStatusChanged {
+                    id,
+                    status: TrackStatus::Loaded,
+                },
+                |event| matches!(event, FfiPlayerEvent::TrackStatusChanged { item_id, status: FfiTrackStatus::Loaded } if *item_id == TrackId::from(21_u64)),
+            ),
+            (
+                QueueEvent::CurrentTrackChanged { id: Some(id) },
+                |event| matches!(event, FfiPlayerEvent::CurrentItemChanged { item_id: Some(item_id) } if *item_id == TrackId::from(21_u64)),
+            ),
+            (
+                QueueEvent::CurrentTrackAdvance {
+                    id: Some(id),
+                    reason: kithara::events::AdvanceReason::NaturalEof,
+                },
+                |event| matches!(event, FfiPlayerEvent::CurrentItemAdvanced { item_id: Some(item_id), reason: FfiAdvanceReason::NaturalEof } if *item_id == TrackId::from(21_u64)),
+            ),
+            (QueueEvent::QueueEnded, |event| {
+                matches!(event, FfiPlayerEvent::QueueEnded)
+            }),
+            (
+                QueueEvent::TrackLoadFailed {
+                    id,
+                    reason: "decode failed".into(),
+                    auto_skipped: true,
+                },
+                |event| matches!(event, FfiPlayerEvent::TrackLoadFailed { item_id, reason, auto_skipped: true } if *item_id == TrackId::from(21_u64) && reason == "decode failed"),
+            ),
+            (
+                QueueEvent::CrossfadeStarted {
+                    duration_seconds: 3.5,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiPlayerEvent::CrossfadeStarted {
+                            duration_seconds: 3.5
+                        }
+                    )
+                },
+            ),
+            (
+                QueueEvent::CrossfadeDurationChanged { seconds: 4.0 },
+                |event| {
+                    matches!(
+                        event,
+                        FfiPlayerEvent::CrossfadeDurationChanged { seconds: 4.0 }
+                    )
+                },
+            ),
+            (
+                QueueEvent::RepeatModeChanged {
+                    mode: QueueRepeatMode::All,
+                },
+                |event| {
+                    matches!(
+                        event,
+                        FfiPlayerEvent::RepeatModeChanged {
+                            mode: FfiRepeatMode::All
+                        }
+                    )
+                },
+            ),
+            (
+                QueueEvent::NextTrackReady { id, index: 3 },
+                |event| matches!(event, FfiPlayerEvent::NextTrackReady { item_id, index: 3 } if *item_id == TrackId::from(21_u64)),
+            ),
+        ];
+
+        for (source, preserves_contract) in cases {
+            let event = FfiPlayerEvent::try_from(&source).expect("event must be forwarded");
+            assert!(preserves_contract(&event), "unexpected event: {event:?}");
+        }
     }
 
     #[kithara::test]
@@ -739,15 +1437,15 @@ mod tests {
     fn engine_event_to_ffi_skips_internal_and_duplicate_crossfade_events() {
         assert!(matches!(
             FfiPlayerEvent::try_from(&EngineEvent::CrossfadeStarted {
-                from: kithara::events::SlotId::new(1),
-                to: kithara::events::SlotId::new(2),
+                from: SlotId::new(1),
+                to: SlotId::new(2),
                 duration: Duration::from_secs(1),
             }),
             Err(NotForwarded)
         ));
         assert!(matches!(
             FfiPlayerEvent::try_from(&EngineEvent::SlotAllocated {
-                slot: kithara::events::SlotId::new(3),
+                slot: SlotId::new(3),
             }),
             Err(NotForwarded)
         ));
@@ -777,8 +1475,8 @@ mod tests {
     #[kithara::test]
     fn dj_event_to_ffi_skips_beat_tick() {
         assert!(matches!(
-            FfiPlayerEvent::try_from(&kithara::events::DjEvent::BeatTick {
-                slot: kithara::events::SlotId::new(9),
+            FfiPlayerEvent::try_from(&DjEvent::BeatTick {
+                slot: SlotId::new(9),
                 beat_number: 4,
                 timestamp: MediaTime::default(),
             }),
@@ -789,8 +1487,8 @@ mod tests {
     #[kithara::test]
     fn dj_event_to_ffi_maps_bpm_detected_fields() {
         assert!(matches!(
-            FfiPlayerEvent::try_from(&kithara::events::DjEvent::BpmDetected {
-                slot: kithara::events::SlotId::new(7),
+            FfiPlayerEvent::try_from(&DjEvent::BpmDetected {
+                slot: SlotId::new(7),
                 info: kithara::events::BpmInfo::new(128.5, Some(0.8), Duration::from_millis(250)),
             }),
             Ok(FfiPlayerEvent::DjBpmDetected {
@@ -805,7 +1503,7 @@ mod tests {
     #[kithara::test]
     fn dj_event_to_ffi_maps_stretch_backend_changed() {
         assert!(matches!(
-            FfiPlayerEvent::try_from(&kithara::events::DjEvent::StretchBackendChanged {
+            FfiPlayerEvent::try_from(&DjEvent::StretchBackendChanged {
                 kind: StretchBackendKind::Bungee,
             }),
             Ok(FfiPlayerEvent::DjStretchBackendChanged {
@@ -839,9 +1537,9 @@ mod tests {
     #[kithara::test]
     fn player_event_to_ffi_maps_item_did_fail_track_id() {
         let event = PlayerEvent::ItemDidFail {
-            item: kithara::events::ItemRole::Leading(kithara::events::TrackRef::new(
+            item: ItemRole::Leading(TrackRef::new(
                 TrackId::from(7_u64),
-                kithara::events::SlotId::new(0),
+                SlotId::new(0),
                 "src".into(),
             )),
         };
@@ -855,13 +1553,13 @@ mod tests {
     #[kithara::test]
     fn queue_event_to_ffi_maps_repeat_mode() {
         let event = QueueEvent::RepeatModeChanged {
-            mode: kithara::events::QueueRepeatMode::All,
+            mode: QueueRepeatMode::All,
         };
 
         assert!(matches!(
             FfiPlayerEvent::try_from(&event),
             Ok(FfiPlayerEvent::RepeatModeChanged {
-                mode: crate::types::FfiRepeatMode::All
+                mode: FfiRepeatMode::All
             })
         ));
     }
