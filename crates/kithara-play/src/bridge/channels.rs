@@ -9,6 +9,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::AudioSpec;
+use kithara_warp::{RenderReader, RenderSnapshot};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Observer, Producer, Split},
@@ -84,12 +85,18 @@ pub struct SlotControl {
     pub cmd_tx: HeapProd<PlayerCmd>,
     pub eq: SharedEq,
     seek: SeekBindings,
+    render: RenderBindings,
 }
 
 #[derive(Default)]
 struct SeekBindings(SmallVec<[SeekBinding; SLOT_TRACKS]>);
 
 type SeekBinding = (TrackId, Arc<dyn SeekBegin>);
+
+#[derive(Default)]
+struct RenderBindings(SmallVec<[RenderBinding; SLOT_TRACKS]>);
+
+type RenderBinding = (TrackId, RenderReader);
 
 const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
 
@@ -111,6 +118,30 @@ impl SlotControl {
         self.seek.0.retain(|(bound_id, bound_handle)| {
             *bound_id != item_id || !Arc::ptr_eq(bound_handle, handle)
         });
+    }
+
+    pub(crate) fn bind_render(&mut self, item_id: TrackId, reader: RenderReader) {
+        self.render.0.push((item_id, reader));
+    }
+
+    pub(crate) fn unbind_render(&mut self, item_id: TrackId, reader: &RenderReader) {
+        self.render
+            .0
+            .retain(|(bound_id, bound_reader)| *bound_id != item_id || bound_reader != reader);
+    }
+
+    pub(crate) fn latest_render_snapshot(&self) -> Option<RenderSnapshot> {
+        self.render
+            .0
+            .iter()
+            .filter_map(|(_, reader)| reader.load())
+            .max_by_key(|snapshot| {
+                let context = snapshot.context();
+                (
+                    u64::from(context.session_epoch()),
+                    i64::from(context.output_frames().end),
+                )
+            })
     }
 }
 
@@ -138,6 +169,7 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
         cmd_tx,
         eq,
         seek: SeekBindings::default(),
+        render: RenderBindings::default(),
     };
     (inputs, control)
 }

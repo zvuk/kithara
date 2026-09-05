@@ -1356,7 +1356,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
 
     // Warmup: read until enough AAC samples are produced (state target, not a
     // wall-clock deadline). The outer test timeout is the only backstop.
-    let (mut audio, pre_total) =
+    let (audio, pre_total) =
         read_until_samples_blocking(audio, 16_384, "cross-codec manual warmup").await;
     assert!(
         pre_total > 0,
@@ -1366,33 +1366,45 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
+    let applied_before = collector.applied_transitions().len();
     handle
         .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC variant) target must be valid");
 
-    // Read for several seconds after the flip — if the decoder hangs on
-    // `Pending(VariantChange)` without recovery, the hang_watchdog or
-    // the test timeout will fail. Otherwise we should see post-switch
-    // samples coming from the FLAC variant.
+    let (mut audio, transition) = read_until_manual_applied(
+        audio,
+        &collector,
+        applied_before,
+        3,
+        "cross-codec manual transition",
+    )
+    .await;
+
+    // Continue through EOF after observing the exact transition. If the
+    // decoder hangs on `Pending(VariantChange)` without recovery, the
+    // hang_watchdog or the test timeout will fail.
     let post_total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
-    let targets = collector.applied_targets();
-    let saw_flac = targets.contains(&3);
+    let transitions = collector.applied_transitions();
+    let saw_flac = transitions[applied_before..].contains(&(3, AbrReason::ManualOverride));
 
     info!(
-        ?targets,
-        pre_total, post_total, "L2: cross-codec Manual switch result"
+        ?transitions,
+        ?transition,
+        pre_total,
+        post_total,
+        "L2: cross-codec Manual switch result"
     );
 
     assert!(
-        !targets.is_empty(),
-        "cross-codec Manual(3) must fire at least one VariantApplied"
+        !transition.saw_eof,
+        "cross-codec Manual(3) must apply before EOF: {transition:?}"
     );
     assert!(
         saw_flac,
-        "Manual(3) must publish a VariantApplied with to=3, saw: {targets:?}"
+        "Manual(3) must publish VariantApplied with to=3 and ManualOverride, saw: {transitions:?}"
     );
     assert!(
         post_total > 0,

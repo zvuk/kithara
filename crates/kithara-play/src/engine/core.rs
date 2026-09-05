@@ -9,6 +9,7 @@ use kithara_platform::{
     time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
 };
+use kithara_warp::RenderSnapshot;
 use portable_atomic::AtomicF32;
 use ringbuf::traits::{Consumer, Producer};
 use tracing::{debug, info};
@@ -117,6 +118,9 @@ impl<S> EngineImpl<S> {
             if let Some(seek) = track.seek_handle() {
                 handle.unbind_seek(track.item_id(), &seek);
             }
+            if let Some(render) = track.render_reader() {
+                handle.unbind_render(track.item_id(), &render);
+            }
         }
     }
 
@@ -171,9 +175,9 @@ impl<S> EngineImpl<S> {
                 // A resource crossing to the audio thread leaves its seek handle behind: beginning
                 // a seek takes locks, so it stays on this side. Bind only after the command is
                 // accepted; the exact resource generation is released when it returns as trash.
-                let seek = match &cmd {
+                let bindings = match &cmd {
                     PlayerCmd::LoadTrack { resource, item_id } => {
-                        resource.seek_handle().map(|handle| (*item_id, handle))
+                        Some((*item_id, resource.seek_handle(), resource.render_reader()))
                     }
                     _ => None,
                 };
@@ -182,9 +186,14 @@ impl<S> EngineImpl<S> {
                     .try_push(cmd)
                     .map_err(|_| PlayError::SlotChannelFull { slot });
                 if result.is_ok()
-                    && let Some((item_id, seek)) = seek
+                    && let Some((item_id, seek, render)) = bindings
                 {
-                    handle.bind_seek(item_id, seek);
+                    if let Some(seek) = seek {
+                        handle.bind_seek(item_id, seek);
+                    }
+                    if let Some(render) = render {
+                        handle.bind_render(item_id, render);
+                    }
                 }
                 result
             }
@@ -231,6 +240,8 @@ impl<S> EngineImpl<S> {
             pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
             #[call(playback)]
             pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
+            #[call(render_snapshot)]
+            pub(crate) fn slot_render_snapshot(&self, slot: SlotId) -> Option<RenderSnapshot>;
         }
     }
 

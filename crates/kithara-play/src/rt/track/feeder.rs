@@ -4,7 +4,8 @@ use kithara_audio::{SourceEnd, SourceSpan};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 use kithara_signal::FrameCount;
-use kithara_warp::{PresentationFrontier, RenderContext};
+use kithara_test_macros as kithara;
+use kithara_warp::{PresentationFrontier, RenderContext, RenderReader};
 
 #[rustfmt::skip]
 use crate::resource::Resource;
@@ -38,22 +39,23 @@ struct SourceWindow {
 }
 
 impl SourceWindow {
-    fn take(&mut self, frames: usize) -> Option<SourceEnd> {
-        let source_end = match self.source {
-            Some(source) if frames >= self.frames => {
-                self.source = None;
-                Some(SourceEnd::new(source.end(), source.sample_rate()))
-            }
-            Some(source) => {
-                let split = partial_source_end(source, frames, self.frames);
-                self.source = split
-                    .and_then(|split| SourceSpan::new(split, source.end(), source.sample_rate()));
-                split.map(|split| SourceEnd::new(split, source.sample_rate()))
-            }
-            None => None,
-        };
-        self.frames = self.frames.saturating_sub(frames);
-        source_end
+    fn source_for(&self, frames: usize) -> Option<SourceSpan> {
+        let source = self.source?;
+        let end = partial_source_end(source, frames.min(self.frames), self.frames)?;
+        SourceSpan::new(source.start(), end, source.sample_rate())
+            .map(|span| span.with_render_revision(source.render_revision()))
+    }
+
+    fn take(&mut self, frames: usize) -> Option<SourceSpan> {
+        let consumed = frames.min(self.frames);
+        let taken = self.source_for(consumed);
+        if let (Some(source), Some(taken)) = (self.source, taken) {
+            self.source = SourceSpan::new(taken.end(), source.end(), source.sample_rate())
+                .filter(|remaining| remaining.start() < remaining.end())
+                .map(|remaining| remaining.with_render_revision(source.render_revision()));
+        }
+        self.frames -= consumed;
+        taken
     }
 }
 
@@ -206,23 +208,46 @@ impl PlayerResource {
             .min(self.channel_buffers[0].len())
     }
 
-    fn consume_source(&mut self, mut frames: usize) {
-        let mut source_end = self.last_source_end;
+    #[kithara::probe(
+        render_revision = source.render_revision(),
+        session_epoch = u64::from(context.session_epoch()),
+        output_start = i64::from(context.output_frames().start)
+            .saturating_add(i64::try_from(output.start).unwrap_or(i64::MAX)),
+        output_end = i64::from(context.output_frames().start)
+            .saturating_add(i64::try_from(output.end).unwrap_or(i64::MAX)),
+        source_start = source.start(),
+        source_end = source.end()
+    )]
+    fn pcm_consumed(&mut self, context: &RenderContext, output: Range<usize>, source: SourceSpan) {
+        self.last_source_end = Some(SourceEnd::new(source.end(), source.sample_rate()));
+    }
+
+    fn consume_source(&mut self, mut frames: usize, context: Option<&RenderContext>) {
+        let mut output_start = 0usize;
         while frames > 0 {
             let Some(mut span) = self.source_spans.pop_front() else {
                 break;
             };
             let consumed = frames.min(span.frames);
-            source_end = span.take(consumed);
+            let output_end = output_start.saturating_add(consumed);
+            match (context, span.take(consumed)) {
+                (Some(context), Some(source)) => {
+                    self.pcm_consumed(context, output_start..output_end, source);
+                }
+                (_, source) => {
+                    self.last_source_end =
+                        source.map(|source| SourceEnd::new(source.end(), source.sample_rate()));
+                }
+            }
             frames -= consumed;
+            output_start = output_end;
             if span.frames > 0 {
                 self.source_spans.push_front(span);
             }
         }
         if frames > 0 {
-            source_end = None;
+            self.last_source_end = None;
         }
-        self.last_source_end = source_end;
     }
 
     pub(crate) fn presentation_source_end(&self, sample_rate: NonZeroU32) -> Option<SourceEnd> {
@@ -249,6 +274,16 @@ impl PlayerResource {
         range: Range<usize>,
         metrics: &RtMetrics,
     ) -> ReadOutcome {
+        self.read_with_context(None, output, range, metrics)
+    }
+
+    pub(crate) fn read_with_context(
+        &mut self,
+        context: Option<&RenderContext>,
+        output: &mut [&mut [f32]],
+        range: Range<usize>,
+        metrics: &RtMetrics,
+    ) -> ReadOutcome {
         let frames_to_read = range.end - range.start;
         let mut eof_reached = self.fill_scratch(frames_to_read, metrics);
 
@@ -271,7 +306,7 @@ impl PlayerResource {
                     .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
             }
 
-            self.consume_source(frames_to_write);
+            self.consume_source(frames_to_write, context);
 
             if tail_size > 0 {
                 self.channel_buffers[0]
@@ -340,6 +375,10 @@ impl PlayerResource {
         self.resource.get().seek_handle()
     }
 
+    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
+        self.resource.get().render_reader()
+    }
+
     delegate::delegate! {
         to self.resource.get() {
             /// Total duration in seconds. Returns 0.0 if unknown.
@@ -389,15 +428,19 @@ mod tests {
     }
 
     #[kithara::test]
-    fn partial_scratch_consumption_advances_the_exact_source_span() {
+    fn partial_scratch_consumption_preserves_the_render_revision() {
         let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
-        let mut span = SourceWindow {
-            frames: 10,
-            source: SourceSpan::new(100, 130, rate),
-        };
+        let source = SourceSpan::new(100, 130, rate).map(|span| span.with_render_revision(7));
+        let mut span = SourceWindow { frames: 10, source };
 
-        assert_eq!(span.take(4), Some(SourceEnd::new(112, rate)));
+        assert_eq!(
+            span.take(4),
+            SourceSpan::new(100, 112, rate).map(|span| span.with_render_revision(7))
+        );
         assert_eq!(span.source.map(|source| source.start()), Some(112));
-        assert_eq!(span.take(6), Some(SourceEnd::new(130, rate)));
+        assert_eq!(
+            span.take(6),
+            SourceSpan::new(112, 130, rate).map(|span| span.with_render_revision(7))
+        );
     }
 }

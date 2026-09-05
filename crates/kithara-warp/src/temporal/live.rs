@@ -179,6 +179,14 @@ impl RenderPublisher {
 #[derive(Clone, Debug)]
 pub struct RenderReader(Arc<RenderCell>);
 
+impl PartialEq for RenderReader {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for RenderReader {}
+
 impl RenderReader {
     #[cfg(feature = "render")]
     pub(crate) fn is_current(&self, snapshot: &RenderSnapshot) -> bool {

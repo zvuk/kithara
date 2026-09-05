@@ -7,7 +7,10 @@ use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
 use kithara_test_macros as kithara;
 use tracing::warn;
 
-use crate::{ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig};
+use crate::{
+    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
+    temporal::RateTarget,
+};
 
 #[cfg(test)]
 mod tests;
@@ -15,7 +18,7 @@ mod tests;
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
     pub(super) frames: usize,
-    pub(super) speed: f32,
+    pub(super) rate: RateTarget,
 }
 
 /// Source-timeline exact-span time-stretch driven by shared live controls.
@@ -137,10 +140,10 @@ where
         remaining: usize,
     ) -> Option<FrameCount> {
         self.sync_plan();
-        let speed = self.controls.speed();
-        match self.source_frames_for_quantum(meta, remaining, speed) {
+        let rate = self.controls.rate_target();
+        match self.source_frames_for_quantum(meta, remaining, rate.speed()) {
             Ok(frames) => {
-                self.prepared_quantum = Some(PreparedQuantum { frames, speed });
+                self.prepared_quantum = Some(PreparedQuantum { frames, rate });
                 Some(FrameCount::new(frames))
             }
             Err(error) => {
@@ -312,21 +315,67 @@ where
         ));
     }
 
+    fn next_render_snapshot(
+        &self,
+        snapshot: RenderSnapshot,
+        output_frames: usize,
+    ) -> Option<(RenderSnapshot, i64, u64, u64)> {
+        if !self.context.is_current(&snapshot) {
+            return None;
+        }
+        let (source_end, _) = self.rendered_source_end?;
+        let source_start = self
+            .committed
+            .as_ref()
+            .filter(|previous| {
+                previous.context().session_epoch() == snapshot.context().session_epoch()
+            })
+            .map_or_else(
+                || snapshot.frontier().source(),
+                |previous| previous.frontier().source(),
+            )
+            .max(snapshot.frontier().source());
+        let committed = snapshot.advance(self.committed.as_ref(), source_end, output_frames)?;
+        let output_frames = i64::try_from(output_frames).ok()?;
+        let output_start = i64::from(committed.frontier().output()).checked_sub(output_frames)?;
+        Some((committed, output_start, source_start, source_end))
+    }
+
     pub(super) fn commit_render(&mut self, snapshot: Option<RenderSnapshot>, output_frames: usize) {
         let Some(snapshot) = snapshot else {
             return;
         };
-        if !self.context.is_current(&snapshot) {
-            return;
-        }
-        let Some((source, _)) = self.rendered_source_end else {
+        let Some((committed, output_start, source_start, _)) =
+            self.next_render_snapshot(snapshot, output_frames)
+        else {
             return;
         };
-        let source_start = snapshot.frontier().source();
-        let output_start = i64::from(snapshot.frontier().output());
-        if let Some(committed) = snapshot.advance(self.committed.as_ref(), source, output_frames) {
-            self.render_committed(committed, source_start, output_start);
-        }
+        self.render_committed(committed, source_start, output_start);
+    }
+
+    pub(super) fn commit_rate_render(
+        &mut self,
+        snapshot: Option<RenderSnapshot>,
+        output_frames: usize,
+        request_revision: u64,
+        applied_rate: f32,
+    ) {
+        let Some(snapshot) = snapshot else {
+            return;
+        };
+        let Some((committed, session_frame, source_start, source_end)) =
+            self.next_render_snapshot(snapshot, output_frames)
+        else {
+            return;
+        };
+        self.rate_applied(
+            committed,
+            request_revision,
+            applied_rate.to_bits(),
+            session_frame,
+            source_start,
+            source_end,
+        );
     }
 
     #[kithara::probe(
@@ -342,6 +391,26 @@ where
         committed: RenderSnapshot,
         source_start: u64,
         output_start: i64,
+    ) {
+        self.committed = Some(committed);
+    }
+
+    #[kithara::probe(
+        request_revision,
+        applied_rate_bits,
+        session_epoch = u64::from(committed.context().session_epoch()),
+        session_frame,
+        source_start,
+        source_end
+    )]
+    fn rate_applied(
+        &mut self,
+        committed: RenderSnapshot,
+        request_revision: u64,
+        applied_rate_bits: u32,
+        session_frame: i64,
+        source_start: u64,
+        source_end: u64,
     ) {
         self.committed = Some(committed);
     }

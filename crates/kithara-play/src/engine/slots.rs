@@ -1,4 +1,5 @@
 use kithara_platform::sync::Arc;
+use kithara_warp::RenderSnapshot;
 
 use crate::{
     api::SlotId,
@@ -61,6 +62,9 @@ impl SlotTable {
             #[expr($.map(|control| control.eq.clone()))]
             #[call(get)]
             pub(super) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
+            #[expr($.and_then(SlotControl::latest_render_snapshot))]
+            #[call(get)]
+            pub(super) fn render_snapshot(&self, slot: SlotId) -> Option<RenderSnapshot>;
         }
     }
 }

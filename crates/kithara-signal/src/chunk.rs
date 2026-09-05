@@ -24,6 +24,8 @@ pub struct AudioChunkInfo {
     pub frames: u32,
     /// Decoder generation, incremented on decoder recreation.
     pub epoch: u64,
+    /// Opaque producer render revision represented by this chunk.
+    pub render_revision: u64,
     /// Absolute frame offset from the start of the track.
     pub frame_offset: u64,
     /// Source bytes that produced this chunk, or zero when unknown.
@@ -46,6 +48,7 @@ impl Default for AudioChunkInfo {
             variant_index: None,
             frames: 0,
             epoch: 0,
+            render_revision: 0,
             frame_offset: 0,
             source_bytes: 0,
         }

@@ -1,4 +1,6 @@
 use kithara_events::RouteDescription;
+use kithara_test_macros as kithara;
+use kithara_warp::{RenderSnapshot, StretchControls};
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -10,6 +12,21 @@ use crate::{
 };
 
 impl<S> PlayerRuntime<S> {
+    #[kithara::probe(
+        request_revision,
+        target_rate_bits = target.to_bits(),
+        session_epoch = u64::from(snapshot.context().session_epoch()),
+        transport_revision = snapshot.context().transport_revision().map_or(0, u64::from),
+        session_frame = i64::from(snapshot.context().output_frames().end),
+        session_beat_bits = snapshot.context().session_beats().map_or(
+            f64::NAN.to_bits(),
+            |beats| f64::from(beats.end).to_bits()
+        )
+    )]
+    fn rate_requested(&self, target: f32, request_revision: u64, snapshot: &RenderSnapshot) {
+        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(target));
+    }
+
     /// Ensure we have an active slot, allocating one if needed.
     pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
         if let Some(id) = self.slot() {
@@ -114,9 +131,16 @@ impl<S> PlayerRuntime<S> {
     /// Set the requested rate target, clamped to
     /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
-        self.core.warp.stretch().set_speed(rate);
-        let target = self.core.warp.stretch().speed();
-        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(target));
+        let target = rate.max(StretchControls::MIN_SPEED);
+        let revision = self.core.warp.stretch().set_speed(target);
+        let snapshot = self
+            .slot()
+            .and_then(|slot| self.core.engine.slot_render_snapshot(slot));
+        if let Some(snapshot) = snapshot {
+            self.rate_requested(target, revision, &snapshot);
+        } else {
+            let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(target));
+        }
     }
 
     /// Set volume, clamped to `0.0..=1.0`.

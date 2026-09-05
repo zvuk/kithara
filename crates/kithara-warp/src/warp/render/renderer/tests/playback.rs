@@ -60,6 +60,27 @@ fn source_span_is_planned_from_the_output_quantum(
     assert_eq!(frames.get(), expected_source_frames);
 }
 
+#[kithara::test]
+fn rendered_quantum_keeps_the_rate_revision_selected_during_planning() {
+    let controls = StretchControls::new(1.0);
+    let expected_revision = controls.set_speed(1.0);
+    let mut renderer = renderer(Arc::clone(&controls));
+    renderer.prepare(spec());
+    let pools = renderer.pools.clone();
+    let input = chunk(&pools, &sine(128));
+
+    let frames = renderer
+        .prepare_quantum(input.meta, input.frames())
+        .expect("test source span is plannable");
+    assert_eq!(frames.get(), input.frames());
+    controls.set_speed(0.5);
+
+    let output = renderer
+        .render_quantum(input)
+        .expect("prepared unity quantum renders");
+    assert_eq!(output.meta.render_revision, expected_revision);
+}
+
 fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);

@@ -10,7 +10,9 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
-use kithara_warp::{PresentationFrontier, RenderContext, RenderPublisher, StretchControls};
+use kithara_warp::{
+    PresentationFrontier, RenderContext, RenderPublisher, RenderReader, StretchControls,
+};
 use tracing::warn;
 
 use super::{ResourceConfig, SourceType};
@@ -278,6 +280,10 @@ impl Resource {
         if let Some(publisher) = &self.render_publisher {
             publisher.publish(context, frontier);
         }
+    }
+
+    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
+        self.render_publisher.as_ref().map(RenderPublisher::reader)
     }
 
     pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {

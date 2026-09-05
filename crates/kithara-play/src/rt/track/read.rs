@@ -60,7 +60,7 @@ impl PlayerTrack {
     ) -> TrackReadOutcome {
         let Some(context) = context else {
             self.resource.clear_render();
-            return self.read(scratch_bufs, mix_bufs, range, sink);
+            return self.read_with_context(None, scratch_bufs, mix_bufs, range, sink);
         };
         if context.sample_rate().get() != self.sample_rate {
             self.resource.clear_render();
@@ -78,7 +78,7 @@ impl PlayerTrack {
         } else {
             self.resource.clear_render();
         }
-        self.read(scratch_bufs, mix_bufs, range, sink)
+        self.read_with_context(Some(&context), scratch_bufs, mix_bufs, range, sink)
     }
 
     /// Advance the media clock by `frames` of mixed output.
@@ -279,11 +279,22 @@ impl PlayerTrack {
         range: Range<usize>,
         sink: &mut RtSink<'_>,
     ) -> TrackReadOutcome {
+        self.read_with_context(None, scratch_bufs, mix_bufs, range, sink)
+    }
+
+    fn read_with_context(
+        &mut self,
+        context: Option<&RenderContext>,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        sink: &mut RtSink<'_>,
+    ) -> TrackReadOutcome {
         if self.state == TrackState::Finished {
             return TrackReadOutcome::Eof;
         }
 
-        let read_outcome = self.read_resource(scratch_bufs, range.clone(), sink.metrics);
+        let read_outcome = self.read_resource(context, scratch_bufs, range.clone(), sink.metrics);
         match read_outcome {
             TrackReadOutcome::Full { .. } => self.handle_full_read(
                 scratch_bufs,
@@ -316,6 +327,7 @@ impl PlayerTrack {
 
     fn read_resource(
         &mut self,
+        context: Option<&RenderContext>,
         scratch_bufs: &mut [&mut [f32]],
         range: Range<usize>,
         metrics: &RtMetrics,
@@ -327,7 +339,7 @@ impl PlayerTrack {
             &mut scratch_right[0][range.clone()],
         ];
 
-        match resource.read(&mut scratch_window, 0..range.len(), metrics) {
+        match resource.read_with_context(context, &mut scratch_window, 0..range.len(), metrics) {
             ReadOutcome::Full { frames } => TrackReadOutcome::Full {
                 frames,
                 duration: resource.duration(),

@@ -303,7 +303,12 @@ where
         let held_source_frames = self.held_source_frames();
         self.emit(Some(samples), held_source_frames)
     }
+}
 
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     /// Prepare deferred renderer state for the current source format.
     pub fn prepare(&mut self, spec: AudioSpec) {
         self.service_target(spec);
@@ -348,20 +353,23 @@ where
     }
 
     /// Render one complete decoded source chunk.
-    pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+    pub fn render(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
         let snapshot = self.context.load();
         self.prepared_quantum = None;
-        self.render_at(chunk, self.controls.speed(), snapshot)
+        let rate = self.controls.rate_target();
+        chunk.meta.render_revision = rate.revision();
+        self.render_at(chunk, rate.speed(), snapshot)
     }
 
     /// Render the source span selected by [`Self::prepare_quantum`].
-    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+    pub fn render_quantum(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
         let prepared = self.prepared_quantum.take()?;
         if chunk.frames() != prepared.frames {
             return None;
         }
         let snapshot = self.context.load();
-        self.render_at(chunk, prepared.speed, snapshot)
+        chunk.meta.render_revision = prepared.rate.revision();
+        self.render_at(chunk, prepared.rate.speed(), snapshot)
     }
 
     fn render_at(
@@ -391,7 +399,12 @@ where
             self.process_active(chunk, speed)
         };
         if let Some(output) = output.as_ref() {
-            self.commit_render(snapshot, output.frames());
+            self.commit_rate_render(
+                snapshot,
+                output.frames(),
+                output.meta.render_revision,
+                speed,
+            );
         }
         output
     }

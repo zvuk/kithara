@@ -312,6 +312,7 @@ fn source_span(data: &AudioChunk, source_end: Option<SourceEnd>) -> Option<Sourc
         source_end.frame(),
         source_end.sample_rate(),
     )
+    .map(|span| span.with_render_revision(data.meta.render_revision))
 }
 
 pub(super) fn create_channels(

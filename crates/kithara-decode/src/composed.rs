@@ -168,6 +168,7 @@ where
             variant_index: self.demuxer.current_variant_index(),
             spec: live_spec,
             epoch: self.epoch,
+            render_revision: 0,
         };
         AudioChunk::new(meta, buf)
     }
