@@ -17,9 +17,10 @@ the change that lands the work, and keep it short.
   publishes once more when the reading ends, ahead of the trailing detection;
   a resumed pass starts like a fresh one. The head an mp3 decoder cannot
   deliver (the encoder's priming plus its own delay) is reported missing; the
-  track is still done and its grid still final. Left: the reported
-  deck scenario on the release build with the full model, and the size of the
-  resume blob.
+  track is still done and its grid still final. The grid is published at the
+  tempo level the detector reports, and the cache tag names that grid
+  `grid_bpm_from_beats_v4`. Left: the reported deck scenario on the release
+  build with the full model, and the size of the resume blob.
 
 - Harness and document revision. `AGENTS.md` routes instead of restating; the
   `style` namespace budgets documents with `doc_size`, blocks drift with

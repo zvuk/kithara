@@ -2,7 +2,6 @@ mod clean;
 mod core;
 mod extend;
 mod fit;
-mod octave;
 mod scratch;
 
 #[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]

@@ -19,7 +19,7 @@ use crate::{
 };
 
 #[cfg(any(feature = "beat-nn", feature = "beat-dsp"))]
-pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v3";
+pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v4";
 
 struct Consts;
 
@@ -88,18 +88,7 @@ where
     build_grid_with(raw, sample_rate, params, &mut buffers)
 }
 
-/// A published grid is counted at the rate it is played, so the octave fold
-/// is part of building one.
 pub(crate) fn build_grid_with(
-    raw: &RawBeats,
-    sample_rate: u32,
-    params: &GridParams,
-    buffers: &mut GridBuffers,
-) -> Result<BeatArtifact, PoolError> {
-    assemble(raw, sample_rate, params, buffers).map(super::octave::fold)
-}
-
-fn assemble(
     raw: &RawBeats,
     sample_rate: u32,
     params: &GridParams,
