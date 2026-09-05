@@ -76,6 +76,9 @@ fn serve_content(behavior: &FixtureBehavior, headers: &HeaderMap) -> Response {
             Delivery::Throttle { chunk, delay_ms } => {
                 throttle_response(bytes, *chunk, *delay_ms, *content_type)
             }
+            Delivery::UnsizedEarlyClose { after_bytes } => {
+                unsized_early_close_response(bytes, *after_bytes, *content_type)
+            }
         },
     }
 }
@@ -130,6 +133,26 @@ fn throttle_response(
         builder = builder.header(header::CONTENT_TYPE, ct);
     }
     builder.body(body).expect("throttle response")
+}
+
+/// A `200 OK` that names no total and stops early.
+///
+/// The sized modes let the client compare what arrived against a declared
+/// length. Without `Content-Length` the response carries no such number, so a
+/// body that ends after `after_bytes` is framed exactly like a complete one -
+/// the reader has only the media itself to tell the two apart.
+fn unsized_early_close_response(
+    bytes: &[u8],
+    after_bytes: usize,
+    content_type: Option<&'static str>,
+) -> Response {
+    let truncated = Bytes::copy_from_slice(&bytes[..after_bytes.min(bytes.len())]);
+    let body = Body::from_stream(stream::iter(vec![Ok::<_, io::Error>(truncated)]));
+    let mut builder = Response::builder().status(StatusCode::OK);
+    if let Some(ct) = content_type {
+        builder = builder.header(header::CONTENT_TYPE, ct);
+    }
+    builder.body(body).expect("unsized early close response")
 }
 
 fn early_close_response(

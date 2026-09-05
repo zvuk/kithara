@@ -968,6 +968,52 @@ mod tests {
         );
     }
 
+    /// The MP3 half of the pair the streaming open splits.
+    ///
+    /// `open_for_with_mode` hands `AudioFile` a real size for streaming FLAC
+    /// and nothing for streaming MP3, so only FLAC can tell "no data yet"
+    /// from "no data ever". A size-less MP3 reading past the download
+    /// boundary must still park: ending the track there is the mid-stream
+    /// stop the FLAC regression above was written for. The ready prefix
+    /// carries the header and several frames; everything past it is the
+    /// part that has not been downloaded.
+    #[kithara::test]
+    fn mp3_streaming_not_ready_surfaces_pending_not_eof() {
+        let bytes = signal_mp3_track_sine440_187s().bytes().to_vec();
+        let ready = 64_u64 * 1024;
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(NotReadySource::new(bytes, ready, None)),
+            AudioCodec::Mp3,
+            Some(ContainerFormat::MpegAudio),
+            SourceOpenMode::Streaming,
+            None,
+        )
+        .expect("streaming MP3 open");
+
+        let mut produced = 0usize;
+        loop {
+            match dx.next_frame() {
+                Ok(DemuxOutcome::Frame(_)) => {
+                    produced += 1;
+                    assert!(
+                        produced < 5000,
+                        "drained the whole fixture without reaching the not-ready boundary"
+                    );
+                }
+                Ok(DemuxOutcome::Pending(PendingReason::NotReady(_))) => break,
+                Ok(DemuxOutcome::Eof) => panic!(
+                    "not-ready boundary surfaced as EOF after {produced} frames — \
+                     the track would end mid-stream"
+                ),
+                other => panic!("unexpected outcome at the not-ready boundary: {other:?}"),
+            }
+        }
+        assert!(
+            produced > 0,
+            "should decode the ready prefix before parking"
+        );
+    }
+
     /// Streaming source that counts `seek(End)` calls — one per `get_size`
     /// re-query — to pin the size-query cost. `seek(End)` returns the full,
     /// fixed file length (the realistic case where `Content-Length` is known

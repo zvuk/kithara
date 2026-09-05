@@ -6,7 +6,7 @@ use kithara::{
     audio::{AudioConfig, AudioRead, AudioSession, ReadOutcome},
     decode::DecoderBackend,
     file::{File, FileConfig},
-    platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    platform::{sync::Arc, thread, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
@@ -117,6 +117,109 @@ async fn audio_file_mp3_decodes_with_duration(
         position >= Duration::from_secs(2),
         "url={url} hint={hint:?}: playback ended too early: \
          pos={position:?} eof={eof} samples={samples_read}"
+    );
+}
+
+/// A streamed track must produce every frame it was built with.
+///
+/// The tests around this one stop at two seconds, or take the end of the
+/// track from the duration the decoder itself reports. Neither can see a
+/// track that stops in the middle: the reported duration is what arms the
+/// crossfade, so a short report cuts the track and shortens the expectation
+/// by the same amount, and the two agree while both are wrong. The fixture's
+/// built length is the one number a playthrough cannot move.
+///
+/// The body is throttled so the reader meets the download frontier a loopback
+/// server hides, and the waits between reads are paced against that delivery,
+/// which is why the clock stays real.
+#[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(120)))]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+async fn streamed_mp3_plays_to_the_length_it_was_built_to(#[case] backend: DecoderBackend) {
+    /// How far the reached position may sit from the built length: two orders
+    /// below the seconds-scale truncation this is written to catch, and well
+    /// above any encoder priming or tail padding.
+    const END_TOLERANCE_SECS: f64 = 0.25;
+    /// Waits the reader may spend on a throttled body before the source is
+    /// declared stuck rather than slow.
+    const MAX_PENDING_WAITS: usize = 6_000;
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::Throttle {
+            chunk: 32 * 1024,
+            delay_ms: 40,
+        },
+    });
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let file_config = FileConfig::for_src(handle.child_url("track.mp3").into())
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .pools(pools)
+        .build();
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
+        .build();
+    let mut audio = worker.open(config).await.expect("open the streamed track");
+
+    let (position, eof, waits) = spawn_blocking(move || {
+        let mut buf = [0.0f32; 4096];
+        let mut saw_eof = false;
+        let mut waits = 0usize;
+        loop {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => {
+                    waits += 1;
+                    if waits >= MAX_PENDING_WAITS {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Ok(ReadOutcome::Frames { .. }) => {}
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("decode error: {e}"),
+            }
+        }
+        (audio.position(), saw_eof, waits)
+    })
+    .await
+    .expect("the decode thread must not panic");
+
+    assert!(
+        waits < MAX_PENDING_WAITS,
+        "{backend:?}: the source stopped delivering the body: pos={position:?}"
+    );
+    assert!(
+        eof,
+        "{backend:?}: the track must end at its own end, not by running out of waits"
+    );
+    let reached = position.as_secs_f64();
+    assert!(
+        (reached - Consts::TEST_MP3_DURATION_SECS).abs() <= END_TOLERANCE_SECS,
+        "{backend:?}: the track must play to the length it was built to: \
+         reached={reached:.3}s, built={}s +/- {END_TOLERANCE_SECS}s",
+        Consts::TEST_MP3_DURATION_SECS
     );
 }
 

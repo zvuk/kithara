@@ -61,6 +61,26 @@ pub const fn frames_in_segments(segments: usize, segment_size: usize, channels: 
     segments * segment_size / (channels as usize * size_of::<i16>())
 }
 
+/// Frames of PCM a packaged HLS variant carries.
+///
+/// A segment holds whole encoder frames, so the packager rounds the requested
+/// segment length up to the next one. A fixture therefore carries more audio
+/// than `segments * segment_duration` names, and a test that asks whether a
+/// track played to its end has to expect the rounded figure. `None` on
+/// overflow.
+#[must_use]
+pub fn packaged_content_frames(
+    requested_segment_frames: usize,
+    frame_samples: usize,
+    segments: usize,
+) -> Option<usize> {
+    requested_segment_frames
+        .div_ceil(frame_samples)
+        .max(1)
+        .checked_mul(frame_samples)?
+        .checked_mul(segments)
+}
+
 impl Default for SawWav {
     fn default() -> Self {
         Self::DEFAULT

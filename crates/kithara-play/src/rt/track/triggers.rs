@@ -3,6 +3,17 @@ use ringbuf::{HeapProd, traits::Producer};
 
 use crate::bridge::PlayerNotification;
 
+/// How close to an end counts as being at it.
+///
+/// One fade, so the handover is asked for early enough to run it, plus the
+/// block about to be rendered, so the last block is not missed. This is the
+/// distance that decides an end is near, and the only one.
+pub(crate) fn near_end_threshold(fade_duration: f32, block_frames: usize, sample_rate: u32) -> f32 {
+    let block_frames_f32: f32 = block_frames.as_();
+    let sr_f32: f32 = sample_rate.as_();
+    fade_duration + block_frames_f32 / sr_f32
+}
+
 #[derive(Default)]
 pub(crate) struct TrackTriggers {
     notified_prefetch_requested: bool,
@@ -18,7 +29,8 @@ impl TrackTriggers {
         let block_frames_f32: f32 = input.block_frames.as_();
         let sr_f32: f32 = input.sample_rate.as_();
         let block_seconds = block_frames_f32 / sr_f32;
-        let fade_threshold = input.fade_duration + block_seconds;
+        let fade_threshold =
+            near_end_threshold(input.fade_duration, input.block_frames, input.sample_rate);
         let prefetch_threshold = input.prefetch_duration.max(input.fade_duration) + block_seconds;
 
         if let Some(frames_until_eof) = input.frames_until_eof {

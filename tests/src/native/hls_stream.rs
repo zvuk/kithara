@@ -21,7 +21,7 @@ use crate::{
         HlsSpecError, ResolvedDataMode, ResolvedEncryption, ResolvedHlsSpec, ResolvedInitMode,
         ResolvedPackagedAudioSpec, ResolvedPackagedSignal, ResolvedPackagedVariant,
     },
-    test_defaults::frames_in_segments,
+    test_defaults::{frames_in_segments, packaged_content_frames},
 };
 
 pub(crate) type GeneratedHlsCache = RwLock<HashMap<String, Arc<GeneratedHls>>>;
@@ -462,10 +462,7 @@ fn packaged_segment_frames(packaged: &ResolvedPackagedAudioSpec) -> Result<usize
             let frame_samples = EncoderFactory::frame_samples(variant.codec)?;
             least_common_multiple(common, frame_samples)
         })?;
-    requested_segment_frames
-        .div_ceil(frame_quantum)
-        .max(1)
-        .checked_mul(frame_quantum)
+    packaged_content_frames(requested_segment_frames, frame_quantum, 1)
         .ok_or_else(|| EncodeError::InvalidInput("packaged frame alignment overflow".to_owned()))
 }
 

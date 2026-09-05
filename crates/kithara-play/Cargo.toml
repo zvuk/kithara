@@ -70,7 +70,7 @@ stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
-probe = ["kithara-warp/probe", "kithara-worker/probe"]
+probe = ["kithara-test-utils/probe", "kithara-warp/probe", "kithara-worker/probe"]
 mock = ["dep:unimock"]
 perf = [
     "dep:hotpath",

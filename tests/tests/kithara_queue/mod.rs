@@ -12,6 +12,7 @@ mod duplicate_src_in_queue;
 mod early_seek_size_withheld_advance;
 mod file_replay_from_warm_cache;
 mod flac_swallow_fixture;
+mod full_playthrough_census;
 mod hls_seek_cancels_stale_fetches;
 mod hls_seek_near_end_stress;
 mod hls_variant_playlists_concurrent;
@@ -28,6 +29,7 @@ mod rapid_scrub_decode_failure;
 mod select_after_eof;
 mod track_replay_after_switch;
 mod track_switch_race;
+mod truncated_body_is_not_a_natural_end;
 mod user_simulation;
 mod zvuk_cipher_check;
 

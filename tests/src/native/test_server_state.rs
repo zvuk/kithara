@@ -45,6 +45,13 @@ pub enum Delivery {
         chunk: usize,
         delay_ms: u64,
     },
+    /// Send `200 OK` with no `Content-Length`, deliver `after_bytes`, then end
+    /// the body. Every other truncating mode declares a total the client can
+    /// measure the arrival against; this one declares none, which is the shape
+    /// a chunked or close-delimited CDN response takes when it stops early.
+    UnsizedEarlyClose {
+        after_bytes: usize,
+    },
 }
 
 #[derive(Clone)]

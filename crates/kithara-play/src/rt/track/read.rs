@@ -1,13 +1,14 @@
 use std::ops::Range;
 
 use kithara_platform::sync::Arc;
+use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, RenderContext};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
 use super::{
     PlayerTrack, ReadOutcome, RtSink,
-    triggers::{TrackTriggers, TriggerInput},
+    triggers::{TrackTriggers, TriggerInput, near_end_threshold},
 };
 use crate::bridge::{PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState};
 
@@ -50,6 +51,20 @@ pub enum TrackReadOutcome {
 }
 
 impl PlayerTrack {
+    /// One track's contribution to one output block.
+    ///
+    /// `range` is the block-relative span this track covers: the outer loop
+    /// renders `0..frames`, while a gapless handover and a promotion render
+    /// `offset..frames`, so the span carries the in-block seam. Together with
+    /// the session-axis base in `context` it names the exact output frames
+    /// this track wrote, which is what attributes a frame to a track.
+    #[kithara::probe(
+        track_id = self.item_id.as_u64(),
+        output_base = context.map(|ctx| i64::from(ctx.output_frames().start)),
+        range_start = range.start,
+        range_end = range.end,
+        served_media_frames = AsPrimitive::<u64>::as_(self.served_media_frames)
+    )]
     pub(crate) fn render(
         &mut self,
         context: Option<&RenderContext>,
@@ -100,6 +115,46 @@ impl PlayerTrack {
         triggers.check(notification_tx, input);
     }
 
+    /// Whether an end at `at_seconds` is one the media's own length does not
+    /// account for.
+    ///
+    /// An end is a track finishing only if the media says so. A body that ran
+    /// out reaches the reader as the same end, and taken at face value it arms
+    /// the crossfade a fade before it and advances the queue after it - the
+    /// fade a listener hears in the middle of a track. The declared length is
+    /// the one number a lost body cannot move, and the distance is the one the
+    /// triggers already use, so an end this side of it is one the position
+    /// never would have announced.
+    fn ends_short_of_its_length(&self, at_seconds: f64, block_frames: usize) -> bool {
+        let declared = self.resource.duration();
+        if declared <= 0.0 {
+            return false;
+        }
+        let near: f64 = AsPrimitive::as_(near_end_threshold(
+            self.fade.duration(),
+            block_frames,
+            self.sample_rate.max(1),
+        ));
+        at_seconds + near < declared
+    }
+
+    /// The remaining frames the resource announced, kept only when the media's
+    /// declared length accounts for the end they point at.
+    ///
+    /// The announcement is what arms the crossfade and what shrinks the visible
+    /// duration onto itself, so a body that ran out has to be refused here or
+    /// both are already committed to the wrong end.
+    fn announced_end_frames(
+        &self,
+        frames_until_eof: Option<usize>,
+        block_frames: usize,
+    ) -> Option<usize> {
+        let remaining = frames_until_eof?;
+        let remaining_f64: f64 = AsPrimitive::as_(remaining);
+        let end = self.position() + remaining_f64 / f64::from(self.sample_rate.max(1));
+        (!self.ends_short_of_its_length(end, block_frames)).then_some(remaining)
+    }
+
     fn handle_failed_end(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
         if self.state == TrackState::Finished {
             return;
@@ -133,14 +188,16 @@ impl PlayerTrack {
             return outcome;
         };
 
+        let TrackReadContext { sink, range } = ctx;
+        let range_len = range.len();
+
         self.advance_media_clock(frames);
         self.observed_duration = duration;
+        let frames_until_eof = self.announced_end_frames(frames_until_eof, range_len);
         self.update_observed_eof(frames_until_eof);
         let position = self.position();
         let duration = self.observed_duration;
 
-        let TrackReadContext { sink, range } = ctx;
-        let range_len = range.len();
         self.fade
             .mix_range(scratch_bufs, mix_bufs, range, range_len);
         Self::check_notifications(
@@ -222,6 +279,10 @@ impl PlayerTrack {
 
         self.fade
             .mix_range(scratch_bufs, mix_bufs, mix_range, frames);
+        if self.ends_short_of_its_length(position, block_frames) {
+            self.handle_failed_end(notification_tx);
+            return TrackReadOutcome::Partial { frames, duration };
+        }
         Self::check_notifications(
             &mut self.triggers,
             notification_tx,
@@ -303,6 +364,12 @@ impl PlayerTrack {
                 },
                 PartialRead { duration, frames },
             ),
+            TrackReadOutcome::Eof
+                if self.ends_short_of_its_length(self.position(), range.len()) =>
+            {
+                self.handle_failed_end(sink.notifications);
+                TrackReadOutcome::Failed
+            }
             TrackReadOutcome::Eof => {
                 self.handle_natural_end(sink.notifications, sink.seek_epoch);
                 TrackReadOutcome::Eof
