@@ -462,4 +462,231 @@ mod tests {
 
         assert_eq!(cache.focus_deck(), 0, "the key must reach a deck on screen");
     }
+
+    #[cfg(not(feature = "broadcast"))]
+    mod routing {
+        use ::kithara::ui::render::{ControlAction, DragPhase, UiEvent, WindowCommand};
+        use kithara_test_utils::kithara;
+
+        use super::super::translate;
+        use crate::{
+            deck::{DeckId, EqMode},
+            gui::{app::Kithara, deck::DeckMsg, message::Message, mix::MixMsg, test_fixture},
+            state::AbrVariant,
+        };
+
+        fn send(state: &mut Kithara, path: &str, action: ControlAction) -> Option<Message> {
+            translate(
+                state,
+                UiEvent::Control {
+                    path: path.to_string(),
+                    action,
+                },
+            )
+        }
+
+        #[kithara::test(native, flash(false))]
+        fn deck_and_bar_controls_translate_to_their_owned_messages() {
+            let mut state = test_fixture::state();
+            state.decks.get_mut(DeckId(0)).unwrap().ui.duration = 120.0;
+            state
+                .decks
+                .get_mut(DeckId(0))
+                .unwrap()
+                .view
+                .timestretch
+                .tempo = 3.0;
+
+            assert!(matches!(
+                send(&mut state, "deck-a/play", ControlAction::Activate),
+                Some(Message::Deck(DeckId(0), DeckMsg::TogglePlayPause))
+            ));
+            assert!(matches!(
+                send(&mut state, "overview/b/next", ControlAction::Activate),
+                Some(Message::Deck(DeckId(1), DeckMsg::Next))
+            ));
+            assert!(matches!(
+                send(
+                    &mut state,
+                    "deck-a/wave",
+                    ControlAction::SetScalar(0.25)
+                ),
+                Some(Message::Deck(DeckId(0), DeckMsg::SeekTo(position)))
+                    if (position - 30.0).abs() < f64::EPSILON
+            ));
+            assert!(matches!(
+                send(
+                    &mut state,
+                    "deck-a/tempo",
+                    ControlAction::StepScalar(2.0)
+                ),
+                Some(Message::Deck(DeckId(0), DeckMsg::SetTempo(tempo)))
+                    if (tempo - 6.0).abs() < f32::EPSILON
+            ));
+            assert!(matches!(
+                send(&mut state, "bar/broadcast", ControlAction::Activate),
+                Some(Message::BroadcastToggle)
+            ));
+            assert!(matches!(
+                send(
+                    &mut state,
+                    "micro-bar/volume",
+                    ControlAction::SetScalar(2.0)
+                ),
+                Some(Message::Mix(MixMsg::Trim(DeckId(0), trim)))
+                    if (trim - 1.0).abs() < f32::EPSILON
+            ));
+            assert!(send(&mut state, "unknown/play", ControlAction::Activate).is_none());
+        }
+
+        #[kithara::test(native, flash(false))]
+        fn stream_controls_own_the_quality_menu_and_selected_rung() {
+            let mut state = test_fixture::state();
+            state.decks.get_mut(DeckId(0)).unwrap().ui.abr_variants = vec![AbrVariant {
+                index: 7,
+                label: "320k".to_string(),
+                detail: "320 kbps".to_string(),
+            }];
+
+            assert!(send(&mut state, "deck-a/stream/cell", ControlAction::Activate).is_none());
+            assert!(state.ui.cache.deck_mut(0).unwrap().view.quality_menu);
+            assert!(matches!(
+                send(
+                    &mut state,
+                    "deck-a/stream/variant-0/cell",
+                    ControlAction::Activate
+                ),
+                Some(Message::Deck(DeckId(0), DeckMsg::SetQuality(Some(7))))
+            ));
+            assert!(!state.ui.cache.deck_mut(0).unwrap().view.quality_menu);
+            assert!(matches!(
+                send(
+                    &mut state,
+                    "deck-a/stream/auto/cell",
+                    ControlAction::Activate
+                ),
+                Some(Message::Deck(DeckId(0), DeckMsg::SetQuality(None)))
+            ));
+            assert!(
+                send(
+                    &mut state,
+                    "deck-a/stream/cell",
+                    ControlAction::SecondaryActivate
+                )
+                .is_none()
+            );
+        }
+
+        #[kithara::test(native, flash(false))]
+        fn mixer_controls_translate_levels_eq_and_stage_window() {
+            let mut state = test_fixture::state();
+
+            assert!(matches!(
+                send(
+                    &mut state,
+                    "mixer/xfade",
+                    ControlAction::SetScalar(1.5)
+                ),
+                Some(Message::Mix(MixMsg::Crossfader(position)))
+                    if (position - 1.0).abs() < f32::EPSILON
+            ));
+            assert!(matches!(
+                send(
+                    &mut state,
+                    "mixer/master",
+                    ControlAction::SetScalar(-1.0)
+                ),
+                Some(Message::Mix(MixMsg::Master(gain))) if gain.abs() < f32::EPSILON
+            ));
+            assert!(
+                send(
+                    &mut state,
+                    "mixer/window/min",
+                    ControlAction::SetScalar(0.7)
+                )
+                .is_none()
+            );
+            assert!(
+                send(
+                    &mut state,
+                    "mixer/window/max",
+                    ControlAction::SetScalar(0.2)
+                )
+                .is_none()
+            );
+            assert_eq!(state.ui.cache.stage.window, (0.7, 0.7));
+
+            assert!(matches!(
+                send(&mut state, "mixer/a/mute", ControlAction::Activate),
+                Some(Message::Mix(MixMsg::Muted(DeckId(0), true)))
+            ));
+            assert!(matches!(
+                send(
+                    &mut state,
+                    "mixer/a/volume",
+                    ControlAction::SetScalar(0.25)
+                ),
+                Some(Message::Mix(MixMsg::Trim(DeckId(0), trim)))
+                    if (trim - 0.25).abs() < f32::EPSILON
+            ));
+            assert!(matches!(
+                send(&mut state, "mixer/a/low-3", ControlAction::SetScalar(1.0)),
+                Some(Message::Deck(DeckId(0), DeckMsg::EqBandChanged(0, _)))
+            ));
+            assert!(
+                send(
+                    &mut state,
+                    "mixer/a/eq-menu-anchor",
+                    ControlAction::SecondaryActivate
+                )
+                .is_none()
+            );
+            assert!(state.ui.cache.deck_mut(0).unwrap().view.eq_menu_open);
+            assert!(matches!(
+                send(&mut state, "mixer/a/eq-4", ControlAction::Activate),
+                Some(Message::SetEqMode(EqMode::FourBand))
+            ));
+            assert!(!state.ui.cache.deck_mut(0).unwrap().view.eq_menu_open);
+        }
+
+        #[kithara::test(native, flash(false))]
+        fn library_and_host_events_update_view_state_and_keep_row_identity() {
+            let mut state = test_fixture::state();
+
+            assert!(translate(&mut state, UiEvent::LibraryQuery("loc".to_string())).is_none());
+            assert_eq!(state.ui.cache.library.query, "loc");
+            state.ui.cache.library.query.clear();
+            assert!(send(&mut state, "library/browser", ControlAction::SelectIndex(1)).is_none());
+            assert!(matches!(
+                send(&mut state, "library/tracks", ControlAction::SelectIndex(0)),
+                Some(Message::SelectCatalogTrack(0))
+            ));
+            assert!(
+                send(
+                    &mut state,
+                    "library/tracks",
+                    ControlAction::Drag(DragPhase::Start(0))
+                )
+                .is_none()
+            );
+            state.ui.cache.set_hover_deck(1, true);
+            assert!(matches!(
+                send(
+                    &mut state,
+                    "library/tracks",
+                    ControlAction::Drag(DragPhase::Drop)
+                ),
+                Some(Message::LoadOntoDeck(0, DeckId(1)))
+            ));
+
+            let was_collapsed = state.ui.cache.collapsed.contains("ov");
+            assert!(translate(&mut state, UiEvent::ToggleModule("ov".to_string())).is_none());
+            assert_ne!(state.ui.cache.collapsed.contains("ov"), was_collapsed);
+            assert!(matches!(
+                translate(&mut state, UiEvent::Window(WindowCommand::ToggleFullScreen)),
+                Some(Message::Window(WindowCommand::ToggleFullScreen))
+            ));
+            assert!(translate(&mut state, UiEvent::OpenSettings).is_none());
+        }
+    }
 }

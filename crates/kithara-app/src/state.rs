@@ -320,6 +320,26 @@ impl StateController {
     }
 }
 
+#[cfg(test)]
+pub(crate) mod test_fixture {
+    use super::*;
+
+    pub(crate) fn controller(
+        queue: AppQueueControl,
+        timestretch: Arc<StretchControls>,
+        cancel: CancelToken,
+    ) -> Arc<StateController> {
+        let state = Arc::new(Mutex::new(UiState::new(&queue)));
+        Arc::new(StateController {
+            queue,
+            state,
+            timestretch,
+            cancel,
+            beat_clock: Mutex::new(BeatClockState::default()),
+        })
+    }
+}
+
 #[derive(Debug, Default)]
 struct BeatClockState {
     last_beat_number: Option<u64>,

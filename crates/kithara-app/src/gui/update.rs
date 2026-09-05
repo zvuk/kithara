@@ -282,3 +282,206 @@ fn refresh_snapshots(state: &mut Kithara) {
     }
     state.ui.cache.refresh(&state.decks, &state.catalog);
 }
+
+#[cfg(all(test, not(feature = "broadcast")))]
+mod tests {
+    use std::mem;
+
+    use ::kithara::{
+        play::effects::eq::GainDb,
+        ui::render::{ControlAction, UiEvent, WindowCommand, WindowEdge},
+    };
+    use iced::{Size, window::Direction};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::gui::{test_fixture, ui::cache::DeckLayout};
+
+    fn apply(state: &mut Kithara, message: Message) {
+        assert_eq!(update(state, message).units(), 0);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn window_edges_keep_their_native_direction() {
+        let cases = [
+            (WindowEdge::North, Direction::North),
+            (WindowEdge::South, Direction::South),
+            (WindowEdge::East, Direction::East),
+            (WindowEdge::West, Direction::West),
+            (WindowEdge::NorthEast, Direction::NorthEast),
+            (WindowEdge::NorthWest, Direction::NorthWest),
+            (WindowEdge::SouthEast, Direction::SouthEast),
+            (WindowEdge::SouthWest, Direction::SouthWest),
+        ];
+
+        for (edge, expected) in cases {
+            let actual = direction(edge).expect("window edge has a native direction");
+            assert_eq!(mem::discriminant(&actual), mem::discriminant(&expected));
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn every_window_command_schedules_host_work() {
+        let state = test_fixture::state();
+        let commands = [
+            WindowCommand::Drag,
+            WindowCommand::Resize(WindowEdge::North),
+            WindowCommand::Minimize,
+            WindowCommand::ToggleMaximize,
+            WindowCommand::ToggleFullScreen,
+            WindowCommand::Close,
+        ];
+
+        for command in commands {
+            assert_eq!(window_task(&state, command).units(), 1, "{command:?}");
+        }
+    }
+
+    #[kithara::test(native, tokio, flash(false))]
+    async fn update_routes_messages_and_refreshes_their_state() {
+        let mut state = test_fixture::state();
+
+        assert_eq!(
+            update(
+                &mut state,
+                Message::Ui(UiEvent::Control {
+                    path: "mixer/xfade".to_string(),
+                    action: ControlAction::SetScalar(1.0),
+                }),
+            )
+            .units(),
+            0
+        );
+        assert_eq!(state.session.mix().position, 1.0);
+
+        assert_eq!(
+            update(
+                &mut state,
+                Message::Ui(UiEvent::LibraryQuery("local".to_string())),
+            )
+            .units(),
+            0
+        );
+        assert_eq!(state.ui.cache.library.query, "local");
+
+        apply(&mut state, Message::SelectCatalogTrack(1));
+        assert_eq!(state.selected_track, Some(1));
+
+        apply(
+            &mut state,
+            Message::Deck(DeckId(0), DeckMsg::SetTempo(80.0)),
+        );
+        let deck = state.decks.get(DeckId(0)).expect("deck A");
+        assert_eq!(deck.view.timestretch.tempo, 50.0);
+
+        apply(&mut state, Message::LoadOntoDeck(usize::MAX, DeckId(0)));
+        let tracks = {
+            let queue = state
+                .decks
+                .get(DeckId(0))
+                .expect("deck A")
+                .controller
+                .queue();
+            queue.append("https://example.test/pending.mp3").unwrap();
+            queue.tracks()
+        };
+        let deck = state.decks.get_mut(DeckId(0)).expect("deck A");
+        deck.ui.tracks = tracks;
+        deck.ui.current_track_index = Some(0);
+        apply(&mut state, Message::DeleteFocusedTrack);
+        assert!(
+            state
+                .decks
+                .get(DeckId(0))
+                .expect("deck A")
+                .controller
+                .queue()
+                .tracks()
+                .is_empty()
+        );
+
+        state.ui.cache.set_layout(DeckLayout::Single);
+        let hidden = state
+            .decks
+            .get(DeckId(1))
+            .expect("deck B")
+            .controller
+            .clone();
+        apply(&mut state, Message::PauseHiddenDecks);
+        assert!(!hidden.queue().is_playing());
+
+        apply(&mut state, Message::WindowResized(Size::new(640.0, 480.0)));
+        assert!(state.ui.cache.window.caption().starts_with("640 × 480"));
+
+        assert_eq!(
+            update(
+                &mut state,
+                Message::Ui(UiEvent::Window(WindowCommand::Minimize)),
+            )
+            .units(),
+            1
+        );
+        assert_eq!(update(&mut state, Message::Tick).units(), 0);
+        assert_eq!(update(&mut state, Message::BroadcastToggle).units(), 0);
+        assert_eq!(update(&mut state, Message::BroadcastToggle).units(), 0);
+        assert_eq!(
+            update(
+                &mut state,
+                Message::BroadcastStopped(Some(Duration::from_millis(10))),
+            )
+            .units(),
+            0
+        );
+        assert_eq!(update(&mut state, Message::WindowCloseRequested).units(), 1);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn eq_mode_changes_every_deck_as_one_transaction() {
+        let mut state = test_fixture::state();
+        let initial = [
+            [-6.0f32, 2.0, 5.0].map(GainDb::from),
+            [1.0f32, 3.0, 7.0].map(GainDb::from),
+        ];
+        for (deck, gains) in state.decks.iter().zip(initial) {
+            deck.controller
+                .mutate(|snapshot| snapshot.eq_bands = gains.to_vec());
+        }
+
+        apply(&mut state, Message::SetEqMode(EqMode::FourBand));
+        assert_eq!(state.eq_mode, EqMode::FourBand);
+        for (deck, gains) in state.decks.iter().zip(initial) {
+            let expected = vec![gains[0], gains[1], gains[1], gains[2]];
+            assert_eq!(deck.controller.snapshot().eq_bands, expected);
+            assert_eq!(deck.controller.queue().eq_band_count(), 4);
+        }
+
+        apply(&mut state, Message::SetEqMode(EqMode::FourBand));
+        apply(&mut state, Message::SetEqMode(EqMode::ThreeBand));
+        assert_eq!(state.eq_mode, EqMode::ThreeBand);
+        for (deck, gains) in state.decks.iter().zip(initial) {
+            assert_eq!(deck.controller.snapshot().eq_bands, gains);
+            assert_eq!(deck.controller.queue().eq_band_count(), 3);
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn invalid_eq_snapshot_keeps_the_shared_mode_unchanged() {
+        let mut state = test_fixture::state();
+        state
+            .decks
+            .get(DeckId(0))
+            .expect("deck A")
+            .controller
+            .mutate(|snapshot| snapshot.eq_bands.clear());
+
+        apply(&mut state, Message::SetEqMode(EqMode::FourBand));
+
+        assert_eq!(state.eq_mode, EqMode::ThreeBand);
+        assert!(
+            state
+                .decks
+                .iter()
+                .all(|deck| deck.controller.queue().eq_band_count() == 3)
+        );
+    }
+}

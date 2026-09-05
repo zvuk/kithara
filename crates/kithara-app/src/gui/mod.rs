@@ -9,6 +9,8 @@ mod reads;
 #[cfg(feature = "masonry")]
 pub(crate) mod retained;
 mod subscription;
+#[cfg(all(test, not(feature = "broadcast")))]
+mod test_fixture;
 mod theme;
 mod ui;
 mod update;
