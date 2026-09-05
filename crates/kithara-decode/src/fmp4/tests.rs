@@ -10,14 +10,14 @@ use std::{
 use kithara_bufpool::PoolRegion;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioChunk;
-use kithara_stream::{AudioCodec, ByteMap};
+use kithara_stream::{AudioCodec, ByteMap, PendingReason, SegmentDescriptor};
 use kithara_test_utils::kithara;
 
 use super::test_layout::{FakeSegmented, TestLayoutCodec, build_test_layout, read_fixture};
 use crate::{
     codec::{CodecPriming, FrameCodec, access_unit_frames},
     composed::{ComposedDecoder, DecoderRuntime},
-    demuxer::{Demuxer, TrackInfo},
+    demuxer::{DemuxOutcome, Demuxer, TrackInfo},
     fmp4::{
         Fmp4SegmentDemuxer,
         parsing::{parse_init, parse_segment_frames},
@@ -122,6 +122,69 @@ fn pull_one_chunk(
         }
     }
     None
+}
+
+/// An HLS variant between the playlist landing and the first segment
+/// settling: it counts its segments and states its extent, but has not
+/// described any segment yet.
+struct PublishedButUndescribed {
+    init_range: Range<u64>,
+    count: u32,
+    total: u64,
+}
+
+impl ByteMap for PublishedButUndescribed {
+    fn init_segment_range(&self) -> Range<u64> {
+        self.init_range.clone()
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(self.total)
+    }
+
+    fn segment_after_byte(&self, _byte_offset: u64) -> Option<SegmentDescriptor> {
+        None
+    }
+
+    fn segment_at_index(&self, _segment_index: u32) -> Option<SegmentDescriptor> {
+        None
+    }
+
+    fn segment_at_time(&self, _t: Duration) -> Option<SegmentDescriptor> {
+        None
+    }
+
+    fn segment_count(&self) -> Option<u32> {
+        Some(self.count)
+    }
+}
+
+/// A segment the layout has not described yet is a segment still owed, not
+/// the end of the stream. Run 33752112563 lost
+/// `packaged_abr_switch_keeps_player_continuity` to the other reading: the
+/// incoming variant of an ABR up-switch reported EOF on its first chunk,
+/// the transition was discarded with `abort_intent`, and the player never
+/// switched.
+#[kithara::test]
+fn an_undescribed_segment_is_not_the_end_of_the_stream() {
+    let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 3);
+    let init_range = 0..segmented.segments[0].byte_range.start;
+    let total = segmented.segments[2].byte_range.end;
+    let source: BoxedSource = Box::new(Cursor::new(blob));
+    let layout: Arc<dyn ByteMap> = Arc::new(PublishedButUndescribed {
+        init_range,
+        count: 3,
+        total,
+    });
+    let mut demuxer =
+        Fmp4SegmentDemuxer::open(source, layout, pools()).expect("BUG: build demuxer");
+
+    let outcome = demuxer.next_frame().expect("BUG: demux a described layout");
+
+    assert!(
+        matches!(outcome, DemuxOutcome::Pending(PendingReason::Retry)),
+        "an undescribed segment must park the decode, not end it: {outcome:?}"
+    );
 }
 
 /// RED scaffold: a freshly opened `Fmp4SegmentDemuxer` always restarts at

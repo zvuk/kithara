@@ -92,10 +92,7 @@ where
                         .segments
                         .get(seg_idx as usize)
                         .is_some_and(|s| s.size().is_exact()),
-                    loaded = self
-                        .segments
-                        .get(seg_idx as usize)
-                        .is_some_and(|s| s.state().is_loaded()),
+                    loaded = self.segment_loaded(seg_idx),
                     "read_at: segment bytes unavailable"
                 );
                 break;
@@ -121,11 +118,7 @@ where
     #[kithara::probe(
         variant = self.variant as u64,
         seg = u64::from(seg_idx),
-        loaded = u64::from(
-            self.segments
-                .get(seg_idx as usize)
-                .is_some_and(|s| s.state().is_loaded())
-        ),
+        loaded = u64::from(self.segment_loaded(seg_idx)),
         downloading = u64::from(self.segment_downloading(seg_idx)),
         failed = u64::from(self.segment_failed(seg_idx)),
         planned = u64::from(self.fetch_is_planned(PlannedFetch::Segment(seg_idx)))

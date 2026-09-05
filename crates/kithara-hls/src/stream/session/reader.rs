@@ -103,7 +103,7 @@ where
                     NotReadyCause::WaitBudgetExhausted,
                 )));
             }
-            Err(error) => return Err(Error::other(error.to_string())),
+            Err(error) => return Err(Error::other(error)),
         }
         self.session.check_live()?;
         match self.session.variant.read_at(byte, buf) {
@@ -117,7 +117,7 @@ where
                 self.session.arm_peer();
                 Err(pending(reason))
             }
-            Err(error) => Err(Error::other(error.to_string())),
+            Err(error) => Err(Error::other(error)),
         }
     }
 }

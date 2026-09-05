@@ -108,7 +108,7 @@ pub(super) fn attempt_outcomes(cases: &[CaseTiming]) -> BTreeMap<AttemptKey, Att
             suite: case.suite.clone(),
             name: case.name.clone(),
         };
-        let outcome = if case.failed {
+        let outcome = if case.failing() {
             AttemptOutcome::Failed
         } else {
             AttemptOutcome::Passed

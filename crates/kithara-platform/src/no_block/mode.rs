@@ -30,7 +30,10 @@ impl Consts {
 thread_local! {
     static FORCED: Cell<Option<Mode>> = const { Cell::new(None) };
     static FORCED_BUDGET: Cell<Option<Duration>> = const { Cell::new(None) };
-    static FORCED_LOG: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    /// The outer `Option` is whether a test overrides the configured sink, the
+    /// inner one the sink it names. A test of the sink-less path needs both:
+    /// the lane that runs it sets `KITHARA_NO_BLOCK_LOG`.
+    static FORCED_LOG: RefCell<Option<Option<PathBuf>>> = const { RefCell::new(None) };
 }
 
 /// Set while a [`PanicMode`] guard lives; see [`force_panic_mode`].
@@ -104,8 +107,8 @@ pub(super) fn blanket_budget() -> Duration {
 pub(super) fn log_path() -> Option<PathBuf> {
     #[cfg(test)]
     {
-        if let Some(path) = FORCED_LOG.with(|forced| forced.borrow().clone()) {
-            return Some(path);
+        if let Some(forced) = FORCED_LOG.with(|forced| forced.borrow().clone()) {
+            return forced;
         }
     }
 
@@ -127,5 +130,10 @@ pub(crate) fn force_blanket_budget(budget: Duration) {
 
 #[cfg(test)]
 pub(crate) fn force_log_path(path: PathBuf) {
-    FORCED_LOG.with(|forced| forced.replace(Some(path)));
+    FORCED_LOG.with(|forced| forced.replace(Some(Some(path))));
+}
+
+#[cfg(test)]
+pub(crate) fn force_no_log_path() {
+    FORCED_LOG.with(|forced| forced.replace(Some(None)));
 }

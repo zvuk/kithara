@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use regex::Regex;
+use regex::{Captures, Regex};
 
 use self::attempt::{AttemptKey, AttemptOutcome, attempt_outcomes};
 use super::{MAX_FAILURE_ROWS, StressReportArgs, markdown_cell, test_id};
@@ -72,7 +72,10 @@ pub(super) fn append_correlated_evidence(
     run_id: Option<&str>,
     args: &StressReportArgs,
 ) -> bool {
-    let failed = cases.iter().filter(|case| case.failed).collect::<Vec<_>>();
+    let failed = cases
+        .iter()
+        .filter(|case| case.failing())
+        .collect::<Vec<_>>();
     let expected_envelopes = failed
         .iter()
         .filter(|case| requires_envelope(&case.output, &args.evidence))
@@ -566,10 +569,50 @@ fn normalize_signature(text: &str) -> String {
     });
     static HEX: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"0x[0-9a-fA-F]+").expect("address regex"));
+    /// A fixture server mints one of these per attempt and puts it in every URL
+    /// it serves. Left standing, each attempt's playlist line is a signature no
+    /// other attempt can carry, so the pass that asks which lines separate
+    /// failures from passes answers "all of them" — eighteen such rows were the
+    /// whole divergence table of `packaged_abr_switch_keeps_player_continuity`
+    /// in run 33752112563, and the lines that did separate them were crowded
+    /// out.
+    static UUID: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+        )
+        .expect("uuid regex")
+    });
+    /// A content or asset-root digest, volatile for the same reason. Unanchored
+    /// because a cache path prefixes one with a namespace letter, and a word
+    /// boundary that never falls between the two leaves the digest standing. A
+    /// run of digits alone is left to the caller that normalizes numbers: a
+    /// decimal counter is not a digest, and saying so would cost the reader the
+    /// one axis these tables order by.
+    static DIGEST: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"[0-9a-f]{16,}").expect("digest regex"));
+    /// A cache key spells an authority's `host:port` with the colon percent-
+    /// escaped, which glues the port to a hex escape so no word boundary falls
+    /// before its digits and the number pass steps over it. The port is as
+    /// volatile as the one in the URL beside it, which that pass does
+    /// normalize: leaving it standing split nine divergence rows of
+    /// `packaged_abr_switch_keeps_player_continuity` into eighteen, one per
+    /// attempt, in run 33752112563.
+    static ESCAPED_PORT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"~3[aA]\d+").expect("escaped port regex"));
     let text = strip_ansi(text).replace(['\r', '\n'], " ");
     let text = VOLATILE.replace_all(&text, "$1=<volatile>");
     let text = PANIC_THREAD.replace_all(&text, "panicked at");
     let text = HEX.replace_all(&text, "0x<address>");
+    let text = UUID.replace_all(&text, "<uuid>");
+    let text = ESCAPED_PORT.replace_all(&text, "~3a<port>");
+    let text = DIGEST.replace_all(&text, |captures: &Captures<'_>| {
+        let matched = &captures[0];
+        if matched.bytes().any(|byte| byte.is_ascii_alphabetic()) {
+            "<digest>".to_owned()
+        } else {
+            matched.to_owned()
+        }
+    });
     markdown_cell(text.trim())
 }
 
@@ -694,6 +737,7 @@ mod tests {
     fn case(name: &str, iteration: usize, failed: bool, secs: f64) -> CaseTiming {
         CaseTiming {
             failed,
+            flaky: false,
             secs,
             name: name.to_owned(),
             suite: "demo::tests".to_owned(),
@@ -745,6 +789,56 @@ mod tests {
             normalized,
             "active_async holder polls=<volatile> state=Runnable"
         );
+    }
+
+    /// The fixture server mints a fresh asset id per attempt, so a playlist line
+    /// carrying one can only ever appear in the attempt that wrote it. The
+    /// divergence pass then reports every such line as separating failures from
+    /// passes, which is how eighteen rows of one run's ABR failure said nothing.
+    #[test]
+    fn a_per_attempt_asset_identity_does_not_separate_a_failure_from_a_pass() {
+        let first = normalize_signature(
+            "fetching url=http://127.0.0.1:8080/stream/3a2f20a5-40f9-45a3-8c0b-67e0f6f8d1e1/v0.m3u8 asset_root=c26bf5add3a9ad105e989b6e35595621",
+        );
+        let second = normalize_signature(
+            "fetching url=http://127.0.0.1:8080/stream/32c0ac7e-a24a-446c-8e86-1a24e509164d/v0.m3u8 asset_root=e0f774bd91c2a3845f6b0d7e8a9c1b23",
+        );
+
+        assert_eq!(first, second);
+        assert!(first.contains("<uuid>"), "{first}");
+        assert!(first.contains("<digest>"), "{first}");
+    }
+
+    /// The cache path writes the same digest behind a namespace letter, so no
+    /// word boundary falls before it.
+    #[test]
+    fn a_namespaced_cache_digest_is_normalized_too() {
+        let first =
+            normalize_signature("rel_path=track/host~oa47d51d70114ab95b6c833c29678b24d/stream");
+        let second =
+            normalize_signature("rel_path=track/host~o2125f04c437b75858496455a66cf20f3/stream");
+
+        assert_eq!(first, second);
+        assert!(first.contains("<digest>"), "{first}");
+    }
+
+    /// A decimal counter is not an identity, and the tables these signatures
+    /// feed are ordered by exactly such counters.
+    /// The cache key writes `127.0.0.1:34265` as `127.0.0.1~3a34265`, and the
+    /// number pass needs a word boundary the hex escape denies it.
+    #[test]
+    fn an_escaped_authority_port_does_not_separate_a_failure_from_a_pass() {
+        let first = normalize_signature("rel_path=track/127.0.0.1~3a34265~oabc/stream");
+        let second = normalize_signature("rel_path=track/127.0.0.1~3a39797~oabc/stream");
+
+        assert_eq!(first, second, "{first} vs {second}");
+    }
+
+    #[test]
+    fn a_long_decimal_counter_is_not_read_as_a_digest() {
+        let normalized = normalize_signature("committed=1207437641712345678 state=Runnable");
+
+        assert_eq!(normalized, "committed=1207437641712345678 state=Runnable");
     }
 
     /// The first line the flash engine writes into a hang dump.

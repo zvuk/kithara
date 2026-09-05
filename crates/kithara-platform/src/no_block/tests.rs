@@ -1,20 +1,25 @@
 use std::{
     env, fs,
     future::Future,
+    io,
     path::PathBuf,
     pin::pin,
     process,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     task::{Context, Poll, Waker},
     thread,
     time::{Duration, Instant},
 };
 
 use kithara_test_utils::kithara;
+use tracing_subscriber::fmt::MakeWriter;
 
 use super::{
     clock::force_cpu_elapsed,
-    mode::{Mode, force_blanket_budget, force_log_path, force_mode},
+    mode::{Mode, force_blanket_budget, force_log_path, force_mode, force_no_log_path},
     *,
 };
 
@@ -50,6 +55,51 @@ fn spin_for(d: Duration) {
     while start.elapsed() < d {
         std::hint::spin_loop();
     }
+}
+
+/// Drive one over-budget poll, which reports a single census observation.
+fn census_once(task: &'static str) {
+    let fut = watch_budget(task, CENSUS_LOG_BUDGET_MS, async {
+        crate::thread::sleep(Duration::from_millis(CENSUS_LOG_SLEEP_MS));
+    });
+    let _ = poll_once(fut);
+}
+
+#[derive(Clone)]
+struct TracingSink(Arc<Mutex<Vec<u8>>>);
+
+impl io::Write for TracingSink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().expect("tracing sink").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for TracingSink {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// What `run` emits through `tracing`, as text.
+///
+/// The subscriber is thread-local, so it takes precedence over whichever one
+/// the test harness installed globally and sees only this call.
+fn capture_tracing(run: impl FnOnce()) -> String {
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(TracingSink(Arc::clone(&sink)))
+        .finish();
+    tracing::subscriber::with_default(subscriber, run);
+    let captured = sink.lock().expect("tracing sink").clone();
+    String::from_utf8(captured).expect("tracing output is utf8")
 }
 
 #[kithara::test(native, flash(false))]
@@ -214,6 +264,33 @@ fn census_panics_when_configured_log_cannot_be_written() {
         msg.contains(&path.display().to_string()),
         "panic must identify the configured path: {msg}"
     );
+}
+
+#[kithara::test(native, flash(false))]
+fn a_configured_census_log_is_the_only_sink() {
+    force_mode(Mode::Census);
+
+    let path = temp_log_path("census-sole-sink");
+    let _ = fs::remove_file(&path);
+    force_log_path(path.clone());
+
+    let traced = capture_tracing(|| census_once("census_sole_sink_task"));
+
+    assert!(
+        !traced.contains("census_sole_sink_task"),
+        "a configured log takes the stream; a second copy lands in the JUnit: {traced}"
+    );
+    let _ = fs::remove_file(path);
+}
+
+#[kithara::test(native, flash(false))]
+fn census_without_a_configured_log_reaches_the_tracing_sink() {
+    force_mode(Mode::Census);
+    force_no_log_path();
+
+    let traced = capture_tracing(|| census_once("census_traced_task"));
+
+    assert!(traced.contains("census_traced_task"), "got: {traced}");
 }
 
 #[kithara::test(native, flash(false))]

@@ -146,10 +146,19 @@ async fn file_stream_closes_early_seek_still_works() {
         stream
     });
 
-    let stream = time::timeout(Duration::from_secs(5), phase1)
-        .await
-        .expect("Phase 1 timed out")
-        .expect("Phase 1 panicked");
+    // The phase-1 read drives a REAL socket against the test server, and a
+    // `spawn_blocking` join registers nothing the flash clock waits on. Hold a
+    // `RealIoScope` across the wait so the 5 s budget is paced to real time and
+    // stays a stall oracle instead of burning to zero in collapsed time: run
+    // 33937211240 fired it after 1.25 s of real time with `active=0 real_io=0`.
+    // Off the `flash` feature the scope is a ZST no-op and the clock is real.
+    let stream = {
+        let _real_io = real_io();
+        time::timeout(Duration::from_secs(5), phase1)
+            .await
+            .expect("Phase 1 timed out")
+            .expect("Phase 1 panicked")
+    };
 
     // Wait on the real state: the sequential GET terminating means the
     // early-close resume has flushed every available byte (here the whole

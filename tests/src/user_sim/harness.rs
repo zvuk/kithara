@@ -335,12 +335,18 @@ impl SimHarness {
 
         match outcome {
             SeekOutcome::Landed { .. } => {}
-            SeekOutcome::PastEof { duration, .. } => {
+            SeekOutcome::PastEof {
+                duration: seek_duration,
+                ..
+            } => {
                 // PastEof is only acceptable for SeekNearEnd very close
                 // to 1.0; everything else means we computed `target` wrong.
                 assert!(
                     near_end && ratio >= 0.95,
-                    "[{action_label}] unexpected PastEof (dur={duration:?})"
+                    "[{action_label}] unexpected PastEof (target={target:.3}s, \
+                     queue dur={duration:.3}s, seek dur={seek_duration:?}, \
+                     track {pre_track:?} -> {:?})",
+                    self.current_track_id()
                 );
                 return;
             }

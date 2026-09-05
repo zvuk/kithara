@@ -503,13 +503,23 @@ mod tests {
     /// Two flushes of one `pins.bin` can overlap: the eager mutator path
     /// and a hub flush from the worker or a checkpoint. Whoever renames
     /// last decides the file, so a flush that snapshotted before an unpin
-    /// must never publish after it. Measured before the per-file write
-    /// lock: 6 resurrections in 2000 rounds.
+    /// must never publish after it. Measured with the per-file write lock
+    /// removed: 3 to 8 resurrections in 200 rounds.
+    ///
+    /// The barrier releases each flusher into the round it races instead of
+    /// letting it spin. Overlap is what the property needs; a free-running
+    /// flusher buys it with `fsync`s it issues faster the longer a round
+    /// takes, so its cost climbs with the load it is already competing with
+    /// — 500 spun rounds took 3.8 s to 16.5 s idle, 200 gated ones 4.2 s to
+    /// 5.3 s.
     #[kithara::test(timeout(Duration::from_secs(60)))]
     fn an_eager_unpin_is_never_resurrected_by_a_concurrent_flush() {
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Barrier;
 
         use crate::index::persistence::{FlushHub, FlushPolicy};
+
+        const ROUNDS: usize = 200;
+        const FLUSHERS: usize = 3;
 
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
@@ -517,13 +527,14 @@ mod tests {
         let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
         idx.attach_to(&hub);
 
-        let stop = Arc::new(AtomicBool::new(false));
-        let flushers: Vec<_> = (0..3)
+        let round = Arc::new(Barrier::new(FLUSHERS + 1));
+        let flushers: Vec<_> = (0..FLUSHERS)
             .map(|n| {
                 let hub = Arc::clone(&hub);
-                let stop = Arc::clone(&stop);
+                let round = Arc::clone(&round);
                 kithara_platform::thread::spawn_named(format!("probe-flusher-{n}"), move || {
-                    while !stop.load(Ordering::Acquire) {
+                    for _ in 0..ROUNDS {
+                        round.wait();
                         let _ = hub.flush_now();
                     }
                 })
@@ -531,22 +542,21 @@ mod tests {
             .collect();
 
         let mut violations = 0_usize;
-        let rounds = 500_usize;
-        for _ in 0..rounds {
+        for _ in 0..ROUNDS {
+            round.wait();
             idx.add("asset-a", PinDurability::Durable).unwrap();
             idx.remove("asset-a", PinDurability::Durable).unwrap();
             if on_disk_contains(&path, "asset-a") {
                 violations += 1;
             }
         }
-        stop.store(true, Ordering::Release);
         for flusher in flushers {
             flusher.join().unwrap();
         }
 
         assert_eq!(
             violations, 0,
-            "an eager unpin must not be resurrected on disk by a concurrent flush ({violations}/{rounds})"
+            "an eager unpin must not be resurrected on disk by a concurrent flush ({violations}/{ROUNDS})"
         );
     }
 }

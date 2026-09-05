@@ -213,6 +213,14 @@ and returns non-zero for failed, missing, partial, duplicate, malformed, or
 mismatched evidence. GitHub Actions owns only authorization, immutable checkout
 selection, job isolation, artifact transfer, and publishing the rendered summary.
 
+A lane is barred from the cross-lane comparison only by what its JUnit report
+cannot account for: a missing iteration, a quarantined repeat, a selected test the
+report never names. A partial evidence overlay - a census past the line pass's
+record bound, a lost output tail, an absent envelope directory - is a diagnosis
+caveat and stays one, because the counts, the rates and the verdict are read from
+the JUnit report alone. The reason an excluded lane carries is the sentence that
+lane recorded, never a cause re-derived at the summary.
+
 ## Quality assessment contract
 
 `quality assess` is an artifact federation layer: the lint, architecture,

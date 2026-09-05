@@ -65,6 +65,9 @@ kithara-test-macros = { path = "../kithara-test-macros" }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 assert_no_alloc = { workspace = true }
+# Which sink a census line reaches is only observable through a subscriber; the
+# `no_block` tests install one to pin that a configured log is the only sink.
+tracing-subscriber = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 # Native-only: criterion pulls a native-only toolchain, never wasm.

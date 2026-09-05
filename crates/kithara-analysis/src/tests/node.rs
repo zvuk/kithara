@@ -41,6 +41,8 @@ use unimock::{MockFn, Unimock, matching};
 use super::super::beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats};
 #[cfg(feature = "analysis-waveform")]
 use super::fixtures::CH;
+#[cfg(feature = "analysis-beat")]
+use super::fixtures::shareable;
 use super::{
     super::{
         analyzer::AnalyzerBuilder,
@@ -850,7 +852,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
     let (release, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
     let release_for_detector = Arc::clone(&release_rx);
-    let detector = Box::new(Unimock::new(
+    let detector = Box::new(shareable(Unimock::new(
         BeatDetectorMock
             .each_call(matching!(_))
             .answers_arc(Arc::new(move |_, mono| {
@@ -860,7 +862,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
                 }
                 Ok(raw_beat(0.5))
             })),
-    ));
+    )));
     let builder = beat_waveform(detector, 1, 1);
     let rate = super::fixtures::spec().sample_rate;
     let frames = usize::try_from(SR).expect("test rate fits usize");
@@ -928,14 +930,14 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
 #[kithara::test(native, flash(false))]
 fn saturation_retries_the_exact_detection_payload_once() {
     let (detected, detected_rx) = mpsc::channel();
-    let detector = Box::new(Unimock::new(
+    let detector = Box::new(shareable(Unimock::new(
         BeatDetectorMock
             .each_call(matching!(_))
             .answers_arc(Arc::new(move |_, mono| {
                 detected.send(mono.to_vec()).ok();
                 Ok(raw_beat(0.5))
             })),
-    ));
+    )));
     let builder = beat_waveform(detector, 1, 1);
     let frames = usize::try_from(SR).expect("test rate fits usize");
     let pcm = sine(frames);
@@ -1011,7 +1013,7 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass() {
     let (release, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
     let release_for_detector = Arc::clone(&release_rx);
-    let detector = Box::new(Unimock::new(
+    let detector = Box::new(shareable(Unimock::new(
         BeatDetectorMock
             .each_call(matching!(_))
             .answers_arc(Arc::new(move |_, _| {
@@ -1024,7 +1026,7 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass() {
                     Ok(raw_beat(0.75))
                 }
             })),
-    ));
+    )));
     let builder = beat_waveform(detector, 1, 1);
     let frames = usize::try_from(SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
@@ -1103,7 +1105,7 @@ fn final_publication_waits_for_trailing_detection() {
     let (started, started_rx) = mpsc::channel();
     let (release, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
-    let detector = Box::new(Unimock::new(
+    let detector = Box::new(shareable(Unimock::new(
         BeatDetectorMock
             .next_call(matching!(_))
             .answers_arc(Arc::new(move |_, _| {
@@ -1111,7 +1113,7 @@ fn final_publication_waits_for_trailing_detection() {
                 release_rx.lock().recv().ok();
                 Ok(raw_beat(0.5))
             })),
-    ));
+    )));
     let builder = beat_waveform(detector, 2, 2);
     let frames = usize::try_from(SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
@@ -1206,7 +1208,7 @@ fn beat_slot_fills_the_beat_grid() {
             .next_call(matching!(_))
             .answers_arc(Arc::new(move |_, _| Ok(raw.clone()))),
     );
-    let detector = Box::new(mock) as Box<dyn BeatDetector>;
+    let detector = Box::new(shareable(mock));
     let builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools())
         .with_beat_detector(detector, GridParams::default());
 

@@ -156,8 +156,17 @@ impl<S> PlayerRuntime<S> {
         Ok(())
     }
 
+    /// Terminal teardown: close the player and cancel its subtree.
+    ///
+    /// Deliberately skips the admission gate. This runs from `Drop`, and a
+    /// player is dropped by whoever last owns it — including a session
+    /// dispatcher unwinding its own state. An admitted operation can be parked
+    /// on a reply from that same dispatcher, so waiting for the gate here
+    /// closes the cycle. Neither step needs it: closing is a store on an
+    /// atomic and cancelling fires a token, and a cancel exists to interrupt
+    /// an admitted operation rather than to queue behind one. `close` still
+    /// takes the gate, so the orderly path keeps its ordering.
     fn invalidate(&self) {
-        let _admission = self.operations.lock();
         self.finish_close();
         self.core.engine.cancel();
     }
@@ -349,6 +358,51 @@ mod tests {
             player.runtime.with_open(|_| ()),
             Err(PlayError::Closed)
         ));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test]
+    fn drop_does_not_wait_for_an_admitted_operation() {
+        let player = player();
+        let runtime = Arc::clone(&player.runtime);
+        let observer = player
+            .prepare_config(resource_config("https://example.com/song.mp3"))
+            .expect("test session answers stream-shape queries")
+            .cancel
+            .expect("prepare_config must populate cancel")
+            .child();
+        let (entered_tx, entered_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let operation = std::thread::spawn(move || {
+            runtime
+                .with_open(|_| {
+                    entered_tx.send(()).expect("report admitted operation");
+                    release_rx.recv().expect("release admitted operation");
+                })
+                .expect("operation remains admitted");
+        });
+        entered_rx
+            .recv()
+            .expect("operation entered the admission gate");
+
+        let closed = Arc::clone(&player.runtime);
+        let (dropped_tx, dropped_rx) = channel();
+        let dropper = std::thread::spawn(move || {
+            drop(player);
+            dropped_tx.send(()).expect("report completed drop");
+        });
+        dropped_rx
+            .recv_timeout(Duration::from_millis(50))
+            .expect("drop must not queue behind an admitted operation");
+        assert!(closed.is_closed(), "drop must close the player at once");
+        assert!(
+            observer.is_cancelled(),
+            "drop must cancel the subtree while the operation is still admitted"
+        );
+
+        release_tx.send(()).expect("release admitted operation");
+        operation.join().expect("operation thread completed");
+        dropper.join().expect("drop thread completed");
     }
 
     #[cfg(not(target_arch = "wasm32"))]

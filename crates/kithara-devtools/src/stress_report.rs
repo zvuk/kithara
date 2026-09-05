@@ -109,6 +109,10 @@ impl StressReportArgs {
 #[derive(Debug, Default)]
 struct TestStats {
     failed_iterations: BTreeSet<usize>,
+    /// Iterations that failed an attempt and passed a later one. Held apart
+    /// from failures: a retried pass is neither, and folding it into either
+    /// column is how a run that reproduced a defect reports as green.
+    flaky_iterations: BTreeSet<usize>,
     observed_iterations: BTreeSet<usize>,
     max_secs: f64,
 }
@@ -121,7 +125,9 @@ struct RenderedReport {
     /// evidence census can be held to the same set as the rate tables.
     quarantined: BTreeSet<usize>,
     markdown: String,
-    complete: bool,
+    /// What the evidence is missing, or `None` when it accounts for every
+    /// requested attempt of every selected test.
+    incomplete: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -167,6 +173,21 @@ impl EvidenceProblems {
             self.rows.push(problem);
         }
     }
+
+    /// The shortfall in one sentence, or `None` when there is none.
+    ///
+    /// The run document names why a lane may not stand beside the others, and
+    /// the lane already phrased every problem it found. Re-deriving a cause
+    /// there is how a summary came to assert "fewer iterations than requested"
+    /// about a lane that had reported every iteration it was asked for.
+    fn shortfall(&self) -> Option<String> {
+        let first = self.rows.first()?;
+        let rest = self.total.saturating_sub(1);
+        if rest == 0 {
+            return Some(first.clone());
+        }
+        Some(format!("{first}; and {rest} further problem(s)"))
+    }
 }
 
 /// Summarizes one nextest stress run.
@@ -196,11 +217,15 @@ pub(crate) struct LaneReport {
     pub(crate) attempts: Option<LaneRate>,
     pub(crate) verdict: Result<()>,
     pub(crate) markdown: String,
-    /// Whether every requested iteration is accounted for. A readable lane can
-    /// still fall short of its own request — quarantined repeats, truncated
-    /// output, a run that stopped early — and a rate measured over the
-    /// survivors answers a different question than the run asked.
-    pub(crate) complete: bool,
+    /// What bars this lane from the comparison, or `None` when nothing does.
+    ///
+    /// A readable lane can still fall short of its own request — quarantined
+    /// repeats, a run that stopped early, a selected test its report never
+    /// names — and a rate measured over the survivors answers a different
+    /// question than the run asked. A partial evidence overlay is not one of
+    /// these: a truncated census or a missing envelope costs the diagnosis, not
+    /// the counts, which are read from the `JUnit` report alone.
+    pub(crate) incomplete: Option<String>,
     /// Whether the lane produced valid per-attempt evidence at all. A lane
     /// whose artifact was missing or invalid has nothing to stand in a
     /// comparison — counting it as trustworthy is how a run summary
@@ -208,13 +233,20 @@ pub(crate) struct LaneReport {
     pub(crate) readable: bool,
 }
 
-/// How often one test failed in one lane.
+/// How often one test failed, and how often it only passed on a retry, in one
+/// lane.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct LaneRate {
     pub(crate) attempts: usize,
     pub(crate) failed: usize,
+    pub(crate) flaky: usize,
 }
 
+/// Reads one lane's `JUnit` artifact and states what it recorded.
+///
+/// A retried pass counts against the lane. It is the outcome a stress run exists
+/// to find, and reading only `failed` is what let a lane that reproduced a defect
+/// fifty times report as clean.
 pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
     validate_expected_count(args.expected_count)?;
     let unreadable = |markdown: String| {
@@ -224,7 +256,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
             attempts: None,
             verdict: Err(NotClean::reported("stress evidence")),
             readable: false,
-            complete: false,
+            incomplete: Some("the lane produced no readable evidence".to_owned()),
         })
     };
     let inventory = match read_inventory(&args.inventory) {
@@ -274,7 +306,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
             ));
         }
     };
-    let has_failures = junit.cases.iter().any(|case| case.failed);
+    let has_failures = junit.cases.iter().any(CaseTiming::failing);
     if let Err(error) = validate_correlation_metadata(&junit) {
         return unreadable(render_invalid_artifact(
             "INVALID JUNIT",
@@ -323,10 +355,12 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         );
     }
     if !correlated_complete || !truncated.is_empty() {
-        report.complete = false;
-        mark_incomplete(&mut report.markdown);
+        let _ = writeln!(
+            report.markdown,
+            "\nThe evidence overlays above are partial. Every requested attempt is still accounted for: the counts, the rates and the verdict are read from the JUnit report, which none of the problems above touches."
+        );
     }
-    let verdict = if report.complete && !has_failures {
+    let verdict = if report.incomplete.is_none() && !has_failures {
         Ok(())
     } else {
         Err(NotClean::reported("stress evidence"))
@@ -337,7 +371,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         rates: report.rates,
         attempts: None,
         readable: true,
-        complete: report.complete,
+        incomplete: report.incomplete,
     })
 }
 
@@ -369,12 +403,13 @@ pub(crate) fn validate_primary_evidence(
         junit.timestamp.as_deref(),
     );
     let failed = junit.cases.iter().filter(|case| case.failed).count();
-    if report.complete && failed == 0 {
+    let flaky = junit.cases.iter().filter(|case| case.flaky).count();
+    if report.incomplete.is_none() && failed == 0 && flaky == 0 {
         Ok(())
     } else {
         println!(
-            "stress run evidence: complete={complete}, failed cases={failed}",
-            complete = report.complete,
+            "stress run evidence: complete={complete}, failed cases={failed}, retried cases={flaky}",
+            complete = report.incomplete.is_none(),
         );
         Err(NotClean::reported("stress run evidence"))
     }
@@ -777,6 +812,15 @@ impl AttemptRecords {
             .max()
             .unwrap_or(0)
     }
+
+    /// Executions the runner failed and then retried into a pass.
+    ///
+    /// Summed over every test rather than counted per test, because a lane is
+    /// judged by whether any execution needed a retry at all. The exit code
+    /// cannot say: the runner reports success once the retry passes.
+    pub(crate) fn retried(&self) -> usize {
+        self.rates.values().map(|rate| rate.flaky).sum()
+    }
 }
 
 /// Reads every report a command lane kept and counts what its runner recorded.
@@ -807,6 +851,9 @@ pub(crate) fn attempt_records(directory: &Path, codes: &[i32]) -> AttemptRecords
                         rate.failed += 1;
                         records.failed_in.entry(id).or_default().insert(attempt);
                     }
+                    if case.flaky {
+                        rate.flaky += 1;
+                    }
                 }
             }
             Err(_) => {
@@ -822,6 +869,9 @@ pub(crate) fn attempt_records(directory: &Path, codes: &[i32]) -> AttemptRecords
 /// An exit code says a run was rejected; it does not say in which test. When the
 /// command runs its tests under a runner that writes a report, this is where that
 /// report becomes the sentence a reader needs: this test, this often.
+///
+/// Retried passes are named separately. No exit code and no failure row carries
+/// them, so without that line the sentence over the table reads as a clean lane.
 pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords) {
     if records.is_empty() {
         return;
@@ -831,6 +881,7 @@ pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords)
         .iter()
         .filter(|(_, rate)| rate.failed > 0)
         .collect::<Vec<_>>();
+    let retried = records.retried();
     out.push_str("\n## What the lane's own runner recorded\n");
     if failures.is_empty() {
         // A heading with nothing under it reads as evidence that failed to
@@ -875,6 +926,9 @@ pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords)
             }
         }
     }
+    if retried > 0 {
+        let _ = writeln!(out, "\n- Attempts that only passed on a retry: `{retried}`");
+    }
     if !records.silent.is_empty() {
         let _ = writeln!(
             out,
@@ -908,16 +962,6 @@ pub(crate) fn write_report(path: &Path, markdown: &str) -> Result<()> {
             .with_context(|| format!("create stress report directory {}", parent.display()))?;
     }
     fs::write(path, markdown).with_context(|| format!("write stress report {}", path.display()))
-}
-
-fn mark_incomplete(markdown: &mut String) {
-    for result in ["PASSED", "FAILED"] {
-        let marker = format!("- Result: **{result}**");
-        if let Some(index) = markdown.find(&marker) {
-            markdown.replace_range(index..index + marker.len(), "- Result: **INCOMPLETE**");
-            return;
-        }
-    }
 }
 
 /// Validate each testcase against the selection and fold the survivors into
@@ -983,6 +1027,9 @@ fn collect_stats(
         if case.failed {
             stats.failed_iterations.insert(iteration);
         }
+        if case.flaky {
+            stats.flaky_iterations.insert(iteration);
+        }
     }
     (tests, observed_iterations)
 }
@@ -1041,16 +1088,21 @@ fn render(
                 id.clone(),
                 LaneRate {
                     failed: stats.failed_iterations.len(),
+                    flaky: stats.flaky_iterations.len(),
                     attempts: stats.observed_iterations.len(),
                 },
             )
         })
         .collect();
     let observed_count = observed_iterations.len();
-    let complete = problems.total == 0;
+    let incomplete = problems.shortfall();
     let failed_attempts = tests
         .values()
         .map(|stats| stats.failed_iterations.len())
+        .sum::<usize>();
+    let flaky_attempts = tests
+        .values()
+        .map(|stats| stats.flaky_iterations.len())
         .sum::<usize>();
     let attempts = tests
         .values()
@@ -1058,10 +1110,12 @@ fn render(
         .sum::<usize>();
     let result = if problems.invalid {
         "INVALID JUNIT"
-    } else if !complete {
+    } else if incomplete.is_some() {
         "INCOMPLETE"
     } else if failed_attempts > 0 {
         "FAILED"
+    } else if flaky_attempts > 0 {
+        "FLAKY"
     } else {
         "PASSED"
     };
@@ -1081,6 +1135,7 @@ fn render(
     let _ = writeln!(out, "- Testcases read: `{}`", cases.len());
     let _ = writeln!(out, "- Unique test iterations: `{attempts}`");
     let _ = writeln!(out, "- Failed attempts: `{failed_attempts}`");
+    let _ = writeln!(out, "- Retried passes: `{flaky_attempts}`");
     let _ = writeln!(out, "- Quarantined iterations: `{}`", quarantined.len());
 
     if problems.total > 0 {
@@ -1098,9 +1153,10 @@ fn render(
     }
 
     render_quarantine(&mut out, &quarantined);
+    render_flakes(&mut out, &tests);
     render_failures(&mut out, tests);
     RenderedReport {
-        complete,
+        incomplete,
         rates,
         markdown: out,
         quarantined: quarantined.into_keys().collect(),
@@ -1163,6 +1219,9 @@ fn quarantine_poisoned_iterations(
         stats
             .failed_iterations
             .retain(|iteration| !quarantined.contains_key(iteration));
+        stats
+            .flaky_iterations
+            .retain(|iteration| !quarantined.contains_key(iteration));
     }
     observed.retain(|iteration| !quarantined.contains_key(iteration));
     quarantined
@@ -1177,6 +1236,39 @@ fn render_quarantine(out: &mut String, quarantined: &BTreeMap<usize, (usize, usi
     );
     for (iteration, (failed, total)) in quarantined {
         let _ = writeln!(out, "| {iteration} | {failed} / {total} |");
+    }
+}
+
+fn render_flakes(out: &mut String, tests: &BTreeMap<TestId, TestStats>) {
+    let mut flakes = tests
+        .iter()
+        .filter(|(_, stats)| !stats.flaky_iterations.is_empty())
+        .collect::<Vec<_>>();
+    if flakes.is_empty() {
+        return;
+    }
+    flakes.sort_by_key(|(id, stats)| (Reverse(stats.flaky_iterations.len()), (*id).clone()));
+    let _ = writeln!(
+        out,
+        "\n## Tests that only passed on a retry\n\nThese attempts failed and were retried into a pass. Nothing in the failure count above can see them, and a run that reproduced a defect this way is not a clean run.\n\n| test | retried / attempts | rate | retried iterations (zero-based) |\n|---|---:|---:|---|"
+    );
+    for ((suite, name), stats) in flakes.iter().take(MAX_FAILURE_ROWS) {
+        let retried = stats.flaky_iterations.len();
+        let attempts = stats.observed_iterations.len();
+        let id = markdown_cell(&format!("{suite} {name}"));
+        let _ = writeln!(
+            out,
+            "| `{id}` | {retried} / {attempts} | {} | {} |",
+            rate_percent(retried, attempts),
+            render_iterations(&stats.flaky_iterations),
+        );
+    }
+    if flakes.len() > MAX_FAILURE_ROWS {
+        let _ = writeln!(
+            out,
+            "\nShowing the first {MAX_FAILURE_ROWS} of {} retried tests. The JUnit artifact is exhaustive.",
+            flakes.len()
+        );
     }
 }
 
@@ -1312,6 +1404,7 @@ mod tests {
     fn case(name: &str, iteration: usize, failed: bool, secs: f64) -> CaseTiming {
         CaseTiming {
             failed,
+            flaky: false,
             secs,
             name: name.to_owned(),
             suite: "demo::tests".to_owned(),
@@ -1343,12 +1436,56 @@ mod tests {
         let report = render(&cases, &inventory(&["seek", "other"]), 3, None, None);
         let markdown = &report.markdown;
 
-        assert!(report.complete, "{markdown}");
+        assert!(report.incomplete.is_none(), "{markdown}");
         assert!(markdown.contains("Result: **FAILED**"), "{markdown}");
         assert!(markdown.contains("1 / 3"), "{markdown}");
         assert!(markdown.contains("33.33%"), "{markdown}");
         assert!(markdown.contains("| 1 | 250 ms |"), "{markdown}");
         assert!(!markdown.contains("demo::tests other"), "{markdown}");
+    }
+
+    /// A retried pass is neither a failure nor a clean pass. Counting only
+    /// failures let a lane that reproduced a defect and passed on the second
+    /// attempt report as green.
+    #[test]
+    fn a_run_whose_only_defect_is_a_retried_pass_is_not_passed() {
+        let cases = vec![
+            case("seek", 0, false, 0.1),
+            CaseTiming {
+                flaky: true,
+                ..case("seek", 1, false, 0.25)
+            },
+            case("seek", 2, false, 0.2),
+        ];
+
+        let report = render(&cases, &inventory(&["seek"]), 3, None, None);
+        let markdown = &report.markdown;
+
+        assert!(markdown.contains("Result: **FLAKY**"), "{markdown}");
+        assert!(markdown.contains("- Failed attempts: `0`"), "{markdown}");
+        assert!(markdown.contains("- Retried passes: `1`"), "{markdown}");
+    }
+
+    /// A count says a retry happened; only a row says which test needed it.
+    #[test]
+    fn a_retried_pass_names_the_test_and_the_iteration() {
+        let cases = vec![
+            case("seek", 0, false, 0.1),
+            CaseTiming {
+                flaky: true,
+                ..case("seek", 1, false, 0.25)
+            },
+        ];
+
+        let report = render(&cases, &inventory(&["seek"]), 2, None, None);
+        let markdown = &report.markdown;
+
+        assert!(
+            markdown.contains("## Tests that only passed on a retry"),
+            "{markdown}"
+        );
+        assert!(markdown.contains("demo::tests seek"), "{markdown}");
+        assert!(markdown.contains("| 1 / 2 |"), "{markdown}");
     }
 
     #[test]
@@ -1387,6 +1524,7 @@ mod tests {
             rate,
             LaneRate {
                 failed: 0,
+                flaky: 0,
                 attempts: 3
             },
             "{}",
@@ -1454,6 +1592,7 @@ mod tests {
             rate,
             LaneRate {
                 failed: 1,
+                flaky: 0,
                 attempts: 2
             },
             "{}",
@@ -1469,13 +1608,13 @@ mod tests {
         let partial = render(&cases, &inventory, 2, None, None);
         let complete = render(&cases, &inventory, 1, None, None);
 
-        assert!(!partial.complete, "{}", partial.markdown);
+        assert!(partial.incomplete.is_some(), "{}", partial.markdown);
         assert!(
             partial.markdown.contains("Result: **INCOMPLETE**"),
             "{}",
             partial.markdown
         );
-        assert!(complete.complete, "{}", complete.markdown);
+        assert!(complete.incomplete.is_none(), "{}", complete.markdown);
         assert!(
             complete.markdown.contains("Result: **PASSED**"),
             "{}",
@@ -1489,7 +1628,7 @@ mod tests {
 
         let report = render(&cases, &inventory(&["seek"]), 2, None, None);
 
-        assert!(!report.complete, "{}", report.markdown);
+        assert!(report.incomplete.is_some(), "{}", report.markdown);
         assert!(
             report.markdown.contains("Result: **INCOMPLETE**"),
             "{}",
@@ -1512,7 +1651,7 @@ mod tests {
 
         let report = render(&cases, &inventory(&["seek"]), 3, None, None);
 
-        assert!(!report.complete, "{}", report.markdown);
+        assert!(report.incomplete.is_some(), "{}", report.markdown);
         assert!(
             report.markdown.contains("Result: **INVALID JUNIT**"),
             "{}",
@@ -1553,7 +1692,7 @@ mod tests {
         let report = render(&cases, &inventory(&["seek"]), 1, None, None);
         let markdown = &report.markdown;
 
-        assert!(!report.complete, "{markdown}");
+        assert!(report.incomplete.is_some(), "{markdown}");
         assert!(markdown.contains("duplicate iteration 0"), "{markdown}");
         assert!(markdown.contains("out-of-range iteration 2"), "{markdown}");
         assert!(markdown.contains("has no stress iteration"), "{markdown}");
@@ -1596,6 +1735,64 @@ mod tests {
         );
         assert!(markdown.contains("more problems"), "{markdown}");
         assert!(!markdown.contains(too_wide.as_str()), "{markdown}");
+    }
+
+    /// A retried pass is the only defect whose evidence lives somewhere other
+    /// than the testcase body: nextest keeps the failing attempt inside
+    /// `flakyFailure` and gives the testcase the streams of the run that
+    /// passed. A report that reads the case the ordinary way names the test
+    /// and describes the green run.
+    #[test]
+    fn a_retried_pass_carries_its_failing_attempt_into_the_evidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let inventory = temp.path().join("inventory.json");
+        fs::write(
+            &inventory,
+            r#"{
+  "rust-suites": {
+    "demo::tests": {
+      "binary-id": "demo::tests",
+      "status": "listed",
+      "testcases": {
+        "seek": {"ignored": false, "filter-match": {"status": "matches"}}
+      }
+    }
+  }
+}"#,
+        )
+        .expect("write inventory");
+        let junit = temp.path().join("junit.xml");
+        fs::write(
+            &junit,
+            r#"<testsuites uuid="run" timestamp="2026-08-16T12:00:00Z">
+  <testsuite name="demo::tests@stress-0">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-16T12:00:00Z">
+      <flakyFailure type="test failure" message="thread 'seek' panicked at seek.rs:9">thread 'seek' panicked at seek.rs:9:
+seek landed short of the requested frame
+        <system-out>red stdout</system-out>
+      </flakyFailure>
+      <system-out>green stdout</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>"#,
+        )
+        .expect("write junit");
+        let output = temp.path().join("report.md");
+
+        let lane =
+            lane_report(&StressReportArgs::new(junit, inventory, output, 1)).expect("lane report");
+        let markdown = &lane.markdown;
+
+        assert!(markdown.contains("Result: **FLAKY**"), "{markdown}");
+        assert!(markdown.contains("Failure symptom clusters"), "{markdown}");
+        assert!(
+            markdown.contains("seek landed short of the requested frame"),
+            "the symptom must come from the attempt that failed: {markdown}"
+        );
+        assert!(
+            !markdown.contains("green stdout"),
+            "the passing attempt is not the evidence: {markdown}"
+        );
     }
 
     /// One case's runaway retained output names itself and marks the lane
@@ -1659,10 +1856,11 @@ mod tests {
             lane.markdown
         );
         assert!(
-            lane.markdown.contains("Result: **INCOMPLETE**"),
-            "{}",
+            lane.markdown.contains("Result: **FAILED**"),
+            "a lost output tail costs the diagnosis, not the verdict: {}",
             lane.markdown
         );
+        assert_eq!(lane.incomplete, None, "{}", lane.markdown);
         assert!(!lane.rates.is_empty(), "the case still counts in rates");
         assert!(lane.verdict.is_err(), "a failed attempt keeps the verdict");
     }
@@ -1786,13 +1984,79 @@ mod tests {
         assert!(markdown.contains("Failed attempts: `1`"), "{markdown}");
     }
 
+    /// A lane's counts come from its `JUnit` report; the evidence overlays only
+    /// explain them. Run 33752112563 grew a census log past the line pass's
+    /// record bound, and folding that shortfall into completeness struck a lane
+    /// holding every requested iteration — and five failing tests nothing else
+    /// reported — out of the comparison, under a reason its own section denied.
+    #[test]
+    fn a_partial_evidence_overlay_leaves_a_complete_lane_complete() {
+        const FAILED: &str = r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z">
+  <testsuite name="demo::tests@stress-0">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z">
+      <failure type="test failure">boom</failure>
+    </testcase>
+  </testsuite>
+</testsuites>"#;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let inventory = temp.path().join("inventory.json");
+        let junit = temp.path().join("junit.xml");
+        fs::write(
+            &inventory,
+            r#"{
+  "rust-suites": {
+    "demo::tests": {
+      "binary-id": "demo::tests",
+      "status": "listed",
+      "testcases": {
+        "seek": {"ignored": false, "filter-match": {"status": "matches"}}
+      }
+    }
+  }
+}"#,
+        )
+        .expect("write inventory");
+        fs::write(&junit, FAILED).expect("write junit");
+        let args = StressReportArgs {
+            junit,
+            inventory,
+            line_log: Some(temp.path().join("census-that-was-never-written.log")),
+            envelope_dir: None,
+            pressure_log: None,
+            output: temp.path().join("report.md"),
+            expected_count: 1,
+            allow_missing: false,
+            evidence: StressEvidenceConfig::default(),
+        };
+
+        let lane = lane_report(&args).expect("lane report");
+
+        assert_eq!(lane.incomplete, None, "{}", lane.markdown);
+        assert!(
+            lane.markdown.contains("Result: **FAILED**"),
+            "{}",
+            lane.markdown
+        );
+        assert!(
+            !lane.markdown.contains("Result: **INCOMPLETE**"),
+            "{}",
+            lane.markdown
+        );
+        assert!(
+            lane.markdown
+                .contains("The evidence overlays above are partial."),
+            "{}",
+            lane.markdown
+        );
+    }
+
     #[test]
     fn selected_test_missing_from_junit_fails_closed() {
         let cases = vec![case("seek", 0, false, 0.1)];
 
         let report = render(&cases, &inventory(&["seek", "missing"]), 1, None, None);
 
-        assert!(!report.complete, "{}", report.markdown);
+        assert!(report.incomplete.is_some(), "{}", report.markdown);
         assert!(
             report
                 .markdown
@@ -1903,6 +2167,7 @@ mod tests {
                         ("demo::tests".to_owned(), (*test).to_owned()),
                         LaneRate {
                             failed: *failed,
+                            flaky: 0,
                             attempts: *attempts,
                         },
                     )
@@ -1985,7 +2250,14 @@ mod tests {
     }
 
     fn attempted(name: &str, failed: usize, attempts: usize) -> (String, LaneRate) {
-        (name.to_owned(), LaneRate { failed, attempts })
+        (
+            name.to_owned(),
+            LaneRate {
+                failed,
+                flaky: 0,
+                attempts,
+            },
+        )
     }
 
     /// A lane whose verdict is one exit code per attempt has no per-test rate to
@@ -2170,6 +2442,7 @@ mod tests {
             records.rates[&("demo::tests".to_owned(), "mix_tap".to_owned())],
             LaneRate {
                 failed: 1,
+                flaky: 0,
                 attempts: 3
             }
         );
@@ -2202,6 +2475,7 @@ mod tests {
             records.rates[&("demo::tests".to_owned(), "mix_tap".to_owned())],
             LaneRate {
                 failed: 1,
+                flaky: 0,
                 attempts: 4
             }
         );
@@ -2286,12 +2560,26 @@ mod tests {
     }
 
     #[test]
-    fn missing_supplementary_evidence_marks_a_report_incomplete() {
-        let mut markdown = "# Stress evidence\n\n- Result: **FAILED**\n".to_owned();
+    fn a_shortfall_names_the_problem_it_was_measured_from() {
+        let cases = vec![case("seek", 0, false, 0.1)];
 
-        mark_incomplete(&mut markdown);
+        let report = render(&cases, &inventory(&["seek"]), 2, None, None);
 
-        assert!(markdown.contains("Result: **INCOMPLETE**"), "{markdown}");
-        assert!(!markdown.contains("Result: **FAILED**"), "{markdown}");
+        let reason = report
+            .incomplete
+            .expect("a report short of its iterations must name the shortfall");
+        assert!(reason.contains("missing requested iterations"), "{reason}");
+    }
+
+    #[test]
+    fn a_shortfall_counts_the_problems_it_could_not_fit() {
+        let cases = vec![case("seek", 0, false, 0.1)];
+
+        let report = render(&cases, &inventory(&["seek", "read"]), 2, None, None);
+
+        let reason = report
+            .incomplete
+            .expect("a report with several problems must name the shortfall");
+        assert!(reason.contains("further problem(s)"), "{reason}");
     }
 }

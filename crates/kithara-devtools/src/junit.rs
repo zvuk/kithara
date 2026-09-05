@@ -14,10 +14,25 @@ pub struct CaseTiming {
     pub output: String,
     pub suite: String,
     pub failed: bool,
+    /// The case failed an attempt and passed a later one. It is not a failure
+    /// and it is not a clean pass: a report that counts only failures reads a
+    /// retried run as green.
+    pub flaky: bool,
     /// The retained output hit the per-case budget and lost its tail. The case
     /// itself stays valid evidence; reports must name the truncation.
     pub output_truncated: bool,
     pub secs: f64,
+}
+
+impl CaseTiming {
+    /// The case carries a failure payload in [`CaseTiming::output`]: it either
+    /// failed outright, or it failed an attempt the runner retried into a
+    /// pass. Both describe a defect that reproduced, so a pass that reads the
+    /// output for a symptom, a wait graph or a dump envelope must take both.
+    #[must_use]
+    pub fn failing(&self) -> bool {
+        self.failed || self.flaky
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,7 +50,8 @@ pub(crate) struct JunitReport {
 /// negative, non-finite, or not a number. A skipped stress testcase is also
 /// rejected because it is not per-iteration execution evidence. The testcase
 /// limit rejects the artifact; an oversized retained output only truncates its
-/// own case and marks it [`CaseTiming::output_truncated`].
+/// own case and marks it [`CaseTiming::output_truncated`]. A case that passed
+/// on a retry is not a failure and is marked [`CaseTiming::flaky`].
 pub fn parse_junit(xml: &str) -> Result<Vec<CaseTiming>> {
     parse_junit_report(xml).map(|report| report.cases)
 }
@@ -95,8 +111,16 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
         let failed = node
             .children()
             .any(|c| c.has_tag_name("failure") || c.has_tag_name("error"));
+        let flaky = !failed
+            && node
+                .children()
+                .any(|child| child.has_tag_name("flakyFailure"));
         let timestamp = node.attribute("timestamp").map(str::to_owned);
-        let (output, output_truncated) = failure_output(node);
+        let (output, output_truncated) = if flaky {
+            retried_failure_output(node)
+        } else {
+            failure_output(node)
+        };
         cases.push(CaseTiming {
             iteration,
             timestamp,
@@ -104,6 +128,7 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
             output,
             suite,
             failed,
+            flaky,
             output_truncated,
             secs,
         });
@@ -131,6 +156,31 @@ fn failure_output(node: roxmltree::Node<'_, '_>) -> (String, bool) {
     {
         truncated |= append_failure_description(&mut output, child);
     }
+    truncated |= append_streams(&mut output, node);
+    (output, truncated)
+}
+
+/// The failing attempt of a case the runner retried into a pass.
+///
+/// That attempt is described entirely inside `flakyFailure`, streams included.
+/// The `testcase` keeps its own `system-out` and `system-err`, but they belong
+/// to the attempt that passed, so reading the case the ordinary way returns
+/// the green run and drops the red one it is evidence of.
+fn retried_failure_output(node: roxmltree::Node<'_, '_>) -> (String, bool) {
+    let mut output = String::new();
+    let mut truncated = false;
+    for child in node
+        .children()
+        .filter(|child| child.has_tag_name("flakyFailure"))
+    {
+        truncated |= append_failure_description(&mut output, child);
+        truncated |= append_streams(&mut output, child);
+    }
+    (output, truncated)
+}
+
+fn append_streams(output: &mut String, node: roxmltree::Node<'_, '_>) -> bool {
+    let mut truncated = false;
     for text in node
         .children()
         .filter(|child| child.has_tag_name("system-out") || child.has_tag_name("system-err"))
@@ -138,9 +188,9 @@ fn failure_output(node: roxmltree::Node<'_, '_>) -> (String, bool) {
         .map(str::trim)
         .filter(|text| !text.is_empty())
     {
-        truncated |= append_output(&mut output, "\n", text);
+        truncated |= append_output(output, "\n", text);
     }
-    (output, truncated)
+    truncated
 }
 
 fn append_failure_description(output: &mut String, node: roxmltree::Node<'_, '_>) -> bool {
@@ -219,12 +269,20 @@ mod tests {
   </testsuite>
 </testsuites>"#;
 
-    /// What nextest writes for a test that failed an attempt and passed a later one.
+    /// What nextest writes for a test that failed an attempt and passed a later
+    /// one: the failing attempt is described inside `flakyFailure`, streams
+    /// included, while the `testcase` keeps the streams of the attempt that
+    /// passed.
     const RETRIED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="nextest-run" tests="1" failures="0">
   <testsuite name="demo-tests::suite_stress" tests="1" failures="0">
     <testcase name="abr::switch" classname="demo-tests::suite_stress" time="2.100">
-      <flakyFailure type="test failure" message="boom"/>
+      <flakyFailure type="test failure" message="boom">panicked at abr.rs:7
+        <system-out>red stdout</system-out>
+        <system-err>red stderr</system-err>
+      </flakyFailure>
+      <system-out>green stdout</system-out>
+      <system-err></system-err>
     </testcase>
   </testsuite>
 </testsuites>"#;
@@ -291,6 +349,81 @@ stack backtrace:
 
         assert_eq!(cases.len(), 1);
         assert!(!cases[0].failed);
+    }
+
+    /// A retried pass is the one outcome a failure count cannot see, and it is
+    /// the outcome a stress run is looking for.
+    #[test]
+    fn a_test_that_passed_on_a_retry_is_recorded_as_flaky() {
+        let cases = parse_junit(RETRIED).expect("parse junit");
+
+        assert_eq!(cases.len(), 1);
+        assert!(cases[0].flaky);
+    }
+
+    /// The retry is the only run a report can describe; without its streams a
+    /// flaky row names a test and says nothing about why it broke.
+    #[test]
+    fn a_retried_pass_keeps_the_failing_attempts_streams() {
+        let cases = parse_junit(RETRIED).expect("parse junit");
+
+        assert_eq!(cases.len(), 1);
+        assert!(
+            cases[0].output.contains("red stdout"),
+            "output must carry the failing attempt: {}",
+            cases[0].output
+        );
+        assert!(
+            cases[0].output.contains("red stderr"),
+            "output must carry the failing attempt: {}",
+            cases[0].output
+        );
+    }
+
+    /// The `testcase` streams belong to the attempt that passed. Retaining them
+    /// as the case's output describes the green run under a red heading.
+    #[test]
+    fn a_retried_pass_drops_the_passing_attempts_streams() {
+        let cases = parse_junit(RETRIED).expect("parse junit");
+
+        assert_eq!(cases.len(), 1);
+        assert!(
+            !cases[0].output.contains("green stdout"),
+            "output must not carry the passing attempt: {}",
+            cases[0].output
+        );
+    }
+
+    #[test]
+    fn a_case_that_passed_on_a_retry_is_failing() {
+        let cases = parse_junit(RETRIED).expect("parse junit");
+
+        assert_eq!(cases.len(), 1);
+        assert!(cases[0].failing());
+    }
+
+    #[test]
+    fn a_failed_case_is_failing() {
+        let cases = parse_junit(XML).expect("parse junit");
+
+        let failed = cases.iter().find(|case| case.failed).expect("failed case");
+        assert!(failed.failing());
+    }
+
+    #[test]
+    fn a_clean_pass_is_not_failing() {
+        let cases = parse_junit(XML).expect("parse junit");
+
+        let passed = cases.iter().find(|case| !case.failed).expect("passed case");
+        assert!(!passed.failing());
+    }
+
+    #[test]
+    fn a_failed_case_is_not_also_flaky() {
+        let cases = parse_junit(XML).expect("parse junit");
+
+        let failed = cases.iter().find(|case| case.failed).expect("failed case");
+        assert!(!failed.flaky);
     }
 
     #[test]

@@ -1022,6 +1022,58 @@ fn incoming_reader_preparation_keeps_the_landing_fetch_anchor() {
 }
 
 #[kithara::test]
+fn an_init_less_reader_plans_the_header_segment_behind_its_tail() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+    let profile = ReaderProfile::new(
+        ReaderInput::InitOnly,
+        ReaderWarmup::None,
+        NonZeroU64::new(64).expect("non-zero read ahead"),
+    );
+
+    let preparation = v
+        .prepare_reader(profile, Duration::from_secs(4))
+        .expect("incoming reader preparation");
+
+    assert!(!v.reader_is_ready(&preparation).expect("readiness poll"));
+    // Readiness waits on the header as well as the forward window, and without an
+    // `EXT-X-MAP` the header is segment 0 — behind the tail, so only this plan can
+    // owe it. Dropped, it is neither downloading nor planned, and the wait never ends.
+    assert_eq!(queue_seg_indices(&v), vec![0, 1, 2, 3, 4]);
+}
+
+#[kithara::test]
+fn a_map_bearing_reader_leaves_the_header_to_its_init_fetch() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: make_init(48, &ctx.scope),
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+    let profile = ReaderProfile::new(
+        ReaderInput::InitOnly,
+        ReaderWarmup::None,
+        NonZeroU64::new(64).expect("non-zero read ahead"),
+    );
+
+    v.prepare_reader(profile, Duration::from_secs(4))
+        .expect("incoming reader preparation");
+
+    assert!(queue_has_init(&v));
+    assert_eq!(queue_seg_indices(&v), vec![1, 2, 3, 4]);
+}
+
+#[kithara::test]
 fn incoming_session_leads_with_the_landing_and_skips_everything_before_it() {
     let ctx = test_ctx(3);
     let v = VariantParts {

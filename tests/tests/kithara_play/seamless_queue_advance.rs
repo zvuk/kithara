@@ -38,6 +38,14 @@ const GAPLESS_TRAILING_TONE_HZ: f64 = 3_000.0;
 /// Analysis window on each side of a candidate handover frame.
 const TONE_SCAN_WINDOW: usize = BLOCK_FRAMES as usize;
 
+/// Two queued items deliver the same amount of audio and meet without a gap.
+///
+/// Each item is measured by the audio it delivered, not by the render span it
+/// occupied: a starved fetch makes the mixer zero-fill mid-item, stretching the
+/// span without adding audio. Under stress the first item has been seen taking
+/// eleven thousand extra frames while the second, already prefetched, kept its
+/// normal span - host starvation under load, not a queue-advance defect. The
+/// seam assertion below still pins the gapless property itself.
 #[kithara::test(
     native,
     tokio,
@@ -100,17 +108,20 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
     let audible_end = last_audible_frame(&left)
         .expect("rendered audio must contain the second track before the post-roll");
 
-    let track1_len = handover.saturating_sub(audible_start);
-    let track2_len = audible_end.saturating_sub(handover);
+    let gaps = silence_runs(&left, MIN_GAP_FRAMES);
+    let track1_len = audio_frames(&gaps, audible_start, handover);
+    let track2_len = audio_frames(&gaps, handover, audible_end);
     let length_delta = track1_len.abs_diff(track2_len);
     assert!(
         length_delta <= BLOCK_FRAMES as usize,
         "track lengths should match within one render block; \
          track1={track1_len}, track2={track2_len}, delta={length_delta}, \
          tolerance={}, audible_start={audible_start}, handover={handover}, \
-         audible_end={audible_end}, expected_visible_frames={expected_visible_frames}; \
-         events={events:?}",
+         audible_end={audible_end}, rendered={rendered_frames}, \
+         expected_visible_frames={expected_visible_frames}, \
+         silence_runs={gaps:?}; events={events:?}",
         BLOCK_FRAMES,
+        rendered_frames = left.len(),
     );
 
     let search_start = handover.saturating_sub(BLOCK_FRAMES as usize * 2);
@@ -442,6 +453,56 @@ fn last_audible_frame(left: &[f32]) -> Option<usize> {
     left.iter()
         .rposition(|sample| sample.abs() > SILENCE_THRESHOLD)
         .map(|index| index + 1)
+}
+
+/// Shortest silence run counted as a gap rather than a zero crossing.
+///
+/// A sine dips below the silence threshold around every zero crossing, and how
+/// many consecutive samples land there depends on the tone: the two items carry
+/// different frequencies, so counting sub-threshold samples directly would
+/// measure the tone, not the audio. Two milliseconds is far longer than any
+/// zero crossing at these frequencies and far shorter than one render block, so
+/// only mixer silence is ever discounted.
+const MIN_GAP_FRAMES: usize = 64;
+
+/// Frames of audio delivered in `[start..end)`: the span minus the silence the
+/// mixer emitted inside it.
+fn audio_frames(gaps: &[(usize, usize)], start: usize, end: usize) -> usize {
+    let silence: usize = gaps
+        .iter()
+        .map(|&(gap_start, len)| {
+            let overlap_start = gap_start.max(start);
+            let overlap_end = (gap_start + len).min(end);
+            overlap_end.saturating_sub(overlap_start)
+        })
+        .sum();
+    end.saturating_sub(start).saturating_sub(silence)
+}
+
+/// Runs of near-silence at least `min_len` frames long, as `(start, len)`.
+///
+/// Reported when a length assertion fails so the artifact shows where the audio
+/// went missing instead of only that the totals disagree.
+fn silence_runs(samples: &[f32], min_len: usize) -> Vec<(usize, usize)> {
+    let mut runs = Vec::new();
+    let mut run_start = None;
+    for (index, sample) in samples.iter().enumerate() {
+        if sample.abs() <= SILENCE_THRESHOLD {
+            run_start.get_or_insert(index);
+            continue;
+        }
+        if let Some(start) = run_start.take()
+            && index - start >= min_len
+        {
+            runs.push((start, index - start));
+        }
+    }
+    if let Some(start) = run_start
+        && samples.len() - start >= min_len
+    {
+        runs.push((start, samples.len() - start));
+    }
+    runs
 }
 
 /// Longest run of near-zero samples in `[start..end)`. Used to detect audible

@@ -252,9 +252,11 @@ Two levels, both scoped by the `Watched` per-poll combinator, installed automati
   the thread-CPU/wall ratio: in panic mode the blanket tier panics ONLY on CPU-spin, still emitting
   census lines for the rest, while the strict tier panics on every over-budget class.
 
-Modes via `KITHARA_NO_BLOCK`: `panic` (default), `census` (log-only; `KITHARA_NO_BLOCK_LOG=<file>`
-adds a sink, since nextest swallows passing-test stderr), `off`. A configured census sink is
-evidence: an open or write failure panics the attempt instead of silently dropping a record.
+Modes via `KITHARA_NO_BLOCK`: `panic` (default), `census`, `off`. A census observation reaches one
+sink: `KITHARA_NO_BLOCK_LOG=<file>` when it names one, `tracing` otherwise. Never both — a profile
+storing the output of passing tests would carry the whole census into its JUnit as well. A
+configured census sink is evidence: an open or write failure panics the attempt instead of silently
+dropping a record.
 
 Escape: `#[kithara::allow_block]` suppresses level 1 AND pauses the level-2 timer. Its guards are
 `!Send`: they mutate thread-local state in `Drop` and must not cross `.await`.

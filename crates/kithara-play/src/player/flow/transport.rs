@@ -114,6 +114,13 @@ where
     /// target (the actual landed position is committed asynchronously by the
     /// worker thread; this call returns the optimistic outcome) or `PastEof`
     /// when the target is past the current track's known duration.
+    ///
+    /// The outcome is classified against the duration observed *before*
+    /// `begin_slot_seek` rebases the source. Reading it afterwards judges the
+    /// request against a duration the request itself perturbed: the audio
+    /// thread can render a block off the rebased source in that window and
+    /// republish a shorter `PlaybackShared::duration`, turning an in-range
+    /// target into a spurious `PastEof`.
     pub fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
         let Some(slot_id) = self.slot() else {
             return Err(PlayError::NotReady);
@@ -123,16 +130,8 @@ where
             return Err(PlayError::SlotNotFound(slot_id));
         };
 
-        // WHY: The `fetch_add` inside is the publication: storing the returned value back would let two concurrent seeks reinstate the older
-        // epoch.
-        let seek_epoch = playback.next_seek_epoch();
-
         let target_secs = seconds.max(0.0);
         let target = Duration::from_secs_f64(target_secs);
-
-        // WHY: Begin here, on the control thread: minting the source epoch publishes an event and wakes the decode worker, both of which
-        // take locks.
-        self.core.engine.begin_slot_seek(slot_id, target);
         let outcome = match self.duration_seconds() {
             Some(dur) if target_secs >= dur => SeekOutcome::PastEof {
                 target,
@@ -143,6 +142,14 @@ where
                 landed_at: target,
             },
         };
+
+        // WHY: The `fetch_add` inside is the publication: storing the returned value back would let two concurrent seeks reinstate the older
+        // epoch.
+        let seek_epoch = playback.next_seek_epoch();
+
+        // WHY: Begin here, on the control thread: minting the source epoch publishes an event and wakes the decode worker, both of which
+        // take locks.
+        self.core.engine.begin_slot_seek(slot_id, target);
 
         if let Err(err) = self.send_to_slot(PlayerCmd::Seek {
             seek_epoch,

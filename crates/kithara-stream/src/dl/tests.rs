@@ -115,8 +115,19 @@ fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
 async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
+    /// Anti-oscillation window the scenario needs still open when the loop
+    /// takes its first tick: the gate is what arms the deadline this test is
+    /// about, and a session that ages past it switches on the spot instead,
+    /// leaving nothing for the deadline to drive. `reevaluate` only marks the
+    /// peer and wakes the loop, so the window has to outlast a task wakeup on
+    /// a loaded runner — at 20 ms it closed twice in 300 attempts of run
+    /// 33910610734, both on hosts at load1 45 to 80. The deadline wait then
+    /// costs the same window in real time, so a quarter of the harness
+    /// timeout is what the pair can spend.
+    const MIN_SWITCH_INTERVAL: Duration = Duration::from_millis(250);
+
     let settings = AbrSettings::builder()
-        .min_switch_interval(Duration::from_millis(20))
+        .min_switch_interval(MIN_SWITCH_INTERVAL)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
     let downloader = Downloader::new(DownloaderConfig {

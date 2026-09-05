@@ -234,6 +234,7 @@ mod tests {
 
     fn case(suite: &str, name: &str, secs: f64) -> CaseTiming {
         CaseTiming {
+            flaky: false,
             secs,
             suite: suite.into(),
             name: name.into(),

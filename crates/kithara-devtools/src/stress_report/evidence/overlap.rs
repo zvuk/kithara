@@ -91,6 +91,7 @@ mod tests {
     fn case(name: &str, iteration: usize, failed: bool, start: &str, secs: f64) -> CaseTiming {
         CaseTiming {
             failed,
+            flaky: false,
             secs,
             name: name.to_owned(),
             suite: "demo".to_owned(),

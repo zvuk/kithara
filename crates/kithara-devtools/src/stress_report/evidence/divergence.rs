@@ -97,7 +97,7 @@ pub(super) fn append(out: &mut String, cases: &[CaseTiming]) -> bool {
         let group = groups
             .entry(format!("{} {}", case.suite, case.name))
             .or_default();
-        let side = if case.failed {
+        let side = if case.failing() {
             &mut group.failed
         } else {
             &mut group.passed
@@ -292,6 +292,7 @@ mod tests {
     fn case(name: &str, iteration: usize, failed: bool, output: &str) -> CaseTiming {
         CaseTiming {
             failed,
+            flaky: false,
             name: name.to_owned(),
             suite: "demo::tests".to_owned(),
             iteration: Some(iteration),

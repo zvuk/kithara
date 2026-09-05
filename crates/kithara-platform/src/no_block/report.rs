@@ -105,23 +105,33 @@ pub(super) fn over_budget(
     }
 }
 
+/// Record one census observation on the single sink the lane configured.
+///
+/// A configured log takes the whole stream. It was introduced as an extra sink
+/// because nextest swallowed the stderr of a passing test, but the stress
+/// profile retains that stderr now, so emitting on both sinks copies every
+/// census line into the JUnit as well. A workspace-wide census then writes a
+/// JUnit past the reporter's size limit and the lane yields no evidence at all,
+/// while the copy that survives the limit is the log this writes.
 fn census_emit(line: &str) {
     let line = format!("{}{line}", nextest_prefix());
-    tracing::warn!(target: "kithara_platform::no_block", "{line}");
 
-    if let Some(path) = log_path() {
-        let line = format!("{line}\n");
-        if let Err(error) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .and_then(|mut file| file.write_all(line.as_bytes()))
-        {
-            panic!(
-                "[no_block] failed to write census log `{}`: {error}",
-                path.display()
-            );
-        }
+    let Some(path) = log_path() else {
+        tracing::warn!(target: "kithara_platform::no_block", "{line}");
+        return;
+    };
+
+    let line = format!("{line}\n");
+    if let Err(error) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| file.write_all(line.as_bytes()))
+    {
+        panic!(
+            "[no_block] failed to write census log `{}`: {error}",
+            path.display()
+        );
     }
 }
 

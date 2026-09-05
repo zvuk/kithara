@@ -250,7 +250,7 @@ impl ActiveDecode {
                 );
             }
             Err(error) => {
-                debug!(error_class = ?error.classify(), chunks, samples, pos = stream_position, "decoder returned error");
+                debug!(error_class = ?error.classify(), %error, chunks, samples, pos = stream_position, "decoder returned error");
             }
             Ok(DecoderChunkOutcome::Chunk(_) | DecoderChunkOutcome::Pending(_)) => {}
         }

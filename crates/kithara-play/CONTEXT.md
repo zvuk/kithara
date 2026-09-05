@@ -149,6 +149,16 @@ so the final `PlayWorker` reference cannot shut its thread down while a track
 still holds a lease; likewise the dispatcher precedes the base-worker clone, and
 each lease's task handle precedes its worker clone.
 
+**Drop does not take the admission gate.** `close` serialises against admitted
+operations; `invalidate`, which `PlayerImpl::drop` calls, deliberately does not
+(`drop_does_not_wait_for_an_admitted_operation`). A player is dropped by whoever
+last owns it, including a session dispatcher unwinding its own state, and an
+admitted operation can be parked on a reply from that same dispatcher - taking
+the gate there closes the cycle and the session never finishes shutting down.
+Neither teardown step needs it: closing stores an atomic and cancelling fires a
+token, and a cancel exists to interrupt an admitted operation rather than queue
+behind one.
+
 ## Cancel Hierarchy
 `docs/guides/cancel-policy.md` owns the typed propagate-down tree, the
 `CancelScope` seam, and the `cancel_root_sites` allowlist (kithara-play is not on

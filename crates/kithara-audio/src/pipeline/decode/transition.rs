@@ -128,6 +128,11 @@ pub(crate) enum IncomingPrime {
 impl super::core::ActiveDecode {
     /// One `DecoderEvent::TransitionHold` per transition: the first held
     /// pass announces it, later passes stay silent.
+    ///
+    /// That once-per-transition edge is also where the reason the pipeline
+    /// stopped producing is recorded. A hang dump otherwise shows only that the
+    /// consumer starved: the readiness verdict itself is `TRACE` and never
+    /// reaches the flight recorder.
     pub(crate) fn announce_transition_hold(&mut self) -> bool {
         let Some(transition) = self.incoming.as_ref().map(IncomingDecode::transition) else {
             return false;
@@ -136,6 +141,26 @@ impl super::core::ActiveDecode {
             return false;
         }
         self.announced_hold = Some(transition);
+        let (stage, staged, incoming_finished) = match self.incoming.as_ref() {
+            Some(IncomingDecode::Preparing { .. }) => ("preparing", None, false),
+            Some(IncomingDecode::Building { .. }) => ("building", None, false),
+            Some(IncomingDecode::Priming { generation, .. }) => (
+                "priming",
+                generation.staged_span().map(|(first, end, _)| (first, end)),
+                generation.is_finished(),
+            ),
+            Some(IncomingDecode::Failed { .. }) | None => ("failed", None, false),
+        };
+        debug!(
+            ?transition,
+            stage,
+            ?staged,
+            incoming_finished,
+            frontier = ?self.incoming_frontier(),
+            source_exhausted = self.active.is_source_exhausted(),
+            blender_steady = self.blender.is_steady(),
+            "decode parked on a pending variant transition"
+        );
         true
     }
 

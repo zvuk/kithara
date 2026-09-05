@@ -1,8 +1,9 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
+    abr::AbrHandle,
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
@@ -13,6 +14,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
+    hls_test_helpers::pin_abr_variant,
 };
 use kithara_test_fixtures::signal::{
     self, Pcm, SignalDirection as Direction, Wave, detect_direction,
@@ -56,6 +58,32 @@ fn read_with_retry<R: AudioRead>(audio: &mut R, buf: &mut [f32]) -> (usize, usiz
         }
     }
     (0, Consts::MAX_ZERO_READS, false)
+}
+
+/// Break sites carried into the continuity panic message.
+///
+/// A stress artifact keeps only the panic, and `info!` from a test binary never
+/// reaches it, so a bare count cannot say whether the phase jumped once over a
+/// segment gap or drifted everywhere.
+const MAX_REPORTED_BREAKS: usize = 5;
+
+/// Freeze the ladder on the variant phase 2 left active.
+///
+/// Every variant carries its own waveform so phase 1 can see a switch by
+/// direction, and a promotion crossfades 20 ms across the join - 882 frames
+/// at 44100 Hz that advance by neither `+1` nor `-1`. Phase 3 asks whether
+/// the track reads back intact, not whether ABR still switches, so a
+/// promotion inside it prints a correct blend as corruption: run
+/// 33910610734 blended variant 1 into 2 at frame 1270656 in one attempt of
+/// fifty, and every one of the 882 counted as a break. Pinning to the index
+/// already active drops the pending decision and refuses every later target.
+fn freeze_active_variant(abr: &AbrHandle) -> usize {
+    let active = abr
+        .current_variant_index()
+        .expect("a registered ABR peer names its active variant");
+    pin_abr_variant(abr, active);
+    info!(variant = active, "ladder pinned for the integrity read");
+    active
 }
 
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
@@ -344,10 +372,16 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
         info!("Phase 3: seek to 0 - full track integrity verification");
 
+        let abr = audio
+            .abr_handle()
+            .expect("an HLS ladder must expose its ABR handle");
+        let pinned = freeze_active_variant(&abr);
+
         audio.seek(Duration::ZERO).expect("seek to 0 must succeed");
 
         let mut total_frames_read = 0u64;
         let mut continuity_breaks = 0u64;
+        let mut first_breaks: Vec<String> = Vec::new();
         let mut prev_phase: Option<usize> = None;
         let mut read_attempts = 0u64;
         let max_read_attempts = 100_000u64;
@@ -407,15 +441,10 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 let next_desc = (pp + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if first_phase != next_asc && first_phase != next_desc {
                     continuity_breaks += 1;
-                    if continuity_breaks <= 5 {
-                        info!(
-                            frame = total_frames_read,
-                            prev_phase = pp,
-                            first_phase,
-                            expected_asc = next_asc,
-                            expected_desc = next_desc,
-                            "inter-chunk continuity break"
-                        );
+                    if first_breaks.len() < MAX_REPORTED_BREAKS {
+                        first_breaks.push(format!(
+                            "inter-chunk@{total_frames_read}: {pp}->{first_phase} (expected {next_asc} or {next_desc})"
+                        ));
                     }
                 }
             }
@@ -427,11 +456,11 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 let next_desc = (p0 + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if p1 != next_asc && p1 != next_desc {
                     continuity_breaks += 1;
-                    if continuity_breaks <= 5 {
-                        info!(
-                            frame = total_frames_read + f as u64,
-                            p0, p1, "intra-chunk continuity break"
-                        );
+                    if first_breaks.len() < MAX_REPORTED_BREAKS {
+                        let frame = total_frames_read + f as u64;
+                        first_breaks.push(format!(
+                            "intra-chunk@{frame}: {p0}->{p1} (expected {next_asc} or {next_desc})"
+                        ));
                     }
                 }
             }
@@ -467,11 +496,20 @@ async fn stress_seek_lifecycle_with_zero_reset(
             total_frames_read, expected_frames, tolerance
         );
 
+        assert_eq!(
+            abr.current_variant_index(),
+            Some(pinned),
+            "the ladder moved during the integrity read, so the phase check below \
+             is reading a crossfade rather than one variant's waveform"
+        );
+
         let max_breaks = 10u64;
         assert!(
             continuity_breaks <= max_breaks,
-            "too many continuity breaks after seek-to-0: {} (>{} tolerance) - data corruption or segment gap",
-            continuity_breaks, max_breaks
+            "too many continuity breaks after seek-to-0: {} (>{} tolerance) \
+             - data corruption or segment gap; total_frames_read={}, \
+             expected_frames={}, first breaks: {:?}",
+            continuity_breaks, max_breaks, total_frames_read, expected_frames, first_breaks
         );
 
         info!("All phases passed");

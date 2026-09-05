@@ -35,11 +35,7 @@ where
             return false;
         }
         let segs_len = self.num_segments();
-        (from_seg..segs_len).all(|idx| {
-            self.segments
-                .get(idx as usize)
-                .is_some_and(|seg| seg.state().is_loaded())
-        })
+        (from_seg..segs_len).all(|idx| self.segment_loaded(idx))
     }
 
     /// True when a rebuild from `from_seg` would change nothing.

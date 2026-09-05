@@ -29,9 +29,11 @@ where
 {
     /// Last segment an inactive session may fetch while it is being built.
     ///
-    /// Derived from the same window [`reader_is_ready`](Self::reader_is_ready)
-    /// waits on, so the two cannot disagree: a ceiling short of the segment
-    /// readiness waits for deadlocks the transition.
+    /// Derived from the same forward window
+    /// [`reader_is_ready`](Self::reader_is_ready) waits on, and floored at the
+    /// first planned segment, which is at or ahead of the
+    /// [header](Self::header_segment) — so every fetch readiness waits on stays
+    /// under the ceiling. One short of any of them deadlocks the transition.
     pub(crate) fn construction_segment_end(&self, preparation: &VariantReaderPreparation) -> u32 {
         self.demand_segment_at_offset(self.forward_window(preparation).end.saturating_sub(1))
             .unwrap_or(preparation.first_segment)
@@ -92,9 +94,12 @@ where
         // WHY: The plan covers one segment behind the landing, whatever the container. A demuxer handed a landing time parks at the packet
         // boundary at or before it, and when the landing is a segment start the first packet it reads begins in the segment before.
         let tail_start = forward_segment.saturating_sub(1);
+        let header_segment = self.header_segment(profile.input())?;
         self.set_segment_aware_seek_tail(tail_start);
-        if !self.queue_matches_plan(tail_start) {
-            self.rebuild_queue(tail_start, None);
+        if !self.queue_matches_plan(tail_start)
+            || header_segment.is_some_and(|seg| !self.segment_loaded(seg))
+        {
+            self.rebuild_queue(tail_start, header_segment);
         }
 
         let anchor = SourceSeekAnchor::builder()
@@ -120,6 +125,22 @@ where
             warmup: profile.warmup().max_bytes().map_or(0, NonZeroU64::get),
             input: profile.input(),
         })
+    }
+
+    /// Segment the plan must carry so a reader can parse its container header,
+    /// or `None` when the plan owes none.
+    ///
+    /// [`reader_is_ready`](Self::reader_is_ready) gates the handover on the
+    /// header range as well as the forward window, and a variant without an
+    /// `EXT-X-MAP` keeps that header in its first segment — behind the tail the
+    /// plan is aimed at, where nothing else would fetch it. A separate init is
+    /// carried by [`PlannedFetch::Init`](crate::segment::PlannedFetch::Init)
+    /// already, and a self-framing reader waits on no header at all.
+    fn header_segment(&self, input: ReaderInput) -> StreamResult<Option<u32>> {
+        if !matches!(input, ReaderInput::InitOnly) || self.has_init() {
+            return Ok(None);
+        }
+        Ok(self.demand_segment_at_offset(self.header_byte_range()?.start))
     }
 
     pub(crate) fn reader_is_ready(
