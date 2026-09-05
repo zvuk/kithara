@@ -490,9 +490,9 @@ mod tests {
         assert!(text.contains("RuntimeDirectoryPreserve=yes"), "{text}");
     }
 
-    /// A build directory holds artefacts valid only for the configuration that
-    /// made them, so runners must not share one. The registry and the compiler
-    /// cache are shared on purpose: both are keyed by content.
+    /// A runner keeps its general build directory private. Test lanes use the
+    /// separate shared mount under workflow serialization so the runner chosen
+    /// for a retry does not decide whether linked binaries survive.
     #[test]
     fn each_runner_builds_in_a_directory_of_its_own() {
         let host = host_fixture();
@@ -513,7 +513,11 @@ mod tests {
             "/var/lib/kithara-ci/target/kithara-ci-octocat"
         );
 
-        for shared in ["/home/runner/.cargo", "/cache/sccache"] {
+        for shared in [
+            "/home/runner/.cargo",
+            "/cache/shared-target",
+            "/cache/sccache",
+        ] {
             let name = |mounts: &[(String, &str)]| {
                 mounts
                     .iter()

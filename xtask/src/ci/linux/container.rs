@@ -62,14 +62,11 @@ impl Container<'_> {
     /// for, and the compiler cache because `sccache` keys on the inputs of a
     /// compilation, so one runner's entry is another's hit.
     ///
-    /// The build directory is not shared. Its artefacts are valid only for the exact
-    /// features, profile and toolchain that produced them, so runners of
-    /// different shapes reuse none of each other's and only contend for the
-    /// same directory — which is how one grew past two hundred gigabytes while
-    /// every job still compiled from source. Each runner keeps its own and
-    /// warms it with its own repeat work. A host path keeps that write-heavy
-    /// cache on the disk selected by the machine profile instead of wherever
-    /// Docker stores named volumes.
+    /// The default build directory stays per-runner because unrelated lanes
+    /// have different features, profiles and toolchains. The Linux test lanes
+    /// opt into the shared mount below and serialize each lane in the workflow,
+    /// so a retry on another runner can reuse its final linked binaries without
+    /// letting different build shapes write one profile tree concurrently.
     pub(super) fn mounts(host: &LinuxHost, runner: &LinuxRunner) -> Vec<(String, &'static str)> {
         vec![
             ("kithara-ci-cargo-home".to_owned(), "/home/runner/.cargo"),
@@ -79,6 +76,10 @@ impl Container<'_> {
                     .into_owned(),
                 "/cache/target",
             ),
+            (
+                Self::shared_target_dir(host).to_string_lossy().into_owned(),
+                "/cache/shared-target",
+            ),
             ("kithara-ci-sccache".to_owned(), "/cache/sccache"),
             ("kithara-ci-fixtures".to_owned(), "/cache/fixtures"),
         ]
@@ -86,6 +87,10 @@ impl Container<'_> {
 
     pub(super) fn target_dir(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
         host.cache_root.join("target").join(&runner.name)
+    }
+
+    pub(super) fn shared_target_dir(host: &LinuxHost) -> PathBuf {
+        host.cache_root.join("shared-target")
     }
 
     pub(super) fn mount_type(source: &str) -> &'static str {

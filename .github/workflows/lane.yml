@@ -87,6 +87,13 @@ jobs:
     name: ${{ inputs.lane }}
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    # Both test lanes keep final links in the host mount shared by every
+    # runner. One writer per lane makes that target safe across branches; all
+    # other lanes get a run-local group and keep using their private targets.
+    concurrency:
+      group: ${{ (inputs.lane == 'linux-test-simulated-clock' || inputs.lane == 'linux-test-real-clock') && format('linux-target-{0}-{1}', github.repository, inputs.lane) || format('lane-{0}-{1}', github.run_id, inputs.lane) }}
+      cancel-in-progress: false
+      queue: max
 
     steps:
       # The runner image carries the toolchain, so a lane installs no packages.
@@ -107,6 +114,8 @@ jobs:
           path: artifacts
 
       - name: Run the lane
+        env:
+          CARGO_TARGET_DIR: ${{ (inputs.lane == 'linux-test-simulated-clock' || inputs.lane == 'linux-test-real-clock') && format('/cache/shared-target/{0}', github.repository) || env.CARGO_TARGET_DIR }}
         run: just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}"
 
       # `artifact-when: always` uploads even when the lane failed: a budget

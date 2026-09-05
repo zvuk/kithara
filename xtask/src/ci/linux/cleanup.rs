@@ -116,13 +116,16 @@ fn orphaned_volumes(listed: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Where the live per-runner target caches sit on disk, so their contents can
-/// be held to a budget.
+/// Where the live target caches sit on disk, so their contents can be held to
+/// one budget.
 fn target_dirs(host: &LinuxHost) -> Vec<PathBuf> {
-    host.runners
+    let mut targets: Vec<PathBuf> = host
+        .runners
         .iter()
         .map(|runner| Container::target_dir(host, runner))
-        .collect()
+        .collect();
+    targets.push(Container::shared_target_dir(host));
+    targets
 }
 
 #[cfg(test)]
@@ -168,13 +171,13 @@ mod tests {
     #[test]
     fn build_cache_budget_uses_the_profile_storage_root() {
         let host = crate::ci::linux::profile::tests::host_fixture();
-        assert_eq!(
-            target_dirs(&host),
-            host.runners
-                .iter()
-                .map(|runner| host.cache_root.join("target").join(&runner.name))
-                .collect::<Vec<_>>()
-        );
+        let mut expected: Vec<PathBuf> = host
+            .runners
+            .iter()
+            .map(|runner| host.cache_root.join("target").join(&runner.name))
+            .collect();
+        expected.push(host.cache_root.join("shared-target"));
+        assert_eq!(target_dirs(&host), expected);
     }
 
     #[test]

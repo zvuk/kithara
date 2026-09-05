@@ -167,6 +167,10 @@ mod tests {
         }
         assert!(yaml.contains("kithara-ci-sccache:/cache/sccache"), "{yaml}");
         assert!(
+            yaml.contains("/var/lib/kithara-ci/shared-target:/cache/shared-target"),
+            "{yaml}"
+        );
+        assert!(
             yaml.contains("/var/lib/kithara-ci/target/kithara-ci-octocat:/cache/target"),
             "{yaml}"
         );

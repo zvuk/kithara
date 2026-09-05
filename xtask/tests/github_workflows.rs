@@ -1802,6 +1802,38 @@ fn a_lane_builds_on_the_volume_that_outlives_it() {
     );
 }
 
+/// Test links are too expensive to tie to whichever ephemeral runner GitHub
+/// selected. The shared directory is safe only while identical lanes have one
+/// writer, so the mount selection and concurrency contract stay together.
+#[test]
+fn linux_test_lanes_share_one_serialized_target() {
+    let workflow = github_workflow("lane.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    let concurrency = mapping_field(job, "concurrency")
+        .as_mapping()
+        .expect("the lane job has a concurrency contract");
+    let group = mapping_field(concurrency, "group")
+        .as_str()
+        .expect("the lane job names its concurrency group");
+    let step = named_step(job, "Run the lane");
+    let env = mapping_field(step, "env")
+        .as_mapping()
+        .expect("the lane step selects its target mount");
+    let target = mapping_field(env, "CARGO_TARGET_DIR")
+        .as_str()
+        .expect("the lane step names its target directory");
+
+    for value in [group, target] {
+        assert!(
+            value.contains("inputs.lane == 'linux-test-simulated-clock'")
+                && value.contains("inputs.lane == 'linux-test-real-clock'"),
+            "both Linux test lanes must opt into the shared target explicitly: {value}"
+        );
+    }
+    assert!(group.contains("github.repository"), "{group}");
+    assert!(target.contains("/cache/shared-target/{0}"), "{target}");
+}
+
 // The executor's whole job is to run a lane the catalog named. A workflow that
 // can be handed an arbitrary command is a second place for a command to live.
 #[test]
