@@ -19,32 +19,21 @@ use crate::{
     sync::Arc,
 };
 
-/// Value + version + close latch, plus the off-flash parked-receiver wakers,
-/// all under one mutex (the gate). The version starts at `0`; every `send`
-/// increments it. A receiver remembers the version it last saw and awaits a
-/// higher one.
 struct State<T> {
     value: T,
-    /// Off-flash real wakers for parked receivers; drained on each signal.
     wakers: Vec<Waker>,
-    /// Set by the last sender's drop so a receiver re-checking after the senders
-    /// are gone resolves `RecvError` instead of re-parking.
     closed: bool,
     version: u64,
 }
 
-/// Shared between both halves (not generic over wake coordination): the gated
-/// state, the live sender count and the construction-latched [`Backend`].
 struct Shared<T> {
     backend: Backend,
-    /// Live sender handles; the last to drop closes the channel.
     senders: Mutex<usize>,
     state: Mutex<State<T>>,
 }
 
 impl<T> Shared<T> {
-    /// Wake every parked receiver so each re-checks the version. Called AFTER the
-    /// version bump / close mark, with the gate already released.
+    /// Called after the version bump or close mark, with the gate released.
     fn signal(&self, drained: Vec<Waker>) {
         match self.backend {
             Backend::Engine(cvid) => system::signal_channel(cvid, true),
@@ -151,6 +140,21 @@ impl<T> Sender<T> {
         old
     }
 
+    /// Borrow the latest value.
+    #[must_use]
+    pub fn borrow(&self) -> Ref<'_, T> {
+        Ref {
+            guard: self.shared.state.lock(),
+        }
+    }
+
+    /// Live receivers: every handle on the shared state that is not a sender.
+    #[must_use]
+    pub fn receiver_count(&self) -> usize {
+        let senders = *self.shared.senders.lock();
+        Arc::strong_count(&self.shared).saturating_sub(senders)
+    }
+
     /// Create a new receiver that starts from the sender's current value.
     #[must_use]
     pub fn subscribe(&self) -> Receiver<T> {
@@ -169,8 +173,6 @@ impl<T> Sender<T> {
 pub struct Receiver<T> {
     shared: Arc<Shared<T>>,
     pending: Option<Parked>,
-    /// The version this receiver has observed; `changed` resolves once the
-    /// stored version exceeds it.
     seen: u64,
 }
 
@@ -184,8 +186,6 @@ impl<T> Clone for Receiver<T> {
     }
 }
 
-/// How a [`Changed`] parked, so re-poll and `Drop` use the matching teardown.
-/// `Real` carries the waker clone for exact-entry removal on `Drop`.
 enum Parked {
     Engine(system::AsyncHandle),
     Real(Waker),
@@ -415,10 +415,6 @@ mod tests {
     use super::channel;
     use crate::{flash, tokio::task::spawn};
 
-    /// A spawned task does (trivial) work then `send`s a new value; an awaiter
-    /// parks on `changed`. A lost wakeup would strand the awaiter forever (all
-    /// tasks on untimed channel waiters, no timed waiter to advance to: a
-    /// real-time hang caught by the harness timeout).
     #[kithara::test(tokio, multi_thread)]
     async fn changed_no_lost_wakeup() {
         flash::reset();
@@ -430,11 +426,13 @@ mod tests {
         drop(spawn(async move {
             tx.send(7).expect("receiver present");
         }));
-        assert_eq!(waiter.await.expect("task joined"), 7);
+        assert_eq!(
+            waiter.await.expect("task joined"),
+            7,
+            "a lost wakeup would strand the awaiter until the harness timeout"
+        );
     }
 
-    /// Dropping the last sender resolves a blocked `changed` with `RecvError`
-    /// rather than parking it forever.
     #[kithara::test(tokio, multi_thread)]
     async fn drop_sender_resolves_recv_error() {
         flash::reset();
@@ -443,11 +441,13 @@ mod tests {
         drop(spawn(async move {
             drop(tx);
         }));
-        assert_eq!(waiter.await.expect("task joined"), Err(super::RecvError));
+        assert_eq!(
+            waiter.await.expect("task joined"),
+            Err(super::RecvError),
+            "the last sender's drop resolves a blocked `changed` rather than parking it"
+        );
     }
 
-    /// `borrow_and_update` marks the current version seen, so a following
-    /// `changed` awaits the NEXT change instead of returning at once.
     #[kithara::test(tokio, multi_thread)]
     async fn borrow_and_update_marks_seen() {
         flash::reset();
@@ -461,7 +461,24 @@ mod tests {
         drop(spawn(async move {
             tx.send(2).expect("receiver present");
         }));
-        assert_eq!(waiter.await.expect("task joined"), 2);
+        assert_eq!(
+            waiter.await.expect("task joined"),
+            2,
+            "the following `changed` awaits the next change, not the seen one"
+        );
+    }
+
+    #[kithara::test(tokio, multi_thread)]
+    async fn receiver_count_follows_live_receivers() {
+        flash::reset();
+        let (tx, rx) = channel(0u32);
+        assert_eq!(tx.receiver_count(), 1);
+        let second = tx.subscribe();
+        let another_sender = tx.clone();
+        assert_eq!(tx.receiver_count(), 2, "a sender clone is not a receiver");
+        drop(rx);
+        drop(second);
+        assert_eq!(another_sender.receiver_count(), 0);
     }
 
     #[kithara::test(tokio, multi_thread)]
@@ -469,6 +486,7 @@ mod tests {
         flash::reset();
         let (tx, mut rx) = channel(false);
         assert!(!tx.send_replace(true));
+        assert!(*tx.borrow(), "the sender reads what it holds");
         rx.wait_for(|value| *value).await.expect("value delivered");
         assert!(*rx.borrow());
 

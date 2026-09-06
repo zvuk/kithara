@@ -54,7 +54,6 @@ struct PrimeFixture {
     source_lookahead: Vec<f32>,
 }
 
-/// The generated full-length MPEG clip the decode benchmarks read.
 fn test_mp3_bytes() -> &'static [u8] {
     signal_mp3_track_sine440_187s().bytes()
 }
@@ -237,7 +236,8 @@ async fn analyze_track(
         .await
         .unwrap_or_else(|error| panic!("analysis benchmark reader failed to open: {error}"));
     let rate = reader.spec().sample_rate;
-    let (mut results, _producer) = analysis_worker.analyze(Box::new(reader), token.clone(), rate);
+    let (mut results, _producer) =
+        analysis_worker.analyze(Box::new(reader), token.clone(), rate, 0);
     while results.changed().await.is_ok() {}
 
     let progress = results.borrow().clone();

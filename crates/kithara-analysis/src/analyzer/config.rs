@@ -1,6 +1,8 @@
 use std::fmt;
 
 use bon::Builder;
+#[cfg(feature = "beat-dsp")]
+use kithara_beat::Tempo;
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
 
 struct Consts;
@@ -34,29 +36,47 @@ pub struct BeatAnalysisConfig<B> {
     target_rate: u32,
     #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
     block_frames: usize,
+    #[cfg(feature = "beat-dsp")]
+    #[builder(default)]
+    #[field(get(copy))]
+    tempo: Tempo,
+}
+
+#[cfg(feature = "beat-backend")]
+impl<B> BeatAnalysisConfig<B>
+where
+    B: ResamplerBackend,
+{
+    /// What a cached analysis must have been produced under to be served back.
+    #[must_use]
+    pub fn cache_tag(&self) -> Option<String> {
+        Some(crate::model::tag(self))
+    }
+}
+
+#[cfg(not(feature = "beat-backend"))]
+impl<B> BeatAnalysisConfig<B>
+where
+    B: ResamplerBackend,
+{
+    /// What a cached analysis must have been produced under to be served back.
+    #[must_use]
+    pub const fn cache_tag(&self) -> Option<String> {
+        None
+    }
 }
 
 impl<B> BeatAnalysisConfig<B>
 where
     B: ResamplerBackend,
 {
-    #[must_use]
-    pub fn cache_tag(&self) -> Option<String> {
-        super::nn::tag(self)
-    }
-
     fn resampler_backend_name(&self) -> &'static str {
         self.resampler_backend.name()
     }
-}
 
-impl<B> fmt::Debug for BeatAnalysisConfig<B>
-where
-    B: ResamplerBackend,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BeatAnalysisConfig")
-            .field("block_frames", &self.block_frames)
+    fn debug_fields<'f, 'a>(&self, f: &'f mut fmt::Formatter<'a>) -> fmt::DebugStruct<'f, 'a> {
+        let mut out = f.debug_struct("BeatAnalysisConfig");
+        out.field("block_frames", &self.block_frames)
             .field("target_rate", &self.target_rate)
             .field("resampler_quality", &self.resampler_quality)
             .field("resampler_backend", &self.resampler_backend_name())
@@ -65,8 +85,28 @@ where
                 &self.detector_min_window_seconds,
             )
             .field("detector_window_seconds", &self.detector_window_seconds)
-            .field("detector_overlap_seconds", &self.detector_overlap_seconds)
-            .finish()
+            .field("detector_overlap_seconds", &self.detector_overlap_seconds);
+        out
+    }
+}
+
+#[cfg(feature = "beat-dsp")]
+impl<B> fmt::Debug for BeatAnalysisConfig<B>
+where
+    B: ResamplerBackend,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.debug_fields(f).field("tempo", &self.tempo).finish()
+    }
+}
+
+#[cfg(not(feature = "beat-dsp"))]
+impl<B> fmt::Debug for BeatAnalysisConfig<B>
+where
+    B: ResamplerBackend,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.debug_fields(f).finish()
     }
 }
 
@@ -94,20 +134,71 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "beat-dsp")]
+    #[kithara::test(native, flash(false))]
+    fn the_cache_tag_carries_the_tempo_the_detector_searches() {
+        let tag = |tempo| {
+            BeatAnalysisConfig::builder()
+                .resampler_backend(RubatoBackend::default())
+                .tempo(tempo)
+                .build()
+                .cache_tag()
+                .expect("a build with a detector has a cache tag")
+        };
+        let searched = kithara_beat::Tempo::default();
+        let narrowed = kithara_beat::Tempo::builder()
+            .band(90.0..=180.0)
+            .prior(120.0)
+            .build()
+            .expect("a searchable band");
+        let tolerant = kithara_beat::Tempo::builder()
+            .tolerance(searched.tolerance() * 2.0)
+            .build()
+            .expect("a finite positive duration");
+        let drifting = kithara_beat::Tempo::builder()
+            .drift(30.0)
+            .build()
+            .expect("a finite positive rate");
+
+        assert_ne!(
+            tag(searched),
+            tag(narrowed),
+            "two search bands are two grids, and one cache tag must not serve both"
+        );
+        assert_ne!(
+            tag(searched),
+            tag(tolerant),
+            "two beat tolerances are two grids, and one cache tag must not serve both"
+        );
+        assert_ne!(
+            tag(searched),
+            tag(drifting),
+            "two tempo drifts are two grids, and one cache tag must not serve both"
+        );
+    }
+
     #[cfg(feature = "beat-nn")]
     #[kithara::test(native, flash(false))]
-    fn cache_tag_invalidates_pre_confidence_results() {
+    fn the_cache_tag_carries_what_decides_the_grid() {
         let tag = BeatAnalysisConfig::<RubatoBackend>::default()
             .cache_tag()
             .expect("beat NN has a cache tag");
 
         assert!(
-            tag.contains(":grid_bpm_from_beats_v2:"),
+            tag.contains(":grid_bpm_from_beats_v4:"),
             "grid semantics must participate in durable-cache identity"
         );
         assert!(
-            !tag.contains(":grid_bpm_from_beats_v1:"),
-            "a grid carrying per-marker confidence is not the grid v1 cached"
+            !tag.contains(":grid_bpm_from_beats_v3:"),
+            "a grid at the level the detector reports is not the grid v3 cached"
+        );
+        assert!(
+            tag.contains(":detector_audio_seamless_v2:"),
+            "how the detector was fed decides the grid, so it must decide the tag"
+        );
+        assert!(
+            !tag.contains(":detector_audio_seamless_v1:"),
+            "a grid built from a track read whole is not the grid v1 cached"
         );
     }
 }

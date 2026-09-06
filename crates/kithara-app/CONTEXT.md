@@ -87,8 +87,8 @@ is why the resolver caches what it read rather than indexing what it might read.
 ### Deck addressing
 
 A deck is addressed by channel letter, and the letter is its position in the session. The letter appears in two
-independent places — the control path (`deck-<letter>/`, `mixer/<letter>/`, `overview/<letter>/`) and the
-`deck=` scope of a binding — so they must agree; a unit test walks the compiled tree asserting every
+independent places - the control path (`deck-<letter>/`, `mixer/<letter>/`, `overview/<letter>/`) and the
+`deck=` scope of a binding - so they must agree; a unit test walks the compiled tree asserting every
 deck-scoped binding is addressed by the letter it reads. The micro bar is the one place carrying no letter:
 `gui::ui::scope::MICRO_DECK` names the deck it drives and the same test admits `micro-bar/` only for that deck.
 `scope` owns the mapping both ways (`deck_index`, `deck_letter`). Only lowercase ASCII maps to a position, and
@@ -149,8 +149,8 @@ The window opens without system decorations, so the bar of whichever shape draws
 a `drag` surface and a `window` control set, executed by `Message::Window` against the window this app opened,
 and a unit test holds those four addresses as the whole of it. Resizing comes back through the layout's
 `resize_edges` flag, which lays eight drag zones over the window's own edges; the platform window menu and
-fullscreen stay out of reach. The CPU cell reports `engine.load` — the heaviest deck's audio-engine load, not
-processor time — bound twice, as a `Meter` bar and as text, off the same per-frame deck snapshots as every other
+fullscreen stay out of reach. The CPU cell reports `engine.load` - the heaviest deck's audio-engine load, not
+processor time - bound twice, as a `Meter` bar and as text, off the same per-frame deck snapshots as every other
 deck read rather than off the live atomics.
 
 ### Reads and host-owned view state
@@ -160,7 +160,7 @@ answers only its own addresses, so no type carries the whole vocabulary, and `Wa
 endpoint key into a walk over it. A binding scope (`@deck=a`) selects an instance rather than naming a path
 segment: the node owning the instances spends it. `ViewCache` owns what the renderer borrows but the model does
 not hold: converted waveform columns, formatted strings, per-deck zoom and quality-menu flag, collapsed modules,
-the hovered and focused deck, and the deck layout. Four smaller views sit beside them, one owner each:
+the hovered and focused deck, and the deck layout. Smaller views sit beside them, one owner each:
 `MenuState` (which menu group is open), `Modules` (which pane the menu switched off), `WindowState` (what the
 single window reports), `LibraryView` (the library's own query and scope) and `StageView` (the tempo-map window
 edges and the visualisation preset, answered by `TempoNode`/`VisNode`). A view is read through `ReadRoot` and
@@ -173,7 +173,7 @@ than each sampling a wall clock of its own.
 ### Layout switching
 
 Both deck layouts are compiled once at startup and the menu picks between them through `ui.layout.decks`. A
-layout lays out a deck whole or not at all — body, overview row and channel strip appear together — and
+layout lays out a deck whole or not at all - body, overview row and channel strip appear together - and
 `DeckLayout::decks` is the single owner of how many that is. Narrowing returns `Message::PauseHiddenDecks`,
 pausing every deck the layout stops laying out, while the session keeps the deck and its queue so widening
 brings it back where it was, paused. `ViewCache::set_layout` bounds the cache's two pointers into the deck list:
@@ -198,7 +198,7 @@ Every threshold is a number the compiled tree already answered, held by unit tes
 height band equals the summed minimum of the blocks that stand in it, and the browser's band equals the micro
 bar's declared box plus the track list's own minimum. Width bands are held by the compiler
 (`room::check_layout_cells`), so a band promising less room than its cell needs is a compile error. A block the
-menu switches off still counts toward the bands above it, since `min_size` counts an `Optional` as standing — so
+menu switches off still counts toward the bands above it, since `min_size` counts an `Optional` as standing - so
 a window can draw the micro bar while the room a hidden pane would take is what keeps the decks out.
 
 The micro bar is one module standing in one place, addressed as `micro-bar/<control>` and driving `MICRO_DECK`.
@@ -211,51 +211,66 @@ cell arriving beside the wave narrows it rather than taking it away.
 split settles on; `AppUi::window_min` takes the larger of the two layouts' and `frontend::window_settings` hands
 it to `iced` as `min_size`.
 
-## Track analysis cache
+## Track analysis
 
 Progressive source analysis derives the coloured waveform and an optional beat grid / BPM estimate from decoded
-ranges, so each deck's `StateController` owns one `AnalysisController` and one in-memory
-`TrackAnalysisCache`. The GUI frontend creates one app-wide `AnalysisPersistence` actor and clones its handle
-into every controller. The actor serializes a bounded stream of writes through `AssetStore`; controllers never
-write analysis resources themselves. Two identity spaces are kept separate on purpose:
+ranges. `AnalysisService` is the one owner of analysis values: the `TrackAnalysisRunner` (one pass in flight),
+the two-tier `TrackAnalysisCache`, the `AnalysisPersistence` client, and one entry per analysed resource. The GUI
+frontend creates both once and hands a cloneable `AnalysisHandle` to every deck `StateController`. Requests arrive on one channel; values leave on one `watch` channel per entry.
+Nothing else writes an analysis value. Two identities stay separate: `TrackId` (session-scoped, never persisted)
+names the track a request is about and where a pass hands its producer (`attach_observer`); `AnalysisTarget`
+(the track's `AssetStore` plus the `ResourceKey` from `ResourceConfig::asset_key`) is the entry and cache
+identity, and `is_same` compares key *and* store.
 
-- **`TrackId`** (session-scoped, from `kithara-events` via the queue) — stale guard for an in-flight run and the
-  "still current" check at publish. Never persisted.
-- **`AnalysisTarget`** (the track's `AssetStore` plus the `ResourceKey` derived by `ResourceConfig::asset_key`)
-  — cross-session cache identity. `is_same` compares key *and* store, so one key in two stores is two entries.
+`subscribe(queue, track_id, source, axis)` resolves the target, points the entry at the requester, seeds it from
+memory then disk for that axis, and returns its receiver; a source with no resource or a rejected key gets a
+closed receiver. `warm(queue, track_ids, axis)` puts a library list in line behind
+every held entry without reading the cache and leaves a held entry's requester alone; the seed is read when the
+pass opens. Readiness has one rule, `settled_for`: the pass is settled and every artifact the configuration's
+fingerprint expects is present. A gap the source cannot deliver, the head an encoder's priming leaves in front
+of a track, stays in `missing()` for drawing and keeps nothing from being done. An entry that is not settled is
+scheduled; a resumable seed resumes, any other opens a fresh pass above the revision the entry holds, so
+revisions stay monotonic per token across passes. A checkpoint the runner rejects is no seed: the pass opens
+fresh. An entry is done (`Stage::Ended` on that axis) only when its pass closed on a settled value; a close
+without a value or on an unsettled one leaves it `Idle`, and the next subscribe or warm schedules it again. `Queued` means in line; with
+no analyzer compiled in nothing is queued. The player's current track takes no part in this path.
 
-`plan_analysis` returns `Serve` for a memory or disk hit and `Decode` for a genuine miss. A resumable or
-configuration-incomplete hit is served immediately and then refilled from its missing ranges; only a current
-track without a served result clears the visible analysis. `pump` starts no second run while the controller is
-active and clears the pending queue when the runner has no analyzers. `on_track_changed` puts the current track
-first and preempts a different running pass. The old pass stays in `Running` until its result channel closes,
-then its last checkpoint is cached and published if still current. The controller enters `Committing` and does
-not start the next pass until durable persistence acknowledges that checkpoint. Intermediate checkpoints update
-memory and the current deck immediately and are offered to persistence without blocking; a full queue may drop
-only that intermediate write.
+The runner serves held entries (a live receiver) before warm ones, each in request order. A subscribe whose
+entry is not the running one ends a background pass (`runner.clear()`) and puts it back in line; a pass for a
+held entry is never ended by another held entry, which waits. Every request names the engine rate axis; a pass
+on another axis is ended and its entry put back in line.
 
-`pending_order` is current-track-first, then list order. A track whose source yields no `ResourceConfig` is
-skipped, and so is a source whose layout rejects the derived key. The `Option<AnalysisTarget>` seam means an
-unkeyable run is decoded only while its track is current and is never cached or persisted.
+A deck observes the track it shows, `UiState::current_track_index`, whether or not it plays. On `TrackAdded` /
+`TrackRemoved` the listener keeps that index naming a track: the player's current item, else the track shown
+while the list still has it, else the first. It re-subscribes on `QueueEvent::CurrentTrackChanged`,
+`EngineEvent::Started`, `SessionEvent::RouteChanged`, `TrackAdded` and `TrackRemoved`, warms the list on the last
+two, and drops its receiver before it asks for the next track. A lagged event bus is a resync: the list and the
+current index are read from the queue, then the deck follows and warms again.
 
-The memory tier is bounded by `Consts::MAX_MEM_ENTRIES` (64) in insertion order; evicted entries are still
-served from disk. An analysis with neither waveform nor beat grid is memoized in neither tier. Disk reads probe
-`AssetStore::resource_state` first, because opening a missing key would create it. The disk tier stores one
-progressive `AnalysisFile` per track in the track's asset scope (`analysis/track.analysis`), so the artifact is
-evicted, moved and deleted with the cached audio bytes. Its fixed header and completion index identify covered
-chunks, while each committed generation replaces the current payload. Restore validates the analyzer
-fingerprint, source rate, extent, and configured chunk duration before resuming only missing ranges.
+Every revision a pass publishes goes to the entry's sender, `cache.put`, and `persistence.try_store`; a full
+persistence queue drops only that intermediate write. When the pass's channel closes, its last value is cached
+and sent, and the service awaits `persistence.store` before the runner takes the next entry. The cache tiers are
+the store: an entry no deck holds drops its value when its run ends and is seeded again on the next subscribe.
+The deck listener mirrors its receiver into `UiState::analysis` when the `(token, revision)` differs from what
+is shown; `DeckCache::refresh_wave` redraws on the same pair.
 
-Each deck cache and the app-wide persistence actor reuse one checked-out byte scratch buffer. Capacity up to
-2 MiB remains charged as fixed working memory between operations; `normalize` releases larger allocations after
+The memory tier holds `Consts::MAX_MEM_ENTRIES` (64) in insertion order; evicted entries are served from disk. An analysis with neither waveform nor beat grid is memoized in neither tier. Disk reads probe
+`AssetStore::resource_state` first: opening a missing key would create it. The disk tier stores one
+progressive `AnalysisFile` per track in the track's asset scope (`analysis/track.analysis`), so it is evicted,
+moved and deleted with the audio bytes. Its header and completion index identify covered chunks; each
+committed generation replaces the payload. Restore validates fingerprint, source rate, extent and chunk duration
+before resuming only missing ranges.
+
+The cache and the persistence actor each reuse one checked-out byte scratch buffer. Capacity up to 2 MiB
+remains charged as fixed working memory between operations; `normalize` releases larger allocations after
 each operation. These guards are active rather than idle pool inventory, so region pressure does not reclaim
 them.
 
-Invalidation has two levers. The composite codec version in `kithara-analysis` must be bumped whenever its framing
-or the waveform / beat-grid encodings change. Configuration changes need no bump: `analysis_fingerprint` is written
-into every blob and a mismatch is a miss, so `waveform_max_buckets` and runtime beat-analysis tuning re-analyse
-on their own. Because the identity is the source location and not the bytes, a file overwritten in place keeps
-its entry until the version is bumped — acceptable for a library of stable files.
+Invalidation has two levers: the composite codec version in `kithara-analysis`, bumped whenever its framing or
+the waveform / beat-grid encodings change, and `analysis_fingerprint`, written into every blob so a
+configuration mismatch is a miss and `waveform_max_buckets` or beat-analysis tuning re-analyse on their own.
+The identity is the source location, not the bytes: a file overwritten in place keeps its entry until the
+version is bumped, acceptable for a library of stable files.
 
 ## Baked DRM secrets
 
@@ -263,6 +278,6 @@ its entry until the version is bumped — acceptable for a library of stable fil
 `kithara_app::baked`. A missing `$KITHARA_*` reference degrades silently by design: the cipher key bakes as an
 empty string, headers referencing the variable are omitted, and the binary compiles but the key server rejects
 its requests. That is the intended mode for every build that never talks to a real key server, which is why it
-is not a warning. Builds that do — the CI `network*` lanes, release pipelines — set `KITHARA_DRM_REQUIRE` (any
+is not a warning. Builds that do - the CI `network*` lanes, release pipelines - set `KITHARA_DRM_REQUIRE` (any
 non-empty value): an upfront pass validates every env reference in `app.yaml`, not only the providers a given
 lane exercises, and fails the build listing all missing variables.

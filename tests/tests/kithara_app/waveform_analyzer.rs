@@ -19,8 +19,6 @@ use kithara_app::{
 use kithara_integration_tests::TestServerHelper;
 use kithara_test_fixtures::SignalAsset;
 
-/// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
-/// nothing is resampled on the way in.
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
 
@@ -34,7 +32,6 @@ fn memory_store(pools: Pools) -> AppStore {
         .build()
 }
 
-/// Run one analysis through the production runner and await its result.
 async fn run_analysis(
     master: &CancelToken,
     config: AppResourceConfig,
@@ -49,7 +46,7 @@ async fn run_analysis(
         BeatAnalysisConfig::default(),
         pools,
     );
-    let mut rx = runner.analyze(config, "waveform-track".into(), RATE, drop);
+    let mut rx = runner.analyze(config, "waveform-track".into(), RATE, 0, drop);
 
     // Staged analysis can emit twice (waveform, then waveform+beat).
     let mut last = None;

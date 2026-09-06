@@ -18,8 +18,6 @@ use kithara_app::{
 };
 use num_traits::ToPrimitive;
 
-/// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
-/// nothing is resampled on the way in.
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
 
@@ -81,7 +79,7 @@ async fn analyse(path: &str) -> TrackAnalysis {
         BeatAnalysisConfig::default(),
         pools,
     );
-    let mut rx = runner.analyze(config, "integration-track".into(), RATE, drop);
+    let mut rx = runner.analyze(config, "integration-track".into(), RATE, 0, drop);
 
     // The runner emits the envelope before the beat grid.
     let mut last = None;

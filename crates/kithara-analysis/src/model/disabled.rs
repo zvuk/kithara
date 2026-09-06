@@ -2,21 +2,17 @@
 use kithara_bufpool::{HasPool, PoolRegion};
 #[cfg(feature = "analysis-beat")]
 use kithara_platform::sync::Arc;
-use kithara_resampler::ResamplerBackend;
 
+#[cfg(feature = "analysis-beat")]
 use crate::BeatAnalysisConfig;
 
 #[cfg(feature = "analysis-beat")]
-pub(crate) fn detector<S>(_pools: &PoolRegion<S>) -> Option<Arc<dyn crate::beat::BeatDetector>>
+pub(crate) fn detector<B, S>(
+    _config: &BeatAnalysisConfig<B>,
+    _pools: &PoolRegion<S>,
+) -> Option<Arc<dyn crate::beat::BeatDetector>>
 where
     S: HasPool<f32> + Send + Sync + 'static,
-{
-    None
-}
-
-pub(crate) fn tag<B>(_config: &BeatAnalysisConfig<B>) -> Option<String>
-where
-    B: ResamplerBackend,
 {
     None
 }

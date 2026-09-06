@@ -221,7 +221,7 @@ impl WaveformResume {
 
 pub(crate) struct BeatResume {
     pub(crate) short: BTreeSet<usize>,
-    pub(crate) dropped: Vec<(u64, u64)>,
+    pub(crate) taken: Vec<(u64, u64)>,
     pub(crate) runs: Vec<BeatRunResume>,
     pub(crate) windows: Vec<(usize, RawBeatsResume)>,
 }
@@ -262,15 +262,17 @@ impl BeatResume {
             });
         }
 
-        let dropped_count = read_count(reader, 16)?;
-        let mut dropped: Vec<(u64, u64)> = Vec::with_capacity(dropped_count.min(MAX_PREALLOC));
-        for _ in 0..dropped_count {
+        let taken_count = read_count(reader, 16)?;
+        let mut taken: Vec<(u64, u64)> = Vec::with_capacity(taken_count.min(MAX_PREALLOC));
+        let mut previous_to = None;
+        for _ in 0..taken_count {
             let from = reader.read_u64()?;
             let to = reader.read_u64()?;
-            if from >= to {
+            if from >= to || previous_to.is_some_and(|previous| previous >= from) {
                 return Err(BlobError::Corrupt);
             }
-            dropped.push((from, to));
+            previous_to = Some(to);
+            taken.push((from, to));
         }
 
         let window_count = read_count(reader, 24)?;
@@ -303,7 +305,7 @@ impl BeatResume {
         }
         let resume = Self {
             short,
-            dropped,
+            taken,
             runs,
             windows,
         };
@@ -313,10 +315,11 @@ impl BeatResume {
 
     fn validate(&self) -> Result<(), BlobError> {
         if self.runs.iter().any(|run| run.mono.is_empty())
-            || self.dropped.iter().any(|(from, to)| {
-                self.runs
+            || self.runs.iter().any(|run| {
+                !self
+                    .taken
                     .iter()
-                    .any(|run| *from < run.end && run.start < *to)
+                    .any(|(from, to)| *from <= run.start && run.end <= *to)
             })
             || self.short.iter().any(|index| {
                 self.windows
@@ -345,10 +348,7 @@ pub(crate) fn write_coverage(writer: &mut Writer<'_>, coverage: &Coverage) {
     }
 }
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "analysis-waveform", feature = "analysis-beat")
-))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "analysis-waveform"))]
 pub(crate) fn write_samples(writer: &mut Writer<'_>, samples: &[f32]) {
     writer.write_len(samples.len());
     for sample in samples {

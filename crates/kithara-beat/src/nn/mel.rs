@@ -1,18 +1,16 @@
 use kithara_bufpool::{HasPool, PoolRegion};
 use smallvec::smallvec;
 
-use crate::{
+use crate::nn::{
     api::BeatError,
+    consts::Consts,
     runtime::{RtenModel, Tensor},
 };
 
-/// Computes log-mel spectrograms via the ONNX mel model, guaranteeing exact
-/// numerical parity with the Python training pipeline (no hand-rolled DSP).
 pub(crate) struct MelExtractor {
     model: RtenModel,
 }
 
-/// Load the mel model from ONNX bytes.
 impl TryFrom<&[u8]> for MelExtractor {
     type Error = BeatError;
 
@@ -24,9 +22,6 @@ impl TryFrom<&[u8]> for MelExtractor {
 }
 
 impl MelExtractor {
-    /// Extract a mel spectrogram from mono PCM samples at 22 050 Hz.
-    ///
-    /// Output shape `[1, T, 128]`, `T ≈ samples.len() / 441` (hop 441 = 50 fps).
     pub(crate) fn extract<S>(
         &self,
         samples: &[f32],
@@ -50,7 +45,7 @@ impl MelExtractor {
                 reason: "mel model missing 'mel_spectrogram' output".into(),
             })?;
 
-        if mel.shape.len() != 3 || mel.shape[0] != 1 || mel.shape[2] != 128 {
+        if mel.shape.len() != 3 || mel.shape[0] != 1 || mel.shape[2] != Consts::MEL_BINS {
             return Err(BeatError::Inference {
                 reason: format!("unexpected mel shape: {:?}", mel.shape),
             });

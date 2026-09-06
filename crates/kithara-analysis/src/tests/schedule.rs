@@ -282,6 +282,7 @@ where
         let (writer, ingest) = ring::open_for(rate);
         jobs.send(Job {
             token: Consts::TOKEN.into(),
+            revision: 0,
             reader: Box::new(source),
             tx,
             rate,
@@ -369,9 +370,6 @@ fn decoded_at(calls: &[Call]) -> Vec<u64> {
         .collect()
 }
 
-/// Runs it takes to cover the fixture track at best: its length over the
-/// configured chunk one run carries. A schedule that leaves part of a gap
-/// behind pays a halving sequence on top, which is what the bound catches.
 fn least_runs() -> usize {
     let chunk = u64::from(SR).saturating_mul(u64::from(Consts::WINDOW_SECONDS));
     usize::try_from(Consts::EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
@@ -441,7 +439,6 @@ fn a_growing_duration_replaces_the_one_the_schedule_had() {
 
 #[kithara::test]
 fn a_run_starts_where_the_seek_landed_before_the_next_progressive_chunk() {
-    /// The decoder snaps every seek down to a whole 30 000 frames.
     const SNAP: u64 = 30_000;
     let mut pass = Pass::open(
         Source::new(Consts::EXTENT).snapping(SNAP),
@@ -608,8 +605,6 @@ fn a_source_that_over_reports_its_length_still_ends() {
 
 #[kithara::test]
 fn a_snapshot_published_early_describes_the_whole_track() {
-    /// Long enough that the pass publishes while it is still decoding: a
-    /// publication is due every five covered source seconds.
     const EXTENT: u64 = 20 * 44_100;
     let mut pass = Pass::open(Source::new(EXTENT), scheduled(Consts::WINDOW_SECONDS));
     pass.drive(40);
@@ -689,8 +684,6 @@ fn a_source_that_snaps_out_of_its_own_gaps_still_finishes() {
 
 #[kithara::test]
 fn a_head_the_source_cannot_reach_is_retired_after_one_chunk() {
-    /// Encoder priming: the decoder's first output frame is 1000, so nothing
-    /// in front of it is a position any seek can be answered with.
     const FLOOR: u64 = 1000;
     let mut pass = Pass::open(
         Source::new(Consts::EXTENT).flooring(FLOOR),
@@ -868,7 +861,6 @@ fn a_run_is_measured_from_where_it_decoded_not_where_it_asked() {
 mod artifacts {
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;
-    use unimock::Unimock;
 
     use super::{
         super::{
@@ -889,17 +881,15 @@ mod artifacts {
     struct Route {
         artifacts: Artifacts,
         seeks: usize,
-        reclaimed: bool,
+        lost: u64,
     }
 
-    /// Runs it takes to cover this track at best: its length over the fixed
-    /// schedule chunk one run carries.
     fn least_runs() -> usize {
         let chunk = u64::from(SR).saturating_mul(u64::from(Consts::WINDOW_SECONDS));
         usize::try_from(EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
     }
 
-    fn beat_pass(detector: Unimock) -> AnalyzerBuilder<RubatoBackend, TestPools> {
+    fn beat_pass() -> AnalyzerBuilder<RubatoBackend, TestPools> {
         AnalyzerBuilder::<RubatoBackend, _>::new(pools())
             .with_waveform(BUCKETS)
             .with_beat_config(
@@ -909,12 +899,11 @@ mod artifacts {
                     .detector_overlap_seconds(0)
                     .build(),
             )
-            .with_beat_detector(Box::new(detector), GridParams::default())
+            .with_beat_detector(beat_detector(), GridParams::default())
     }
 
     fn covered(source: Source, offer: &[(u64, u64)]) -> Route {
-        let detector = beat_detector();
-        let mut pass = Pass::open(source, beat_pass(detector.clone()));
+        let mut pass = Pass::open(source, beat_pass());
         for (at, frames) in offer {
             pass.offer(*at, *frames);
             pass.drive(2);
@@ -930,9 +919,9 @@ mod artifacts {
         Route {
             artifacts: artifacts(&analysis),
             seeks: targets(&pass.calls()).len(),
-            reclaimed: analysis
-                .beat()
-                .is_some_and(|beat| !beat.unanalysed().is_empty()),
+            lost: analysis.beat().map_or(0, |beat| {
+                beat.unanalysed().iter().map(|range| range.frames()).sum()
+            }),
         }
     }
 
@@ -957,9 +946,15 @@ mod artifacts {
             "the same artifacts must not cost a halving sequence to reach: {} runs",
             scheduled.seeks
         );
-        assert!(
-            linear.reclaimed && scheduled.reclaimed,
-            "both routes must reach the regime where the beat pass reclaims"
+        // The track is longer than the audio the beat pass may hold, and either
+        // route waits for room rather than giving audio up.
+        assert_eq!(
+            linear.lost, 0,
+            "read in order, a track longer than the hold reaches its end whole"
+        );
+        assert_eq!(
+            scheduled.lost, 0,
+            "scheduled into fragments, the track still reaches its end whole"
         );
         assert_agrees(
             &linear.artifacts,

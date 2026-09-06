@@ -291,7 +291,7 @@ pub struct ProjectIdentity {
 pub struct HealthConfig {
     /// Package whose dependency closure the unsafe-code census is rooted at.
     pub geiger_package: String,
-    /// Backend groups a crate refuses to be built without.
+    /// Feature-set rules a crate states with `compile_error!`.
     pub feature_invariants: Vec<FeatureInvariant>,
     /// Crates excluded from the `cargo hack --feature-powerset` stage.
     pub feature_powerset_exclude: Vec<String>,
@@ -307,7 +307,7 @@ pub struct HealthConfig {
     pub semver_packages: Vec<String>,
 }
 
-/// A rule some crates state with `compile_error!`: this build needs a backend.
+/// A rule some crates state with `compile_error!` about their own feature set.
 ///
 /// The crate it applies to is not named here. It is found by the feature that
 /// names the group, so the rule follows the workspace rather than being
@@ -323,12 +323,24 @@ pub struct FeatureInvariant {
     pub always: Vec<String>,
     /// Groups the powerset must pick from rather than leave empty.
     pub at_least_one_of: Vec<Vec<String>>,
+    /// Features no combination carries: a shared name that selects nothing.
+    pub never: Vec<String>,
+    /// Groups the powerset must pick at most one member of.
+    pub mutually_exclusive: Vec<Vec<String>>,
 }
 
 impl FeatureInvariant {
     #[must_use]
     pub fn args(&self) -> Vec<String> {
         let mut args = Vec::new();
+        if !self.never.is_empty() {
+            args.push("--exclude-features".to_owned());
+            args.push(self.never.join(","));
+        }
+        for group in &self.mutually_exclusive {
+            args.push("--mutually-exclusive-features".to_owned());
+            args.push(group.join(","));
+        }
         for group in &self.at_least_one_of {
             args.push("--at-least-one-of".to_owned());
             args.push(group.join(","));

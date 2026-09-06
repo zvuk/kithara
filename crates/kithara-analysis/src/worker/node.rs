@@ -13,16 +13,16 @@ use super::AnalysisTask;
 pub(crate) use super::task::Job;
 use crate::{
     analyzer::{AnalyzerBuilder, Detector},
-    slots::beat::{DetectionOutput, DetectionRequest, detect},
+    slots::beat::{DetectOutput, DetectRequest, detect},
 };
 
 struct DetectJob {
     pass_cancel: CancelToken,
-    request: DetectionRequest,
+    request: DetectRequest,
 }
 
 struct DetectDone {
-    output: Option<DetectionOutput>,
+    output: Option<DetectOutput>,
 }
 
 enum DetectorState {

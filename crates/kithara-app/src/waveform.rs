@@ -20,8 +20,20 @@ use kithara::{
 };
 use tracing::warn;
 
+use crate::pools::{AppPools, AppResourceConfig, Pools};
+
 type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;
-use crate::pools::{AppResourceConfig, Pools};
+type AppAnalyzerBuilder = AnalyzerBuilder<PlaybackResamplerBackend, AppPools>;
+
+#[cfg(feature = "analysis-waveform")]
+fn with_waveform(builder: AppAnalyzerBuilder, buckets: usize) -> AppAnalyzerBuilder {
+    builder.with_waveform(buckets)
+}
+
+#[cfg(not(feature = "analysis-waveform"))]
+fn with_waveform(builder: AppAnalyzerBuilder, _buckets: usize) -> AppAnalyzerBuilder {
+    builder
+}
 
 /// App-side handle over the shared [`AnalysisWorker`]: opens the resource
 /// off the player runtime, hands the opened reader to the worker thread,
@@ -30,19 +42,13 @@ use crate::pools::{AppResourceConfig, Pools};
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct TrackAnalysisRunner {
-    /// What this configuration produces, per artifact: the cache keys off it.
     fingerprint: AnalysisFingerprint,
     worker: Arc<AnalysisWorker>,
     current: Option<RunHandle>,
-    /// Whether any analyzer is compiled in; without one a decode pass would
-    /// produce nothing, so the driver skips analysis entirely.
     #[field(get = is_active)]
     active: bool,
 }
 
-/// An in-flight run: its child token and the spawned fallback-reader open task.
-/// Teardown is cooperative — cancelling the token exits the worker's decode
-/// loop at its next per-chunk check.
 struct RunHandle {
     cancel: CancelToken,
     task: JoinHandle<()>,
@@ -57,14 +63,12 @@ impl TrackAnalysisRunner {
         master: &CancelToken,
         base_worker: Option<Worker>,
         chunk_seconds: NonZeroU32,
-        _buckets: usize,
+        buckets: usize,
         beat_config: AppBeatAnalysisConfig,
         pools: Pools,
     ) -> Self {
         let builder = AnalyzerBuilder::new(pools).with_beat_config(beat_config);
-        #[cfg(feature = "analysis-waveform")]
-        let builder = builder.with_waveform(_buckets);
-        let builder = builder.with_beat();
+        let builder = with_waveform(builder, buckets).with_beat();
         let worker = Arc::new(AnalysisWorker::new(
             AnalysisWorkerConfig::for_builder(builder)
                 .cancel(master.clone())
@@ -85,8 +89,9 @@ impl TrackAnalysisRunner {
     /// Cancel any prior run and queue `config` for analysis on the `rate`
     /// axis: the reader is opened onto it and the pass is measured in it, so
     /// a producer feeding the same pass later shares one axis with it.
-    /// Staged results arrive on the returned receiver,
-    /// which closes when the run ends; nothing arrives on failure/cancel.
+    /// `revision` is the one the caller holds for `token`; every publication
+    /// outranks it. Staged results arrive on the returned receiver, which
+    /// closes when the run ends; nothing arrives on failure/cancel.
     /// `deliver` receives the producer half synchronously, before the fallback
     /// reader is opened. The runner does not know what the handle is for;
     /// attaching it to the track's playback path is the caller's business.
@@ -95,6 +100,7 @@ impl TrackAnalysisRunner {
         config: AppResourceConfig,
         token: AnalysisToken,
         rate: NonZeroU32,
+        revision: u64,
         deliver: D,
     ) -> watch::Receiver<Option<AnalysisProgress>>
     where
@@ -102,7 +108,7 @@ impl TrackAnalysisRunner {
     {
         self.clear();
 
-        let (rx, producer, pass) = self.worker.open(token, rate);
+        let (rx, producer, pass) = self.worker.open(token, rate, revision);
         let run = pass.cancel_token().clone();
         deliver(producer);
         let task = task::spawn(run_analysis(
@@ -135,8 +141,8 @@ impl TrackAnalysisRunner {
     ///
     /// # Errors
     ///
-    /// Returns an archive error when the checkpoint or source extent no longer
-    /// matches the current analyzer configuration.
+    /// Returns an archive error when the checkpoint no longer matches the
+    /// current analyzer configuration.
     pub fn resume<D>(
         &mut self,
         config: AppResourceConfig,
@@ -152,7 +158,7 @@ impl TrackAnalysisRunner {
         let (rx, producer, pass) = self.worker.open_resume(progress)?;
         let run = pass.cancel_token().clone();
         deliver(producer);
-        let task = task::spawn(run_resume_analysis(
+        let task = task::spawn(run_analysis(
             Arc::clone(&self.worker),
             config,
             run.clone(),
@@ -170,7 +176,6 @@ impl Drop for TrackAnalysisRunner {
     }
 }
 
-/// Open `config` and start the already-open pass on the shared worker.
 async fn run_analysis(
     worker: Arc<AnalysisWorker>,
     config: AppResourceConfig,
@@ -184,24 +189,6 @@ async fn run_analysis(
     worker.start(pass, reader);
 }
 
-async fn run_resume_analysis(
-    worker: Arc<AnalysisWorker>,
-    config: AppResourceConfig,
-    cancel: CancelToken,
-    rate: NonZeroU32,
-    pass: AnalysisPass,
-) {
-    let Some(reader) = open_reader(config, &cancel, rate).await else {
-        return;
-    };
-    if let Err(error) = worker.start_resume(pass, reader) {
-        warn!(%error, "analysis: resume checkpoint rejected by source");
-    }
-}
-
-/// Open the resource under the run's cancel scope (so preemption and app
-/// shutdown tear its registered playback task down top-down) and unwrap the
-/// reader for the analysis worker.
 async fn open_reader(
     mut config: AppResourceConfig,
     cancel: &CancelToken,

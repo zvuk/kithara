@@ -118,6 +118,7 @@ mod tests {
                 .map(|group| group.iter().map(|name| (*name).to_owned()).collect())
                 .collect(),
             always: always.iter().map(|name| (*name).to_owned()).collect(),
+            ..FeatureInvariant::default()
         }
     }
 
@@ -133,6 +134,29 @@ mod tests {
         assert_eq!(
             pair.args(),
             vec!["--at-least-one-of", "client-reqwest,client-wreq"]
+        );
+    }
+
+    #[test]
+    fn a_derived_feature_is_excluded_while_the_models_it_names_exclude_each_other() {
+        let beat = FeatureInvariant {
+            when_feature: "embed-model".to_owned(),
+            never: vec!["embed-model".to_owned()],
+            mutually_exclusive: vec![vec![
+                "embed-small-model".to_owned(),
+                "embed-full-model".to_owned(),
+                "embed-full-int8-model".to_owned(),
+            ]],
+            ..FeatureInvariant::default()
+        };
+        assert_eq!(
+            beat.args(),
+            vec![
+                "--exclude-features",
+                "embed-model",
+                "--mutually-exclusive-features",
+                "embed-small-model,embed-full-model,embed-full-int8-model",
+            ]
         );
     }
 

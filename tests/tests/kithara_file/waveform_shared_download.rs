@@ -29,8 +29,6 @@ use kithara_app::{
 use kithara_integration_tests::TestHttpServer;
 use kithara_test_fixtures::signal;
 
-/// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
-/// nothing is resampled on the way in.
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
 
@@ -42,7 +40,6 @@ struct CountState {
     wav: Arc<Vec<u8>>,
 }
 
-/// Serve the whole WAV in a single 200 response, counting GETs.
 async fn serve_wav(State(state): State<CountState>) -> Response {
     state.gets.fetch_add(1, Ordering::SeqCst);
     Response::builder()
@@ -53,12 +50,6 @@ async fn serve_wav(State(state): State<CountState>) -> Response {
         .expect("valid response")
 }
 
-/// Drain the player to EOF. The pipeline is built with `block_on_underrun`
-/// (see the call site), so `next_chunk` PARKS on the engine-coordinated ring
-/// underrun until the decode worker delivers the next chunk or signals EOF —
-/// it never returns `Pending`. The park drives the virtual clock forward under
-/// flash (no real-clock re-poll sleep), so the worker advances and the shared
-/// WAV is decoded deterministically.
 fn drain_to_eof(mut audio: RegisteredAudio<Stream<File<AppPools>>, AppPools>) -> bool {
     loop {
         match audio.next_chunk() {
@@ -119,7 +110,8 @@ async fn waveform_and_player_share_one_get() {
         BeatAnalysisConfig::default(),
         pools,
     );
-    let mut analysis_rx = runner.analyze(waveform_cfg, "shared-download-track".into(), RATE, drop);
+    let mut analysis_rx =
+        runner.analyze(waveform_cfg, "shared-download-track".into(), RATE, 0, drop);
 
     let player = worker.open(player_cfg).await.expect("open player audio");
     let player_drain = spawn_blocking(move || {

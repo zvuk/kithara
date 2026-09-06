@@ -34,7 +34,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 delegate = { workspace = true }
 
 [build-dependencies]
-kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn", "client-reqwest", "symphonia", "tls-rustls"] }
+kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn-small", "client-reqwest", "symphonia", "tls-rustls"] }
 kithara-audio = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }

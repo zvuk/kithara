@@ -36,7 +36,7 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
 
 - `BeatThis::builder()` — load models from bytes (caller chooses embed vs file
   vs download), inject a sample-capable pool facade, and pick the decoding policy.
-- `BeatThis::analyze(&mono_22050)` — run the mel → inference → peak-pick pipeline.
+- `BeatThis::analyze(&mono_22050)` — run the mel, inference and peak-pick pipeline.
 - `BeatConfig` — peak threshold, max-pool half-width, dedup width. The defaults
   are the values the golden fixtures are held to; see CONTEXT.md before moving
   them.
@@ -45,10 +45,16 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
 
 ## Features
 
-- `embed-small-model` — exposes `MEL_MODEL_BYTES` / `BEAT_MODEL_BYTES`
-  (`include_bytes!` of `models/mel_spectrogram.onnx`, 264 KB, and
-  `models/beat_this_small.onnx`, 10.1 MB) so FFI/mobile builds need no asset
-  plumbing. Off by default.
+- `embed-small-model`, `embed-full-model`, `embed-full-int8-model` — exactly one
+  of these exposes `MEL_MODEL_BYTES` / `BEAT_MODEL_BYTES` / `BEAT_MODEL_TAG`, so
+  FFI/mobile builds need no asset plumbing. Off by default; the build fetches
+  what the tree does not carry.
+
+  | feature | size | mean octave-folded error over 40 tracks |
+  |---|---|---|
+  | `embed-small-model` | 10.1 MB | 1.72 BPM |
+  | `embed-full-model` | 79 MB | 0.38 BPM |
+  | `embed-full-int8-model` | 22.6 MB | 0.35 BPM |
 
 ## Integration
 

@@ -24,14 +24,6 @@ use kithara_test_fixtures::SignalAsset;
 
 use crate::bufpool_ext::pools;
 
-/// A handle left for a track must reach that track's decode path, so playing
-/// it warms its own analysis instead of leaving the pass to decode the same
-/// audio a second time.
-///
-/// The pass's own reader only stalls, so every covered frame arrived through
-/// the producer. Attachment happens after the queue reports the resource
-/// loaded, proving it reaches the decoder through the live relay rather than
-/// relying on task scheduling during resource admission.
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     let helper = TestServerHelper::new().await;
@@ -111,6 +103,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
         stalled_reader(AudioSpec::new(2, rate)),
         "played-track".into(),
         rate,
+        0,
     );
     queue.attach_observer(id, producer);
     queue.play();
@@ -127,6 +120,10 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     .await
     .expect("the pass covered nothing, so the handle never reached the decode path");
 
-    assert!(covered() > 0, "coverage must survive the wait");
+    assert!(
+        covered() > 0,
+        "the pass's own reader only stalls, so every covered frame arrived through \
+         the attached producer"
+    );
     tick_handle.abort();
 }

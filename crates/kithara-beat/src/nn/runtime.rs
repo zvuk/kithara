@@ -5,16 +5,14 @@ use rten::{Model as RtenGraph, NodeId, ValueOrView, ValueView};
 use rten_tensor::{AsView, Layout};
 use smallvec::SmallVec;
 
-use crate::api::BeatError;
+use crate::nn::api::BeatError;
 
-/// Simple f32 tensor with shape (row-major / C-order).
 #[derive(Debug)]
 pub(crate) struct Tensor {
     pub(crate) data: SampleBuffer,
     pub(crate) shape: SmallVec<[usize; 4]>,
 }
 
-/// ONNX model loaded from bytes, run via the pure-Rust rten runtime.
 pub(crate) struct RtenModel {
     input_map: HashMap<String, NodeId>,
     output_names: HashMap<NodeId, String>,
@@ -22,7 +20,6 @@ pub(crate) struct RtenModel {
     output_ids: Vec<NodeId>,
 }
 
-/// Load a model from ONNX bytes; `name` tags load errors.
 impl TryFrom<(&'static str, &[u8])> for RtenModel {
     type Error = BeatError;
 
@@ -64,7 +61,6 @@ impl TryFrom<(&'static str, &[u8])> for RtenModel {
 }
 
 impl RtenModel {
-    /// Run inference with named inputs, return named outputs.
     pub(crate) fn run<S>(
         &self,
         inputs: &[(&str, &Tensor)],

@@ -18,6 +18,7 @@ wasm MODE="check" *ARGS:
         for c in kithara-storage kithara-net kithara-stream kithara-assets kithara-hls; do
           cargo "+$toolchain" check -p "$c" --target wasm32-unknown-unknown
         done
+        cargo "+$toolchain" check -p kithara-beat --target wasm32-unknown-unknown --features dsp
         cargo "+$toolchain" check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia,webcodecs,client-reqwest,tls-rustls
         cargo "+$toolchain" check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;

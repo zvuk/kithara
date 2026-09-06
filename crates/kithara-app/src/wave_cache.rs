@@ -18,15 +18,12 @@ pub(crate) mod persistence;
 
 pub(crate) use persistence::{AnalysisPersistence, AnalysisPersistenceError};
 
-/// Tunables for the analysis cache, grouped to keep the module surface small.
 struct Consts;
 
 impl Consts {
-    /// Cap on the in-memory tier; past it the oldest entries fall back to disk.
     const MAX_MEM_ENTRIES: usize = 64;
 }
 
-/// Physical analysis resource together with the store that owns it.
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct AnalysisTarget {
@@ -57,20 +54,11 @@ struct MemoryEntry {
     progress: AnalysisProgress,
 }
 
-/// Two-tier track-analysis memoization: a session in-memory map plus durable
-/// blobs stored as resources of each track's `AssetScope` (so they follow the
-/// track's storage lifecycle). Owned by the single listener task, so it needs
-/// no synchronization.
 pub(crate) struct TrackAnalysisCache {
     bytes: ByteBuffer,
     chunk_duration: Duration,
     mem: HashMap<ResourceKey, Vec<MemoryEntry>>,
-    /// Active analysis configuration, per artifact: a stored artifact whose
-    /// tag differs is dropped on its own, so a waveform resolution change no
-    /// longer invalidates stored beat results.
     fingerprint: AnalysisFingerprint,
-    /// Insertion order of store-qualified targets; the oldest is evicted past
-    /// the cap.
     order: VecDeque<AnalysisTarget>,
 }
 
@@ -89,18 +77,6 @@ impl TrackAnalysisCache {
         }
     }
 
-    /// Whether a cached snapshot carries every artifact the active
-    /// configuration expects. A stored artifact whose tag moved is dropped on
-    /// read, so a hit can be real and still need the pass to run.
-    pub(crate) fn is_sufficient(&self, progress: &AnalysisProgress) -> bool {
-        let analysis = progress.analysis();
-        let waveform = self.fingerprint.waveform().is_none() || analysis.waveform().is_some();
-        let beat = self.fingerprint.beat().is_none() || analysis.beat().is_some();
-        waveform && beat
-    }
-
-    /// Look up a cached analysis: memory first, then the scope resource.
-    /// `None` on a miss or an unreadable blob.
     pub(crate) fn get(
         &mut self,
         target: &AnalysisTarget,
@@ -154,7 +130,6 @@ impl TrackAnalysisCache {
         progress
     }
 
-    /// Store the latest publication in the bounded memory tier.
     pub(crate) fn put(&mut self, target: AnalysisTarget, progress: AnalysisProgress) {
         let analysis = progress.analysis();
         // An analysis with no meaningful slots would be served forever as
@@ -165,8 +140,6 @@ impl TrackAnalysisCache {
         self.remember(target, progress);
     }
 
-    /// Insert into the bounded memory tier, evicting the oldest entry past
-    /// [`Consts::MAX_MEM_ENTRIES`]. Evicted entries are still served from disk.
     fn remember(&mut self, target: AnalysisTarget, progress: AnalysisProgress) {
         let entries = self.mem.entry(target.key.clone()).or_default();
         if let Some(entry) = entries
@@ -197,9 +170,6 @@ impl TrackAnalysisCache {
     }
 }
 
-/// The token a stored blob carries: derived from the resource key the blob
-/// lives under, so a restored snapshot identifies the same content it was
-/// analysed from rather than a session-scoped id.
 pub(crate) fn token_for(key: &ResourceKey) -> AnalysisToken {
     match (key.asset_root(), key.rel_path()) {
         (Some(root), Some(rel)) => format!("{root}/{rel}").into(),
@@ -215,7 +185,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use ::kithara::platform::sync::Arc;
-    /// The test macro import shadows the `kithara` crate name; use absolute path.
+    // The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
         analysis::{
             AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState, Coverage,
@@ -234,8 +204,6 @@ mod tests {
     use super::{AnalysisTarget, Consts, TrackAnalysisCache};
     use crate::pools::{self, AppPools, AppResourceConfig, AppStore, Pools};
 
-    /// The beat tag two tests must agree on: one of them keeps it while the
-    /// waveform tag moves.
     const BEAT_TAG: &str = "beat:test:v1";
 
     fn fingerprint(wave: &str, beat: &str) -> AnalysisFingerprint {

@@ -1,10 +1,6 @@
 use kithara_bufpool::PoolError;
 use thiserror::Error;
 
-#[cfg(feature = "beat-nn")]
-#[path = "backend.rs"]
-pub(super) mod backend;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct BeatMark {
     pub(crate) at: f32,

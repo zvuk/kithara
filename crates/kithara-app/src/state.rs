@@ -1,17 +1,23 @@
-#[cfg(test)]
 use std::num::NonZeroU32;
 
 #[cfg(test)]
 use kithara::analysis::Coverage;
 use kithara::{
     abr::AbrHandle,
-    analysis::FrameRange,
-    events::{AbrMode, BpmInfo, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
+    analysis::{AnalysisProgress, FrameRange},
+    events::{
+        AbrMode, BpmInfo, DjEvent, EngineEvent, Envelope, Event, EventReceiver, MediaTime,
+        PlayerEvent, SessionEvent, SlotId, TrackId, VariantInfo,
+    },
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
         time::Duration,
-        tokio::task,
+        tokio::{
+            self,
+            sync::{broadcast::error::RecvError, watch},
+            task,
+        },
     },
     play::{StretchControls, effects::eq::GainDb},
     prelude::EngineLoadSnapshot,
@@ -19,11 +25,9 @@ use kithara::{
     stream::AudioCodec,
 };
 use num_traits::{ToPrimitive, cast::AsPrimitive};
+use tracing::warn;
 
-use crate::{
-    config::AppConfig, pools::AppQueueControl, wave_cache::AnalysisPersistence,
-    waveform::TrackAnalysis,
-};
+use crate::{analysis::AnalysisHandle, pools::AppQueueControl, waveform::TrackAnalysis};
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -31,18 +35,12 @@ use crate::{
 /// listener task and direct setter calls from the UI controller.
 #[derive(Debug, Clone)]
 pub struct UiState {
-    /// Beat positions as track fractions in `[0, 1]`, derived from `analysis.beat`.
     pub beat_marks: Arc<[f32]>,
-    /// Downbeat positions as track fractions in `[0, 1]`, derived from `analysis.beat`.
     pub downbeat_marks: Arc<[f32]>,
-    /// Ranges the analysis has not covered, as track fractions in `[0, 1]`,
-    /// derived from `analysis.coverage`.
     pub unready_ranges: Arc<[[f32; 2]]>,
     pub engine_load: EngineLoadSnapshot,
-    /// Source analysis of the current track; `None` until analysed.
     pub analysis: Option<TrackAnalysis>,
     pub current_track_index: Option<usize>,
-    /// Rung the stream is on right now, whichever mode chose it.
     pub current_variant: Option<usize>,
     pub selected_variant: Option<usize>,
     pub track_name: String,
@@ -59,7 +57,7 @@ pub struct UiState {
 }
 
 impl UiState {
-    fn new(queue: &AppQueueControl) -> Self {
+    pub(crate) fn new(queue: &AppQueueControl) -> Self {
         let tracks = queue.tracks();
         let current_track_index = tracks.first().map(|_| 0usize);
         let track_name = tracks.first().map(|e| e.name.clone()).unwrap_or_default();
@@ -89,7 +87,6 @@ impl UiState {
         }
     }
 
-    /// Bare default state for unit tests.
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
         let beat_marks = empty_marks();
@@ -117,9 +114,6 @@ impl UiState {
         }
     }
 
-    /// Set the analysis and re-derive `beat_marks`/`downbeat_marks` from its
-    /// beat grid, keeping them in sync with their single source.
-    ///
     pub(crate) fn set_analysis(&mut self, analysis: Option<TrackAnalysis>) {
         let (beats, downbeats) = analysis
             .as_ref()
@@ -139,15 +133,12 @@ impl UiState {
     }
 }
 
-/// Map one source frame to a track fraction in `[0, 1]`, clamping past the end.
 fn fraction(frame: u64, total: f64) -> f32 {
     let frame_f: f64 = frame.as_();
     let frac: f32 = (frame_f / total).clamp(0.0, 1.0).as_();
     frac
 }
 
-/// Map source-frame positions to track fractions in `[0, 1]`, clamping
-/// out-of-range frames to `1.0`. Empty input or `total == 0` yields empty.
 fn frames_to_fractions(frames: &[u64], total: u64) -> Arc<[f32]> {
     if total == 0 {
         return empty_marks();
@@ -160,8 +151,6 @@ fn empty_marks() -> Arc<[f32]> {
     Arc::default()
 }
 
-/// Map source-frame ranges to track fractions in `[0, 1]`. Empty input or
-/// `total == 0` yields empty, and an empty range is dropped.
 fn ranges_to_fractions(ranges: &[FrameRange], total: u64) -> Arc<[[f32; 2]]> {
     if ranges.is_empty() || total == 0 {
         return Arc::default();
@@ -180,8 +169,6 @@ fn ranges_to_fractions(ranges: &[FrameRange], total: u64) -> Arc<[[f32; 2]]> {
     )
 }
 
-/// A snapshot covering `runs` of a track `extent` frames long, or of unknown
-/// length when `extent` is `None`.
 #[cfg(test)]
 pub(crate) fn covered(runs: &[(u64, u64)], extent: Option<u64>) -> TrackAnalysis {
     let mut coverage = Coverage::default();
@@ -197,11 +184,6 @@ pub(crate) fn covered(runs: &[(u64, u64)], extent: Option<u64>) -> TrackAnalysis
         .build()
 }
 
-/// The ranges a snapshot has not covered, as track fractions.
-///
-/// Empty once the coverage holds the whole extent, and empty while the extent
-/// is unknown: with no known length there is no rest of the track to be
-/// missing, so a live source claims nothing rather than guessing.
 fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
     if analysis.extent().is_none() || analysis.is_complete() {
         return Arc::default();
@@ -209,18 +191,9 @@ fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
     ranges_to_fractions(&analysis.missing(), analysis.source_frames())
 }
 
-/// Owns the canonical [`UiState`] and bridges queue events to it.
-///
-/// All reads from the UI go through [`StateController::snapshot`] which
-/// returns a cheap clone — the lock is released before rendering. The
-/// listener task is the only background writer; direct setters from the
-/// UI thread cover values that the UI commits optimistically (seek
-/// scrub, crossfade slider, etc.) before the engine echoes them back.
-///
-/// Synchronisation uses [`kithara::platform::sync::Mutex`] (a sync
-/// `parking_lot` mutex) instead of `tokio::sync::Mutex`. The previous
-/// design called `blocking_lock` from inside the iced runtime, which
-/// would panic; this one avoids `await`s while the lock is held.
+/// Owns the canonical [`UiState`] and bridges queue events to it. The
+/// listener task is the only background writer; the UI thread commits
+/// optimistic values through [`StateController::mutate`].
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct StateController {
@@ -228,36 +201,30 @@ pub struct StateController {
     #[field(get, deref = false)]
     queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
-    /// Per-deck time-stretch handle.
     #[field(get = stretch, deref = false)]
     timestretch: Arc<StretchControls>,
     cancel: CancelToken,
 }
 
 impl StateController {
-    /// Build a controller and start the listener task that mirrors
-    /// queue events into [`UiState`].
-    ///
-    /// `cancel` must be a child of the deck master, so the listener task
-    /// stops with its deck or the whole app.
-    /// `config` supplies the shared stores for per-track source analysis.
-    /// `timestretch` is the per-deck handle shared with the player.
+    /// `cancel` must be a child of the deck master: the listener stops with its
+    /// deck or with the app.
     pub(crate) fn new(
         queue: AppQueueControl,
         timestretch: Arc<StretchControls>,
-        config: AppConfig,
         cancel: CancelToken,
-        persistence: AnalysisPersistence,
+        analysis: AnalysisHandle,
     ) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
 
-        spawn_listener(
+        let rx = queue.subscribe();
+        task::spawn(listen(
             queue.clone(),
             Arc::clone(&state),
-            config,
             cancel.clone(),
-            persistence,
-        );
+            rx,
+            analysis,
+        ));
 
         Self {
             queue,
@@ -380,9 +347,6 @@ impl StateController {
     }
 }
 
-/// Takes the whole beat artifact, not just its grid: tempo and how sure the
-/// detector was are two answers about the same markers, and passing them
-/// separately is how they come to disagree.
 fn bpm_info_from_state(
     beat: &kithara::analysis::BeatSnapshot,
     source_frames: u64,
@@ -412,7 +376,6 @@ fn media_time_for_frame(frame: u64, total_frames: u64, duration_secs: f64) -> Me
     )
 }
 
-/// Saturating conversion for frame counts used in beat-grid ratio math.
 fn u64_to_f64(value: u64) -> f64 {
     value.to_f64().unwrap_or(f64::MAX)
 }
@@ -423,26 +386,127 @@ impl Drop for StateController {
     }
 }
 
-fn spawn_listener(
+pub(crate) async fn listen(
     queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
-    config: AppConfig,
     cancel: CancelToken,
-    persistence: AnalysisPersistence,
+    mut rx: EventReceiver,
+    analysis: AnalysisHandle,
 ) {
-    let rx = queue.subscribe();
-    task::spawn(crate::analysis::listen(
-        queue,
-        state,
-        config,
-        cancel,
-        rx,
-        persistence,
-    ));
+    let mut held = HeldAnalysis {
+        queue: queue.clone(),
+        analysis,
+        rx: None,
+    };
+    held.follow(&state).await;
+    held.warm(&state).await;
+
+    loop {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => break,
+            open = held.changed() => held.mirror(&state, open),
+            event = rx.recv() => match event {
+                Ok(Envelope { event, .. }) => {
+                    apply_event(&event, &queue, &state);
+                    match event {
+                        Event::Queue(QueueEvent::CurrentTrackChanged { .. })
+                        | Event::Engine(EngineEvent::Started)
+                        | Event::Session(SessionEvent::RouteChanged { .. }) => {
+                            held.follow(&state).await;
+                        }
+                        Event::Queue(QueueEvent::TrackAdded { .. } | QueueEvent::TrackRemoved { .. }) => {
+                            held.follow(&state).await;
+                            held.warm(&state).await;
+                        }
+                        _ => {}
+                    }
+                }
+                Err(RecvError::Lagged(missed)) => {
+                    warn!(missed, "queue events lagged; the deck resyncs from its queue");
+                    apply_list(&queue, &state);
+                    held.follow(&state).await;
+                    held.warm(&state).await;
+                }
+                Err(RecvError::Closed) => break,
+            },
+        }
+    }
 }
 
-/// Push the desired EQ gains down to the engine. Calls for bands with no
-/// active slot are no-ops; the master EQ persists once a slot accepts them.
+struct HeldAnalysis {
+    queue: AppQueueControl,
+    analysis: AnalysisHandle,
+    rx: Option<watch::Receiver<Option<AnalysisProgress>>>,
+}
+
+impl HeldAnalysis {
+    async fn follow(&mut self, state: &Mutex<UiState>) {
+        let held = {
+            let st = state.lock();
+            st.current_track_index
+                .and_then(|index| st.tracks.get(index).map(|track| track.id))
+        };
+        let track = held.and_then(|id| self.queue.track_source(id).map(|source| (id, source)));
+        self.rx = None;
+        self.rx = match (track, self.axis()) {
+            (Some((id, source)), Some(axis)) => {
+                self.analysis
+                    .subscribe(self.queue.clone(), id, source, axis)
+                    .await
+            }
+            _ => None,
+        };
+        self.mirror(state, true);
+    }
+
+    async fn warm(&self, state: &Mutex<UiState>) {
+        let ids: Vec<TrackId> = state.lock().tracks.iter().map(|track| track.id).collect();
+        if let Some(axis) = self.axis() {
+            self.analysis.warm(self.queue.clone(), ids, axis).await;
+        }
+    }
+
+    fn axis(&self) -> Option<NonZeroU32> {
+        let axis = NonZeroU32::new(self.queue.sample_rate());
+        if axis.is_none() {
+            warn!("analysis: the engine reports no sample rate; the deck observes nothing");
+        }
+        axis
+    }
+
+    async fn changed(&mut self) -> bool {
+        match &mut self.rx {
+            Some(rx) => rx.changed().await.is_ok(),
+            None => std::future::pending().await,
+        }
+    }
+
+    fn mirror(&mut self, state: &Mutex<UiState>, open: bool) {
+        let next = self
+            .rx
+            .as_ref()
+            .and_then(|rx| rx.borrow().as_ref().map(|p| p.analysis().clone()));
+        if !open {
+            self.rx = None;
+        }
+        let mut st = state.lock();
+        if !same_revision(st.analysis.as_ref(), next.as_ref()) {
+            st.set_analysis(next);
+        }
+    }
+}
+
+fn same_revision(shown: Option<&TrackAnalysis>, next: Option<&TrackAnalysis>) -> bool {
+    match (shown, next) {
+        (None, None) => true,
+        (Some(shown), Some(next)) => {
+            shown.token() == next.token() && shown.revision() == next.revision()
+        }
+        _ => false,
+    }
+}
+
 fn reapply_eq(queue: &AppQueueControl, eq_bands: &[GainDb]) {
     for (band, &gain) in eq_bands.iter().enumerate() {
         let _ = queue.set_eq_gain(band, f32::from(gain));
@@ -487,18 +551,28 @@ pub(crate) fn apply_event(event: &Event, queue: &AppQueueControl, state: &Mutex<
             QueueEvent::TrackAdded { .. }
             | QueueEvent::TrackRemoved { .. }
             | QueueEvent::TrackStatusChanged { .. },
-        ) => {
-            let tracks = queue.tracks();
-            let mut st = state.lock();
-            st.tracks = tracks;
-            if let Some(idx) = st.current_track_index
-                && let Some(track) = st.tracks.get(idx)
-            {
-                st.track_name = track.name.clone();
-            }
-        }
+        ) => apply_list(queue, state),
         _ => {}
     }
+}
+
+fn apply_list(queue: &AppQueueControl, state: &Mutex<UiState>) {
+    let tracks = queue.tracks();
+    let current = queue.current_index();
+    let mut st = state.lock();
+    st.tracks = tracks;
+    st.current_track_index = shown_index(current, st.current_track_index, st.tracks.len());
+    st.track_name = st
+        .current_track_index
+        .and_then(|idx| st.tracks.get(idx).map(|track| track.name.clone()))
+        .unwrap_or_default();
+}
+
+fn shown_index(current: Option<usize>, shown: Option<usize>, len: usize) -> Option<usize> {
+    current
+        .or(shown)
+        .filter(|&index| index < len)
+        .or_else(|| (len > 0).then_some(0))
 }
 
 /// One rung of the ABR ladder as the UI names it: the short label a control
@@ -535,9 +609,6 @@ fn variant_display_label_from_info(v: &VariantInfo) -> String {
     }
 }
 
-/// Human-readable codec family from an HLS `CODECS` attribute value
-/// (e.g. `mp4a.40.2` -> `AAC`). Unknown codecs yield `None` so the
-/// bitrate is shown without a trailing format tag.
 fn codec_label(codecs: &str) -> Option<&'static str> {
     Some(match AudioCodec::parse_hls_codec(codecs)? {
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => "AAC",
@@ -561,12 +632,186 @@ fn variant_short_label(v: &VariantInfo) -> String {
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::analysis::{BeatArtifact, BeatSnapshot, BeatState};
+    use ::kithara::{
+        analysis::{AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState},
+        events::PlayerEvent,
+        platform::{
+            CancelToken,
+            sync::{Arc, Mutex},
+            time::{self, Duration},
+            tokio::{sync::mpsc, task},
+        },
+        queue::QueueEvent,
+    };
     use kithara_test_utils::kithara;
 
     use super::{
-        UiState, bpm_info_from_state, codec_label, covered, frames_to_fractions, unready_ranges,
+        UiState, bpm_info_from_state, codec_label, covered, frames_to_fractions, listen,
+        unready_ranges,
     };
+    use crate::{
+        analysis::{
+            AnalysisHandle, Request,
+            fixtures::{answer_subscribe, next_subscribe, queue, track, wait_for_revision},
+        },
+        pools::AppQueueControl,
+        waveform::TrackAnalysis,
+    };
+
+    fn progress(revision: u64) -> AnalysisProgress {
+        let mut analysis = covered(&[(0, 1_000)], Some(1_000));
+        analysis = TrackAnalysis::builder()
+            .token(analysis.token().clone())
+            .revision(revision)
+            .source_sample_rate(analysis.source_sample_rate())
+            .maybe_extent(analysis.extent())
+            .settled(true)
+            .coverage(analysis.coverage().clone())
+            .build();
+        AnalysisProgress::try_from(analysis).expect("settled fixture is valid progress")
+    }
+
+    fn deck(
+        queue: &AppQueueControl,
+    ) -> (Arc<Mutex<UiState>>, mpsc::Receiver<Request>, CancelToken) {
+        let state = Arc::new(Mutex::new(UiState::new(queue)));
+        let (analysis, requests) = AnalysisHandle::channel();
+        let cancel = CancelToken::root();
+        task::spawn(listen(
+            queue.clone(),
+            Arc::clone(&state),
+            cancel.clone(),
+            queue.subscribe(),
+            analysis,
+        ));
+        (state, requests, cancel)
+    }
+
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_deck_observes_a_track_added_to_its_empty_queue() {
+        let (_host, queue) = queue();
+        let (state, mut requests, cancel) = deck(&queue);
+        assert_eq!(state.lock().current_track_index, None);
+
+        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let tx = time::timeout(
+            Duration::from_secs(2),
+            answer_subscribe(&mut requests, track_id),
+        )
+        .await
+        .expect("the deck subscribes for the track its queue gained");
+
+        assert_eq!(state.lock().current_track_index, Some(0));
+        assert!(!queue.is_playing());
+        tx.send_replace(Some(progress(1)));
+        wait_for_revision(&state, 1).await;
+        cancel.cancel();
+    }
+
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_deck_lets_go_of_a_removed_track() {
+        let (_host, queue) = queue();
+        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (state, mut requests, cancel) = deck(&queue);
+        let tx = answer_subscribe(&mut requests, track_id).await;
+        tx.send_replace(Some(progress(1)));
+        wait_for_revision(&state, 1).await;
+
+        queue.remove(track_id).expect("remove test track");
+
+        for _ in 0..2_000 {
+            if tx.receiver_count() == 0 && state.lock().analysis.is_none() {
+                break;
+            }
+            task::yield_now().await;
+        }
+        assert_eq!(
+            tx.receiver_count(),
+            0,
+            "the deck drops the receiver of a track its queue lost"
+        );
+        let st = state.lock();
+        assert_eq!(st.current_track_index, None);
+        assert!(st.analysis.is_none(), "nothing is shown for no track");
+        cancel.cancel();
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn a_current_track_change_resubscribes_the_deck_and_mirrors_the_revisions() {
+        let (_host, queue) = queue();
+        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (state, mut requests, cancel) = deck(&queue);
+
+        let first = answer_subscribe(&mut requests, track_id).await;
+        let Some(Request::Warm { track_ids, .. }) = requests.recv().await else {
+            panic!("the deck warms its library");
+        };
+        assert_eq!(track_ids, vec![track_id]);
+        first.send_replace(Some(progress(1)));
+        wait_for_revision(&state, 1).await;
+
+        queue
+            .bus()
+            .publish(QueueEvent::CurrentTrackChanged { id: Some(track_id) });
+        let second = answer_subscribe(&mut requests, track_id).await;
+        second.send_replace(Some(progress(2)));
+        wait_for_revision(&state, 2).await;
+
+        drop(first);
+        cancel.cancel();
+    }
+
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_deck_lets_go_of_its_track_before_asking_for_the_next() {
+        let (_host, queue) = queue();
+        let (first_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (second_id, _) = track(&queue, 2, "file:///tmp/track-2.mp3");
+        let (_state, mut requests, cancel) = deck(&queue);
+        let first = answer_subscribe(&mut requests, first_id).await;
+
+        queue.remove(first_id).expect("remove test track");
+        let (asked, reply) = time::timeout(Duration::from_secs(2), next_subscribe(&mut requests))
+            .await
+            .expect("the deck asks for the track it moved to");
+        assert_eq!(asked, second_id, "the deck asks for the track it moved to");
+        assert_eq!(
+            first.receiver_count(),
+            0,
+            "and holds no receiver for the one it left while it waits"
+        );
+        drop(reply);
+        cancel.cancel();
+    }
+
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_lagged_deck_resyncs_from_its_queue() {
+        let (_host, queue) = queue();
+        let (first_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (state, mut requests, cancel) = deck(&queue);
+        let (_, reply) = next_subscribe(&mut requests).await;
+        let (_second_id, _) = track(&queue, 2, "file:///tmp/track-2.mp3");
+        for _ in 0..=::kithara::events::DEFAULT_EVENT_BUS_CAPACITY {
+            queue
+                .bus()
+                .publish(PlayerEvent::VolumeChanged { volume: 0.5 });
+        }
+        let (first, first_rx) = ::kithara::platform::tokio::sync::watch::channel(None);
+        assert!(reply.send(first_rx).is_ok(), "the deck waits for the reply");
+
+        let again = time::timeout(
+            Duration::from_secs(2),
+            answer_subscribe(&mut requests, first_id),
+        )
+        .await
+        .expect("the deck observes its track again after the lag");
+        let st = state.lock();
+        assert_eq!(st.tracks.len(), 2, "the list is read from the queue");
+        assert_eq!(st.current_track_index, Some(0));
+        drop(st);
+        drop(again);
+        drop(first);
+        cancel.cancel();
+    }
 
     fn beat(beats: Vec<(u64, Option<f32>)>) -> BeatSnapshot {
         BeatSnapshot::new(
@@ -576,8 +821,6 @@ mod tests {
         )
     }
 
-    /// The event carries a confidence slot; leaving it empty when the grid
-    /// knows the answer is the gap this closes.
     #[kithara::test(native, flash(false))]
     fn a_published_tempo_carries_the_confidence_its_grid_reports() {
         let detected = beat(vec![(0, Some(0.4)), (22_050, Some(0.8))]);
@@ -591,14 +834,15 @@ mod tests {
         );
     }
 
-    /// A grid built entirely by extrapolation has a tempo but nothing to
-    /// stand behind it, and must say so rather than report a zero.
     #[kithara::test(native, flash(false))]
     fn a_tempo_with_nothing_detected_publishes_no_confidence() {
         let guessed = beat(vec![(0, None), (22_050, None)]);
         let info = bpm_info_from_state(&guessed, 44_100, 1.0).expect("a grid names a tempo");
 
-        assert_eq!(info.confidence, None);
+        assert_eq!(
+            info.confidence, None,
+            "an extrapolated grid names no confidence rather than a zero"
+        );
     }
 
     #[kithara::test(native, flash(false))]
@@ -625,8 +869,6 @@ mod tests {
         assert!(clamped[0] < clamped[1], "ascending preserved");
     }
 
-    /// A snapshot that holds the whole track has nothing left to mark, and
-    /// must say so before any range is derived.
     #[kithara::test(native, flash(false))]
     fn a_fully_covered_track_has_no_unready_ranges() {
         let full = covered(&[(0, 1_000)], Some(1_000));
@@ -634,32 +876,32 @@ mod tests {
         assert!(unready_ranges(&full).is_empty());
     }
 
-    /// Coverage spread over the track leaves holes between the runs and after
-    /// the last one, each reported on the track's own fraction axis.
     #[kithara::test(native, flash(false))]
     fn a_partly_covered_track_names_the_holes_it_left() {
         let partial = covered(&[(0, 200), (400, 600), (800, 900)], Some(1_000));
 
         let ranges = unready_ranges(&partial);
 
-        assert_eq!(ranges.len(), 3, "{ranges:?}");
+        assert_eq!(
+            ranges.len(),
+            3,
+            "a hole sits between each pair of runs and after the last one: {ranges:?}"
+        );
         assert_eq!(ranges[0], [0.2, 0.4], "{ranges:?}");
         assert_eq!(ranges[1], [0.6, 0.8], "{ranges:?}");
         assert_eq!(ranges[2], [0.9, 1.0], "{ranges:?}");
     }
 
-    /// Without an extent there is no rest of the track to be missing, so a
-    /// live source claims nothing rather than guessing a length.
     #[kithara::test(native, flash(false))]
     fn a_track_of_unknown_length_claims_nothing_unready() {
         let live = covered(&[(0, 200), (400, 600)], None);
 
-        assert!(unready_ranges(&live).is_empty());
+        assert!(
+            unready_ranges(&live).is_empty(),
+            "with no extent there is no rest of the track to be missing"
+        );
     }
 
-    /// A revision carries the whole coverage, so a growing analysis only ever
-    /// takes ranges out of the unready set; one coming back would mean a
-    /// revision had contradicted an earlier one.
     #[kithara::test(native, flash(false))]
     fn growing_coverage_only_shrinks_the_unready_set() {
         let revisions = [
@@ -680,7 +922,7 @@ mod tests {
                         previous
                             .iter()
                             .any(|was| was[0] <= range[0] && range[1] <= was[1]),
-                        "{range:?} was ready in {previous:?}"
+                        "a revision only takes ranges out: {range:?} was ready in {previous:?}"
                     );
                 }
             }

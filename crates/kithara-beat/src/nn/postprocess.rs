@@ -1,8 +1,8 @@
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    api::{BeatError, BeatMark},
-    config::BeatConfig,
+    mark::BeatMark,
+    nn::{api::BeatError, config::BeatConfig, consts::Consts},
 };
 
 pub(crate) struct PeakPicker {
@@ -46,10 +46,8 @@ struct Peak {
 
 impl Peak {
     fn mark(self) -> BeatMark {
-        const FPS: f32 = 50.0;
-
         BeatMark {
-            at: (self.at / f64::from(FPS)).as_(),
+            at: (self.at / f64::from(Consts::FPS)).as_(),
             confidence: sigmoid(self.logit),
         }
     }
@@ -241,7 +239,6 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_wider_window_suppresses_a_neighbour_the_default_keeps() {
-        // 4 frames apart: each wins its own +-3 window, neither wins a +-4 one.
         let mut logits = vec![0.0; 10];
         logits[2] = 2.0;
         logits[6] = 1.0;
@@ -278,7 +275,6 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn find_peaks_multiple_peaks() {
-        // Two peaks separated by more than 3 frames.
         let mut logits = vec![0.0; 20];
         logits[3] = 2.0;
         logits[15] = 1.5;
@@ -288,7 +284,6 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn find_peaks_window_suppresses_smaller_neighbour() {
-        // A smaller positive value 3 frames from a larger one is not a peak.
         let mut logits = vec![0.0; 10];
         logits[4] = 2.0;
         logits[7] = 1.0;
@@ -298,7 +293,6 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn find_peaks_outside_window_both_survive() {
-        // 4 frames apart: each is the max of its own ±3 window.
         let mut logits = vec![0.0; 10];
         logits[2] = 2.0;
         logits[6] = 1.0;
@@ -308,8 +302,6 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn find_peaks_plateau_collapses_to_centre() {
-        // Adjacent frames with equal positive values: both tie the max-pool,
-        // dedup merges them to the plateau centre.
         let logits = [0.0, 1.0, 1.0, 0.0];
         let peaks = find_peaks(&logits, &BeatConfig::default());
         assert_eq!(peaks.len(), 1);
@@ -330,11 +322,9 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn deduplicate_peaks_merge() {
-        // 10 and 11 merge (gap 1) to 10.5; 12 is 1.5 from the mean → new group.
         let peaks = deduplicate_peaks(&[(10, 1.0), (11, 1.0), (12, 1.0), (20, 1.0)], 1);
         assert_eq!(at(&peaks), vec![10.5, 12.0, 20.0]);
 
-        // {10, 11, 11}: running mean 32/3, kept fractional.
         let peaks = deduplicate_peaks(&[(10, 1.0), (11, 1.0), (11, 1.0), (20, 1.0)], 1);
         assert_eq!(peaks.len(), 2);
         assert!((peaks[0].at - 32.0 / 3.0).abs() < 1e-9);
@@ -358,7 +348,6 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn snap_downbeats_dedup() {
         let beats = marks(&[1.0, 2.0, 3.0]);
-        // Both downbeats snap to 2.0 and collapse to one, keeping the surer.
         let mut downbeats = vec![
             BeatMark {
                 at: 1.8,
@@ -398,7 +387,6 @@ mod tests {
         beat_logits[50] = 3.0;
         beat_logits[100] = 2.5;
         beat_logits[150] = 4.0;
-        // Downbeat at frame 51 snaps to the beat at frame 50.
         downbeat_logits[51] = 2.0;
 
         let pp = PeakPicker::new(BeatConfig::default());
