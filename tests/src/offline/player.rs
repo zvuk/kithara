@@ -9,13 +9,14 @@ use kithara::{
     },
 };
 
-use super::{OfflineResident, host::offline_pools};
+use super::{OfflineHostHarness, OfflineResident, host::offline_pools};
 use crate::bufpool_ext::TestPools;
 
 /// Product Player and Host wired for deterministic finite rendering.
 pub struct OfflinePlayer {
     events: EventReceiver,
     player: OfflineResident<PlayerImpl<TestPools>, TestPools>,
+    worker: PlayWorker<TestPools>,
 }
 
 impl OfflinePlayer {
@@ -32,18 +33,34 @@ impl OfflinePlayer {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(sample_rate)
-                .worker(worker)
+                .worker(worker.clone())
                 .build(),
         );
         let events = player.subscribe();
         let player = OfflineResident::new(session, player)
             .await
             .unwrap_or_else(|error| panic!("create product offline player: {error}"));
-        Self { events, player }
+        Self {
+            events,
+            player,
+            worker,
+        }
     }
 
     fn control(&self) -> PlayerControl<TestPools> {
         self.player.control()
+    }
+
+    /// Offline Host owning this player, for probes the Host installs.
+    #[must_use]
+    pub const fn host(&self) -> &OfflineHostHarness<TestPools> {
+        self.player.host()
+    }
+
+    /// Decode worker this player pulls from, for opening resources beside it.
+    #[must_use]
+    pub const fn worker(&self) -> &PlayWorker<TestPools> {
+        &self.worker
     }
 
     /// Load one resource and start playback.
@@ -119,8 +136,13 @@ impl OfflinePlayer {
     }
 
     pub async fn close(self) {
-        let Self { events, player } = self;
+        let Self {
+            events,
+            player,
+            worker,
+        } = self;
         drop(events);
+        drop(worker);
         player.close().await;
     }
 }

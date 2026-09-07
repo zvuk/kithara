@@ -72,7 +72,13 @@ check/build/size-check only and runs no tests.
 - A `wasm32` build makes no host binary and the runner looks for `test_server`
   beside itself, so the recipe builds it first.
 - Only `suite_heavy` is built for `wasm32`, with every native module compiled
-  out — `kithara_ffi_web` is the browser-visible coverage.
+  out — `kithara_ffi_web` and `kithara_play::offline_browser` are the
+  browser-visible coverage.
+- The offline harness in `tests/src/offline` builds on both targets; only
+  `app.rs`, which needs `kithara-app`, is gated to native.
+- `OfflineWorker` owns the `OfflinePlayer`, on wasm from a Web Worker, because
+  `Platform::offline` refuses a Host on the browser main thread. Open the
+  resource inside a command, not on the driver.
 - `webcodecs` belongs to `kithara-decode`, not any integration suite, and is
   Chromium-only.
 

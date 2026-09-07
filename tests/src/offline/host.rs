@@ -9,24 +9,36 @@ use kithara::{
     output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
+        maybe_send::MaybeSend,
         sync::{
             Arc,
             atomic::{AtomicU64, Ordering},
-            mpsc::{self, RecvTimeoutError},
         },
-        thread::{JoinHandle, spawn_named},
-        time::{Duration, Instant},
-        tokio::{runtime::Handle, task::spawn_blocking},
+        time::Duration,
     },
     play::{MixTapWriter, PlayError, TransportRevision, player::PlayerControlSource},
-    queue::{Queue, QueueControl},
+    queue::Queue,
     signal::AudioSpec,
 };
-use kithara_test_utils::off_thread::OffThread;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::{
+    platform::{
+        sync::mpsc::{self, RecvTimeoutError},
+        thread::{JoinHandle, spawn_named},
+        time::Instant,
+        tokio::{runtime::Handle, task::spawn_blocking},
+    },
+    queue::QueueControl,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_utils::off_thread::OffThread as HostOwner;
 use ringbuf::{
     HeapCons, HeapRb,
     traits::{Consumer, Observer, Split},
 };
+
+#[cfg(target_arch = "wasm32")]
+use self::inline::InlineOwner as HostOwner;
 
 const CHANNELS: u16 = 2;
 const ENDPOINT_SLACK_SECS: f64 = 0.5;
@@ -46,7 +58,7 @@ struct HostState<S> {
 
 /// Test owner for the product offline Host and its monotonic render cursor.
 pub struct OfflineHostHarness<S> {
-    off: OffThread<HostState<S>>,
+    off: HostOwner<HostState<S>>,
     position: Arc<AtomicU64>,
     spec: AudioSpec,
     max_block_frames: NonZeroU32,
@@ -64,8 +76,8 @@ where
 
 impl<P, S> OfflineResident<P, S>
 where
-    P: PlayerControlSource<Schema = S> + Send + 'static,
-    P::Control: Send,
+    P: PlayerControlSource<Schema = S> + MaybeSend + 'static,
+    P::Control: MaybeSend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     pub async fn new(config: HostConfig<S>, player: P) -> Result<Self, PlayError> {
@@ -83,10 +95,10 @@ where
     }
 
     /// Issues a control call from the host owner thread, as the app would.
-    pub async fn run<R>(&self, f: impl FnOnce(&P::Control) -> R + Send + 'static) -> R
+    pub async fn run<R>(&self, f: impl FnOnce(&P::Control) -> R + MaybeSend + 'static) -> R
     where
-        P::Control: Clone + Send + 'static,
-        R: Send + 'static,
+        P::Control: Clone + MaybeSend + 'static,
+        R: MaybeSend + 'static,
     {
         let control = self.control();
         self.host.run(move || f(&control)).await
@@ -117,6 +129,7 @@ where
 
 pub type OfflineQueue<S> = OfflineResident<Queue<S>, S>;
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Drives `QueueControl::tick` from a dedicated thread, the way the FFI
 /// bridge and the app update loop do, until the queue closes or `stop`.
 pub struct QueueTicker {
@@ -124,6 +137,7 @@ pub struct QueueTicker {
     thread: Option<JoinHandle<()>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl QueueTicker {
     /// Spawns the ticker; the thread enters the caller's runtime like the
     /// product app thread, so a tick may spawn loads.
@@ -180,6 +194,7 @@ impl QueueTicker {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for QueueTicker {
     fn drop(&mut self) {
         drop(self.stop.take());
@@ -199,7 +214,7 @@ where
         let pacing = config.pacing();
         let position = Arc::new(AtomicU64::new(0));
         let owned = Arc::clone(&position);
-        let off = OffThread::spawn("offline-host", move || {
+        let off = HostOwner::spawn("offline-host", move || {
             Host::new(config).map(|host| HostState {
                 host,
                 position: owned,
@@ -221,18 +236,18 @@ where
     }
 
     /// Runs an arbitrary Host operation on the owner thread.
-    pub async fn with<R>(&self, f: impl FnOnce(&mut Host<S>) -> R + Send + 'static) -> R
+    pub async fn with<R>(&self, f: impl FnOnce(&mut Host<S>) -> R + MaybeSend + 'static) -> R
     where
-        R: Send + 'static,
+        R: MaybeSend + 'static,
     {
         self.off.call(move |state| f(&mut state.host)).await
     }
 
     /// Runs a control call on the owner thread, the way product callers issue
     /// it from the app thread rather than from a runtime worker.
-    pub async fn run<R>(&self, f: impl FnOnce() -> R + Send + 'static) -> R
+    pub async fn run<R>(&self, f: impl FnOnce() -> R + MaybeSend + 'static) -> R
     where
-        R: Send + 'static,
+        R: MaybeSend + 'static,
     {
         self.off.call(move |_| f()).await
     }
@@ -240,16 +255,16 @@ where
     /// Transfer one configured player facade into the product Host.
     pub async fn insert<P>(&self, player: P) -> Result<HostOwned<P>, PlayError>
     where
-        P: PlayerControlSource<Schema = S> + Send + 'static,
-        P::Control: Send,
+        P: PlayerControlSource<Schema = S> + MaybeSend + 'static,
+        P::Control: MaybeSend,
     {
         self.off.call(move |state| state.host.insert(player)).await
     }
 
     pub async fn insert_control<P>(&self, player: P) -> Result<P::Control, PlayError>
     where
-        P: PlayerControlSource<Schema = S> + Send + 'static,
-        P::Control: Send,
+        P: PlayerControlSource<Schema = S> + MaybeSend + 'static,
+        P::Control: MaybeSend,
     {
         self.insert(player)
             .await
@@ -402,4 +417,31 @@ pub fn offline_gain_window(
     let rate =
         (f64::from(block_frames.get()) / f64::from(sample_rate.get())) / pacing.as_secs_f64();
     GAIN_FLOOR_SECS..=(rate * (window_secs + ENDPOINT_SLACK_SECS))
+}
+
+/// Owner of a Host on the calling thread, for the wasm harness whose caller is
+/// already the worker the Host belongs to.
+#[cfg(target_arch = "wasm32")]
+mod inline {
+    use kithara::platform::sync::Mutex;
+
+    pub(super) struct InlineOwner<T>(Mutex<T>);
+
+    impl<T: 'static> InlineOwner<T> {
+        pub(super) async fn spawn<E, I>(_name: &'static str, init: I) -> Result<Self, E>
+        where
+            I: FnOnce() -> Result<T, E>,
+        {
+            init().map(|value| Self(Mutex::new(value)))
+        }
+
+        pub(super) async fn call<R, F>(&self, job: F) -> R
+        where
+            F: FnOnce(&mut T) -> R,
+        {
+            job(&mut self.0.lock())
+        }
+
+        pub(super) async fn close(self) {}
+    }
 }

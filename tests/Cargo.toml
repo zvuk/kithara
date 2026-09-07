@@ -100,6 +100,7 @@ cbc = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 num-traits = { workspace = true }
+ringbuf = { workspace = true }
 rkyv = { workspace = true }
 
 # Serialization
@@ -166,7 +167,6 @@ rand = { workspace = true }
 
 # HTTP server (axum stack not available on WASM)
 reqwest = { workspace = true, features = ["rustls", "stream"] }
-ringbuf = { workspace = true }
 
 # WebDriver automation
 thirtyfour = { workspace = true }

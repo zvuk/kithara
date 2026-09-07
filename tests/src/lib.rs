@@ -52,7 +52,6 @@ pub mod memory_source;
 mod native;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod net_fixture;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod offline;
 pub mod packed_audio;
 pub mod reads;

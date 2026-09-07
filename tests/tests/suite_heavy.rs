@@ -33,8 +33,8 @@ mod kithara_decode {
 }
 
 // The rest of this suite drives the local test server, the filesystem, and
-// several players at once. The browser has none of that; only
-// `kithara_ffi_web` is meant to run there.
+// several players at once. The browser has none of that; `kithara_ffi_web` and
+// `kithara_play::offline_browser` are what is meant to run there.
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_file {
     mod live_stress_real_mp3;
@@ -49,6 +49,10 @@ mod kithara_hls {
 }
 
 mod kithara_ffi_web;
+
+mod kithara_play {
+    mod offline_browser;
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 mod multi_instance;
