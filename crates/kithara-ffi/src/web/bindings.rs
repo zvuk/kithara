@@ -11,7 +11,7 @@ static HEAP_END: u8 = 0;
 #[cfg_attr(target_family = "wasm", allow(unreachable_pub))]
 #[wasm_bindgen(start)]
 pub fn setup() -> Result<(), JsValue> {
-    console_error_panic_hook::set_once();
+    kithara::platform::logging::install_panic_hook();
 
     // WHY: Worker threads import `<shim>.js` for `initSync`; register our wasm-bindgen output name so the engine worker loads the right
     // shim (auto-detection mis-picks a co-loaded `.js` like coi-serviceworker).

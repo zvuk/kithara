@@ -16,7 +16,8 @@ use std::{
 
 use kithara::{
     audio::{
-        AudioControl, AudioRead, AudioSession, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
+        AudioControl, AudioRead, AudioSession, ConsumerWakeMode, PendingReason, ReadOutcome,
+        SeekBegin, SeekOutcome,
     },
     decode::{DecodeError, TrackMetadata},
     events::EventBus,
@@ -247,8 +248,10 @@ pub struct MockReader {
 }
 
 enum MockBehavior {
-    SampleRateTracking {
+    /// Records the session-owned capabilities an owner applies to the reader.
+    AdoptionTracking {
         recorded_host_rate: Arc<AtomicU32>,
+        recorded_wake_mode: Arc<Mutex<Option<ConsumerWakeMode>>>,
         duration: Duration,
     },
     SeekTracking {
@@ -264,6 +267,14 @@ enum MockBehavior {
     },
     Faulty(Fault),
     SeekSplit(SeekSplitCounts),
+}
+
+fn adoption_tracking(recorded_host_rate: Arc<AtomicU32>, duration: Duration) -> MockBehavior {
+    MockBehavior::AdoptionTracking {
+        recorded_host_rate,
+        recorded_wake_mode: Arc::new(Mutex::new(None)),
+        duration,
+    }
 }
 
 impl MockReader {
@@ -287,14 +298,23 @@ impl MockReader {
         duration: Duration,
     ) -> (Self, Arc<AtomicU32>) {
         let recorded = Arc::new(AtomicU32::new(0));
-        let reader = Self::with_behavior(
-            spec,
-            MockBehavior::SampleRateTracking {
-                recorded_host_rate: Arc::clone(&recorded),
-                duration,
-            },
-        );
+        let reader = Self::with_behavior(spec, adoption_tracking(Arc::clone(&recorded), duration));
         (reader, recorded)
+    }
+
+    /// Reader recording the consumer wake mode its owner applies to it.
+    #[must_use]
+    pub fn wake_mode_tracking(spec: AudioSpec) -> (Self, Arc<Mutex<Option<ConsumerWakeMode>>>) {
+        let behavior = adoption_tracking(Arc::new(AtomicU32::new(0)), Duration::from_secs(60));
+        let MockBehavior::AdoptionTracking {
+            ref recorded_wake_mode,
+            ..
+        } = behavior
+        else {
+            unreachable!("adoption tracking builds one variant")
+        };
+        let recorded = Arc::clone(recorded_wake_mode);
+        (Self::with_behavior(spec, behavior), recorded)
     }
 
     #[must_use]
@@ -347,7 +367,7 @@ impl MockReader {
                 source: std::io::Error::other("mock decode failure"),
             }),
             MockBehavior::Faulty(Fault::Stall | Fault::RefuseSeek)
-            | MockBehavior::SampleRateTracking { .. }
+            | MockBehavior::AdoptionTracking { .. }
             | MockBehavior::SeekTracking { .. }
             | MockBehavior::SeekSplit(_) => Ok(ReadOutcome::Pending {
                 position: Duration::ZERO,
@@ -366,7 +386,7 @@ impl MockReader {
 impl AudioSession for MockReader {
     fn duration(&self) -> Option<Duration> {
         match &self.behavior {
-            MockBehavior::SampleRateTracking { duration, .. } => Some(*duration),
+            MockBehavior::AdoptionTracking { duration, .. } => Some(*duration),
             MockBehavior::SeekTracking { .. } => None,
             MockBehavior::MisreportedDuration { .. } => Some(Duration::from_secs(10)),
             MockBehavior::LiveFrontier { .. } => Some(Duration::from_secs(180)),
@@ -501,8 +521,19 @@ impl AudioControl for MockReader {
         })
     }
 
+    fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode) {
+        if let MockBehavior::AdoptionTracking {
+            recorded_wake_mode, ..
+        } = &self.behavior
+        {
+            *recorded_wake_mode
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(mode);
+        }
+    }
+
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
-        if let MockBehavior::SampleRateTracking {
+        if let MockBehavior::AdoptionTracking {
             recorded_host_rate, ..
         } = &self.behavior
         {

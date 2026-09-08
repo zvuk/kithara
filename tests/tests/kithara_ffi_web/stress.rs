@@ -44,7 +44,7 @@ impl Xorshift64 {
 }
 
 async fn create_stress_source(jitter: bool) -> (TestServerHelper, Url) {
-    console_error_panic_hook::set_once();
+    kithara::platform::logging::install_panic_hook();
     let _ = tracing_wasm::try_set_as_global_default();
     let helper = TestServerHelper::new().await;
     let bytes_per_second = 44_100.0 * 2.0 * 2.0;

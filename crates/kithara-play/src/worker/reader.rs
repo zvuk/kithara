@@ -1,8 +1,8 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{
-    Audio, AudioControl, AudioRead, AudioSession, ChunkOutcome, PreloadGate, ReadOutcome,
-    SeekBegin, SeekOutcome,
+    Audio, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode, PreloadGate,
+    ReadOutcome, SeekBegin, SeekOutcome,
 };
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
@@ -114,6 +114,7 @@ impl<T: MaybeSend, S> AudioControl for RegisteredAudio<T, S> {
         to self.warp.source_mut() {
             fn preload(&mut self) -> Result<(), DecodeError>;
             fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+            fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode);
             fn sync_seek(&mut self);
         }
         to self.warp.source() {

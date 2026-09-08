@@ -47,8 +47,8 @@ rustflags = [
   # imported shared memory, the same reason the TLS symbols are named above.
   "-C",
   "link-arg=--export=__heap_base",
-  # panic=abort (NOT immediate-abort) so panic messages appear in the
-  # browser console.  console_error_panic_hook shows stack traces.
+  # panic=abort (NOT immediate-abort) so a panic still reaches whichever hook
+  # the binary installed, instead of lowering to a trap that reports nothing.
   "-C",
   "panic=abort",
 ]

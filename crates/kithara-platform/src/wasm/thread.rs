@@ -169,10 +169,7 @@ where
         builder = builder.shim_name(shim.clone());
     }
     builder
-        .spawn(move || {
-            console_error_panic_hook::set_once();
-            f()
-        })
+        .spawn(f)
         .expect("BUG: WASM Worker spawn must succeed; only fails on OS resource exhaustion")
 }
 

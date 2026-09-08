@@ -99,7 +99,6 @@ where
             bus,
             cancel,
             worker: Some(self.player.core.worker.clone()),
-            consumer_wake_mode: Some(self.player.core.engine.consumer_wake_mode()),
             block_on_underrun: self.player.core.block_on_underrun,
             audio,
             host_sample_rate,
@@ -140,8 +139,6 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_assets::AssetStore;
-    use kithara_audio::ConsumerWakeMode;
-    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
     use kithara_warp::WarpConfig;
 
@@ -150,21 +147,8 @@ mod tests {
         PlayError, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, mock,
         player::PlayerConfig,
         resource::ResourceSrc,
-        session::{Cmd, Reply, SessionBinding, SessionDispatcher},
         test_pools::{TestPools, pools},
     };
-
-    struct ImmediateSession(Arc<dyn SessionDispatcher<TestPools>>);
-
-    impl SessionDispatcher<TestPools> for ImmediateSession {
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::ImmediateOffRt
-        }
-
-        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-            self.0.exec(cmd)
-        }
-    }
 
     fn resource_config(source: &str) -> ResourceConfig<TestPools> {
         let pools = pools();
@@ -203,41 +187,6 @@ mod tests {
         )
     }
 
-    #[kithara::test]
-    fn prepare_config_propagates_session_consumer_wake_mode_to_audio() {
-        let session = SessionBinding::new(
-            Arc::new(ImmediateSession(mock::session().dispatcher())),
-            mock::SAMPLE_RATE,
-        );
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(mock::SAMPLE_RATE)
-                .worker(worker())
-                .session(session)
-                .build(),
-        );
-
-        let prepared = player
-            .prepare_config(resource_config("https://example.com/song.mp3"))
-            .expect("test session answers stream-shape queries");
-        assert_eq!(
-            prepared.consumer_wake_mode,
-            Some(ConsumerWakeMode::ImmediateOffRt)
-        );
-        assert!(prepared.decoder.resampler().is_none());
-        let audio = prepared.build_file_config(player.worker(), None);
-        assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
-
-        let prepared = player
-            .prepare_config(resource_config("https://example.com/live.m3u8"))
-            .expect("test session answers stream-shape queries");
-        let audio = prepared
-            .build_hls_config(player.worker(), None)
-            .expect("valid HLS config");
-        assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
-    }
-
-    #[kithara::test]
     #[kithara::test]
     fn prepare_config_sizes_default_resampling_work_to_the_output_block() {
         let shape = StreamShape::new(

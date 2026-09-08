@@ -126,7 +126,6 @@ kithara = { workspace = true, default-features = false, features = [
 kithara-test-macros = { workspace = true }
 
 bytes = { workspace = true }
-console_error_panic_hook = { workspace = true }
 js-sys = { workspace = true }
 # Wraps the `!Send` `js_sys::Function` behind a `Send + Sync` guard (with a
 # runtime same-thread assertion) so the JS-backed observer impls satisfy the

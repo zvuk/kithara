@@ -2,7 +2,8 @@ use std::num::NonZeroU32;
 
 use delegate::delegate;
 use kithara_audio::{
-    AudioObserver, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend, SeekOutcome,
+    AudioObserver, AudioReader, ChunkOutcome, ConsumerWakeMode, ReadOutcome, ResamplerBackend,
+    SeekOutcome,
 };
 use kithara_bufpool::HasPool;
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
@@ -362,6 +363,9 @@ impl Resource {
             /// readers with no worker-backed seek.
             #[must_use]
             pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
+            /// Adopt the wake capability of the consumer that will read this
+            /// resource.
+            pub fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode);
             /// Adopt a seek epoch begun through `seek_handle`. Lock-free.
             pub fn sync_seek(&mut self);
             /// Set the target sample rate of the audio host.

@@ -21,7 +21,10 @@ use kithara::{
         bridge::slot_channels,
     },
 };
-use kithara_integration_tests::{audio_mock::TestPcmReader, test_defaults::Consts};
+use kithara_integration_tests::{
+    audio_mock::{MockReader, TestPcmReader},
+    test_defaults::Consts,
+};
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -301,6 +304,38 @@ fn replay_same_item_does_not_re_emit_current_item_changed(constant_half: &'stati
     assert_eq!(
         second_count, 0,
         "resuming the same item must not re-announce CurrentItemChanged: {second:?}"
+    );
+}
+
+/// `insert` is the queue entry that never passes `ConfigPrep`, so adoption
+/// into the real-time arena is the only place a session wake policy can reach
+/// the resource. A reader left on the direct-consumer default publishes its
+/// reader events inline from the audio callback.
+#[kithara::test(tokio)]
+async fn an_inserted_resource_adopts_the_session_wake_mode() {
+    let (player, _session) = make_fixture_player(0.0);
+    let (reader, recorded) = MockReader::wake_mode_tracking(Consts::AUDIO_SPEC);
+
+    player.insert(
+        Resource::from_reader(reader, None),
+        TrackId::allocate(),
+        None,
+    );
+    player
+        .ensure_engine_started()
+        .expect("start the fixture engine");
+    player.ensure_slot().expect("allocate the fixture slot");
+    player
+        .select_item(0, true)
+        .expect("select the inserted item");
+
+    let applied = *recorded
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(
+        applied,
+        Some(ConsumerWakeMode::RealtimeDeferred),
+        "adoption must apply the session wake mode to an inserted resource"
     );
 }
 

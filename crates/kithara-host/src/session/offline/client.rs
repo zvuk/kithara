@@ -83,8 +83,10 @@ impl<S> OfflineSessionClient<S> {
 }
 
 impl<S: Send + Sync + 'static> SessionDispatcher<S> for OfflineSessionClient<S> {
+    /// Offline render pulls the graph from the session task, an ordinary thread
+    /// that may block and read the clock, so a reader wakes its producer inline.
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
+        ConsumerWakeMode::ImmediateOffRt
     }
 
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {

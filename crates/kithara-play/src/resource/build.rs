@@ -77,10 +77,7 @@ where
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(extension)
             .maybe_observer(observer)
-            .consumer_wake_mode(
-                self.consumer_wake_mode
-                    .unwrap_or(ConsumerWakeMode::ImmediateOffRt),
-            )
+            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
             .block_on_underrun(self.block_on_underrun)
             .maybe_host_sample_rate(self.host_sample_rate)
             .decoder(self.decoder)
@@ -121,10 +118,7 @@ where
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint)
             .maybe_observer(observer)
-            .consumer_wake_mode(
-                self.consumer_wake_mode
-                    .unwrap_or(ConsumerWakeMode::ImmediateOffRt),
-            )
+            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
             .block_on_underrun(self.block_on_underrun)
             .maybe_host_sample_rate(self.host_sample_rate)
             .decoder(self.decoder)

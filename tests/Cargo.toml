@@ -241,12 +241,15 @@ kithara = { workspace = true, default-features = false, features = [
 # fetching their bytes from the native test server.
 kithara-test-fixtures = { workspace = true }
 
-console_error_panic_hook = { workspace = true }
 gloo-timers = { workspace = true }
 
 # WASM-specific
 js-sys = { workspace = true }
 reqwest = { workspace = true }
+
+# The Web Audio backend reports its own start-up failures through `log`; without
+# the bridge a silent audio node is silent in the lane output too.
+tracing-log = { workspace = true }
 tracing-wasm = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
@@ -282,6 +285,10 @@ path = "tests/suite_light.rs"
 [[test]]
 name = "suite_heavy"
 path = "tests/suite_heavy.rs"
+
+[[test]]
+name = "suite_live_web_audio"
+path = "tests/suite_live_web_audio.rs"
 
 [[test]]
 name = "suite_stress"

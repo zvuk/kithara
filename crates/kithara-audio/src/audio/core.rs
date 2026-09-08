@@ -21,7 +21,7 @@ use super::{
     ring::{RecvCtx, RingConsumer},
     seek::{SeekHandle, SeekHandleParts},
 };
-use crate::traits::SeekBegin;
+use crate::{ConsumerWakeMode, traits::SeekBegin};
 
 /// Pull-based PCM facade over a bounded producer ring.
 pub struct Audio<S> {
@@ -377,6 +377,11 @@ impl<S> AudioControl for Audio<S> {
         Some(Self::seek_handle(self))
     }
 
+    fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode) {
+        self.ring.set_consumer_wake_mode(mode);
+        self.events.set_wake_mode(self.ring.consumer_wake_mode());
+    }
+
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
         let previous = self
             .controls
@@ -590,6 +595,29 @@ mod tests {
             vec![epoch],
             "an ImmediateOffRt consumer runs off the real-time thread, so the SeekComplete born inside its read is on the bus when the read returns"
         );
+    }
+
+    #[kithara::test]
+    fn an_adopted_realtime_mode_moves_the_reader_events_with_the_ring(trim_silence: Vec<f32>) {
+        let mut fixture = AudioFixture::with_wake_mode(ConsumerWakeMode::ImmediateOffRt);
+        let mut receiver = fixture.audio.events.bus().subscribe();
+        AudioControl::set_consumer_wake_mode(
+            &mut fixture.audio,
+            ConsumerWakeMode::RealtimeDeferred,
+        );
+        let epoch = seek_and_stage(&trim_silence, &mut fixture);
+
+        let mut buf = [0.0f32; 8];
+        fixture.audio.read(&mut buf).expect("staged read");
+
+        assert_eq!(
+            drain_seek_completions(&mut receiver),
+            Vec::<u64>::new(),
+            "a reader that adopted RealtimeDeferred reads on the audio callback, so it defers what its read births"
+        );
+
+        fixture.emit.flush();
+        assert_eq!(drain_seek_completions(&mut receiver), vec![epoch]);
     }
 
     #[kithara::test]

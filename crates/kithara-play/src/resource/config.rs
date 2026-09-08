@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
-use kithara_audio::{AudioConfigPatch, AudioDecoderConfig, ConsumerWakeMode};
+use kithara_audio::{AudioConfigPatch, AudioDecoderConfig};
 use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
@@ -76,11 +76,6 @@ where
     /// children via [`CancelToken::child`]. `None` lets each subsystem own a
     /// standalone scope (see [`CancelScope::new`](kithara_platform::CancelScope)).
     pub(crate) cancel: Option<CancelToken>,
-    /// Session-owned audio-consumer wake capability. Player preparation fills
-    /// this field; `None` identifies a direct resource consumed off RT. Not a
-    /// document key: the session owns it.
-    #[builder(skip)]
-    pub(crate) consumer_wake_mode: Option<ConsumerWakeMode>,
     /// Optional cache discriminator mixed into the asset root.
     pub(crate) discriminator: Option<String>,
     /// Shared downloader instance.
@@ -138,7 +133,6 @@ where
             hls: self.hls.clone(),
             file: self.file.clone(),
             audio: self.audio.clone(),
-            consumer_wake_mode: self.consumer_wake_mode,
             block_on_underrun: self.block_on_underrun,
             host_sample_rate: self.host_sample_rate,
             preferred_peak_bitrate: self.preferred_peak_bitrate,
@@ -192,12 +186,6 @@ mod tests {
         Ok(ResourceConfig::for_src(ResourceSrc::parse(input)?)
             .store(store())
             .build())
-    }
-
-    #[kithara::test]
-    fn direct_config_has_no_session_wake_policy() {
-        let config = test_config("https://example.com/track.mp3").expect("valid config");
-        assert_eq!(config.consumer_wake_mode, None);
     }
 
     fn worker() -> PlayWorker<TestPools> {
@@ -447,10 +435,6 @@ mod tests {
         let config = test_config("https://example.com/song.mp3").expect("valid config");
 
         assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
-        assert_eq!(
-            config.consumer_wake_mode, None,
-            "a direct resource carries no session wake policy"
-        );
         assert!(!config.block_on_underrun);
         assert!(config.host_sample_rate.is_none());
         assert!(

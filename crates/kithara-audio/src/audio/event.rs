@@ -174,6 +174,10 @@ impl AudioEvents {
         self.underrun_active = false;
     }
 
+    pub(super) const fn set_wake_mode(&mut self, wake_mode: ConsumerWakeMode) {
+        self.wake_mode = wake_mode;
+    }
+
     pub(super) const fn take_wake_pending(&mut self) -> bool {
         let pending = self.wake_pending;
         self.wake_pending = false;

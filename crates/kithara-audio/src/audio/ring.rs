@@ -61,11 +61,8 @@ pub(super) struct RingParts {
 
 impl RingConsumer {
     pub(super) fn new(parts: RingParts) -> Self {
-        let consumer_wake_mode = if parts.block_on_underrun {
-            ConsumerWakeMode::ImmediateOffRt
-        } else {
-            parts.consumer_wake_mode
-        };
+        let consumer_wake_mode =
+            resolve_wake_mode(parts.consumer_wake_mode, parts.block_on_underrun);
         Self {
             consumer_wake_mode,
             audio_rx: parts.audio_rx,
@@ -267,6 +264,10 @@ impl RingConsumer {
         }
     }
 
+    pub(super) fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode) {
+        self.consumer_wake_mode = resolve_wake_mode(mode, self.block_on_underrun);
+    }
+
     fn source_span(
         &mut self,
         data: &AudioChunk,
@@ -323,6 +324,16 @@ impl RingConsumer {
 
     pub(super) fn wake_worker(&self, worker: Option<&dyn WorkerWake>) {
         wake_worker(worker, self.consumer_wake_mode);
+    }
+}
+
+/// A consumer that blocks on underrun waits on the producer thread, so it wakes
+/// it inline whatever the session declares.
+const fn resolve_wake_mode(mode: ConsumerWakeMode, block_on_underrun: bool) -> ConsumerWakeMode {
+    if block_on_underrun {
+        ConsumerWakeMode::ImmediateOffRt
+    } else {
+        mode
     }
 }
 
@@ -470,6 +481,21 @@ mod tests {
     #[kithara::test]
     fn block_on_underrun_forces_immediate_off_rt_wakes() {
         let fixture = RingFixture::with_wake_mode(false, true, ConsumerWakeMode::RealtimeDeferred);
+
+        assert_eq!(
+            fixture.ring.consumer_wake_mode,
+            ConsumerWakeMode::ImmediateOffRt
+        );
+    }
+
+    #[kithara::test]
+    fn an_adopted_mode_still_yields_to_blocking_reads() {
+        let mut fixture =
+            RingFixture::with_wake_mode(false, true, ConsumerWakeMode::ImmediateOffRt);
+
+        fixture
+            .ring
+            .set_consumer_wake_mode(ConsumerWakeMode::RealtimeDeferred);
 
         assert_eq!(
             fixture.ring.consumer_wake_mode,

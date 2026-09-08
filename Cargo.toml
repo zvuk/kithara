@@ -281,7 +281,6 @@ clap = { version = "4.6", features = ["derive", "env"] }
 cochlea-features = "0.1.0"
 cochlea-render = "0.7.0"
 cochlea-score = "0.7.0"
-console_error_panic_hook = "0.1"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
 cpal = { version = "0.18", default-features = false }

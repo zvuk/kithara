@@ -6,7 +6,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 
 use super::{ChunkOutcome, ReadOutcome, SeekOutcome};
-use crate::producer::PreloadGate;
+use crate::{ConsumerWakeMode, producer::PreloadGate};
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -185,6 +185,12 @@ pub trait AudioControl {
     fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
         None
     }
+
+    /// Adopt the wake capability of the consumer that will read this reader.
+    ///
+    /// The owning session declares it; readers with no ring to arm keep the
+    /// default no-op.
+    fn set_consumer_wake_mode(&mut self, _mode: ConsumerWakeMode) {}
 
     /// Set the target sample rate of the audio host.
     ///

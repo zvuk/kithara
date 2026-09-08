@@ -104,6 +104,7 @@ impl<S> PlayerRuntime<S> {
         let Some(item) = self.core.items.take_for_load(
             index,
             self.core.engine.master_sample_rate(),
+            self.core.engine.consumer_wake_mode(),
             self.core.engine.pools(),
         )?
         else {

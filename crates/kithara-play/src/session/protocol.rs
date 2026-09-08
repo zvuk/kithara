@@ -303,12 +303,6 @@ mod handle {
         pub(crate) fn requested_sample_rate(&self) -> NonZeroU32 {
             self.requested_sample_rate
         }
-
-        #[cfg(test)]
-        #[must_use]
-        pub(crate) fn dispatcher(&self) -> Arc<dyn SessionDispatcher<S>> {
-            Arc::clone(&self.dispatcher)
-        }
     }
 
     impl<S> Clone for SessionBinding<S> {

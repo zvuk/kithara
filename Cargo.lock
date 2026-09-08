@@ -1640,16 +1640,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "console_error_panic_hook"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
-dependencies = [
- "cfg-if",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5031,7 +5021,6 @@ name = "kithara-ffi"
 version = "0.0.1-alpha4"
 dependencies = [
  "bytes",
- "console_error_panic_hook",
  "cpal 0.18.1",
  "dashmap",
  "delegate",
@@ -5195,7 +5184,6 @@ dependencies = [
  "bytes",
  "cbc",
  "cochlea-features",
- "console_error_panic_hook",
  "criterion",
  "firewheel",
  "futures",
@@ -5227,6 +5215,7 @@ dependencies = [
  "tower",
  "tower-http 0.7.0",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
  "tracing-wasm",
  "unimock",
@@ -5316,7 +5305,6 @@ version = "0.0.1-alpha4"
 dependencies = [
  "arc-swap",
  "assert_no_alloc",
- "console_error_panic_hook",
  "cpu-time",
  "criterion",
  "delegate",
