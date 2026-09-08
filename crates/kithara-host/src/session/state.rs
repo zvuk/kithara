@@ -249,11 +249,6 @@ impl<B: AudioBackend, S> SessionState<B, S> {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) const fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
-        self.ctx.as_mut()
-    }
-
     pub(super) fn publish_root(&self) {
         self.root_view.publish(&self.root);
     }

@@ -3,12 +3,16 @@ use std::num::NonZeroU32;
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
+#[cfg(any(target_arch = "wasm32", test))]
+use kithara_platform::sync::mpsc;
 use kithara_play::{PlayError, StreamShape, player::PlayerMember};
 use kithara_warp::{
     SyncCapability, SyncError, SyncGroup, SyncOperation, SyncRejected, TopologyOperation,
 };
 use tracing::{debug, trace, warn};
 
+#[cfg(any(target_arch = "wasm32", test))]
+use super::protocol::HostCmdMsg;
 use super::{
     graph::{controls, lifecycle, player_index, slots, tap},
     protocol::{
@@ -265,6 +269,26 @@ pub(super) fn tick_session<B: AudioBackend, S>(state: &mut SessionState<B, S>) -
         return handle_update_error(state, err);
     }
     Reply::Ok
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(super) fn drain_host_channel<B, S>(
+    state: &mut SessionState<B, S>,
+    rx: &mpsc::Receiver<HostCmdMsg<S>>,
+    mut observe: impl FnMut(&HostReply),
+) where
+    B: AudioBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    for msg in rx.try_iter() {
+        let reply = run_host_cmd(state, msg.cmd);
+        observe(&reply);
+        msg.reply_tx.send(reply).ok();
+    }
+
+    if let Reply::Err(err) = tick_session(state) {
+        warn!(?err, "session tick in host drain failed");
+    }
 }
 
 fn unregister_player<B: AudioBackend, S>(
@@ -1111,6 +1135,35 @@ mod tests {
             deck(&state, 0).slots.len(),
             2,
             "session must accept a future slot after route-loss reinit"
+        );
+        assert!(!state.stream_needs_restart);
+    }
+
+    #[kithara::test]
+    fn stream_loss_seen_while_draining_host_commands_restarts_the_stream() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let player_id = register_player(&mut state);
+
+        assert!(matches!(
+            run_cmd(&mut state, start_command(player_id, 44_100)),
+            Reply::Ok
+        ));
+        assert_eq!(
+            route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
+            1
+        );
+
+        let (_tx, rx) = mpsc::channel::<HostCmdMsg<TestPools>>();
+
+        route_loss(|probe| probe.fail_next_poll.store(true, Ordering::SeqCst));
+        drain_host_channel(&mut state, &rx, |_| {});
+
+        assert_eq!(
+            route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
+            2,
+            "a stream drop observed during a host command drain must restart the stream"
         );
         assert!(!state.stream_needs_restart);
     }

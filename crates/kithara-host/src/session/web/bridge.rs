@@ -3,13 +3,12 @@ use std::{cell::RefCell, num::NonZeroU32, sync::atomic::Ordering};
 use firewheel::FirewheelCtx;
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, mpsc};
-use tracing::warn;
 
 use super::client::WebSessionState;
 use crate::{
     bridge::PlaybackShared,
     session::{
-        dispatch::run_host_cmd,
+        dispatch::drain_host_channel,
         protocol::{HostCmdMsg, HostReply, Reply},
         state::ensure_ctx,
     },
@@ -40,21 +39,13 @@ pub(crate) fn tick_and_poll_remote<S>(
         return;
     };
 
-    for msg in rx.try_iter() {
-        let reply = run_host_cmd(state, msg.cmd);
-        if let HostReply::Play(Reply::SlotAllocated(ref allocated)) = reply {
+    drain_host_channel(state, rx, |reply| {
+        if let HostReply::Play(Reply::SlotAllocated(allocated)) = reply {
             BRIDGE_PLAYBACK.with(|playback| {
                 *playback.borrow_mut() = Some(Arc::clone(&allocated.control.playback));
             });
         }
-        msg.reply_tx.send(reply).ok();
-    }
-
-    if let Some(ctx) = state.ctx_mut()
-        && let Err(err) = ctx.update()
-    {
-        warn!("session graph update in tick failed: {err:?}");
-    }
+    });
 }
 
 pub(crate) fn bridge_position_secs() -> f64 {
