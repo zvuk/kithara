@@ -44,7 +44,7 @@ use ringbuf::{
     HeapCons, HeapRb,
     traits::{Consumer, Split},
 };
-use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -59,11 +59,13 @@ fn init_diagnostics() {
 
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).unwrap();
 const CHANNELS: usize = 2;
-/// Eight seconds of stereo headroom, so a poll that arrives late still finds
+/// Eight seconds of stereo headroom, so a frame that arrives late still finds
 /// the ring with room.
 const TAP_CAPACITY: usize = 8 * 44_100 * CHANNELS;
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
-const POLL_BUDGET: usize = 300;
+/// The cadence the product Worker ticks its queue at.
+const WORKER_TICK: Duration = Duration::from_millis(100);
+/// How long the tap may take to carry its second of audio.
+const AUDIO_BUDGET_MS: f64 = 15_000.0;
 const AUDIBLE_THRESHOLD: f32 = 0.01;
 const TONE_HZ: f64 = 440.0;
 const TONE_TOLERANCE: f64 = 0.02;
@@ -72,12 +74,34 @@ const TONE_TOLERANCE: f64 = 0.02;
 const MIN_RMS: f32 = 0.55;
 const MAX_RMS: f32 = 0.75;
 
+/// How far the player Worker got. Its console is not the one
+/// `wasm-bindgen-test` captures, so a failure there reads only from here.
+const STAGES: [&str; 8] = [
+    "spawning the Worker",
+    "inserting the player into the Host",
+    "starting the test server",
+    "opening the fixture resource",
+    "preloading the fixture",
+    "starting playback",
+    "ticking the queue",
+    "past the tick loop",
+];
+
+fn stage_name(stage: u64) -> &'static str {
+    usize::try_from(stage)
+        .ok()
+        .and_then(|index| STAGES.get(index))
+        .copied()
+        .unwrap_or("an unknown stage")
+}
+
 /// One player on the fixture sine, owned by the Worker the wasm Host requires
 /// for insertion. It keeps ticking until the test's Host route closes.
-fn spawn_player_worker(sender: wasm::HostSender<TestPools>) {
+fn spawn_player_worker(sender: wasm::HostSender<TestPools>, stage: Arc<AtomicU64>) {
     spawn_named("live-web-audio-player", move || {
         keep_worker_alive();
         task::spawn(async move {
+            stage.store(1, Ordering::Relaxed);
             let mut host = wasm::remote_host(sender);
             let region = pools();
             let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
@@ -90,10 +114,12 @@ fn spawn_player_worker(sender: wasm::HostSender<TestPools>) {
             let owner = host
                 .insert(player)
                 .expect("insert the player into the Host");
+            stage.store(2, Ordering::Relaxed);
             let control = owner.control().clone();
             control.set_crossfade_duration(0.0);
 
             let server = TestServerHelper::new().await;
+            stage.store(3, Ordering::Relaxed);
             let url = server.signal(SignalAsset::MP3_SINE440_60S);
             let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
                 ResourceSrc::parse(url.as_str())
@@ -109,32 +135,49 @@ fn spawn_player_worker(sender: wasm::HostSender<TestPools>) {
             let mut resource = Resource::new(config)
                 .await
                 .expect("open the fixture as a product resource");
+            stage.store(4, Ordering::Relaxed);
             resource.preload().await.expect("preload the fixture");
+            stage.store(5, Ordering::Relaxed);
 
             control.insert(resource, TrackId(0), None);
             control
                 .select_item(0, true)
                 .expect("select the fixture for playback");
             control.play();
+            stage.store(6, Ordering::Relaxed);
 
             while control.tick().is_ok() {
-                sleep(POLL_INTERVAL).await;
+                sleep(WORKER_TICK).await;
             }
+            stage.store(7, Ordering::Relaxed);
         });
     });
 }
 
+/// One `requestAnimationFrame` turn, the cadence `tick_and_poll` documents.
+async fn next_frame(window: &web_sys::Window) {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        let frame = Closure::once_into_js(move |_: JsValue| {
+            let _ = resolve.call0(&JsValue::NULL);
+        });
+        window
+            .request_animation_frame(frame.unchecked_ref())
+            .expect("schedule the next animation frame");
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
 /// Append what the tap holds, starting the window at the first audible frame.
-fn collect_tap(tap: &mut HeapCons<f32>, window: &mut Vec<f32>) {
+fn collect_tap(tap: &mut HeapCons<f32>, window: &mut Vec<f32>) -> usize {
     let drained: Vec<f32> = tap.pop_iter().collect();
     if window.is_empty() {
-        let Some(start) = first_audible_sample(&drained) else {
-            return;
-        };
-        window.extend_from_slice(&drained[start..]);
-        return;
+        if let Some(start) = first_audible_sample(&drained) {
+            window.extend_from_slice(&drained[start..]);
+        }
+    } else {
+        window.extend_from_slice(&drained);
     }
-    window.extend_from_slice(&drained);
+    drained.len()
 }
 
 fn first_audible_sample(samples: &[f32]) -> Option<usize> {
@@ -142,6 +185,11 @@ fn first_audible_sample(samples: &[f32]) -> Option<usize> {
         .chunks_exact(CHANNELS)
         .position(|frame| frame.iter().any(|sample| sample.abs() > AUDIBLE_THRESHOLD))
         .map(|frame| frame * CHANNELS)
+}
+
+fn session_is_live(host: &Host<TestPools>) -> bool {
+    host.sample_rate()
+        .is_ok_and(|rates| rates.measured == Some(rates.requested))
 }
 
 /// Dominant frequency of a mono window, taken from its rising zero crossings.
@@ -178,32 +226,44 @@ async fn live_web_audio_plays_at_session_rate() {
     outputs.push(MixTapWriter::new(pcm_tx, Arc::clone(&drops)));
     host.enable_outputs(outputs).expect("install the mix tap");
 
-    spawn_player_worker(sender);
+    let stage = Arc::new(AtomicU64::new(0));
+    spawn_player_worker(sender, Arc::clone(&stage));
 
-    let document = web_sys::window()
-        .expect("the browser main thread owns a window")
-        .document()
-        .expect("the runner page owns a document");
+    let page = web_sys::window().expect("the browser main thread owns a window");
+    let document = page.document().expect("the runner page owns a document");
     let target = usize::try_from(RATE.get()).unwrap() * CHANNELS;
     let mut window: Vec<f32> = Vec::with_capacity(target);
-    let mut polls = 0;
-    while polls < POLL_BUDGET && window.len() < target {
+    let mut frames_pumped = 0u64;
+    let mut tapped = 0usize;
+    let deadline = js_sys::Date::now() + AUDIO_BUDGET_MS;
+    let mut opened = false;
+    while js_sys::Date::now() < deadline && window.len() < target {
         wasm::tick_and_poll(&receiver);
+        // Firewheel resumes a suspended `AudioContext` only from a document
+        // interaction event, and the Worker installs that listener mid-run.
         let click = web_sys::Event::new("click").expect("build a click event");
         document.dispatch_event(&click).expect("dispatch the click");
-        sleep(POLL_INTERVAL).await;
-        collect_tap(&mut pcm_rx, &mut window);
-        polls += 1;
+        next_frame(&page).await;
+        tapped += collect_tap(&mut pcm_rx, &mut window);
+        frames_pumped += 1;
+        // A session that reported its rate and then stopped has lost its stream,
+        // and waiting out the budget would report silence instead of the drop.
+        if session_is_live(&host) {
+            opened = true;
+        } else if opened {
+            break;
+        }
     }
 
     let frames = window.len() / CHANNELS;
     let dropped = drops.load(Ordering::Relaxed);
+    let stage = stage_name(stage.load(Ordering::Relaxed));
     let rates = host.sample_rate().expect("read the session output rate");
     assert_eq!(
         (rates.requested, rates.measured),
         (RATE.get(), Some(RATE.get())),
-        "the session plays at a rate it did not ask for, having tapped {frames} frames \
-         with {dropped} dropped"
+        "the session lost the rate it asked for after {frames_pumped} frames, having tapped \
+         {frames} frames with {dropped} dropped while the Worker was {stage}"
     );
 
     let measured = rates.output();
@@ -211,7 +271,8 @@ async fn live_web_audio_plays_at_session_rate() {
     assert!(
         frames >= second,
         "tap carried {frames} frames of the {second} one second holds at {measured} Hz, \
-         with {dropped} dropped"
+         with {dropped} dropped over {frames_pumped} frames and {tapped} samples tapped, \
+         while the Worker was {stage}"
     );
     assert_eq!(
         dropped, 0,
@@ -222,7 +283,7 @@ async fn live_web_audio_plays_at_session_rate() {
     let tone = zero_crossing_hz(&deinterleave_left(steady, CHANNELS), f64::from(measured));
     let level = rms(steady);
     tracing::info!(
-        polls,
+        frames_pumped,
         frames,
         measured,
         tone,
@@ -326,12 +387,12 @@ async fn reported_from_the_render_scope(probe_name: &str) -> String {
     );
     let pending = probe
         .apply(
-            &wasm_bindgen::JsValue::NULL,
+            &JsValue::NULL,
             &js_sys::Array::of4(
                 &IMPORT_META.with(ImportMeta::url).into(),
                 &wasm_bindgen::module(),
                 &wasm_bindgen::memory(),
-                &wasm_bindgen::JsValue::from_str(probe_name),
+                &JsValue::from_str(probe_name),
             ),
         )
         .expect("start the worklet probe");

@@ -3,14 +3,10 @@ use std::{panic, sync::Once};
 use js_sys::JsString;
 use web_sys::console;
 
-/// `String.fromCharCode` takes one argument per code unit, so a message is fed
-/// to it in slices that stay inside an engine's argument list.
+/// `String.fromCharCode` takes one argument per code unit.
 const CODE_UNITS_PER_CALL: usize = 1024;
 
-/// Build a JS string from the code units of `msg`.
-///
-/// Every scope can read code units, `AudioWorkletGlobalScope` included, which
-/// is where the audio render pass reports from.
+/// Build a JS string from the code units of `msg`, which every scope can read.
 fn js_string(msg: &str) -> JsString {
     let mut units = msg.encode_utf16();
     let mut line = JsString::from_char_code(&[]);
@@ -33,20 +29,15 @@ fn js_string(msg: &str) -> JsString {
 ///
 /// On native this routes through `tracing`. On wasm it writes to the browser
 /// `console` directly: the global `tracing` subscriber marks its spans through
-/// `performance`, a global the `AudioWorkletGlobalScope` of the audio render
-/// pass leaves undefined. `console.error` is a per-realm import that is valid
-/// in every scope, and [`js_string`] builds its argument the way every scope
-/// can.
+/// `performance`, which `AudioWorkletGlobalScope` leaves undefined.
 pub fn log_error(msg: &str) {
     console::error_1(&js_string(msg));
 }
 
 /// Report a panic through [`log_error`], on whichever thread panicked.
 ///
-/// `set_hook` writes one process-wide slot, so a binary's entry point is where
-/// this belongs. A build that lowers a panic to a trap (`-C
-/// panic=immediate-abort`, which the web artifact takes) reaches no hook at
-/// all.
+/// `set_hook` writes one process-wide slot, so a binary's entry point owns this
+/// call. `-C panic=immediate-abort` traps instead and reaches no hook.
 pub fn install_panic_hook() {
     static INSTALLED: Once = Once::new();
 

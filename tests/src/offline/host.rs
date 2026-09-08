@@ -20,25 +20,12 @@ use kithara::{
     queue::Queue,
     signal::AudioSpec,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use kithara::{
-    platform::{
-        sync::mpsc::{self, RecvTimeoutError},
-        thread::{JoinHandle, spawn_named},
-        time::Instant,
-        tokio::{runtime::Handle, task::spawn_blocking},
-    },
-    queue::QueueControl,
-};
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_test_utils::off_thread::OffThread as HostOwner;
 use ringbuf::{
     HeapCons, HeapRb,
     traits::{Consumer, Observer, Split},
 };
 
-#[cfg(target_arch = "wasm32")]
-use self::inline::InlineOwner as HostOwner;
+use super::owner::HostOwner;
 
 const CHANNELS: u16 = 2;
 const ENDPOINT_SLACK_SECS: f64 = 0.5;
@@ -128,78 +115,6 @@ where
 }
 
 pub type OfflineQueue<S> = OfflineResident<Queue<S>, S>;
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Drives `QueueControl::tick` from a dedicated thread, the way the FFI
-/// bridge and the app update loop do, until the queue closes or `stop`.
-pub struct QueueTicker {
-    stop: Option<mpsc::Sender<()>>,
-    thread: Option<JoinHandle<()>>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl QueueTicker {
-    /// Spawns the ticker; the thread enters the caller's runtime like the
-    /// product app thread, so a tick may spawn loads.
-    pub fn spawn<S>(queue: QueueControl<S>, interval: Duration) -> Self
-    where
-        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    {
-        let (stop, stop_receiver) = mpsc::channel::<()>();
-        let runtime = Handle::current();
-        let thread = spawn_named("queue-ticks", move || {
-            let _runtime = runtime.enter();
-            while let Err(RecvTimeoutError::Timeout) =
-                stop_receiver.recv_timeout(Instant::now() + interval)
-            {
-                if queue.tick().is_err() {
-                    break;
-                }
-            }
-        });
-        Self {
-            stop: Some(stop),
-            thread: Some(thread),
-        }
-    }
-
-    /// Whether the thread exited: the queue closed or a tick panicked.
-    pub fn is_finished(&self) -> bool {
-        self.thread.as_ref().is_some_and(JoinHandle::is_finished)
-    }
-
-    /// Stops ticking and joins the thread; `Err` is the message of a tick panic.
-    pub async fn join(&mut self) -> Result<(), String> {
-        drop(self.stop.take());
-        let Some(thread) = self.thread.take() else {
-            return Ok(());
-        };
-        spawn_blocking(move || thread.join())
-            .await
-            .expect("join the queue ticker")
-            .map_err(|payload| {
-                payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
-                    .unwrap_or_else(|| "non-string panic payload".to_owned())
-            })
-    }
-
-    /// Stops ticking and waits for the thread; a tick panic fails the caller.
-    pub async fn stop(&mut self) {
-        if let Err(panic) = self.join().await {
-            panic!("queue ticker panicked: {panic}");
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for QueueTicker {
-    fn drop(&mut self) {
-        drop(self.stop.take());
-    }
-}
 
 impl<S> OfflineHostHarness<S>
 where
@@ -417,31 +332,4 @@ pub fn offline_gain_window(
     let rate =
         (f64::from(block_frames.get()) / f64::from(sample_rate.get())) / pacing.as_secs_f64();
     GAIN_FLOOR_SECS..=(rate * (window_secs + ENDPOINT_SLACK_SECS))
-}
-
-/// Owner of a Host on the calling thread, for the wasm harness whose caller is
-/// already the worker the Host belongs to.
-#[cfg(target_arch = "wasm32")]
-mod inline {
-    use kithara::platform::sync::Mutex;
-
-    pub(super) struct InlineOwner<T>(Mutex<T>);
-
-    impl<T: 'static> InlineOwner<T> {
-        pub(super) async fn spawn<E, I>(_name: &'static str, init: I) -> Result<Self, E>
-        where
-            I: FnOnce() -> Result<T, E>,
-        {
-            init().map(|value| Self(Mutex::new(value)))
-        }
-
-        pub(super) async fn call<R, F>(&self, job: F) -> R
-        where
-            F: FnOnce(&mut T) -> R,
-        {
-            job(&mut self.0.lock())
-        }
-
-        pub(super) async fn close(self) {}
-    }
 }

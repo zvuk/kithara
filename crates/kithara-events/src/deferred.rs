@@ -6,18 +6,14 @@ use crate::{BusEvent, Envelope, Event, EventBus, EventMeta};
 
 /// Decode-core → shell hand-off for reader-hook events.
 ///
-/// Reader hooks run on the worker's forbid-blocking decode core, where they
-/// resolve a fully-formed event from live cursor state. Publishing it goes
-/// through `tokio::broadcast::Sender::send`, which takes an internal lock —
-/// forbidden on the produce core. `DeferredBus` splits the two:
-/// [`enqueue`](Self::enqueue) pushes the resolved event into a fixed,
-/// lock-free ring on the decode core (no alloc, no lock, no clock);
-/// [`flush`](Self::flush) drains the ring, stamps each envelope and publishes
-/// from the scheduler's unchecked shell, once per pass. The ring is FIFO, so
-/// events keep their decode order.
+/// Reader hooks resolve events on the worker's forbid-blocking decode core,
+/// where `tokio::broadcast::Sender::send` cannot run: it takes an internal
+/// lock. [`enqueue`](Self::enqueue) pushes into a fixed lock-free ring;
+/// [`flush`](Self::flush) drains it FIFO, stamping each envelope, from the
+/// scheduler's unchecked shell once per pass.
 ///
-/// The element is the narrow per-domain event (`HlsEvent` / `FileEvent`),
-/// converted to [`Event`] only at publish time, so the ring stays small.
+/// The element is the narrow per-domain event, converted to [`Event`] only at
+/// publish time, so the ring stays small.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct DeferredBus<E> {
@@ -50,7 +46,8 @@ impl<E: Into<Event>> DeferredBus<E> {
     /// Queue a resolved event for shell-side publish.
     ///
     /// Lock-free, alloc-free and clock-free, so it is safe to call from the
-    /// decode core and from an audio thread whose global scope offers no clock.
+    /// decode core.
+    ///
     /// Drops the event if the ring is full: the only high-volume producer is
     /// monotonic progress, where the next pass's event supersedes a dropped
     /// one, so a drop under burst is self-healing.
@@ -67,8 +64,8 @@ impl<E: Into<Event>> DeferredBus<E> {
     /// Drain the ring and publish every queued event in FIFO order.
     ///
     /// Runs in the unchecked scheduler shell, so the `broadcast::send` lock and
-    /// the clock read that stamps each envelope stay off the forbid-blocking
-    /// decode core. `seq`, taken at enqueue, carries the producer's order.
+    /// the stamp's clock read stay off the decode core. `seq`, taken at
+    /// enqueue, carries the producer's order.
     pub fn flush(&self) {
         while let Some(event) = self.pending.pop() {
             self.bus.publish_envelope(Envelope {
@@ -94,7 +91,6 @@ impl<E: Into<Event>> DeferredBus<E> {
 
 #[cfg(all(test, feature = "file"))]
 mod tests {
-    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -168,8 +164,9 @@ mod tests {
         deferred.enqueue(progress(1));
         deferred.enqueue(progress(2));
 
-        // Wide enough that a stamp taken on the core would sit below `before`.
-        kithara_platform::time::sleep(Duration::from_millis(10)).await;
+        // Leaving the enqueue tick puts a stamp taken there below `before`.
+        let enqueued = crate::bus::ts_micros();
+        while crate::bus::ts_micros() <= enqueued {}
         let before = crate::bus::ts_micros();
         deferred.flush();
         let after = crate::bus::ts_micros();

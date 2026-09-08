@@ -112,9 +112,8 @@ wasm BROWSER="chrome" SUITE="all":
         -Z build-std=std,panic_abort,core,alloc \
         -Z build-std-features=optimize_for_size \
         -p kithara-integration-tests --test suite_heavy
-      # The live-graph oracle needs the page's main thread: the product web
-      # session creates its `AudioContext` there. `wasm-bindgen-test` picks the
-      # thread per binary, so the oracle gets a binary of its own.
+      # `wasm-bindgen-test` picks its thread per binary, and the live-graph
+      # oracle needs the page's main thread.
       WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
         cargo "+$toolchain" test --profile test-release \
         --target wasm32-unknown-unknown \
