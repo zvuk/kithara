@@ -20,5 +20,5 @@ description = "Packaged HLS fixtures carry public AES material, not credentials.
 targetRules = ["generic-api-key"]
 paths = [
   '''^assets/drm/index-(shq|slossless|slq|smq)-a1\.m3u8$''',
-  '''^(?:tests/src/native|crates/kithara-test-utils/src)/hls_stream\.rs$''',
+  '''^(?:tests/crates/integration/src/native|crates/kithara-test-utils/src)/hls_stream\.rs$''',
 ]

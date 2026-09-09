@@ -74,6 +74,14 @@ impl Container<'_> {
         vec![
             ("kithara-ci-cargo-home".to_owned(), "/home/runner/.cargo"),
             (
+                host.cache_root
+                    .join("workspaces")
+                    .join(&runner.name)
+                    .to_string_lossy()
+                    .into_owned(),
+                "/runner/_work",
+            ),
+            (
                 Self::target_dir(host, runner)
                     .to_string_lossy()
                     .into_owned(),

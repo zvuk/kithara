@@ -1,5 +1,73 @@
 use std::{fs, path::Path};
 
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root")
+}
+
+#[test]
+fn workspace_lane_builds_native_test_packages_in_one_cargo_graph() {
+    let root = workspace_root();
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let test = &config["test"];
+    assert_eq!(
+        test["lanes"]["workspace"]["program"].as_str(),
+        Some("cargo")
+    );
+    assert_eq!(config["stress"]["lane"].as_str(), Some("workspace"));
+    let args = test["lanes"]["workspace"]["prefix_args"]
+        .as_array()
+        .expect("workspace lane has arguments");
+    let args: Vec<&str> = args.iter().filter_map(toml::Value::as_str).collect();
+    assert!(args.contains(&"--workspace"));
+    for package in [
+        "kithara-fuzz",
+        "kithara-ui",
+        "kithara-devtools",
+        "xtask",
+        "kithara-test-utils",
+        "kithara-test-macros",
+        "kithara-ffi-web-tests",
+        "kithara-ffi-web-analysis-tests",
+    ] {
+        assert!(
+            args.contains(&package),
+            "workspace lane must exclude {package}"
+        );
+    }
+
+    let manifest: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join("Cargo.toml")).expect("workspace manifest is readable"),
+    )
+    .expect("workspace manifest is valid TOML");
+    let overrides = manifest["profile"]["test-release"]["package"]
+        .as_table()
+        .expect("test-release has package overrides");
+    assert!(overrides.contains_key("kithara-integration-tests"));
+    for entry in fs::read_dir(root.join("tests/crates")).expect("read test packages") {
+        let manifest = entry.expect("read test package").path().join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let package: toml::Value = toml::from_str(
+            &fs::read_to_string(manifest).expect("test package manifest is readable"),
+        )
+        .expect("test package manifest is valid TOML");
+        let name = package["package"]["name"]
+            .as_str()
+            .expect("test package has a name");
+        assert_eq!(
+            overrides[name]["opt-level"].as_integer(),
+            Some(1),
+            "{name} must keep test code out of opt-level 3"
+        );
+    }
+}
+
 // A browser lane's name is a promise about what ran. The harness reads
 // `KITHARA_SELENIUM_BROWSER` and falls back to chrome when nothing sets it, so
 // the lane that names a browser has to name it in its own configuration -

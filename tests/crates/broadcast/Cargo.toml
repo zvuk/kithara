@@ -1,0 +1,40 @@
+[package]
+name = "kithara-broadcast-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-test-utils"]
+
+[features]
+default = ["client-reqwest", "tls-rustls"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
+flash = ["kithara/flash", "kithara-integration-tests/flash"]
+no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
+broadcast = ["kithara/broadcast"]
+
+[dependencies]
+kithara = { workspace = true, features = ["full", "probe", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }
+kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
+kithara-integration-tests = { workspace = true }
+kithara-test-fixtures = { workspace = true }
+
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+
+bytes = { workspace = true }
+url = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "broadcast"
+path = "tests/suite.rs"
+required-features = ["broadcast"]

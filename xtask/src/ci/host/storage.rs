@@ -17,6 +17,8 @@ use super::{
     runner_images::JobVm,
     runners::{docker_host, docker_socket},
 };
+#[cfg(test)]
+use crate::ci::process::Recording;
 use crate::ci::{
     build_cache,
     config::CiConfig,
@@ -1288,20 +1290,20 @@ mod tests {
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
         install_double(&cfg.host.brew_root.join("bin"), "colima");
-        let asked = directory.path().join("asked");
+        let process = Process::recording(directory.path(), Recording::default());
+        {
+            let storage = HostStorage::for_test(&cfg, &process).unwrap();
+            assert_eq!(storage.worst_pressure().unwrap().0, Pressure::Normal);
+            storage.cleanup().unwrap();
+        }
 
-        let process = Process::new(
-            directory.path(),
-            BTreeMap::from([(
-                OsString::from("KITHARA_TEST_TRACE"),
-                asked.clone().into_os_string(),
-            )]),
-        );
-        let storage = HostStorage::for_test(&cfg, &process).unwrap();
-        assert_eq!(storage.worst_pressure().unwrap().0, Pressure::Normal);
-        storage.cleanup().unwrap();
-
-        let arguments = fs::read_to_string(&asked).expect("the guest was never asked for anything");
+        let recording = process.recorded().expect("a recording process records");
+        let arguments = recording
+            .steps()
+            .iter()
+            .find(|step| step.label == "return the Linux guest's freed blocks")
+            .map(|step| step.args.join(" "))
+            .expect("the guest was never asked for anything");
         assert!(
             arguments.contains("fstrim"),
             "cleanup asked the guest for {arguments} instead of a trim"

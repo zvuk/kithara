@@ -173,7 +173,7 @@ fn run_report(
     let unimock_traits = count_pattern(&crate_files, &re_mock_coverage)?;
     let rstest_cases = count_pattern(&crate_and_test_files, &re_rstest)?;
     let plain_tests = count_pattern(&crate_and_test_files, &re_plain_test)?;
-    let perf_tests = count_rs_files_in(&tests_dir.join("perf"))?;
+    let perf_tests = count_rs_files_in(&tests_dir.join("crates/integration/perf"))?;
     let bench_targets = count_bench_rs_files(&[&crates_dir, &tests_dir])?;
     let local_http_servers = count_pattern(&test_files, &re_tcp_listener)?;
 
@@ -226,7 +226,7 @@ fn run_report(
 | Traits with mock coverage | {unimock_traits} |
 | rstest test cases | {rstest_cases} |
 | Plain #[test]/#[tokio::test] markers | {plain_tests} |
-| perf test files (tests/perf) | {perf_tests} |
+| perf test files (tests/crates/integration/perf) | {perf_tests} |
 | bench targets (*/benches/*.rs) | {bench_targets} |
 | Local HTTP server bind sites in tests | {local_http_servers} |
 

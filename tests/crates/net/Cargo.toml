@@ -1,0 +1,47 @@
+[package]
+name = "kithara-net-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-test-utils"]
+
+[features]
+default = ["client-reqwest", "tls-rustls"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
+flash = ["kithara/flash", "kithara-integration-tests/flash"]
+no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
+
+[dependencies]
+kithara = { workspace = true, features = [
+    "bufpool",
+    "mock",
+    "net",
+    "platform",
+    "probe",
+    "stream",
+    "tokio-net",
+] }
+kithara-integration-tests = { workspace = true }
+
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+
+axum = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+unimock = { workspace = true }
+url = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "net"
+path = "tests/suite.rs"

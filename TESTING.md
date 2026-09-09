@@ -9,7 +9,7 @@ per-crate behavior contracts live in each crate's wiki page.
 
 The canonical gate is plain `just test` (the product workspace, all backends,
 `flash` ON, `test-release` profile). Backend features (symphonia / apple /
-android) are activated automatically by `tests/Cargo.toml`, so a single run
+android) are activated automatically by `tests/crates/integration/Cargo.toml`, so a single run
 exercises every compiled-in decoder.
 
 ```sh

@@ -37,7 +37,7 @@ validation scope.
 
 ## Harness Shape
 
-- Use shared helpers from `kithara-test-utils` and `tests/src` for temp dirs,
+- Use shared helpers from `kithara-test-utils` and `tests/crates/integration/src` for temp dirs,
   servers, waits, fixtures, flash pacing, and spawned work.
 - Do not hard-code ports or random global paths.
 - Wait for observable conditions, events, or bounded predicates. Do not sleep

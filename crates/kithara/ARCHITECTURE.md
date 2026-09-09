@@ -31,6 +31,12 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 
 ## Features
 
+Every normal dependency of the facade is optional. With
+`--no-default-features`, `kithara` is an empty facade; consumers enable the
+modules they import and the backend features those modules need. `default`
+preserves the desktop facade, while `all` selects every facade domain with one
+compatible native software stack.
+
 <table>
 
 <tr><th>Feature</th><th>Default</th><th>Enables</th></tr>
@@ -38,6 +44,10 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 <tr><td><code>file</code></td><td>yes</td><td>Progressive pipeline (<code>kithara-file</code>, <code>kithara-assets</code>, <code>kithara-net</code>)</td></tr>
 
 <tr><td><code>hls</code></td><td>yes</td><td>HLS pipeline (<code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-assets</code>, <code>kithara-net</code>, <code>kithara-drm</code>)</td></tr>
+
+<tr><td><code>audio</code> / <code>bufpool</code> / <code>decode</code> / <code>events</code> / <code>host</code> / <code>platform</code> / <code>play</code> / <code>resampler</code> / <code>signal</code> / <code>stream</code> / <code>test-utils</code> / <code>warp</code></td><td>yes</td><td>Enables the matching facade module or support crate; <code>signal</code> also enables process signals in <code>kithara-platform</code></td></tr>
+
+<tr><td><code>abr</code> / <code>drm</code> / <code>storage</code> / <code>stretch</code></td><td>via composite features</td><td>Enables the matching facade module independently; <code>hls</code>, <code>assets</code>, and stretch backend features select them as needed</td></tr>
 
 <tr><td><code>symphonia</code></td><td>yes</td><td>Symphonia software decoder (<code>kithara-audio/symphonia</code>, <code>kithara-decode/symphonia</code>) plus queue decode forwarding when <code>queue</code> is enabled</td></tr>
 
@@ -75,8 +85,6 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 
 <tr><td><code>net</code></td><td>no</td><td>Network module (<code>kithara-net</code>)</td></tr>
 
-<tr><td><code>bufpool</code></td><td>no</td><td>Aggregator flag used by <code>full</code>; the <code>kithara::bufpool</code> module is always re-exported</td></tr>
-
 <tr><td><code>queue</code></td><td>no</td><td>Queue module (<code>kithara-queue</code>) exposed as <code>kithara::queue</code></td></tr>
 
 <tr><td><code>encode</code> / <code>ffmpeg</code></td><td>no</td><td>Encoding API exposed as <code>kithara::encode</code>; FFmpeg remains opt-in</td></tr>
@@ -84,8 +92,6 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 <tr><td><code>ui</code> / <code>ui-iced</code> / <code>ui-masonry</code> / <code>ui-capture</code></td><td>no</td><td>UI document and renderer APIs exposed as <code>kithara::ui</code></td></tr>
 
 <tr><td><code>worker</code></td><td>no</td><td>Prioritized worker API exposed as <code>kithara::worker</code></td></tr>
-
-<tr><td><code>signal</code></td><td>no</td><td>Process signal handling forwarded to <code>kithara-platform</code></td></tr>
 
 <tr><td><code>backend-cpal</code></td><td>no</td><td>Native CPAL backend forwarded to play and queue when <code>queue</code> is enabled</td></tr>
 
@@ -96,7 +102,9 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 
 <tr><td><code>tokio-rt-multi-thread</code></td><td>no</td><td>Tokio multi-thread runtime builder support forwarded to <code>kithara-platform</code>; used by tests that opt into <code>#[kithara::test(..., multi_thread)]</code></td></tr>
 
-<tr><td><code>full</code></td><td>no</td><td>Shortcut for <code>file + hls + assets + net + bufpool</code></td></tr>
+<tr><td><code>full</code></td><td>no</td><td>The former always-present core plus <code>file + hls + offline + record</code>, including with <code>--no-default-features</code></td></tr>
+
+<tr><td><code>all</code></td><td>no</td><td>Every facade domain with CPAL, Symphonia, FDK-AAC, Rubato, Signalsmith, reqwest, and rustls; mutually exclusive alternative backends stay off</td></tr>
 
 <tr><td><code>probe</code></td><td>no</td><td>USDT probes forwarded across all public facade crates that expose probes</td></tr>
 
@@ -132,23 +140,23 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 
 ## Re-exports
 
-Each enabled engine layer is re-exported as a module: `kithara::audio`, `kithara::bufpool`,
-`kithara::decode`, `kithara::events`, `kithara::platform`, `kithara::play`,
-`kithara::stream`, `kithara::warp`. The `file`/`hls`/`assets`/`net`/`storage`/`queue`/`encode`/`ui`/`worker`
-modules are feature-gated; `kithara::analysis` is exposed with `analysis`, `kithara::abr` and `kithara::drm` are exposed with `hls`, while
-`kithara::stretch` is exposed with either stretch backend. For
+Every re-exported crate module is gated by its same-named feature. Composite
+features keep their existing convenience: `file` also selects `assets` and
+`net`; `hls` selects `abr`, `assets`, `drm`, and `net`; `assets` selects
+`storage`; stretch backend features select `stretch`. For
 advanced control — multi-slot engine, crossfade, EQ — reach into
 `kithara::play` (`Engine`, `Player`, `CrossfadeConfig`, `Equalizer`). The
 speed-control type `StretchControls` is re-exported even when no stretch backend
 is compiled; the flat `StretchKind` re-export and
 `kithara::warp::WarpRenderer` are gated on a native stretch backend.
-`mock` macro is re-exported unconditionally; `test`, `fixture`, and `flash` are
-gated behind `probe`. The facade `flash` macro emits `kithara::platform::flash`
+`mock` and `no_block` macros are gated by `test-utils`; `test`, `fixture`, and
+`flash` are gated by `probe`. The facade `flash` macro emits `kithara::platform::flash`
 paths so integration tests do not need a direct `kithara-platform` dependency.
 The `prelude` collects the everyday types.
 
 ## Integration
 
-Most consumers depend on `kithara` with default features and call
-`Resource::new(ResourceConfig::new(url)?).await?`. For wasm or embedded builds,
-disable defaults and pick a minimal feature set (e.g. `file` + `symphonia`).
+Most consumers depend on `kithara` with default features. Narrow consumers
+disable defaults, enable each facade module they import, and add one compatible
+HTTP, TLS, decoder, resampler, and stretch stack where their selected domains
+need them.

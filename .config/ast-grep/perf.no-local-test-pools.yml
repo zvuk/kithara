@@ -7,7 +7,7 @@ severity: error
 language: Rust
 files:
   - crates/**/*.rs
-  - tests/src/**/*.rs
+  - tests/crates/integration/src/**/*.rs
 ignores:
   - crates/kithara-bufpool/**
   - crates/kithara-devtools/**

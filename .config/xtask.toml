@@ -14,7 +14,7 @@ exclude = ["target/**", "**/target/**"]
 exclude_crates = [
   "kithara-devtools",
   "kithara-fuzz",
-  "kithara-integration-tests",
+  "kithara-*-tests",
   "kithara-test-*",
   "kithara-workspace-hack",
   "xtask",
@@ -24,9 +24,9 @@ exclude_modules = ["*::tests"]
 [[architecture.runtime.scenarios]]
 name = "queue-playback"
 command = "test"
-package = "kithara-integration-tests"
-test = "suite_light"
-filter = "kithara_queue::architecture_flow::queue_playback_architecture"
+package = "kithara-queue-tests"
+test = "queue"
+filter = "architecture_flow::queue_playback_architecture"
 ignored = true
 timeout_secs = 120
 
@@ -123,9 +123,30 @@ machete_exclude = ["kithara-workspace-hack"]
 # `[health]` list is. Product crates are not listed: kithara-storage's 8
 # `possibly` double locks fail the stage until that code is fixed.
 lockbud_exclude = [
+  "kithara-abr-tests",
+  "kithara-analysis-tests",
+  "kithara-app-tests",
+  "kithara-assets-tests",
+  "kithara-audio-tests",
+  "kithara-broadcast-tests",
+  "kithara-bufpool-tests",
+  "kithara-decode-tests",
   "kithara-devtools",
+  "kithara-encode-tests",
+  "kithara-events-tests",
+  "kithara-ffi-web-analysis-tests",
+  "kithara-ffi-web-tests",
+  "kithara-file-tests",
   "kithara-fuzz",
+  "kithara-harness-tests",
+  "kithara-hls-tests",
   "kithara-integration-tests",
+  "kithara-net-tests",
+  "kithara-platform-tests",
+  "kithara-play-tests",
+  "kithara-queue-tests",
+  "kithara-storage-tests",
+  "kithara-stream-tests",
   "kithara-test-macros",
   "kithara-test-utils",
   "kithara-workspace-hack",
@@ -467,19 +488,16 @@ features = []
 shared_paths = [
   ".config/xtask.toml",
   ".config/nextest.toml",
-  "tests/Cargo.toml",
+  "tests/crates/integration/Cargo.toml",
 ]
 
-# `kithara/flash` reaches `kithara-platform` and `kithara-test-utils` through
-# the facade and stops there. The integration suite owns flash-gated code of
-# its own - the virtual time a rendered block advances by, the lexical
-# targets, the loom case - so it is named here too. Without it a lane runs a
-# virtual clock while the suite compiles as if the clock were real: the
-# targets under `#![cfg(feature = "flash")]` come out empty and the run
-# reports them green.
+# Cargo applies an unqualified workspace feature to every selected package
+# that declares it. Each test package's `flash` feature forwards to the exact
+# product and harness crates it owns, so a narrow lane does not receive feature
+# names from unrelated test packages.
 [test.flash]
 default = true
-features = ["kithara/flash", "kithara-integration-tests/flash"]
+features = ["flash"]
 
 [test.no_block]
 default = false
@@ -489,24 +507,11 @@ features = ["no-block"]
 features = []
 
 [test.net_backends.apple]
-features = ["kithara-integration-tests/apple-net"]
+features = ["kithara/apple-net"]
 
-# The product suite. What it excludes is not product: `kithara-devtools` and
-# `xtask` are the build tooling, `kithara-test-utils` and `kithara-test-macros`
-# are the harness the product tests are written with. Excluded at cargo level
-# rather than filtered, so they are not compiled either — a filter would still
-# pay for building and linking them. Neither depends on a product crate, so
-# nothing product-side leaves with them.
-#
-# `kithara-ui` is the one exclusion that is product: it needs a GPU adapter and
-# two toolkit features this lane does not turn on, so `test.lanes.ui` below runs
-# it against both hosts instead.
-#
-# The remaining support targets live inside product crates and cannot be dropped
-# here without taking product tests along; `default-filter` in
-# `.config/nextest.toml` removes those. The lanes below run all of it.
-#
-# Returning a crate to this suite is one edit: drop its `--exclude` pair.
+# The default product suite is one Cargo graph. Domain tests remain separate
+# packages, so Cargo can reuse every unchanged test binary while compiling the
+# shared product closure only once. Browser-only packages have their own lane.
 [test.lanes.workspace]
 program = "cargo"
 default_features = []
@@ -526,9 +531,28 @@ prefix_args = [
   "kithara-test-utils",
   "--exclude",
   "kithara-test-macros",
+  "--exclude",
+  "kithara-ffi-web-tests",
+  "--exclude",
+  "kithara-ffi-web-analysis-tests",
   "--cargo-profile",
   "test-release",
 ]
+
+# What the product-only first split excludes is not product:
+# `kithara-devtools` and `xtask` are build tooling, and `kithara-test-utils`
+# and `kithara-test-macros` are the harness the product tests are written with.
+#
+# `kithara-ui` is the one exclusion that is product: it needs a GPU adapter and
+# two toolkit features this lane does not turn on, so `test.lanes.ui` below runs
+# it against both hosts instead.
+#
+# The remaining support targets live inside product crates and cannot be dropped
+# here without taking product tests along; `default-filter` in
+# `.config/nextest.toml` removes those. The lanes below run all of it.
+#
+# Returning a support crate to the product-only split is one edit: drop its
+# `--exclude` entry from `.config/just/test.just`.
 
 # The build tooling: lint and architecture checks, similarity, viz, quality
 # assessment, release and publish, the platform commands, the xtask self-cache,
@@ -608,10 +632,10 @@ prefix_args = [
 [test.lanes.fixtures]
 program = "cargo"
 owns = [
-  "tests/src/",
-  "tests/tests/suite_harness.rs",
-  "tests/tests/flash_lexical.rs",
-  "tests/tests/timeout_guard.rs",
+  "tests/crates/integration/src/",
+  "tests/crates/harness/tests/suite_harness.rs",
+  "tests/crates/harness/tests/flash_lexical.rs",
+  "tests/crates/harness/tests/timeout_guard.rs",
 ]
 default_features = ["harness"]
 prefix_args = [
@@ -621,6 +645,8 @@ prefix_args = [
   "support",
   "-p",
   "kithara-integration-tests",
+  "-p",
+  "kithara-harness-tests",
   "--lib",
   "--test",
   "suite_harness",
@@ -716,23 +742,22 @@ default_flash = false
 # graph, otherwise the compile-time alias picks Rubato).
 #
 # All three need a real output device, so they run on the Apple executor and are
-# absent from the Linux container fleet. `suite_e2e` reaches nothing outside the
-# runner. The tests that need the zvuk CDN or the corporate VPN live in
-# `suite_network` behind the `network` feature, so no amount of `--run-ignored`
-# can pull them in here.
+# absent from the Linux container fleet. The e2e target reaches nothing outside
+# the runner. Tests that need the zvuk CDN or the corporate VPN live behind
+# separate network features.
 [test.lanes.e2e]
 program = "cargo"
 prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-integration-tests",
+  "kithara-play-tests",
   "--cargo-profile",
   "test-release",
   "--test",
-  "suite_e2e",
+  "e2e",
 ]
-default_features = ["e2e", "kithara/resample-rubato"]
+default_features = ["kithara-play-tests/e2e", "kithara/resample-rubato"]
 default_flash = false
 
 [test.lanes.e2e-fused]
@@ -741,13 +766,17 @@ prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-integration-tests",
+  "kithara-play-tests",
   "--cargo-profile",
   "test-release",
   "--test",
-  "suite_e2e",
+  "e2e",
 ]
-default_features = ["e2e", "kithara/resample-rubato", "apple-fused-src"]
+default_features = [
+  "kithara-play-tests/e2e",
+  "kithara/resample-rubato",
+  "kithara/apple-fused-src",
+]
 default_flash = false
 
 [test.lanes.e2e-glide]
@@ -756,13 +785,13 @@ prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-integration-tests",
+  "kithara-play-tests",
   "--cargo-profile",
   "test-release",
   "--test",
-  "suite_e2e",
+  "e2e",
 ]
-default_features = ["e2e", "kithara/resample-glide"]
+default_features = ["kithara-play-tests/e2e", "kithara/resample-glide"]
 default_flash = false
 
 # The network tests a runner can reach: the public zvuk CDN and silvercomet.
@@ -777,13 +806,19 @@ prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-integration-tests",
+  "kithara-play-tests",
+  "-p",
+  "kithara-queue-tests",
   "--cargo-profile",
   "test-release",
   "--test",
-  "suite_network",
+  "network",
 ]
-default_features = ["network", "kithara/resample-rubato"]
+default_features = [
+  "kithara-play-tests/network",
+  "kithara-queue-tests/network",
+  "kithara/resample-rubato",
+]
 default_flash = false
 
 # The half of the network tests no runner can serve: `*.zvq.me`, which resolves
@@ -796,13 +831,19 @@ prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-integration-tests",
+  "kithara-play-tests",
+  "-p",
+  "kithara-queue-tests",
   "--cargo-profile",
   "test-release",
   "--test",
-  "suite_network_manual",
+  "network_manual",
 ]
-default_features = ["network-manual", "kithara/resample-rubato"]
+default_features = [
+  "kithara-play-tests/network-manual",
+  "kithara-queue-tests/network-manual",
+  "kithara/resample-rubato",
+]
 default_flash = false
 
 # What only the `broadcast` feature turns on. `kithara-broadcast`'s own unit
@@ -815,16 +856,16 @@ prefix_args = [
   "-p",
   "kithara-app",
   "-p",
-  "kithara-integration-tests",
+  "kithara-broadcast-tests",
   "--cargo-profile",
   "test-release",
   "--lib",
   "--test",
-  "suite_broadcast",
+  "broadcast",
 ]
 default_features = [
   "kithara-app/broadcast",
-  "kithara-integration-tests/broadcast",
+  "kithara-broadcast-tests/broadcast",
 ]
 default_flash = true
 # The detector these tests were failing under. Declared here so two schedulers
@@ -834,7 +875,7 @@ default_no_block = true
 # `broadcast::engine` needs the feature.
 suffix_args = [
   "-E",
-  "binary(suite_broadcast) + (package(kithara-app) & test(/^broadcast::engine::/))",
+  "binary(broadcast) + (package(kithara-app) & test(/^broadcast::engine::/))",
 ]
 
 # Integration regression tests are red by design and stay outside the main gate.
@@ -853,7 +894,7 @@ prefix_args = [
 default_features = ["integration-regressions"]
 default_flash = true
 
-# The harness (tests/tests/kithara_ffi_web/selenium.rs) reads
+# The harness (tests/crates/ffi-web/tests/selenium.rs) reads
 # KITHARA_SELENIUM_BROWSER to pick a browser and defaults to chrome if unset.
 # Naming the browser in the lane itself, rather than leaving it to whatever
 # the caller happens to export, is what makes `--lane=selenium-firefox` an
@@ -866,11 +907,11 @@ prefix_args = [
   "+nightly",
   "test",
   "-p",
-  "kithara-integration-tests",
+  "kithara-ffi-web-tests",
   "--test",
-  "suite_heavy",
+  "ffi_web",
 ]
-default_features = ["selenium"]
+default_features = ["kithara-ffi-web-tests/selenium"]
 suffix_args = ["selenium", "--", "--nocapture"]
 passthrough = "after-suffix"
 default_flash = false
@@ -916,6 +957,29 @@ handler = "format-edited-paths"
 
 [ext.ci]
 pins = ".config/ci-pins.toml"
+
+# Moving integration sources into domain packages changed nextest's package
+# and binary prefix without changing the tests. The verdict canonicalizes both
+# the executor's existing journal and current reports through this one-time
+# project migration, so a moved known failure stays known while a new failure
+# still blocks the pipeline.
+[ext.ci.verdict.id_aliases]
+"suite_light::audio_artifact::" = "kithara-harness-tests::suite_light::audio_artifact::"
+"kithara-integration-tests::suite_light::audio_artifact::" = "kithara-harness-tests::suite_light::audio_artifact::"
+"suite_light::browser_runner_smoke::" = "kithara-harness-tests::suite_light::browser_runner_smoke::"
+"kithara-integration-tests::suite_light::browser_runner_smoke::" = "kithara-harness-tests::suite_light::browser_runner_smoke::"
+"suite_light::no_block::" = "kithara-harness-tests::suite_light::no_block::"
+"kithara-integration-tests::suite_light::no_block::" = "kithara-harness-tests::suite_light::no_block::"
+"suite_stress::abr_contract::" = "kithara-abr-tests::abr_stress::abr_contract::"
+"loom::" = "kithara-platform-tests::loom::"
+"kithara-integration-tests::suite_stress::abr_contract::" = "kithara-abr-tests::abr_stress::abr_contract::"
+"kithara-integration-tests::loom::" = "kithara-platform-tests::loom::"
+"suite_heavy::no_sync_real_media::" = "kithara-play-tests::play_heavy::no_sync_real_media::"
+"suite_light::kithara_audio::" = "kithara-audio-tests::audio::"
+"suite_light::kithara_play::" = "kithara-play-tests::play::"
+"suite_light::kithara_queue::" = "kithara-queue-tests::queue::"
+"suite_stress::kithara_hls::" = "kithara-hls-tests::hls_stress::"
+"suite_stress::kithara_play::" = "kithara-play-tests::play_stress::"
 
 # Lanes that are nothing but the work they ask the executor for. A lane needs a
 # function only when a parameter cannot say what it does.
@@ -1348,6 +1412,7 @@ timeout_minutes = 60
 # diagnostic, because the compiler never reached one.
 [ext.ci.lanes.linux-test-simulated-clock]
 cache_group = "linux"
+github_runner = "kithara-test-simulated"
 label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
@@ -1360,7 +1425,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -1617,6 +1682,7 @@ timeout_minutes = 60
 # and reclaim machinery would not know about.
 [ext.ci.lanes.linux-test-real-clock]
 cache_group = "linux"
+github_runner = "kithara-test-real"
 label = "Linux"
 os = "linux"
 fetch_depth = 1
@@ -1629,7 +1695,7 @@ steps = [
     "run",
     "--flash=off",
     "--timings",
-  ], label = "real-clock suite", env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "real-clock suite", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]
@@ -2020,8 +2086,7 @@ kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 60
 
 # A review ref asks the same question the default branch asks: what a reviewer
-# would have to fix anyway is cheaper to learn before merge. Quarantine keeps
-# its plain profile probe.
+# would have to fix anyway is cheaper to learn before merge.
 [ext.ci.lanes.apple-test]
 cache_group = "macos"
 label = "Apple"
@@ -2042,12 +2107,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple flash and no-block gate", env = { CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" }, args_by_kind = { quarantine = [
-    "test",
-    "run",
-    "--profile",
-    "ci",
-  ] } },
+  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "platforms"
 kinds = [
@@ -2082,7 +2142,7 @@ steps = [
     "--flash=off",
     "--profile",
     "ci",
-  ], label = "Apple flash-off gate", env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Apple flash-off gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]

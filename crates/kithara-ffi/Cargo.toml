@@ -72,7 +72,16 @@ dev = []
 test = ["kithara/probe", "dep:cpal"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["assets", "queue"] }
+kithara = { workspace = true, default-features = false, features = [
+    "assets",
+    "bufpool",
+    "events",
+    "platform",
+    "play",
+    "queue",
+    "stream",
+    "test-utils",
+] }
 
 # Cross-platform deps (used by both the native UniFFI modules and `src/web`).
 # `kithara-play` is the canonical owner of the shared play types
@@ -109,6 +118,7 @@ uuid = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara = { workspace = true, default-features = false, features = [
     "analysis-waveform",
+    "audio",
     "beat-dsp",
     "hls",
     "resample-rubato",
@@ -155,17 +165,11 @@ tempfile = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-kithara-test-fixtures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [[test]]
 name = "web-observer"
 path = "src/web/observer/tests.rs"
-required-features = ["wasm"]
-
-[[test]]
-name = "web-analysis"
-path = "src/web/analysis/tests.rs"
 required-features = ["wasm"]
 
 [lints]

@@ -40,6 +40,7 @@ struct CacheContents {
 
 struct DirectoryScan {
     bytes: u64,
+    last_used: Option<SystemTime>,
     active: bool,
     locks: Vec<FileLock>,
 }
@@ -143,6 +144,7 @@ fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u
     // Cargo fingerprints describe a complete profile tree, so removing files
     // within one can leave its dependency artifacts inconsistent.
     for entry in evictions {
+        info!(path = %entry.path.display(), bytes = entry.size_bytes, "evicting build cache");
         fs::remove_dir_all(&entry.path)
             .with_context(|| format!("removing build cache entry {}", entry.path.display()))?;
     }
@@ -200,7 +202,7 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         contents.entries.push(CacheEntry {
             path,
             size_bytes: scan.bytes,
-            modified,
+            modified: scan.last_used.map_or(modified, |used| used.max(modified)),
         });
     }
     Ok(contents)
@@ -214,6 +216,7 @@ fn scan_directory(path: &Path) -> Result<DirectoryScan> {
             let (active, lock) = cargo_lock(path)?;
             return Ok(DirectoryScan {
                 bytes: allocated_bytes(&metadata),
+                last_used: None,
                 active,
                 locks: lock.into_iter().collect(),
             });
@@ -227,12 +230,14 @@ fn scan_directory(path: &Path) -> Result<DirectoryScan> {
         if metadata.file_type().is_file() && path.file_name() == Some(OsStr::new(lease::FILE)) {
             return Ok(DirectoryScan {
                 bytes: allocated_bytes(&metadata),
+                last_used: Some(metadata.modified()?),
                 active: lease_file_is_held(path, FileLock::try_exclusive),
                 locks: Vec::new(),
             });
         }
         return Ok(DirectoryScan {
             bytes: allocated_bytes(&metadata),
+            last_used: None,
             active: false,
             locks: Vec::new(),
         });
@@ -241,6 +246,7 @@ fn scan_directory(path: &Path) -> Result<DirectoryScan> {
     let entries = fs::read_dir(path)
         .with_context(|| format!("reading build cache directory {}", path.display()))?;
     let mut bytes = allocated_bytes(&metadata);
+    let mut last_used = None;
     let mut active = false;
     let mut locks = Vec::new();
     for entry in entries {
@@ -248,11 +254,13 @@ fn scan_directory(path: &Path) -> Result<DirectoryScan> {
             entry.with_context(|| format!("reading an entry in build cache {}", path.display()))?;
         let scan = scan_directory(&entry.path())?;
         bytes = bytes.saturating_add(scan.bytes);
+        last_used = last_used.max(scan.last_used);
         active |= scan.active;
         locks.extend(scan.locks);
     }
     Ok(DirectoryScan {
         bytes,
+        last_used,
         active,
         locks,
     })
@@ -406,7 +414,7 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
 
 /// Build directories kept in the executor cache rather than in a checkout.
 ///
-/// Linux Docker checkouts are temporary volumes. Their targets live below the
+/// GitLab checkouts are cleaned between jobs. Their targets live below the
 /// mounted cache root, one per runner slot, so the host budget must discover
 /// them without walking Cargo homes and compiler caches beside them.
 pub(crate) fn cached_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
@@ -467,6 +475,43 @@ mod tests {
             build.display()
         );
         drop(lease);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn using_an_old_cache_refreshes_its_eviction_order() {
+        let root = tempfile::tempdir().unwrap();
+        let used = root.path().join("old-but-used");
+        let idle = root.path().join("newer-but-idle");
+        fs::create_dir_all(&used).unwrap();
+        fs::create_dir_all(&idle).unwrap();
+        let old = UNIX_EPOCH + Duration::from_secs(10);
+        let newer = UNIX_EPOCH + Duration::from_secs(20);
+        drop(lease::hold(&used).unwrap());
+        File::options()
+            .write(true)
+            .open(used.join(lease::FILE))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        File::open(&used).unwrap().set_modified(old).unwrap();
+        File::open(&idle).unwrap().set_modified(newer).unwrap();
+        drop(lease::hold(&used).unwrap());
+
+        let contents = candidate_entries(root.path()).unwrap();
+        assert!(!contents.active);
+        let used_entry = contents
+            .entries
+            .iter()
+            .find(|entry| entry.path == used)
+            .unwrap();
+        let idle_entry = contents
+            .entries
+            .iter()
+            .find(|entry| entry.path == idle)
+            .unwrap();
+        assert!(used_entry.modified > idle_entry.modified);
+        assert_eq!(fs::metadata(&used).unwrap().modified().unwrap(), old);
     }
 
     /// The same tree without a holder: the guard above must not answer "held"

@@ -1,0 +1,38 @@
+[package]
+name = "kithara-assets-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-test-utils"]
+
+[features]
+default = ["client-reqwest", "tls-rustls"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
+flash = ["kithara/flash", "kithara-integration-tests/flash"]
+no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
+
+[dependencies]
+kithara = { workspace = true, features = ["assets", "bufpool", "platform", "probe", "storage"] }
+kithara-integration-tests = { workspace = true }
+
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+
+bytes = { workspace = true }
+rkyv = { workspace = true }
+tempfile = { workspace = true }
+url = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "assets"
+path = "tests/suite.rs"

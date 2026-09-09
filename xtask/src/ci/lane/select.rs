@@ -54,6 +54,8 @@ pub(crate) struct Entry {
     pub(crate) depth: u32,
     pub(crate) artifact: Option<CiLaneArtifact>,
     pub(crate) queue: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) runner: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +65,8 @@ pub(crate) struct Dependent {
     pub(crate) depth: u32,
     pub(crate) needs: Vec<String>,
     pub(crate) artifact: Option<CiLaneArtifact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) runner: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -137,6 +141,7 @@ pub(crate) fn render(
             depth: lane.fetch_depth,
             artifact: lane.artifact.clone(),
             queue: lane.queue.clone(),
+            runner: lane.github_runner.clone(),
         })
         .collect();
 
@@ -173,6 +178,7 @@ pub(crate) fn render(
             depth: lane.fetch_depth,
             needs: lane.needs.clone(),
             artifact: lane.artifact.clone(),
+            runner: lane.github_runner.clone(),
         })
         .collect();
 
@@ -278,6 +284,23 @@ mod tests {
             .collect();
         assert_eq!(names, ["linux-lint"]);
         assert!(selection.dependent.is_empty());
+    }
+
+    #[test]
+    fn a_github_runner_label_follows_the_lane_into_the_matrix() {
+        let mut lanes = catalog();
+        lanes
+            .get_mut("linux-lint")
+            .expect("the lane is configured")
+            .github_runner = Some("kithara-test-cache".to_owned());
+
+        let selection =
+            render(&lanes, &args("gate", PipelineKind::Main, &[])).expect("the gate role renders");
+
+        assert_eq!(
+            selection.matrix[0].runner.as_deref(),
+            Some("kithara-test-cache")
+        );
     }
 
     // Asking for one lane must bring what reads its artifact, and nothing else.

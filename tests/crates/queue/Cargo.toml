@@ -1,0 +1,56 @@
+[package]
+name = "kithara-queue-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[features]
+default = ["client-reqwest", "tls-rustls"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
+flash = ["kithara/flash", "kithara-integration-tests/flash"]
+no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
+network = []
+network-manual = []
+
+[dependencies]
+kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith", "backend-cpal"] }
+kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
+kithara-devtools = { workspace = true }
+kithara-integration-tests = { workspace = true }
+kithara-test-fixtures = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+
+aes = { workspace = true }
+bytes = { workspace = true }
+num-traits = { workspace = true }
+reqwest = { workspace = true, features = ["rustls", "stream"] }
+serial_test = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara = { workspace = true, features = ["apple", "client-wreq"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "queue"
+path = "tests/suite.rs"
+
+[[test]]
+name = "network"
+path = "tests/network.rs"
+required-features = ["network"]
+
+[[test]]
+name = "network_manual"
+path = "tests/network_manual.rs"
+required-features = ["network-manual"]

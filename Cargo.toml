@@ -40,7 +40,7 @@ members = [
     "crates/kithara-warp",
     "crates/kithara-worker",
     "crates/kithara-workspace-hack",
-    "tests",
+    "tests/crates/*",
     "tests/fuzz",
     "xtask",
 ]
@@ -78,7 +78,7 @@ default-members = [
     "crates/kithara-ui",
     "crates/kithara-warp",
     "crates/kithara-worker",
-    "tests",
+    "tests/crates/*",
 ]
 
 [workspace.lints.rust]
@@ -218,10 +218,11 @@ kithara-devtools = { path = "crates/kithara-devtools", version = "0.0.1-alpha4" 
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha4" }
 kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha4", default-features = false }
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha4" }
-kithara-ffi = { path = "crates/kithara-ffi" }
+kithara-ffi = { path = "crates/kithara-ffi", default-features = false }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default-features = false }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha4", default-features = false }
+kithara-integration-tests = { path = "tests/crates/integration" }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha4" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha4", default-features = false }
 kithara-output = { path = "crates/kithara-output", version = "0.0.1-alpha4" }
@@ -538,7 +539,7 @@ opt-level = 3
 [profile.test-release]
 inherits = "release"
 opt-level = 3
-debug = "line-tables-only"
+debug = false
 debug-assertions = true
 overflow-checks = true
 lto = false
@@ -546,9 +547,73 @@ codegen-units = 16
 panic = "unwind"
 strip = "none"
 
-# Product dependencies stay optimized; the integration harness itself spends
-# most of its build in LLVM and does not contain the runtime being measured.
+# Product dependencies stay optimized; test packages spend their build in LLVM
+# and do not contain the runtime being measured. Cargo profile overrides require
+# exact workspace package names, so each test package is listed here.
+[profile.test-release.package.kithara-abr-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-analysis-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-app-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-assets-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-audio-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-broadcast-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-bufpool-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-decode-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-encode-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-events-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-ffi-web-analysis-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-ffi-web-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-file-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-harness-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-hls-tests]
+opt-level = 1
+
 [profile.test-release.package.kithara-integration-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-net-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-platform-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-play-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-queue-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-storage-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-stream-tests]
 opt-level = 1
 
 [profile.wasm-release]

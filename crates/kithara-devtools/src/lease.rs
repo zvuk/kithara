@@ -1,6 +1,7 @@
 use std::{
     fs::{self, OpenOptions},
     path::{self, Path},
+    time::SystemTime,
 };
 
 use crate::lock::FileLock;
@@ -51,6 +52,7 @@ pub fn hold(directory: &Path) -> Option<Lease> {
         .write(true)
         .open(directory.join(FILE))
         .ok()?;
+    file.set_modified(SystemTime::now()).ok()?;
     let lock = FileLock::try_shared(file).ok()?;
     Some(Lease { _lock: lock })
 }

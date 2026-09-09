@@ -1,9 +1,11 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+#[cfg(any(test, feature = "probe"))]
+use kithara_platform::time::Instant;
 use kithara_platform::{
     sync::{Arc, mpsc},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use kithara_play::{GroupState, PlayError, player::PlayerMember};
 use kithara_worker::{Dispatcher, Task, TaskConfig, TaskHandle, TickResult};

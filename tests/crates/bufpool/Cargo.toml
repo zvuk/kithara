@@ -1,0 +1,38 @@
+[package]
+name = "kithara-bufpool-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-test-utils", "serial_test"]
+
+[features]
+default = ["client-reqwest", "tls-rustls"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
+flash = ["kithara/flash"]
+no-block = ["kithara/no-block"]
+
+[dependencies]
+kithara = { workspace = true, default-features = false, features = [
+    "bufpool",
+    "platform",
+    "probe",
+    "tokio-net",
+] }
+
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+serial_test = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "bufpool"
+path = "tests/suite.rs"

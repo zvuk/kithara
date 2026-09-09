@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -234,8 +234,19 @@ fn sync_directory(_path: &Path) -> Result<()> {
 }
 
 /// A test's identity across runs and lanes.
-fn case_id(case: &CaseTiming) -> String {
-    format!("{}::{}", case.suite, case.name)
+fn canonical_id(id: &str, aliases: &BTreeMap<String, String>) -> String {
+    aliases
+        .iter()
+        .filter_map(|(old, new)| {
+            id.strip_prefix(old)
+                .map(|suffix| (old.len(), format!("{new}{suffix}")))
+        })
+        .max_by_key(|(prefix_len, _)| *prefix_len)
+        .map_or_else(|| id.to_owned(), |(_, canonical)| canonical)
+}
+
+fn case_id(case: &CaseTiming, aliases: &BTreeMap<String, String>) -> String {
+    canonical_id(&format!("{}::{}", case.suite, case.name), aliases)
 }
 
 /// Where the verdict expects every lane to leave what it produced. Artifacts
@@ -315,7 +326,12 @@ fn journal_path(shared_root: &Path) -> PathBuf {
 
 /// `main` and the nightly chain describe the default branch, so they record.
 /// Everything else is measured against what they recorded.
-pub(crate) fn lane(root: &Path, shared_root: &Path, kind: PipelineKind) -> Result<()> {
+pub(crate) fn lane(
+    root: &Path,
+    shared_root: &Path,
+    kind: PipelineKind,
+    aliases: &BTreeMap<String, String>,
+) -> Result<()> {
     let common = Common {
         reports: root.join(REPORT_DIR),
         journal: journal_path(shared_root),
@@ -325,21 +341,22 @@ pub(crate) fn lane(root: &Path, shared_root: &Path, kind: PipelineKind) -> Resul
         JournalAction::Record => {
             let sha = std::env::var("CI_COMMIT_SHA")
                 .context("CI_COMMIT_SHA names the run being recorded")?;
-            record(&common, &sha)
+            record(&common, &sha, aliases)
         }
-        JournalAction::Check => check(&common),
+        JournalAction::Check => check(&common, aliases),
     }
 }
 
 pub(crate) fn run(args: &VerdictArgs) -> Result<()> {
+    let aliases = BTreeMap::new();
     match &args.command {
-        VerdictCommand::Record { common, sha } => record(common, sha),
-        VerdictCommand::Check { common } => check(common),
+        VerdictCommand::Record { common, sha } => record(common, sha, &aliases),
+        VerdictCommand::Check { common } => check(common, &aliases),
     }
 }
 
-fn record(common: &Common, sha: &str) -> Result<()> {
-    let observed = observe(common)?;
+fn record(common: &Common, sha: &str, aliases: &BTreeMap<String, String>) -> Result<()> {
+    let observed = observe(common, aliases)?;
     let remembered = JournalFile::new(common.journal.clone()).update(|journal| {
         journal.record(Run {
             sha: sha.to_owned(),
@@ -357,8 +374,8 @@ fn record(common: &Common, sha: &str) -> Result<()> {
     Ok(())
 }
 
-fn check(common: &Common) -> Result<()> {
-    let observed = observe(common)?;
+fn check(common: &Common, aliases: &BTreeMap<String, String>) -> Result<()> {
+    let observed = observe(common, aliases)?;
     let journal = JournalFile::new(common.journal.clone()).load()?;
     if journal.runs.is_empty() {
         bail!(
@@ -367,9 +384,13 @@ fn check(common: &Common) -> Result<()> {
             common.journal.display()
         );
     }
-    let known_tests = journal.tests();
+    let known_tests: BTreeSet<String> = journal
+        .tests()
+        .into_iter()
+        .map(|id| canonical_id(id, aliases))
+        .collect();
     let known_jobs = journal.jobs();
-    let at_base = attested_at_base(&journal, common.base.as_deref());
+    let at_base = attested_at_base(&journal, common.base.as_deref(), aliases);
     let new_tests: Vec<&String> = observed
         .tests
         .iter()
@@ -407,7 +428,11 @@ fn check(common: &Common) -> Result<()> {
 /// but it is what makes a known failure arguable: "this was failing at the
 /// commit you branched from" is evidence, "this failed sometime last week" is
 /// not. Returned separately for exactly that.
-fn attested_at_base<'a>(journal: &'a Journal, base: Option<&str>) -> BTreeSet<&'a str> {
+fn attested_at_base(
+    journal: &Journal,
+    base: Option<&str>,
+    aliases: &BTreeMap<String, String>,
+) -> BTreeSet<String> {
     let Some(sha) = base else {
         warn!("no base commit named; a known failure cannot be attributed to one");
         return BTreeSet::new();
@@ -421,13 +446,16 @@ fn attested_at_base<'a>(journal: &'a Journal, base: Option<&str>) -> BTreeSet<&'
         return BTreeSet::new();
     };
     info!(base = %sha, "the base commit has a recorded run");
-    run.tests.iter().map(String::as_str).collect()
+    run.tests
+        .iter()
+        .map(|id| canonical_id(id, aliases))
+        .collect()
 }
 
 fn report(
     observed: &Observed,
-    known_tests: &BTreeSet<&str>,
-    at_base: &BTreeSet<&str>,
+    known_tests: &BTreeSet<String>,
+    at_base: &BTreeSet<String>,
     new_tests: &[&String],
     new_jobs: &[&String],
     journal: &Journal,
@@ -449,7 +477,7 @@ fn report(
     );
 }
 
-fn report_known(observed: &Observed, known_tests: &BTreeSet<&str>, at_base: &BTreeSet<&str>) {
+fn report_known(observed: &Observed, known_tests: &BTreeSet<String>, at_base: &BTreeSet<String>) {
     for id in observed
         .tests
         .iter()
@@ -473,7 +501,7 @@ struct Observed {
 /// the browser suites, the sanitiser runs, mutation — contributes its own name
 /// instead, so a failure there is still something a merge request can be held
 /// on rather than a silence.
-fn observe(common: &Common) -> Result<Observed> {
+fn observe(common: &Common, aliases: &BTreeMap<String, String>) -> Result<Observed> {
     let cases = collect(&common.reports)?;
     let jobs = failed_markers(&common.reports)?;
     if cases.is_empty() && jobs.is_empty() {
@@ -487,7 +515,7 @@ fn observe(common: &Common) -> Result<Observed> {
         tests: cases
             .iter()
             .filter(|case| case.failed)
-            .map(case_id)
+            .map(|case| case_id(case, aliases))
             .collect(),
         jobs,
         cases: cases.len(),
@@ -610,8 +638,8 @@ mod tests {
         journal.record(run_of("base", &["suite::a"], &[]));
         journal.record(run_of("later", &["suite::b"], &[]));
         assert_eq!(
-            attested_at_base(&journal, Some("base")),
-            BTreeSet::from(["suite::a"])
+            attested_at_base(&journal, Some("base"), &BTreeMap::new()),
+            BTreeSet::from(["suite::a".to_owned()])
         );
     }
 
@@ -619,10 +647,23 @@ mod tests {
     fn an_unremembered_base_attributes_nothing_and_still_lets_the_window_decide() {
         let mut journal = Journal::default();
         journal.record(run_of("later", &["suite::b"], &[]));
-        assert!(attested_at_base(&journal, Some("gone")).is_empty());
-        assert!(attested_at_base(&journal, None).is_empty());
+        assert!(attested_at_base(&journal, Some("gone"), &BTreeMap::new()).is_empty());
+        assert!(attested_at_base(&journal, None, &BTreeMap::new()).is_empty());
         // The window is untouched by either: it is what the verdict compares to.
         assert_eq!(journal.tests(), BTreeSet::from(["suite::b"]));
+    }
+
+    #[test]
+    fn a_relocated_test_matches_its_journal_identity() {
+        let aliases = BTreeMap::from([(
+            "suite_light::kithara_audio::".to_owned(),
+            "kithara-audio-tests::audio::".to_owned(),
+        )]);
+        let old = "suite_light::kithara_audio::reader::still_fails";
+        let current = "kithara-audio-tests::audio::reader::still_fails";
+
+        assert_eq!(canonical_id(old, &aliases), current);
+        assert_eq!(canonical_id(current, &aliases), current);
     }
 
     #[test]

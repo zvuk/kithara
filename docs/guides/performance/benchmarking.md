@@ -9,7 +9,7 @@ No lint enforces a measurement, so every entry here is manual and *tier: bench*.
 **Benchmark input by value, or a result the optimizer deletes.** Pass the borrow
 through `black_box` and return the output: a by-value input memcpys on every
 iteration, and a discarded result can be optimized away entirely.
-*present in kithara: tests/benches/perf_audit.rs already black-boxes the borrow.*
+*present in kithara: tests/crates/integration/benches/perf_audit.rs already black-boxes the borrow.*
 
 **Setup and drop timed inside the iteration.** A clone and its `Drop` inside the
 timed closure are counted as work. Use criterion's batched-ref form to exclude

@@ -1,7 +1,7 @@
 //! Test double for the external programs `xtask` spawns.
 //!
 //! One binary, many roles: the role is the file name it was invoked under, so
-//! a test copies it to the path the code under test will reach — `<tmp>/bin/
+//! a test installs it at the path the code under test will reach — `<tmp>/bin/
 //! sccache`, `<brew_root>/bin/colima` — and nothing about the production path
 //! changes to accommodate the test.
 //!

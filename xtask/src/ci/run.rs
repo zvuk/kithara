@@ -409,7 +409,12 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
             Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
             Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, &args.channel),
-            Lane::Verdict => verdict::lane(&ctx.root, environment.shared_root(), args.kind),
+            Lane::Verdict => verdict::lane(
+                &ctx.root,
+                environment.shared_root(),
+                args.kind,
+                &ext.ci.verdict.id_aliases,
+            ),
             ref lane => command_lane(
                 lane,
                 args.kind,
@@ -598,6 +603,7 @@ mod tests {
     fn reviewed_pipelines_run_the_explicit_flash_and_no_block_gate() {
         for kind in [
             PipelineKind::MergeRequest,
+            PipelineKind::Quarantine,
             PipelineKind::Branch,
             PipelineKind::Main,
             PipelineKind::Platforms,
@@ -619,13 +625,6 @@ mod tests {
                 "{kind:?} must run the explicit gate"
             );
         }
-    }
-
-    #[test]
-    fn quarantine_keeps_its_plain_profile_probe() {
-        let (args, _) = gate("apple-test", PipelineKind::Quarantine);
-
-        assert_eq!(args, ["test", "run", "--profile", "ci"]);
     }
 
     #[test]

@@ -98,7 +98,7 @@ debug-assertions = false
 overflow-checks = false
 ```
 
-At opt-3 the `tests/benches/perf_audit.rs` gate can never surface the opt-z vectorization loss above.
+At opt-3 the `tests/crates/integration/benches/perf_audit.rs` gate can never surface the opt-z vectorization loss above.
 *tier: n/a | detector: manual (Cargo.toml census) | present in kithara (no `[profile.bench]`)*
 
 **Distributed `target-cpu=native`** - never on a shipped binary; pin an explicit floor matching the deploy target instead.

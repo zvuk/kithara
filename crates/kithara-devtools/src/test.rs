@@ -530,12 +530,29 @@ fn build_nextest_command(
     } = spec;
     let mut cmd = Command::new(program);
     cmd.envs(env);
+    let mut prefix_args = prefix_args.to_vec();
+    if extra
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-p" | "--package") || arg.starts_with("--package="))
+    {
+        let mut skip = false;
+        prefix_args.retain(|arg| {
+            if skip {
+                skip = false;
+                return false;
+            }
+            if arg == "--exclude" {
+                skip = true;
+                return false;
+            }
+            arg != "--workspace" && !arg.starts_with("--exclude=")
+        });
+    }
     match action {
         NextestAction::Run => {
-            cmd.args(prefix_args);
+            cmd.args(&prefix_args);
         }
         NextestAction::List => {
-            let mut prefix_args = prefix_args.to_vec();
             let nextest_index = prefix_args
                 .iter()
                 .position(|arg| arg == "nextest")
@@ -909,6 +926,35 @@ mod tests {
         let args = args_of(&cmd);
 
         assert_eq!(&args[..prefix_args.len()], prefix_args.as_slice());
+    }
+
+    #[test]
+    fn package_scope_replaces_workspace_selection() {
+        let mut project = synthetic_project();
+        project
+            .test
+            .lanes
+            .get_mut("workspace")
+            .expect("workspace lane")
+            .prefix_args
+            .extend(["--exclude".to_owned(), "excluded-package".to_owned()]);
+        let extra = vec!["-p".to_owned(), "one-package".to_owned()];
+
+        let (_, cmd) = nextest_lane_command(
+            &project,
+            LaneToggles {
+                flash: true,
+                no_block: false,
+            },
+            "http",
+            &extra,
+        )
+        .expect("nextest command");
+        let args = args_of(&cmd);
+
+        assert!(!args.contains(&"--workspace".to_owned()));
+        assert!(!args.contains(&"--exclude".to_owned()));
+        assert!(args.windows(2).any(|args| args == ["-p", "one-package"]));
     }
 
     #[test]

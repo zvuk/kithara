@@ -40,7 +40,7 @@ beat-dsp = ["kithara/beat-dsp"]
 analysis-waveform = ["kithara/analysis-waveform"]
 # Build kithara-app as a plain library — exposes `config`/`sources`/`drm`
 # modules without pulling in iced. Used by integration tests
-# (`tests/tests/kithara_queue/real_playlist.rs`).
+# (`tests/crates/queue/tests/real_playlist.rs`).
 lib-only = []
 # Enable app and facade USDT probes together.
 probe = ["kithara/probe"]
@@ -55,7 +55,24 @@ stretch-bungee = ["kithara/stretch-bungee"]
 stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["analysis", "file", "hls", "queue", "resample-rubato", "worker"] }
+kithara = { workspace = true, default-features = false, features = [
+    "analysis",
+    "audio",
+    "bufpool",
+    "decode",
+    "events",
+    "file",
+    "hls",
+    "host",
+    "platform",
+    "play",
+    "queue",
+    "resample-rubato",
+    "resampler",
+    "stream",
+    "warp",
+    "worker",
+] }
 kithara-assets = { workspace = true }
 kithara-derive = { workspace = true }
 kithara-record = { workspace = true }

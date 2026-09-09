@@ -10,8 +10,8 @@
 # `just test run -E 'test(seek)'` back to nearly the whole suite. `default-filter`
 # intersects with a command-line filter instead.
 #
-# The `=` matchers are exact on purpose — a substring match on
-# `kithara-integration-tests` would also swallow `suite_e2e` and `suite_network`.
+# The `=` matcher is exact, so the remaining cross-domain suites stay in the
+# product run while the integration helper library stays out.
 #
 # Returning a target to the product suite is one edit: drop its term.
 # `.config/xtask.toml` `[test.lanes.fixtures]` and `[test.lanes.harness]` run

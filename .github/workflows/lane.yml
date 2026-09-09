@@ -53,6 +53,10 @@ on:
           depends on one lane's output. Empty downloads nothing.
         default: ''
         type: string
+      runner:
+        description: Stable runner label for a lane-owned persistent build cache.
+        default: ''
+        type: string
 
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
@@ -64,18 +68,10 @@ env:
   # called workflow inherits nothing from its caller, so every workflow that
   # runs a lane on that fleet says it for itself.
   KITHARA_FIXTURE_CACHE: /cache/fixtures
-  # Where the lane builds. Not in the checkout: this runner is ephemeral and
-  # the workspace is deleted before the lane starts, so a build directory
-  # there is empty on every job - 521 crates compiled and every test binary
-  # linked again, which was 8m30s of a 13m45s job whose tests took 4m. The
-  # compiler cache cannot close that; it was already at 98.96% and it caches
-  # compilations, not process spawns, build scripts or links. `/cache` is the
-  # mount that does survive - sccache reports its store as `/cache/sccache`
-  # from inside these jobs - and this is the directory beside it that the
-  # Linux executor names, `build_cache.rs` budgets, and a lane's `{target}`
-  # resolves through. Naming it also gives `hold_target_lease` something to
-  # claim, so the host's hourly reclaim leaves a live build alone. Reports do
-  # not move with it: nextest anchors its store on the workspace root.
+  # Compiled artifacts survive checkout cleaning in the runner's cache mount.
+  # The host also preserves this runner's work folder so checkout leaves
+  # unchanged build-script inputs at their existing modification times.
+  # xtask leases the target during the lane; reports stay in the workspace.
   CARGO_TARGET_DIR: /cache/target
 
 jobs:
@@ -85,7 +81,7 @@ jobs:
   # the tree says which lanes ran only through the API.
   run:
     name: ${{ inputs.lane }}
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    runs-on: ${{ inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
     steps:

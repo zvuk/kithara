@@ -10,7 +10,7 @@ severity: error
 language: Yaml
 files:
   - crates/**/Cargo.toml
-  - tests/Cargo.toml
+  - tests/crates/integration/Cargo.toml
 ignores:
   - crates/kithara-platform/Cargo.toml
 rule:

@@ -1,0 +1,39 @@
+[package]
+name = "kithara-storage-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-test-utils"]
+
+[features]
+default = ["client-reqwest", "tls-rustls"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
+flash = ["kithara/flash"]
+no-block = ["kithara/no-block"]
+
+[dependencies]
+kithara = { workspace = true, default-features = false, features = [
+    "assets",
+    "platform",
+    "probe",
+    "storage",
+    "tokio-net",
+] }
+kithara-integration-tests = { workspace = true }
+
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "storage"
+path = "tests/suite.rs"

@@ -1,0 +1,42 @@
+[package]
+name = "kithara-stream-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[lib]
+name = "kithara_stream_test_support"
+path = "../integration/src/memory_source.rs"
+
+[features]
+default = ["client-reqwest", "tls-rustls"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
+flash = ["kithara/flash"]
+no-block = ["kithara/no-block"]
+
+[dependencies]
+kithara = { workspace = true, default-features = false, features = [
+    "events",
+    "platform",
+    "probe",
+    "storage",
+    "stream",
+    "tokio-net",
+] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+
+futures = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "stream"
+path = "tests/suite.rs"

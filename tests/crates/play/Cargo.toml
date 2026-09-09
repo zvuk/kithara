@@ -1,0 +1,78 @@
+[package]
+name = "kithara-play-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[package.metadata.cargo-machete]
+ignored = ["reqwest", "serial_test"]
+
+[features]
+default = ["client-reqwest", "tls-rustls"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
+flash = ["kithara/flash", "kithara-integration-tests/flash"]
+no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
+apple-fused-src = ["kithara/apple-fused-src"]
+e2e = []
+network = []
+network-manual = []
+
+[dependencies]
+kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith", "backend-cpal"] }
+kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
+kithara-integration-tests = { workspace = true }
+kithara-test-fixtures = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+
+cochlea-features = { workspace = true }
+firewheel = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+num-traits = { workspace = true }
+reqwest = { workspace = true, features = ["rustls", "stream"] }
+ringbuf = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serial_test = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+url = { workspace = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara = { workspace = true, features = ["apple", "client-wreq"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "play"
+path = "tests/suite.rs"
+
+[[test]]
+name = "play_heavy"
+path = "tests/heavy.rs"
+
+[[test]]
+name = "play_stress"
+path = "tests/stress.rs"
+
+[[test]]
+name = "e2e"
+path = "tests/e2e.rs"
+required-features = ["e2e"]
+
+[[test]]
+name = "network"
+path = "tests/network.rs"
+required-features = ["network"]
+
+[[test]]
+name = "network_manual"
+path = "tests/network_manual.rs"
+required-features = ["network-manual"]

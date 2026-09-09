@@ -230,7 +230,9 @@ pub(super) fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
 }
 
 /// The runner takes one job and exits, the container goes with it, and systemd
-/// starts the next one. Nothing survives a job except the caches.
+/// starts the next one. The runner keeps its checkout and caches; checkout
+/// cleans generated files and updates tracked files without retouching unchanged
+/// build-script inputs. Cargo still checks those inputs by modification time.
 ///
 /// The cargo home is mounted whole rather than as its registry and its git
 /// checkouts separately: cargo guards both with a lock file kept beside them,
@@ -511,6 +513,20 @@ mod tests {
         assert_eq!(
             target(&first),
             "/var/lib/kithara-ci/target/kithara-ci-octocat"
+        );
+
+        let workspace = |mounts: &[(String, &str)]| {
+            mounts
+                .iter()
+                .find(|(_, at)| *at == "/runner/_work")
+                .expect("a persistent workspace")
+                .0
+                .clone()
+        };
+        assert_ne!(workspace(&first), workspace(&second));
+        assert_eq!(
+            workspace(&first),
+            "/var/lib/kithara-ci/workspaces/kithara-ci-octocat"
         );
 
         for shared in ["/home/runner/.cargo", "/cache/sccache"] {

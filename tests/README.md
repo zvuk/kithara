@@ -1,7 +1,18 @@
 # Tests
 
-`kithara-integration-tests` owns the workspace's integration suites, `perf`
-scenarios, benches and fuzz targets. Binaries: `test_server` serves
+Domain suites live in `tests/crates/<domain>/tests/`, with each package's
+`Cargo.toml` beside that directory. Suite entrypoints select focused modules;
+subdirectories group scenarios rather than repeat the package name.
+
+`tests/crates/integration` owns cross-component scenarios (multi-instance,
+phase continuity, thread budgets and integration regressions), shared fixture
+helpers in `src/`, performance scenarios and benches. Its package name remains
+`kithara-integration-tests`, which domain packages use for shared helpers.
+`tests/crates/harness` owns fixture-artifact, browser-runner, blocking-detector,
+flash and timeout tests. ABR contracts live in `abr`; platform loom models live
+in `platform`. Fuzz targets remain in `tests/fuzz`.
+
+ Binaries: `test_server` serves
 `/assets/*` (checked-in regression files), `/signal/*` (procedural encoded audio)
 and `/stream/*` (synthetic HLS); `wasm_test_runner` is the `wasm32` runner in
 `.cargo/config.toml` that starts it.
@@ -20,14 +31,14 @@ built. Lanes are `just test run --lane=<name>`, from `[test.lanes.*]` in
 |---|---|
 | `suite_light`, `suite_heavy`, `suite_stress` | `just test` |
 | `suite_perf`, `memory_rss` (`perf`) | `just perf`; two `[[test]]` targets |
-| `suite_harness` (`harness`) | lane `fixtures` |
-| `suite_broadcast` (`broadcast`) | lane `broadcast` |
-| `suite_e2e` (`e2e`) | lane `e2e`; needs a real output device |
-| `suite_network` (`network`) | lane `network`; needs `KITHARA_DRM_PROD_*` |
-| `suite_network_manual` (`network-manual`) | lane `network-manual`; corporate DNS + a device, so no CI runner |
+| `suite_harness` in `harness` (`harness`) | lane `fixtures` |
+| `broadcast` in `broadcast` (`broadcast`) | lane `broadcast` |
+| `e2e` in `play` (`e2e`) | lane `e2e`; needs a real output device |
+| `network` in `play` and `queue` (`network`) | lane `network`; needs `KITHARA_DRM_PROD_*` |
+| `network_manual` in `play` and `queue` (`network-manual`) | lane `network-manual`; corporate DNS + a device, so no CI runner |
 | `suite_integration_regressions` | own lane; some tests are red on purpose |
 | selenium tests (`selenium`) | lane `selenium-firefox` |
-| `loom` models | lane `loom`; `just test` builds the target, explores nothing |
+| `loom` models in `platform` | lane `loom`; `just test` builds the target, explores nothing |
 
 `just test` also covers neither `kithara-ui`, nor `kithara-app` GUI tests, nor
 this crate's own lib tests and the `flash` harness binaries: `default-filter` in
@@ -53,7 +64,7 @@ the same binary on `http://127.0.0.1:3444`, which `TEST_SERVER_URL` overrides.
 Complex `/signal` and `/stream` specs register through `POST /token`; helpers
 hand back ordinary `Url`s, so a test never sees the token.
 
-`tests/src/fixture_protocol.rs` owns the synthetic-HLS wire types (`DataMode`,
+`tests/crates/integration/src/fixture_protocol.rs` owns the synthetic-HLS wire types (`DataMode`,
 `InitMode`, `DelayRule`, `EncryptionRequest`) and the deterministic byte oracles,
 so byte assertions agree across helpers. Audio inputs, including small PCM
 arrays and encoded `/signal/*` assets, are prepared by `kithara-test-fixtures`
@@ -74,7 +85,7 @@ check/build/size-check only and runs no tests.
 - Only `suite_heavy` is built for `wasm32`, with every native module compiled
   out — `kithara_ffi_web` and `kithara_play::offline_browser` are the
   browser-visible coverage.
-- The offline harness in `tests/src/offline` builds on both targets; only
+- The offline harness in `tests/crates/integration/src/offline` builds on both targets; only
   `app.rs`, which needs `kithara-app`, is gated to native.
 - `OfflineWorker` owns the `OfflinePlayer`, on wasm from a Web Worker, because
   `Platform::offline` refuses a Host on the browser main thread. Open the
@@ -85,14 +96,14 @@ check/build/size-check only and runs no tests.
 ### Selenium
 
 Player scenarios drive the real page via thirtyfour:
-`tests/tests/kithara_ffi_web/selenium.rs`, auto-ignored by the macro flag.
+`tests/crates/ffi-web/tests/selenium.rs`, auto-ignored by the macro flag.
 Capabilities are in `tests/webdriver.json`;
 `KITHARA_SELENIUM_PAGE_URL` and `KITHARA_SELENIUM_WEBDRIVER_URL` attach to an
 already-running page or driver instead of starting one.
 
 ## Perf and benches
 
-Perf scenarios are `#[ignore]`d. Criterion targets in `tests/benches` set
+Perf scenarios are `#[ignore]`d. Criterion targets in `tests/crates/integration/benches` set
 `harness = false` and are compiled only by `just perf bench`, which only builds
 in its default mode. No test lane touches them, so a changed signature breaks
 them silently.
@@ -101,8 +112,8 @@ Fuzzing: `fuzz/README.md`.
 
 ## Adding a test
 
-- Name the module in its suite root (`tests/tests/suite_*.rs`,
-  `tests/perf/suite_perf.rs`). A file nobody names compiles into nothing and
+- Name the module in its suite root (`tests/crates/integration/tests/suite_*.rs`,
+  `tests/crates/integration/perf/suite_perf.rs`). A file nobody names compiles into nothing and
   passes silently. A perf file also needs `#![cfg(feature = "perf")]` and a
   `[[test]]` entry carrying `required-features = ["perf"]`.
 - Pick the suite and `#[kithara::test]` flags from the contract under test,

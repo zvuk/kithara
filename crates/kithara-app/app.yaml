@@ -86,7 +86,7 @@ drm:
       cipher_key: $KITHARA_DRM_STAGE_KEY
       # zvq.me staging keyserver is captured against a 16-char
       # alphanumeric salt (legacy zvqengine format, `aaaaaaaaaaaaaaaa`
-      # in `tests/tests/kithara_queue/zvuk_cipher_check.rs`). Using the
+      # in `tests/crates/queue/tests/zvuk_cipher_check.rs`). Using the
       # 8-char hex prod format here silently corrupts decrypt output.
       seed:
         length: 16

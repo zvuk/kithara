@@ -505,12 +505,12 @@ fn build_target_dir(
     project_root: &Path,
     shared_root: &Path,
     target_scope: &str,
-    target_is_linux: bool,
+    target_is_windows: bool,
     gitlab: bool,
     concurrent_id: Option<&str>,
     slots: usize,
 ) -> Result<PathBuf> {
-    if target_is_linux && gitlab {
+    if gitlab && !target_is_windows {
         let slot = disposable_slot(concurrent_id, slots)?;
         return Ok(shared_root
             .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
@@ -530,7 +530,7 @@ fn prepare_build_target(
         project_root,
         shared_root,
         target_scope,
-        cfg!(target_os = "linux"),
+        cfg!(windows),
         is_gitlab(),
         concurrent_id.as_deref(),
         config.host.job_concurrency,
@@ -1087,12 +1087,12 @@ mod tests {
     }
 
     #[test]
-    fn linux_gitlab_targets_live_in_the_persistent_runner_slot() {
+    fn gitlab_targets_live_in_the_persistent_runner_slot() {
         let target = build_target_dir(
             Path::new("/builds/disrupt/kithara"),
             Path::new("/cache"),
             "review-linux-aarch64",
-            true,
+            false,
             true,
             Some("1"),
             3,
@@ -1106,7 +1106,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_targets_stay_with_the_checkout() {
+    fn macos_gitlab_targets_live_in_the_persistent_runner_slot() {
         let target = build_target_dir(
             Path::new("/builds/disrupt/kithara"),
             Path::new("/cache"),
@@ -1118,6 +1118,25 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(target, Path::new("/builds/disrupt/kithara/target"));
+        assert_eq!(
+            target,
+            Path::new("/cache/target-slots/review-macos-aarch64-slot-1")
+        );
+    }
+
+    #[test]
+    fn non_gitlab_targets_stay_with_the_checkout() {
+        let target = build_target_dir(
+            Path::new("/work/kithara"),
+            Path::new("/cache"),
+            "review-macos-aarch64",
+            false,
+            false,
+            None,
+            3,
+        )
+        .unwrap();
+
+        assert_eq!(target, Path::new("/work/kithara/target"));
     }
 }

@@ -1,0 +1,37 @@
+[package]
+name = "kithara-harness-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[features]
+harness = []
+flash = ["kithara/flash", "kithara-integration-tests/flash"]
+no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
+
+[dependencies]
+kithara = { workspace = true, features = ["platform", "test-utils"] }
+kithara-integration-tests = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "suite_light"
+path = "tests/suite_light.rs"
+
+[[test]]
+name = "suite_harness"
+path = "tests/suite_harness.rs"
+required-features = ["harness"]

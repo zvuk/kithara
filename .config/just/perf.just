@@ -99,18 +99,15 @@ bench MODE="build":
         ;;
     esac
 
-# The pool budget and allocation tests live in the integration crate, as
-# modules of `suite_light`, not as test targets of `kithara-bufpool`. They were
-# named here as targets of the pool crate long after they moved.
 memory:
     @echo "=== Tier 1: Pool-native budget tests ==="
-    cargo test -p kithara-integration-tests --test suite_light kithara_bufpool::memory_budget
+    cargo test -p kithara-bufpool-tests --test bufpool memory_budget
     @echo ""
     @echo "=== Tier 2: Allocation regression tests ==="
-    cargo test -p kithara-integration-tests --test suite_light kithara_bufpool::alloc_regression -- --test-threads=1
+    cargo test -p kithara-bufpool-tests --test bufpool alloc_regression -- --test-threads=1
     @echo ""
     @echo "=== Tier 3: Audio hot path zero-alloc ==="
-    cargo test -p kithara-integration-tests --test suite_heavy kithara_audio::alloc_free_hotpath -- --test-threads=1
+    cargo test -p kithara-audio-tests --test audio_heavy alloc_free_hotpath -- --test-threads=1
     @echo ""
     @echo "=== Tier 4: RSS budget (HLS playback) ==="
     cargo test -p kithara-integration-tests --features perf --test memory_rss -- --test-threads=1

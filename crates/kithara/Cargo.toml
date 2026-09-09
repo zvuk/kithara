@@ -11,8 +11,20 @@ categories = ["multimedia::audio"]
 
 [features]
 default = [
+    "audio",
+    "bufpool",
+    "decode",
+    "events",
     "file",
     "hls",
+    "host",
+    "platform",
+    "play",
+    "resampler",
+    "signal",
+    "stream",
+    "test-utils",
+    "warp",
     "symphonia",
     "resample-rubato",
     "analysis-beat",
@@ -20,7 +32,77 @@ default = [
     "stretch-signalsmith",
     "client-reqwest",
     "tls-rustls",
+    "workspace-hack",
 ]
+all = [
+    "abr",
+    "analysis",
+    "analysis-beat",
+    "analysis-waveform",
+    "assets",
+    "audio",
+    "backend-cpal",
+    "broadcast",
+    "bufpool",
+    "client-reqwest",
+    "decode",
+    "drm",
+    "encode",
+    "events",
+    "fdk-aac",
+    "file",
+    "hls",
+    "host",
+    "net",
+    "offline",
+    "output",
+    "platform",
+    "play",
+    "queue",
+    "record",
+    "resample-rubato",
+    "resampler",
+    "signal",
+    "storage",
+    "stream",
+    "stretch",
+    "stretch-signalsmith",
+    "symphonia",
+    "tls-rustls",
+    "ui",
+    "warp",
+    "worker",
+    "workspace-hack",
+]
+abr = ["dep:kithara-abr"]
+analysis = ["dep:kithara-analysis"]
+assets = ["storage", "dep:kithara-assets"]
+audio = ["dep:kithara-audio"]
+# Live HLS packaging: take a PCM feed on air as an HLS origin. Off by default.
+broadcast = ["output", "dep:kithara-broadcast"]
+bufpool = ["dep:kithara-bufpool"]
+decode = ["dep:kithara-decode"]
+drm = ["dep:kithara-drm"]
+encode = ["dep:kithara-encode"]
+events = ["dep:kithara-events"]
+file = ["assets", "net", "dep:kithara-file"]
+hls = ["abr", "assets", "drm", "net", "dep:kithara-hls"]
+host = ["dep:kithara-host"]
+net = ["dep:kithara-net"]
+output = ["dep:kithara-output"]
+platform = ["dep:kithara-platform"]
+play = ["dep:kithara-play"]
+queue = ["dep:kithara-queue"]
+resampler = ["dep:kithara-resampler"]
+signal = ["platform", "dep:kithara-signal", "kithara-platform/signal"]
+storage = ["dep:kithara-storage"]
+stream = ["dep:kithara-stream"]
+stretch = ["dep:kithara-stretch"]
+test-utils = ["bufpool", "dep:kithara-test-utils", "kithara-bufpool/test-utils"]
+ui = ["dep:kithara-ui"]
+warp = ["dep:kithara-warp"]
+worker = ["dep:kithara-worker"]
+workspace-hack = ["dep:kithara-workspace-hack"]
 # HTTP backend forwarding to every kithara-net-reaching dep. Optional deps
 # (kithara-net / kithara-file / kithara-hls / kithara-abr) use the weak `?`
 # form so a backend choice never force-enables them. Android forwards
@@ -28,85 +110,95 @@ default = [
 client-reqwest = [
     "kithara-analysis?/client-reqwest",
     "kithara-net?/client-reqwest",
-    "kithara-stream/client-reqwest",
+    "kithara-stream?/client-reqwest",
     "kithara-assets?/client-reqwest",
     "kithara-broadcast?/client-reqwest",
     "kithara-file?/client-reqwest",
     "kithara-hls?/client-reqwest",
-    "kithara-play/client-reqwest",
+    "kithara-host?/client-reqwest",
+    "kithara-play?/client-reqwest",
     "kithara-queue?/client-reqwest",
     "kithara-storage?/client-reqwest",
-    "kithara-audio/client-reqwest",
-    "kithara-decode/client-reqwest",
+    "kithara-test-utils?/client-reqwest",
+    "kithara-audio?/client-reqwest",
+    "kithara-decode?/client-reqwest",
     "kithara-encode?/client-reqwest",
-    "kithara-events/client-reqwest",
+    "kithara-events?/client-reqwest",
     "kithara-abr?/client-reqwest",
 ]
 client-wreq = [
     "kithara-analysis?/client-wreq",
     "kithara-net?/client-wreq",
-    "kithara-stream/client-wreq",
+    "kithara-stream?/client-wreq",
     "kithara-assets?/client-wreq",
     "kithara-broadcast?/client-wreq",
     "kithara-file?/client-wreq",
     "kithara-hls?/client-wreq",
-    "kithara-play/client-wreq",
+    "kithara-host?/client-wreq",
+    "kithara-play?/client-wreq",
     "kithara-queue?/client-wreq",
     "kithara-storage?/client-wreq",
-    "kithara-audio/client-wreq",
-    "kithara-decode/client-wreq",
+    "kithara-test-utils?/client-wreq",
+    "kithara-audio?/client-wreq",
+    "kithara-decode?/client-wreq",
     "kithara-encode?/client-wreq",
-    "kithara-events/client-wreq",
+    "kithara-events?/client-wreq",
     "kithara-abr?/client-wreq",
 ]
 tls-rustls = [
     "kithara-analysis?/tls-rustls",
     "kithara-net?/tls-rustls",
-    "kithara-stream/tls-rustls",
+    "kithara-stream?/tls-rustls",
     "kithara-assets?/tls-rustls",
     "kithara-broadcast?/tls-rustls",
     "kithara-file?/tls-rustls",
     "kithara-hls?/tls-rustls",
-    "kithara-play/tls-rustls",
+    "kithara-host?/tls-rustls",
+    "kithara-play?/tls-rustls",
     "kithara-queue?/tls-rustls",
     "kithara-storage?/tls-rustls",
-    "kithara-audio/tls-rustls",
-    "kithara-decode/tls-rustls",
+    "kithara-test-utils?/tls-rustls",
+    "kithara-audio?/tls-rustls",
+    "kithara-decode?/tls-rustls",
     "kithara-encode?/tls-rustls",
-    "kithara-events/tls-rustls",
+    "kithara-events?/tls-rustls",
     "kithara-abr?/tls-rustls",
 ]
 tls-native = [
     "kithara-analysis?/tls-native",
     "kithara-net?/tls-native",
-    "kithara-stream/tls-native",
+    "kithara-stream?/tls-native",
     "kithara-assets?/tls-native",
     "kithara-broadcast?/tls-native",
     "kithara-file?/tls-native",
     "kithara-hls?/tls-native",
-    "kithara-play/tls-native",
+    "kithara-host?/tls-native",
+    "kithara-play?/tls-native",
     "kithara-queue?/tls-native",
     "kithara-storage?/tls-native",
-    "kithara-audio/tls-native",
-    "kithara-decode/tls-native",
+    "kithara-test-utils?/tls-native",
+    "kithara-audio?/tls-native",
+    "kithara-decode?/tls-native",
     "kithara-encode?/tls-native",
-    "kithara-events/tls-native",
+    "kithara-events?/tls-native",
     "kithara-abr?/tls-native",
 ]
-# Live HLS packaging: take a PCM feed on air as an HLS origin. Off by default.
-broadcast = ["output", "dep:kithara-broadcast"]
 # Enable the Symphonia software decoder path. Disable to compile with
 # only a hardware backend (apple/android) and no software fallback.
 symphonia = [
     "kithara-analysis?/symphonia",
-    "kithara-audio/symphonia",
-    "kithara-decode/symphonia",
+    "kithara-audio?/symphonia",
+    "kithara-decode?/symphonia",
+    "kithara-host?/symphonia",
+    "kithara-play?/symphonia",
     "kithara-queue?/symphonia",
 ]
 webcodecs = [
     "kithara-analysis?/webcodecs",
-    "kithara-audio/webcodecs",
-    "kithara-decode/webcodecs",
+    "kithara-audio?/webcodecs",
+    "kithara-decode?/webcodecs",
+    "kithara-host?/webcodecs",
+    "kithara-play?/webcodecs",
     "kithara-queue?/webcodecs",
 ]
 # libfdk-aac override for HE-AAC v1/v2 streams. Symphonia ships an
@@ -114,44 +206,49 @@ webcodecs = [
 # stereo + SBR) streams fail in the software pipeline.
 fdk-aac = [
     "kithara-analysis?/fdk-aac",
-    "kithara-audio/fdk-aac",
-    "kithara-decode/fdk-aac",
+    "kithara-audio?/fdk-aac",
+    "kithara-decode?/fdk-aac",
     "kithara-encode?/fdk-aac",
+    "kithara-host?/fdk-aac",
+    "kithara-play?/fdk-aac",
     "kithara-queue?/fdk-aac",
 ]
-encode = ["dep:kithara-encode"]
 ffmpeg = ["encode", "kithara-encode/ffmpeg"]
-offline = ["output", "kithara-host/offline"]
-output = ["dep:kithara-output"]
+offline = ["host", "output", "kithara-host/offline"]
 record = ["encode", "output", "dep:kithara-record"]
 resample-glide = [
-    "kithara-audio/resample-glide",
-    "kithara-decode/resample-glide",
-    "kithara-play/resample-glide",
-    "kithara-resampler/resample-glide",
+    "kithara-audio?/resample-glide",
+    "kithara-decode?/resample-glide",
+    "kithara-host?/resample-glide",
+    "kithara-play?/resample-glide",
+    "kithara-resampler?/resample-glide",
 ]
 resample-rubato = [
-    "kithara-audio/resample-rubato",
-    "kithara-decode/resample-rubato",
-    "kithara-play/resample-rubato",
-    "kithara-resampler/resample-rubato",
+    "kithara-audio?/resample-rubato",
+    "kithara-decode?/resample-rubato",
+    "kithara-host?/resample-rubato",
+    "kithara-play?/resample-rubato",
+    "kithara-resampler?/resample-rubato",
 ]
-analysis = ["dep:kithara-analysis"]
 analysis-beat = ["analysis", "kithara-analysis/analysis-beat"]
 analysis-waveform = ["analysis", "kithara-analysis/analysis-waveform"]
 # Native-only C++ time-stretch backends. Native builds require at least one;
 # enabling both makes them selectable at runtime in the DJ deck.
 stretch-signalsmith = [
-    "dep:kithara-stretch",
-    "kithara-play/stretch-signalsmith",
+    "stretch",
+    "kithara-host?/stretch-signalsmith",
+    "kithara-play?/stretch-signalsmith",
     "kithara-queue?/stretch-signalsmith",
     "kithara-stretch/stretch-signalsmith",
+    "kithara-warp?/stretch-signalsmith",
 ]
 stretch-bungee = [
-    "dep:kithara-stretch",
-    "kithara-play/stretch-bungee",
+    "stretch",
+    "kithara-host?/stretch-bungee",
+    "kithara-play?/stretch-bungee",
     "kithara-queue?/stretch-bungee",
     "kithara-stretch/stretch-bungee",
+    "kithara-warp?/stretch-bungee",
 ]
 # NN beat/downbeat detector (kithara-beat, embedded small model) in the
 # analysis registry.
@@ -162,62 +259,54 @@ beat-nn-full-int8 = ["analysis", "kithara-analysis/beat-nn-full-int8"]
 # Signal-processing beat detector, no model bytes. Independent of `beat-nn`;
 # a build carrying both uses the network.
 beat-dsp = ["analysis", "kithara-analysis/beat-dsp"]
-file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
-hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net", "dep:kithara-drm"]
-assets = ["dep:kithara-assets", "dep:kithara-storage"]
-net = ["dep:kithara-net"]
-bufpool = []
-test-utils = ["kithara-bufpool/test-utils"]
-queue = ["dep:kithara-queue"]
-signal = ["kithara-platform/signal"]
-ui = ["dep:kithara-ui"]
 ui-capture = ["ui", "kithara-ui/capture"]
 ui-iced = ["ui", "kithara-ui/iced"]
 ui-masonry = ["ui", "kithara-ui/masonry"]
-worker = ["dep:kithara-worker"]
-flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
-loom = ["kithara-platform/loom"]
-no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
-tokio-net = ["kithara-platform/tokio-net"]
-tokio-rt-multi-thread = ["kithara-platform/tokio-rt-multi-thread"]
-backend-cpal = ["kithara-host/backend-cpal"]
+flash = ["platform", "test-utils", "kithara-platform/flash", "kithara-test-utils/flash"]
+loom = ["platform", "kithara-platform/loom"]
+no-block = ["platform", "test-utils", "kithara-platform/no-block", "kithara-test-utils/no-block"]
+tokio-net = ["platform", "kithara-platform/tokio-net"]
+tokio-rt-multi-thread = ["platform", "kithara-platform/tokio-rt-multi-thread"]
+backend-cpal = ["host", "kithara-host/backend-cpal"]
 probe = [
+    "test-utils",
     "kithara-abr?/probe",
     "kithara-analysis?/probe",
     "kithara-assets?/probe",
-    "kithara-audio/probe",
-    "kithara-decode/probe",
+    "kithara-audio?/probe",
+    "kithara-decode?/probe",
     "kithara-file?/probe",
     "kithara-hls?/probe",
-    "kithara-host/probe",
+    "kithara-host?/probe",
     "kithara-net?/probe",
-    "kithara-play/probe",
+    "kithara-play?/probe",
     "kithara-queue?/probe",
     "kithara-storage?/probe",
-    "kithara-stream/probe",
+    "kithara-stream?/probe",
     "kithara-test-utils/probe",
     "kithara-worker?/probe",
 ]
 mock = [
+    "test-utils",
     "kithara-abr?/mock",
-    "kithara-audio/mock",
-    "kithara-decode/mock",
+    "kithara-audio?/mock",
+    "kithara-decode?/mock",
     "kithara-net?/mock",
-    "kithara-play/mock",
+    "kithara-play?/mock",
     "kithara-storage?/mock",
-    "kithara-stream/mock",
+    "kithara-stream?/mock",
     "kithara-test-utils/mock",
 ]
 perf = [
-    "kithara-audio/perf",
-    "kithara-decode/perf",
-    "kithara-play/perf",
-    "kithara-storage/perf",
-    "kithara-stream/perf",
-    "kithara-bufpool/perf",
-    "kithara-file/perf",
-    "kithara-hls/perf",
-    "kithara-net/perf",
+    "kithara-audio?/perf",
+    "kithara-decode?/perf",
+    "kithara-play?/perf",
+    "kithara-storage?/perf",
+    "kithara-stream?/perf",
+    "kithara-bufpool?/perf",
+    "kithara-file?/perf",
+    "kithara-hls?/perf",
+    "kithara-net?/perf",
 ]
 # Apple HW decoder. Does NOT include `fdk-aac` — Apple AudioToolbox
 # decodes HE-AAC v1/v2 natively via kAudioFormatMPEG4AAC_HE / _HE_V2
@@ -227,65 +316,85 @@ perf = [
 # without pulling the real-clock NSURLSession backend.
 apple = [
     "kithara-analysis?/apple",
-    "kithara-audio/apple",
-    "kithara-decode/apple",
-    "kithara-play/apple",
+    "kithara-audio?/apple",
+    "kithara-decode?/apple",
+    "kithara-host?/apple",
+    "kithara-play?/apple",
     "kithara-queue?/apple",
 ]
 apple-fused-src = [
     "kithara-analysis?/apple",
-    "kithara-audio/apple-fused-src",
-    "kithara-decode/apple",
-    "kithara-play/apple-fused-src",
+    "kithara-audio?/apple-fused-src",
+    "kithara-decode?/apple",
+    "kithara-host?/apple-fused-src",
+    "kithara-play?/apple-fused-src",
     "kithara-queue?/apple-fused-src",
 ]
 # Apple HTTP backend for the shipped FFI framework build. It uses NSURLSession,
 # which passes the DRM keyserver anti-bot WAF natively and removes the wreq /
 # BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
-apple-net = ["kithara-net?/client-apple", "kithara-stream/client-apple"]
+apple-net = ["kithara-net?/client-apple", "kithara-stream?/client-apple"]
 android = [
     "kithara-analysis?/android",
-    "kithara-audio/android",
-    "kithara-decode/android",
+    "kithara-audio?/android",
+    "kithara-decode?/android",
     "kithara-net?/client-wreq",
     "resample-rubato",
     "analysis-beat",
 ]
-full = ["file", "hls", "assets", "net", "bufpool", "offline", "record"]
+full = [
+    "audio",
+    "bufpool",
+    "decode",
+    "events",
+    "file",
+    "hls",
+    "host",
+    "offline",
+    "platform",
+    "play",
+    "record",
+    "resampler",
+    "signal",
+    "stream",
+    "test-utils",
+    "warp",
+    "workspace-hack",
+]
 
 [dependencies]
 kithara-abr = { workspace = true, optional = true, default-features = false }
 kithara-analysis = { workspace = true, optional = true, default-features = false }
 kithara-assets = { workspace = true, optional = true }
-kithara-audio = { workspace = true, default-features = false }
+kithara-audio = { workspace = true, optional = true, default-features = false }
 kithara-broadcast = { workspace = true, optional = true, default-features = false }
-kithara-bufpool = { workspace = true }
-kithara-decode = { workspace = true, default-features = false }
+kithara-bufpool = { workspace = true, optional = true }
+kithara-decode = { workspace = true, optional = true, default-features = false }
 kithara-drm = { workspace = true, optional = true }
 kithara-encode = { workspace = true, optional = true, default-features = false }
-kithara-events = { workspace = true }
+kithara-events = { workspace = true, optional = true }
 kithara-file = { workspace = true, optional = true, default-features = false }
 kithara-hls = { workspace = true, optional = true, default-features = false }
-kithara-host = { workspace = true, default-features = false }
+kithara-host = { workspace = true, optional = true, default-features = false }
 kithara-net = { workspace = true, optional = true, default-features = false }
 kithara-output = { workspace = true, optional = true }
-kithara-platform = { workspace = true }
-kithara-play = { workspace = true, default-features = false }
+kithara-platform = { workspace = true, optional = true }
+kithara-play = { workspace = true, optional = true, default-features = false }
 kithara-queue = { workspace = true, optional = true, default-features = false }
 kithara-record = { workspace = true, optional = true }
-kithara-resampler = { workspace = true, default-features = false }
-kithara-signal = { workspace = true }
+kithara-resampler = { workspace = true, optional = true, default-features = false }
+kithara-signal = { workspace = true, optional = true }
 kithara-storage = { workspace = true, optional = true }
-kithara-stream = { workspace = true, default-features = false }
+kithara-stream = { workspace = true, optional = true, default-features = false }
 kithara-stretch = { workspace = true, optional = true, default-features = false }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, optional = true }
 kithara-ui = { workspace = true, optional = true }
-kithara-warp = { workspace = true, default-features = false }
+kithara-warp = { workspace = true, optional = true, default-features = false }
 kithara-worker = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack", optional = true }
 
 [dev-dependencies]
 kithara = { path = ".", default-features = false }
