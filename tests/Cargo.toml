@@ -228,7 +228,6 @@ kithara = { workspace = true, default-features = false, features = [
     "resample-rubato",
     "analysis-beat",
     "analysis-waveform",
-    "backend-web-audio",
     # `probe` re-exports the WebCodecs capability probe on wasm, and the probe
     # only exists when the decoder that owns it is compiled in.
     "webcodecs",

@@ -19,9 +19,7 @@ default = [
     "tls-rustls",
 ]
 backend-cpal = ["firewheel/cpal"]
-backend-web-audio = ["dep:firewheel-web-audio"]
 offline = ["dep:kithara-worker"]
-wasm-bindgen = ["firewheel/wasm-bindgen"]
 client-reqwest = ["kithara-play/client-reqwest"]
 client-wreq = ["kithara-play/client-wreq"]
 tls-rustls = ["kithara-play/tls-rustls"]
@@ -62,8 +60,11 @@ triple_buffer = { workspace = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
+# The browser realtime backend arrives with the target, the way `firewheel`'s
+# `std` feature brings the native one.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-firewheel-web-audio = { workspace = true, optional = true }
+firewheel = { workspace = true, features = ["wasm-bindgen"] }
+firewheel-web-audio = { workspace = true }
 
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["mock", "probe"] }

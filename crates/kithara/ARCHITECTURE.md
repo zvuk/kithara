@@ -89,7 +89,6 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 
 <tr><td><code>backend-cpal</code></td><td>no</td><td>Native CPAL backend forwarded to play and queue when <code>queue</code> is enabled</td></tr>
 
-<tr><td><code>backend-web-audio</code></td><td>no</td><td>Wasm WebAudio backend forwarded to play and queue when <code>queue</code> is enabled; also enables <code>kithara-play/wasm-bindgen</code></td></tr>
 
 <tr><td><code>flash</code></td><td>no</td><td>Virtual-time test/platform mode forwarded to <code>kithara-platform</code> and test macro utilities</td></tr>
 

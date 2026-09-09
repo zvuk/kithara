@@ -181,7 +181,6 @@ no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 tokio-net = ["kithara-platform/tokio-net"]
 tokio-rt-multi-thread = ["kithara-platform/tokio-rt-multi-thread"]
 backend-cpal = ["kithara-host/backend-cpal"]
-backend-web-audio = ["kithara-host/backend-web-audio", "kithara-host/wasm-bindgen"]
 probe = [
     "kithara-abr?/probe",
     "kithara-analysis?/probe",

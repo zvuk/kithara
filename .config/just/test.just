@@ -70,7 +70,7 @@ wasm BROWSER="chrome" SUITE="all":
       -Z build-std=std,panic_abort,core,alloc \
       -Z build-std-features=optimize_for_size \
       -p kithara-host --lib --no-default-features \
-      --features backend-web-audio,wasm-bindgen,symphonia,webcodecs,resample-rubato,client-reqwest,tls-rustls
+      --features symphonia,webcodecs,resample-rubato,client-reqwest,tls-rustls
     WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
       cargo "+$toolchain" test --profile test-release \
       --target wasm32-unknown-unknown \
