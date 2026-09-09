@@ -73,6 +73,15 @@ wasm-bindgen-test = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
 
+# kithara-net refuses a wasm32 build without an HTTP client backend, and the
+# test-utils chain reaches it. Native leaves the backend to the consumer, so
+# the choice is made here only for the target that demands one.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+kithara-test-utils = { path = "../kithara-test-utils", features = [
+    "client-reqwest",
+    "tls-rustls",
+] }
+
 [lints]
 workspace = true
 

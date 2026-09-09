@@ -89,6 +89,12 @@ wasm BROWSER="chrome" SUITE="all":
       --target wasm32-unknown-unknown \
       -Z build-std=std,panic_abort,core,alloc \
       -Z build-std-features=optimize_for_size \
+      -p kithara-platform --lib
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
       -p kithara-analysis --lib --no-default-features \
       --features analysis-waveform,beat-dsp,client-reqwest,tls-rustls,symphonia,webcodecs
     WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
