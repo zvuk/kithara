@@ -123,7 +123,6 @@ mod tests {
     };
 
     use kithara_test_utils::kithara;
-    use tokio::{spawn, task, time as tokio_time};
 
     use super::CancelToken;
     use crate::sync::Arc;
@@ -189,7 +188,7 @@ mod tests {
     /// A worker token derived via `child()` must observe a master `cancel()`
     /// through its lock-free read, even though nobody calls the worker token's
     /// own `cancel()`.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn child_observes_parent_cancel_lock_free() {
         let master = CancelToken::root();
         let worker = master.child();
@@ -273,10 +272,12 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn async_cancelled_resolves_on_self_cancel() {
+        use crate::tokio::task;
+
         // Node mechanism: cancelled() resolves when this node cancels; the flag
         let c = CancelToken::never();
         let c2 = c.clone();
-        let handle = spawn(async move {
+        let handle = task::spawn(async move {
             c2.cancelled().await;
             c2.is_cancelled()
         });
@@ -284,7 +285,7 @@ mod tests {
 
         c.cancel();
 
-        let flag = tokio_time::timeout(Duration::from_secs(2), handle)
+        let flag = crate::time::timeout(Duration::from_secs(2), handle)
             .await
             .expect("cancelled() must resolve within the test timeout")
             .expect("spawned cancellation task must not panic");

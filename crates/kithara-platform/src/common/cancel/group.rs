@@ -179,15 +179,11 @@ impl Future for GroupCancelled<'_> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{
-            Barrier,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
 
     use kithara_test_utils::kithara;
-    use tokio::{spawn, task, time as tokio_time};
 
     use super::CancelGroup;
     use crate::{common::cancel::CancelToken, sync::Arc};
@@ -304,14 +300,14 @@ mod tests {
                 async fn $name() {
                     let s = build(&$spec);
                     let group2 = s.group.clone();
-                    let handle = spawn(async move { group2.cancelled().await });
+                    let handle = crate::tokio::task::spawn(async move { group2.cancelled().await });
 
-                    task::yield_now().await;
+                    crate::tokio::task::yield_now().await;
 
                     assert!(!s.group.is_cancelled(), "must not be cancelled before action");
                     fire(&$action, &s);
 
-                    tokio_time::timeout(Duration::from_secs(2), handle)
+                    crate::time::timeout(Duration::from_secs(2), handle)
                         .await
                         .expect("BUG: cancelled() must resolve within the test timeout")
                         .expect("BUG: spawned cancellation task must not panic");
@@ -343,7 +339,7 @@ mod tests {
         tok.cancel();
         let group = CancelGroup::new(vec![tok, CancelToken::never()]);
 
-        tokio_time::timeout(Duration::from_secs(1), group.cancelled())
+        crate::time::timeout(Duration::from_secs(1), group.cancelled())
             .await
             .expect("BUG: cancelled() must return immediately for a pre-cancelled source");
     }
@@ -357,7 +353,7 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn empty_group_cancelled_never_resolves() {
         let group = CancelGroup::new(vec![]);
-        let result = tokio_time::timeout(Duration::from_millis(50), group.cancelled()).await;
+        let result = crate::time::timeout(Duration::from_millis(50), group.cancelled()).await;
         assert!(
             result.is_err(),
             "cancelled() on empty group must not resolve"
@@ -446,18 +442,20 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn bitor_async_cancelled() {
+        use crate::tokio::task;
+
         let a = CancelToken::never();
         let b = CancelToken::never();
         let group = CancelGroup::from(a.clone()) | b.clone();
 
         let g2 = group.clone();
-        let handle = spawn(async move { g2.cancelled().await });
+        let handle = task::spawn(async move { g2.cancelled().await });
         task::yield_now().await;
 
         assert!(!group.is_cancelled());
         b.cancel();
 
-        tokio_time::timeout(Duration::from_secs(2), handle)
+        crate::time::timeout(Duration::from_secs(2), handle)
             .await
             .expect("BUG: cancelled() must resolve once one source has cancelled")
             .expect("BUG: spawned task awaiting cancellation must not panic");
@@ -516,8 +514,10 @@ mod tests {
         assert_eq!(dropped_count.load(Ordering::SeqCst), 0);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn group_on_cancel_fires_once_when_sources_cancel_concurrently() {
+        use std::sync::Barrier;
+
         let tokens = [CancelToken::never(), CancelToken::never()];
         let group = CancelGroup::new(tokens.to_vec());
         let (count, callback) = on_cancel_counter();
