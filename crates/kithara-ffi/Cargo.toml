@@ -121,6 +121,7 @@ kithara = { workspace = true, default-features = false, features = [
     "audio",
     "beat-dsp",
     "hls",
+    "host",
     "resample-rubato",
     "symphonia",
     "webcodecs",
