@@ -40,7 +40,7 @@ use crate::bufpool_ext::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
-const BLOCK_FRAMES: usize = 512;
+const BLOCK_FRAMES: usize = 128;
 const SINE_HZ: f64 = 441.0;
 const SEGMENT_SECS: f64 = 0.5;
 const SEGMENTS_PER_VARIANT: usize = 16;

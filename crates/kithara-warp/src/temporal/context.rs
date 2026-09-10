@@ -2,13 +2,17 @@ use std::{num::NonZeroU32, ops::Range};
 
 use num_traits::ToPrimitive;
 
-use crate::{SessionBeat, SessionEpoch, SessionFrame, TransportRevision};
+use crate::{RateTarget, SessionBeat, SessionEpoch, SessionFrame, SyncMode, TransportRevision};
 
 /// Immutable session position for one output subrange.
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct RenderContext {
+    #[field(get, copy)]
+    mode: SyncMode,
+    #[field(get, copy)]
+    rate: RateTarget,
     /// The sample rate defining [`Self::output_frames`].
     #[field(get, copy)]
     sample_rate: NonZeroU32,
@@ -40,12 +44,22 @@ impl RenderContext {
             .is_none_or(|beats| beats.start <= beats.end);
         let transport_matches_beats = session_beats.is_none() || transport_revision.is_some();
         (output_is_ordered && beats_are_ordered && transport_matches_beats).then_some(Self {
+            mode: SyncMode::Off,
+            rate: RateTarget::default(),
             sample_rate,
             session_beats,
             transport_revision,
             output_frames,
             session_epoch,
         })
+    }
+
+    /// Attaches the one player-owned multiplier for this render pass.
+    #[must_use]
+    pub fn with_rate(mut self, mode: SyncMode, rate: RateTarget) -> Self {
+        self.mode = mode;
+        self.rate = rate;
+        self
     }
 
     /// Derives the same context for a half-open range relative to this output block.
@@ -71,6 +85,7 @@ impl RenderContext {
             self.session_epoch,
             self.transport_revision,
         )
+        .map(|context| context.with_rate(self.mode, self.rate))
     }
 }
 
@@ -96,7 +111,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::RenderContext;
-    use crate::{SessionBeat, SessionEpoch, SessionFrame, TransportRevision};
+    use crate::{RateTarget, SessionBeat, SessionEpoch, SessionFrame, SyncMode, TransportRevision};
 
     const BLOCK_FRAMES: usize = 480;
 
@@ -159,7 +174,9 @@ mod tests {
 
     #[kithara::test]
     fn derives_exact_output_subrange() {
+        let rate = RateTarget::default().with_speed(0.75);
         let second_half = context()
+            .with_rate(SyncMode::LocalSync, rate)
             .for_output_range(BLOCK_FRAMES / 2..BLOCK_FRAMES)
             .expect("invariant: second half is inside the block");
 
@@ -169,6 +186,8 @@ mod tests {
         );
         assert_eq!(second_half.session_beats(), Some(&(beat(0.01)..beat(0.02))));
         assert_eq!(second_half.session_epoch(), SessionEpoch::new(7));
+        assert_eq!(second_half.mode(), SyncMode::LocalSync);
+        assert_eq!(second_half.rate(), rate);
         assert_eq!(
             second_half.transport_revision(),
             Some(TransportRevision::first())

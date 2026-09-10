@@ -1,10 +1,11 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_test_macros as kithara;
 
-use crate::{RenderReader, RenderSnapshot, WarpConfig};
+use crate::{RegionPlanSlot, RenderReader, RenderSnapshot, WarpConfig};
 
 /// Identity renderer for targets without elastic DSP.
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
@@ -26,6 +27,7 @@ where
         context: RenderReader,
         _spec: AudioSpec,
         _pools: PoolRegion<S>,
+        _plan_slot: Arc<RegionPlanSlot>,
     ) -> Self {
         Self {
             context,
@@ -157,7 +159,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{pools, sample_buffer};
+    use crate::{
+        StretchControls,
+        test_pools::{pools, sample_buffer},
+    };
 
     #[kithara::test]
     fn renderer_preserves_samples_exactly(warp_pair: Vec<f32>) {
@@ -177,6 +182,7 @@ mod tests {
             crate::RenderPublisher::default().reader(),
             spec,
             pools,
+            Arc::default(),
         );
 
         assert_eq!(renderer.rendered_source_end(), None);

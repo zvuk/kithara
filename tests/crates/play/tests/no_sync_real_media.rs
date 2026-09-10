@@ -41,7 +41,7 @@ use crate::bufpool_ext::{TestPools, pools};
 
 const CHANNELS: u16 = 2;
 const SOURCE_RATE: u32 = 44_100;
-const BLOCK_FRAMES: usize = 512;
+const BLOCK_FRAMES: usize = 128;
 const CAPTURE_SECS: u32 = 2;
 const CAPTURE_START_SECS: f64 = 10.0;
 const CAPTURE_START_STEP_SECS: f64 = 4.0;
@@ -277,13 +277,9 @@ async fn run_case(
 ) -> Vec<String> {
     let pool_region = pools();
     let sample_rate = NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero");
-    let max_block_frames =
-        NonZeroU32::new(u32::try_from(BLOCK_FRAMES).expect("block frames fit u32"))
-            .expect("block frames must be non-zero");
     let host = OfflineHostHarness::new(
         HostConfig::offline(pool_region.clone())
             .sample_rate(sample_rate)
-            .max_block_frames(max_block_frames)
             .build(),
     )
     .await

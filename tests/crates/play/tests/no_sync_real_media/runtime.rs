@@ -328,16 +328,14 @@ pub(super) fn record_control_state(
     failures: &mut Vec<String>,
 ) {
     if deck.controls.speed() != 1.0
-        || deck.controls.region_plan().is_some()
         || deck.controls.backend() != StretchKind::Signalsmith
         || !deck.controls.keylock()
     {
         failures.push(format!(
-            "{} deck {deck_index} ({}): invalid no-SYNC controls {phase} (speed={}, plan={}, backend={:?}, keylock={})",
+            "{} deck {deck_index} ({}): invalid no-SYNC controls {phase} (speed={}, backend={:?}, keylock={})",
             case.label,
             deck.observation.label,
             deck.controls.speed(),
-            deck.controls.region_plan().is_some(),
             deck.controls.backend(),
             deck.controls.keylock(),
         ));

@@ -30,6 +30,103 @@ pub struct AudioArtifactSet {
     scope: AssetScope<TestPools>,
 }
 
+/// One listening artifact per harness: PCM pushed by the render funnel,
+/// markers stamped by control calls, published on drop.
+pub struct AudioArtifactTap {
+    set: AudioArtifactSet,
+    recording: Option<AudioArtifactRecording>,
+    markers: Vec<Marker>,
+    frames: u64,
+    channels: u16,
+}
+
+#[derive(Serialize)]
+struct Marker {
+    frame: u64,
+    label: String,
+}
+
+impl AudioArtifactTap {
+    /// Build a tap only when `KITHARA_AUDIO_ARTIFACT_DIR` is set.
+    pub fn from_env(case: &str, sample_rate: u32, channels: u16) -> io::Result<Option<Self>> {
+        let Some(set) = AudioArtifactSet::from_env(case, sample_rate, channels)? else {
+            return Ok(None);
+        };
+        let recording = set.recording("output", None)?;
+        Ok(Some(Self {
+            set,
+            recording: Some(recording),
+            markers: Vec::new(),
+            frames: 0,
+            channels,
+        }))
+    }
+
+    pub fn push(&mut self, pcm: &[f32]) {
+        if let Some(recording) = self.recording.as_mut() {
+            recording
+                .push(pcm)
+                .unwrap_or_else(|error| panic!("listening tap push: {error}"));
+            self.frames += (pcm.len() / usize::from(self.channels)) as u64;
+        }
+    }
+
+    pub fn mark(&mut self, label: &str) {
+        self.markers.push(Marker {
+            frame: self.frames,
+            label: label.to_owned(),
+        });
+    }
+}
+
+impl Drop for AudioArtifactTap {
+    fn drop(&mut self) {
+        let Some(recording) = self.recording.take() else {
+            return;
+        };
+        let output = match AudioArtifactSet::finish(recording) {
+            Ok(reader) => audio_artifact_path(&reader).ok(),
+            Err(error) => {
+                eprintln!("KITHARA_AUDIO_ARTIFACT output not published: {error}");
+                None
+            }
+        };
+        let manifest = serde_json::json!({
+            "frames": self.frames,
+            "channels": self.channels,
+            "sample_rate": self.set.sample_rate,
+            "markers": self.markers,
+            "output": output,
+        });
+        match self
+            .set
+            .write_manifest(&manifest)
+            .and_then(|reader| audio_artifact_path(&reader))
+        {
+            Ok(path) => eprintln!("KITHARA_AUDIO_ARTIFACT manifest: {}", path.display()),
+            Err(error) => eprintln!("KITHARA_AUDIO_ARTIFACT manifest not published: {error}"),
+        }
+    }
+}
+
+/// Return the running test's path as an artifact label.
+#[must_use]
+pub fn artifact_label() -> String {
+    let name = std::thread::current()
+        .name()
+        .unwrap_or("unnamed")
+        .to_owned();
+    name.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
 impl AudioArtifactSet {
     /// Build an artifact set only when the absolute opt-in directory is set.
     pub fn from_env(case: &str, sample_rate: u32, channels: u16) -> io::Result<Option<Self>> {
@@ -145,8 +242,6 @@ pub fn audio_artifact_path(reader: &AssetReader<TestPools>) -> io::Result<PathBu
 }
 
 /// Write listening WAV files and a manifest when the artifact directory is set.
-///
-/// Returns `Ok(None)` when unset and errors on invalid input or `AssetStore` I/O.
 pub fn write_audio_artifact<T: Serialize>(
     case: &str,
     sample_rate: u32,

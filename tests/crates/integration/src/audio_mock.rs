@@ -45,6 +45,15 @@ pub const TEST_PCM_DEFAULT_VALUE: f32 = 0.5;
 
 impl TestPcmReader {
     #[must_use]
+    pub fn new(spec: AudioSpec, duration_secs: f64) -> Self {
+        let frames = (f64::from(spec.sample_rate.get()) * duration_secs) as usize;
+        Self::from_samples(
+            spec,
+            vec![TEST_PCM_DEFAULT_VALUE; frames * usize::from(spec.channels)],
+        )
+    }
+
+    #[must_use]
     pub fn from_samples(spec: AudioSpec, samples: Vec<f32>) -> Self {
         let total_frames = samples.len() as u64;
         let mut reader = Self::with_source(spec, 0.0, Source::Samples(samples));

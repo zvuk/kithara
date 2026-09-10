@@ -160,6 +160,7 @@ kithara = { workspace = true, features = [
     "mock",
     "test-utils",
     "symphonia",
+    "analysis-beat",
     "stretch-signalsmith",
     "backend-cpal",
     "encode",

@@ -359,18 +359,13 @@ where
 
     /// Render one complete decoded source chunk.
     pub fn render(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
-        let snapshot = self.context.load();
+        let snapshot = self.select_context(chunk.meta.frame_offset);
         self.prepared_quantum = None;
-        let rate = self.controls.rate_target();
-        let speed = match self.preview_speed(rate.speed(), chunk.frames().max(1)) {
-            Ok(speed) => speed,
-            Err(error) => {
-                warn!(%error, "time-stretch speed smoothing failed");
-                return None;
-            }
-        };
+        self.prepared_context = None;
+        let rate = self.rate;
+        let speed = rate.speed();
         chunk.meta.render_revision = rate.revision();
-        self.render_at(chunk, speed, snapshot, None, rate.speed())
+        self.render_at(chunk, speed, snapshot, None)
     }
 
     fn render_at(
@@ -379,8 +374,10 @@ where
         speed: f32,
         snapshot: Option<crate::RenderSnapshot>,
         prepared: Option<PreparedQuantum>,
-        target_speed: f32,
     ) -> Option<AudioChunk> {
+        if let Some(snapshot) = &snapshot {
+            self.rate_context = Some(snapshot.context().clone());
+        }
         if chunk.spec() != self.spec {
             warn!(
                 expected = %self.spec,
@@ -419,7 +416,6 @@ where
                 output.frames(),
                 output.meta.render_revision,
                 speed,
-                target_speed,
             );
         }
         output
@@ -431,15 +427,9 @@ where
         if chunk.frames() != prepared.frames {
             return None;
         }
-        let snapshot = self.context.load();
+        let snapshot = self.prepared_context.take();
         chunk.meta.render_revision = prepared.rate.revision();
-        self.render_at(
-            chunk,
-            prepared.speed,
-            snapshot,
-            Some(prepared),
-            prepared.rate.speed(),
-        )
+        self.render_at(chunk, prepared.speed, snapshot, Some(prepared))
     }
 
     /// Discard renderer state after a source discontinuity.
@@ -447,6 +437,5 @@ where
         self.reset_pending = true;
         self.clear_render_state();
         self.committed = None;
-        self.snap_speed();
     }
 }

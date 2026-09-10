@@ -52,4 +52,5 @@ mod sync_listening;
 #[cfg(not(target_arch = "wasm32"))]
 mod sync_oracle;
 mod sync_product_matrix;
+mod sync_queue_seam;
 mod sync_runtime_oracles;

@@ -20,6 +20,10 @@ impl Consts {
     ];
     const TEST_DECAY: f32 = 400.0;
     const TEST_BURST_SECONDS: f32 = 0.01;
+    const WARP_BEATS: usize = 8;
+    const WARP_CLICK_OFFSET: usize = 8_192;
+    const WARP_NOMINAL_FRAMES: usize = 176_400;
+    const WARP_NOMINAL_PERIOD: usize = 22_050;
 }
 
 #[kithara::asset(ext = "f32le", content_type = "application/octet-stream", embed)]
@@ -127,6 +131,7 @@ impl Consts {
 #[case::warp_sine(warp_tone(352_800))]
 #[case::warp_pair(vec![0.25, -0.5])]
 #[case::warp_constant(vec![0.25; 10240])]
+#[case::warp_nominal_clicks({ let mut src = warp_silence(Consts::WARP_NOMINAL_FRAMES); for k in 0..Consts::WARP_BEATS { warp_click(&mut src, k * Consts::WARP_NOMINAL_PERIOD + Consts::WARP_CLICK_OFFSET); } src })]
 #[case::warp_clicks({     let mut src = warp_silence(352_800);
     for k in 0..8 {
         warp_click(&mut src, k * 19_845 + 8192);

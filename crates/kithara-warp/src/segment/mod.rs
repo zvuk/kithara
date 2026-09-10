@@ -1,5 +1,6 @@
 mod facts;
 mod geometry;
+mod plan;
 
 pub use facts::{
     BeatEvidence, BeatMarker, BeatsPerMinute, BeatsPerMinuteError, Meter, MeterError, MeterFacts,

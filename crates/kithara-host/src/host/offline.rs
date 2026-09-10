@@ -22,6 +22,10 @@ impl Defaults {
         Some(value) => value,
         None => unreachable!(),
     };
+    const RENDER_FRAMES: NonZeroU32 = match NonZeroU32::new(128) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
     const CHANNELS: u16 = 2;
     const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
         Some(value) => value,
@@ -54,7 +58,7 @@ impl<S> HostConfig<S> {
     pub fn offline(
         #[builder(start_fn)] pools: PoolRegion<S>,
         #[builder(default = Defaults::SAMPLE_RATE)] sample_rate: NonZeroU32,
-        #[builder(default = Defaults::BLOCK_FRAMES)] max_block_frames: NonZeroU32,
+        #[builder(default = Defaults::RENDER_FRAMES)] max_block_frames: NonZeroU32,
         #[builder(default = Defaults::BLOCK_FRAMES)] declick_frames: NonZeroU32,
         #[builder(default = Duration::ZERO)] declared_latency: Duration,
         #[builder(default = WorkerConfig::new())] worker: WorkerConfig,

@@ -10,7 +10,7 @@ use super::WarpConfig;
 use super::WarpRenderer;
 #[cfg(feature = "render")]
 use crate::RenderReader;
-use crate::{RenderPublisher, StretchControls};
+use crate::{RegionPlanSlot, RenderPublisher, StretchControls};
 
 /// Resident warp actuator around one decoded-audio source.
 ///
@@ -25,6 +25,9 @@ pub struct Warp<S> {
     publisher: Option<RenderPublisher>,
     #[cfg(feature = "render")]
     reader: RenderReader,
+    /// Region plan of this resident item, installed by its deck.
+    #[field(get, deref = false)]
+    region_plan: Arc<RegionPlanSlot>,
     #[field(get, get_mut)]
     source: S,
 }
@@ -42,6 +45,7 @@ impl<S> Warp<S> {
             reader,
             config: config.clone(),
             publisher: Some(publisher),
+            region_plan: Arc::default(),
         }
     }
 
@@ -52,7 +56,13 @@ impl<S> Warp<S> {
     where
         P: HasPool<f32>,
     {
-        WarpRenderer::new(&self.config, self.reader.clone(), spec, pools)
+        WarpRenderer::new(
+            &self.config,
+            self.reader.clone(),
+            spec,
+            pools,
+            Arc::clone(&self.region_plan),
+        )
     }
 
     /// Live temporal controls shared with the resident Warp lane.

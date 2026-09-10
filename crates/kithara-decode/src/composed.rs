@@ -486,15 +486,10 @@ where
     /// The frames between a packet's timestamp and the PCM the decoder has
     /// actually produced for it.
     ///
-    /// Two ways of learning the same figure, and the larger one is the whole of
-    /// it. A decode that started at the head sees the decoder's strip split in
-    /// two: `timestamp_bias_frames` models part of it, and the remainder
-    /// surfaces as a timestamp jump this decoder records in
-    /// `timeline_gap_frames`. A decode that started mid-stream records no jump —
-    /// `seek` resyncs the frame offset onto the packet timestamp instead — so
-    /// for it only the strip directly observed by this decoder is complete.
-    /// Taking the maximum leaves both with the same number, which is what a
-    /// splice between them cuts on.
+    /// A codec's PTS bias and observed jumps may explain only part of its
+    /// algorithmic strip. The directly observed strip remains authoritative
+    /// when output timestamps already account for the removed prefix, including
+    /// after a seek. Taking the maximum keeps variant-splice offsets consistent.
     fn timeline_gap_frames(&self) -> u64 {
         let modelled = self
             .codec

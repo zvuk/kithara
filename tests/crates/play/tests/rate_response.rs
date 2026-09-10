@@ -5,6 +5,7 @@ use std::{
     path::Path,
 };
 
+use firewheel::param::smoother::SmootherConfig;
 use kithara::{
     host::HostOwned,
     platform::time::{self, Duration},
@@ -59,11 +60,13 @@ const MINIMUM: ResponseCase = ResponseCase::new(128, 4_096, 16, 1, 441, 1.0, 1, 
 const PRODUCT: ResponseCase = ResponseCase::new(128, 8_192, 32, 12, 441, 2.0, 2, 0.5, 0, 0);
 const EXTREME: ResponseCase = ResponseCase::new(64, 16_384, 32, 64, 441, 0.5, 0, 4.0, 3, 64);
 
+const RAMP: ResponseCase = ResponseCase::new(128, 8_192, 32, 882, 441, 2.0, 2, 4.0, 3, 0);
+
 #[derive(Clone, Copy, Debug)]
 struct ResponseCase {
     callback_frames: usize,
     source_block_frames: usize,
-    render_quantum_frames: usize,
+    render_quantum_frames: Option<NonZeroUsize>,
     smooth_frames: usize,
     response_budget_frames: usize,
     initial_rate: f32,
@@ -89,7 +92,7 @@ impl ResponseCase {
         Self {
             callback_frames,
             source_block_frames,
-            render_quantum_frames,
+            render_quantum_frames: NonZeroUsize::new(render_quantum_frames),
             smooth_frames,
             response_budget_frames,
             initial_rate,
@@ -243,12 +246,11 @@ async fn playing_queue(
         .source_block_frames(
             NonZeroUsize::new(case.source_block_frames).expect("case source block is non-zero"),
         )
-        .rate_smooth_frames(
-            NonZeroUsize::new(case.smooth_frames).expect("case smoothing is non-zero"),
-        )
-        .render_quantum_frames(
-            NonZeroUsize::new(case.render_quantum_frames).expect("case quantum is non-zero"),
-        )
+        .rate_smoothing(SmootherConfig {
+            smooth_seconds: frame_period(case.smooth_frames).as_secs_f32(),
+            ..SmootherConfig::default()
+        })
+        .maybe_render_quantum_frames(case.render_quantum_frames)
         .build();
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -533,6 +535,14 @@ async fn run_case(
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(5)
 )]
+#[case::signalsmith_default_quantum(
+    StretchKind::Signalsmith,
+    response_backends(),
+    ResponseCase {
+        render_quantum_frames: None,
+        ..MINIMUM
+    }
+)]
 #[case::signalsmith_minimum(StretchKind::Signalsmith, response_backends(), MINIMUM)]
 #[case::signalsmith_product(StretchKind::Signalsmith, response_backends(), PRODUCT)]
 #[case::signalsmith_extreme(StretchKind::Signalsmith, response_backends(), EXTREME)]
@@ -556,4 +566,86 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     #[case] case: ResponseCase,
 ) {
     run_case(&temp_dir, backend, backends, case, response_source).await;
+}
+
+/// A plain rate step is ramped by `WarpConfig::rate_smoothing` in the RT
+/// render pass before the renderer sees it: no block moves the multiplier
+/// further than the smoother's worst-case step for that block, the renderer
+/// applies intermediate ratios, and the ramp settles at the target.
+#[kithara::test(
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(60)),
+    hang_timeout_secs(5)
+)]
+#[case::signalsmith_ramp(StretchKind::Signalsmith, response_backends(), RAMP)]
+async fn rate_multiplier_step_is_ramped_across_blocks(
+    temp_dir: TestTempDir,
+    response_source: &'static Path,
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] case: ResponseCase,
+) {
+    let (harness, queue) = playing_queue(&temp_dir, backend, backends, case, response_source).await;
+    let recorder = probe_capture::install();
+    let _ = capture_command_boundary(&harness, &recorder, case.initial_tone, case.callback_frames)
+        .await;
+    let before = recorder.snapshot().len();
+    queue.set_rate(case.target_rate);
+    let _ = capture_frames(&harness, case.smooth_frames * 12, case.callback_frames).await;
+    let events = recorder.snapshot();
+    let smoothed: Vec<(u64, f32)> = events[before..]
+        .iter()
+        .filter(|event| event.probe_name() == Some("rate_smoothed"))
+        .filter_map(|event| {
+            let bits =
+                u32::try_from(event.u64("multiplier_bits")?).expect("multiplier bits fit u32");
+            Some((event.u64("frames")?, f32::from_bits(bits)))
+        })
+        .collect();
+    assert!(
+        smoothed.len() >= 4,
+        "{backend} emitted {} rate_smoothed blocks after the step",
+        smoothed.len()
+    );
+    let delta = f64::from(case.target_rate - case.initial_rate);
+    let smooth_frames =
+        f64::from(u32::try_from(case.smooth_frames).expect("case smoothing fits u32"));
+    for pair in smoothed.windows(2) {
+        let (frames, next) = pair[1];
+        let step = f64::from((next - pair[0].1).abs());
+        let bound = delta * f64::from(u32::try_from(frames).expect("block fits u32"))
+            / smooth_frames
+            + 1e-3;
+        assert!(
+            step <= bound,
+            "{backend} multiplier moved {step} over {frames} frames; {} smoothing frames allow {bound}: {smoothed:?}",
+            case.smooth_frames
+        );
+    }
+    assert!(
+        smoothed
+            .iter()
+            .any(|(_, multiplier)| (multiplier - case.target_rate).abs() < 2e-3),
+        "{backend} never settled at {}: {smoothed:?}",
+        case.target_rate
+    );
+    let applied: Vec<f32> = events[before..]
+        .iter()
+        .filter(|event| event.probe_name() == Some("rate_applied"))
+        .filter_map(|event| event.u64("applied_rate_bits"))
+        .map(|bits| f32::from_bits(u32::try_from(bits).expect("ratio bits fit u32")))
+        .collect();
+    let between = applied
+        .iter()
+        .filter(|ratio| {
+            (*ratio - case.initial_rate).abs() > 1e-3 && (*ratio - case.target_rate).abs() > 1e-3
+        })
+        .count();
+    assert!(
+        between >= 3,
+        "{backend} renderer never applied an intermediate ratio: {applied:?}"
+    );
 }

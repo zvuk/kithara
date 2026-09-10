@@ -1,12 +1,13 @@
 use kithara_bufpool::HasPool;
 use kithara_play::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, PlayError, SeekOutcome, SessionBinding, SyncAdmission,
-    SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected,
-    SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, PlayError, SeekOutcome, SegmentSet,
+    SessionAnchor, SessionBinding, SyncAdmission, SyncApplied, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
     player::{PlaybackView, Player, PlayerControlSource, PlayerMember},
 };
 
 use super::Queue;
+use crate::TrackId;
 
 impl<S> BeatGrid for Queue<S>
 where
@@ -67,6 +68,14 @@ where
         to self.player {
             fn set_host_level(&self, level: f32);
             fn host_level(&self) -> f32;
+            fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError>;
+            fn publish_item_grid(
+                &mut self,
+                item: TrackId,
+                segments: SegmentSet,
+                state: BeatGridState,
+            ) -> Result<SyncAdmission, SyncError>;
+            fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError>;
         }
     }
 }

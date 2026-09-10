@@ -1,10 +1,11 @@
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, SegmentSet, SessionAnchor,
+    SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
+    SyncRejected, SyncStatusSnapshot,
 };
 
 use super::Player;
-use crate::sync::GroupState;
+use crate::{api::TrackId, sync::GroupState};
 
 pub(crate) type PlayerSync = GroupState<PlayerMember>;
 
@@ -30,6 +31,31 @@ impl PlayerMember {
             /// Reads the desired Host level used for later graph registration.
             #[must_use]
             pub fn host_level(&self) -> f32;
+        }
+        to self.inner.as_mut() {
+            /// Pushes the Host's committed session anchor into the player.
+            ///
+            /// # Errors
+            ///
+            /// Returns the player's grid publication error.
+            pub fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError>;
+            /// Publishes one queued track's asset grid on the deck.
+            ///
+            /// # Errors
+            ///
+            /// Returns the deck's rejection.
+            pub fn publish_item_grid(
+                &mut self,
+                item: TrackId,
+                segments: SegmentSet,
+                state: BeatGridState,
+            ) -> Result<SyncAdmission, SyncError>;
+            /// Acknowledges the deck's prepared warp map once it is due.
+            ///
+            /// # Errors
+            ///
+            /// Returns the deck's acknowledgement error.
+            pub fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError>;
         }
     }
 }

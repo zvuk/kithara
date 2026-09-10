@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{num::NonZeroUsize, ops::Deref};
 
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
@@ -7,7 +7,7 @@ use kithara_platform::{
     CancelScope,
     sync::{Arc, Mutex},
 };
-use kithara_warp::{SessionEpoch, SyncMemberKind};
+use kithara_warp::{SessionEpoch, SyncMemberKind, SyncMode, WarpConfigPatch};
 
 use super::{PlayerCore, PlayerLifecycle, PlayerRuntime};
 use crate::{
@@ -39,12 +39,18 @@ impl<S> PlayerImpl<S> {
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {
+        if config.warp.render_quantum_frames().is_none() {
+            let mut patch = WarpConfigPatch::default();
+            patch.render_quantum_frames = NonZeroUsize::new(32);
+            config.warp.apply(patch);
+        }
         let pools = config.worker.pools().clone();
         let sync = PlayerSync::unavailable(
             config.grid_id,
             config.sample_rate,
             SessionEpoch::new(0),
             SyncMemberKind::Grid,
+            SyncMode::Off,
         );
 
         let bus = config.bus.clone().unwrap_or_default();
@@ -56,6 +62,8 @@ impl<S> PlayerImpl<S> {
         config.cancel = Some(cancel.clone());
 
         let engine_config = EngineConfig::builder()
+            .stretch(Arc::clone(config.warp.stretch()))
+            .rate_smoothing(config.warp.rate_smoothing())
             .grid_id(config.grid_id)
             .sample_rate(config.sample_rate)
             .max_slots(config.max_slots)

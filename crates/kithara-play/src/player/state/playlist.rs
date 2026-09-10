@@ -1,6 +1,24 @@
+use std::collections::BTreeMap;
+
 use kithara_events::TrackId;
+use kithara_platform::sync::Arc;
+use kithara_warp::{BeatGridId, BeatGridRevision, RegionPlan, RegionPlanSlot, SegmentSet};
 
 use crate::resource::Resource;
+
+#[derive(Clone, Debug)]
+pub(crate) struct TrackGrid {
+    pub(crate) id: BeatGridId,
+    pub(crate) revision: BeatGridRevision,
+    pub(crate) segments: SegmentSet,
+}
+
+#[derive(Default)]
+struct TrackState {
+    slot: Option<Arc<RegionPlanSlot>>,
+    plan: Option<Arc<RegionPlan>>,
+    grid: Option<TrackGrid>,
+}
 
 /// A queued resource plus the queue's identity for it.
 pub(crate) struct QueuedResource {
@@ -36,6 +54,7 @@ impl Slot {
 pub(crate) struct Playlist {
     last_announced: Option<usize>,
     items: Vec<Option<Slot>>,
+    tracks: BTreeMap<TrackId, TrackState>,
     #[field(get, set, vis = "pub(crate)")]
     current: usize,
 }
@@ -53,14 +72,42 @@ impl Playlist {
 
     pub(crate) fn clear(&mut self) {
         self.items.clear();
+        self.tracks.clear();
         self.current = 0;
         self.last_announced = None;
     }
 
     pub(crate) fn clear_item(&mut self, index: usize) {
-        if let Some(item) = self.items.get_mut(index) {
-            *item = None;
+        if let Some(item) = self.items.get_mut(index)
+            && let Some(cleared) = item.take()
+        {
+            self.tracks.remove(&cleared.item_id);
         }
+    }
+
+    pub(crate) fn track_loaded(&mut self, item: TrackId, slot: Option<Arc<RegionPlanSlot>>) {
+        let Some(slot) = slot else {
+            return;
+        };
+        let track = self.tracks.entry(item).or_default();
+        slot.install(track.plan.clone());
+        track.slot = Some(slot);
+    }
+
+    pub(crate) fn track_grid(&self, item: TrackId) -> Option<&TrackGrid> {
+        self.tracks.get(&item).and_then(|track| track.grid.as_ref())
+    }
+
+    pub(crate) fn publish_track_grid(&mut self, item: TrackId, grid: TrackGrid) {
+        self.tracks.entry(item).or_default().grid = Some(grid);
+    }
+
+    pub(crate) fn set_track_plan(&mut self, item: TrackId, plan: Option<Arc<RegionPlan>>) {
+        let track = self.tracks.entry(item).or_default();
+        if let Some(slot) = &track.slot {
+            slot.install(plan.clone());
+        }
+        track.plan = plan;
     }
 
     pub(crate) fn has_resource(&self, index: usize) -> bool {
@@ -99,6 +146,9 @@ impl Playlist {
         }
 
         let removed = self.items.remove(index).and_then(|mut slot| slot.take());
+        if let Some(removed) = &removed {
+            self.tracks.remove(&removed.item_id);
+        }
         if index < self.current {
             self.current = self.current.saturating_sub(1);
         } else if index == self.current
@@ -140,9 +190,16 @@ impl Playlist {
 
 #[cfg(test)]
 mod tests {
+    use kithara_events::TrackId;
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
+    use kithara_warp::{GridSegment, RegionPlan, RegionPlanSlot};
 
     use super::Playlist;
+
+    fn plan() -> Arc<RegionPlan> {
+        Arc::new(RegionPlan::new(vec![GridSegment::new(0, 48_000, 1.0)]).expect("fixture plan"))
+    }
 
     #[kithara::test(native, flash(false))]
     fn remove_at_shifts_current_and_reopens_announce() {
@@ -188,5 +245,38 @@ mod tests {
         assert!(playlist.mark_announced(0));
         assert!(!playlist.mark_announced(0));
         assert!(playlist.mark_announced(1));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_plan_stored_before_the_lane_loads_is_installed_on_load() {
+        let mut playlist = Playlist::default();
+        let item = TrackId(7);
+        let plan = plan();
+        playlist.set_track_plan(item, Some(plan.clone()));
+        let slot = Arc::new(RegionPlanSlot::default());
+
+        playlist.track_loaded(item, Some(slot.clone()));
+
+        assert!(
+            slot.load()
+                .is_some_and(|installed| Arc::ptr_eq(&installed, &plan))
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_plan_set_after_the_lane_loads_is_installed_at_once() {
+        let mut playlist = Playlist::default();
+        let item = TrackId(7);
+        let slot = Arc::new(RegionPlanSlot::default());
+        playlist.track_loaded(item, Some(slot.clone()));
+        assert!(slot.load().is_none());
+
+        let plan = plan();
+        playlist.set_track_plan(item, Some(plan.clone()));
+
+        assert!(
+            slot.load()
+                .is_some_and(|installed| Arc::ptr_eq(&installed, &plan))
+        );
     }
 }

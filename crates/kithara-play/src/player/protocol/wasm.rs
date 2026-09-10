@@ -1,12 +1,16 @@
 use std::num::NonZeroU32;
 
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SessionEpoch, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, SegmentSet, SessionAnchor, SessionEpoch,
+    SessionFrame, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncMemberKind, SyncMode, SyncOperation, SyncRejected, SyncStatusSnapshot,
 };
 use portable_atomic::{AtomicF32, Ordering};
 
-use crate::sync::GroupState;
+use crate::{
+    api::TrackId,
+    sync::{DeckGrid, GroupState},
+};
 
 pub(crate) struct PlayerSync {
     grid: BeatGridSnapshot,
@@ -16,6 +20,27 @@ pub(crate) struct PlayerSync {
 }
 
 impl PlayerSync {
+    pub(crate) fn owned(&self) -> Result<&GroupState<PlayerMember>, SyncError> {
+        self.owned.as_ref().ok_or(SyncError::OwnerUnavailable)
+    }
+
+    delegate::delegate! {
+        to self.owned.as_mut().ok_or(SyncError::OwnerUnavailable)? {
+            pub(crate) fn publish_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError>;
+        }
+    }
+
+    pub(crate) fn transact_at(
+        &mut self,
+        operation: SyncOperation<PlayerMember>,
+        now: SessionFrame,
+    ) -> Result<(SyncAdmission, Option<DeckGrid>), SyncRejected<PlayerMember>> {
+        match self.owned.as_mut() {
+            Some(owned) => owned.transact_at(operation, now),
+            None => Err(SyncRejected::new(SyncError::OwnerUnavailable, operation)),
+        }
+    }
+
     pub(crate) fn take(&mut self) -> Option<GroupState<PlayerMember>> {
         let owned = self.owned.take()?;
         self.grid = owned.snapshot();
@@ -28,8 +53,9 @@ impl PlayerSync {
         sample_rate: NonZeroU32,
         epoch: SessionEpoch,
         member_kind: SyncMemberKind,
+        mode: SyncMode,
     ) -> Self {
-        let owned = GroupState::unavailable(id, sample_rate, epoch, member_kind);
+        let owned = GroupState::unavailable(id, sample_rate, epoch, member_kind, mode);
         Self {
             grid: owned.snapshot(),
             topology: owned.topology(),
@@ -106,6 +132,40 @@ impl PlayerMember {
     #[must_use]
     pub fn host_level(&self) -> f32 {
         self.level.load(Ordering::Relaxed)
+    }
+
+    /// Pushes the Host's committed session anchor into the member's group.
+    ///
+    /// # Errors
+    ///
+    /// Returns the group's grid publication error.
+    pub fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
+        self.sync.publish_session_anchor(anchor)
+    }
+
+    /// Track grids need the player runtime, which the Host-owned wasm member
+    /// does not reach.
+    ///
+    /// # Errors
+    ///
+    /// Always returns [`SyncError::OwnerUnavailable`].
+    pub fn publish_item_grid(
+        &mut self,
+        _item: TrackId,
+        _segments: SegmentSet,
+        _state: BeatGridState,
+    ) -> Result<SyncAdmission, SyncError> {
+        Err(SyncError::OwnerUnavailable)
+    }
+
+    /// Acknowledgement needs the player runtime, which the Host-owned wasm
+    /// member does not reach.
+    ///
+    /// # Errors
+    ///
+    /// Always returns [`SyncError::OwnerUnavailable`].
+    pub fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError> {
+        Err(SyncError::OwnerUnavailable)
     }
 }
 

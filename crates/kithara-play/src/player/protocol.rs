@@ -4,12 +4,13 @@ use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, SegmentSet, SessionAnchor,
+    SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
+    SyncRejected, SyncStatusSnapshot,
 };
 
 use super::{PlaybackView, PlayerImpl, PlayerRuntime};
-use crate::{PlayError, SessionBinding};
+use crate::{PlayError, SessionBinding, api::TrackId};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "protocol/native.rs"]
@@ -39,8 +40,16 @@ impl fmt::Debug for PlayerMember {
 pub trait Player:
     BeatGrid + SyncGroup<NestedGroup = PlayerMember> + MaybeSend + MaybeSync + 'static
 {
+    /// Acknowledges the prepared warp map once the deck has rendered up to its
+    /// activation frame; `None` when nothing is due yet.
+    fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError>;
+
     /// Stop owned work and detach the player from its playback session.
     fn close(&mut self) -> Result<(), PlayError>;
+
+    /// Records the parent's committed session anchor; a deck under
+    /// `HostSync` republishes its session grid on it.
+    fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError>;
 
     /// Read the desired host-applied deck level.
     fn host_level(&self) -> f32;
@@ -50,6 +59,15 @@ pub trait Player:
 
     /// Start or resume playback.
     fn play(&self);
+
+    /// Publishes the asset grid of one queued track on this deck's sync group
+    /// and reconciles the track onto the deck.
+    fn publish_item_grid(
+        &mut self,
+        item: TrackId,
+        segments: SegmentSet,
+        state: BeatGridState,
+    ) -> Result<SyncAdmission, SyncError>;
 
     /// Read one coherent playback view.
     fn playback_view(&self) -> PlaybackView;
@@ -113,13 +131,21 @@ where
         SyncGroup::status(&self.sync)
     }
 
+    fn transact(
+        &mut self,
+        operation: SyncOperation<PlayerMember>,
+    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
+        let now = self.runtime.presentation_frontier().output();
+        let (admission, projection) = self.sync.transact_at(operation, now)?;
+        if let Some(projection) = projection {
+            self.runtime.core.engine.publish_deck_grid(projection);
+        }
+        Ok(admission)
+    }
+
     delegate::delegate! {
         to self.sync {
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
-            fn transact(
-                &mut self,
-                operation: SyncOperation<PlayerMember>,
-            ) -> Result<SyncAdmission, SyncRejected<PlayerMember>>;
             fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
         }
     }
@@ -129,8 +155,17 @@ impl<S> Player for PlayerImpl<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError> {
+        Self::acknowledge_prepared(self)
+    }
+
     fn close(&mut self) -> Result<(), PlayError> {
         self.make_control().close()
+    }
+
+    fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
+        self.sync.publish_session_anchor(anchor)?;
+        Ok(())
     }
 
     fn host_level(&self) -> f32 {
@@ -143,6 +178,15 @@ where
 
     fn play(&self) {
         let _ = self.runtime.with_open(PlayerRuntime::play);
+    }
+
+    fn publish_item_grid(
+        &mut self,
+        item: TrackId,
+        segments: SegmentSet,
+        state: BeatGridState,
+    ) -> Result<SyncAdmission, SyncError> {
+        Self::publish_item_grid(self, item, segments, state)
     }
 
     fn playback_view(&self) -> PlaybackView {

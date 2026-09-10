@@ -406,12 +406,12 @@ async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
     (rendered, log)
 }
 
-/// One firing of the render probe: which track was asked for which block, and
-/// how much of that track had been served when it was asked.
+/// One completed render with its actual output and source frontier.
 #[derive(Clone, Copy, Debug)]
 struct Firing {
     track: u64,
     block: i64,
+    frames: u64,
     served: u64,
 }
 
@@ -428,6 +428,7 @@ fn firings(recorder: &Recorder) -> Vec<Firing> {
             Some(Firing {
                 track: event.u64("track_id")?,
                 block: i64::from_probe_arg(base) + range_start,
+                frames: event.u64("rendered_frames")?,
                 served: event.u64("served_media_frames")?,
             })
         })
@@ -444,25 +445,21 @@ struct Active {
     served: u64,
 }
 
-/// A track is active across a block when its media clock advanced over it, so
-/// a block it was asked for but answered with EOF never enters the window.
+/// Exact output spans, including the final partial block and DSP tails.
 fn active_windows(firings: &[Firing]) -> BTreeMap<u64, Active> {
     let mut windows: BTreeMap<u64, Active> = BTreeMap::new();
-    for pair in firings.windows(2) {
-        let (before, after) = (pair[0], pair[1]);
-        if before.track != after.track || after.served <= before.served {
-            continue;
-        }
+    for firing in firings.iter().filter(|firing| firing.frames > 0) {
+        let last = firing.block + i64::try_from(firing.frames).expect("render frames fit i64");
         windows
-            .entry(before.track)
+            .entry(firing.track)
             .and_modify(|window| {
-                window.last = after.block;
-                window.served = after.served;
+                window.last = last;
+                window.served = firing.served;
             })
             .or_insert(Active {
-                first: before.block,
-                last: after.block,
-                served: after.served,
+                first: firing.block,
+                last,
+                served: firing.served,
             });
     }
     windows
@@ -473,6 +470,39 @@ fn left_channel(rendered: &[f32]) -> Vec<f32> {
         .chunks_exact(usize::from(CHANNELS))
         .map(|frame| frame[0])
         .collect()
+}
+
+#[kithara::test]
+fn completed_render_counts_final_partial_and_tail_without_inventing_source_frames() {
+    let firings = [
+        Firing {
+            track: 1,
+            block: 100,
+            frames: 5,
+            served: 20,
+        },
+        Firing {
+            track: 1,
+            block: 105,
+            frames: 2,
+            served: 21,
+        },
+        Firing {
+            track: 1,
+            block: 107,
+            frames: 3,
+            served: 21,
+        },
+        Firing {
+            track: 1,
+            block: 110,
+            frames: 0,
+            served: 21,
+        },
+    ];
+    let windows = active_windows(&firings);
+    let window = windows.get(&1).expect("track has an output span");
+    assert_eq!((window.first, window.last, window.served), (100, 110, 21));
 }
 
 /// Runs of one classification, ignoring the `Unknown` windows a crossfade's

@@ -1,3 +1,4 @@
+use firewheel::param::smoother::SmootherConfig;
 use kithara_audio::SeekBegin;
 use kithara_events::TrackId;
 use kithara_output::LiveOutput;
@@ -9,26 +10,41 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::AudioSpec;
-use kithara_warp::{RenderReader, RenderSnapshot};
+use kithara_warp::{DEFAULT_RATE_SMOOTHING, RenderReader, RenderSnapshot, StretchControls};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Observer, Producer, Split},
 };
 use smallvec::SmallVec;
+use triple_buffer::{Input, Output, triple_buffer};
 
 use super::PlaybackShared;
 use crate::{
     bridge::{PlayerCmd, PlayerNotification, SharedEq},
     rt::{PlayerNodeProcessor, track::PlayerTrack},
+    sync::DeckGrid,
 };
 
 /// RT-owned channel halves and playback atomics for one player node.
 #[non_exhaustive]
 pub struct NodeInputs {
+    pub(crate) grid: Output<DeckGrid>,
+    pub(crate) stretch: Arc<StretchControls>,
+    pub(crate) rate_smoothing: SmootherConfig,
     pub(crate) playback: Arc<PlaybackShared>,
     pub(crate) cmd_rx: HeapCons<PlayerCmd>,
     pub(crate) notif_tx: HeapProd<PlayerNotification>,
     pub(crate) trash_tx: HeapProd<PlayerTrack>,
+}
+
+impl NodeInputs {
+    /// Supplies the owning player's rate controls before processor construction.
+    #[must_use]
+    pub fn with_rate(mut self, stretch: Arc<StretchControls>, smoothing: SmootherConfig) -> Self {
+        self.stretch = stretch;
+        self.rate_smoothing = smoothing;
+        self
+    }
 }
 
 /// Producer for interleaved stereo mix samples and their drop count.
@@ -79,6 +95,7 @@ impl LiveOutput for MixTapWriter {
 /// Control-owned channel halves and shared controls for one allocated slot.
 #[non_exhaustive]
 pub struct SlotControl {
+    pub(crate) grid: Input<DeckGrid>,
     pub playback: Arc<PlaybackShared>,
     pub notif_rx: HeapCons<PlayerNotification>,
     pub trash_rx: HeapCons<PlayerTrack>,
@@ -156,13 +173,18 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
     let (trash_tx, trash_rx) = HeapRb::<PlayerTrack>::new(TRASH_CAPACITY).split();
     let playback = Arc::new(PlaybackShared::default());
 
+    let (grid_tx, grid_rx) = triple_buffer(&DeckGrid::default());
     let inputs = NodeInputs {
+        grid: grid_rx,
+        stretch: StretchControls::new(1.0),
+        rate_smoothing: DEFAULT_RATE_SMOOTHING,
         cmd_rx,
         notif_tx,
         trash_tx,
         playback: Arc::clone(&playback),
     };
     let control = SlotControl {
+        grid: grid_tx,
         playback,
         notif_rx,
         trash_rx,

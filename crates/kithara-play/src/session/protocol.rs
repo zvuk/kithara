@@ -3,8 +3,12 @@ mod wire {
 
     use firewheel::param::smoother::SmootherConfig;
     use kithara_bufpool::PoolRegion;
-    use kithara_events::EventBus;
-    use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
+    use kithara_events::{EventBus, TrackId};
+    use kithara_platform::sync::Arc;
+    use kithara_warp::{
+        BeatGridId, BeatGridIdAllocationError, BeatGridState, SegmentSet, StretchControls,
+        SyncAdmission, SyncError,
+    };
 
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
@@ -104,6 +108,8 @@ mod wire {
         },
         AllocateSlot {
             player_id: PlayerId,
+            stretch: Arc<StretchControls>,
+            rate_smoothing: SmootherConfig,
         },
         ReleaseSlot {
             player_id: PlayerId,
@@ -137,6 +143,12 @@ mod wire {
         SessionDucking,
         SetSessionTempo {
             tempo: Tempo,
+        },
+        PublishTrackGrid {
+            deck: BeatGridId,
+            item: TrackId,
+            segments: SegmentSet,
+            state: BeatGridState,
         },
         SetSessionPlaying {
             playing: bool,
@@ -178,6 +190,7 @@ mod wire {
         SlotAllocated(AllocatedSlot),
         SampleRate(SessionSampleRate),
         StreamShape(Option<StreamShape>),
+        SyncAdmission(SyncAdmission),
         Err(SessionError),
     }
 
@@ -235,7 +248,7 @@ mod handle {
         maybe_send::{MaybeSend, MaybeSync},
         sync::{Arc, Mutex},
     };
-    use kithara_warp::BeatGridId;
+    use kithara_warp::{BeatGridId, StretchControls};
 
     #[cfg(any(test, feature = "probe"))]
     use super::wire::PlayerLevel;
@@ -344,8 +357,17 @@ mod handle {
             }))
         }
 
-        pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
-            match self.exec_ok(Cmd::AllocateSlot { player_id })? {
+        pub fn allocate_slot(
+            &self,
+            player_id: PlayerId,
+            stretch: Arc<StretchControls>,
+            rate_smoothing: SmootherConfig,
+        ) -> Result<AllocatedSlot, PlayError> {
+            match self.exec_ok(Cmd::AllocateSlot {
+                player_id,
+                stretch,
+                rate_smoothing,
+            })? {
                 Reply::SlotAllocated(allocated) => Ok(allocated),
                 _ => Err(PlayError::Internal(
                     "unexpected reply for session allocate slot".into(),

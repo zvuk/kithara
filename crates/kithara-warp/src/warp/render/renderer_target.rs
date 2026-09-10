@@ -162,17 +162,13 @@ where
         }
         self.sync_plan();
 
-        if spec.sample_rate != self.spec.sample_rate
-            && let Some(applied) = self.applied_speed.as_mut()
-        {
-            applied.update_sample_rate(spec.sample_rate);
-        }
+        self.select_context(self.rendered_source_end.map_or(0, |(frame, _)| frame));
 
         let kind = self.controls.backend();
         let channels = usize::from(self.spec.channels.max(1));
         let entering_unity = spec == self.spec
             && (self.active || self.pending_frames(channels) > 0)
-            && self.unity_passthrough(self.controls.speed());
+            && self.unity_passthrough(self.rate.speed());
         if entering_unity {
             self.service_scratch();
             return;

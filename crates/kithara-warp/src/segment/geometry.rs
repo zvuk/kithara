@@ -207,7 +207,7 @@ impl MapSegment {
         }
     }
 
-    fn tempo(&self, axis: MapAxis) -> Option<BeatsPerMinute> {
+    pub(super) fn tempo(&self, axis: MapAxis) -> Option<BeatsPerMinute> {
         let frames =
             f64::try_from(self.end_position).ok()? - f64::try_from(self.start_position).ok()?;
         let beats = f64::from(self.end_beat) - f64::from(self.start_beat);

@@ -3,10 +3,12 @@ use std::num::NonZeroUsize;
 use firewheel::{
     FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
     dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume::VolumeNode,
+    param::smoother::SmootherConfig,
 };
 use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
-use kithara_warp::{BeatGrid, MapAxis};
+use kithara_platform::sync::Arc;
+use kithara_warp::{BeatGrid, MapAxis, StretchControls};
 use tracing::{debug, warn};
 
 use super::{
@@ -360,6 +362,8 @@ pub(super) mod slots {
     pub(in crate::session) fn allocate_slot<B, S>(
         state: &mut SessionState<B, S>,
         player_id: PlayerId,
+        stretch: Arc<StretchControls>,
+        rate_smoothing: SmootherConfig,
     ) -> Result<Reply, SessionError>
     where
         B: AudioBackend,
@@ -381,8 +385,12 @@ pub(super) mod slots {
         player.next_slot_id += 1;
         let shared_eq = player.shared_eq.clone();
         let (inputs, control) = slot_channels(shared_eq);
-        let player_node = PlayerNode::new(inputs, player.pools.clone(), player.gate_smoothing)
-            .with_session_context();
+        let player_node = PlayerNode::new(
+            inputs.with_rate(stretch, rate_smoothing),
+            player.pools.clone(),
+            player.gate_smoothing,
+        )
+        .with_session_context();
         let player_node_id = fw_ctx.add_node(player_node, None);
         let slot_volume = VolumeNode::from_linear(1.0);
         let slot_volume_memo = Memo::new(slot_volume);
@@ -924,7 +932,14 @@ mod tests {
         let mut state = test_state(start_test_stream);
         let player_id = register(&mut state);
         start(&mut state, player_id);
-        let slot = match run_cmd(&mut state, Cmd::AllocateSlot { player_id }) {
+        let slot = match run_cmd(
+            &mut state,
+            Cmd::AllocateSlot {
+                player_id,
+                stretch: StretchControls::new(1.0),
+                rate_smoothing: SmootherConfig::default(),
+            },
+        ) {
             Reply::SlotAllocated(allocated) => allocated.slot,
             Reply::Err(err) => panic!("slot allocation failed: {err}"),
             _ => panic!("slot allocation returned unexpected reply"),
@@ -997,7 +1012,14 @@ mod tests {
         let second = register(&mut state);
         start(&mut state, second);
         assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id: second }),
+            run_cmd(
+                &mut state,
+                Cmd::AllocateSlot {
+                    player_id: second,
+                    stretch: StretchControls::new(1.0),
+                    rate_smoothing: SmootherConfig::default()
+                }
+            ),
             Reply::SlotAllocated(..)
         ));
 

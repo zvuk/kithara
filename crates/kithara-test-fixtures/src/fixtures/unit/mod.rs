@@ -56,4 +56,4 @@ pub use trim::{
     trim_silence_trim_trailing_disabled_by_default, trim_silence_trim_trailing_enabled,
     trim_stereo_quiet, trim_stereo_silence, trim_trailing_sine,
 };
-pub use warp::{warp_clicks, warp_constant, warp_pair, warp_sine};
+pub use warp::{warp_clicks, warp_constant, warp_nominal_clicks, warp_pair, warp_sine};

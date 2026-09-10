@@ -91,9 +91,6 @@ pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>,
     let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero");
     let session = HostConfig::offline(pools.clone())
         .sample_rate(sample_rate)
-        .max_block_frames(
-            NonZeroU32::new(Consts::BLOCK_FRAMES as u32).expect("block size is non-zero"),
-        )
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let player = PlayerImpl::new(
@@ -358,7 +355,6 @@ async fn failed_deck_preparation_releases_host_membership() {
     let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate");
     let config = HostConfig::offline(region.clone())
         .sample_rate(sample_rate)
-        .max_block_frames(NonZeroU32::new(Consts::BLOCK_FRAMES as u32).expect("block size"))
         .build();
     let host = OfflineHostHarness::new(config).await.expect("offline host");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

@@ -1,6 +1,5 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use firewheel_core::param::smoother::{SmoothedParam, SmootherConfig};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
@@ -9,12 +8,11 @@ use kithara_stretch::{
 };
 use kithara_test_macros as kithara;
 use num_traits::cast::AsPrimitive;
-use tracing::warn;
 
 use super::renderer_target::PreparedTarget;
 use crate::{
-    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
-    temporal::RateTarget,
+    ActiveRegion, RegionPlan, RegionPlanSlot, RenderContext, RenderReader, RenderSnapshot,
+    StretchControls, SyncMode, WarpConfig, temporal::RateTarget,
 };
 
 #[cfg(test)]
@@ -43,7 +41,7 @@ impl PreparedActivation {
     }
 }
 
-/// Source-timeline exact-span time-stretch driven by shared live controls.
+/// Source-timeline exact-span time-stretch driven by the published output rate.
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
@@ -54,8 +52,10 @@ pub struct WarpRenderer<S> {
     pub(super) source_block_frames: NonZeroUsize,
     /// Latency-sized pooled output discarded while priming an inactive engine.
     pub(super) activation_scratch: Option<SampleBuffer>,
-    /// Renderer-owned applied speed. Shared controls contain only the target.
-    pub(super) applied_speed: Option<SmoothedParam>,
+    /// Initial prefill rate, then the latest rate published by the output owner.
+    pub(super) rate: RateTarget,
+    pub(super) rate_context: Option<RenderContext>,
+    pub(super) prepared_context: Option<RenderSnapshot>,
     pub(super) committed: Option<RenderSnapshot>,
     /// Consumed input retained until the scheduler shell can resize or recycle
     /// it outside the checked render core.
@@ -75,8 +75,10 @@ pub struct WarpRenderer<S> {
     /// Unity chunk retained while the active backend drains its tail.
     /// Its samples occupy `pending_source` without a copy.
     pub(super) pending_unity_meta: Option<AudioChunkInfo>,
-    /// Region plan cached from the controls; `Arc::ptr_eq` detects a live swap.
+    /// Region plan cached from `plan_slot`; `Arc::ptr_eq` detects a live swap.
     pub(super) plan: Option<Arc<RegionPlan>>,
+    /// Live plan of the rendered item, shared with the deck that installs it.
+    pub(super) plan_slot: Arc<RegionPlanSlot>,
     /// Source span and live speed selected by the scheduler for the next render.
     pub(super) prepared_quantum: Option<PreparedQuantum>,
     /// Region covering the playhead - the lookup cursor. `None` forces a
@@ -130,13 +132,12 @@ where
         context: RenderReader,
         spec: AudioSpec,
         pools: PoolRegion<S>,
+        plan_slot: Arc<RegionPlanSlot>,
     ) -> Self {
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
-        let plan = controls.region_plan();
-        let speed = controls.speed();
-        let smooth_frames: f32 = config.rate_smooth_frames().get().as_();
-        let sample_rate: f32 = spec.sample_rate.get().as_();
+        let plan = plan_slot.load();
+        let rate = controls.rate_target();
         let target = Self::prepare_target(
             current_kind,
             config.backends(),
@@ -154,21 +155,15 @@ where
             retired_engine: None,
             current_kind,
             controls,
+            plan_slot,
             pools,
             spec,
             source_block_frames: config.source_block_frames(),
             render_quantum_frames: config.render_quantum_frames(),
             prepared_quantum: None,
-            applied_speed: (config.rate_smooth_frames().get() > 1).then(|| {
-                SmoothedParam::new(
-                    speed,
-                    SmootherConfig {
-                        smooth_seconds: smooth_frames / sample_rate,
-                        ..SmootherConfig::default()
-                    },
-                    spec.sample_rate,
-                )
-            }),
+            rate,
+            prepared_context: None,
+            rate_context: None,
             applied_pitch: f64::NAN,
             active: false,
             output_remainder: 0.0,
@@ -195,7 +190,7 @@ where
     #[must_use]
     pub fn accepts_input(&self) -> bool {
         !self.transition_pending()
-            && (self.unity_passthrough(self.controls.speed())
+            && (self.unity_passthrough(self.rate.speed())
                 || (self.engine.is_some()
                     && self.pending_source.is_some()
                     && self.scratch.is_some()))
@@ -237,6 +232,7 @@ where
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
         self.prepared_quantum = None;
+        self.prepared_context = None;
         self.rendered_source_end = None;
         self.source_frames_admitted = 0;
         self.primed_source_debt = 0;
@@ -250,11 +246,7 @@ where
         output_frames: usize,
         request_revision: u64,
         applied_rate: f32,
-        target_rate: f32,
     ) {
-        if let Err(error) = self.advance_speed(target_rate, output_frames) {
-            warn!(%error, "time-stretch speed smoothing failed");
-        }
         let Some(snapshot) = snapshot else {
             return;
         };
@@ -422,17 +414,20 @@ where
         self.rebuild_pending = true;
     }
 
-    pub(super) fn snap_speed(&mut self) {
-        if let Some(applied) = self.applied_speed.as_mut() {
-            applied.set_value(self.controls.speed());
-            applied.reset_to_target();
+    pub(super) fn select_context(&mut self, frame: u64) -> Option<RenderSnapshot> {
+        let snapshot = self.context.load();
+        if let Some(snapshot) = &snapshot {
+            let context = snapshot.context();
+            let region = self.region_for(frame);
+            self.rate = context.rate().with_speed(context.rate_for(region).as_());
+            self.rate_context = Some(context.clone());
         }
-        self.prepared_quantum = None;
+        snapshot
     }
 
     /// Pull the live region plan handle; on a swap drop the region cursor.
     pub(super) fn sync_plan(&mut self) {
-        let want = self.controls.region_plan();
+        let want = self.plan_slot.load();
         let same = match (&self.plan, &want) {
             (None, None) => true,
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -442,6 +437,7 @@ where
             self.plan = want;
             self.region = None;
             self.prepared_quantum = None;
+            self.prepared_context = None;
         }
     }
 
@@ -452,6 +448,14 @@ where
     }
 
     pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
-        self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON
+        (self
+            .plan
+            .as_ref()
+            .is_none_or(|plan| plan.segments().is_empty())
+            || self
+                .rate_context
+                .as_ref()
+                .is_none_or(|context| context.mode() == SyncMode::Off))
+            && (speed - 1.0).abs() <= f32::EPSILON
     }
 }

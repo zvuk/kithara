@@ -122,6 +122,7 @@ sha2 = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+triple_buffer = { workspace = true }
 
 unimock = { workspace = true, optional = true }
 url = { workspace = true }

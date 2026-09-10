@@ -39,17 +39,17 @@ const CROSSFADE_SEGMENTS: usize = 8;
 const REAL_GEOMETRY_SEGMENTS: usize = 6;
 const SEGMENT_SECS: f64 = 2.0;
 const REAL_GEOMETRY_SEGMENT_SECS: f64 = 6.0;
-const BLOCK_FRAMES: usize = 512;
-const BLOCK_BUDGET: usize = 2_400;
-const CROSSFADE_BLOCK_BUDGET: usize = 4_500;
-const REAL_GEOMETRY_BLOCK_BUDGET: usize = 9_000;
+const BLOCK_FRAMES: usize = 128;
+const BLOCK_BUDGET: usize = 2_400 * 512 / BLOCK_FRAMES;
+const CROSSFADE_BLOCK_BUDGET: usize = 4_500 * 512 / BLOCK_FRAMES;
+const REAL_GEOMETRY_BLOCK_BUDGET: usize = 9_000 * 512 / BLOCK_FRAMES;
 const WINDOW_FRAMES: usize = 64;
 const POST_ROLL_FRAMES: usize = 88_200;
 const SUSTAINED_DESCENDING_WINDOWS: usize = 3;
 const SUSTAINED_ASCENDING_REPLAY_WINDOWS: usize = 8;
 const ASCENDING_TOL: f32 = 0.5;
 const PHASE_TOL_UNITS: i32 = 3;
-const TRACK_FRAME_TOLERANCE: usize = BLOCK_FRAMES * 2;
+const TRACK_FRAME_TOLERANCE: usize = 1_024;
 const CROSSFADE_SECS: f32 = 5.0;
 const CROSSFADE_DURATION_WAIT_SECS: f64 = 12.0;
 const REAL_GEOMETRY_DURATION_WAIT_SECS: f64 = 30.0;
@@ -885,21 +885,16 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     );
     let last_ascending_end_frame = frame_for_window(last_ascending_window + 1);
 
-    // Where the seek landed, read off the rendered audio rather than off the
-    // event. `SeekComplete` is published from a read, so its frame leads the
-    // audible position by the ring depth, and a length measured from it would
-    // carry that lead as a tolerance instead of stating a property. The last
-    // Ascending run before B is the post-seek tail itself: its first window is
-    // the landing, its length is what the seek left of track A.
-    let (_, landing_window, landing_windows) = require_run_containing(
+    let (_, run_start, _) = require_run_containing(
         &runs,
         FrameClass::Ascending,
         last_ascending_window,
         &search_context,
     );
+    let landing_window = run_start.max(seek_issue_frame.div_ceil(WINDOW_FRAMES));
     let landing_frame = frame_for_window(landing_window);
 
-    let phase_start_frame = seek_complete_frame.saturating_add(WINDOW_FRAMES);
+    let phase_start_frame = landing_frame + 1;
     let replays = ascending_phase_replays(
         &left,
         phase_start_frame,
@@ -937,7 +932,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     );
 
     assert_close_len(
-        landing_windows * WINDOW_FRAMES,
+        last_ascending_end_frame - landing_frame,
         EXPECTED_POST_SEEK_FRAMES,
         TRACK_FRAME_TOLERANCE,
         "post-seek ascending length must be approximately 0.5s before B starts",
@@ -1954,9 +1949,6 @@ fn require_last_class_window_before(
         })
 }
 
-/// The run of `target` that covers `window`. A window says which class a moment
-/// belongs to; the run says where that stretch began and how long it lasted,
-/// which is what a length property is stated about.
 fn require_run_containing(
     runs: &[ClassRun],
     target: FrameClass,

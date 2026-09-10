@@ -51,17 +51,6 @@ pub enum TrackReadOutcome {
 }
 
 impl PlayerTrack {
-    /// Advance the media clock by `frames` of mixed output.
-    ///
-    /// The mix output runs on the output clock; one output frame carries the
-    /// resource's current effective rate in media frames.
-    fn advance_media_clock(&mut self, frames: usize) {
-        let output_frames: f64 = AsPrimitive::as_(frames);
-        let playback_rate = self.playback_rate();
-        self.served_media_frames =
-            output_frames.mul_add(f64::from(playback_rate), self.served_media_frames);
-    }
-
     fn check_notifications(
         triggers: &mut TrackTriggers,
         notification_tx: &mut HeapProd<PlayerNotification>,
@@ -104,7 +93,6 @@ impl PlayerTrack {
             return outcome;
         };
 
-        self.advance_media_clock(frames);
         self.observed_duration = duration;
         self.update_observed_eof(frames_until_eof);
         let position = self.position();
@@ -194,7 +182,6 @@ impl PlayerTrack {
         let published_seek_epoch = sink.seek_epoch;
         let notification_tx = sink.notifications;
         let PartialRead { frames, duration } = partial;
-        self.advance_media_clock(frames);
         let position = self.position();
         self.observed_duration = if position > 0.0 { position } else { duration };
         let duration = self.observed_duration;
@@ -281,7 +268,10 @@ impl PlayerTrack {
             &mut scratch_right[0][range.clone()],
         ];
 
-        match resource.read_with_context(context, &mut scratch_window, 0..range.len(), metrics) {
+        let (outcome, source_frames) =
+            resource.read_with_context(context, &mut scratch_window, 0..range.len(), metrics);
+        self.served_media_frames += AsPrimitive::<f64>::as_(source_frames);
+        match outcome {
             ReadOutcome::Full { frames } => TrackReadOutcome::Full {
                 frames,
                 duration: resource.duration(),
@@ -347,14 +337,36 @@ impl PlayerTrack {
     /// `offset..frames`, so the span carries the in-block seam. Together with
     /// the session-axis base in `context` it names the exact output frames
     /// this track wrote, which is what attributes a frame to a track.
-    #[kithara::probe(
-        track_id = self.item_id.as_u64(),
-        output_base = context.map(|ctx| i64::from(ctx.output_frames().start)),
-        range_start = range.start,
-        range_end = range.end,
-        served_media_frames = AsPrimitive::<u64>::as_(self.served_media_frames)
-    )]
     pub(crate) fn render(
+        &mut self,
+        context: Option<&RenderContext>,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        sink: &mut RtSink<'_>,
+    ) -> TrackReadOutcome {
+        let range_start = range.start;
+        let range_end = range.end;
+        let outcome = self.render_inner(context, scratch_bufs, mix_bufs, range, sink);
+        let rendered_frames = match outcome {
+            TrackReadOutcome::Full { frames, .. } | TrackReadOutcome::Partial { frames, .. } => {
+                frames
+            }
+            TrackReadOutcome::Eof | TrackReadOutcome::Failed => 0,
+        };
+        kithara::probe_event!(
+            render,
+            track_id = self.item_id.as_u64(),
+            output_base = context.map(|ctx| i64::from(ctx.output_frames().start)),
+            range_start,
+            range_end,
+            rendered_frames,
+            served_media_frames = AsPrimitive::<u64>::as_(self.served_media_frames)
+        );
+        outcome
+    }
+
+    fn render_inner(
         &mut self,
         context: Option<&RenderContext>,
         scratch_bufs: &mut [&mut [f32]],

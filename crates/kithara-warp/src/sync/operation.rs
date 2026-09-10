@@ -2,7 +2,7 @@ use super::{
     LoadGeneration, PresentationFrontier, SyncGroup, SyncMember, SyncOperationId, TopologyStamp,
     TransportRevision, WarpMapRevision,
 };
-use crate::{Beat, BeatGridId, MapPoint, MapRegion, SessionFrame};
+use crate::{Beat, BeatGridId, BeatsPerMinute, MapPoint, MapRegion, SessionFrame};
 
 /// A beat on a source grid aligned with a beat on a target grid.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -71,6 +71,13 @@ pub enum SyncOperation<G: SyncGroup> {
         /// Requested synchronization state transition.
         intent: SyncIntent,
     },
+    /// Sets the local tempo of one group that owns its tempo.
+    Tempo {
+        /// Group whose local tempo changes.
+        target: BeatGridId,
+        /// New local tempo.
+        tempo: BeatsPerMinute,
+    },
     /// Re-evaluates an active warp map after one material control-plane change.
     Reconcile {
         /// Stable Deck grid whose active warp map is being re-evaluated.
@@ -94,6 +101,7 @@ impl<G: SyncGroup> SyncOperation<G> {
             Self::Topology { base, .. } => base.group_id,
             Self::Transport { target, .. }
             | Self::Sync { target, .. }
+            | Self::Tempo { target, .. }
             | Self::Reconcile { target, .. } => *target,
         }
     }
@@ -161,6 +169,8 @@ pub enum SyncIntent {
     Enable,
     /// Stop future parent-group correction and latch the current settings.
     Disable,
+    /// Leave the beat timeline: the group plays at its plain rate multiplier.
+    Free,
     /// Snap immediately to the parent group's tempo and phase.
     AlignNow,
 }
@@ -203,6 +213,14 @@ pub enum SyncAdmission {
         /// Identity assigned to the committed transaction.
         operation: SyncOperationId,
         /// Exact topology published by the transaction.
+        topology: TopologyStamp,
+    },
+    /// A mode or tempo transition was applied; nothing waits on the render
+    /// boundary.
+    StateChanged {
+        /// Operation that carried the transition.
+        operation: SyncOperationId,
+        /// Topology the transition was applied under.
         topology: TopologyStamp,
     },
     /// A validated SYNC-off transport command may enter the existing sample path.

@@ -8,13 +8,16 @@ use kithara_test_macros as kithara;
 use portable_atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 
 use crate::{
-    PresentationFrontier, RenderContext, SessionBeat, SessionEpoch, SessionFrame, TransportRevision,
+    PresentationFrontier, RateTarget, RenderContext, SessionBeat, SessionEpoch, SessionFrame,
+    SyncMode, TransportRevision,
 };
 
 const SEQLOCK_PHASES: u64 = 2;
 
 #[derive(Debug, Default)]
 struct RenderCell {
+    rate: AtomicU64,
+    mode: AtomicU32,
     frontier_output: AtomicI64,
     output_end: AtomicI64,
     output_start: AtomicI64,
@@ -44,6 +47,8 @@ impl RenderCell {
                 continue;
             }
             let raw = RawSnapshot {
+                rate: self.rate.load(Ordering::Relaxed),
+                mode: self.mode.load(Ordering::Relaxed),
                 output_start: self.output_start.load(Ordering::Relaxed),
                 output_end: self.output_end.load(Ordering::Relaxed),
                 sample_rate: self.sample_rate.load(Ordering::Relaxed),
@@ -65,6 +70,15 @@ impl RenderCell {
 
     fn publish(&self, context: &RenderContext, frontier: PresentationFrontier) {
         self.write(|cell| {
+            cell.rate.store(context.rate().packed(), Ordering::Relaxed);
+            cell.mode.store(
+                match context.mode() {
+                    SyncMode::Off => 0,
+                    SyncMode::HostSync => 1,
+                    SyncMode::LocalSync => 2,
+                },
+                Ordering::Relaxed,
+            );
             let output = context.output_frames();
             cell.output_start
                 .store(i64::from(output.start), Ordering::Relaxed);
@@ -103,6 +117,8 @@ impl RenderCell {
 }
 
 struct RawSnapshot {
+    rate: u64,
+    mode: u32,
     beats_present: bool,
     frontier_output: i64,
     output_end: i64,
@@ -134,7 +150,16 @@ impl RawSnapshot {
             session_beats,
             SessionEpoch::new(self.session_epoch),
             transport_revision,
-        )?;
+        )?
+        .with_rate(
+            match self.mode {
+                0 => SyncMode::Off,
+                1 => SyncMode::HostSync,
+                2 => SyncMode::LocalSync,
+                _ => return None,
+            },
+            RateTarget::unpack(self.rate),
+        );
         let frontier = PresentationFrontier::builder()
             .source(self.frontier_source)
             .output(SessionFrame::new(self.frontier_output))
@@ -257,8 +282,8 @@ mod tests {
 
     use super::RenderPublisher;
     use crate::{
-        PresentationFrontier, RenderContext, SessionBeat, SessionEpoch, SessionFrame,
-        TransportRevision,
+        PresentationFrontier, RateTarget, RenderContext, SessionBeat, SessionEpoch, SessionFrame,
+        SyncMode, TransportRevision,
     };
 
     fn context(epoch: u64, start: i64) -> RenderContext {
@@ -286,7 +311,8 @@ mod tests {
     fn publication_is_one_coherent_snapshot() {
         let publisher = RenderPublisher::default();
         let reader = publisher.reader();
-        let expected_context = context(3, 1_000);
+        let expected_context = context(3, 1_000)
+            .with_rate(SyncMode::LocalSync, RateTarget::default().with_speed(0.75));
         let expected_frontier = frontier(8_000, 1_128);
 
         publisher.publish(&expected_context, expected_frontier);

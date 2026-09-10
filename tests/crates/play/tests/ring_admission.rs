@@ -188,8 +188,10 @@ fn backend_starts_exactly_once() {
 
 #[kithara::test]
 fn clock_is_monotone_across_pause_and_graph_edits() {
+    let block_frames = 128;
     let session = Arc::new(
-        ManualRingSession::start(config(6)).expect("start manual ring session for player"),
+        ManualRingSession::start(ManualRingConfig::new(session_rate(), block_frames, 6))
+            .expect("start manual ring session for player"),
     );
     let player = empty_player(&session);
     player
@@ -204,20 +206,20 @@ fn clock_is_monotone_across_pause_and_graph_edits() {
     session.credit(1).expect("credit playing block");
     assert_eq!(
         session.clock_samples().expect("playing clock"),
-        initial + u64::from(BLOCK_FRAMES)
+        initial + u64::from(block_frames)
     );
 
     player.pause();
     session.credit(1).expect("credit paused block");
     assert_eq!(
         session.clock_samples().expect("paused clock"),
-        initial + 2 * u64::from(BLOCK_FRAMES)
+        initial + 2 * u64::from(block_frames)
     );
 
     player.play();
     session.credit(1).expect("credit resumed block");
     let before_edit = session.clock_samples().expect("resumed clock");
-    assert_eq!(before_edit, initial + 3 * u64::from(BLOCK_FRAMES));
+    assert_eq!(before_edit, initial + 3 * u64::from(block_frames));
 
     let unrelated = register_started_player(&session);
     assert_eq!(
@@ -228,7 +230,7 @@ fn clock_is_monotone_across_pause_and_graph_edits() {
     let after_add = session
         .clock_samples()
         .expect("clock after added-node credit");
-    assert_eq!(after_add, before_edit + u64::from(BLOCK_FRAMES));
+    assert_eq!(after_add, before_edit + u64::from(block_frames));
     remove_player(&session, unrelated);
     assert_eq!(
         session.clock_samples().expect("clock after remove"),
@@ -239,7 +241,7 @@ fn clock_is_monotone_across_pause_and_graph_edits() {
         session
             .clock_samples()
             .expect("clock after removed-node credit"),
-        after_add + u64::from(BLOCK_FRAMES)
+        after_add + u64::from(block_frames)
     );
 }
 

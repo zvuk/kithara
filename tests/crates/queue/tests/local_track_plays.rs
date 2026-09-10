@@ -23,7 +23,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE, assert_playhead_tracks_renderer},
+    offline::{OfflineQueue, QueueTicker, assert_playhead_tracks_renderer, audio_clock_pace},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
@@ -193,6 +193,7 @@ async fn build_queue_with_tick(
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
     let session = HostConfig::offline(pools.clone()).build();
+    let render_pace = audio_clock_pace(&session);
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -209,7 +210,7 @@ async fn build_queue_with_tick(
                 .store(store.clone())
                 .build(),
         ),
-        RENDER_PACE,
+        render_pace,
     )
     .await
     .expect("create product offline queue");

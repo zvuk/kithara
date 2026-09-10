@@ -6,14 +6,17 @@ use firewheel::{
         mix::{Mix, MixDSP},
     },
     node::ProcBuffers,
-    param::smoother::SmootherConfig,
+    param::smoother::{SmoothedParam, SmootherConfig},
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_warp::RenderContext;
+use kithara_platform::sync::Arc;
+use kithara_test_utils::kithara;
+use kithara_warp::{RenderContext, StretchControls};
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
 use smallvec::SmallVec;
 use tracing::warn;
+use triple_buffer::Output;
 
 use super::{
     processor::{PlayerNodeProcessor, StreamShape},
@@ -22,6 +25,7 @@ use super::{
 use crate::{
     bridge::{PlayerNotification, RtMetrics, TrackState},
     rt::{TrackSlot, TrackSlots},
+    sync::DeckGrid,
 };
 
 type ActiveTrackEntry = (usize, TrackSlot, bool);
@@ -40,6 +44,9 @@ pub(crate) struct RenderTargets<'a> {
 }
 
 pub(crate) struct RenderPass {
+    grid: Output<DeckGrid>,
+    stretch: Arc<StretchControls>,
+    rate: SmoothedParam,
     gate: MixDSP,
     scratch_bufs: [SampleBuffer; Self::SCRATCH_BUF_COUNT],
     priming: bool,
@@ -56,12 +63,18 @@ impl RenderPass {
     pub(crate) fn new<S>(
         pools: &PoolRegion<S>,
         shape: StreamShape,
+        stretch: Arc<StretchControls>,
+        smoothing: SmootherConfig,
+        grid: Output<DeckGrid>,
         gate_smoothing: SmootherConfig,
     ) -> Self
     where
         S: HasPool<f32>,
     {
         let mut pass = Self {
+            grid,
+            rate: SmoothedParam::new(stretch.speed(), smoothing, shape.sample_rate),
+            stretch,
             scratch_bufs: std::array::from_fn(|_| pools.get::<f32>()),
             capacity: 0,
             priming: true,
@@ -99,19 +112,10 @@ impl RenderPass {
         // WHY: Growing a pooled buffer here would allocate on the audio thread. The fill above already covered the frames past the clamp
         // with silence.
         let frames = frames.min(self.capacity);
+        let context = self.render_context(context, frames);
+        let context = context.as_ref();
 
-        self.gate.set_mix(
-            if is_playing {
-                Mix::FULLY_DRY
-            } else {
-                Mix::FULLY_WET
-            },
-            Self::GATE_CURVE,
-        );
-        if self.priming {
-            self.priming = false;
-            self.gate.reset_to_target();
-        }
+        self.update_gate(is_playing);
         // WHY: A closed gate outputs silence whatever the tracks hold, so readers stop only once its ramp has run out.
         if !is_playing && self.gate.has_settled() {
             return (false, None);
@@ -258,6 +262,43 @@ impl RenderPass {
         (playback_started, leading_outcome_pos_dur)
     }
 
+    fn update_gate(&mut self, is_playing: bool) {
+        self.gate.set_mix(
+            if is_playing {
+                Mix::FULLY_DRY
+            } else {
+                Mix::FULLY_WET
+            },
+            Self::GATE_CURVE,
+        );
+        if self.priming {
+            self.priming = false;
+            self.gate.reset_to_target();
+        }
+    }
+
+    fn render_context(
+        &mut self,
+        context: Option<&RenderContext>,
+        frames: usize,
+    ) -> Option<RenderContext> {
+        let target = self.stretch.rate_target();
+        self.rate.set_value(target.speed());
+        let mut multiplier = self.rate.target_value();
+        for _ in 0..frames {
+            multiplier = self.rate.next_smoothed();
+        }
+        self.rate.settle();
+        kithara::probe_event!(
+            rate_smoothed,
+            frames = frames,
+            target_bits = target.speed().to_bits(),
+            multiplier_bits = multiplier.to_bits()
+        );
+        let grid = *self.grid.read();
+        context.and_then(|context| grid.project(context, target.with_speed(multiplier)))
+    }
+
     pub(crate) fn resize(&mut self, max_frames: usize) {
         let mut capacity = usize::MAX;
         for buf in &mut self.scratch_bufs {
@@ -276,6 +317,7 @@ impl RenderPass {
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.gate.update_sample_rate(sample_rate);
+        self.rate.update_sample_rate(sample_rate);
     }
 }
 

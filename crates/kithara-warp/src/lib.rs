@@ -31,7 +31,7 @@ pub use segment::{
 pub use sync::{
     AlignmentSource, BeatAlignment, LoadGeneration, PresentationFrontier, ReconcileCause,
     SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot,
+    SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot, SyncMode,
     SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyOperation,
     TopologyRevision, TopologyStamp, TransportOperation, TransportRevision, WarpMapRevision,
 };
@@ -41,9 +41,12 @@ pub use sync::{
 ))]
 pub use temporal::StretchKind;
 pub use temporal::{
-    ActiveRegion, GridSegment, RegionPlan, RegionPlanError, RenderContext, RenderPublisher,
-    RenderReader, RenderSnapshot, StretchControls,
+    ActiveRegion, GridSegment, RateTarget, RegionPlan, RegionPlanError, RegionPlanSlot,
+    RenderContext, RenderPublisher, RenderReader, RenderSnapshot, StretchControls,
 };
 #[cfg(feature = "render")]
 pub use warp::WarpRenderer;
-pub use warp::{Warp, WarpConfig, WarpConfigPatch, WarpCursor, WarpMap, supports_playback_rate};
+pub use warp::{
+    DEFAULT_RATE_SMOOTHING, Warp, WarpConfig, WarpConfigPatch, WarpCursor, WarpMap,
+    supports_playback_rate,
+};

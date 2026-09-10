@@ -7,7 +7,7 @@ mod render;
 mod support;
 
 pub use actuator::Warp;
-pub use config::{WarpConfig, WarpConfigPatch};
+pub use config::{DEFAULT_RATE_SMOOTHING, WarpConfig, WarpConfigPatch};
 pub use cursor::WarpCursor;
 pub use map::WarpMap;
 #[cfg(feature = "render")]

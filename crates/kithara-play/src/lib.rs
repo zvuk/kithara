@@ -47,8 +47,9 @@ pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
 pub use kithara_net::Headers;
 pub use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, StretchControls, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, SegmentSet, SessionAnchor,
+    StretchControls, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncOperation, SyncRejected, SyncStatusSnapshot,
 };
 pub use player::{PlayerConfig, PlayerConfigPatch, PlayerImpl, SelectTransition};
 pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};

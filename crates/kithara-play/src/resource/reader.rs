@@ -12,7 +12,8 @@ use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::{
-    PresentationFrontier, RenderContext, RenderPublisher, RenderReader, StretchControls,
+    PresentationFrontier, RegionPlanSlot, RenderContext, RenderPublisher, RenderReader,
+    StretchControls,
 };
 use tracing::warn;
 
@@ -74,6 +75,9 @@ pub struct Resource {
     render_publisher: Option<RenderPublisher>,
     #[field(with)]
     playback_rate: PlaybackRate,
+    /// Region plan slot of the resident Warp lane; `None` for a plain reader.
+    #[field(get, deref = false)]
+    region_plan: Option<Arc<RegionPlanSlot>>,
     reader: ReaderOwner,
 }
 
@@ -186,6 +190,7 @@ impl Resource {
             playback_rate: PlaybackRate::Fixed,
             reader: ReaderOwner(CancelGuard(None), inner),
             render_publisher: None,
+            region_plan: None,
         };
         if preload && let Err(error) = resource.reader.1.preload() {
             warn!(src = %resource.src, %error, "resource preload failed");
@@ -212,6 +217,7 @@ impl Resource {
         let warp_controls = Arc::clone(config.warp().stretch());
         let mut audio = worker.open(config).await?;
         let priority = audio.priority();
+        let region_plan = audio.region_plan();
         let render_publisher = audio.take_publisher().ok_or(DecodeError::InvalidData {
             detail: "registered Warp publisher was already taken",
         })?;
@@ -222,6 +228,7 @@ impl Resource {
         }
         resource.priority = Some(priority);
         resource.render_publisher = Some(render_publisher);
+        resource.region_plan = Some(region_plan);
         Ok(resource)
     }
 
@@ -410,7 +417,9 @@ mod tests {
             StreamStatus,
         },
     };
-    use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
+    use kithara_audio::{
+        AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome, SourceSpan,
+    };
     use kithara_bufpool::PoolRegion;
     use kithara_decode::TrackMetadata;
     use kithara_events::TrackId;
@@ -549,7 +558,12 @@ mod tests {
             Ok(ReadOutcome::Frames {
                 count: NonZeroUsize::new(samples).expect("non-zero stereo sample count"),
                 position: self.position_duration(),
-                source_span: None,
+                source_span: SourceSpan::new(
+                    u64::try_from(self.position_frames - frames.get())
+                        .expect("fixture frame fits u64"),
+                    u64::try_from(self.position_frames).expect("fixture frame fits u64"),
+                    self.spec.sample_rate,
+                ),
             })
         }
         fn read_planar<'a>(
@@ -569,7 +583,12 @@ mod tests {
             Ok(ReadOutcome::Frames {
                 count: frames,
                 position: self.position_duration(),
-                source_span: None,
+                source_span: SourceSpan::new(
+                    u64::try_from(self.position_frames - frames.get())
+                        .expect("fixture frame fits u64"),
+                    u64::try_from(self.position_frames).expect("fixture frame fits u64"),
+                    self.spec.sample_rate,
+                ),
             })
         }
 
@@ -718,8 +737,7 @@ mod tests {
             .position()
             - first_position;
         let block_frames = u32::try_from(Consts::BLOCK_FRAMES).expect("block size fits u32");
-        let expected_advance =
-            f64::from(block_frames) * f64::from(effective_rate) / f64::from(Consts::SAMPLE_RATE);
+        let expected_advance = f64::from(block_frames) / f64::from(Consts::SAMPLE_RATE);
         assert!((first_advance - expected_advance).abs() < f64::EPSILON);
         assert_eq!(
             processor.playback().rate.load(Ordering::Relaxed),

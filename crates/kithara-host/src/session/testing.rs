@@ -14,8 +14,8 @@ use kithara_play::{
     SessionDuckingMode, player::PlayerMember,
 };
 use kithara_warp::{
-    BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
-    TopologyOperation, TransportRevision,
+    BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncMode,
+    SyncOperation, TopologyOperation, TransportRevision,
 };
 
 use super::{
@@ -166,6 +166,7 @@ where
         sample_rate,
         SessionEpoch::new(0),
         SyncMemberKind::Group,
+        SyncMode::LocalSync,
     );
     let root_view = RootView::new(&root, sample_rate);
     SessionState::new(root, root_view, sample_rate, None, start_stream_fn)

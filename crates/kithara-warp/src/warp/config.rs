@@ -1,6 +1,9 @@
 use std::num::NonZeroUsize;
 
 use bon::Builder;
+use firewheel_core::{
+    dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON, param::smoother::SmootherConfig,
+};
 use kithara_derive::Patch;
 use kithara_platform::sync::Arc;
 #[cfg(all(
@@ -10,6 +13,12 @@ use kithara_platform::sync::Arc;
 use kithara_stretch::{ElasticBackendConfig, ElasticBackendConfigPatch};
 
 use crate::StretchControls;
+
+/// Smoothing of the player's plain playback-rate multiplier.
+pub const DEFAULT_RATE_SMOOTHING: SmootherConfig = SmootherConfig {
+    smooth_seconds: 0.02,
+    settle_epsilon: DEFAULT_SETTLE_EPSILON,
+};
 
 const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
     Some(frames) => frames,
@@ -50,12 +59,13 @@ pub struct WarpConfig {
     #[builder(default = DEFAULT_SOURCE_BLOCK_FRAMES)]
     #[field(get, copy)]
     source_block_frames: NonZeroUsize,
-    /// Output-frame window used to smooth live rate changes.
-    #[builder(default = NonZeroUsize::MIN)]
+    /// Plain multiplier smoothing in the player's RT render pass.
+    /// Beat-derived ratios are not smoothed.
+    #[builder(default = DEFAULT_RATE_SMOOTHING)]
     #[field(get, copy)]
-    rate_smooth_frames: NonZeroUsize,
-    /// Optional output-frame cap between samples of live temporal controls.
-    /// Without a cap, Warp consumes the complete source span accepted by its backend.
+    rate_smoothing: SmootherConfig,
+    /// Output-frame cap between samples of live temporal controls.
+    /// Without a cap, standalone Warp consumes the complete source span.
     #[field(get, copy)]
     render_quantum_frames: Option<NonZeroUsize>,
 }
