@@ -10,13 +10,13 @@ use std::{
 use super::ffi::{
     self, AMediaDataSource, AMediaDataSource_delete, AMediaDataSource_new,
     AMediaDataSource_setGetSize, AMediaDataSource_setReadAt, AMediaDataSource_setUserdata,
-    AMediaDataSourceGetSize, AMediaDataSourceReadAt, AMediaExtractor, AMediaExtractor_advance,
-    AMediaExtractor_delete, AMediaExtractor_getSampleTime, AMediaExtractor_getTrackCount,
-    AMediaExtractor_getTrackFormat, AMediaExtractor_new, AMediaExtractor_readSampleData,
-    AMediaExtractor_seekTo, AMediaExtractor_selectTrack, AMediaExtractor_setDataSourceCustom,
-    AMediaFormat_delete, AMediaFormat_getBuffer, AMediaFormat_getInt32, AMediaFormat_getInt64,
-    AMediaFormat_getString, KEY_CHANNEL_COUNT, KEY_CSD_0, KEY_DURATION_US, KEY_MIME,
-    KEY_SAMPLE_RATE, MEDIA_STATUS_OK, Off64, SEEK_MODE_PREVIOUS_SYNC, SSize,
+    AMediaExtractor, AMediaExtractor_advance, AMediaExtractor_delete,
+    AMediaExtractor_getSampleTime, AMediaExtractor_getTrackCount, AMediaExtractor_getTrackFormat,
+    AMediaExtractor_new, AMediaExtractor_readSampleData, AMediaExtractor_seekTo,
+    AMediaExtractor_selectTrack, AMediaExtractor_setDataSourceCustom, AMediaFormat_delete,
+    AMediaFormat_getBuffer, AMediaFormat_getInt32, AMediaFormat_getInt64, AMediaFormat_getString,
+    KEY_CHANNEL_COUNT, KEY_CSD_0, KEY_DURATION_US, KEY_MIME, KEY_SAMPLE_RATE, MEDIA_STATUS_OK,
+    Off64, SEEK_MODE_PREVIOUS_SYNC, SSize,
 };
 use crate::{
     error::{DecodeError, DecodeResult},
@@ -83,16 +83,13 @@ impl AndroidMediaExtractor {
             AMediaDataSource_setGetSize(ds.as_ptr(), Some(get_size_callback));
         }
 
-        // SAFETY: `AMediaExtractor_new` returns NULL on failure; we
-        let ex = match NonNull::new(unsafe { AMediaExtractor_new() }) {
-            Some(e) => e,
-            None => {
-                // SAFETY: `ds` is non-null and we're abandoning it
-                unsafe { AMediaDataSource_delete(ds.as_ptr()) };
-                return Err(DecodeError::InvalidData {
-                    detail: "AMediaExtractor_new returned null",
-                });
-            }
+        // SAFETY: `AMediaExtractor_new` returns NULL on failure.
+        let Some(ex) = NonNull::new(unsafe { AMediaExtractor_new() }) else {
+            // SAFETY: `ds` is live and unreferenced; nothing took ownership of it.
+            unsafe { AMediaDataSource_delete(ds.as_ptr()) };
+            return Err(DecodeError::InvalidData {
+                detail: "AMediaExtractor_new returned null",
+            });
         };
 
         // SAFETY: both handles are live; the extractor takes a reference
@@ -291,10 +288,9 @@ extern "C" fn read_at_callback(
     if ctx.source.seek(SeekFrom::Start(pos)).is_err() {
         return -1;
     }
-    match ctx.source.read(slice) {
-        Ok(n) => SSize::try_from(n).unwrap_or(-1),
-        Err(_) => -1,
-    }
+    ctx.source
+        .read(slice)
+        .map_or(-1, |n| SSize::try_from(n).unwrap_or(-1))
 }
 
 extern "C" fn get_size_callback(userdata: *mut c_void) -> Off64 {

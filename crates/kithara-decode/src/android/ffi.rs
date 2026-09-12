@@ -3,7 +3,6 @@
 use std::ffi::{CStr, c_char, c_void};
 
 pub(crate) const MEDIA_STATUS_OK: i32 = 0;
-pub(crate) const MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM: u32 = 4;
 pub(crate) const MEDIA_CODEC_INFO_OUTPUT_BUFFERS_CHANGED: i32 = -3;
 pub(crate) const MEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED: i32 = -2;
 pub(crate) const MEDIA_CODEC_INFO_TRY_AGAIN_LATER: i32 = -1;
@@ -16,25 +15,21 @@ pub(crate) const KEY_SAMPLE_RATE: &CStr = c"sample-rate";
 pub(crate) const KEY_CHANNEL_COUNT: &CStr = c"channel-count";
 pub(crate) const KEY_DURATION_US: &CStr = c"durationUs";
 pub(crate) const KEY_PCM_ENCODING: &CStr = c"pcm-encoding";
-/// `AMEDIAFORMAT_KEY_SAMPLE_FILE_OFFSET` — present on the per-sample
-/// format returned by `AMediaExtractor_getSampleFormat` (API 28+).
-/// Carries the byte offset of the current sample in the source file.
-pub(crate) const KEY_SAMPLE_FILE_OFFSET: &CStr = c"sample-file-offset";
 /// Codec-specific data payload (`csd-0`) — `AudioSpecificConfig` for AAC,
 /// `STREAMINFO` for FLAC. Required when configuring the codec without
 /// an `AMediaExtractor`-supplied format.
 pub(crate) const KEY_CSD_0: &CStr = c"csd-0";
 
-/// Android MediaCodec MIME type for AAC (raw frames or fMP4-stripped).
+/// Android `MediaCodec` MIME type for AAC (raw frames or fMP4-stripped).
 pub(crate) const MIME_AAC: &CStr = c"audio/mp4a-latm";
-/// Android MediaCodec MIME type for FLAC.
+/// Android `MediaCodec` MIME type for FLAC.
 pub(crate) const MIME_FLAC: &CStr = c"audio/flac";
-/// Android MediaCodec MIME type for raw PCM. WAV passes through with no
+/// Android `MediaCodec` MIME type for raw PCM. WAV passes through with no
 /// decoding work — the extractor's per-sample bytes are interleaved PCM.
 pub(crate) const MIME_RAW: &CStr = c"audio/raw";
-/// Android MediaCodec MIME type for MPEG-1/2 Layer 3 (MP3).
+/// Android `MediaCodec` MIME type for MPEG-1/2 Layer 3 (MP3).
 pub(crate) const MIME_MP3: &CStr = c"audio/mpeg";
-/// Android MediaCodec MIME type for Apple Lossless (ALAC).
+/// Android `MediaCodec` MIME type for Apple Lossless (ALAC).
 pub(crate) const MIME_ALAC: &CStr = c"audio/alac";
 
 pub(crate) type MediaStatus = i32;
@@ -72,12 +67,6 @@ pub(crate) struct AMediaFormat {
 pub(crate) type AMediaDataSourceReadAt =
     Option<unsafe extern "C" fn(*mut c_void, Off64, *mut c_void, usize) -> SSize>;
 pub(crate) type AMediaDataSourceGetSize = Option<unsafe extern "C" fn(*mut c_void) -> Off64>;
-pub(crate) type AMediaDataSourceClose = Option<unsafe extern "C" fn(*mut c_void)>;
-
-#[link(name = "android")]
-unsafe extern "C" {
-    fn android_get_device_api_level() -> i32;
-}
 
 #[link(name = "mediandk")]
 unsafe extern "C" {
@@ -94,10 +83,6 @@ unsafe extern "C" {
     pub(crate) fn AMediaDataSource_setGetSize(
         source: *mut AMediaDataSource,
         callback: AMediaDataSourceGetSize,
-    );
-    pub(crate) fn AMediaDataSource_setClose(
-        source: *mut AMediaDataSource,
-        callback: AMediaDataSourceClose,
     );
 
     pub(crate) fn AMediaExtractor_new() -> *mut AMediaExtractor;
@@ -126,17 +111,7 @@ unsafe extern "C" {
         capacity: usize,
     ) -> SSize;
     pub(crate) fn AMediaExtractor_getSampleTime(extractor: *mut AMediaExtractor) -> i64;
-    pub(crate) fn AMediaExtractor_getSampleTrackIndex(extractor: *mut AMediaExtractor) -> i32;
     pub(crate) fn AMediaExtractor_advance(extractor: *mut AMediaExtractor) -> bool;
-    /// Available since API 28 (Android 9). Populates `*out_format` with a
-    /// new `AMediaFormat` carrying per-sample metadata, including
-    /// `"sample-file-offset"` (the byte offset of the current sample in
-    /// the source file).  Caller owns the returned format and must free
-    /// it with [`AMediaFormat_delete`].
-    pub(crate) fn AMediaExtractor_getSampleFormat(
-        extractor: *mut AMediaExtractor,
-        out_format: *mut *mut AMediaFormat,
-    ) -> MediaStatus;
 
     pub(crate) fn AMediaCodec_createDecoderByType(mime_type: *const c_char) -> *mut AMediaCodec;
     pub(crate) fn AMediaCodec_delete(codec: *mut AMediaCodec) -> MediaStatus;
@@ -223,18 +198,6 @@ unsafe extern "C" {
     ) -> bool;
 }
 
-pub(crate) fn current_api_level() -> Option<u32> {
-    let level = unsafe { android_get_device_api_level() };
-    (level >= 0).then_some(level as u32)
-}
-
-#[must_use]
-pub(crate) fn api_level_allows_hardware(api_level: Option<u32>) -> bool {
-    /// Minimum Android API level that supports the hardware decoder path.
-    const MIN_HARDWARE_API_LEVEL: u32 = 28;
-    api_level.is_some_and(|level| level >= MIN_HARDWARE_API_LEVEL)
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -242,9 +205,8 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn api_gate_and_keys_are_stable() {
+    fn ndk_constants_are_stable() {
         assert_eq!(MEDIA_STATUS_OK, 0);
-        assert_eq!(MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM, 4);
         assert_eq!(MEDIA_CODEC_INFO_OUTPUT_BUFFERS_CHANGED, -3);
         assert_eq!(MEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED, -2);
         assert_eq!(MEDIA_CODEC_INFO_TRY_AGAIN_LATER, -1);
@@ -256,8 +218,5 @@ mod tests {
         assert_eq!(KEY_CHANNEL_COUNT.to_str().ok(), Some("channel-count"));
         assert_eq!(KEY_DURATION_US.to_str().ok(), Some("durationUs"));
         assert_eq!(KEY_PCM_ENCODING.to_str().ok(), Some("pcm-encoding"));
-        const MIN_HARDWARE_API_LEVEL: u32 = 28;
-        assert!(api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL)));
-        assert!(!api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL - 1)));
     }
 }

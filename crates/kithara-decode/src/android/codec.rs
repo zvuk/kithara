@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use std::{ffi::c_void, num::NonZeroU32, ptr::NonNull};
+use std::{ffi::c_void, ptr::NonNull};
 
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
@@ -21,7 +21,7 @@ use crate::{
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
-    types::DecoderTrackInfo,
+    types::{DecoderTrackInfo, checked_audio_spec},
 };
 
 struct Consts;
@@ -69,7 +69,7 @@ impl AndroidCodec {
 
         let format = build_format(mime, track).map_err(DecodeError::from)?;
         let codec = OwnedCodec::create_with_format(mime, &format).map_err(DecodeError::from)?;
-        let (spec, pcm_encoding) = read_output_format(&codec).map_err(DecodeError::from)?;
+        let (spec, pcm_encoding) = read_output_format(&codec)?;
 
         Ok(Self {
             codec,
@@ -112,30 +112,26 @@ impl FrameCodec for AndroidCodec {
             return Ok(0);
         }
 
-        match self
+        let Some(mut buf) = self
             .codec
             .dequeue_input_buffer(Consts::INPUT_DEQUEUE_TIMEOUT_US)
             .map_err(DecodeError::from)?
-        {
-            Some(mut buf) => {
-                let dst = buf.data_mut();
-                let copy_len = dst.len().min(frame_data.len());
-                dst[..copy_len].copy_from_slice(&frame_data[..copy_len]);
-                let pts_us = i64::try_from(pts.as_micros()).unwrap_or(i64::MAX);
-                self.codec
-                    .queue_input_buffer(QueueInput {
-                        index: buf.index,
-                        size: copy_len,
-                        presentation_time_us: pts_us,
-                        flags: 0,
-                    })
-                    .map_err(DecodeError::from)?;
-            }
-            None => {
-                out.clear();
-                return Ok(0);
-            }
-        }
+        else {
+            out.clear();
+            return Ok(0);
+        };
+        let dst = buf.data_mut();
+        let copy_len = dst.len().min(frame_data.len());
+        dst[..copy_len].copy_from_slice(&frame_data[..copy_len]);
+        let pts_us = i64::try_from(pts.as_micros()).unwrap_or(i64::MAX);
+        self.codec
+            .queue_input_buffer(QueueInput {
+                index: buf.index,
+                size: copy_len,
+                presentation_time_us: pts_us,
+                flags: 0,
+            })
+            .map_err(DecodeError::from)?;
 
         match self
             .codec
@@ -153,11 +149,10 @@ impl FrameCodec for AndroidCodec {
                     .release_output_buffer(index)
                     .map_err(DecodeError::from)?;
                 let channels = self.spec.channels as usize;
-                let frames = if channels == 0 {
-                    0
-                } else {
-                    u32::try_from(out.len() / channels).unwrap_or(u32::MAX)
-                };
+                let frames = out
+                    .len()
+                    .checked_div(channels)
+                    .map_or(0, |frames| u32::try_from(frames).unwrap_or(u32::MAX));
                 Ok(frames)
             }
             DequeueOutput::OutputFormatChanged(new_format) => {
@@ -226,9 +221,7 @@ fn build_format(
     Ok(format)
 }
 
-fn read_output_format(
-    codec: &OwnedCodec,
-) -> Result<(AudioSpec, AndroidPcmEncoding), AndroidBackendError> {
+fn read_output_format(codec: &OwnedCodec) -> DecodeResult<(AudioSpec, AndroidPcmEncoding)> {
     let format = codec.output_format()?;
     let sample_rate = format.get_u32(KEY_SAMPLE_RATE)?.ok_or_else(|| {
         AndroidBackendError::operation("codec-output-format", "missing sample-rate")
@@ -239,11 +232,12 @@ fn read_output_format(
     let pcm_encoding = match format.get_i32(KEY_PCM_ENCODING) {
         None | Some(PCM_ENCODING_16BIT) => AndroidPcmEncoding::Pcm16,
         Some(PCM_ENCODING_FLOAT) => AndroidPcmEncoding::Float,
-        Some(other) => return Err(AndroidBackendError::UnsupportedPcmEncoding { encoding: other }),
+        Some(other) => {
+            return Err(AndroidBackendError::UnsupportedPcmEncoding { encoding: other }.into());
+        }
     };
-    let nz_rate = NonZeroU32::new(sample_rate)
-        .ok_or_else(|| AndroidBackendError::operation("codec-output-format", "zero sample-rate"))?;
-    Ok((AudioSpec::new(channels, nz_rate), pcm_encoding))
+    let spec = checked_audio_spec(channels, sample_rate, "android.codec.output")?;
+    Ok((spec, pcm_encoding))
 }
 
 fn decode_pcm16_into(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {

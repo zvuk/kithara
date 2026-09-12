@@ -49,6 +49,8 @@ pub(crate) enum AndroidCommand {
         #[arg(long, default_value_t = crate::BuildProfile::Debug)]
         profile: BuildProfile,
     },
+    /// Run Clippy over the Android device build.
+    Clippy,
     /// Build release JNI/Kotlin bindings and export stable release AAR files.
     Aar,
     /// Boot an emulator (if needed), install the demo APK, and launch it.
@@ -124,6 +126,7 @@ pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
             args,
         } => run_native_binary(&session, &binary, &args),
         AndroidCommand::Build { profile } => run_build(profile, &ext.android, tools),
+        AndroidCommand::Clippy => run_clippy(&ctx.root, &ext.android, tools),
         AndroidCommand::Aar => run_aar(&ext.android, tools),
         AndroidCommand::Run {
             profile,
@@ -183,16 +186,22 @@ fn recreate_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn run_build(
-    profile: BuildProfile,
-    android: &AndroidConfig,
-    tools: &ToolsConfig,
-) -> Result<()> {
-    const RUST_TARGETS: &[(&str, &str)] = &[
-        ("aarch64-linux-android", "arm64-v8a"),
-        ("x86_64-linux-android", "x86_64"),
-    ];
+/// Rust targets the device build compiles, each with its Android ABI name.
+const RUST_TARGETS: &[(&str, &str)] = &[
+    ("aarch64-linux-android", "arm64-v8a"),
+    ("x86_64-linux-android", "x86_64"),
+];
 
+/// Features the FFI crate is compiled with on-device. Defaults stay off so
+/// `symphonia` is absent: `MediaCodec` is the sole decoder there.
+const fn device_features(profile: BuildProfile) -> &'static str {
+    match profile {
+        BuildProfile::Release => "uniffi,android,stretch-signalsmith",
+        BuildProfile::Debug => "uniffi,android,dev,test,stretch-signalsmith",
+    }
+}
+
+fn check_ndk_toolchain(tools: &ToolsConfig) -> Result<()> {
     check_tool(
         "cargo",
         &["ndk", "--help"],
@@ -205,6 +214,66 @@ pub(crate) fn run_build(
             bail!("Rust target '{target}' is not installed. Run: rustup target add {target}");
         }
     }
+    Ok(())
+}
+
+/// `cargo ndk` primed for every device ABI. Native build scripts read the NDK
+/// out of the environment.
+fn cargo_ndk(api_level: &str) -> Result<Command> {
+    let mut cmd = Command::new("cargo");
+    cmd.env("ANDROID_NDK_HOME", ndk_root()?);
+    cmd.arg("ndk").arg("-P").arg(api_level);
+    for (_, abi) in RUST_TARGETS {
+        cmd.args(["-t", abi]);
+    }
+    Ok(cmd)
+}
+
+/// Clippy over the Android backends. The host lint chain compiles for the
+/// host, where every `target_os = "android"` item is configured out and unseen.
+fn run_clippy(root: &Path, android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
+    // Crates carrying `target_os = "android"` code that build outside the
+    // full device graph, in the feature set the device build resolves.
+    const CLIPPY_PACKAGES: &[&str] = &["kithara-decode", "kithara-audio"];
+    const CLIPPY_FEATURES: &[&str] = &["android", "client-wreq", "resample-rubato"];
+
+    check_ndk_toolchain(tools)?;
+    let api_level = require_android_str(&android.api_level, "api_level")?;
+
+    println!("==> Linting the Android backends");
+
+    let features = CLIPPY_PACKAGES
+        .iter()
+        .flat_map(|package| {
+            CLIPPY_FEATURES
+                .iter()
+                .map(move |feature| format!("{package}/{feature}"))
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let mut cmd = cargo_ndk(api_level)?;
+    cmd.arg("clippy");
+    for package in CLIPPY_PACKAGES {
+        cmd.args(["-p", package]);
+    }
+    cmd.args(["--no-default-features", "--features", &features]);
+    cmd.args(["--", "-D", "warnings"]);
+    cmd.current_dir(root);
+
+    let status = cmd.status().context("failed to run cargo ndk clippy")?;
+    if !status.success() {
+        bail!("cargo ndk clippy failed");
+    }
+    Ok(())
+}
+
+pub(crate) fn run_build(
+    profile: BuildProfile,
+    android: &AndroidConfig,
+    tools: &ToolsConfig,
+) -> Result<()> {
+    check_ndk_toolchain(tools)?;
 
     let metadata = MetadataCommand::new()
         .exec()
@@ -221,36 +290,15 @@ pub(crate) fn run_build(
 
     println!("==> Building Android shared libraries");
 
-    let ndk_targets: Vec<&str> = RUST_TARGETS
-        .iter()
-        .flat_map(|(_, abi)| ["-t", abi])
-        .collect();
-
-    let features: &str = if matches!(profile, BuildProfile::Release) {
-        "uniffi,android,stretch-signalsmith"
-    } else {
-        "uniffi,android,dev,test,stretch-signalsmith"
-    };
-
-    let mut cmd = Command::new("cargo");
-    // Native build scripts read the NDK out of the environment.
-    cmd.env("ANDROID_NDK_HOME", ndk_root()?);
-    cmd.arg("ndk")
-        .arg("-P")
-        .arg(api_level)
-        .args(&ndk_targets)
-        .arg("-o")
-        .arg(&jni_dir)
-        // Device build: drop default features so `symphonia` is absent —
-        // the Android MediaCodec backend is the sole decoder on-device.
-        .args([
-            "build",
-            "-p",
-            ffi_crate,
-            "--no-default-features",
-            "--features",
-            features,
-        ]);
+    let mut cmd = cargo_ndk(api_level)?;
+    cmd.arg("-o").arg(&jni_dir).args([
+        "build",
+        "-p",
+        ffi_crate,
+        "--no-default-features",
+        "--features",
+        device_features(profile),
+    ]);
 
     if matches!(profile, BuildProfile::Release) {
         // `uniffi-bindgen --library` reads the interface out of the static

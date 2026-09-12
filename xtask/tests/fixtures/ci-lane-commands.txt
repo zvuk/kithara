@@ -1,34 +1,42 @@
 # android-build / branch
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / platforms
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / merge-request
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / quarantine
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / main
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / nightly
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / weekly
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-build / release
   <require os> macos
   <require tools> cargo java just sccache
+  just platform android clippy
   just platform android build
 # android-test / branch
   <require os> macos

@@ -83,8 +83,7 @@ impl Demuxer for AndroidMediaExtractorDemuxer {
 
         let pts = u64::try_from(pts_us)
             .ok()
-            .map(Duration::from_micros)
-            .unwrap_or(Duration::ZERO);
+            .map_or(Duration::ZERO, Duration::from_micros);
         let frame = Frame {
             pts,
             data: &self.read_buf[..n],

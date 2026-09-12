@@ -2245,6 +2245,11 @@ steps = [
   { args = [
     "platform",
     "android",
+    "clippy",
+  ], label = "Android device Clippy" },
+  { args = [
+    "platform",
+    "android",
     "build",
   ], label = "Android native build" },
 ]
