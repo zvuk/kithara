@@ -105,6 +105,7 @@ tests/fuzz/coverage
 
 # Android / Gradle
 android/.gradle/
+android/**/.gradle/
 android/**/build/
 android/local.properties
 
