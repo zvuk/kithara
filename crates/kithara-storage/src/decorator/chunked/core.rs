@@ -1,12 +1,16 @@
 #![forbid(unsafe_code)]
 
+#[cfg(target_arch = "wasm32")]
+use std::fs::TryLockError;
 use std::{
-    fs::{self, File, OpenOptions, TryLockError},
+    fs::{self, File, OpenOptions},
     ops::Range,
     path::{Path, PathBuf},
 };
 
 use arc_swap::ArcSwap;
+#[cfg(not(target_arch = "wasm32"))]
+use fs4::{FileExt, TryLockError};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -33,6 +37,10 @@ pub(super) fn make_tmp_path(canonical: &Path) -> Option<PathBuf> {
 /// including when the owning process dies. That is what separates a live
 /// sibling writer from an orphan a `kill -9` left behind; the file's mere
 /// existence cannot.
+///
+/// `fs4` supplies the lock: its `flock` reaches every non-wasm target, and
+/// its `EWOULDBLOCK`/`EAGAIN` mapping is the `WouldBlock` the claim protocol
+/// reads as "a live writer holds it".
 struct TmpClaim {
     file: File,
     path: PathBuf,
@@ -60,7 +68,7 @@ impl TmpClaim {
             .create(true)
             .truncate(false)
             .open(&path)?;
-        match file.try_lock() {
+        match Self::try_claim(&file) {
             Ok(()) => {
                 file.set_len(0)?;
                 Ok(Self { file, path })
@@ -68,6 +76,18 @@ impl TmpClaim {
             Err(TryLockError::WouldBlock) => Err(StorageError::TmpClaimed(path)),
             Err(TryLockError::Error(e)) => Err(StorageError::Io(e)),
         }
+    }
+
+    /// The exclusive, non-blocking `flock` the claim is made of.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn try_claim(file: &File) -> Result<(), TryLockError> {
+        FileExt::try_lock(file)
+    }
+
+    /// The exclusive, non-blocking `flock` the claim is made of.
+    #[cfg(target_arch = "wasm32")]
+    fn try_claim(file: &File) -> Result<(), TryLockError> {
+        file.try_lock()
     }
 }
 

@@ -18,6 +18,8 @@
 //! `kithara-abr/src/state/tests.rs` so the crate no longer needs to
 //! publish a `test_variants_3` helper.
 
+use kithara_test_dylib as _;
+
 mod bandwidth_scenarios_golden;
 mod common;
 mod multi_track_contention;

@@ -5,6 +5,7 @@
 )]
 
 pub use kithara_integration_tests::bufpool_ext;
+use kithara_test_dylib as _;
 
 #[path = "live_remote_network.rs"]
 mod live_remote_network;

@@ -6,6 +6,8 @@
 
 //! Integration tests for kithara-net
 
+use kithara_test_dylib as _;
+
 mod http_client;
 mod retry;
 mod timeout;

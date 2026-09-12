@@ -91,7 +91,10 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
 #[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case(StretchKind::Bungee)
 )]
 async fn non_unity_route_change_resumes_ahead_of_the_consumer(

@@ -6,6 +6,7 @@
 )]
 
 pub use kithara_integration_tests::bufpool_ext;
+use kithara_test_dylib as _;
 
 #[path = "no_sync_real_media.rs"]
 mod no_sync_real_media;

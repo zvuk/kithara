@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   android:
-    name: Instrumented tests on an emulator
+    name: Android baseline on an emulator
     # Set only where a runner with an emulator is attached, so a copy of this
     # repository without one never starts the job.
     # See .github/workflows/ci.yml.
@@ -29,5 +29,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Run the instrumented tests
-        run: just platform android test
+      - name: Run instrumentation and Rust tests
+        run: just ci lane android-test --kind platforms
+
+      - name: Upload test results and run evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-baseline
+          path: |
+            target/android-test/
+            !target/android-test/**/native/*.tar
+            !target/android-test/**/native/jniLibs/**
+            !target/android-test/**/native/apk/**

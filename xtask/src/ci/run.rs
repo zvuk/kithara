@@ -597,6 +597,63 @@ mod tests {
     }
 
     #[test]
+    fn android_baseline_builds_fresh_without_requiring_sdk_tools_on_path() {
+        let (outcome, steps) = resolve("android-test", PipelineKind::Platforms);
+        outcome.unwrap();
+        assert_eq!(
+            steps
+                .iter()
+                .map(|(program, args, _)| (program.as_str(), args.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("<require os>", vec!["macos".to_owned()]),
+                (
+                    "<require tools>",
+                    [
+                        "cargo",
+                        "curl",
+                        "ffmpeg",
+                        "java",
+                        "just",
+                        "make",
+                        "pkg-config",
+                        "tar"
+                    ]
+                    .map(str::to_owned)
+                    .to_vec()
+                ),
+                (
+                    "just",
+                    vec![
+                        "platform".to_owned(),
+                        "android".to_owned(),
+                        "test".to_owned(),
+                        "--avd".to_owned(),
+                        fixture().pins.android_avd
+                    ]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn both_ci_executors_select_the_android_baseline_lane() {
+        let github = fs::read_to_string(repo().join(".github/workflows/android.yml")).unwrap();
+        let gitlab = fs::read_to_string(repo().join(".gitlab/ci/android.yml")).unwrap();
+        assert!(github.contains("run: just ci lane android-test --kind platforms"));
+        assert!(gitlab.contains("- just ci run android-test"));
+        assert!(gitlab.contains("- .ci-artifacts/junit/android-test.xml"));
+        let config = KitharaExt::load(repo()).unwrap();
+        assert!(
+            config
+                .android
+                .baseline_tests
+                .iter()
+                .any(|name| name == "com.kithara.OfflineCaptureTest#rendersCleanWav")
+        );
+    }
+
+    #[test]
     fn reviewed_pipelines_run_the_explicit_flash_and_no_block_gate() {
         for kind in [
             PipelineKind::MergeRequest,

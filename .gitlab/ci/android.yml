@@ -9,8 +9,6 @@ android:build:
   needs: []
   script:
     - just ci run android-build
-  # The suite consumes these rather than building both ABIs again while it
-  # holds the emulator and the measured group.
   artifacts:
     expire_in: 1 day
     paths:
@@ -28,9 +26,7 @@ android:test:
     - !reference [.rules-integration, rules]
   stage: android
   timeout: 90 minutes
-  needs:
-    - job: android:build
-      artifacts: true
+  needs: []
   script:
     - just ci run android-test
   artifacts:
@@ -38,8 +34,11 @@ android:test:
     expire_in: 30 days
     reports:
       junit:
-        - android/lib/build/outputs/androidTest-results/connected/**/*.xml
+        - .ci-artifacts/junit/android-test.xml
     paths:
-      - android/lib/build/reports/androidTests/
-      - android/lib/build/outputs/androidTest-results/
+      - target/android-test/
       - .ci-artifacts/junit/
+    exclude:
+      - target/android-test/**/native/*.tar
+      - target/android-test/**/native/jniLibs/**/*
+      - target/android-test/**/native/apk/**/*

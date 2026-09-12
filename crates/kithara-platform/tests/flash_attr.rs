@@ -17,6 +17,8 @@ use kithara_platform::{
     sync::Arc,
     time::{self, Duration},
 };
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_utils::kithara;
 
 #[kithara_test_macros::flash(true)]

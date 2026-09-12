@@ -1,0 +1,42 @@
+
+running 20 tests
+test aac_tests::encode_packaged_aac_happy_path_emits_monotonic_access_units ... [aac @ 0xb40000797417d7a0] Qavg: 339.710
+ok
+test aac_tests::encode_packaged_aac_reuses_injected_pools_he ... ok
+test aac_tests::encode_packaged_aac_reuses_injected_pools_lc ... [aac @ 0xb4000079741481c0] Qavg: 339.710
+[aac @ 0xb4000079741481c0] Qavg: 339.710
+ok
+test bytes_tests::encode_bytes_happy_paths_return_expected_metadata_and_container_markers ... [aac @ 0xb40000797417d7a0] Qavg: 339.710
+[aac @ 0xb40000797417d7a0] Qavg: 339.710
+[alac @ 0xb40000797417d7a0] encoding as 24 bits-per-sample
+ok
+test bytes_tests::encode_bytes_honors_explicit_bit_rate_across_lossy_range ... [aac @ 0xb40000797408b700] Qavg: 620.801
+[aac @ 0xb40000797408b700] Qavg: 2701.974
+[aac @ 0xb40000797408b700] Qavg: 20130.834
+[aac @ 0xb40000797408b700] Qavg: 26365.740
+[aac @ 0xb40000797408b700] Qavg: 59228.188
+[aac @ 0xb40000797408b700] Qavg: 620.801
+[aac @ 0xb40000797408b700] Qavg: 2701.974
+[aac @ 0xb40000797408b700] Qavg: 20130.834
+[aac @ 0xb40000797408b700] Qavg: 26365.740
+[aac @ 0xb40000797408b700] Qavg: 59228.188
+ok
+test error_tests::backend_message_wraps_any_string ... ok
+test error_tests::error_display_mentions_codec ... ok
+test error_tests::error_display_mentions_container ... ok
+test factory_tests::frame_samples_match_runtime_contract_aac ... ok
+test factory_tests::frame_samples_match_runtime_contract_flac ... ok
+test factory_tests::frame_samples_reject_unknown_packaged_codec ... ok
+test flac_tests::encode_packaged_flac_happy_path_emits_monotonic_access_units ... ok
+test flac_tests::normalize_flac_codec_config_accepts_mp4_metadata_block ... ok
+test stream_tests::pushed_f32_sine_survives_encode_mux_and_decode ... [aac @ 0xb40000797417c210] Qavg: 336.380
+ok
+test types_tests::bytes_target_defaults_match_route_contract_aac ... ok
+test types_tests::bytes_target_defaults_match_route_contract_alac ... ok
+test types_tests::bytes_target_defaults_match_route_contract_flac ... ok
+test types_tests::bytes_target_defaults_match_route_contract_m4a ... ok
+test types_tests::bytes_target_defaults_match_route_contract_mp3 ... ok
+test types_tests::bytes_target_maps_to_expected_media_info ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+

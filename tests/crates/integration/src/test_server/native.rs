@@ -15,7 +15,7 @@ use crate::{
     fixture_protocol::DelayRule,
     hls_url::HlsSpec,
     http_server::TestHttpServer,
-    routes::{assets, behavior, control, signal, stream},
+    routes::{assets, behavior, control, signal, store, stream},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
     test_server_state::{DelayGate, FixtureBehavior, InitGate, SegmentGate, TestServerState},
 };
@@ -352,6 +352,12 @@ async fn health() -> &'static str {
     "ok"
 }
 
+/// First stdout line of the standalone server, followed by the base URL it
+/// bound. The harness that spawns the process reads the address from here, so
+/// the wording is a contract with `xtask`: `TEST_SERVER_PORT=0` asks the OS for
+/// a port, and this line is the only place the answer is published.
+const STARTUP_RECORD: &str = "test server listening on";
+
 /// Start the server as a standalone process (used by the `test_server` binary).
 pub async fn run_test_server() {
     let port: u16 = env::var("TEST_SERVER_PORT")
@@ -359,8 +365,11 @@ pub async fn run_test_server() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(3444);
     let state = TestServerState::new();
-    let mut server = TestHttpServer::bind(&format!("127.0.0.1:{port}"), router(state)).await;
-    println!("test server listening on {}", server.base_url());
+    let routes = router(state);
+    #[cfg(not(target_os = "android"))]
+    let routes = routes.merge(crate::pcm_oracle::router());
+    let mut server = TestHttpServer::bind(&format!("127.0.0.1:{port}"), routes).await;
+    println!("{STARTUP_RECORD} {}", server.base_url());
     server.completion().await;
 }
 
@@ -370,6 +379,7 @@ pub(crate) fn router(state: Arc<TestServerState>) -> Router {
         .merge(assets::router())
         .merge(behavior::router())
         .merge(signal::router())
+        .merge(store::router())
         .merge(stream::router())
         .merge(crate::routes::token::router())
         .merge(control::router())

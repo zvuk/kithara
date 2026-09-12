@@ -34,6 +34,9 @@ kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 futures = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+kithara-test-dylib = { workspace = true }
+
 [lints]
 workspace = true
 

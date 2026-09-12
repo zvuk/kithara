@@ -3,12 +3,15 @@
 //! `CancelGroup` is not yet exported from the crate root (its root re-export
 //! switches off the legacy in 3.3), so its tests live in `src/common/cancel/
 //! group.rs` `#[cfg(test)]`.
+
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
 
 use kithara_platform::{CancelToken, sync::Arc};
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_utils::kithara;
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]

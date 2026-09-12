@@ -27,6 +27,7 @@ kithara = { workspace = true, default-features = false, features = [
     "tokio-net",
 ] }
 
+kithara-test-dylib = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 serial_test = { workspace = true }
 

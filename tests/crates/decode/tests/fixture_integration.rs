@@ -1,4 +1,4 @@
-use std::{fs, io::Cursor, process::Command};
+use std::io::Cursor;
 
 use kithara::{
     decode::{DecoderBackend, DecoderConfig, DecoderFactory},
@@ -349,7 +349,9 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
         mp4_bytes.extend_from_slice(&segment);
     }
 
-    let samples = decode_fragment_with_ffmpeg(&mp4_bytes, &format!("packaged {label}"));
+    let samples = kithara_integration_tests::pcm_oracle::decode(&mp4_bytes)
+        .await
+        .unwrap_or_else(|error| panic!("packaged {label}: {error:#}"));
     assert_valid_pcm_samples(&samples, &format!("packaged {label} decoded PCM"));
 
     assert!(
@@ -543,47 +545,6 @@ fn assert_valid_pcm_samples(samples: &[f32], context: &str) {
         samples.iter().any(|sample| sample.abs() > 0.01),
         "{context}: decoded PCM unexpectedly looks silent"
     );
-}
-
-fn decode_fragment_with_ffmpeg(bytes: &[u8], context: &str) -> Vec<f32> {
-    let temp_dir = tempfile::tempdir().expect("create temp dir for ffmpeg decode");
-    let input_path = temp_dir.path().join("fragment.m4a");
-    fs::write(&input_path, bytes).unwrap_or_else(|error| {
-        panic!("{context}: write temporary MP4 fragment failed: {error}");
-    });
-
-    let output = Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            input_path.to_str().expect("temp path utf-8"),
-            "-f",
-            "f32le",
-            "-acodec",
-            "pcm_f32le",
-            "-",
-        ])
-        .output()
-        .unwrap_or_else(|error| panic!("{context}: launching ffmpeg failed: {error}"));
-
-    assert!(
-        output.status.success(),
-        "{context}: ffmpeg decode failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        output.stdout.len() % 4,
-        0,
-        "{context}: ffmpeg returned a non-f32le byte stream"
-    );
-
-    output
-        .stdout
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
 }
 
 fn contains_direction_window(samples: &[f32], channels: usize, expected: SignalDirection) -> bool {

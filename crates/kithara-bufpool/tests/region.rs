@@ -5,6 +5,8 @@ use kithara_bufpool::{
     VecKey, pool_schema, testing::TestPools,
 };
 use kithara_platform::sync::Arc;
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_utils::kithara;
 
 fn config(max_buffers: usize) -> PoolConfig {

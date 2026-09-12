@@ -815,7 +815,10 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case(StretchKind::Bungee)
 )]
 async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
@@ -828,7 +831,10 @@ async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case(StretchKind::Bungee)
 )]
 async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(
@@ -843,7 +849,10 @@ async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(60)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case(StretchKind::Bungee)
 )]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
@@ -857,7 +866,10 @@ async fn record_no_sync_unity_playback_artifacts(
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(60)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case(StretchKind::Bungee)
 )]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]

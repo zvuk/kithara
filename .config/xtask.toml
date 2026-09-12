@@ -2252,26 +2252,13 @@ role = "platforms"
 kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 45
 
-# The emulator, the connected suite, and the shutdown are one job: the tests
-# only mean anything while the device this job booted is still alive, and a
-# device left running would poison the next Android job on the host. The
-# emulator runs wherever the machine's own architecture matches the guest's, so
-# the lane pins tools rather than a platform.
-#
-# The libraries and the bindings come from the job that builds them, and Gradle
-# is told to skip generating them: a job that arrives without them builds an
-# archive with no library in it and fails on the device with
-# `UnsatisfiedLinkError`, minutes after the emulator came up.
+# CI and prepared local runners execute the same complete baseline. The test
+# command builds the JNI libraries before it acquires an emulator.
 [ext.ci.lanes.android-test]
 cache_group = "host"
 label = "Android"
 os = "macos"
-tools = ["adb", "cargo", "emulator", "java", "just", "sccache"]
-left_behind_by = "Android build"
-left_behind = [
-  "android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so",
-  "android/lib/build/generated/uniffi/kotlin",
-]
+tools = ["cargo", "curl", "ffmpeg", "java", "just", "make", "pkg-config", "tar"]
 program = "just"
 steps = [
   { args = [
@@ -2280,8 +2267,7 @@ steps = [
     "test",
     "--avd",
     "{pin.android_avd}",
-    "--skip-build",
-  ], label = "Android connected tests" },
+  ], label = "Android baseline tests" },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]
@@ -2621,6 +2607,39 @@ steps = ["nightly_retained"]
 exclude_packages = []
 
 [ext.android]
+baseline_tests = [
+  "com.kithara.AudioFormatProbeTest#defaultOutputFormatIsF32",
+  "com.kithara.HermeticEnqueueTest#aMissingServerUrlFailsSetup",
+  "com.kithara.HermeticEnqueueTest#everyFixtureKindReachesLoaded",
+  "com.kithara.HermeticEnqueueTest#singleEncryptedHlsReachesLoaded",
+  "com.kithara.HermeticEnqueueTest#singleHlsReachesLoaded",
+  "com.kithara.HermeticEnqueueTest#singleMp3ReachesLoaded",
+  "com.kithara.HermeticPlaybackTest#positionAdvancesOnALocalMp3",
+  "com.kithara.KitharaInitTest#initializePublishesOneDefaultStore",
+  "com.kithara.KitharaInitTest#multiplePlayersCanBeCreated",
+  "com.kithara.KitharaInitTest#nativeRegistryAndStoreCanCreatePlayer",
+  "com.kithara.KitharaInitTest#queryIdentityLayoutRegistersForFileAndHls",
+  "com.kithara.KitharaPlayerItemTest#audioIdMatchesId",
+  "com.kithara.KitharaPlayerItemTest#eachItemGetsUniqueId",
+  "com.kithara.KitharaPlayerItemTest#initSetsIdAndUrl",
+  "com.kithara.KitharaPlayerItemTest#initialDurationIsNull",
+  "com.kithara.KitharaPlayerItemTest#initialLoadedRangesAreEmpty",
+  "com.kithara.KitharaPlayerItemTest#initialStatusIsUnknown",
+  "com.kithara.KitharaPlayerItemTest#isLiveStreamFromConfig",
+  "com.kithara.KitharaPlayerItemTest#isPlayableLiveAlwaysTrue",
+  "com.kithara.KitharaPlayerItemTest#isPlayableWithRanges",
+  "com.kithara.KitharaPlayerItemTest#preferredBitrateComesFromConstruction",
+  "com.kithara.KitharaPlayerItemTest#preferredBitrateDefaultsToZero",
+  "com.kithara.KitharaPlayerItemTest#uuidIsStableForSameItem",
+  "com.kithara.KitharaPlayerTest#crossfadeDurationRoundTrips",
+  "com.kithara.KitharaPlayerTest#initCreatesPlayerWithUnknownStatus",
+  "com.kithara.KitharaPlayerTest#itemsStartsEmpty",
+  "com.kithara.KitharaPlayerTest#playingRateIsOne",
+  "com.kithara.KitharaPlayerTest#removeAllItemsOnEmptyQueueDoesNotCrash",
+  "com.kithara.KitharaPlayerTest#removeUpdatesItemsSnapshot",
+  "com.kithara.OfflineCaptureTest#pcmOracleRejectsShortReadZeroPadding",
+  "com.kithara.OfflineCaptureTest#rendersCleanWav",
+]
 # Cargo package compiled into the Android JNI libraries.
 ffi_crate = "kithara-ffi"
 # AAR artifacts the Gradle export is expected to produce.

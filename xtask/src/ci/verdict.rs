@@ -265,6 +265,7 @@ pub(crate) fn produced_report(lane: &str) -> Option<&'static str> {
         | "linux-test-simulated-clock"
         | "windows-arm64"
         | "windows-x64" => Some("target/nextest/ci/junit.xml"),
+        "android-test" => Some("target/android-test/junit.xml"),
         "apple-ios-test" => Some("target/xcresult/ios-test.junit.xml"),
         "apple-swift-test" => Some("target/xcresult/swift-test.junit.xml"),
         _ => None,

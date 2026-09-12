@@ -34,6 +34,7 @@ kithara = { workspace = true, features = [
     "stream",
 ] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }

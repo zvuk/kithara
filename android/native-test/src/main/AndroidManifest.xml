@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:label="Kithara native tests" android:usesCleartextTraffic="true" />
+    <instrumentation
+        android:name="com.kithara.nativetest.NativeInstrumentation"
+        android:targetPackage="com.kithara.nativetest" />
+</manifest>

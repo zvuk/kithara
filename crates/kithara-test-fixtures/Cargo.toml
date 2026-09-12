@@ -27,9 +27,7 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# `PcmSource` and `EncodedTrack`. The crate refuses to build with no backend,
-# and `ffmpeg` is the one the build script already pulls in, so this adds no
-# compilation.
+# Runtime fixture producers use the same FFmpeg backend as build-time generation.
 kithara-encode = { workspace = true, default-features = false, features = ["client-reqwest", "ffmpeg", "tls-rustls"] }
 # `AudioCodec` for the fMP4 sample entries.
 kithara-stream = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
@@ -37,6 +35,8 @@ kithara-stream = { workspace = true, default-features = false, features = ["clie
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 delegate = { workspace = true }
+fs4 = { workspace = true }
+serde_json = { workspace = true }
 
 [build-dependencies]
 kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn-small", "client-reqwest", "symphonia", "tls-rustls"] }
@@ -60,6 +60,7 @@ cbc = { workspace = true }
 cochlea-render = { workspace = true }
 cochlea-score = { workspace = true }
 delegate = { workspace = true }
+fs4 = { workspace = true }
 futures-lite = { workspace = true }
 hex = { workspace = true }
 hls_m3u8 = { workspace = true }
@@ -88,6 +89,9 @@ tempfile = { workspace = true }
 tiny_http = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true

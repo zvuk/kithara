@@ -366,10 +366,34 @@ pub(crate) fn nextest_lane_command(
     nextest_lane_command_for(project, toggles, backend, extra, NextestAction::Run)
 }
 
+/// Operation on the same configured nextest selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NextestAction {
+pub enum NextestAction {
     Run,
     List,
+}
+
+/// Build the default suite command for a platform adapter.
+///
+/// # Errors
+/// Returns an error when the configured suite or backend is invalid.
+pub fn default_nextest_command(
+    project: &ProjectConfig,
+    extra: &[String],
+    action: NextestAction,
+) -> Result<Command> {
+    let test = &project.test;
+    let lane = test
+        .lanes
+        .get(&test.default_lane)
+        .context("default test lane is not configured")?;
+    let toggles = LaneToggles {
+        flash: lane.default_flash.unwrap_or(test.flash.default),
+        no_block: lane.default_no_block.unwrap_or(test.no_block.default),
+    };
+    let (_, command) =
+        nextest_lane_command_for(project, toggles, &test.default_backend, extra, action)?;
+    Ok(command)
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

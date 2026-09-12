@@ -1,6 +1,10 @@
 //! One non-generic `AssetStore` serves both `ctx = None` (file passthrough) and
 //! `ctx = Some(ProcessCtx)` (per-acquire processing): covers chunk chaining and
 //! per-acquire application of the processor.
+
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+
 mod support;
 
 use std::{

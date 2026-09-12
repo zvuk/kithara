@@ -20,8 +20,9 @@ flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["assets", "audio", "bufpool", "decode", "file", "platform", "play", "probe", "record", "resample-rubato", "resampler", "signal", "stream", "stretch-bungee", "stretch-signalsmith", "symphonia", "test-utils", "warp"] }
+kithara = { workspace = true, default-features = false, features = ["assets", "audio", "bufpool", "decode", "file", "platform", "play", "probe", "record", "resample-rubato", "resampler", "signal", "stream", "stretch-signalsmith", "symphonia", "test-utils", "warp"] }
 kithara-integration-tests = { workspace = true, default-features = false, features = ["audio"] }
+kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
@@ -30,6 +31,12 @@ num-traits = { workspace = true }
 serde = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+
+# `bungee-sys` fails through `cmake`/MSVC and its build script refuses Android
+# by target triple. Android stretches through Signalsmith, the backend
+# `kithara-ffi`'s `android` feature selects.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
+kithara = { workspace = true, default-features = false, features = ["stretch-bungee"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 kithara = { workspace = true, features = ["apple", "client-wreq"] }

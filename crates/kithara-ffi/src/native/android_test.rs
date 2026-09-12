@@ -3,6 +3,7 @@
 use std::{
     fs::File,
     io::{Seek, SeekFrom, Write},
+    num::NonZeroU32,
     path::PathBuf,
 };
 
@@ -13,23 +14,25 @@ use jni::{
 };
 use kithara::{
     assets::StorageBackend,
-    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
-    file::{File as FileSource, FileConfig, FileSrc},
-    platform::{
-        CancelToken,
-        time::{Duration, Instant, sleep},
-        tokio::runtime::Builder,
+    events::TrackId,
+    host::HostConfig,
+    output::{
+        OfflineRenderError, OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError,
     },
-    play::PlayWorkerConfig,
+    platform::{
+        CancelScope,
+        tokio::runtime::{Builder, Runtime},
+    },
+    play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceSrc},
+    signal::AudioSpec,
 };
 use tracing::{error, info};
 
-use crate::pools::{FfiPools, FfiStore, FfiWorker, build as build_pools};
+use crate::pools::{FfiHost, FfiResourceConfig, FfiStore, FfiWorker, build as build_pools};
 
 struct Consts;
 impl Consts {
     const BITS_PER_SAMPLE: u16 = 32;
-    const BLOCK_FRAMES: usize = 512;
     const CHANNELS: u16 = 2;
     const FMT_ERR_DEFAULT_CFG: jlong = -2;
     const FMT_ERR_NO_DEVICE: jlong = -1;
@@ -54,15 +57,17 @@ impl Consts {
     const RC_OUTPUT_WRITE: jlong = 5;
     const RC_RUNTIME_BUILD: jlong = 2;
     const RC_STRING_READ: jlong = 1;
-    const SAMPLE_RATE: u32 = 44_100;
+    const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+        Some(rate) => rate,
+        None => unreachable!(),
+    };
     const WAV_FMT_CHUNK_SIZE: u32 = 16;
     const WAV_FORMAT_IEEE_FLOAT: u16 = 3;
     const WAV_HEADER_BYTES: u32 = 36;
 }
 
-/// Render `seconds` of audio from `inputPath` through the offline backend
-/// and write the interleaved stereo f32 stream to `outputPath` as WAV.
-/// Returns `0` on success; non-zero error codes mirror the `RC_*` constants.
+/// Render through an independent offline Host into a stereo float WAV.
+/// Returns zero on success or a `RC_*` error code.
 #[expect(unreachable_pub, reason = "JNI entrypoint must remain exported")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_kithara_Kithara_nativeRunOfflineCapture<'local>(
@@ -107,15 +112,23 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeRunOfflineCapture<'local>(
         }
     };
 
-    let clamped_seconds = usize::try_from(seconds.max(1)).unwrap_or(1);
-    runtime.block_on(run_capture(
+    match run_capture(
+        &runtime,
         PathBuf::from(input_path),
         PathBuf::from(output_path),
-        clamped_seconds,
-    ))
+        seconds.max(1).unsigned_abs(),
+    ) {
+        Ok(()) => Consts::RC_OK,
+        Err(code) => code,
+    }
 }
 
-async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
+fn run_capture(
+    runtime: &Runtime,
+    input: PathBuf,
+    output: PathBuf,
+    seconds: u32,
+) -> Result<(), jlong> {
     info!(
         input = %input.display(),
         output = %output.display(),
@@ -123,114 +136,141 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         "offline capture: start"
     );
 
-    let pools = match build_pools() {
-        Ok(pools) => pools,
-        Err(err) => {
-            error!(?err, "buffer-pool initialization failed");
-            return Consts::RC_AUDIO_BUILD;
-        }
-    };
+    let pools = build_pools().map_err(|err| {
+        error!(?err, "buffer-pool initialization failed");
+        Consts::RC_AUDIO_BUILD
+    })?;
     let store = FfiStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .build();
-    let file_cfg = FileConfig::for_src(FileSrc::Local(input))
-        .store(store)
-        .pools(pools.clone())
-        .build();
-    let worker = FfiWorker::new(
-        PlayWorkerConfig::builder(pools)
-            .cancel(CancelToken::never())
+    let worker = FfiWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let mut host = FfiHost::new(
+        HostConfig::offline(pools)
+            .sample_rate(Consts::SAMPLE_RATE)
+            .build(),
+    )
+    .map_err(|err| {
+        error!(?err, "offline Host initialization failed");
+        Consts::RC_AUDIO_BUILD
+    })?;
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(Consts::SAMPLE_RATE)
+            .worker(worker)
+            .block_on_underrun(true)
+            .crossfade_duration(0.0)
             .build(),
     );
-    let audio_cfg = AudioConfig::<FileSource<FfiPools>>::for_stream(file_cfg)
-        .hint("mp3".to_string())
-        .build();
+    let member = host.insert(player).map_err(|err| {
+        error!(?err, "offline player insertion failed");
+        Consts::RC_AUDIO_BUILD
+    })?;
+    let control = member.control();
+    let config: FfiResourceConfig = control
+        .prepare_config(
+            FfiResourceConfig::for_src(ResourceSrc::Path(input))
+                .store(store)
+                .build(),
+        )
+        .map_err(|err| {
+            error!(?err, "offline resource preparation failed");
+            Consts::RC_AUDIO_BUILD
+        })?;
+    let resource = runtime.block_on(async {
+        let mut resource = Resource::new(config).await.map_err(|err| {
+            error!(?err, "offline resource open failed");
+            Consts::RC_AUDIO_BUILD
+        })?;
+        resource.preload().await.map_err(|err| {
+            error!(?err, "offline resource preload failed");
+            Consts::RC_AUDIO_BUILD
+        })?;
+        Ok::<_, jlong>(resource)
+    })?;
+    control.insert(resource, TrackId::allocate(), None);
+    control.select_item(0, true).map_err(|err| {
+        error!(?err, "offline player selection failed");
+        Consts::RC_AUDIO_BUILD
+    })?;
 
-    let mut audio = match worker.open(audio_cfg).await {
-        Ok(a) => a,
-        Err(err) => {
-            error!(?err, "play worker failed to open audio");
-            return Consts::RC_AUDIO_BUILD;
-        }
-    };
-
-    if let Err(err) = audio.preload() {
-        error!(?err, "audio preload failed");
-        return Consts::RC_AUDIO_BUILD;
-    }
-
-    let mut file = match File::create(&output) {
-        Ok(f) => f,
-        Err(err) => {
-            error!(?err, path = %output.display(), "output open failed");
-            return Consts::RC_OUTPUT_OPEN;
-        }
-    };
-
-    if let Err(err) = write_wav_header(&mut file, 0) {
+    let mut file = File::create(&output).map_err(|err| {
+        error!(?err, path = %output.display(), "output open failed");
+        Consts::RC_OUTPUT_OPEN
+    })?;
+    write_wav_header(&mut file, 0).map_err(|err| {
         error!(?err, "placeholder header write failed");
-        return Consts::RC_OUTPUT_WRITE;
-    }
-
-    let channels = usize::from(Consts::CHANNELS);
-    let target_frames = seconds.saturating_mul(Consts::SAMPLE_RATE as usize);
-    let block_budget = Duration::from_secs_f64(
-        f64::from(Consts::BLOCK_FRAMES as u32) / f64::from(Consts::SAMPLE_RATE),
-    );
-    let mut samples = vec![0.0f32; Consts::BLOCK_FRAMES * channels];
-    let mut byte_buf = Vec::with_capacity(samples.len() * 4);
-    let mut rendered_frames = 0usize;
-
-    while rendered_frames < target_frames {
-        let frames_wanted = (target_frames - rendered_frames).min(Consts::BLOCK_FRAMES);
-        let tick = Instant::now();
-        let outcome = audio.read(&mut samples[..frames_wanted * channels]);
-        let frames_written = match outcome {
-            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
-            Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(5)).await;
-                continue;
+        Consts::RC_OUTPUT_WRITE
+    })?;
+    let target_frames = u64::from(seconds) * u64::from(Consts::SAMPLE_RATE.get());
+    let request = OfflineRenderRequest::builder()
+        .spec(AudioSpec::new(Consts::CHANNELS, Consts::SAMPLE_RATE))
+        .frames(0..target_frames)
+        .build();
+    let cancel = CancelScope::new(None);
+    let mut sink = WavSink {
+        file,
+        bytes: Vec::new(),
+        samples: 0,
+    };
+    let report = host
+        .render(&request, &cancel.token(), &mut sink)
+        .map_err(|err| {
+            error!(?err, "offline Host render failed");
+            if matches!(err, OfflineRenderError::Sink { .. }) {
+                Consts::RC_OUTPUT_WRITE
+            } else {
+                Consts::RC_AUDIO_BUILD
             }
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(err) => {
-                error!(?err, "audio read failed");
-                return Consts::RC_AUDIO_BUILD;
-            }
-        };
-
-        let written_samples = frames_written * channels;
-        byte_buf.clear();
-        for sample in &samples[..written_samples] {
-            byte_buf.extend_from_slice(&sample.to_le_bytes());
-        }
-        if let Err(err) = file.write_all(&byte_buf) {
-            error!(?err, "sample write failed");
-            return Consts::RC_OUTPUT_WRITE;
-        }
-
-        rendered_frames += frames_written;
-        if let Some(remaining) = block_budget.checked_sub(tick.elapsed()) {
-            sleep(remaining).await;
-        }
+        })?;
+    if report.frames != target_frames
+        || sink.samples as u64 != target_frames * u64::from(Consts::CHANNELS)
+    {
+        error!(
+            frames = report.frames,
+            samples = sink.samples,
+            target_frames,
+            "incomplete offline render"
+        );
+        return Err(Consts::RC_AUDIO_BUILD);
     }
-
-    if let Err(err) = file.flush() {
-        error!(?err, "flush failed");
-        return Consts::RC_OUTPUT_WRITE;
-    }
-
-    let total_samples = rendered_frames.saturating_mul(channels);
-    if let Err(err) = write_wav_header(&mut file, total_samples) {
+    host.remove(&member).map_err(|err| {
+        error!(?err, "offline player removal failed");
+        Consts::RC_AUDIO_BUILD
+    })?;
+    sink.file.flush().map_err(|err| {
+        error!(?err, "output flush failed");
+        Consts::RC_OUTPUT_WRITE
+    })?;
+    write_wav_header(&mut sink.file, sink.samples).map_err(|err| {
         error!(?err, "header rewrite failed");
-        return Consts::RC_HEADER_REWRITE;
-    }
-
+        Consts::RC_HEADER_REWRITE
+    })?;
     info!(
-        frames = rendered_frames,
-        bytes = total_samples * (usize::from(Consts::BITS_PER_SAMPLE) / 8),
+        frames = report.frames,
+        samples = sink.samples,
         "offline capture: done"
     );
-    Consts::RC_OK
+    Ok(())
+}
+
+struct WavSink {
+    file: File,
+    bytes: Vec<u8>,
+    samples: usize,
+}
+
+impl RenderSink for WavSink {
+    fn write(&mut self, samples: &[f32]) -> Result<(), RenderSinkError> {
+        self.bytes.clear();
+        for sample in samples {
+            self.bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        self.file
+            .write_all(&self.bytes)
+            .map_err(RenderSinkError::new)?;
+        self.samples += samples.len();
+        Ok(())
+    }
 }
 
 /// Enumerate the cpal default host / output device and log every supported
@@ -325,6 +365,7 @@ fn write_wav_header(file: &mut File, total_samples: usize) -> std::io::Result<()
         .saturating_mul(bytes_per_sample);
     let riff_size = Consts::WAV_HEADER_BYTES.saturating_add(data_size);
     let byte_rate = Consts::SAMPLE_RATE
+        .get()
         .saturating_mul(channels)
         .saturating_mul(bytes_per_sample);
     let block_align = (Consts::CHANNELS * Consts::BITS_PER_SAMPLE) / 8;
@@ -338,7 +379,7 @@ fn write_wav_header(file: &mut File, total_samples: usize) -> std::io::Result<()
     file.write_all(&Consts::WAV_FMT_CHUNK_SIZE.to_le_bytes())?;
     file.write_all(&Consts::WAV_FORMAT_IEEE_FLOAT.to_le_bytes())?;
     file.write_all(&Consts::CHANNELS.to_le_bytes())?;
-    file.write_all(&Consts::SAMPLE_RATE.to_le_bytes())?;
+    file.write_all(&Consts::SAMPLE_RATE.get().to_le_bytes())?;
     file.write_all(&byte_rate.to_le_bytes())?;
     file.write_all(&block_align.to_le_bytes())?;
     file.write_all(&Consts::BITS_PER_SAMPLE.to_le_bytes())?;

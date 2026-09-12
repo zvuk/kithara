@@ -1,0 +1,175 @@
+//! Completeness checks for the Android instrumentation baseline.
+
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
+
+use anyhow::{Context, Result, bail};
+use kithara_devtools::junit::parse_junit;
+use roxmltree::Document;
+
+pub(super) fn require_baseline(expected: &[String]) -> Result<()> {
+    if expected.is_empty() {
+        bail!("ext.android.baseline_tests must name the required instrumentation cases");
+    }
+    let mut unique = BTreeSet::new();
+    for name in expected {
+        if !name
+            .split_once('#')
+            .is_some_and(|(class, method)| !class.trim().is_empty() && !method.trim().is_empty())
+        {
+            bail!("Android baseline case `{name}` must use class#method");
+        }
+        if !unique.insert(name) {
+            bail!("duplicate Android baseline case `{name}`");
+        }
+    }
+    Ok(())
+}
+
+/// Keep current-run `JUnit` even when the completeness check rejects its results.
+pub(super) fn collect(results: &Path, report: &Path, expected: &[String]) -> Result<Vec<String>> {
+    let pattern = format!(
+        "{}/**/*.xml",
+        glob::Pattern::escape(&results.to_string_lossy())
+    );
+    let mut files = glob::glob(&pattern)?.collect::<std::result::Result<Vec<_>, _>>()?;
+    files.sort();
+    if files.is_empty() {
+        bail!(
+            "Android instrumentation wrote no JUnit under {}",
+            results.display()
+        );
+    }
+    merge(&files, report)?;
+    validate(&fs::read_to_string(report)?, expected)
+}
+
+/// Preserve each runner's suites in one CI report.
+pub(super) fn merge(files: &[PathBuf], report: &Path) -> Result<()> {
+    let mut combined = String::from("<testsuites>\n");
+    for file in files {
+        let xml =
+            fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
+        let doc = Document::parse(&xml).with_context(|| format!("parsing {}", file.display()))?;
+        for suite in doc.descendants().filter(|node| {
+            node.has_tag_name("testsuite")
+                && !node
+                    .ancestors()
+                    .skip(1)
+                    .any(|parent| parent.has_tag_name("testsuite"))
+        }) {
+            combined.push_str(&xml[suite.range()]);
+            combined.push('\n');
+        }
+    }
+    combined.push_str("</testsuites>\n");
+    fs::write(report, &combined).with_context(|| format!("writing {}", report.display()))?;
+    Ok(())
+}
+
+fn validate(xml: &str, expected: &[String]) -> Result<Vec<String>> {
+    require_baseline(expected)?;
+    let doc = Document::parse(xml).context("parsing Android JUnit")?;
+    if doc.descendants().any(|node| node.has_tag_name("skipped")) {
+        bail!("Android instrumentation skipped a test");
+    }
+    let cases = parse_junit(xml)?;
+    if cases.is_empty() {
+        bail!("Android instrumentation ran no tests");
+    }
+    let mut actual = BTreeSet::new();
+    for case in cases {
+        let name = format!("{}#{}", case.suite, case.name);
+        if case.failing() {
+            bail!("Android instrumentation case `{name}` failed or passed only after retry");
+        }
+        if !actual.insert(name.clone()) {
+            bail!("Android instrumentation reported duplicate case `{name}`");
+        }
+    }
+    let missing: Vec<_> = expected
+        .iter()
+        .filter(|name| !actual.contains(*name))
+        .collect();
+    if !missing.is_empty() {
+        bail!("Android instrumentation missed baseline cases: {missing:?}");
+    }
+    Ok(actual.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RENDER: &str = "com.kithara.OfflineCaptureTest#rendersCleanWav";
+
+    fn report(body: &str) -> String {
+        format!("<testsuite>{body}</testsuite>")
+    }
+
+    fn render(outcome: &str) -> String {
+        format!(
+            "<testcase classname=\"com.kithara.OfflineCaptureTest\" name=\"rendersCleanWav\" time=\"1\">{outcome}</testcase>"
+        )
+    }
+
+    #[test]
+    fn baseline_requires_the_offline_renderer_to_run_and_pass() {
+        let expected = vec![RENDER.to_owned()];
+        assert_eq!(validate(&report(&render("")), &expected).unwrap(), expected);
+        for outcome in ["<skipped/>", "<failure/>", "<error/>", "<flakyFailure/>"] {
+            assert!(
+                validate(&report(&render(outcome)), &expected).is_err(),
+                "{outcome}"
+            );
+        }
+        assert!(validate(&report(""), &expected).is_err());
+        let unrelated =
+            "<testcase classname=\"com.kithara.PlayerTest\" name=\"createsPlayer\" time=\"1\"/>";
+        assert!(validate(&report(unrelated), &expected).is_err());
+        assert_eq!(
+            validate(&report(&(render("") + unrelated)), &expected)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn baseline_rejects_empty_configuration_and_duplicate_execution() {
+        assert!(require_baseline(&[]).is_err());
+        assert!(require_baseline(&[RENDER.to_owned(), RENDER.to_owned()]).is_err());
+        assert!(require_baseline(&["rendersCleanWav".to_owned()]).is_err());
+        assert!(validate(&report(&render("")), &[]).is_err());
+        assert!(validate(&report(&(render("") + &render(""))), &[RENDER.to_owned()]).is_err());
+    }
+
+    #[test]
+    fn collection_cannot_use_a_previous_runs_report() {
+        let root = tempfile::tempdir().unwrap();
+        let previous = root.path().join("previous");
+        let current = root.path().join("current");
+        fs::create_dir_all(&previous).unwrap();
+        fs::create_dir_all(&current).unwrap();
+        fs::write(previous.join("TEST.xml"), report(&render(""))).unwrap();
+        let output = root.path().join("junit.xml");
+        assert!(collect(&current, &output, &[RENDER.to_owned()]).is_err());
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn failed_current_results_are_preserved_for_the_ci_verdict() {
+        let root = tempfile::tempdir().unwrap();
+        let results = root.path().join("results");
+        fs::create_dir_all(&results).unwrap();
+        fs::write(results.join("TEST.xml"), report(&render("<failure/>"))).unwrap();
+        let output = root.path().join("junit.xml");
+        assert!(collect(&results, &output, &[RENDER.to_owned()]).is_err());
+        let cases = parse_junit(&fs::read_to_string(output).unwrap()).unwrap();
+        assert_eq!(cases.len(), 1);
+        assert!(cases[0].failed);
+    }
+}

@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use kithara_test_dylib as _;
+
 mod aac_tests;
 mod bytes_tests;
 mod error_tests;

@@ -2,6 +2,8 @@ use std::{sync::Barrier, thread};
 
 use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
 use kithara_platform::sync::Arc;
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_utils::kithara;
 
 pool_schema! {

@@ -2,6 +2,8 @@
 
 use hls_m3u8::{MasterPlaylist, MediaPlaylist, tags::VariantStream};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_fixtures::hls::{
     HlsBundle, gapless_drm, gapless_plain, long_drm, long_plain, rss_plain,
 };

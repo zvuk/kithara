@@ -1,26 +1,48 @@
+mod device;
+mod evidence;
+mod native;
+mod results;
+
 use std::{
-    env, fs,
+    collections::BTreeMap,
+    env,
+    ffi::OsString,
+    fs,
     path::{Path, PathBuf},
-    process::Command,
-    thread,
-    time::Duration,
+    process::{Command, ExitStatus},
 };
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
 use kithara_devtools::{
     Ctx,
-    common::tools::ToolsConfig,
+    common::{project::ProjectConfig, tools::ToolsConfig},
     util::{check_rust_target, check_tool},
 };
 
+use self::device::{Request, Reverse, Screen, Selected};
 use crate::{
-    BuildProfile,
+    BuildProfile, child,
+    ci::process::Process,
     config::{AndroidConfig, KitharaExt},
+    test_server::{Port, TestServer},
 };
 
 #[derive(Clone, Debug, clap::Subcommand)]
 pub(crate) enum AndroidCommand {
+    #[command(hide = true)]
+    NativeLink {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<OsString>,
+    },
+    #[command(hide = true)]
+    NativeRunner {
+        #[arg(long)]
+        session: PathBuf,
+        binary: PathBuf,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Build Android shared libraries and Kotlin bindings.
     Build {
         /// Build profile.
@@ -48,24 +70,59 @@ pub(crate) enum AndroidCommand {
         #[arg(long)]
         skip_build: bool,
     },
-    /// Boot an emulator (if needed) and run the instrumented tests on it.
+    /// Boot an emulator (if needed) and run the instrumented tests on it
+    /// against a hermetic fixture server this command owns.
     Test {
         /// Build profile for the underlying Rust JNI libs.
         #[arg(long, default_value_t = crate::BuildProfile::Debug)]
         profile: BuildProfile,
         /// AVD name to boot (must already exist in `avdmanager`).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "serial")]
         avd: Option<String>,
+        /// Serial of an already-online device to run on.
+        #[arg(long)]
+        serial: Option<String>,
         /// Skip the JNI/Kotlin rebuild (use the cached `android/lib/build`).
         #[arg(long)]
         skip_build: bool,
     },
 }
 
+/// Cargo and nextest invoke these from the crate they are building, where the
+/// repository root stays out of reach.
+pub(crate) fn run_native_shim(cmd: &AndroidCommand) -> Option<Result<()>> {
+    match cmd {
+        AndroidCommand::NativeLink { args } => Some(native::link(args)),
+        AndroidCommand::NativeRunner {
+            session,
+            binary,
+            args,
+        } => Some(run_native_binary(session, binary, args)),
+        _ => None,
+    }
+}
+
+fn run_native_binary(session: &Path, binary: &Path, args: &[String]) -> Result<()> {
+    let code = native::run_binary(session, binary, args)?;
+    if code != 0 {
+        return Err(kithara_devtools::verdict::ChildFailure::inherited(
+            "Android libtest".to_owned(),
+            Some(code),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     let tools = &ctx.config.tools;
     match cmd {
+        AndroidCommand::NativeLink { args } => native::link(&args),
+        AndroidCommand::NativeRunner {
+            session,
+            binary,
+            args,
+        } => run_native_binary(&session, &binary, &args),
         AndroidCommand::Build { profile } => run_build(profile, &ext.android, tools),
         AndroidCommand::Aar => run_aar(&ext.android, tools),
         AndroidCommand::Run {
@@ -84,8 +141,16 @@ pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
         AndroidCommand::Test {
             profile,
             avd,
+            serial,
             skip_build,
-        } => run_tests(profile, avd.as_deref(), skip_build, &ext.android, tools),
+        } => run_tests(
+            &ctx.root,
+            &ctx.config,
+            profile,
+            request(avd.as_deref(), serial.as_deref()),
+            skip_build,
+            &ext.android,
+        ),
     }
 }
 
@@ -168,6 +233,8 @@ pub(crate) fn run_build(
     };
 
     let mut cmd = Command::new("cargo");
+    // Native build scripts read the NDK out of the environment.
+    cmd.env("ANDROID_NDK_HOME", ndk_root()?);
     cmd.arg("ndk")
         .arg("-P")
         .arg(api_level)
@@ -310,118 +377,285 @@ fn run_aar(android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
     Ok(())
 }
 
-/// Everything both the demo launch and the instrumented tests need: a booted
-/// device to talk to and a Gradle wrapper to drive it.
-struct Device {
-    adb: PathBuf,
+/// Resolved before the run takes anything, so a failure while preparing is
+/// still recorded somewhere.
+struct Layout {
+    workspace_root: PathBuf,
     android_root: PathBuf,
     gradlew: PathBuf,
+    adb: PathBuf,
+    emulator: PathBuf,
 }
 
-/// Whether the emulator draws. Launching the demo is the case where someone is
-/// watching; the instrumented tests read their verdict through `adb`, and the
-/// machine that runs them has no display to draw on.
-#[derive(Clone, Copy)]
-enum Screen {
-    Windowed,
-    Headless,
-}
+impl Layout {
+    fn resolve() -> Result<Self> {
+        let metadata = MetadataCommand::new()
+            .exec()
+            .context("failed to read cargo metadata")?;
+        Self::at(metadata.workspace_root.as_std_path().to_path_buf())
+    }
 
-impl Screen {
-    const fn args(self) -> &'static [&'static str] {
-        match self {
-            Self::Windowed => &[],
-            Self::Headless => &["-no-window"],
+    fn at(workspace_root: PathBuf) -> Result<Self> {
+        let sdk_root = android_sdk_root()?;
+        let adb = sdk_root.join("platform-tools/adb");
+        if !adb.exists() {
+            bail!("adb not found at {}", adb.display());
         }
+        let android_root = workspace_root.join("android");
+        let gradlew = android_root.join("gradlew");
+        if !gradlew.exists() {
+            bail!("gradlew not found at {}", gradlew.display());
+        }
+
+        Ok(Self {
+            workspace_root,
+            android_root,
+            gradlew,
+            adb,
+            emulator: sdk_root.join("emulator/emulator"),
+        })
     }
 }
 
-fn prepare_device(
+struct Prepared<'a> {
+    device: Selected,
+    layout: &'a Layout,
+}
+
+impl Prepared<'_> {
+    /// `ANDROID_SERIAL` is what the Android tooling reads to pick a target, so
+    /// a second device on the host cannot receive this run's APK.
+    fn gradle(&self) -> Command {
+        let mut command = Command::new(&self.layout.gradlew);
+        command
+            .env("ANDROID_SERIAL", &self.device.serial)
+            .current_dir(&self.layout.android_root);
+        command
+    }
+}
+
+fn request<'a>(avd: Option<&'a str>, serial: Option<&'a str>) -> Request<'a> {
+    match (serial, avd) {
+        (Some(serial), _) => Request::Serial(serial),
+        (None, Some(avd)) => Request::Avd(avd),
+        (None, None) => Request::Any,
+    }
+}
+
+fn prepare_device<'a>(
+    layout: &'a Layout,
     profile: BuildProfile,
-    avd: Option<&str>,
+    request: Request<'_>,
     skip_build: bool,
     screen: Screen,
     android: &AndroidConfig,
     tools: &ToolsConfig,
-) -> Result<Device> {
-    let sdk_root = android_sdk_root()?;
-    let adb = sdk_root.join("platform-tools/adb");
-    let emulator = sdk_root.join("emulator/emulator");
-    if !adb.exists() {
-        bail!("adb not found at {}", adb.display());
-    }
-
-    let metadata = MetadataCommand::new()
-        .exec()
-        .context("failed to read cargo metadata")?;
-    let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
-    let android_root = workspace_root.join("android");
-    let gradlew = android_root.join("gradlew");
-    if !gradlew.exists() {
-        bail!("gradlew not found at {}", gradlew.display());
-    }
-
+) -> Result<Prepared<'a>> {
     if !skip_build {
         run_build(profile, android, tools)?;
     }
 
-    let avd_name = match avd {
-        Some(avd) => avd,
-        None => require_android_str(&android.default_avd, "default_avd")?,
-    };
-    ensure_emulator_running(&adb, &emulator, avd_name, screen, android)?;
-
-    Ok(Device {
-        adb,
-        android_root,
-        gradlew,
-    })
+    let device = device::select(
+        &layout.adb,
+        &layout.emulator,
+        request,
+        screen,
+        android,
+        None,
+    )?;
+    Ok(Prepared { device, layout })
 }
 
-/// Run the instrumented tests, then put the emulator down whether they passed
-/// or not: a CI machine that leaves one running has one fewer job's worth of
-/// memory for the next job.
+/// Run instrumentation and record cleanup on success, failure, and cancellation.
 fn run_tests(
+    workspace_root: &Path,
+    config: &ProjectConfig,
     profile: BuildProfile,
-    avd: Option<&str>,
+    request: Request<'_>,
     skip_build: bool,
     android: &AndroidConfig,
-    tools: &ToolsConfig,
 ) -> Result<()> {
-    let device = prepare_device(profile, avd, skip_build, Screen::Headless, android, tools)?;
+    let evidence = evidence::Dir::create(workspace_root)?;
+    let report = workspace_root.join("target/android-test/junit.xml");
+    if report.exists() {
+        fs::remove_file(&report).context("removing previous Android JUnit")?;
+    }
+    let mut record = evidence::Manifest::open(&evidence, workspace_root, profile)?;
+    let cancel = child::Cancel::install()?;
 
-    println!("==> Running instrumented tests via gradle");
-    let tests = Command::new(&device.gradlew)
-        .args([
-            ":lib:connectedDebugAndroidTest",
-            "-x",
-            "generateKitharaFfi",
-            "--no-daemon",
-        ])
-        .current_dir(&device.android_root)
-        .status()
-        .with_context(|| format!("failed to run {}", device.gradlew.display()))
-        .and_then(|status| {
-            status
-                .success()
-                .then_some(())
-                .context("gradle connected tests failed")
-        });
-
-    let shutdown = Command::new(&device.adb)
-        .args(["emu", "kill"])
-        .status()
-        .context("failed to invoke `adb emu kill`")
-        .and_then(|status| {
-            status
-                .success()
-                .then_some(())
-                .context("adb emu kill failed")
-        });
-
-    tests.and(shutdown)
+    let mut device = None;
+    let mut server = None;
+    let mut reverse = None;
+    let tests = (|| {
+        record.stage(
+            "baseline_config",
+            results::require_baseline(&android.baseline_tests),
+        )?;
+        let layout = record.stage("layout", Layout::at(workspace_root.to_path_buf()))?;
+        child::check(Some(&cancel))?;
+        if !skip_build {
+            let build = child::run(
+                Command::new(env::current_exe()?).args([
+                    "android",
+                    "build",
+                    "--profile",
+                    &profile.to_string(),
+                ]),
+                Some(&cancel),
+            )
+            .and_then(|status| {
+                status
+                    .success()
+                    .then_some(())
+                    .context("Android JNI build failed")
+            });
+            record.stage("jni_build", build)?;
+        }
+        device = Some(record.stage(
+            "device",
+            device::select(
+                &layout.adb,
+                &layout.emulator,
+                request,
+                Screen::Headless,
+                android,
+                Some(&cancel),
+            ),
+        )?);
+        let selected = device.as_ref().context("selected device")?;
+        record.device(&layout.workspace_root, selected, &cancel);
+        let process = ambient_process(&layout.workspace_root);
+        server = Some(record.stage(
+            "fixture_server",
+            TestServer::start(
+                &process,
+                Port::Ephemeral,
+                &evidence.server_log(),
+                Some(&cancel),
+            ),
+        )?);
+        let server = server.as_ref().context("started fixture server")?;
+        reverse = Some(record.stage(
+            "reverse_mapping",
+            Reverse::create(selected, host_port(server.url())?, Some(&cancel)),
+        )?);
+        let reverse = reverse.as_ref().context("created reverse mapping")?;
+        let device_url = format!("http://127.0.0.1:{}", reverse.device_port());
+        record.fixture_server(server.url(), &device_url, reverse.device_port());
+        record.stage(
+            "reverse_probe",
+            device::probe_origin(selected, &device_url, Some(&cancel)),
+        )?;
+        device::control(selected.adb().args(["logcat", "-c"]), Some(&cancel))?;
+        println!("==> Running instrumented tests via gradle");
+        let tests =
+            run_gradle(&layout, selected, &device_url, &cancel, &evidence).and_then(|status| {
+                record.gradle_exit(status.code());
+                status
+                    .success()
+                    .then_some(())
+                    .context("gradle connected tests failed")
+            });
+        let tests = record.stage("gradle", tests);
+        let instrumentation = evidence.path().join("instrumentation.xml");
+        let baseline = record.stage(
+            "instrumentation",
+            results::collect(
+                &evidence.results(),
+                &instrumentation,
+                &android.baseline_tests,
+            ),
+        );
+        if let Ok(cases) = &baseline {
+            record.instrumentation(cases);
+        }
+        if instrumentation.is_file() {
+            results::merge(std::slice::from_ref(&instrumentation), &report)?;
+        }
+        tests?;
+        baseline?;
+        let native = record.stage(
+            "rust_prepare",
+            native::prepare(workspace_root, config, selected, evidence.path(), &cancel),
+        )?;
+        let rust = record.stage("rust_tests", native.run(&device_url, &cancel));
+        let native_report = evidence.path().join("native/junit.xml");
+        if native_report.is_file() {
+            results::merge(&[instrumentation, native_report], &report)?;
+        }
+        rust
+    })();
+    let tests = record.stage("run", tests);
+    if let Some(device) = &device {
+        evidence.capture_logcat(device);
+    }
+    let owned_reverse = reverse.is_some();
+    let unmapped = reverse.map_or(Ok(()), Reverse::remove);
+    let stopped = server.map_or(Ok(()), TestServer::stop);
+    let owned_emulator = device.as_ref().map(Selected::owns_emulator);
+    let released = device.map_or(Ok(()), Selected::release);
+    record.cleanup(
+        &unmapped,
+        &stopped,
+        &released,
+        owned_emulator,
+        owned_reverse,
+    );
+    let written = record.write();
+    tests.and(unmapped).and(stopped).and(released).and(written)
 }
 
+/// Waiting on Gradle's exit status would leave a cancelled run holding the
+/// device until the whole suite finished.
+fn run_gradle(
+    layout: &Layout,
+    device: &Selected,
+    device_url: &str,
+    cancel: &child::Cancel,
+    evidence: &evidence::Dir,
+) -> Result<ExitStatus> {
+    let log = fs::File::create(evidence.gradle_log()).context("creating Gradle log")?;
+    child::run(
+        Command::new(&layout.gradlew)
+            .current_dir(&layout.android_root)
+            .env("ANDROID_SERIAL", &device.serial)
+            .stdout(log.try_clone()?)
+            .stderr(log)
+            .args([
+                ":lib:connectedDebugAndroidTest",
+                "-x",
+                "generateKitharaFfi",
+                "--no-daemon",
+                &format!("-Pkithara.testResultsDir={}", evidence.results().display()),
+                &format!("-Pkithara.testReportDir={}", evidence.report().display()),
+                &format!(
+                    "-Pandroid.testInstrumentationRunnerArguments.{}={device_url}",
+                    evidence::Manifest::URL_ARGUMENT
+                ),
+            ]),
+        Some(cancel),
+    )
+}
+
+fn ambient_process(root: &Path) -> Process {
+    let vars = env::var_os("CARGO_TARGET_DIR")
+        .map(|dir| BTreeMap::from([(OsString::from("CARGO_TARGET_DIR"), dir)]))
+        .unwrap_or_default();
+    Process::new(root, vars)
+}
+
+fn host_port(url: &str) -> Result<u16> {
+    url.rsplit_once(':')
+        .context("the fixture server URL carries no port")
+        .and_then(|(_, port)| {
+            port.trim_end_matches('/')
+                .parse()
+                .with_context(|| format!("`{url}` carries no numeric port"))
+        })
+}
+
+/// The device is left running: an emulator that shuts down with the command
+/// that booted it takes the app off the screen it was launched to appear on.
 fn run_app(
     profile: BuildProfile,
     avd: Option<&str>,
@@ -430,22 +664,43 @@ fn run_app(
     android: &AndroidConfig,
     tools: &ToolsConfig,
 ) -> Result<()> {
-    let Device {
-        adb,
-        android_root,
-        gradlew,
-    } = prepare_device(profile, avd, skip_build, Screen::Windowed, android, tools)?;
+    let layout = Layout::resolve()?;
+    let mut prepared = prepare_device(
+        &layout,
+        profile,
+        request(avd, None),
+        skip_build,
+        Screen::Windowed,
+        android,
+        tools,
+    )?;
 
+    let launched = launch_app(&prepared, profile, debug, android);
+    prepared.device.leave_running();
+    launched
+}
+
+fn launch_app(
+    prepared: &Prepared<'_>,
+    profile: BuildProfile,
+    debug: bool,
+    android: &AndroidConfig,
+) -> Result<()> {
     println!("==> Installing demo APK via gradle");
     let gradle_task = match profile {
         BuildProfile::Release => ":example:installRelease",
         BuildProfile::Debug => ":example:installDebug",
     };
-    let status = Command::new(&gradlew)
+    let status = prepared
+        .gradle()
         .arg(gradle_task)
-        .current_dir(&android_root)
         .status()
-        .with_context(|| format!("failed to run {} {}", gradlew.display(), gradle_task))?;
+        .with_context(|| {
+            format!(
+                "failed to run {} {gradle_task}",
+                prepared.layout.gradlew.display()
+            )
+        })?;
     if !status.success() {
         bail!("gradle install task failed: {gradle_task}");
     }
@@ -453,7 +708,7 @@ fn run_app(
     let package = require_android_str(&android.demo_package, "demo_package")?;
     let activity = require_android_str(&android.demo_activity, "demo_activity")?;
     println!("==> Launching {package}/{activity}");
-    let mut cmd = Command::new(&adb);
+    let mut cmd = prepared.device.adb();
     cmd.args(["shell", "am", "start"]);
     if debug {
         // `-D` suspends the launched process so a JDWP-aware debugger
@@ -476,7 +731,7 @@ fn run_app(
     }
 
     if debug {
-        print_jdwp_attach_hint(&adb);
+        print_jdwp_attach_hint(&prepared.device);
     }
 
     Ok(())
@@ -564,93 +819,6 @@ fn android_sdk_root() -> Result<PathBuf> {
     bail!("ANDROID_HOME / ANDROID_SDK_ROOT not set and ~/Library/Android/sdk does not exist")
 }
 
-/// Make sure at least one device is online; if none is, boot the AVD in
-/// the background and wait for it to finish booting.
-fn ensure_emulator_running(
-    adb: &Path,
-    emulator: &Path,
-    avd_name: &str,
-    screen: Screen,
-    android: &AndroidConfig,
-) -> Result<()> {
-    if has_online_device(adb)? {
-        println!("==> Using already-connected device");
-        return Ok(());
-    }
-
-    if !emulator.exists() {
-        bail!(
-            "no device connected and emulator binary missing at {}",
-            emulator.display()
-        );
-    }
-
-    println!("==> Booting AVD '{avd_name}' in the background");
-    Command::new(emulator)
-        .args(["-avd", avd_name])
-        .args(screen.args())
-        .spawn()
-        .with_context(|| format!("failed to spawn emulator -avd {avd_name}"))?;
-
-    println!("==> Waiting for device to come online");
-    let status = Command::new(adb)
-        .arg("wait-for-device")
-        .status()
-        .context("failed to invoke `adb wait-for-device`")?;
-    if !status.success() {
-        bail!("adb wait-for-device failed");
-    }
-
-    // `wait-for-device` returns as soon as adb sees the device, which
-    // is well before the system finishes booting; poll
-    // `sys.boot_completed` so the install step doesn't race the
-    // package manager.
-    wait_for_boot_complete(adb, android)?;
-    Ok(())
-}
-
-fn has_online_device(adb: &Path) -> Result<bool> {
-    let output = Command::new(adb)
-        .arg("devices")
-        .output()
-        .context("failed to run `adb devices`")?;
-    if !output.status.success() {
-        bail!("adb devices failed");
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout
-        .lines()
-        .skip(1)
-        .any(|line| line.ends_with("\tdevice")))
-}
-
-fn wait_for_boot_complete(adb: &Path, android: &AndroidConfig) -> Result<()> {
-    let max_attempts = android.boot_wait_attempts.context(
-        "ext.android.boot_wait_attempts is not set; fill in the [ext.android] section of .config/xtask.toml",
-    )?;
-    let poll_interval = Duration::from_secs(android.boot_poll_interval_secs.context(
-        "ext.android.boot_poll_interval_secs is not set; fill in the [ext.android] section of .config/xtask.toml",
-    )?);
-
-    for _ in 0..max_attempts {
-        let output = Command::new(adb)
-            .args(["shell", "getprop", "sys.boot_completed"])
-            .output();
-        if let Ok(output) = output
-            && output.status.success()
-        {
-            let value = String::from_utf8_lossy(&output.stdout);
-            if value.trim() == "1" {
-                println!("==> Device boot complete");
-                return Ok(());
-            }
-        }
-        thread::sleep(poll_interval);
-    }
-    let timeout_secs = u64::from(max_attempts).saturating_mul(poll_interval.as_secs());
-    bail!("device did not finish booting within {timeout_secs} seconds");
-}
-
 fn require_android_str<'a>(value: &'a str, key: &str) -> Result<&'a str> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -663,8 +831,8 @@ fn require_android_str<'a>(value: &'a str, key: &str) -> Result<&'a str> {
 
 /// Print attach instructions after `am start -D`. Failures here are
 /// non-fatal: the app is already running suspended.
-fn print_jdwp_attach_hint(adb: &Path) {
-    let pid = Command::new(adb).arg("jdwp").output().ok().and_then(|out| {
+fn print_jdwp_attach_hint(device: &Selected) {
+    let pid = device.adb().arg("jdwp").output().ok().and_then(|out| {
         String::from_utf8(out.stdout)
             .ok()?
             .lines()

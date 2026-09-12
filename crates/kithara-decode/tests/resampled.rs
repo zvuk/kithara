@@ -21,6 +21,8 @@ use kithara_resampler::{
 };
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_fixtures::unit_fixtures::{
     poisoned_float_wav, resampled_markers, resampled_wav_eight, resampled_wav_four,
     resampled_wav_seek, trim_silence,

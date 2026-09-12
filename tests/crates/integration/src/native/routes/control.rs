@@ -165,15 +165,19 @@ async fn create_behavior(
 
 /// Reject every data route while the global network switch is offline.
 ///
-/// `/control/*` remains reachable so callers can restore the network, and
-/// `/health` remains available for process-level liveness checks.
+/// `/control/*` remains reachable so callers can restore the network,
+/// `/health` remains available for process-level liveness checks, and
+/// `/store/*` is the fixture origin itself, not a simulated network path.
 pub(crate) async fn network_guard(
     State(state): State<Arc<TestServerState>>,
     request: Request,
     next: Next,
 ) -> Response {
     let path = request.uri().path();
-    let exempt = path.starts_with("/control/") || path == "/health";
+    let exempt = path.starts_with("/control/")
+        || path == "/health"
+        || path == "/store"
+        || path.starts_with("/store/");
     if !exempt && !state.network_online() {
         return (StatusCode::SERVICE_UNAVAILABLE, "network offline").into_response();
     }

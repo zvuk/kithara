@@ -5,6 +5,8 @@ use kithara_drm::{
     KeyProcessor, KeyProcessorRegistry, KeyRequest, KeyRequestFactory, KeyRequestResolver,
 };
 use kithara_play::policy::{DomainKeyPolicy, DomainKeyRule};
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_utils::kithara;
 use url::Url;
 

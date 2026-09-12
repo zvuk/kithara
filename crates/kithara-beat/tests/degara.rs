@@ -1,5 +1,8 @@
 #![cfg(feature = "dsp")]
 
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+
 mod common;
 
 use common::{WINDOW, f_measure, fixture, load_golden, load_pcm_fixture, report};

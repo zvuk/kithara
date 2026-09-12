@@ -4,6 +4,8 @@
     reason = "integration test crate - unwraps are acceptable in test code"
 )]
 
+use kithara_test_dylib as _;
+
 #[path = "early_stream_close.rs"]
 mod early_stream_close;
 #[path = "file_source.rs"]

@@ -5,6 +5,7 @@
 )]
 
 pub use kithara_integration_tests::bufpool_ext;
+use kithara_test_dylib as _;
 
 #[path = "silvercomet_seek_hang.rs"]
 mod silvercomet_seek_hang;

@@ -56,10 +56,10 @@ pub trait AudioRead {
     /// Read interleaved audio samples.
     ///
     /// After `preload()`, returns immediately from buffered data
-    /// without blocking. The returned [`ReadOutcome`] distinguishes
-    /// "produced N frames" (including `count == 0` for transient
-    /// stalls) from natural EOF. Decoder / channel failures surface as
-    /// `Err(DecodeError)`.
+    /// without blocking. The returned [`ReadOutcome`] distinguishes a
+    /// productive read from natural EOF; `count` is interleaved
+    /// samples, so `count / channels` frames. Decoder / channel
+    /// failures surface as `Err(DecodeError)`.
     ///
     /// # Errors
     ///

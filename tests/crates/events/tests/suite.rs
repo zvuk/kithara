@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara_events::{BusEvent, EventBus, EventSet};
+use kithara_test_dylib as _;
 
 #[derive(Clone, Debug, EventSet)]
 enum TestEvent {

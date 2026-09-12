@@ -2,6 +2,8 @@ use kithara_encode::{
     ContainerFinish, ContainerSession, ContainerWrite, EncodeConfig, EncodeError, EncoderSession,
 };
 use kithara_stream::{AudioCodec, ContainerFormat};
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_fixtures::unit_fixtures::encode_session;
 use kithara_test_utils::kithara;
 

@@ -19,7 +19,7 @@ pub(crate) struct AssetDef {
     pub(crate) ext: &'static str,
     /// Generator function name.
     pub(crate) func: &'static str,
-    /// Bake the bytes into the binary instead of reading them from the store.
+    /// Bake the bytes into filesystem-free wasm binaries.
     pub(crate) embed: bool,
     /// Keep the build green when the producer reports unavailable.
     pub(crate) optional: bool,

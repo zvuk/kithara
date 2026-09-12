@@ -112,6 +112,37 @@ mod tests {
     }
 
     #[test]
+    fn the_android_profile_bounds_a_whole_test_binary() {
+        /// The slowest Android binary runs 219 selected tests in 240 s of
+        /// device time as one batch, so a limit derived from a single test
+        /// terminates it.
+        const ANDROID_SLOWEST_BINARY_SECS: u64 = 240;
+
+        let nextest: toml::Value = toml::from_str(
+            &fs::read_to_string(workspace_root().join(".config/nextest.toml")).unwrap(),
+        )
+        .unwrap();
+        let android = nextest["profile"]["android"].as_table().unwrap();
+
+        let slow = android
+            .get("slow-timeout")
+            .expect("`[profile.android]` must state its own limit, not inherit a per-test one");
+        let period = slow["period"].as_str().unwrap();
+        let seconds: u64 = period
+            .strip_suffix('s')
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("slow-timeout period `{period}` is not a second count"));
+        assert!(
+            seconds > ANDROID_SLOWEST_BINARY_SECS * 2,
+            "a {seconds}s limit leaves no headroom over the {ANDROID_SLOWEST_BINARY_SECS}s the              slowest binary takes on an idle emulator"
+        );
+        assert!(
+            android.contains_key("leak-timeout"),
+            "`[profile.android]` must state its own leak-timeout"
+        );
+    }
+
+    #[test]
     fn tracked_pins_are_valid_on_every_build_platform() {
         CiPins::load(&workspace_root().join(".config/ci-pins.toml")).unwrap();
     }

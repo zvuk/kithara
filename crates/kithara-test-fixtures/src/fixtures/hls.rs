@@ -1,4 +1,4 @@
-use std::{fs, io, str::from_utf8, sync::OnceLock};
+use std::{fs, io, path::Path, str::from_utf8, sync::OnceLock};
 
 use kithara_test_macros as kithara;
 
@@ -151,17 +151,15 @@ pub fn load_variant(input: &VariantInput) -> io::Result<Fmp4Package> {
             format!("unregistered HLS fixture: {key}"),
         )
     })?;
-    let root = asset
-        .path()
-        .expect("on-disk HLS catalog")
+    let relative_root = Path::new(asset.entry().path)
         .parent()
-        .expect("fixture namespace");
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HLS catalog has no namespace"))?;
     Ok(Fmp4Package {
-        init_segment: fs::read(root.join(&artifact.init))?,
+        init_segment: fs::read(crate::store::file(&relative_root.join(&artifact.init))?)?,
         media_segments: artifact
             .media
             .iter()
-            .map(|path| fs::read(root.join(path)))
+            .map(|path| fs::read(crate::store::file(&relative_root.join(path))?))
             .collect::<io::Result<_>>()?,
         segment_durations_secs: artifact.durations.clone(),
     })

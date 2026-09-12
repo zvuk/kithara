@@ -59,5 +59,8 @@ kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "hang", "probe", "tls-rustls"] }
 
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
+
 [lints]
 workspace = true

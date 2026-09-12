@@ -184,14 +184,15 @@ fn live_thread_count() -> usize {
         .saturating_sub(1)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn live_thread_count() -> usize {
     std::fs::read_dir("/proc/self/task")
-        .map(|it| it.count())
-        .unwrap_or(0)
+        .expect("read process thread directory")
+        .try_fold(0, |count, entry| entry.map(|_| count + 1))
+        .expect("read process thread entries")
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
 fn live_thread_count() -> usize {
     0
 }

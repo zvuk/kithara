@@ -17,6 +17,8 @@ use kithara_record::{
     LiveRecordingReport, PartSinkFactory, RecordingConfig, RecordingSink,
 };
 use kithara_signal::AudioSpec;
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_fixtures::unit_fixtures::{record_labels, record_signed};
 use kithara_test_utils::kithara;
 use kithara_worker::{Worker, WorkerConfig};

@@ -10,6 +10,8 @@ use kithara_play::{
     SelectTransition, StretchControls, effects::eq::generate_log_spaced_bands, mock,
     player::PlayerControlSource,
 };
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_utils::kithara;
 use kithara_warp::WarpConfig;
 

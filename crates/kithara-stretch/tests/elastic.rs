@@ -4,6 +4,7 @@
 //! mandatory priming lifecycle.
 //! Every observable lifecycle and audio behavior is shared; backend-specific
 //! tests cover only private preparation and storage mechanics.
+
 use std::{num::NonZeroUsize, ops::RangeInclusive};
 
 use kithara_bufpool::testing::{pools as default_pools, pools_with_budget as pools};
@@ -11,6 +12,8 @@ use kithara_stretch::{
     BungeeConfig, ElasticBackendConfig, ElasticCapabilities, ElasticConfig, ElasticEngine,
     ElasticError, ElasticRequest, ElasticSpanConfig, SignalsmithConfig, StretchKind, build_engine,
 };
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_fixtures::stretch_fixtures::{StretchPcm, stretch_pcm};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;

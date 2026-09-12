@@ -30,6 +30,7 @@ kithara = { workspace = true, features = [
 ] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-test-dylib = { workspace = true }
 
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 

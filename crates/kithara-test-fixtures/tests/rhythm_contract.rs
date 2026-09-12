@@ -1,6 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara_analysis::{AnalysisFile, AnalysisFingerprint, BeatArtifact};
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_fixtures::assets::by_name;
 use kithara_test_utils::kithara;
 use num_traits::cast;

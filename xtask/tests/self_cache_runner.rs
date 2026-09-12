@@ -861,11 +861,15 @@ fn killed_refresh_parent_does_not_leave_builder_descendants() -> Result<()> {
         r#"#!/bin/sh
 set -eu
 trap 'exit 0' TERM
-printf '%s\n' "$PPID" > "$SELF_CACHE_WORKER_PID"
-printf '%s\n' "$$" > "$SELF_CACHE_CARGO_PID"
+publish_pid() {
+    printf '%s\n' "$1" > "$2.pending"
+    mv "$2.pending" "$2"
+}
+publish_pid "$PPID" "$SELF_CACHE_WORKER_PID"
+publish_pid "$$" "$SELF_CACHE_CARGO_PID"
 sh -c 'trap "" TERM; while :; do sleep 300; done' &
 descendant=$!
-printf '%s\n' "$descendant" > "$SELF_CACHE_DESCENDANT_PID"
+publish_pid "$descendant" "$SELF_CACHE_DESCENDANT_PID"
 wait "$descendant"
 "#,
     )?;

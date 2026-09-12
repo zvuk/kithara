@@ -9,4 +9,6 @@
 //! `run_crossfade_flac_case` and its kin.
 #![recursion_limit = "256"]
 
+use kithara_test_dylib as _;
+
 mod thread_budget;

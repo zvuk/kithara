@@ -14,9 +14,8 @@ default = ["ffmpeg", "fdk-aac", "client-reqwest", "tls-rustls"]
 # streaming AAC-LC the live broadcast runs on. Carries no system dependency,
 # so a distributed binary needs nothing installed on the user's machine.
 fdk-aac = ["dep:fdk-aac-sys"]
-# System FFmpeg: byte encoding, FLAC, and the offline AAC-LC fixtures. Links
-# against the FFmpeg on the build and run host, so a consumer that ships
-# binaries keeps it off.
+# FFmpeg: byte encoding, FLAC, and offline AAC-LC fixtures. Android links
+# the target libraries statically; other native targets use system FFmpeg.
 ffmpeg = ["dep:ffmpeg-next", "dep:tempfile"]
 # HTTP backend forwarding. This crate encodes and never speaks HTTP, but it
 # takes its media types from kithara-stream, which reaches kithara-net, and
@@ -36,12 +35,17 @@ num-traits = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+ffmpeg-next = { workspace = true, optional = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 fdk-aac-sys = { workspace = true, optional = true }
-ffmpeg-next = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ffmpeg-next = { workspace = true, optional = true, features = ["static"] }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
@@ -50,6 +54,9 @@ kithara-test-utils = { workspace = true, features = ["probe"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true

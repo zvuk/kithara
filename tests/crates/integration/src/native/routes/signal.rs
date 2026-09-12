@@ -32,7 +32,7 @@ async fn signal(Path(name_with_ext): Path<String>, headers: HeaderMap) -> Respon
             .into_response();
     };
     let entry = asset.entry();
-    if entry.ext != ext {
+    if entry.path.rsplit('.').next() != Some(ext) {
         return (
             StatusCode::NOT_FOUND,
             format!("`{name}` is not stored as `.{ext}`"),

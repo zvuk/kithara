@@ -24,6 +24,7 @@ broadcast = ["kithara/broadcast"]
 kithara = { workspace = true, features = ["full", "probe", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }

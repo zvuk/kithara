@@ -1,5 +1,8 @@
 //! Hostile custom layout output must be rejected at the scope/key boundary.
 
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+
 #[path = "support/pools.rs"]
 mod support;
 

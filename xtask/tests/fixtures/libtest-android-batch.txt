@@ -1,0 +1,55 @@
+
+running 50 tests
+test aac_priming_regression::aac_decoder_strips_algorithmic_delay_on_first_chunk ... ok
+test apple_mp3_priming_probe::mp3_decoder_reads_lame_enc_delay_or_not_symphonia ... ok
+test apple_mp3_priming_probe::mp3_raw_decoder_shift_vs_reference_symphonia_320k ... ok
+test apple_mp3_priming_probe::mp3_raw_decoder_shift_vs_reference_symphonia_64k ... ok
+test apple_mp3_priming_probe::mp3_raw_decoder_shift_vs_reference_symphonia_default ... ok
+test decoder_seek_tests::decoder_file_reads_samples ... ok
+test decoder_seek_tests::decoder_file_seek_backward ... ok
+test decoder_seek_tests::decoder_file_seek_emits_events ... ok
+test decoder_seek_tests::decoder_file_seek_multiple_sw ... ok
+test decoder_seek_tests::decoder_file_single_seek_forward ... ok
+test decoder_seek_tests::decoder_file_single_seek_to_zero ... ok
+test decoder_tests::chunk_has_valid_samples ... ok
+test decoder_tests::consecutive_chunks_differ ... ok
+test decoder_tests::decode_complete_mp3 ... ok
+test decoder_tests::decode_complete_wav ... ok
+test decoder_tests::decode_with_probe_mp3 ... ok
+test decoder_tests::decode_with_probe_wav ... ok
+test decoder_tests::from_media_info_mp3 ... ok
+test decoder_tests::from_media_info_wav ... ok
+test decoder_tests::invalid_data_fails_empty ... ok
+test decoder_tests::invalid_data_fails_invalid ... ok
+test decoder_tests::multiple_chunks_consistent ... ok
+test decoder_tests::spec_properties_mp3 ... ok
+test decoder_tests::spec_properties_wav ... ok
+test decoder_tests::truncated_data_handles_gracefully ... ok
+test factory_tests::create_from_media_info_surfaces_error_without_native_probe_fallback ... ok
+test factory_tests::create_with_probe_uses_hint_mp3_hint ... ok
+test factory_tests::create_with_probe_uses_hint_without_hint ... ok
+test factory_tests::decoder_config_default_uses_symphonia_backend ... ok
+test protocol_tests::duration_after_create_is_consistent_across_backends ... ok
+test protocol_tests::end_of_stream_returns_none_repeatedly ... ok
+test protocol_tests::seek_then_first_chunk_timestamp_is_after_target ... ok
+test protocol_tests::spec_after_create_is_consistent_across_backends ... ok
+test protocol_tests::total_frames_are_consistent_across_backends ... ok
+test protocol_tests::wav_pcm_round_trip_matches_signal_across_backends ... ok
+test symphonia_seek_stale_duration::full_decoder_seeks_to_same_target_without_error ... ok
+test symphonia_seek_stale_duration::partial_decoder_seek_past_available_bytes_errors ... ok
+test symphonia_seek_stale_duration::xing_partial_probe_reports_full_duration ... ok
+test symphonia_tests::test_create_decoder_wav_case_1 ... ok
+test symphonia_tests::test_create_decoder_wav_case_2 ... ok
+test symphonia_tests::test_duration_available ... ok
+test symphonia_tests::test_invalid_input_fails_case_1 ... ok
+test symphonia_tests::test_invalid_input_fails_case_2 ... ok
+test symphonia_tests::test_next_chunk_eof ... ok
+test symphonia_tests::test_next_chunk_returns_data ... ok
+test symphonia_tests::test_seek_to_beginning ... ok
+test symphonia_tests::test_unsupported_container_returns_error ... ok
+test timeline_tests::hls_timeline::test_hls_timeline_segment_tracking ... ok
+test timeline_tests::test_progressive_file_seek_resets_frame_offset ... ok
+test timeline_tests::test_progressive_file_timeline_monotonic ... ok
+
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+

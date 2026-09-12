@@ -6,6 +6,7 @@
 )]
 
 pub use kithara_integration_tests::bufpool_ext;
+use kithara_test_dylib as _;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod source_helper;

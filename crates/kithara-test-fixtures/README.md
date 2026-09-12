@@ -34,6 +34,29 @@ The environment can override this value. CI supplies a persistent directory
 shared across branches and platforms within each trust boundary. When changing
 the root, copy the existing version directory to preserve prepared assets.
 
+Native test binaries also read `KITHARA_FIXTURE_CACHE` at first fixture access.
+This selects one local root for both `Asset::bytes()` and `Asset::path()`. With
+no runtime override, they use the root selected at build time. An explicit
+override must be absolute; missing entries fail without consulting the build
+store.
+
+When `KITHARA_FIXTURE_ORIGIN` is also set to `http://127.0.0.1:<port>`, that
+HTTP origin is the record source and `KITHARA_FIXTURE_CACHE` is only the local
+replica. The store selects the source once from this configuration; it does
+not try disk and then the network. ART points the origin at the host fixture
+server through `adb reverse` and keeps the replica in the session directory so
+a later process can reuse a fetch. Host and wasm lanes leave the origin unset.
+
+To run a binary on another machine or device without an origin, stage the
+version directory under the configured runtime root. Assets marked `embed`
+also use this store on native targets.
+
+`kithara-fixture-export --manifest output.json` records the selected root,
+revision, and every namespace file with its root-relative path, SHA-256 and
+byte length. It includes nested HLS resources, excludes producer locks and
+temporary writes, and rejects symlinks or paths that escape the store. The
+existing `kithara-fixture-export <accessor-name> <output-path>` exports one asset.
+
 ## Usage
 
 ```rust
@@ -55,7 +78,11 @@ use `#[future(awt)]` to receive those resources after preparation.
 
 - `store::STORE_ENV` — `KITHARA_FIXTURE_CACHE`, the required store root. CI
   points it at a persisted directory so a fresh job starts warm.
+- `store::ORIGIN_ENV` — `KITHARA_FIXTURE_ORIGIN`, optional `http://127.0.0.1`
+  source. When set, records come from this URL and land in `STORE_ENV`.
 - `store::asset_id` — stable identity of one case.
+- `store::file` — local path of one store-relative record, fetched when an
+  origin is configured.
 - `store::read_entry` / `store::write_entry` — a hit-or-miss read and an atomic
   write; an empty file counts as a miss.
 - `store::lock_entry` — the exclusive producer lock for one entry.
@@ -74,12 +101,13 @@ use `#[future(awt)]` to receive those resources after preparation.
   The build script packages both embedded bodies and registered HLS variants.
 - `build.rs` — resolves every declared case against the store, produces what is
   missing, and writes the accessor module.
-- `src/store.rs` — the store itself: identity, namespace, atomic writes, and the
-  cross-process lock that keeps two producers off one entry.
+- `src/store/` — identity, namespace, atomic writes, the producer lock, and the
+  optional HTTP origin that ART uses as the one record source.
 
-An asset declared `#[kithara::asset(..., embed)]` is baked into the binary with
-`include_bytes!` instead of being read from disk at run time. It is still
-generated once, into the store, like every other asset.
+An asset declared `#[kithara::asset(..., embed)]` is baked into wasm binaries
+with `include_bytes!`, because wasm has no fixture filesystem. Native targets
+read the same asset from the store at run time. It is generated once, into the
+store, like every other asset.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-fixtures)
 for the store layout, invalidation, and build-time preparation contracts.

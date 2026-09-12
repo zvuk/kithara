@@ -4,6 +4,8 @@
     reason = "integration test crate - unwraps are acceptable in test code"
 )]
 
+use kithara_test_dylib as _;
+
 mod engine_e2e;
 mod hls_conformance;
 mod origin;

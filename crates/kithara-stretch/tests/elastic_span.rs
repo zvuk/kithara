@@ -3,6 +3,8 @@ use kithara_stretch::{
     ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticError, ElasticSpan,
     ElasticSpanConfig, ElasticSpanPlan, build_engine,
 };
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_utils::kithara;
 
 const CONTINUITY_EPSILON: f64 = 1.0e-6;

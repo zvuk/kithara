@@ -2,6 +2,10 @@
 //! `thread` primitives. Moved from the W1 facade files (`src/sync/mpsc.rs`,
 //! `src/thread.rs`) when the facades died in 1.11b — they exercise the public
 //! surface, so they live against it.
+
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod mpsc {
     use std::time::Duration;

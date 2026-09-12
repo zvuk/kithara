@@ -166,7 +166,9 @@ mod tests {
     fn the_deadline_fires_while_the_pass_is_parked() {
         let (expired, waiting) = mpsc::channel();
 
-        end_the_process_after(Duration::from_millis(10), move || drop(expired.send(())));
+        end_the_process_after(Duration::from_millis(10), move || {
+            let _ = expired.send(());
+        });
 
         waiting
             .recv_timeout(Duration::from_secs(10))

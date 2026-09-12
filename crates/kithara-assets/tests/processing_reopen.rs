@@ -3,6 +3,9 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+
 mod support;
 
 use aes::Aes128;

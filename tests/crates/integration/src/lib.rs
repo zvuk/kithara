@@ -65,6 +65,8 @@ pub mod net_fixture;
 #[cfg(any(feature = "all", feature = "wasm"))]
 pub mod offline;
 pub mod packed_audio;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod pcm_oracle;
 pub mod reads;
 pub mod rfc6381;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]

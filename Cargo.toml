@@ -239,6 +239,7 @@ kithara-signal = { path = "crates/kithara-signal", version = "0.0.1-alpha4" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha4", default-features = false }
 kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha4", default-features = false }
 kithara-stretch = { path = "crates/kithara-stretch", version = "0.0.1-alpha4", default-features = false }
+kithara-test-dylib = { path = "tests/crates/dylib", version = "0.0.1-alpha4" }
 kithara-test-fixtures = { path = "crates/kithara-test-fixtures", version = "0.0.1-alpha4", default-features = false }
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha4" }
 kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha4", default-features = false }
@@ -621,6 +622,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-stream-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-test-dylib]
 opt-level = 1
 
 [profile.wasm-release]

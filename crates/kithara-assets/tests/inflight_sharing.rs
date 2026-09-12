@@ -4,6 +4,10 @@
 //! - `asset_root` is a method parameter, not store-level state.
 //! - `RequestIdentity` differentiates inflight handles within one store.
 //! - Distinct `AssetStore` instances stay isolated by construction.
+
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+
 mod support;
 
 use kithara_assets::{

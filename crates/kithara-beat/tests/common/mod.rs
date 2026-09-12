@@ -7,9 +7,14 @@ use serde::Deserialize;
 pub(crate) const WINDOW: f64 = 0.070;
 
 pub(crate) fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
+    let root = std::env::var_os("KITHARA_BEAT_FIXTURE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"));
+    assert!(
+        root.is_absolute(),
+        "beat fixture directory must be absolute"
+    );
+    root.join(name)
 }
 
 pub(crate) fn load_pcm_fixture(name: &str) -> Vec<f32> {

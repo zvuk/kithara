@@ -5,6 +5,7 @@ mod agent_hook;
 mod android;
 mod apple;
 mod apple_docgen;
+mod child;
 mod ci;
 mod config;
 mod mutants;
@@ -12,6 +13,7 @@ mod parity;
 mod publish;
 mod release;
 mod self_cache;
+mod test_server;
 mod wasm;
 
 use android::AndroidCommand;
@@ -102,8 +104,15 @@ fn work() -> anyhow::Result<()> {
         .without_time()
         .compact()
         .try_init();
-    let _lease: Option<self_cache::GenerationLease> = self_cache::lease_current()?;
     let cli = Cli::parse();
+    // Cargo and nextest invoke these from the crate they are building, where
+    // the repository root the self-cache resolves stays out of reach.
+    if let Command::Android { command } = &cli.command
+        && let Some(result) = android::run_native_shim(command)
+    {
+        return result;
+    }
+    let _lease: Option<self_cache::GenerationLease> = self_cache::lease_current()?;
     match &cli.command {
         Command::AgentHook => return agent_hook::run(),
         Command::SelfCache(args) => return self_cache::run(args),

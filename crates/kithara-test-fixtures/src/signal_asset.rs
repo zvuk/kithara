@@ -168,11 +168,11 @@ mod tests {
                 .find(|entry| entry.name == asset.name())
                 .unwrap_or_else(|| panic!("`{}` is registered", asset.name()));
             assert!(
-                entry.ext == asset.ext(),
+                entry.path.ends_with(asset.ext()),
                 "`{}` is declared as `.{}` but stored at {}",
                 asset.name(),
                 asset.ext(),
-                entry.ext,
+                entry.path,
             );
         }
     }

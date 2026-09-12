@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Test-only policy. `lencr.org` mirrors the library's own configuration so
+  revocation checks behave here as they do in an app; `127.0.0.1` is the
+  hermetic fixture server, reached over an `adb reverse` mapping to the host
+  that runs it. The published library keeps the policy in
+  `src/main/res/xml/network_security_config.xml`.
+-->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">lencr.org</domain>
+    </domain-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
     </domain-config>
 </network-security-config>

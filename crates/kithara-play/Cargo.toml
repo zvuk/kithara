@@ -151,5 +151,8 @@ unimock = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 serde_yaml_ng = { workspace = true }
 
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
+
 [lints]
 workspace = true

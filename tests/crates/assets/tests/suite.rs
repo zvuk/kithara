@@ -6,6 +6,8 @@
 
 //! Integration tests for kithara-assets
 
+use kithara_test_dylib as _;
+
 mod eviction_bytes_integration;
 mod eviction_integration;
 mod index_persistence;

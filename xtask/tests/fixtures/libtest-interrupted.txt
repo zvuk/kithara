@@ -1,0 +1,4 @@
+
+running 3 tests
+test aaa_quick ... ok
+test bbb_slow ... 

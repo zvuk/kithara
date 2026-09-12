@@ -35,7 +35,6 @@ all = [
     "kithara/encode",
     "kithara/fdk-aac",
     "kithara/ffmpeg",
-    "kithara/stretch-bungee",
     "kithara-app/analysis-waveform",
     "kithara-app/beat-nn-small",
     "kithara-app/lib-only",
@@ -212,6 +211,12 @@ tower-http = { workspace = true }
 # Mocking
 unimock = { workspace = true }
 
+# `bungee-sys` fails through `cmake`/MSVC and its build script refuses Android
+# by target triple. Android stretches through Signalsmith, the backend
+# `kithara-ffi`'s `android` feature selects.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
+kithara = { workspace = true, default-features = false, optional = true, features = ["stretch-bungee"] }
+
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
 kithara = { workspace = true, default-features = false, optional = true }
 
@@ -228,6 +233,7 @@ kithara = { workspace = true, default-features = false, optional = true }
 kithara = { workspace = true, default-features = false, optional = true }
 kithara-app = { workspace = true, default-features = false, optional = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
+tokio = { workspace = true, features = ["process"] }
 
 # `v4` mints the random tokens the test server hands out; the workspace
 # default carries only `v5`. It stays off wasm: `v4` needs an RNG, and
@@ -270,6 +276,8 @@ kithara = { workspace = true, features = ["download", "android", "client-wreq"] 
 toml = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
+
 criterion = { workspace = true }
 
 [lints]

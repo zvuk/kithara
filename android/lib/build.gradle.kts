@@ -95,6 +95,11 @@ val exportTestFixtures by tasks.registering(Exec::class) {
 }
 
 android {
+    testOptions {
+        providers.gradleProperty("kithara.testResultsDir").orNull?.let { resultsDir = it }
+        providers.gradleProperty("kithara.testReportDir").orNull?.let { reportDir = it }
+    }
+
     namespace = "com.kithara"
     compileSdk = libs.versions.compileSdk.get().toInt()
 

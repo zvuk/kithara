@@ -2,7 +2,7 @@
 
 use std::{
     num::{NonZeroU32, NonZeroUsize},
-    path::Path,
+    path::PathBuf,
 };
 
 use kithara::{
@@ -22,7 +22,7 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
 
 #[kithara::fixture]
-fn response_source() -> &'static Path {
+fn response_source() -> PathBuf {
     signal_mp3_sine880_30s()
         .path()
         .expect("generated sine fixture is stored on disk")
@@ -233,7 +233,7 @@ async fn playing_queue(
     backend: StretchKind,
     backends: ElasticBackendConfig,
     case: ResponseCase,
-    response_source: &'static Path,
+    response_source: PathBuf,
 ) -> (OfflinePlayerHarness, HostOwned<Queue<TestPools>>) {
     let stretch = StretchControls::new(1.0);
     stretch.set_backend(backend);
@@ -471,7 +471,7 @@ async fn run_case(
     backend: StretchKind,
     backends: ElasticBackendConfig,
     case: ResponseCase,
-    response_source: &'static Path,
+    response_source: PathBuf,
 ) {
     let (harness, queue) = playing_queue(temp_dir, backend, backends, case, response_source).await;
     let recorder = probe_capture::install();
@@ -537,20 +537,29 @@ async fn run_case(
 #[case::signalsmith_product(StretchKind::Signalsmith, response_backends(), PRODUCT)]
 #[case::signalsmith_extreme(StretchKind::Signalsmith, response_backends(), EXTREME)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case::bungee_minimum(StretchKind::Bungee, response_backends(), MINIMUM)
 )]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case::bungee_product(StretchKind::Bungee, response_backends(), PRODUCT)
 )]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case::bungee_extreme(StretchKind::Bungee, response_backends(), EXTREME)
 )]
 async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     temp_dir: TestTempDir,
-    response_source: &'static Path,
+    response_source: PathBuf,
     #[case] backend: StretchKind,
     #[case] backends: ElasticBackendConfig,
     #[case] case: ResponseCase,

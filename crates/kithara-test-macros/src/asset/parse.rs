@@ -51,7 +51,7 @@ pub(crate) struct AssetArgs {
     pub(crate) env: Vec<LitStr>,
     /// Pass the build context to a required producer.
     pub(crate) context: bool,
-    /// Bake the asset into the binary instead of reading it from the store.
+    /// Bake the asset into filesystem-free wasm binaries.
     pub(crate) embed: bool,
     /// Keep the build green when this producer reports an unavailable asset.
     pub(crate) optional: bool,

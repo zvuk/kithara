@@ -4,6 +4,8 @@
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
 
+use kithara_test_dylib as _;
+
 mod common;
 
 #[cfg(not(target_arch = "wasm32"))]

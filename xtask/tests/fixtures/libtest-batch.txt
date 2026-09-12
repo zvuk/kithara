@@ -1,0 +1,23 @@
+
+running 4 tests
+test alpha_passes ... ok
+test beta_fails ... FAILED
+test delta_passes ... ok
+test gamma_is_ignored ... ignored, pins a real regression; unignore when the layer lands
+
+failures:
+
+---- beta_fails stdout ----
+captured line one
+captured line two
+
+thread 'beta_fails' (35352549) panicked at fixture.rs:8:5:
+beta went wrong
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    beta_fails
+
+test result: FAILED. 2 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

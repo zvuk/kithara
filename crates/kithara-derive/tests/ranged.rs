@@ -1,6 +1,8 @@
 //! Behaviour of the code `#[derive(Ranged)]` emits.
 
 use kithara_derive::Ranged;
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
 use kithara_test_utils::kithara;
 
 /// Asymmetric on purpose: the two ends have to be read separately.

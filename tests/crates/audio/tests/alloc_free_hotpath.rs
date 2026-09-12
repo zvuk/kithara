@@ -215,7 +215,10 @@ fn resampler_presize_keeps_output_bit_exact(
 #[kithara::test]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case(StretchKind::Bungee)
 )]
 fn timestretch_active_process_and_terminal_flush_are_allocation_free(
@@ -266,7 +269,10 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(
 #[kithara::test]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
+    all(
+        not(target_os = "android"),
+        not(all(target_os = "windows", target_env = "msvc"))
+    ),
     case(StretchKind::Bungee)
 )]
 fn timestretch_pending_and_maximum_output_are_allocation_free(

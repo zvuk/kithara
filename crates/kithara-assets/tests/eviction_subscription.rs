@@ -3,6 +3,10 @@
 //! receives every `ResourceKey` evicted under its `asset_root`; keys
 //! under a different `asset_root` are not delivered to it; dropping the
 //! returned guard deregisters, so no further keys arrive.
+
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+
 mod support;
 
 use std::num::NonZeroUsize;

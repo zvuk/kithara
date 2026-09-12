@@ -69,7 +69,7 @@ dev = []
 # Exposes JNI entrypoints that render through the offline firewheel
 # backend and write WAV output, bypassing cpal/AAudio. Never ship in a
 # release AAR.
-test = ["kithara/probe", "dep:cpal"]
+test = ["kithara/offline", "kithara/probe", "kithara/signal", "dep:cpal"]
 
 [dependencies]
 kithara = { workspace = true, default-features = false, features = [

@@ -82,6 +82,9 @@ kithara-test-utils = { path = "../kithara-test-utils", features = [
     "tls-rustls",
 ] }
 
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
+
 [lints]
 workspace = true
 

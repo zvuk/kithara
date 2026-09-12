@@ -35,9 +35,11 @@ pub enum PendingReason {
 /// as an enum variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadOutcome {
-    /// `count` frames were written into the output buffer (`count > 0`
-    /// by construction). `position` is the reader's position
-    /// **after** the read.
+    /// `count` values were written into the output buffer (`count > 0`
+    /// by construction). The producing call sets the unit: interleaved
+    /// samples for [`read`](crate::AudioRead::read), frames per channel
+    /// for [`read_planar`](crate::AudioRead::read_planar). `position` is
+    /// the reader's position **after** the read.
     Frames {
         count: NonZeroUsize,
         position: Duration,

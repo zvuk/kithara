@@ -1,7 +1,6 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::OnceLock,
-};
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::OnceLock;
 
 use thiserror::Error;
 
@@ -13,10 +12,10 @@ pub struct AssetEntry {
     pub content_type: &'static str,
     /// Content address inside the cache revision namespace.
     pub id: &'static str,
-    /// File extension inside the fixture store.
-    pub ext: &'static str,
     /// Accessor name, `{func}_{case}`.
     pub name: &'static str,
+    /// Path relative to the store root, including the cache revision.
+    pub path: &'static str,
     /// Redacted build-time reason an optional asset is unavailable.
     pub unavailable: Option<&'static str>,
 }
@@ -25,6 +24,9 @@ pub struct AssetEntry {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum AssetError {
+    /// Runtime store configuration is invalid.
+    #[error("fixture store configuration: {0}")]
+    Store(#[source] std::io::Error),
     /// An optional producer did not materialize this asset.
     #[error("fixture `{name}` is unavailable: {reason}")]
     Unavailable {
@@ -33,13 +35,13 @@ pub enum AssetError {
         /// Redacted build-time failure.
         reason: &'static str,
     },
-    /// A required on-disk entry disappeared after the build.
-    #[error("fixture `{name}` is missing from {path}: {source}")]
+    /// A required entry is missing or unreadable in the runtime store.
+    #[error("fixture `{name}` is missing from {}: {source}", path.display())]
     Read {
         /// Generated accessor name.
         name: &'static str,
         /// Expected store path.
-        path: String,
+        path: PathBuf,
         /// Filesystem failure.
         #[source]
         source: std::io::Error,
@@ -54,10 +56,8 @@ pub struct Asset {
 
 enum Source {
     Embedded(&'static [u8]),
-    OnDisk {
-        bytes: &'static OnceLock<Vec<u8>>,
-        path: &'static OnceLock<PathBuf>,
-    },
+    #[cfg(not(target_arch = "wasm32"))]
+    OnDisk(&'static OnceLock<Vec<u8>>),
 }
 
 impl Asset {
@@ -66,8 +66,7 @@ impl Asset {
     /// # Panics
     ///
     /// Panics when an optional asset is unavailable or a store entry is
-    /// missing. A missing required entry means the build script did not run for
-    /// this build: run `cargo build -p kithara-test-fixtures`.
+    /// missing, or the runtime store override is invalid.
     #[must_use]
     pub fn bytes(&self) -> &'static [u8] {
         self.try_bytes().unwrap_or_else(|error| panic!("{error}"))
@@ -89,25 +88,41 @@ impl Asset {
     }
 
     /// Asset read from the store on first use.
+    #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
-    pub const fn on_disk(
-        entry: &'static AssetEntry,
-        bytes: &'static OnceLock<Vec<u8>>,
-        path: &'static OnceLock<PathBuf>,
-    ) -> Self {
+    pub const fn on_disk(entry: &'static AssetEntry, cell: &'static OnceLock<Vec<u8>>) -> Self {
         Self {
             entry,
-            source: Source::OnDisk { bytes, path },
+            source: Source::OnDisk(cell),
         }
     }
 
     /// Store path, or `None` for an asset baked into the binary.
+    ///
+    /// # Panics
+    /// Panics if the runtime store override is not an absolute path.
     #[must_use]
-    pub fn path(&self) -> Option<&'static Path> {
+    pub fn path(&self) -> Option<PathBuf> {
         match self.source {
             Source::Embedded(_) => None,
-            Source::OnDisk { path, .. } => Some(path.get_or_init(|| store_path(self.entry))),
+            #[cfg(not(target_arch = "wasm32"))]
+            Source::OnDisk(_) => Some(self.store_path().unwrap_or_else(|error| panic!("{error}"))),
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn store_path(&self) -> Result<PathBuf, AssetError> {
+        crate::store::file(std::path::Path::new(self.entry.path)).map_err(|source| {
+            if source.kind() == std::io::ErrorKind::InvalidInput {
+                AssetError::Store(source)
+            } else {
+                AssetError::Read {
+                    name: self.entry.name,
+                    path: PathBuf::from(self.entry.path),
+                    source,
+                }
+            }
+        })
     }
 
     /// Bytes of the asset, or the redacted reason an optional producer failed.
@@ -115,7 +130,9 @@ impl Asset {
     /// # Errors
     ///
     /// Returns [`AssetError::Unavailable`] for an optional asset that was not
-    /// hydrated and [`AssetError::Read`] when an on-disk entry disappeared.
+    /// hydrated, [`AssetError::Read`] when a store entry is unreadable or the
+    /// HTTP origin cannot supply it, or [`AssetError::Store`] when the runtime
+    /// store override is invalid.
     pub fn try_bytes(&self) -> Result<&'static [u8], AssetError> {
         if let Some(reason) = self.entry.unavailable {
             return Err(AssetError::Unavailable {
@@ -125,45 +142,25 @@ impl Asset {
         }
         match self.source {
             Source::Embedded(bytes) => Ok(bytes),
-            Source::OnDisk { bytes, path } => {
-                if let Some(bytes) = bytes.get() {
+            #[cfg(not(target_arch = "wasm32"))]
+            Source::OnDisk(cell) => {
+                if let Some(bytes) = cell.get() {
                     return Ok(bytes);
                 }
-                let path = path.get_or_init(|| store_path(self.entry));
-                let loaded = std::fs::read(path).map_err(|source| AssetError::Read {
+                let path = self.store_path()?;
+                let loaded = std::fs::read(&path).map_err(|source| AssetError::Read {
                     source,
                     name: self.entry.name,
-                    path: path.display().to_string(),
+                    path,
                 })?;
-                Ok(bytes.get_or_init(|| loaded))
+                Ok(cell.get_or_init(|| loaded))
             }
         }
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn store_path(entry: &AssetEntry) -> PathBuf {
-    let root = crate::store::root_from_env()
-        .unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
-    crate::store::entry_path(
-        &crate::store::namespace(&root, crate::store::CACHE_VERSION.trim()),
-        entry.id,
-        entry.ext,
-    )
-}
-
-#[cfg(target_arch = "wasm32")]
-fn store_path(entry: &AssetEntry) -> PathBuf {
-    panic!(
-        "fixture `{}` is not embedded and has no filesystem on wasm32",
-        entry.name
-    )
-}
-
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use std::path::PathBuf;
-
     use kithara_test_utils::kithara;
 
     use super::{Asset, AssetEntry, AssetError, OnceLock};
@@ -173,13 +170,12 @@ mod tests {
         static ENTRY: AssetEntry = AssetEntry {
             name: "remote_reference",
             id: "remote-id",
-            ext: "m3u8",
+            path: "revision/remote.m3u8",
             content_type: "application/vnd.apple.mpegurl",
             unavailable: Some("HTTP 403; refresh KITHARA_TOKEN"),
         };
         static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
-        static PATH: OnceLock<PathBuf> = OnceLock::new();
-        let asset = Asset::on_disk(&ENTRY, &BYTES, &PATH);
+        let asset = Asset::on_disk(&ENTRY, &BYTES);
 
         assert!(matches!(
             asset.try_bytes(),

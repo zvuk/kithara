@@ -5,6 +5,7 @@
 )]
 
 pub use kithara_integration_tests::bufpool_ext;
+use kithara_test_dylib as _;
 
 #[path = "source_helper.rs"]
 mod source_helper;

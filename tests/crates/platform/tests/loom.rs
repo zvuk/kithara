@@ -12,6 +12,7 @@ use kithara::platform::{
     },
     thread,
 };
+use kithara_test_dylib as _;
 
 /// A backstop, not a scheduling budget. The gate tests assert that a signal
 /// published after the waiter's snapshot wakes that waiter; a correct gate

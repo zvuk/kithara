@@ -7,10 +7,10 @@
 //! for test parameters; signal primitives also support assertions and their own
 //! tests.
 
-/// Every accessor that reads the store carries its own `cfg`, because the store
-/// is a host filesystem the browser cannot reach; an `embed` accessor carries
-/// its bytes instead and compiles everywhere. The store itself stays native, and
-/// the wasm lane reaches the rest through `SignalAsset` over HTTP.
+/// Every native accessor reads its prepared entry from the store. An accessor
+/// marked `embed` carries its bytes on wasm, where the store is unavailable; the
+/// remaining accessors compile only for native targets. The wasm lane reaches
+/// those fixtures through `SignalAsset` over HTTP.
 pub mod asset;
 pub mod assets;
 pub mod fixtures;
