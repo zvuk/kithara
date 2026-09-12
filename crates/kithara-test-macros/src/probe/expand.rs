@@ -75,10 +75,10 @@ fn wire_fields(
         ));
     }
     let total = args.len() + computed.len();
-    if total > 6 {
+    if total > 5 {
         return Err(Error::new_spanned(
             owner,
-            "probe supports at most 6 wire arguments (USDT provider arity ceiling)",
+            "probe supports at most 5 payload arguments (one of the 6 USDT provider slots is reserved for the operation id)",
         ));
     }
 
@@ -93,7 +93,7 @@ fn wire_fields(
         .zip(&arg_slots)
         .map(|(arg, slot)| {
             quote! {
-                #[cfg(any(test, feature = "probe"))]
+                #[cfg(feature = "usdt")]
                 let #slot: u64 =
                     ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#arg);
             }
@@ -104,7 +104,7 @@ fn wire_fields(
         .zip(&computed_slots)
         .map(|((_, expression), slot)| {
             quote! {
-                #[cfg(any(test, feature = "probe"))]
+                #[cfg(feature = "usdt")]
                 let #slot: u64 =
                     ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#expression);
             }
@@ -133,7 +133,6 @@ fn wire_fields(
                 .map(|((name, _), slot)| quote! { #name = #slot }),
         )
         .collect();
-
     Ok(WireFields {
         arg_bindings,
         computed_bindings,
@@ -148,14 +147,8 @@ fn wire_fields(
 pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenStream2> {
     let fn_name = input.sig.ident.clone();
     let fn_name_str = fn_name.to_string();
-
     let crate_name = std::env::var("CARGO_PKG_NAME")
-        .map_err(|_| {
-            Error::new_spanned(
-                &input.sig.ident,
-                "#[kithara::probe] requires CARGO_PKG_NAME env var (set automatically by cargo)",
-            )
-        })?
+        .map_err(|_| Error::new_spanned(&input.sig.ident, "probe requires CARGO_PKG_NAME"))?
         .replace('-', "_");
     let target = format!("{crate_name}_probe");
 
@@ -174,27 +167,20 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let body = if probe_return {
         quote! {
             let __probe_ret = (|| #block)();
-            #[cfg(any(test, feature = "probe"))]
+            #[cfg(feature = "usdt")]
             {
-                let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
-                ::kithara_test_utils::probe::register_probes();
-                ::kithara_test_utils::probe::Probe::record_probe(&__probe_ret, #fn_name_str);
+                const __KITHARA_USDT_OPERATION: u64 =
+                    ::kithara_test_utils::probe::operation_id(concat!(module_path!(), "::", #fn_name_str));
+                ::kithara_test_utils::probe::Probe::record_probe(
+                    &__probe_ret,
+                    #fn_name_str,
+                    __KITHARA_USDT_OPERATION,
+                );
             }
             __probe_ret
         }
     } else {
         quote! { #(#stmts)* }
-    };
-
-    let capture_caller_fn = if filter.caller {
-        quote! {
-            let __probe_caller_fn = ::kithara_test_utils::probe::caller_fn_above(#fn_name_str)
-                .unwrap_or_default();
-        }
-    } else {
-        quote! {
-            let __probe_caller_fn = "";
-        }
     };
 
     let emit_entry_event = build_emit_entry_event(
@@ -204,7 +190,6 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         &fields.fire_fn,
         &fields.slots,
         &fields.tracing_fields,
-        &capture_caller_fn,
     );
     let WireFields {
         arg_bindings,
@@ -214,15 +199,8 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         ..
     } = fields;
 
-    let track_caller_attr = if probe_return {
-        quote! {}
-    } else {
-        quote! { #[cfg_attr(any(test, feature = "probe"), track_caller)] }
-    };
-
     Ok(quote! {
         #(#attrs)*
-        #track_caller_attr
         #vis #sig {
             #(#arg_consumes)*
             #(#computed_consumes)*
@@ -245,7 +223,6 @@ pub(crate) fn expand_event(event: ProbeEvent) -> syn::Result<TokenStream2> {
         .replace('-', "_");
     let probe_name = name.to_string();
     let fields = wire_fields(&args, &computed, &name)?;
-    let capture_caller_fn = quote! { let __probe_caller_fn = ""; };
     let emit = build_emit_entry_event(
         false,
         &probe_name,
@@ -253,7 +230,6 @@ pub(crate) fn expand_event(event: ProbeEvent) -> syn::Result<TokenStream2> {
         &fields.fire_fn,
         &fields.slots,
         &fields.tracing_fields,
-        &capture_caller_fn,
     );
     let WireFields {
         arg_bindings,
@@ -278,37 +254,26 @@ fn build_emit_entry_event(
     fire_fn: &Ident,
     probe_idents: &[Ident],
     tracing_fields: &[TokenStream2],
-    capture_caller_fn: &TokenStream2,
 ) -> TokenStream2 {
     if probe_return {
         return quote! {};
     }
     quote! {
-        #[cfg(any(test, feature = "probe"))]
+        #[cfg(feature = "usdt")]
+        let __kithara_usdt_rtsan_permit = ::kithara_test_utils::rtsan::permit();
+        #[cfg(all(feature = "usdt", target_os = "macos", not(miri)))]
         {
-            let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
             ::kithara_test_utils::probe::register_probes();
-            let __probe_caller = ::core::panic::Location::caller();
-            let __probe_seq: u64 = ::kithara_test_utils::probe::next_probe_seq();
-            let __probe_thread_seq: u64 =
-                ::kithara_test_utils::probe::next_thread_probe_seq();
-            let __probe_thread_id: u64 =
-                ::kithara_test_utils::probe::current_thread_u64();
-            let __probe_install_id: u64 =
-                ::kithara_test_utils::probe::current_install_id();
-            #capture_caller_fn
-            ::kithara_test_utils::probe::#fire_fn(#fn_name_str, #(#probe_idents),*);
-            ::tracing::event!(
+            const __KITHARA_USDT_OPERATION: u64 =
+                ::kithara_test_utils::probe::operation_id(concat!(module_path!(), "::", #fn_name_str));
+            ::kithara_test_utils::probe::#fire_fn(__KITHARA_USDT_OPERATION, #(#probe_idents),*);
+        }
+        #[cfg(all(feature = "usdt", any(not(target_os = "macos"), miri)))]
+        {
+            ::kithara_test_utils::tracing::event!(
                 target: #target,
-                ::tracing::Level::TRACE,
+                ::kithara_test_utils::tracing::Level::TRACE,
                 probe = #fn_name_str,
-                caller_file = __probe_caller.file(),
-                caller_line = __probe_caller.line() as u64,
-                caller_fn = __probe_caller_fn,
-                seq = __probe_seq,
-                thread_id = __probe_thread_id,
-                thread_seq = __probe_thread_seq,
-                install_id = __probe_install_id,
                 #(#tracing_fields),*
             );
         }
@@ -339,6 +304,36 @@ mod tests {
             expanded.block.stmts.last(),
             Some(Stmt::Expr(Expr::MethodCall(call), None)) if call.method == "total_bytes"
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn probe_emission_uses_only_usdt_platform_backends() -> syn::Result<()> {
+        let input: ItemFn = parse_quote! {
+            fn advance(frames: u64) {
+                let _ = frames;
+            }
+        };
+        let filter = ProbeFilter {
+            args: Some(vec![parse_quote!(frames)]),
+            ..ProbeFilter::default()
+        };
+
+        let expanded = expand(&input, filter)?.to_string();
+
+        assert!(
+            expanded
+                .contains("cfg (all (feature = \"usdt\" , target_os = \"macos\" , not (miri)))")
+        );
+        assert!(
+            expanded.contains(
+                "cfg (all (feature = \"usdt\" , any (not (target_os = \"macos\") , miri)))"
+            )
+        );
+        assert!(!expanded.contains("cfg (test)"));
+        assert!(!expanded.contains("probe-capture"));
+        assert!(expanded.contains("kithara_test_utils :: tracing :: event"));
+        assert!(expanded.contains("rtsan :: permit"));
         Ok(())
     }
 }

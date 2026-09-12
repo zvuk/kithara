@@ -7,8 +7,6 @@ use super::{
     QueueControl,
     types::{CachedPosition, CrossfadeArm, Placement, SelectPhase, Transition, extract_track_name},
 };
-#[cfg(any(test, feature = "probe"))]
-use crate::event::TrackStatus;
 use crate::{
     attempts::LoadClass,
     error::QueueError,
@@ -78,8 +76,6 @@ where
             drop(navigation);
             self.write_armed_for(CrossfadeArm::Disarmed);
             self.write_cached_position(CachedPosition::Unknown);
-            #[cfg(any(test, feature = "probe"))]
-            self.autoplay_target.store(CrossfadeArm::Disarmed);
             self.player.remove_all_items();
             ids
         };
@@ -89,27 +85,6 @@ where
             .unwrap_or_else(PoisonError::into_inner) = self.bus.subscribe();
         for id in ids {
             self.bus.publish(QueueEvent::TrackRemoved { id });
-        }
-    }
-
-    #[cfg(any(test, feature = "probe"))]
-    fn complete_load_for_test_inner(&self, id: TrackId, resource: kithara_play::Resource) {
-        let index = {
-            let guard = self.lock_tracks();
-            guard.iter().position(|e| e.id == id)
-        };
-        if let Some(index) = index {
-            let Ok(()) = self.player.replace_item(index, resource, id) else {
-                return;
-            };
-            self.set_status(id, TrackStatus::Loaded);
-            if self.should_autoplay
-                && self.autoplay_target.disarm_if_matches(id)
-                && let Err(err) =
-                    self.select_with_reason(id, Transition::None, AdvanceReason::UserSelect)
-            {
-                tracing::warn!(id = id.as_u64(), %err, "autoplay select failed");
-            }
         }
     }
 
@@ -193,97 +168,6 @@ where
             }
         };
         Ok(self.insert_entry(id, source, Placement::At(pos)))
-    }
-
-    /// Test helper: drive a pre-built [`kithara_play::Resource`] into the
-    /// player slot for an id previously created via
-    /// [`Self::register_for_test`]. Mirrors the synchronous portion of
-    /// the loader's `apply_after_load` callback.
-    #[cfg(any(test, feature = "probe"))]
-    pub(in crate::queue) fn probe_complete_load(
-        &self,
-        id: TrackId,
-        resource: kithara_play::Resource,
-    ) {
-        let _admission = self.lock_admission();
-        self.complete_load_for_test_inner(id, resource);
-    }
-
-    /// Test helper: convenience for the common case where load order
-    /// matches register order. Equivalent to
-    /// [`Self::register_for_test`] + [`Self::complete_load_for_test`].
-    #[cfg(any(test, feature = "probe"))]
-    pub(in crate::queue) fn probe_insert_loaded(
-        &self,
-        resource: kithara_play::Resource,
-    ) -> TrackId {
-        let _admission = self.lock_admission();
-        let id = self.register_for_test_inner();
-        self.complete_load_for_test_inner(id, resource);
-        id
-    }
-
-    /// Test helper: put `id` into the state a track reaches after natural
-    /// EOF — selected in navigation and already consumed by the player.
-    /// The next advance onto it must reload it (repeat-one) instead of
-    /// picking a pre-loaded successor.
-    #[cfg(any(test, feature = "probe"))]
-    pub(in crate::queue) fn probe_mark_played(&self, id: TrackId) {
-        let _admission = self.lock_admission();
-        let index = {
-            let guard = self.lock_tracks();
-            guard.iter().position(|e| e.id == id)
-        };
-        if let Some(index) = index {
-            self.lock_navigation_mut().select(index);
-            self.set_status(id, TrackStatus::Consumed);
-        }
-    }
-
-    /// Test helper: register a placeholder track entry without starting
-    /// a real loader. Pair with [`Self::complete_load_for_test`] to
-    /// drive the loaded resource into the player on demand.
-    #[cfg(any(test, feature = "probe"))]
-    #[must_use]
-    pub(in crate::queue) fn probe_register(&self) -> TrackId {
-        let _admission = self.lock_admission();
-        self.register_for_test_inner()
-    }
-
-    /// Test helper: pre-supply a fresh [`kithara_play::Resource`] that
-    /// `Queue::select` should plant when a `Consumed` / `Cancelled` /
-    /// `Failed` track is re-selected. This emulates the loader-respawn
-    /// path the production code uses without dispatching the real
-    /// loader, so harness tests can exercise replay-after-EOF.
-    #[cfg(any(test, feature = "probe"))]
-    pub(in crate::queue) fn probe_supply_respawn_resource(
-        &self,
-        id: TrackId,
-        resource: kithara_play::Resource,
-    ) {
-        let _admission = self.lock_admission();
-        self.test_resources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, resource);
-    }
-
-    #[cfg(any(test, feature = "probe"))]
-    fn register_for_test_inner(&self) -> TrackId {
-        let id = TrackId::allocate();
-        let url = format!("test://memory/{}", id.as_u64());
-        let record = TrackRecord::new(id, format!("test-{}", id.as_u64()), TrackSource::Uri(url));
-        let index = {
-            let mut guard = self.lock_tracks_mut();
-            guard.push(record);
-            guard.len() - 1
-        };
-        self.player.reserve_slots(self.len());
-        if self.should_autoplay {
-            let _ = self.autoplay_target.arm_if_disarmed(id);
-        }
-        self.bus.publish(QueueEvent::TrackAdded { id, index });
-        id
     }
 
     /// Remove a track from the queue by id.
@@ -438,7 +322,9 @@ mod tests {
     #[kithara::test(tokio)]
     async fn clear_discards_old_eof_before_reinsert() {
         let queue = make_queue();
-        let old = queue.probe_register();
+        let old = queue
+            .append("https://example.com/old.mp3")
+            .expect("open queue accepts a track");
         queue.lock_navigation_mut().select(0);
         queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
             item: ItemRole::Leading(TrackRef::new(
@@ -449,7 +335,9 @@ mod tests {
         });
 
         queue.clear();
-        let replacement = queue.probe_register();
+        let replacement = queue
+            .append("https://example.com/replacement.mp3")
+            .expect("open queue accepts a replacement track");
         queue.lock_navigation_mut().select(0);
         queue.player.set_rate(1.0);
 

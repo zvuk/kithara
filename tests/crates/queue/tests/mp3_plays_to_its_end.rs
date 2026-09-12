@@ -10,18 +10,16 @@
 //! cuts the track short, which is what a listener hears as a fade in the
 //! middle of one.
 
-use std::path::Path;
-
 use kithara::{
-    events::TrackId,
+    events::{EventReceiver, TrackId},
     platform::{
         sync::Arc,
         time::{self, Duration},
     },
-    play::{Resource, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
     queue::{
-        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, Transition,
-        test_utils::QueueProbe,
+        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus,
+        Transition,
     },
 };
 use kithara_integration_tests::{
@@ -42,21 +40,23 @@ const NO_CROSSFADE_SECS: f32 = 0.0;
 /// Two tracks plus slack; the loop leaves as soon as the queue ends.
 const BLOCK_BUDGET: usize = 3_000;
 
-async fn open_resource(
-    harness: &OfflinePlayerHarness,
-    src: ResourceSrc,
-    cache_dir: &Path,
-) -> Resource {
-    let config = ResourceConfig::<TestPools>::for_src(src)
-        .store(kithara_integration_tests::disk_asset_store(cache_dir))
-        .build();
-    let config = harness
-        .with_player(move |player| player.prepare_config(config))
-        .await
-        .expect("prepare resource");
-    let mut resource = Resource::new(config).await.expect("open resource");
-    let _ = resource.preload().await;
-    resource
+async fn wait_for_loaded(receiver: &mut EventReceiver<TestEvent>, id: TrackId) {
+    time::timeout(Duration::from_secs(30), async {
+        while let Ok(envelope) = receiver.recv().await {
+            if matches!(
+                envelope.event,
+                TestEvent::Queue(QueueEvent::TrackStatusChanged {
+                    id: seen,
+                    status: TrackStatus::Loaded,
+                }) if seen == id
+            ) {
+                return;
+            }
+        }
+        panic!("queue event stream closed before track {id:?} loaded");
+    })
+    .await
+    .expect("queued MP3 must load");
 }
 
 /// What the queue did over the whole playthrough.
@@ -106,23 +106,25 @@ async fn play_queue(
         SAMPLE_RATE,
     )
     .await;
-    let mut config = QueueConfig::builder().player(harness.take_player()).build();
-    config.should_autoplay = false;
+    let config = QueueConfig::builder().player(harness.take_player()).build();
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 
+    let mut receiver = queue.subscribe();
     let mut tracks = Vec::with_capacity(2);
     for (index, source) in sources.into_iter().enumerate() {
-        let resource = open_resource(
-            &harness,
-            source,
-            &temp_dir.path().join(format!("track{index}")),
-        )
-        .await;
-        tracks.push(
-            harness
-                .run(&queue, move |q| q.insert_loaded_for_test(resource))
-                .await,
-        );
+        let config = ResourceConfig::<TestPools>::for_src(source)
+            .store(kithara_integration_tests::disk_asset_store(
+                &temp_dir.path().join(format!("track{index}")),
+            ))
+            .build();
+        let id = harness
+            .run(&queue, move |q| {
+                q.append(TrackSource::Config(Box::new(config)))
+            })
+            .await
+            .expect("append streamed MP3");
+        wait_for_loaded(&mut receiver, id).await;
+        tracks.push(id);
     }
     let (first, second) = (tracks[0], tracks[1]);
     let transition = if crossfade > 0.0 {
@@ -135,7 +137,6 @@ async fn play_queue(
         .await
         .expect("select the first track");
 
-    let mut receiver = queue.subscribe();
     let mut log = QueueLog::default();
     for _ in 0..BLOCK_BUDGET {
         let _ = harness.run(&queue, |q| q.tick()).await;

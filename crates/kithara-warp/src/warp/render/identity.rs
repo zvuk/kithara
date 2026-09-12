@@ -106,7 +106,6 @@ where
                         .transport_revision()
                         .map_or(0, u64::from),
                     output_start,
-                    output_end = i64::from(committed.frontier().output()),
                     source_start,
                     source_end = committed.frontier().source()
                 );

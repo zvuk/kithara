@@ -16,12 +16,8 @@ ignored = ["serde", "unimock"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-# No-op shim retained so `#[kithara::probe]` macro expansions
-# (which emit `cfg(any(test, feature = "probe"))`) don't trigger
-# `unexpected_cfgs` warnings on this crate. No production code is
-# gated by this feature; the canonical test escape hatch was removed
-# in plan async-juggling-plum.md.
-probe = []
+# Enables the crate's USDT probe points.
+usdt = ["kithara-test-utils/usdt"]
 mock = ["dep:unimock"]
 # HTTP backend forwarding (kithara-net reached via kithara-events).
 client-reqwest = []
@@ -52,7 +48,7 @@ unimock = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 proptest = { workspace = true }
 serde_yaml_ng = { workspace = true }
 unimock = { workspace = true }

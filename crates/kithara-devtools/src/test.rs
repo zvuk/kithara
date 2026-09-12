@@ -198,11 +198,8 @@ fn lane_command(
                     .no_block
                     .unwrap_or_else(|| lane.default_no_block.unwrap_or(test.no_block.default)),
             };
-            let backend = request
-                .net_backend
-                .as_deref()
-                .unwrap_or(&test.default_backend);
-            let (_, cmd) = nextest_lane_command(project, toggles, backend, &request.passthrough)?;
+            let backend = backend_name(test, lane, request);
+            let (_, cmd) = nextest_lane_command(project, toggles, &backend, &request.passthrough)?;
             Ok(cmd)
         }
         passthrough => {
@@ -260,6 +257,13 @@ fn validate_config(config: &TestCommandConfig) -> Result<()> {
     for (name, lane) in &config.lanes {
         if lane.program.is_empty() {
             bail!("test.lanes.{name}.program is empty");
+        }
+        if let Some(backend) = &lane.net_backend
+            && !config.net_backends.contains_key(backend)
+        {
+            bail!(
+                "test.lanes.{name}.net_backend `{backend}` is not configured under test.net_backends"
+            );
         }
         passthrough_position(lane).with_context(|| format!("test.lanes.{name}.passthrough"))?;
     }
@@ -322,11 +326,20 @@ fn features_for(
     let no_block = request
         .no_block
         .unwrap_or_else(|| lane.default_no_block.unwrap_or(config.no_block.default));
-    let backend_name = request
+    let backend = backend_name(config, lane, request);
+    lane_features(config, lane, LaneToggles { flash, no_block }, &backend)
+}
+
+fn backend_name(
+    config: &TestCommandConfig,
+    lane: &TestLaneConfig,
+    request: &TestRequest,
+) -> String {
+    request
         .net_backend
         .clone()
-        .unwrap_or_else(|| config.default_backend.clone());
-    lane_features(config, lane, LaneToggles { flash, no_block }, &backend_name)
+        .or_else(|| lane.net_backend.clone())
+        .unwrap_or_else(|| config.default_backend.clone())
 }
 
 pub(crate) fn lane_features(
@@ -642,6 +655,7 @@ mod tests {
                 default_features: Vec::new(),
                 default_flash: None,
                 default_no_block: None,
+                net_backend: None,
                 passthrough: String::new(),
                 env: BTreeMap::new(),
                 owns: Vec::new(),
@@ -660,6 +674,7 @@ mod tests {
                 default_features: vec!["demo/loom".to_owned()],
                 default_flash: Some(false),
                 default_no_block: None,
+                net_backend: None,
                 passthrough: String::new(),
                 env: BTreeMap::new(),
                 owns: Vec::new(),
@@ -674,6 +689,7 @@ mod tests {
                 default_features: Vec::new(),
                 default_flash: None,
                 default_no_block: Some(true),
+                net_backend: None,
                 passthrough: String::new(),
                 env: BTreeMap::new(),
                 owns: Vec::new(),
@@ -688,6 +704,7 @@ mod tests {
                 default_features: Vec::new(),
                 default_flash: Some(false),
                 default_no_block: None,
+                net_backend: Some("native".to_owned()),
                 passthrough: "after-suffix".to_owned(),
                 env: BTreeMap::from([("DEMO_BROWSER".to_owned(), "firefox".to_owned())]),
                 owns: Vec::new(),
@@ -786,6 +803,94 @@ mod tests {
 
         let feats = features_for(test, lane, &request).expect("features");
         assert!(!feats.contains("nb-detect"));
+    }
+
+    #[test]
+    fn lane_backend_overrides_the_project_default() {
+        let project = synthetic_project();
+        let test = &project.test;
+        let lane = &test.lanes["browser"];
+        let request = TestRequest::parse(&[]).expect("parse request");
+
+        let feats = features_for(test, lane, &request).expect("features");
+
+        assert!(feats.contains("demo/native-net"));
+    }
+
+    #[test]
+    fn default_lane_command_resolves_cli_then_lane_then_project_backend() {
+        let mut project = synthetic_project();
+        project
+            .test
+            .lanes
+            .get_mut("workspace")
+            .expect("workspace")
+            .net_backend = Some("native".to_owned());
+        let lane = &project.test.lanes[&project.test.default_lane];
+
+        let lane_backend = lane_command(
+            &project,
+            &project.test.default_lane,
+            lane,
+            &TestRequest::parse(&[]).expect("parse request"),
+        )
+        .expect("default lane command");
+        assert!(
+            args_of(&lane_backend)
+                .iter()
+                .any(|arg| arg.contains("demo/native-net"))
+        );
+
+        let cli_backend = lane_command(
+            &project,
+            &project.test.default_lane,
+            lane,
+            &TestRequest::parse(&["--net-backend=http".to_owned()]).expect("parse request"),
+        )
+        .expect("default lane command");
+        assert!(
+            !args_of(&cli_backend)
+                .iter()
+                .any(|arg| arg.contains("demo/native-net"))
+        );
+    }
+
+    #[test]
+    fn lane_backend_must_be_configured() {
+        let mut project = synthetic_project();
+        project
+            .test
+            .lanes
+            .get_mut("browser")
+            .expect("browser")
+            .net_backend = Some("missing".to_owned());
+
+        let error = validate_config(&project.test).expect_err("unknown lane backend fails");
+
+        assert!(error.to_string().contains("test.lanes.browser.net_backend"));
+    }
+
+    #[test]
+    fn linux_usdt_contract_lanes_keep_their_product_feature_closures() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let project = ProjectConfig::load(&root).expect("load repository config");
+        let test = &project.test;
+        let request = TestRequest::parse(&[]).expect("parse request");
+
+        for (name, feature) in [
+            ("usdt-play", "kithara-play-tests/usdt"),
+            ("usdt-hls", "kithara-hls-tests/usdt"),
+            ("usdt-hls-stress", "kithara-hls-tests/usdt"),
+            ("usdt-queue", "kithara-queue-tests/usdt"),
+        ] {
+            let lane = &test.lanes[name];
+            let features = features_for(test, lane, &request).expect("features");
+            assert!(features.contains(feature), "{name} keeps {feature}");
+            assert!(
+                !features.contains("usdt-observer"),
+                "{name} no longer reaches the removed observer"
+            );
+        }
     }
 
     #[test]

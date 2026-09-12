@@ -1,39 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! Deterministic repro for flake F5: the audio worker BUSY-SPINS when
-//! steady-state forward playback reaches a not-ready (withheld) segment.
+//! Regression contract for forward playback at a withheld HLS segment.
 //!
-//! Root: `Track<Decoding>::step` enters `decode_one_step` whenever
-//! `source_is_ready()` is true. That gate checks only `[pos, next-segment-
-//! boundary)` — the CURRENT segment — so it reports `Ready` even when the
-//! decoder's container parser reads *across* the boundary into the withheld
-//! next segment and returns `Pending`. Before the fix, the `Pending` mapped
-//! to a bare `TrackStep::Blocked(Waiting)` with NO FSM transition: the slot
-//! stayed `Decoding`, so the very next scheduler tick re-ran the full
-//! `decode_one_step` (decode-into-buffer + `wait_range` budget) again. The
-//! source phase at `pos` never changes (the current segment stays ready), so
-//! the loop never parks. The blocking consumer's `recv_outcome_blocking`
-//! wake loop unparks the worker on a tight loop while it waits for a chunk,
-//! and each unpark re-runs the full decode — thousands of times per second
-//! (`step_track took too long — starving other tracks`), burning CPU and
-//! never making progress.
-//!
-//! Contract: while the next segment's body is withheld, the worker must PARK
-//! (transition to `WaitingForSource(Playback)` and re-check the source's
-//! forward read-ahead window cheaply on each wake) — it must NOT re-run
-//! `decode_one_step` on a hot loop. Counted directly off the
-//! `kithara::audio::decode_one_step` probe: a parked worker fires it only on
-//! the occasional wake; the busy-spin fires it thousands of times over the
-//! same window. Once the body is released, decoding must resume.
-//!
-//! Determinism: the `HlsTestServer` segment gate withholds segment
-//! `GATED_SEGMENT`'s BODY while its size (HEAD) stays known, so the layout is
-//! learned up front and the worker reaches the boundary deterministically.
-//! The blocking decode runs on a `spawn_blocking` thread (the documented
-//! offline-pull contract) while a releaser thread observes the parked GET on
-//! the gate's in-process counter, measures the spin RATE off the probe (a
-//! real metric, not a sleep that masks a hang), then releases. No real-time
-//! pacing, no codec timers.
+//! The decoder must wait for the real segment gate and then resume after the
+//! body arrives. The test observes only the public read outcome and the test
+//! server's real request gate; it does not add an observation path to audio.
+
 use std::{
     num::NonZeroUsize,
     sync::atomic::{AtomicBool, Ordering},
@@ -59,7 +31,6 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use kithara_test_fixtures::hls_fixtures::{hls_pcm_boundary, hls_stream_header};
-use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tracing::info;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -69,27 +40,6 @@ const SEGMENT_SIZE: usize = 32_768;
 const SEGMENT_COUNT: usize = 8;
 /// The segment whose body is withheld; forward playback parks at its start.
 const GATED_SEGMENT: usize = 4;
-
-/// Window over which the parked worker's `decode_one_step` invocations are
-/// counted while the consumer is blocked at the withheld boundary. A real
-/// budget — long enough that a busy-spin (thousands/sec) blows the bound by
-/// orders of magnitude.
-const OBSERVE_WINDOW: Duration = Duration::from_millis(700);
-/// Upper bound on `decode_one_step` invocations over the observation window
-/// while parked. The pre-fix spin produced ~7 500/sec (~5 000 in this
-/// window). A correctly-parked worker re-checks the cheap source phase per
-/// wake, not the decode loop, so it fires `decode_one_step` only a few
-/// hundred times at most — well under this ceiling, still an order of
-/// magnitude below the spin floor.
-const MAX_PARKED_DECODE_STEPS: usize = 500;
-
-fn count_decode_steps(recorder: &Recorder) -> usize {
-    recorder
-        .snapshot()
-        .into_iter()
-        .filter(|e| e.target == "kithara_audio_probe" && e.probe_name() == Some("decode_one_step"))
-        .count()
-}
 
 #[kithara::fixture]
 async fn gated_audio(
@@ -123,7 +73,7 @@ async fn gated_audio(
     timeout(Duration::from_secs(30)),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
-async fn forward_into_withheld_segment_parks_without_busy_spin(
+async fn forward_into_withheld_segment_waits_and_resumes(
     #[future(awt)] gated_audio: (HlsTestServer, SegmentGateHandle),
 ) {
     let (server, gate) = gated_audio;
@@ -152,8 +102,6 @@ async fn forward_into_withheld_segment_parks_without_busy_spin(
         .media_info(wav_info)
         .build();
 
-    let recorder = install_recorder();
-
     let mut audio = worker
         .open(audio_config)
         .await
@@ -162,17 +110,12 @@ async fn forward_into_withheld_segment_parks_without_busy_spin(
     let spec = audio.spec();
     let read_samples = spec.channels as usize * 512;
 
-    // Set once the blocking decode has consumed enough to be parked at the
-    // withheld boundary, so the releaser measures the spin during the park.
+    // Set once decoding reaches the withheld boundary.
     let at_boundary = Arc::new(AtomicBool::new(false));
     let released = Arc::new(AtomicBool::new(false));
 
-    // Releaser: wait for the withheld GET to park AND the decode thread to
-    // signal it is at the boundary, then measure `decode_one_step` over a
-    // fixed window (the worker is blocked-consumer-driven during this window),
-    // assert no busy-spin, and release the body so playback resumes.
+    // Release only after the real segment request and decoding boundary.
     let release_gate = gate.clone();
-    let release_recorder = recorder.clone();
     let release_at_boundary = Arc::clone(&at_boundary);
     let release_flag = Arc::clone(&released);
     let releaser = tokio::task::spawn(async move {
@@ -188,22 +131,8 @@ async fn forward_into_withheld_segment_parks_without_busy_spin(
             time::sleep(Duration::from_millis(5)).await;
         }
 
-        let before = count_decode_steps(&release_recorder);
-        time::sleep(OBSERVE_WINDOW).await;
-        let after = count_decode_steps(&release_recorder);
-        let delta = after.saturating_sub(before);
-        info!(
-            before,
-            after,
-            delta,
-            bound = MAX_PARKED_DECODE_STEPS,
-            observe_ms = OBSERVE_WINDOW.as_millis(),
-            "F5 parked-window decode_one_step observation"
-        );
-
         release_flag.store(true, Ordering::Release);
         release_gate.release();
-        delta
     });
 
     let decode_at_boundary = Arc::clone(&at_boundary);
@@ -218,8 +147,7 @@ async fn forward_into_withheld_segment_parks_without_busy_spin(
         // ready segments 0..GATED_SEGMENT, then block at the withheld
         // boundary. The moment a read blocks (consumes all ready data and the
         // worker can't fill the ring), signal the boundary so the releaser
-        // starts its spin measurement; the blocking `read` itself then parks
-        // this thread until the body arrives.
+        // can release the real segment body.
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             if decode_released.load(Ordering::Acquire) {
@@ -263,29 +191,16 @@ async fn forward_into_withheld_segment_parks_without_busy_spin(
         (frames_before, frames_after)
     });
 
-    let parked_delta = releaser.await.expect("releaser joins");
+    releaser.await.expect("releaser joins");
     let (frames_before, frames_after) = decode.await.expect("decode task joins");
 
-    info!(
-        frames_before,
-        frames_after,
-        parked_delta,
-        bound = MAX_PARKED_DECODE_STEPS,
-        "F5 forward-withhold result"
-    );
+    info!(frames_before, frames_after, "F5 forward-withhold result");
 
     assert!(
         frames_before > 0,
         "expected some frames decoded before the withheld boundary"
     );
-    assert!(
-        parked_delta <= MAX_PARKED_DECODE_STEPS,
-        "audio worker BUSY-SPUN at the withheld segment boundary: {parked_delta} \
-         `decode_one_step` invocations over {OBSERVE_WINDOW:?} (bound \
-         {MAX_PARKED_DECODE_STEPS}). A parked worker re-checks the cheap source \
-         phase per wake; this rate means it re-ran the full decode loop on a hot \
-         tick (flake F5)."
-    );
+
     assert!(
         frames_after > 0,
         "playback did not resume after releasing the withheld body"

@@ -28,19 +28,6 @@ impl ProducerPort {
         }
     }
 
-    /// Create an isolated port and a consumer probe for unit tests.
-    #[cfg(any(test, feature = "probe"))]
-    pub fn probe(
-        capacity: usize,
-    ) -> (
-        Self,
-        impl FnMut() -> Option<Fetch<AudioChunk>> + Send + 'static,
-    ) {
-        let (outlet, mut inlet) = crate::runtime::connect(capacity, None);
-        let (_trash_outlet, trash_inlet) = crate::runtime::connect(capacity + 2, None);
-        (Self::new(outlet, trash_inlet), move || inlet.try_pop())
-    }
-
     /// Reclaim spent chunks outside the checked producer core.
     pub fn recycle(&mut self) {
         while self.trash_inlet.try_pop().is_some() {}

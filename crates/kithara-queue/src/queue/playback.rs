@@ -272,8 +272,12 @@ mod tests {
     #[kithara::test(tokio)]
     async fn eof_after_queue_end_does_not_restart_from_first_track() {
         let queue = make_queue();
-        let _a = queue.probe_register();
-        let b = queue.probe_register();
+        let _a = queue
+            .append("https://example.com/a.mp3")
+            .expect("open queue accepts a track");
+        let b = queue
+            .append("https://example.com/b.mp3")
+            .expect("open queue accepts a track");
         queue.lock_navigation_mut().select(1);
         queue.lock_navigation_mut().finish();
         let mut rx = queue.subscribe();

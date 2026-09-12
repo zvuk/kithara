@@ -16,7 +16,7 @@ use crate::{
     session::{
         HostCmd, HostDispatcher, HostReply, Reply,
         protocol::{HostDispatchError, SyncCmd},
-        testing::{FixtureSession, fixture_member},
+        tests::graph::{FixtureSession, fixture_member},
     },
 };
 

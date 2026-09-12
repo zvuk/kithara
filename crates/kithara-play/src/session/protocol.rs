@@ -7,7 +7,7 @@ mod wire {
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
 
     use crate::{
-        api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionBeat, SessionTransportSnapshot, SlotId, Tempo},
         bridge::{MixTapWriter, SharedEq, SlotControl},
         effects::eq::EqBandConfig,
         rt::StreamShape,
@@ -109,7 +109,6 @@ mod wire {
             player_id: PlayerId,
             slot: SlotId,
         },
-        #[cfg(any(test, feature = "probe"))]
         SetPlayerMasterVolumes {
             levels: Vec<PlayerLevel>,
         },
@@ -131,10 +130,6 @@ mod wire {
             writer: MixTapWriter,
         },
         DisableMixTap,
-        SetSessionDucking {
-            mode: SessionDuckingMode,
-        },
-        SessionDucking,
         SetSessionTempo {
             tempo: Tempo,
         },
@@ -173,7 +168,6 @@ mod wire {
     pub enum Reply {
         Ok,
         PlayerRegistered(RegisteredPlayer),
-        SessionDucking(SessionDuckingMode),
         SessionTransport(SessionTransportSnapshot),
         SlotAllocated(AllocatedSlot),
         SampleRate(SessionSampleRate),
@@ -237,9 +231,9 @@ mod handle {
     };
     use kithara_warp::BeatGridId;
 
-    #[cfg(any(test, feature = "probe"))]
-    use super::wire::PlayerLevel;
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, RegisteredPlayer, Reply, SessionSampleRate};
+    use super::wire::{
+        AllocatedSlot, Cmd, PlayerId, PlayerLevel, RegisteredPlayer, Reply, SessionSampleRate,
+    };
     use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError, rt::StreamShape};
 
     /// Handle used by resident players to reach their session owner.
@@ -463,7 +457,6 @@ mod handle {
             .map(|_| ())
         }
 
-        #[cfg(any(test, feature = "probe"))]
         pub fn set_player_master_volumes(&self, levels: Vec<PlayerLevel>) -> Result<(), PlayError> {
             if levels.is_empty() {
                 return Ok(());

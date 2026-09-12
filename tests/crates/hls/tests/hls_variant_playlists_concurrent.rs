@@ -25,8 +25,8 @@ use kithara_integration_tests::{
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
+    usdt_trace::{self, ProbeEvent},
 };
-use kithara_test_utils::probe::capture as probe_capture;
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -39,10 +39,6 @@ impl Consts {
     const MAX_CONCURRENT: usize = 3;
     const LOAD_DEADLINE: Duration = Duration::from_secs(20);
 }
-
-/// `BatchGroup::process` probe (the downloader's batch processor). Fires once
-/// per dispatched batch with `batch_size` + `first_request_id` wire fields.
-const PROCESS_PROBE: &str = "process";
 
 async fn build_hls(helper: &TestServerHelper) -> Url {
     let builder = HlsFixtureBuilder::new()
@@ -179,51 +175,19 @@ async fn observe_until_loaded(
     Ok(variant_request_ids)
 }
 
-/// Largest `process` batch whose first request is a variant media playlist.
-/// Serial playlist loading yields 1 (each playlist is its own batch);
-/// concurrent `try_join_all` loading batches them, yielding `VARIANT_COUNT`.
-/// `None` means no such probe fired (probe feature off or request-id mismatch).
-fn max_playlist_batch_size(
-    probes: &[probe_capture::ProbeEvent],
-    variant_request_ids: &HashSet<u64>,
-) -> Option<u64> {
-    process_probes(probes)
-        .filter(|probe| {
-            probe
-                .u64("first_request_id")
-                .is_some_and(|request_id| variant_request_ids.contains(&request_id))
-        })
-        .filter_map(|probe| probe.u64("batch_size"))
-        .max()
-}
-
-fn process_probes(
-    probes: &[probe_capture::ProbeEvent],
-) -> impl Iterator<Item = &probe_capture::ProbeEvent> {
-    probes
+/// Largest USDT-observed `BatchGroup::process` batch whose first request is a
+/// variant media playlist. Serial playlist loading yields one request per
+/// batch; concurrent loading produces a batch of at least two.
+fn max_playlist_batch_size(records: &[ProbeEvent], variant_request_ids: &HashSet<u64>) -> Option<u64> {
+    records
         .iter()
-        .filter(|probe| probe.target == "kithara_download_probe")
-        .filter(|probe| probe.probe_name() == Some(PROCESS_PROBE))
-}
-
-fn format_process_probes(probes: &[probe_capture::ProbeEvent]) -> String {
-    let entries = process_probes(probes)
-        .filter_map(|probe| {
-            Some(format!(
-                "(seq={}, batch_size={}, first_request_id={})",
-                probe.seq()?,
-                probe.u64("batch_size")?,
-                probe.u64("first_request_id")?,
-            ))
+        .filter(|record| record.probe == "process")
+        .filter_map(|record| {
+            let batch_size = record.field("batch_size")?;
+            let first_request_id = record.field("first_request_id")?;
+            variant_request_ids.contains(&first_request_id).then_some(batch_size)
         })
-        .collect::<Vec<_>>();
-    format!("[{}]", entries.join(", "))
-}
-
-fn format_variant_request_ids(request_ids: &HashSet<u64>) -> String {
-    let mut request_ids: Vec<_> = request_ids.iter().copied().collect();
-    request_ids.sort_unstable();
-    format!("{request_ids:?}")
+        .max()
 }
 
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
@@ -236,8 +200,6 @@ async fn variant_media_playlists_load_concurrently(
     #[future(awt)] prepared_hls: (TestServerHelper, Url),
     #[case] decoder: DecoderBackend,
 ) {
-    let recorder = probe_capture::install();
-
     let (_server, url) = prepared_hls;
 
     let temp = temp_dir();
@@ -257,6 +219,7 @@ async fn variant_media_playlists_load_concurrently(
             )
             .build();
 
+    let trace = usdt_trace::scope();
     let track_id = queue
         .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
         .await
@@ -273,16 +236,10 @@ async fn variant_media_playlists_load_concurrently(
             panic!("{error}");
         }
     };
-    let probes = recorder.snapshot();
+    let records = trace.events();
     tick_handle.stop().await;
 
-    let process_dump = format_process_probes(&probes);
-    let max_batch = max_playlist_batch_size(&probes, &variant_request_ids);
-
-    eprintln!(
-        "DIAG variant_request_ids={} max_playlist_batch={max_batch:?} process()={process_dump}",
-        format_variant_request_ids(&variant_request_ids),
-    );
+    let max_batch = max_playlist_batch_size(&records, &variant_request_ids);
 
     assert!(
         variant_request_ids.len() >= 2,
@@ -296,7 +253,7 @@ async fn variant_media_playlists_load_concurrently(
         "variant media playlists were not batched at the downloader's batch processor \
          (`BatchGroup::process`): largest batch starting at a variant-playlist request = \
          {max_batch:?}, expected >= 2 (serial loading yields 1, concurrent `try_join_all` \
-         yields {}). variant_request_ids={}, process()={process_dump}",
+         yields {}). variant_request_ids={}",
         Consts::VARIANT_COUNT,
         format_variant_request_ids(&variant_request_ids),
     );

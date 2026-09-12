@@ -62,7 +62,6 @@ audio = [
     "kithara/net",
     "kithara/platform",
     "kithara/play",
-    "kithara/probe",
     "kithara/record",
     "kithara/resample-rubato",
     "kithara/resampler",
@@ -84,7 +83,6 @@ wasm = [
     "kithara/full",
     "kithara/download",
     "kithara/queue",
-    "kithara/probe",
     "kithara/mock",
     "kithara/test-utils",
     "kithara/symphonia",
@@ -116,11 +114,13 @@ no-block = ["kithara/no-block", "kithara-test-utils/no-block"]
 # into scope for tests.
 apple-net = ["kithara/apple-net"]
 apple-fused-src = ["kithara/apple-fused-src"]
+# External DTrace acceptance for the real USDT provider.
+usdt = ["dep:kithara", "kithara/usdt"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara-events = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
+kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
 
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }

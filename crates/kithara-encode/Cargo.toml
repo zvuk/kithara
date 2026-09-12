@@ -46,7 +46,7 @@ tempfile = { workspace = true, optional = true }
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["probe"] }
+kithara-test-utils = { workspace = true, features = [] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }

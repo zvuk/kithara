@@ -42,12 +42,8 @@ tls-native = [
     "kithara-stream/tls-native",
     "kithara-abr/tls-native",
 ]
-# No-op shim retained so `#[kithara::probe]` macro expansions
-# (which emit `cfg(any(test, feature = "probe"))`) don't trigger
-# `unexpected_cfgs` warnings on this crate. No production code is
-# gated by this feature; the probe arg is observed via USDT in test
-# builds only.
-probe = []
+# Enables the crate's USDT probe points.
+usdt = ["kithara-test-utils/usdt"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
@@ -82,7 +78,7 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

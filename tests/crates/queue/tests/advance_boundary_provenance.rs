@@ -12,8 +12,11 @@ use kithara::{
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{Resource, ResourceConfig, ResourceSrc, effects::eq::generate_log_spaced_bands},
-    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    play::{ResourceConfig, ResourceSrc, effects::eq::generate_log_spaced_bands},
+    queue::{
+        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus,
+        Transition,
+    },
     warp::{StretchControls, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -536,12 +539,11 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(
 ) {
     let (_server, sources) = crossfade_tracks;
     let timestretch = StretchControls::new(1.0);
-    let setup = setup_flac_queue_with_player_config_autoplay(
+    let setup = setup_flac_queue_with_player_config(
         &sources,
         &temp_dir,
         RESAMPLED_RENDER_RATE,
         crossfade_eq_stretch_player_config(&timestretch),
-        true,
         true,
     )
     .await;
@@ -580,12 +582,11 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
 ) {
     let (_server, sources) = real_geometry_tracks;
     let timestretch = StretchControls::new(1.0);
-    let setup = setup_flac_queue_with_player_config_autoplay(
+    let setup = setup_flac_queue_with_player_config(
         &sources,
         &temp_dir,
         RESAMPLED_RENDER_RATE,
         crossfade_eq_stretch_player_config(&timestretch),
-        true,
         true,
     )
     .await;
@@ -814,12 +815,11 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(
 ) {
     let (_server, sources) = crossfade_tracks;
     let timestretch = StretchControls::new(1.0);
-    let setup = setup_flac_queue_with_player_config_autoplay(
+    let setup = setup_flac_queue_with_player_config(
         &sources,
         &temp_dir,
         SAMPLE_RATE,
         crossfade_eq_stretch_player_config(&timestretch),
-        true,
         false,
     )
     .await;
@@ -1093,14 +1093,6 @@ struct RenderProgress {
     descending_seen_at: Option<usize>,
 }
 
-fn with_autoplay(
-    mut config: QueueConfig<TestPools>,
-    should_autoplay: bool,
-) -> QueueConfig<TestPools> {
-    config.should_autoplay = should_autoplay;
-    config
-}
-
 async fn run_crossfade_flac_case(
     sources: &[Url; 2],
     temp_dir: &TestTempDir,
@@ -1168,21 +1160,16 @@ async fn setup_queue_with_sample_rate(
         .await,
     );
     let queue = harness
-        .insert_control(Queue::new(with_autoplay(
+        .insert_control(Queue::new(
             QueueConfig::builder().player(harness.take_player()).build(),
-            false,
-        )))
+        ))
         .await;
 
-    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
-    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
+    let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
+    let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));
 
-    let id_a = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
-        .await;
-    let _ = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
-        .await;
+    let id_a = append_loaded(&harness, &queue, source_a).await;
+    let _ = append_loaded(&harness, &queue, source_b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
@@ -1202,21 +1189,16 @@ async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDi
         .await,
     );
     let queue = harness
-        .insert_control(Queue::new(with_autoplay(
+        .insert_control(Queue::new(
             QueueConfig::builder().player(harness.take_player()).build(),
-            false,
-        )))
+        ))
         .await;
 
-    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
-    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
+    let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
+    let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));
 
-    let id_a = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
-        .await;
-    let _ = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
-        .await;
+    let id_a = append_loaded(&harness, &queue, source_a).await;
+    let _ = append_loaded(&harness, &queue, source_b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
@@ -1232,25 +1214,6 @@ async fn setup_flac_queue_with_player_config(
     player_config: OfflinePlayerOptions,
     provenance_headroom: bool,
 ) -> QueueSetup {
-    setup_flac_queue_with_player_config_autoplay(
-        sources,
-        temp_dir,
-        render_sample_rate,
-        player_config,
-        false,
-        provenance_headroom,
-    )
-    .await
-}
-
-async fn setup_flac_queue_with_player_config_autoplay(
-    sources: &[Url; 2],
-    temp_dir: &TestTempDir,
-    render_sample_rate: u32,
-    player_config: OfflinePlayerOptions,
-    should_autoplay: bool,
-    provenance_headroom: bool,
-) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate).await;
     let harness = if provenance_headroom {
         with_provenance_headroom(harness)
@@ -1258,36 +1221,18 @@ async fn setup_flac_queue_with_player_config_autoplay(
         harness
     };
     let queue = harness
-        .insert_control(Queue::new(with_autoplay(
+        .insert_control(Queue::new(
             QueueConfig::builder().player(harness.take_player()).build(),
-            should_autoplay,
-        )))
+        ))
         .await;
-
-    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
-    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
-
-    if should_autoplay {
-        let id_a = queue.register_for_test();
-        let id_b = queue.register_for_test();
-        harness
-            .run(&queue, move |q| q.complete_load_for_test(id_b, resource_b))
-            .await;
-        harness
-            .run(&queue, move |q| q.complete_load_for_test(id_a, resource_a))
-            .await;
-    } else {
-        let id_a = harness
-            .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
-            .await;
-        let _ = harness
-            .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
-            .await;
-        harness
-            .run(&queue, move |q| q.select(id_a, Transition::None))
-            .await
-            .expect("select track A");
-    }
+    let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
+    let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));
+    let id_a = append_loaded(&harness, &queue, source_a).await;
+    let _ = append_loaded(&harness, &queue, source_b).await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
+        .expect("select track A");
 
     QueueSetup { harness, queue }
 }
@@ -1301,21 +1246,16 @@ async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> Que
     )
     .await;
     let queue = harness
-        .insert_control(Queue::new(with_autoplay(
+        .insert_control(Queue::new(
             QueueConfig::builder().player(harness.take_player()).build(),
-            false,
-        )))
+        ))
         .await;
 
-    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
-    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
+    let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
+    let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));
 
-    let id_a = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
-        .await;
-    let _ = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
-        .await;
+    let id_a = append_loaded(&harness, &queue, source_a).await;
+    let _ = append_loaded(&harness, &queue, source_b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
@@ -1324,22 +1264,51 @@ async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> Que
     QueueSetup { harness, queue }
 }
 
-async fn hls_resource(harness: &OfflinePlayerHarness, url: &Url, cache_dir: &Path) -> Resource {
+fn hls_source(url: &Url, cache_dir: &Path) -> TrackSource<TestPools> {
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::<TestPools>::for_src(
+    let config = ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("valid HLS master URL"),
     )
     .store(store)
     .build();
-    config = harness
-        .with_player(move |player| player.prepare_config(config))
+    TrackSource::Config(Box::new(config))
+}
+
+async fn append_loaded(
+    harness: &OfflinePlayerHarness,
+    queue: &QueueControl<TestPools>,
+    source: TrackSource<TestPools>,
+) -> kithara::events::TrackId {
+    let mut events: EventReceiver<TestEvent> = queue.subscribe();
+    let id = harness
+        .run(queue, move |q| q.append(source))
         .await
-        .expect("prepare advance-boundary HLS resource");
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open HLS resource for advance-boundary fixture");
-    let _ = resource.preload().await;
-    resource
+        .expect("open queue accepts a fixture source");
+    wait_loaded_from(&mut events, id).await;
+    id
+}
+
+async fn wait_loaded_from(events: &mut EventReceiver<TestEvent>, id: kithara::events::TrackId) {
+    let loaded = time::timeout(Duration::from_secs(20), async {
+        while let Ok(envelope) = events.recv().await {
+            if matches!(
+                envelope.event,
+                TestEvent::Queue(QueueEvent::TrackStatusChanged {
+                    id: seen,
+                    status: TrackStatus::Loaded,
+                }) if seen == id
+            ) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        loaded,
+        "fixture track {id:?} must load through Queue loader"
+    );
 }
 
 #[kithara::flash(true)]

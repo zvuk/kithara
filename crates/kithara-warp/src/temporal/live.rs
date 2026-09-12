@@ -167,8 +167,7 @@ impl RenderPublisher {
                 transport_revision = context.transport_revision().map_or(0, u64::from),
                 output_start = i64::from(context.output_frames().start),
                 output_end = i64::from(context.output_frames().end),
-                source = frontier.source(),
-                presentation_frame = i64::from(frontier.output())
+                source = frontier.source()
             )]
             pub fn publish(&self, context: &RenderContext, frontier: PresentationFrontier);
         }

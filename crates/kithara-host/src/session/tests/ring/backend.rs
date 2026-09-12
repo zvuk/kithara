@@ -9,7 +9,7 @@ use firewheel::{
     node::StreamStatus,
     processor::FirewheelProcessor,
 };
-use kithara::platform::{
+use kithara_platform::{
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -18,7 +18,7 @@ use super::buffer::RingWriter;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum RingLayout {
+pub(crate) enum RingLayout {
     #[default]
     Stereo,
 }
@@ -73,7 +73,7 @@ impl RingBackendProbe {
 }
 
 #[non_exhaustive]
-pub struct RingBackendConfig {
+pub(crate) struct RingBackendConfig {
     session_rate: NonZeroU32,
     block_frames: u32,
     layout: RingLayout,
@@ -83,7 +83,7 @@ pub struct RingBackendConfig {
 
 impl RingBackendConfig {
     #[must_use]
-    pub fn new(session_rate: NonZeroU32, layout: RingLayout, writer: RingWriter) -> Self {
+    pub(crate) fn new(session_rate: NonZeroU32, layout: RingLayout, writer: RingWriter) -> Self {
         let block_frames = writer.block_frames();
         Self {
             session_rate,
@@ -114,7 +114,7 @@ impl Default for RingBackendConfig {
     }
 }
 
-pub struct RingBackend {
+pub(crate) struct RingBackend {
     armed: bool,
     block_frames: u32,
     block_frames_usize: usize,
@@ -127,7 +127,7 @@ pub struct RingBackend {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
-pub enum RingRenderError {
+pub(crate) enum RingRenderError {
     #[error("ring backend is not armed")]
     NotArmed,
     #[error("ring backend has no firewheel processor")]
@@ -140,7 +140,7 @@ pub enum RingRenderError {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
-pub enum RingStartError {
+pub(crate) enum RingStartError {
     #[error("ring backend config has no writer")]
     MissingWriter,
     #[error("ring backend block size must be non-zero")]
@@ -151,7 +151,7 @@ pub enum RingStartError {
 
 #[derive(Debug, thiserror::Error)]
 #[error("ring backend stream failed")]
-pub struct RingStreamError;
+pub(crate) struct RingStreamError;
 
 impl AudioBackend for RingBackend {
     type Config = RingBackendConfig;

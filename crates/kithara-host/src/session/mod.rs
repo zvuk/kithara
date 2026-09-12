@@ -4,8 +4,8 @@ mod dispatch;
 mod graph;
 pub(crate) mod protocol;
 pub(crate) mod state;
-#[cfg(any(test, feature = "probe"))]
-pub mod testing;
+#[cfg(test)]
+pub(crate) mod tests;
 mod transport;
 
 #[cfg(not(target_arch = "wasm32"))]

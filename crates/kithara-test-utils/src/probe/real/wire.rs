@@ -8,10 +8,27 @@ use url::Url;
 
 /// Implemented by `#[derive(kithara::Probe)]` for value-type probe payloads.
 pub trait Probe {
-    /// Fire the probe associated with this value. `name` becomes the
-    /// `probe` field on the tracing event so call-site granularity
-    /// survives even though the USDT probe name is fixed.
-    fn record_probe(&self, name: &'static str);
+    /// Fire the probe associated with this value.
+    fn record_probe(&self, name: &'static str, operation: u64);
+}
+
+/// Stable, allocation-free USDT operation identifier.
+///
+/// The provider has room for six `u64` values. Every firing reserves the
+/// first one for this FNV-1a hash; the remaining five are operation payload.
+/// Callers pass a `concat!(module_path!(), "::", operation)` literal, so the
+/// hash is evaluated at compile time and does not touch the RT path.
+#[must_use]
+pub const fn operation_id(name: &str) -> u64 {
+    let bytes = name.as_bytes();
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut index = 0;
+    while index < bytes.len() {
+        hash ^= bytes[index] as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        index += 1;
+    }
+    hash
 }
 
 /// Convert a value of arbitrary type into the `u64` USDT wire format.
@@ -105,198 +122,13 @@ impl<T: IntoProbeArg> IntoProbeArg for Option<T> {
     }
 }
 
-/// Register all USDT probes embedded in the binary with the host
-/// kernel tracer (dtrace on macOS, bpftrace on Linux). Safe to call
-/// from multiple init paths — guarded by an internal `OnceLock`. On
-/// wasm32, Android, under Miri, and in production builds (`feature = "probe"`
-/// disabled), this is a no-op stub - the optional `usdt` crate is not pulled
-/// in.
+/// Register the macOS DTrace probes embedded in the binary. Other targets use
+/// the tracing USDT backend and do not require registration.
 pub fn register_probes() {
     imp::register();
 }
 
-/// Resolve the symbol name of the function that called the probe-
-/// attributed function `probe_fn_name`.
-///
-/// Walks `backtrace::Backtrace`, skips frames inside the probe machinery
-/// (`kithara_test_utils::probes::*`) and the probe-attributed frame
-/// itself, and returns the first remaining symbol — that is the
-/// production-code caller. Returns `None` when frames are unavailable
-/// (target=wasm32 with `backtrace` disabled, debug info stripped, etc.).
-///
-/// Used by the `#[kithara::probe]` expansion to record `caller_fn` on
-/// every event so tests can assert on call-site identity by symbol
-/// name (`assert_eq!(evt.caller_fn(), Some("…::format_change_segment_range"))`)
-/// rather than by fragile `file.rs:line` strings.
-#[cfg(not(target_arch = "wasm32"))]
-#[must_use]
-pub fn caller_fn_above(probe_fn_name: &str) -> Option<String> {
-    let mut found_self = false;
-    let mut result: Option<String> = None;
-    backtrace::trace(|frame| {
-        if result.is_some() {
-            return false;
-        }
-        let mut symbol_seen = false;
-        backtrace::resolve_frame(frame, |symbol| {
-            if result.is_some() || symbol_seen {
-                return;
-            }
-            symbol_seen = true;
-            let Some(raw_name) = symbol.name() else {
-                return;
-            };
-            let demangled = format!("{raw_name}");
-            let trimmed = demangled
-                .rsplit_once("::h")
-                .map_or(demangled.as_str(), |(head, _)| head);
-            if trimmed.starts_with("kithara_test_utils::probe::")
-                || trimmed.starts_with("backtrace::")
-                || trimmed.starts_with("std::backtrace::")
-            {
-                return;
-            }
-            if !found_self {
-                if trimmed.contains(probe_fn_name) {
-                    found_self = true;
-                }
-                return;
-            }
-            result = Some(trimmed.to_string());
-        });
-        result.is_none()
-    });
-    result
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn caller_fn_above(_probe_fn_name: &str) -> Option<String> {
-    None
-}
-
-/// Process-wide monotonic sequence number for probe firings.
-///
-/// Used by the `#[kithara::probe]` macro to attach a deterministic
-/// ordering field (`seq`) to every emitted tracing event. `Instant`-
-/// based ordering breaks down when two probes fire within the same
-/// nanosecond on different threads; a per-process atomic counter
-/// closes that gap and lets tests assert on event ordering even when
-/// timestamps tie. `Ordering::Relaxed` is sufficient — uniqueness is
-/// the only invariant; consumers that need cross-thread happens-before
-/// must synchronise through a different channel.
-pub fn next_probe_seq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    SEQ.fetch_add(1, Ordering::Relaxed)
-}
-
-/// Per-thread monotonic sequence number for probe firings.
-///
-/// Recorded alongside the global `seq` so a test can reconstruct the
-/// **per-thread call order** without resorting to the global ordering
-/// (which interleaves unrelated work). Together with [`current_thread_u64`]
-/// this lets a test pin down "on thread T the i-th probe was X with args
-/// (...)" and fail the test the moment the i-th probe diverges from the
-/// expected one — instead of timing out on a `wait_for_probe` and leaving
-/// the operator to scan logs.
-#[must_use]
-pub fn next_thread_probe_seq() -> u64 {
-    use std::cell::Cell;
-    thread_local! {
-        static SEQ: Cell<u64> = const { Cell::new(0) };
-    }
-    SEQ.with(|cell| {
-        let v = cell.get();
-        cell.set(v.wrapping_add(1));
-        v
-    })
-}
-
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-
-/// Process-wide install-generation counter.
-///
-/// Bumped once per [`bump_install_id`]; the probe macro stamps the
-/// **owning** `install_id` (from the `OWNED_INSTALL_ID` task-local) into
-/// every emitted event, and `Recorder::snapshot` filters by its
-/// captured `install_id`.
-///
-/// Why a task-local on top of a global atomic: orphan async tasks
-/// from a just-finished test (downloader on-complete closures still
-/// resolving HTTP, audio worker `write_all`'ing the last buffer) that
-/// outlive their test's `Drop` would otherwise read the *current*
-/// global at fire-time — which is the *next* test's id — and leak
-/// into the next recorder's snapshot. With `OWNED_INSTALL_ID` set in
-/// scope by `#[kithara::test]` and inherited by `tokio::spawn`, those
-/// orphans freeze their own id at task-creation time and the new
-/// recorder filters them out.
-///
-/// Ordering is `Relaxed`: uniqueness is the only invariant. Tests
-/// observe their own events through the `OWNED_INSTALL_ID` scope,
-/// which is set *before* the test body's first probe site.
-static INSTALL_ID: AtomicU64 = AtomicU64::new(0);
-
-#[cfg(not(target_arch = "wasm32"))]
-kithara_platform::tokio::task_local! {
-    /// Per-test install_id captured at scope entry. Inherited by
-    /// `tokio::spawn` automatically; not inherited by `spawn_blocking`
-    /// — that path falls back to the global atomic, which is the
-    /// best we can do for non-tokio threads.
-    pub static OWNED_INSTALL_ID: u64;
-}
-
-/// Read the `install_id` of the current test.
-///
-/// Prefers the task-local set by `#[kithara::test]`; falls back to
-/// the global atomic for code paths outside any test scope (notably
-/// `spawn_blocking` workers and pre-test probe firings before the
-/// first test scope is entered).
-#[must_use]
-pub fn current_install_id() -> u64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        if let Ok(id) = OWNED_INSTALL_ID.try_with(|id| *id) {
-            return id;
-        }
-    }
-    INSTALL_ID.load(AtomicOrdering::Relaxed)
-}
-
-/// Bump the global install-generation counter and return the new value.
-///
-/// Called once per test by the `#[kithara::test]` macro before the test
-/// body enters `OWNED_INSTALL_ID.scope(...)`. `probe_capture::install()`
-/// reads the task-local; it does not bump.
-#[must_use]
-pub fn bump_install_id() -> u64 {
-    INSTALL_ID.fetch_add(1, AtomicOrdering::Relaxed) + 1
-}
-
-/// Numeric identifier of the calling OS thread.
-///
-/// `std::thread::ThreadId` carries a private `NonZeroU64` (`as_u64()` is
-/// nightly-only) but implements `Hash` over that inner value directly, so
-/// we hash the `ThreadId` itself — no `format!`/`String` allocation. That
-/// matters because this runs on the real-time render path (e.g.
-/// `PlayheadWrite::advance`); allocating here would abort under
-/// `-Zsanitizer=realtime`. Equal `ThreadId` values hash to the same `u64`,
-/// distinct values almost certainly do not — the only consumer is "group
-/// probe events by thread" and a hash collision would fold two threads
-/// into one bucket; in 50-thread test runs that's a 64-bit-birthday
-/// non-event.
-#[must_use]
-pub fn current_thread_u64() -> u64 {
-    let mut hasher = DefaultHasher::new();
-    std::thread::current().id().hash(&mut hasher);
-    hasher.finish()
-}
-
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    not(target_os = "android"),
-    not(miri),
-    feature = "probe"
-))]
+#[cfg(all(target_os = "macos", feature = "usdt", not(miri)))]
 mod imp {
     use std::sync::OnceLock;
 
@@ -309,12 +141,7 @@ mod imp {
     }
 }
 
-#[cfg(any(
-    target_arch = "wasm32",
-    target_os = "android",
-    miri,
-    not(feature = "probe")
-))]
+#[cfg(any(not(target_os = "macos"), not(feature = "usdt"), miri))]
 mod imp {
     pub(super) fn register() {}
 }

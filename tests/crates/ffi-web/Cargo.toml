@@ -21,10 +21,10 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 selenium = []
 
 [dependencies]
-kithara = { workspace = true, features = ["full", "probe", "symphonia", "resample-rubato"] }
+kithara = { workspace = true, features = ["test-utils", "full", "symphonia", "resample-rubato"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
 reqwest = { workspace = true, features = ["rustls", "stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

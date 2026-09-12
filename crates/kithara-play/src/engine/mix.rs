@@ -26,7 +26,7 @@ where
     let Some(&(first, _)) = inputs.first() else {
         return Ok(());
     };
-    let session = first.session_handle();
+    let session = first.session();
     let dispatcher = session.dispatcher()?;
 
     for &(_, level) in &inputs {
@@ -35,7 +35,7 @@ where
         }
     }
     for &(engine, _) in &inputs {
-        if !Arc::ptr_eq(&engine.session_handle().dispatcher()?, &dispatcher) {
+        if !Arc::ptr_eq(&engine.session().dispatcher()?, &dispatcher) {
             return Err(PlayError::MixForeignSession);
         }
     }

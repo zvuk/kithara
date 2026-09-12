@@ -6,11 +6,9 @@ use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::Arc;
 
 use super::{PlayerRuntime, SelectTransition};
-#[cfg(any(test, feature = "probe"))]
-use crate::bridge::RtMetricsSnapshot;
 use crate::{
     EngineLoadSnapshot, EqBandConfig, PlayError, PlaybackSnapshot, PlayerStatus, Resource,
-    ResourceConfig,
+    ResourceConfig, bridge::RtMetricsSnapshot,
 };
 
 /// Cloneable runtime capability used by player-owned orchestration.
@@ -259,8 +257,7 @@ where
             /// Current engine cost snapshot.
             #[must_use]
             pub fn engine_load(&self) -> EngineLoadSnapshot;
-            /// Read the active audio slot's real-time counters for tests and probes.
-            #[cfg(any(test, feature = "probe"))]
+            /// Read the active audio slot's real-time counters.
             #[must_use]
             pub fn rt_metrics(&self) -> Option<RtMetricsSnapshot>;
             /// Number of EQ bands.

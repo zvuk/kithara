@@ -21,17 +21,17 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
 kithara = { workspace = true, features = [
+    "test-utils",
     "analysis",
     "assets",
     "bufpool",
     "platform",
     "play",
-    "probe",
 ] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
 
 num-traits = { workspace = true }
 url = { workspace = true }

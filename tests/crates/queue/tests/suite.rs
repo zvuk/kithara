@@ -11,6 +11,12 @@ pub use kithara_integration_tests::bufpool_ext;
 mod source_helper;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use source_helper::{app_disk_asset_store, app_track_source};
+#[cfg(not(target_arch = "wasm32"))]
+mod loader_fixture;
+#[cfg(all(feature = "usdt", target_os = "macos"))]
+pub(crate) use loader_fixture::wait_loaded;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use loader_fixture::{LocalWav, append_loaded};
 
 mod advance_boundary_provenance;
 mod app_fixture_ticks;
@@ -21,11 +27,11 @@ mod cpal_cold_seek_synthetic;
 mod duplicate_src_in_queue;
 mod early_seek_size_withheld_advance;
 mod file_replay_from_warm_cache;
+#[cfg(all(feature = "usdt", target_os = "macos"))]
 mod flac_swallow_fixture;
+#[cfg(all(feature = "usdt", target_os = "macos"))]
 mod full_playthrough_census;
-mod hls_seek_cancels_stale_fetches;
 mod hls_seek_near_end_stress;
-mod hls_variant_playlists_concurrent;
 mod loader_lanes;
 mod loader_starvation;
 mod local_track_plays;

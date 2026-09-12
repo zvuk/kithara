@@ -4,23 +4,21 @@ use std::{
 };
 
 use firewheel::FirewheelCtx;
-use kithara::{
-    audio::ConsumerWakeMode,
-    events::EventBus,
-    host::testing::GraphSession,
-    platform::{
-        sync::{Mutex, mpsc},
-        thread::{JoinHandle, spawn_named},
-    },
-    play::{Cmd, PlayError, Reply, SessionDispatcher, SessionError},
-    warp::{BeatGridId, BeatGridIdAllocationError},
+use kithara_audio::ConsumerWakeMode;
+use kithara_bufpool::testing::{TestPools, pools};
+use kithara_events::EventBus;
+use kithara_platform::{
+    sync::{Mutex, mpsc},
+    thread::{JoinHandle, spawn_named},
 };
+use kithara_play::{Cmd, PlayError, Reply, SessionDispatcher, SessionError};
+use kithara_test_utils::kithara;
+use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
 use super::{
-    MasterRing, RingBackend, RingBackendConfig, RingBackendProbe, RingLayout, RingReader,
-    RingRenderError,
+    super::graph::GraphSession, MasterRing, RingBackend, RingBackendConfig, RingBackendProbe,
+    RingLayout, RingReader, RingRenderError,
 };
-use crate::bufpool_ext::{TestPools, pools};
 
 type RingSetup = Box<
     dyn FnOnce(&mut FirewheelCtx<RingBackend>) -> Result<(), RingSessionError> + Send + 'static,
@@ -28,16 +26,20 @@ type RingSetup = Box<
 
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
-pub struct ManualRingConfig {
-    pub session_rate: NonZeroU32,
-    pub block_frames: u32,
-    pub capacity_blocks: usize,
-    pub layout: RingLayout,
+pub(crate) struct ManualRingConfig {
+    pub(crate) session_rate: NonZeroU32,
+    pub(crate) block_frames: u32,
+    pub(crate) capacity_blocks: usize,
+    pub(crate) layout: RingLayout,
 }
 
 impl ManualRingConfig {
     #[must_use]
-    pub const fn new(session_rate: NonZeroU32, block_frames: u32, capacity_blocks: usize) -> Self {
+    pub(crate) const fn new(
+        session_rate: NonZeroU32,
+        block_frames: u32,
+        capacity_blocks: usize,
+    ) -> Self {
         Self {
             session_rate,
             block_frames,
@@ -60,7 +62,7 @@ impl Default for ManualRingConfig {
 
 #[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]
-pub enum RingSessionError {
+pub(crate) enum RingSessionError {
     #[error(transparent)]
     GridId(#[from] BeatGridIdAllocationError),
     #[error(transparent)]
@@ -108,7 +110,7 @@ struct RingSnapshot {
     committed_frames: u64,
 }
 
-pub struct ManualRingSession {
+pub(crate) struct ManualRingSession {
     cmd_tx: Mutex<Option<mpsc::Sender<RingMsg>>>,
     credit_gate: Mutex<()>,
     lifecycle_gate: Mutex<()>,
@@ -120,13 +122,16 @@ pub struct ManualRingSession {
 }
 
 impl ManualRingSession {
-    pub fn start(config: ManualRingConfig) -> Result<Self, RingSessionError> {
+    pub(crate) fn start(config: ManualRingConfig) -> Result<Self, RingSessionError> {
         Self::start_with(config, |_| Ok(()))
     }
 
     /// `no_block`: startup waits for the dedicated ring-session worker to finish arming.
     #[kithara::allow_block]
-    pub fn start_with<F>(config: ManualRingConfig, setup: F) -> Result<Self, RingSessionError>
+    pub(crate) fn start_with<F>(
+        config: ManualRingConfig,
+        setup: F,
+    ) -> Result<Self, RingSessionError>
     where
         F: FnOnce(&mut FirewheelCtx<RingBackend>) -> Result<(), RingSessionError> + Send + 'static,
     {
@@ -172,7 +177,7 @@ impl ManualRingSession {
     }
 
     /// Synchronous command-reply bridge; call from a blocking control thread.
-    pub fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, RingSessionError> {
+    pub(crate) fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, RingSessionError> {
         self.ensure_available()?;
         let (reply_tx, reply_rx) = mpsc::channel();
         let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
@@ -190,7 +195,7 @@ impl ManualRingSession {
 
     /// `no_block`: sync credit-reply bridge to the dedicated ring-session worker.
     #[kithara::allow_block]
-    pub fn credit(&self, blocks: usize) -> Result<(), RingSessionError> {
+    pub(crate) fn credit(&self, blocks: usize) -> Result<(), RingSessionError> {
         let _credit = self.credit_gate.lock();
         self.ensure_available()?;
         let (reply_tx, reply_rx) = mpsc::channel();
@@ -213,34 +218,34 @@ impl ManualRingSession {
         }
     }
 
-    pub fn drain(&self, frames: usize) -> Result<Vec<f32>, RingSessionError> {
+    pub(crate) fn drain(&self, frames: usize) -> Result<Vec<f32>, RingSessionError> {
         self.ensure_available()?;
         Ok(self.reader.lock().drain(frames))
     }
 
-    pub fn committed_frames(&self) -> Result<u64, RingSessionError> {
+    pub(crate) fn committed_frames(&self) -> Result<u64, RingSessionError> {
         self.ensure_available()?;
         Ok(self.snapshot.lock().committed_frames)
     }
 
-    pub fn clock_samples(&self) -> Result<u64, RingSessionError> {
+    pub(crate) fn clock_samples(&self) -> Result<u64, RingSessionError> {
         self.ensure_available()?;
         Ok(self.snapshot.lock().clock_samples)
     }
 
-    pub fn start_count(&self) -> Result<usize, RingSessionError> {
+    pub(crate) fn start_count(&self) -> Result<usize, RingSessionError> {
         self.ensure_available()?;
         Ok(self.probe.start_count())
     }
 
-    pub fn pre_arm_error(&self) -> Result<Option<RingRenderError>, RingSessionError> {
+    pub(crate) fn pre_arm_error(&self) -> Result<Option<RingRenderError>, RingSessionError> {
         self.ensure_available()?;
         Ok(self.probe.pre_arm_error())
     }
 
     /// `no_block`: explicit shutdown joins the dedicated ring-session worker.
     #[kithara::allow_block]
-    pub fn shutdown(&self) -> Result<(), RingSessionError> {
+    pub(crate) fn shutdown(&self) -> Result<(), RingSessionError> {
         let _lifecycle = self.lifecycle_gate.lock();
         if let Some(error) = self.terminal_error.lock().clone() {
             return match error {
@@ -381,7 +386,7 @@ fn bootstrap(
         grid_id: BeatGridId::allocate().map_err(RingSessionError::GridId)?,
         bus: EventBus::default(),
         eq_layout: Vec::new(),
-        gate_smoothing: kithara::play::DEFAULT_GATE_SMOOTHING,
+        gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
         pools: pools(),
         sample_rate: session_rate.get(),
     }) {

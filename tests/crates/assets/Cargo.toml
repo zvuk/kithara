@@ -20,10 +20,10 @@ flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
-kithara = { workspace = true, features = ["assets", "bufpool", "platform", "probe", "storage"] }
+kithara = { workspace = true, features = ["test-utils", "assets", "bufpool", "platform", "storage"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
 
 bytes = { workspace = true }
 rkyv = { workspace = true }

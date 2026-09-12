@@ -14,4 +14,4 @@ pub use event::{
 };
 pub use kithara_warp::{SessionBeat, TransportRevision};
 pub use transport::{SessionTransportSnapshot, Tempo, TempoError};
-pub use types::{SessionDuckingMode, SlotId, TrackId};
+pub use types::{SlotId, TrackId};

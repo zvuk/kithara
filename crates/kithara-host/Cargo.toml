@@ -20,6 +20,7 @@ default = [
 ]
 backend-cpal = ["firewheel/cpal"]
 offline = ["dep:kithara-worker"]
+no-block = ["kithara-platform/no-block"]
 client-reqwest = ["kithara-play/client-reqwest"]
 client-wreq = ["kithara-play/client-wreq"]
 tls-rustls = ["kithara-play/tls-rustls"]
@@ -33,7 +34,7 @@ resample-glide = ["kithara-play/resample-glide"]
 resample-rubato = ["kithara-play/resample-rubato"]
 stretch-signalsmith = ["kithara-play/stretch-signalsmith"]
 stretch-bungee = ["kithara-play/stretch-bungee"]
-probe = ["kithara-play/probe"]
+usdt = ["kithara-play/usdt"]
 
 [dependencies]
 kithara-audio = { workspace = true, default-features = false }
@@ -67,9 +68,9 @@ firewheel = { workspace = true, features = ["wasm-bindgen"] }
 firewheel-web-audio = { workspace = true }
 
 [dev-dependencies]
-kithara-audio = { workspace = true, features = ["mock", "probe"] }
+kithara-audio = { workspace = true, features = ["mock"] }
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
 wasm-bindgen-test = { workspace = true }
 
 [lints]

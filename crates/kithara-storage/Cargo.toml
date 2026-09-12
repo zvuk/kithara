@@ -14,7 +14,6 @@ ignored = ["unimock"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-probe = []
 mock = ["dep:unimock"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # HTTP backend forwarding. kithara-storage reaches the single kithara-net
@@ -60,7 +59,7 @@ tempfile = { workspace = true }
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-storage = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 tempfile = { workspace = true }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

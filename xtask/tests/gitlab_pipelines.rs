@@ -628,6 +628,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         "apple:swift-test",
         "apple:test",
         "apple:test-flash-off",
+        "apple:usdt",
         "apple:xcframework",
     ]);
     let actual_jobs: BTreeSet<&str> = config
@@ -639,6 +640,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
     for (job, owner, judged) in [
         ("apple:lint", ".rules-verify-and-branch", false),
         ("apple:test", ".rules-verify-and-branch", true),
+        ("apple:usdt", ".rules-verify-and-branch", false),
         ("apple:xcframework", ".rules-verify-and-branch", false),
         ("apple:ios", ".rules-verify", false),
         ("apple:ios-test", ".rules-integration-and-review", true),

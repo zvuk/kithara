@@ -22,7 +22,7 @@ beat-nn-full = ["beat-nn", "kithara-beat/embed-full-model"]
 beat-nn-full-int8 = ["beat-nn", "kithara-beat/embed-full-int8-model"]
 beat-dsp = ["beat-backend", "kithara-beat/dsp"]
 mock = ["dep:unimock"]
-probe = ["kithara-worker/probe"]
+usdt = ["kithara-worker/usdt"]
 client-reqwest = ["kithara-audio/client-reqwest", "kithara-test-utils/client-reqwest"]
 client-wreq = ["kithara-audio/client-wreq", "kithara-test-utils/client-wreq"]
 tls-rustls = ["kithara-audio/tls-rustls", "kithara-test-utils/tls-rustls"]
@@ -67,7 +67,7 @@ kithara-events = { workspace = true }
 kithara-resampler = { workspace = true, features = ["resample-rubato"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
 
 unimock = { workspace = true }
 

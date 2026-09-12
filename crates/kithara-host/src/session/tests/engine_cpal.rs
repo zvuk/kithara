@@ -2,22 +2,19 @@
 //! A test-only dispatcher owns that graph so the production Host never exposes
 //! its resident engine or raw session.
 use firewheel::{FirewheelCtx, cpal::CpalBackend};
-use kithara::{
-    audio::ConsumerWakeMode,
-    host::testing::GraphSession,
-    platform::{
-        sync::{Arc, Mutex, mpsc},
-        thread::{JoinHandle, spawn_named},
-    },
-    play::{
-        Cmd, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply,
-        SessionBinding, SessionDispatcher, player::Player,
-    },
+use kithara_audio::ConsumerWakeMode;
+use kithara_bufpool::testing::{TestPools, pools};
+use kithara_platform::{
+    sync::{Arc, Mutex, mpsc},
+    thread::{JoinHandle, spawn_named},
 };
-use kithara_integration_tests::test_defaults::Consts as Shared;
+use kithara_play::{
+    Cmd, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply,
+    SessionBinding, SessionDispatcher, player::Player,
+};
+use kithara_test_utils::kithara;
 
-use super::engine_session_contract as contract;
-use crate::bufpool_ext::{TestPools, pools};
+use super::{engine_session_contract as contract, graph::GraphSession};
 
 struct CpalGraphSession {
     cmd_tx: Mutex<mpsc::Sender<CpalMessage>>,
@@ -96,10 +93,13 @@ fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl<TestPools>))
     let session: Arc<dyn SessionDispatcher<TestPools>> = Arc::new(CpalGraphSession::new());
     let mut player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(GraphSession::<CpalBackend, TestPools>::DEFAULT_SAMPLE_RATE)
             .max_slots(max_slots)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(SessionBinding::new(session, Shared::NON_ZERO_SAMPLE_RATE))
+            .session(SessionBinding::new(
+                session,
+                GraphSession::<CpalBackend, TestPools>::DEFAULT_SAMPLE_RATE,
+            ))
             .build(),
     );
     contract(player.engine());

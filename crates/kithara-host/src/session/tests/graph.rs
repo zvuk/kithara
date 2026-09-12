@@ -5,64 +5,28 @@ use kithara_audio::ConsumerWakeMode;
 #[cfg(test)]
 use kithara_bufpool::testing::{TestPools, pools};
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use kithara_play::player::PlayerControlSource;
 use kithara_play::{
     GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
-    SessionDuckingMode, player::PlayerMember,
+    player::PlayerMember,
 };
 use kithara_warp::{
     BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
-    TopologyOperation, TransportRevision,
+    TopologyOperation,
 };
 
-use super::{
-    dispatch::{restart_stream, run_cmd},
-    graph::tap,
+use super::super::{
+    dispatch::run_cmd,
     protocol::{Cmd, Reply, SessionDispatcher},
     state::{RootView, SessionState},
 };
-use crate::Host;
-
-/// Probe-only access to session-output policy.
-pub trait HostProbe {
-    /// # Errors
-    /// Returns an error when the Host cannot read the output policy.
-    fn ducking(&self) -> Result<SessionDuckingMode, PlayError>;
-
-    /// # Errors
-    /// Returns an error when the deterministic Host route cannot restart.
-    fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError>;
-
-    /// # Errors
-    /// Returns an error when the Host rejects the output-policy update.
-    fn set_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError>;
-
-    /// # Errors
-    /// Returns an error when the Host cannot read the canonical transport revision.
-    fn transport_revision(&self) -> Result<TransportRevision, PlayError>;
-}
-
-impl<S> HostProbe for Host<S> {
-    delegate::delegate! {
-        to self {
-            fn transport_revision(&self) -> Result<TransportRevision, PlayError>;
-            #[call(ducking_mode)]
-            fn ducking(&self) -> Result<SessionDuckingMode, PlayError>;
-            #[call(set_ducking_mode)]
-            fn set_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError>;
-            fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError>;
-        }
-    }
-}
-
 /// Test-only owner for the real Host graph running on an injected backend.
 ///
 /// The production Host surface never exposes its raw session state. This
 /// probe keeps existing deterministic backend tests on the same graph code.
-pub struct GraphSession<B: AudioBackend, S> {
+pub(crate) struct GraphSession<B: AudioBackend, S> {
     state: SessionState<B, S>,
 }
 
@@ -71,34 +35,26 @@ where
     B: AudioBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    pub const DEFAULT_SAMPLE_RATE: NonZeroU32 =
+    pub(crate) const DEFAULT_SAMPLE_RATE: NonZeroU32 =
         match NonZeroU32::new(SessionState::<B, S>::DEFAULT_SAMPLE_RATE) {
             Some(sample_rate) => sample_rate,
             None => unreachable!(),
         };
 
     #[must_use]
-    pub fn new<F>(start_stream_fn: F) -> Self
+    pub(crate) fn new<F>(start_stream_fn: F) -> Self
     where
         F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
     {
         Self::with_sample_rate(Self::DEFAULT_SAMPLE_RATE, start_stream_fn)
     }
 
-    pub fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
+    pub(crate) fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
         self.state.ctx.as_mut()
     }
 
-    /// Install the real post-limiter output node in a deterministic graph.
-    ///
-    /// # Errors
-    /// Returns an error when an output is already active or graph installation fails.
-    pub fn enable_outputs(&mut self, outputs: OutputGroup) -> Result<(), PlayError> {
-        tap::enable(&mut self.state, outputs).map_err(Into::into)
-    }
-
     #[must_use]
-    pub fn exec(&mut self, cmd: Cmd<S>) -> Reply {
+    pub(crate) fn exec(&mut self, cmd: Cmd<S>) -> Reply {
         if let Cmd::RegisterPlayer { grid_id, pools, .. } = &cmd
             && self.state.root.with_group(*grid_id, |_| ()).is_none()
         {
@@ -107,16 +63,8 @@ where
         run_cmd(&mut self.state, cmd)
     }
 
-    /// Restart the deterministic graph at a different output rate.
-    ///
-    /// # Errors
-    /// Returns an error when the existing Host route cannot restart.
-    pub fn restart_stream(&mut self, sample_rate: u32) -> Result<(), PlayError> {
-        restart_stream(&mut self.state, sample_rate).map_err(Into::into)
-    }
-
     #[must_use]
-    pub fn with_sample_rate<F>(sample_rate: NonZeroU32, start_stream_fn: F) -> Self
+    fn with_sample_rate<F>(sample_rate: NonZeroU32, start_stream_fn: F) -> Self
     where
         F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
     {

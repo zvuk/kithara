@@ -39,8 +39,10 @@ pub struct EngineImpl<S> {
     eq_layout: Mutex<Vec<EqBandConfig>>,
     registration: Mutex<Option<RegisteredPlayer>>,
     slots: Mutex<SlotTable>,
+    #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
+    #[field(get, vis = "pub(super)")]
     session: SessionHandle<S>,
 }
 
@@ -297,11 +299,6 @@ impl<S> EngineImpl<S> {
         result
     }
 
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) const fn session_handle(&self) -> &SessionHandle<S> {
-        &self.session
-    }
-
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session.set_player_eq_gain(player_id, band, gain_db)
@@ -352,11 +349,6 @@ impl<S> EngineImpl<S> {
         );
         self.emit(EngineEvent::Started);
         Ok(())
-    }
-
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) const fn start_lock(&self) -> &Mutex<()> {
-        &self.start_lock
     }
 
     pub fn stop(&self) -> Result<(), PlayError> {

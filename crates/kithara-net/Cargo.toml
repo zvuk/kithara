@@ -23,7 +23,6 @@ client-apple = ["dep:dashmap", "dep:kithara-apple", "kithara-apple/foundation"]
 # SChannel / OpenSSL). Both are no-ops on wasm32, where the browser owns TLS.
 tls-rustls = ["reqwest?/rustls"]
 tls-native = ["reqwest?/native-tls"]
-probe = []
 mock = ["dep:unimock"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
@@ -89,7 +88,7 @@ gloo-timers = { workspace = true }
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-net = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 
 futures = { workspace = true }
 tracing-subscriber = { workspace = true }

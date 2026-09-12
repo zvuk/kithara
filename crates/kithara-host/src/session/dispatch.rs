@@ -38,8 +38,7 @@ where
         }
         HostCmd::EnableOutput { outputs } => tap::enable(state, outputs)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
-        #[cfg(any(test, feature = "probe"))]
-        HostCmd::RestartOutput { sample_rate } => restart_stream(state, sample_rate)
+        HostCmd::UpdateOutputRoute { sample_rate } => restart_stream(state, sample_rate.get())
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
     }
@@ -165,7 +164,6 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        #[cfg(feature = "probe")]
         Cmd::SetPlayerMasterVolumes { levels } => {
             match controls::set_player_master_volumes(state, &levels) {
                 Ok(()) => Reply::Ok,
@@ -207,11 +205,6 @@ where
             tap::disable(state);
             Reply::Ok
         }
-        Cmd::SetSessionDucking { mode } => {
-            controls::set_session_ducking(state, mode);
-            Reply::Ok
-        }
-        Cmd::SessionDucking => Reply::SessionDucking(state.session_ducking),
         Cmd::SetSessionTempo { tempo } => match transport::set_tempo(state, tempo) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
@@ -507,7 +500,7 @@ mod tests {
             graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
             state::{Deck, MixTap, SessionState},
-            testing::{attach_player, state as test_state},
+            tests::graph::{attach_player, state as test_state},
         },
     };
 

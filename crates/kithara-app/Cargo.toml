@@ -43,7 +43,7 @@ analysis-waveform = ["kithara/analysis-waveform"]
 # (`tests/crates/queue/tests/real_playlist.rs`).
 lib-only = []
 # Enable app and facade USDT probes together.
-probe = ["kithara/probe"]
+usdt = ["kithara/usdt"]
 # Production Apple decode shape: embedded AudioConverter SRC inside the Apple
 # codec. Opt-in so the default desktop build keeps the Rubato adapter path.
 apple-fused-src = ["kithara/apple-fused-src"]
@@ -131,11 +131,11 @@ kithara = { workspace = true, default-features = false, features = ["download", 
 serde_yaml_ng = { workspace = true }
 
 [dev-dependencies]
-kithara = { workspace = true, default-features = false, features = ["download", "offline", "probe", "ui-capture"] }
+kithara = { workspace = true, default-features = false, features = ["download", "offline", "ui-capture"] }
 kithara-encode = { workspace = true, default-features = false }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
+kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
 
 futures = { workspace = true }
 tempfile = { workspace = true }

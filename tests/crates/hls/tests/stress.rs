@@ -30,6 +30,7 @@ mod startup_no_eager_size_probe_storm;
 mod stress_seek_abr;
 #[path = "stress_seek_abr_audio.rs"]
 mod stress_seek_abr_audio;
+#[cfg(all(feature = "usdt", target_os = "macos"))]
 #[path = "stress_seek_audio.rs"]
 mod stress_seek_audio;
 #[path = "stress_seek_lifecycle.rs"]

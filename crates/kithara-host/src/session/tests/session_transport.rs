@@ -2,20 +2,15 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{
-    events::{EventBus, EventReceiver},
-    host::TransportEvent,
-    platform::tokio::sync::broadcast::error::TryRecvError,
-    play::{Cmd, Reply, SessionBeat, SessionTransportSnapshot, Tempo},
-};
-use kithara_integration_tests::{
-    event::TestEvent,
-    kithara,
-    ring::{ManualRingConfig, ManualRingSession},
-};
-use num_traits::ToPrimitive;
+use kithara_bufpool::testing::pools;
+use kithara_events::{EventBus, EventReceiver};
+use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+use kithara_play::{Cmd, Reply, SessionBeat, SessionTransportSnapshot, Tempo};
+use kithara_test_utils::kithara;
+use kithara_warp::BeatGridId;
 
-use crate::bufpool_ext::pools;
+use super::ring::{ManualRingConfig, ManualRingSession};
+use crate::session::TransportEvent;
 
 const SAMPLE_RATE: u32 = 48_000;
 
@@ -39,15 +34,15 @@ fn expect_ok(reply: Reply) {
     }
 }
 
-fn register_transport_events(session: &ManualRingSession) -> EventReceiver<TestEvent> {
+fn register_transport_events(session: &ManualRingSession) -> EventReceiver<TransportEvent> {
     let bus = EventBus::default();
     let events = bus.subscribe();
     match session
         .exec(Cmd::RegisterPlayer {
-            grid_id: kithara::warp::BeatGridId::allocate().expect("fixture grid id"),
+            grid_id: BeatGridId::allocate().expect("fixture grid id"),
             bus,
             eq_layout: Vec::new(),
-            gate_smoothing: kithara::play::DEFAULT_GATE_SMOOTHING,
+            gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
             pools: pools(),
             sample_rate: SAMPLE_RATE,
         })
@@ -59,12 +54,11 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver<TestE
     }
 }
 
-fn drain_transport_events(events: &mut EventReceiver<TestEvent>) -> Vec<TransportEvent> {
+fn drain_transport_events(events: &mut EventReceiver<TransportEvent>) -> Vec<TransportEvent> {
     let mut transport = Vec::new();
     loop {
         match events.try_recv().map(|envelope| envelope.event) {
-            Ok(TestEvent::Transport(event)) => transport.push(event),
-            Ok(_) => {}
+            Ok(event) => transport.push(event),
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             Err(TryRecvError::Lagged(_)) => continue,
         }
@@ -102,7 +96,7 @@ fn snapshot(session: &ManualRingSession) -> SessionTransportSnapshot {
 
 fn commit_initial_transport(
     session: &ManualRingSession,
-    events: &mut EventReceiver<TestEvent>,
+    events: &mut EventReceiver<TransportEvent>,
 ) -> SessionTransportSnapshot {
     set_tempo(session, 120.0);
     session
@@ -274,11 +268,9 @@ fn session_transport_advances_with_rendered_frames() {
         .expect("invariant: credited blocks render");
 
     let frames = clock_samples(&session);
-    let expected = frames
-        .to_f64()
-        .expect("invariant: rendered frame count fits f64")
-        * 2.0
-        / f64::from(SAMPLE_RATE);
+    let expected =
+        f64::from(u32::try_from(frames).expect("invariant: rendered frame count fits u32")) * 2.0
+            / f64::from(SAMPLE_RATE);
     assert!((position(&session) - expected).abs() <= sample_tolerance(2.0));
 }
 

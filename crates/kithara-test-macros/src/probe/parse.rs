@@ -20,7 +20,7 @@ impl Parse for ProbeEvent {
             input.parse::<Token![,]>()?;
             parse_entries(input)?
         };
-        if filter.caller || filter.probe_return {
+        if filter.probe_return {
             return Err(Error::new_spanned(
                 name,
                 "kithara::probe_event! does not accept attribute-only flags",
@@ -35,12 +35,11 @@ impl Parse for ProbeEvent {
 }
 
 /// Parsed `#[kithara::probe(...)]` arguments: parameter idents, computed `name = expr`
-/// values, and the `caller` / `probe_return` flags.
+/// values, and the `probe_return` flag.
 #[derive(Default, Debug)]
 pub(crate) struct ProbeFilter {
     pub args: Option<Vec<Ident>>,
     pub computed: Vec<(Ident, Expr)>,
-    pub caller: bool,
     pub probe_return: bool,
 }
 
@@ -91,14 +90,12 @@ fn filter_entries(parsed: Punctuated<ProbeArg, Token![,]>) -> syn::Result<ProbeF
             ProbeArg::Plain(ident) => {
                 if ident == "probe_return" {
                     filter.probe_return = true;
-                } else if ident == "caller" {
-                    filter.caller = true;
                 } else {
                     args.push(ident);
                 }
             }
             ProbeArg::Computed { name, expr } => {
-                if name == "probe_return" || name == "caller" {
+                if name == "probe_return" {
                     return Err(Error::new_spanned(
                         &name,
                         format!(
@@ -129,7 +126,6 @@ mod tests {
         assert!(f.args.is_none());
         assert!(f.computed.is_empty());
         assert!(!f.probe_return);
-        assert!(!f.caller);
     }
 
     #[test]
@@ -146,12 +142,7 @@ mod tests {
     fn keyword_flags_recognised() {
         let f = parse_filter(quote!(probe_return)).unwrap();
         assert!(f.probe_return);
-        assert!(!f.caller);
         assert!(f.args.is_none());
-
-        let f = parse_filter(quote!(caller, variant)).unwrap();
-        assert!(f.caller);
-        assert_eq!(f.args.as_ref().unwrap().len(), 1);
     }
 
     #[test]
@@ -179,7 +170,7 @@ mod tests {
 
     #[test]
     fn computed_keyword_name_is_rejected() {
-        for keyword in ["probe_return", "caller"] {
+        for keyword in ["probe_return"] {
             let input: proc_macro2::TokenStream = format!("{keyword} = self.foo")
                 .parse()
                 .expect("valid tokens");

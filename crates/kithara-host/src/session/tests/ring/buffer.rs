@@ -5,11 +5,11 @@ use ringbuf::{
 
 const STEREO_CHANNELS: usize = 2;
 
-pub struct MasterRing;
+pub(crate) struct MasterRing;
 
 impl MasterRing {
     #[must_use]
-    pub fn open(block_frames: u32, capacity_blocks: usize) -> (RingWriter, RingReader) {
+    pub(crate) fn open(block_frames: u32, capacity_blocks: usize) -> (RingWriter, RingReader) {
         assert!(block_frames > 0, "invariant: ring block size is non-zero");
         assert!(capacity_blocks > 0, "invariant: ring capacity is non-zero");
         let block_samples = (block_frames as usize)
@@ -31,7 +31,7 @@ impl MasterRing {
     }
 }
 
-pub struct RingWriter {
+pub(crate) struct RingWriter {
     block_frames: u32,
     block_samples: usize,
     producer: HeapProd<f32>,
@@ -43,7 +43,7 @@ impl RingWriter {
         self.block_frames
     }
 
-    pub fn reserve(&mut self, block_frames: u32) -> Option<ReservedBlock<'_>> {
+    pub(crate) fn reserve(&mut self, block_frames: u32) -> Option<ReservedBlock<'_>> {
         assert_eq!(
             block_frames, self.block_frames,
             "invariant: master ring accepts only its configured block size"
@@ -56,16 +56,16 @@ impl RingWriter {
     }
 }
 
-pub struct ReservedBlock<'a> {
+pub(crate) struct ReservedBlock<'a> {
     writer: &'a mut RingWriter,
 }
 
 impl ReservedBlock<'_> {
-    pub fn as_mut_slice(&mut self) -> &mut [f32] {
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [f32] {
         &mut self.writer.staging
     }
 
-    pub fn commit(self) {
+    pub(crate) fn commit(self) {
         let Self { writer } = self;
         let written = writer.producer.push_slice(&writer.staging);
         assert_eq!(
@@ -76,13 +76,13 @@ impl ReservedBlock<'_> {
     }
 }
 
-pub struct RingReader {
+pub(crate) struct RingReader {
     consumer: HeapCons<f32>,
 }
 
 impl RingReader {
     #[must_use]
-    pub fn drain(&mut self, frames: usize) -> Vec<f32> {
+    pub(crate) fn drain(&mut self, frames: usize) -> Vec<f32> {
         let requested = frames
             .checked_mul(STEREO_CHANNELS)
             .unwrap_or_else(|| panic!("invariant: drain sample count fits usize"));

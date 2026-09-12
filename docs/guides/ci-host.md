@@ -54,6 +54,30 @@ Runners and the bridge validate `gitlab_url` against the platform trust store;
 no private CA is installed. A host that cannot build that chain is a network
 fault to fix upstream.
 
+## Apple USDT observer
+
+`apple:usdt` is required on every branch and review pipeline. It runs an
+external observer with `sudo -n /usr/sbin/dtrace`, attaches it to a same-user
+child, and parses the raw `kithara:::probe_0` through `probe_5` records. This
+is the acceptance boundary for the provider ABI; an in-process collector does
+not prove that DTrace can discover or read the probes.
+
+The same job runs the feature-gated product contracts, including HLS seek
+stress, under the external-observer feature closure.
+
+The `kithara-ci` runner account needs a narrowly scoped passwordless sudoers
+entry for `/usr/sbin/dtrace`, and macOS must permit DTrace attachment to a
+same-user process. Install or upgrade the runner only after this succeeds in
+the logged-in `kithara-ci` session:
+
+```sh
+sudo -n /usr/sbin/dtrace -q -n 'syscall:::entry { exit(0); }' -c '/bin/true'
+```
+
+If SIP, Developer Mode, or the runner's entitlement blocks that command, fix
+the host policy. Do not mark the lane optional or replace it with tracing
+capture.
+
 The runner's launch agent uses launchd's `Interactive` process type and host
 shell jobs inherit that scheduling policy, so marking the parent `Background`
 throttles Cargo and the single-threaded source linters. Colima stays background;

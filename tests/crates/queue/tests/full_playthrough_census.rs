@@ -19,10 +19,7 @@
 //! Cochlea says the take never falls silent for longer than the handover's
 //! block quantum and never sums two tracks above the level one plays at.
 
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use kithara::{
     encode::EncoderFactory,
@@ -31,11 +28,8 @@ use kithara::{
         sync::Arc,
         time::{self, Duration},
     },
-    play::{Resource, ResourceConfig, ResourceSrc},
-    queue::{
-        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, Transition,
-        test_utils::QueueProbe,
-    },
+    play::ResourceSrc,
+    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, Transition},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -44,15 +38,15 @@ use kithara_integration_tests::{
     event::TestEvent,
     fixture_protocol::PcmPattern,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    temp_dir,
     test_defaults::packaged_content_frames,
+    usdt_trace::{self, ProbeEvent},
 };
 use kithara_test_fixtures::{
     asset::Asset,
     assets,
     signal::{FrameClass, classify_windows},
 };
-use kithara_test_utils::probe::{IntoProbeArg, capture as probe_capture, capture::Recorder};
+use kithara_test_utils::probe::IntoProbeArg;
 
 use crate::bufpool_ext::TestPools;
 
@@ -266,23 +260,6 @@ async fn track_src(
     }
 }
 
-async fn open_resource(
-    harness: &OfflinePlayerHarness,
-    src: ResourceSrc,
-    cache_dir: &Path,
-) -> Resource {
-    let config = ResourceConfig::<TestPools>::for_src(src)
-        .store(kithara_integration_tests::disk_asset_store(cache_dir))
-        .build();
-    let config = harness
-        .with_player(move |player| player.prepare_config(config))
-        .await
-        .expect("prepare census resource");
-    let mut resource = Resource::new(config).await.expect("open census resource");
-    let _ = resource.preload().await;
-    resource
-}
-
 struct Census {
     harness: OfflinePlayerHarness,
     queue: QueueControl<TestPools>,
@@ -302,7 +279,7 @@ impl Census {
     }
 }
 
-async fn build_queue(sources: Vec<ResourceSrc>, temp_dir: &TestTempDir, seam: Seam) -> Census {
+async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(seam.crossfade_seconds())
@@ -312,32 +289,27 @@ async fn build_queue(sources: Vec<ResourceSrc>, temp_dir: &TestTempDir, seam: Se
     )
     .await;
     harness.set_host_level(CENSUS_LEVEL);
-    let mut config = QueueConfig::builder().player(harness.take_player()).build();
-    config.should_autoplay = false;
+    let config = QueueConfig::builder().player(harness.take_player()).build();
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 
     let mut tracks = Vec::with_capacity(sources.len());
-    for (index, src) in sources.into_iter().enumerate() {
-        let resource = open_resource(
-            &harness,
-            src,
-            &temp_dir.path().join(format!("track{index}")),
-        )
-        .await;
-        tracks.push(
-            harness
-                .run(&queue, move |q| q.insert_loaded_for_test(resource))
-                .await,
-        );
+    for source in sources {
+        let mut events = queue.subscribe();
+        let id = harness
+            .run(&queue, move |control| control.append(source.to_string()))
+            .await
+            .expect("append census track through the production loader");
+        crate::wait_loaded(&mut events, id).await;
+        tracks.push(id);
     }
     harness
         .run(&queue, {
-            let arg0 = tracks[0];
-            let arg1 = seam.transition();
-            move |q| q.select(arg0, arg1)
+            let first = tracks[0];
+            let transition = seam.transition();
+            move |control| control.select(first, transition)
         })
         .await
-        .expect("select the first track");
+        .expect("select the first loaded track");
 
     Census {
         harness,
@@ -415,20 +387,20 @@ struct Firing {
     served: u64,
 }
 
-fn firings(recorder: &Recorder) -> Vec<Firing> {
-    let mut firings: Vec<Firing> = recorder
-        .events_with_probe("render")
+fn firings(records: &[ProbeEvent]) -> Vec<Firing> {
+    let mut firings: Vec<Firing> = records
         .iter()
-        .filter_map(|event| {
-            let base = event.u64("output_base")?;
+        .filter(|record| record.probe == "render")
+        .filter_map(|record| {
+            let base = record.field("output_base")?;
             if base == u64::MAX {
                 return None;
             }
-            let range_start: i64 = i64::from_probe_arg(event.u64("range_start")?);
+            let range_start: i64 = i64::from_probe_arg(record.field("range_start")?);
             Some(Firing {
-                track: event.u64("track_id")?,
+                track: record.field("track_id")?,
                 block: i64::from_probe_arg(base) + range_start,
-                served: event.u64("served_media_frames")?,
+                served: record.field("served_media_frames")?,
             })
         })
         .collect();
@@ -534,15 +506,16 @@ struct Take {
     ordered: Vec<(u64, Active)>,
 }
 
-async fn census_provenance(prepared: PreparedTracks, seam: Seam, temp_dir: &TestTempDir) -> Take {
-    let recorder = probe_capture::install();
+async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &TestTempDir) -> Take {
     let PreparedTracks {
         server: _server,
         origins,
         sources,
     } = prepared;
-    let census = build_queue(sources, temp_dir, seam).await;
+    let census = build_queue(sources, seam).await;
+    let trace = usdt_trace::scope();
     let (rendered, log) = play_to_the_end(&census).await;
+    let records = trace.events();
 
     assert!(
         log.ended,
@@ -551,7 +524,7 @@ async fn census_provenance(prepared: PreparedTracks, seam: Seam, temp_dir: &Test
         rendered.len() / usize::from(CHANNELS)
     );
 
-    let windows = active_windows(&firings(&recorder));
+    let windows = active_windows(&firings(&records));
     let expected: Vec<u64> = census.tracks.iter().map(|id| id.as_u64()).collect();
     let mut ordered: Vec<(u64, Active)> = windows.iter().map(|(id, w)| (*id, *w)).collect();
     ordered.sort_by_key(|(_, window)| window.first);

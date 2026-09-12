@@ -32,7 +32,7 @@ let handle = downloader.register(peer);
 The facade exposes the same API as `kithara::download` behind its `download`
 feature. `client-reqwest` and `tls-rustls` are the crate defaults; `client-wreq`,
 `client-apple`, and `tls-native` select the other supported transports.
-`flash`, `no-block`, and `probe` support isolated runtime validation.
+`flash`, `no-block`, and `usdt` support isolated runtime validation.
 
 ## Integration
 

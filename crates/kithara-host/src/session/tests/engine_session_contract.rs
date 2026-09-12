@@ -1,9 +1,8 @@
 //! The engine lifecycle contract is the same whatever session drives the graph.
 //! The caller supplies an EngineImpl; each fixture decides which session and
 //! backend it uses, and therefore which suite owns the test.
-use kithara::play::{EngineImpl, PlayError};
-
-use crate::bufpool_ext::TestPools;
+use kithara_bufpool::testing::TestPools;
+use kithara_play::{EngineImpl, PlayError};
 
 pub(super) fn start_stop_roundtrip(engine: &EngineImpl<TestPools>) {
     engine.start().unwrap();

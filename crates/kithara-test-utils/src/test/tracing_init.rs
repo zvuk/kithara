@@ -98,7 +98,7 @@ pub fn init_tracing(filter: EnvFilter) {
     // the probe layer), a decode/seek diagnostic event. Production RT threads
     // are never synchronously logged, so install no subscriber here: callsites
     // stay disabled and the lane verifies kithara's own RT-safety, not the test
-    // logger. Normal `just test` keeps the full fmt + probe subscriber.
+    // logger. Normal `just test` keeps the formatting subscriber.
     #[cfg(rtsan)]
     {
         let _ = filter;
@@ -111,11 +111,10 @@ pub fn init_tracing(filter: EnvFilter) {
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_test_writer()
             .with_filter(filter);
-        let probe_layer = crate::probe::capture::probe_layer();
         let _ = tracing_subscriber::registry()
             .with(fmt_layer)
-            .with(probe_layer)
             .with(crate::flight::layer())
+            .with(crate::test::usdt::layer())
             .try_init();
     }
 

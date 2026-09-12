@@ -79,7 +79,7 @@ kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 # The backend features are what lets `cargo test -p kithara-test-fixtures` stand on
 # its own: kithara-net, reached through test-utils, refuses to build without one.
-kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"] }
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 
 hls_m3u8 = { workspace = true }
 rayon = { workspace = true }

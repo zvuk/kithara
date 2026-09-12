@@ -273,24 +273,22 @@ tokio-net = ["platform", "kithara-platform/tokio-net"]
 tokio-rt-multi-thread = ["platform", "kithara-platform/tokio-rt-multi-thread"]
 backend-cpal = ["host", "kithara-host/backend-cpal"]
 backend-web-audio = ["host"]
-probe = [
-    "test-utils",
-    "kithara-abr?/probe",
-    "kithara-analysis?/probe",
-    "kithara-assets?/probe",
-    "kithara-audio?/probe",
-    "kithara-decode?/probe",
-    "kithara-file?/probe",
-    "kithara-hls?/probe",
-    "kithara-host?/probe",
-    "kithara-net?/probe",
-    "kithara-play?/probe",
-    "kithara-queue?/probe",
-    "kithara-storage?/probe",
-    "kithara-download?/probe",
-    "kithara-stream?/probe",
-    "kithara-test-utils/probe",
-    "kithara-worker?/probe",
+usdt = [
+    "dep:kithara-test-utils",
+    "kithara-abr?/usdt",
+    "kithara-analysis?/usdt",
+    "kithara-assets?/usdt",
+    "kithara-audio?/usdt",
+    "kithara-decode?/usdt",
+    "kithara-download?/usdt",
+    "kithara-file?/usdt",
+    "kithara-hls?/usdt",
+    "kithara-host?/usdt",
+    "kithara-play?/usdt",
+    "kithara-queue?/usdt",
+    "kithara-stream?/usdt",
+    "kithara-test-utils/usdt",
+    "kithara-worker?/usdt",
 ]
 mock = [
     "test-utils",

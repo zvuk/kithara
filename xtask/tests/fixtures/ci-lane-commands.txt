@@ -1959,6 +1959,94 @@
   <require tools> cargo just sccache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+# linux-usdt / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
 # linux-wasm / branch
   <require os> linux
   <require tools> cargo just sccache

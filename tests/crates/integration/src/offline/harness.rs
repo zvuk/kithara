@@ -51,17 +51,22 @@ pub struct OfflinePlayerOptions {
 pub async fn offline_queue_fixture(
     sample_rate: u32,
 ) -> (OfflinePlayerHarness, QueueControl<TestPools>) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    offline_queue_fixture_with_options(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
         sample_rate,
     )
-    .await;
-    let config = QueueConfig::builder()
-        .player(harness.take_player())
-        .should_autoplay(false)
-        .build();
+    .await
+}
+
+/// Build a paused queue from explicit product player options.
+pub async fn offline_queue_fixture_with_options(
+    options: OfflinePlayerOptions,
+    sample_rate: u32,
+) -> (OfflinePlayerHarness, QueueControl<TestPools>) {
+    let harness = OfflinePlayerHarness::with_sample_rate(options, sample_rate).await;
+    let config = QueueConfig::builder().player(harness.take_player()).build();
     let queue = harness.insert_control(Queue::new(config)).await;
     (harness, queue)
 }

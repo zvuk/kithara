@@ -525,6 +525,9 @@ features = [
 [test.net_backends.apple]
 features = ["kithara/apple-net"]
 
+[test.net_backends.none]
+features = []
+
 # The default product suite is one Cargo graph. Domain tests remain separate
 # packages, so Cargo can reuse every unchanged test binary while compiling the
 # shared product closure only once. Browser-only packages have their own lane.
@@ -1165,6 +1168,83 @@ prefix_args = [
 ]
 default_features = ["integration-regressions"]
 default_flash = true
+
+[test.lanes.usdt-play]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-play-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "play",
+]
+default_features = ["kithara-play-tests/usdt"]
+default_flash = false
+suffix_args = [
+  "-E",
+  "test(/rate_response::live_rate_change_reaches_presented_pcm_within_response_budget/)",
+]
+owns = ["tests/crates/play/tests/rate_response.rs"]
+
+[test.lanes.usdt-hls]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-hls-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "hls",
+]
+default_features = ["kithara-hls-tests/usdt"]
+default_flash = false
+suffix_args = [
+  "-E",
+  "test(/hls_variant_playlists_concurrent::variant_media_playlists_load_concurrently/)",
+]
+owns = ["tests/crates/hls/tests/hls_variant_playlists_concurrent.rs"]
+
+[test.lanes.usdt-hls-stress]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-hls-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "hls_stress",
+]
+default_features = ["kithara-hls-tests/usdt"]
+default_flash = false
+suffix_args = ["-E", "test(/stress_seek_audio::stress_seek_audio_hls/)"]
+owns = ["tests/crates/hls/tests/stress_seek_audio.rs"]
+
+[test.lanes.usdt-queue]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-queue-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "queue",
+]
+default_features = ["kithara-queue-tests/usdt"]
+default_flash = false
+suffix_args = ["-E", "test(/(full_playthrough_census|flac_swallow_fixture)/)"]
+owns = [
+  "tests/crates/queue/tests/full_playthrough_census.rs",
+  "tests/crates/queue/tests/flac_swallow_fixture.rs",
+]
 
 # The harness (tests/crates/ffi-web/tests/selenium.rs) reads
 # KITHARA_SELENIUM_BROWSER to pick a browser and defaults to chrome if unset.
@@ -1989,6 +2069,47 @@ steps = [
   ], label = "suites this push touches" },
 ]
 role = "gate"
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
+
+[ext.ci.lanes.linux-usdt]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-play",
+    "--profile",
+    "ci",
+  ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-hls",
+    "--profile",
+    "ci",
+  ], label = "USDT HLS concurrency contract", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-hls-stress",
+    "--profile",
+    "ci",
+  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-queue",
+    "--profile",
+    "ci",
+  ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "gate"
+kinds = ["platforms", "main", "nightly"]
 kinds_github = ["main", "branch"]
 timeout_minutes = 60
 

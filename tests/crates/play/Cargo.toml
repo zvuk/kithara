@@ -18,17 +18,18 @@ tls-rustls = ["kithara/tls-rustls"]
 tls-native = ["kithara/tls-native"]
 flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
+usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
 apple-fused-src = ["kithara/apple-fused-src"]
 e2e = []
 network = []
 network-manual = []
 
 [dependencies]
-kithara = { workspace = true, features = ["download", "full", "queue", "probe", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith", "backend-cpal"] }
+kithara = { workspace = true, features = ["download", "full", "queue", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith", "backend-cpal"] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
 
 cochlea-features = { workspace = true }
 firewheel = { workspace = true }

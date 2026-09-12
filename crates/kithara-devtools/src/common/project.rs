@@ -579,6 +579,7 @@ pub struct TestLaneConfig {
     /// Poll-blocking detector default for this lane, so two schedulers cannot
     /// run the same lane under different rules.
     pub default_no_block: Option<bool>,
+    pub net_backend: Option<String>,
     pub passthrough: String,
     pub program: String,
     pub default_features: Vec<String>,

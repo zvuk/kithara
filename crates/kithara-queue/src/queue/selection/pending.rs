@@ -1,20 +1,12 @@
-#[cfg(any(test, feature = "probe"))]
-use std::sync::PoisonError;
-
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
-#[cfg(any(test, feature = "probe"))]
-use kithara_play::SelectTransition;
 
-#[cfg(any(test, feature = "probe"))]
-use crate::event::{AdvanceReason, QueueEvent};
 use crate::{
     attempts::LoadClass,
-    error::QueueError,
     event::TrackStatus,
     queue::{
         QueueControl,
-        types::{PendingSelect, SelectPhase, Transition},
+        types::{PendingSelect, SelectPhase},
     },
     track::TrackSource,
 };
@@ -97,63 +89,5 @@ where
     ) {
         let handle = self.loader.spawn_load(id, source, class);
         self.watch_apply(id, handle);
-    }
-
-    /// Test-only path: if a respawn resource was pre-supplied via
-    /// `supply_test_resource_for_respawn`, plant it directly and select
-    /// synchronously, bypassing the real loader. Returns `Some(result)`
-    /// when the test path took the request, `None` to fall through to
-    /// the production loader respawn.
-    #[cfg(any(test, feature = "probe"))]
-    pub(in crate::queue) fn try_replant_test_resource(
-        &self,
-        id: TrackId,
-        index: usize,
-        transition: Transition,
-    ) -> Option<Result<(), QueueError>> {
-        let cached = self
-            .test_resources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&id);
-        let resource = cached?;
-        if let Err(error) = self.player.replace_item(index, resource, id) {
-            return Some(Err(error.into()));
-        }
-        self.set_status(id, TrackStatus::Loaded);
-        let was_playing = self.player.is_playing();
-        let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
-        if was_playing && crossfade > 0.0 {
-            self.bus.publish(QueueEvent::CrossfadeStarted {
-                duration_seconds: crossfade,
-            });
-        }
-        if let Err(error) = self.player.select_item_with_crossfade(
-            index,
-            SelectTransition {
-                autoplay: true,
-                crossfade_seconds: crossfade,
-            },
-        ) {
-            return Some(Err(error.into()));
-        }
-        self.lock_navigation_mut().select(index);
-        self.bus.publish(QueueEvent::CurrentTrackAdvance {
-            id: Some(id),
-            reason: AdvanceReason::UserSelect,
-        });
-        self.set_status(id, TrackStatus::Consumed);
-        Some(Ok(()))
-    }
-
-    #[cfg(not(any(test, feature = "probe")))]
-    pub(in crate::queue) fn try_replant_test_resource(
-        &self,
-        _id: TrackId,
-        _index: usize,
-        _transition: Transition,
-    ) -> Option<Result<(), QueueError>> {
-        let _ = self;
-        None
     }
 }

@@ -3,7 +3,7 @@ use std::sync::PoisonError;
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_platform::tokio::task;
-use kithara_play::{Resource, SelectTransition};
+use kithara_play::Resource;
 use tracing::{debug, warn};
 
 use crate::{
@@ -77,12 +77,12 @@ where
             self.bus.publish(QueueEvent::NextTrackReady { id, index });
         }
 
-        let pending_transition = {
+        let selection = {
             let mut phase = self
                 .pending_select
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            let result = match *phase {
+            let selection = match *phase {
                 SelectPhase::Pending(pending) if pending.id == id => {
                     *phase = SelectPhase::Idle;
                     Some(pending.transition)
@@ -90,38 +90,17 @@ where
                 _ => None,
             };
             drop(phase);
-            result
+            selection
         };
 
-        let Some(transition) = pending_transition else {
+        let Some(transition) = selection else {
             return;
         };
-        let was_playing = self.player.is_playing();
-        let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
-        if was_playing && crossfade > 0.0 {
-            self.bus.publish(QueueEvent::CrossfadeStarted {
-                duration_seconds: crossfade,
-            });
-        }
-        if let Err(error) = self.player.select_item_with_crossfade(
-            index,
-            SelectTransition {
-                autoplay: true,
-                crossfade_seconds: crossfade,
-            },
-        ) {
+        if let Err(error) =
+            self.select_loaded_item(index, id, transition, AdvanceReason::UserSelect)
+        {
             warn!(id = id.as_u64(), error = %error, "pending select failed");
-            return;
         }
-        self.navigation
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .select(index);
-        self.bus.publish(QueueEvent::CurrentTrackAdvance {
-            id: Some(id),
-            reason: AdvanceReason::UserSelect,
-        });
-        self.tracks.set_status(id, TrackStatus::Consumed);
     }
 
     pub(super) fn watch_apply(

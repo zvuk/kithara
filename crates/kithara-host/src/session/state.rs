@@ -20,12 +20,12 @@ use tracing::{debug, warn};
 
 use super::{
     dispatch::{restart_stream, sample_rate, stream_shape, trace_stream_info},
-    graph::{ducking_gain, tap},
+    graph::tap,
     protocol::{PlayerId, SessionError, StartStreamFn},
     transport::{SessionGridGeneration, SessionTransportState, TransportControl, install},
 };
 use crate::{
-    api::{SessionDuckingMode, SlotId},
+    api::SlotId,
     bridge::SharedEq,
     effects::eq::{EqBandConfig, GainDb},
     rt::{LimiterNode, MasterEqNode},
@@ -221,12 +221,10 @@ pub(crate) struct SessionState<B: AudioBackend, S> {
     pub(super) requested_max_block_frames: Option<NonZeroU32>,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
     pub(super) session_limiter_node_id: Option<NodeID>,
-    pub(super) session_output_memo: Option<Memo<VolumeNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
     pub(super) transport_control: Option<TransportControl>,
     pub(super) next_player_id: PlayerId,
     pub(super) root_view: RootView,
-    pub(super) session_ducking: SessionDuckingMode,
     pub(super) transport: SessionTransportState,
     pub(super) start_stream_fn: StartStreamFn<B>,
     pub(super) stream_needs_restart: bool,
@@ -234,7 +232,7 @@ pub(crate) struct SessionState<B: AudioBackend, S> {
 }
 
 impl<B: AudioBackend, S> SessionState<B, S> {
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(test)]
     pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
     /// Creates session state with its own musical-grid topology.
@@ -262,8 +260,6 @@ impl<B: AudioBackend, S> SessionState<B, S> {
             mix_tap: None,
             next_player_id: 1,
             sample_rate_hint: sample_rate.get(),
-            session_ducking: SessionDuckingMode::Off,
-            session_output_memo: None,
             session_output_node_id: None,
             session_limiter_node_id: None,
             stream_needs_restart: false,
@@ -411,8 +407,7 @@ fn create_session_output<B: AudioBackend, S>(
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err(SessionError::NoContext);
     };
-    let session_node = VolumeNode::from_linear(ducking_gain(state.session_ducking));
-    let session_memo = Memo::new(session_node);
+    let session_node = VolumeNode::from_linear(1.0);
     let session_id = fw_ctx.add_node(session_node, None);
     let limiter_id = fw_ctx.add_node(LimiterNode, None);
     let graph_out = fw_ctx.graph_out_node_id();
@@ -430,7 +425,6 @@ fn create_session_output<B: AudioBackend, S>(
         warn!("session graph update after output init failed: {err:?}");
     }
     state.session_output_node_id = Some(session_id);
-    state.session_output_memo = Some(session_memo);
     state.session_limiter_node_id = Some(limiter_id);
     tap::install_requested(state, limiter_id)?;
     debug!(

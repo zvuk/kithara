@@ -14,6 +14,9 @@ pub use kithara_platform;
 /// Native serialization runtime used by generated test wrappers.
 #[cfg(not(target_arch = "wasm32"))]
 pub use serial_test;
+/// Re-exported for the platform-independent USDT tracing backend emitted by
+/// `#[kithara::probe]`.
+pub use tracing;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flight;
@@ -24,7 +27,6 @@ pub mod no_block;
 pub mod off_thread;
 pub mod probe;
 pub mod rtsan;
-#[cfg(any(test, feature = "probe"))]
 pub mod test;
 
 pub mod kithara {

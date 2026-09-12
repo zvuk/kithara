@@ -15,7 +15,7 @@ ignored = ["unimock"]
 [features]
 default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-probe = []
+usdt = ["kithara-test-utils/usdt"]
 mock = ["dep:unimock"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-net/client-reqwest", "kithara-abr/client-reqwest"]
@@ -50,7 +50,7 @@ hotpath = { workspace = true, optional = true }
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-stream = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

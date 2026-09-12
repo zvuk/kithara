@@ -17,26 +17,10 @@ ignored = ["serde"]
 [features]
 default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
-client-reqwest = [
-    "kithara-play/client-reqwest",
-    "kithara-download/client-reqwest",
-    "kithara-abr/client-reqwest",
-]
-client-wreq = [
-    "kithara-play/client-wreq",
-    "kithara-download/client-wreq",
-    "kithara-abr/client-wreq",
-]
-tls-rustls = [
-    "kithara-play/tls-rustls",
-    "kithara-download/tls-rustls",
-    "kithara-abr/tls-rustls",
-]
-tls-native = [
-    "kithara-play/tls-native",
-    "kithara-download/tls-native",
-    "kithara-abr/tls-native",
-]
+client-reqwest = ["kithara-play/client-reqwest", "kithara-download/client-reqwest", "kithara-abr/client-reqwest"]
+client-wreq = ["kithara-play/client-wreq", "kithara-download/client-wreq", "kithara-abr/client-wreq"]
+tls-rustls = ["kithara-play/tls-rustls", "kithara-download/tls-rustls", "kithara-abr/tls-rustls"]
+tls-native = ["kithara-play/tls-native", "kithara-download/tls-native", "kithara-abr/tls-native"]
 # Software decoder pass-through (see kithara-play). Required unless an
 # explicit hardware backend feature is enabled.
 symphonia = ["kithara-play/symphonia"]
@@ -46,9 +30,7 @@ apple = ["kithara-play/apple"]
 apple-fused-src = ["kithara-play/apple-fused-src"]
 stretch-signalsmith = ["kithara-play/stretch-signalsmith"]
 stretch-bungee = ["kithara-play/stretch-bungee"]
-# Exposes test-only helpers (`Queue::insert_loaded_for_test`) for
-# integration tests that drive Queue against an offline backend.
-probe = ["kithara-play/probe"]
+usdt = ["kithara-play/usdt", "kithara-test-utils/usdt"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
@@ -75,8 +57,8 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-platform = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-platform = { workspace = true, features = ["tokio-rt-multi-thread"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 serde_yaml_ng = { workspace = true }

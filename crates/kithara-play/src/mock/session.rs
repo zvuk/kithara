@@ -7,7 +7,7 @@ use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::{Arc, Mutex};
 
 use crate::{
-    PlayError, SessionDuckingMode, SharedEq, SlotId, StreamShape,
+    PlayError, SharedEq, SlotId, StreamShape,
     bridge::{NodeInputs, slot_channels},
     session::{AllocatedSlot, Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate},
 };
@@ -50,7 +50,6 @@ impl<S> SessionDispatcher<S> for SessionMock {
                 Reply::SampleRate(SessionSampleRate::new(None, self.sample_rate.get()))
             }
             Cmd::QueryStreamShape => Reply::StreamShape(self.shape),
-            Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
             _ => Reply::Ok,
         };
         Ok(reply)

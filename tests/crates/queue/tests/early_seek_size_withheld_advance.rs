@@ -25,12 +25,15 @@ use kithara::{
     download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration},
-    play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, Resource,
-        ResourceConfig, ResourceSrc,
+    platform::{
+        CancelToken,
+        time::{self, Duration},
     },
-    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig,
+        ResourceSrc,
+    },
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
     PackagedTestServer, SegmentGateHandle, TestTempDir, event::TestEvent, kithara,
@@ -139,12 +142,12 @@ impl Harness {
     }
 }
 
-async fn build_hls_resource(
+fn build_hls_source(
     master: &url::Url,
     downloader: &Downloader,
     store: &AssetStore<TestPools>,
     worker: &PlayWorker<TestPools>,
-) -> Resource {
+) -> TrackSource<TestPools> {
     let cfg: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
             .downloader(downloader.clone())
@@ -157,7 +160,7 @@ async fn build_hls_resource(
             .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
             .worker(worker.clone())
             .build();
-    Resource::new(cfg).await.expect("create HLS resource")
+    TrackSource::Config(Box::new(cfg))
 }
 
 /// What the queue did during the post-seek observation window.
@@ -259,26 +262,26 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward
     // auto-advance has somewhere to land (observable as current_index 0 -> 1).
-    let target = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
-    let target_src = target.src().clone();
-    let next = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
+    let target = build_hls_source(&master, &downloader, &store, &harness.worker);
+    let target_src = kithara::platform::sync::Arc::from(master.as_str());
+    let next = build_hls_source(&master, &downloader, &store, &harness.worker);
     let player = harness.take_player();
     let queue = harness
         .host
-        .insert_control(Queue::new(
-            QueueConfig::builder()
-                .should_autoplay(false)
-                .player(player)
-                .build(),
-        ))
+        .insert_control(Queue::new(QueueConfig::builder().player(player).build()))
         .await
         .expect("insert queue into product offline Host");
+    let mut queue_events = queue.subscribe::<TestEvent>();
     let id0 = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(target))
-        .await;
+        .run(&queue, move |q| q.append(target))
+        .await
+        .expect("append gated HLS track");
+    wait_loaded(&mut queue_events, id0).await;
     let _id1 = harness
-        .run(&queue, move |q| q.insert_loaded_for_test(next))
-        .await;
+        .run(&queue, move |q| q.append(next))
+        .await
+        .expect("append successor HLS track");
+    wait_loaded(&mut queue_events, _id1).await;
 
     harness
         .run(&queue, move |q| q.select(id0, Transition::None))
@@ -373,6 +376,29 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
     drop(queue);
     drop(server);
     harness.close().await;
+}
+
+async fn wait_loaded(
+    events: &mut kithara::events::EventReceiver<TestEvent>,
+    id: kithara::events::TrackId,
+) {
+    let loaded = time::timeout(Duration::from_secs(20), async {
+        while let Ok(envelope) = events.recv().await {
+            if matches!(
+                envelope.event,
+                TestEvent::Queue(QueueEvent::TrackStatusChanged {
+                    id: seen,
+                    status: TrackStatus::Loaded,
+                }) if seen == id
+            ) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    assert!(loaded, "track {id:?} must load through Queue loader");
 }
 
 #[kithara::fixture]

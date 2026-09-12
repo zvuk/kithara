@@ -842,12 +842,12 @@ impl HasPool<u8> for Fixture {
 #[cfg(test)]
 pool_schema! { pub InlineTestPools { bytes: u8 } }
 
-#[cfg(all(feature = "probe", test))]
+#[cfg(all(feature = "usdt", test))]
 impl HasPool<f32> for AllCfgFixture {
     fn __slot(&self) -> &PoolSlot<f32> { todo!() }
 }
 
-#[cfg(all(feature = "probe", test))]
+#[cfg(all(feature = "usdt", test))]
 pool_schema!(pub AllCfgPools { samples: f32 });
 
 #[cfg(test)]
@@ -857,7 +857,7 @@ fn fixture() {
     let values: Vec<f32> = vec![0.0; 8];
 }
 
-#[cfg(all(feature = "probe", test))]
+#[cfg(all(feature = "usdt", test))]
 fn all_cfg_fixture() {
     let region = PoolRegion::__build(OverallBudget(1024), |_| Ok(()));
 }

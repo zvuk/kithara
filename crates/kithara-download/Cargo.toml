@@ -17,7 +17,7 @@ ignored = ["serde"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-probe = []
+usdt = ["kithara-test-utils/usdt"]
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
 no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
@@ -49,7 +49,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 
 serde_yaml_ng = { workspace = true }
 wasm-bindgen-test = { workspace = true }

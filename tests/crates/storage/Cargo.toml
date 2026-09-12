@@ -21,15 +21,15 @@ no-block = ["kithara/no-block"]
 
 [dependencies]
 kithara = { workspace = true, default-features = false, features = [
+    "test-utils",
     "assets",
     "platform",
-    "probe",
     "storage",
     "tokio-net",
 ] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
 
 [lints]
 workspace = true

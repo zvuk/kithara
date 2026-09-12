@@ -19,5 +19,3 @@ pub use error::PlayError;
 pub use host::{Host, HostConfig, HostOwned};
 pub use kithara_play::SessionSampleRate;
 pub use session::TransportEvent;
-#[cfg(any(test, feature = "probe"))]
-pub use session::testing;

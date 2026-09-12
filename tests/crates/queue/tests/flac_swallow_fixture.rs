@@ -22,8 +22,8 @@ use kithara_integration_tests::{
     fixture_protocol::{DelayRule, EncryptionRequest},
     offline::OfflinePlayer,
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
+    usdt_trace,
 };
-use kithara_test_utils::probe::capture as probe_capture;
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -160,8 +160,6 @@ async fn flac_swallow_fixture(
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 
-    let recorder = probe_capture::install();
-
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
@@ -181,10 +179,12 @@ async fn flac_swallow_fixture(
     // instead of the virtual clock racing past the producer (which starves the
     // worker so the track never plays). Off the `flash` feature this is a ZST
     // no-op and the clock is already real.
+    let trace = usdt_trace::scope();
     play_realtime(&mut player, windows, window_secs).await;
+    let records = trace.events();
 
-    assert_committed_reached(&recorder, MIN_DELAYED_PLAYHEAD_SECS);
-    assert_no_committed_swallow(&recorder, MAX_COMMITTED_STEP_SECS);
+    assert_committed_reached(&records, Duration::from_secs_f64(MIN_DELAYED_PLAYHEAD_SECS));
+    assert_no_committed_swallow(&records, Duration::from_secs_f64(MAX_COMMITTED_STEP_SECS));
     player.close().await;
 }
 

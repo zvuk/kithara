@@ -85,7 +85,6 @@ hotpath = { workspace = true, optional = true }
 kithara-platform = { path = "../kithara-platform" }
 kithara-test-utils = { path = "../kithara-test-utils", features = [
     "client-reqwest",
-    "probe",
     "tls-rustls",
 ] }
 

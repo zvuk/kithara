@@ -477,7 +477,7 @@ mod native {
     use std::rc::Rc;
 
     use kithara_platform::{thread, time::Instant};
-    use kithara_test_utils::{hang::default_timeout, probe::capture as probe_capture};
+    use kithara_test_utils::hang::default_timeout;
 
     use super::*;
 
@@ -705,7 +705,6 @@ mod native {
 
     #[kithara::test(native, flash(false))]
     fn shutdown_cancels_and_recycles_a_queued_never_run_task_once() {
-        let recorder = probe_capture::install();
         let worker = crate::Worker::new(crate::WorkerConfig::new());
         let dispatcher = worker.dispatcher(
             DispatcherConfig::builder()
@@ -730,17 +729,6 @@ mod native {
 
         dispatcher.shutdown();
         release.send(()).expect("release blocking task");
-
-        recorder
-            .wait_for_probe(
-                |event| {
-                    event.probe_name() == Some("cancel")
-                        && event.u64("task_id") == Some(queued.id().get())
-                        && event.u64("already_terminal") == Some(0)
-                },
-                default_timeout(),
-            )
-            .expect("queued task cancellation probe");
 
         assert_eq!(
             received

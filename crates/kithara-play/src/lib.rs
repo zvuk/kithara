@@ -28,8 +28,8 @@ pub mod mock;
 pub use api::{
     BpmInfo, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemRole, ItemStatus, MediaTime,
     PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
-    RouteDescription, SessionBeat, SessionDuckingMode, SessionEvent, SessionTransportSnapshot,
-    SlotId, StretchBackendKind, SyncUnavailable, Tempo, TempoError, TimeControlStatus, TimeRange,
+    RouteDescription, SessionBeat, SessionEvent, SessionTransportSnapshot, SlotId,
+    StretchBackendKind, SyncUnavailable, Tempo, TempoError, TimeControlStatus, TimeRange,
     TrackBinding, TrackRef, TransportRevision, WaitingReason,
 };
 pub use bridge::{
@@ -39,9 +39,7 @@ pub use bridge::{
     TrackTransition,
 };
 pub use effects::eq::EqBandConfig;
-#[cfg(any(test, feature = "probe"))]
-pub use engine::apply_mix;
-pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl};
+pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;

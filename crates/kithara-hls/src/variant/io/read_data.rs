@@ -137,10 +137,10 @@ where
     #[kithara::probe(
         variant = self.variant as u64,
         seg = u64::from(seg_idx),
-        loaded = u64::from(self.segment_loaded(seg_idx)),
-        downloading = u64::from(self.segment_downloading(seg_idx)),
-        failed = u64::from(self.segment_failed(seg_idx)),
-        planned = u64::from(self.fetch_is_planned(PlannedFetch::Segment(seg_idx)))
+        flags = u64::from(self.segment_loaded(seg_idx))
+            | (u64::from(self.segment_downloading(seg_idx)) << 1)
+            | (u64::from(self.segment_failed(seg_idx)) << 2)
+            | (u64::from(self.fetch_is_planned(PlannedFetch::Segment(seg_idx))) << 3)
     )]
     pub(super) fn segment_has_demand(&self, seg_idx: u32) -> bool {
         self.segment_downloading(seg_idx) || self.fetch_is_planned(PlannedFetch::Segment(seg_idx))

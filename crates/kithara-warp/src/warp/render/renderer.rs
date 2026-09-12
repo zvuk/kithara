@@ -267,7 +267,6 @@ where
             rate_applied,
             request_revision,
             applied_rate_bits = applied_rate.to_bits(),
-            session_epoch = u64::from(committed.context().session_epoch()),
             session_frame,
             source_start,
             source_end
@@ -292,7 +291,6 @@ where
                 .transport_revision()
                 .map_or(0, u64::from),
             output_start,
-            output_end = i64::from(committed.frontier().output()),
             source_start,
             source_end = committed.frontier().source()
         );

@@ -18,18 +18,18 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
 kithara = { workspace = true, features = [
+    "test-utils",
     "analysis",
     "audio",
     "bufpool",
     "platform",
-    "probe",
     "resample-rubato",
     "resampler",
     "signal",
 ] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["probe"] }
+kithara-test-utils = { workspace = true, features = [] }
 
 [lints]
 workspace = true

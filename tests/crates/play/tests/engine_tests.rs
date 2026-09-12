@@ -4,11 +4,11 @@ use kithara::{
     self,
     audio::ConsumerWakeMode,
     events::EventBus,
-    host::{Host, HostConfig, HostOwned, testing::HostProbe},
+    host::{Host, HostConfig, HostOwned},
     platform::sync::Arc,
     play::{
         Cmd, EngineConfig, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerImpl, Reply, SessionBinding, SessionDispatcher, SessionDuckingMode, SlotId,
+        PlayerImpl, Reply, SessionBinding, SessionDispatcher, SlotId,
     },
     warp::{BeatGrid, BeatGridId},
 };
@@ -163,54 +163,6 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);
-}
-
-#[kithara::test]
-fn engine_session_ducking_roundtrip() {
-    let host: Host<TestPools> =
-        Host::new(HostConfig::builder().build()).expect("create fixture host");
-    host.set_ducking(SessionDuckingMode::Soft)
-        .expect("set soft ducking");
-    assert_eq!(
-        host.ducking().expect("read soft ducking"),
-        SessionDuckingMode::Soft
-    );
-    host.set_ducking(SessionDuckingMode::Hard)
-        .expect("set hard ducking");
-    assert_eq!(
-        host.ducking().expect("read hard ducking"),
-        SessionDuckingMode::Hard
-    );
-    host.set_ducking(SessionDuckingMode::Off)
-        .expect("disable ducking");
-    assert_eq!(
-        host.ducking().expect("read disabled ducking"),
-        SessionDuckingMode::Off
-    );
-}
-
-#[kithara::test]
-fn injected_engine_instances_share_session_ducking() {
-    let mut host = Host::new(HostConfig::builder().build()).expect("create fixture host");
-    let a = insert_player(&mut host);
-    let b = insert_player(&mut host);
-
-    host.set_ducking(SessionDuckingMode::Soft)
-        .expect("set shared ducking");
-    assert_eq!(
-        host.ducking().expect("read shared ducking"),
-        SessionDuckingMode::Soft
-    );
-
-    host.set_ducking(SessionDuckingMode::Off)
-        .expect("disable shared ducking");
-    assert_eq!(
-        host.ducking().expect("read disabled ducking"),
-        SessionDuckingMode::Off
-    );
-
-    host.remove(&a).expect("remove first fixture player");
-    host.remove(&b).expect("remove second fixture player");
 }
 
 #[kithara::test]

@@ -10,23 +10,22 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcessStatus,
     },
 };
+use kithara_bufpool::testing::{TestPools, pools};
+use kithara_events::EventBus;
 #[cfg(feature = "no-block")]
-use kithara::platform::no_block::force_panic_mode;
-use kithara::{
-    self,
-    events::EventBus,
-    platform::sync::Arc,
-    play::{
-        Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerId, PlayerImpl, Reply,
-        SessionBinding, SessionDispatcher,
-    },
+use kithara_platform::no_block::force_panic_mode;
+use kithara_platform::sync::Arc;
+use kithara_play::{
+    Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerId, PlayerImpl, Reply, SessionBinding,
+    SessionDispatcher,
 };
-use kithara_integration_tests::ring::{
+use kithara_test_utils::kithara;
+use kithara_warp::BeatGridId;
+
+use super::ring::{
     CountingNode, CountingProbe, DeterministicToneNode, ManualRingConfig, ManualRingSession,
     RingRenderError, RingSessionError, fixtures::install_stereo_source,
 };
-
-use crate::bufpool_ext::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: u32 = 512;
@@ -59,10 +58,10 @@ fn expect_ok(reply: Reply) {
 fn register_started_player(session: &ManualRingSession) -> PlayerId {
     let player_id = match session
         .exec(Cmd::RegisterPlayer {
-            grid_id: kithara::warp::BeatGridId::allocate().expect("fixture grid id"),
+            grid_id: BeatGridId::allocate().expect("fixture grid id"),
             bus: EventBus::default(),
             eq_layout: Vec::new(),
-            gate_smoothing: kithara::play::DEFAULT_GATE_SMOOTHING,
+            gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
             pools: pools(),
             sample_rate: SAMPLE_RATE,
         })

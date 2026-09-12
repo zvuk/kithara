@@ -50,7 +50,7 @@ stretch-bungee = ["kithara/stretch-bungee"]
 # (reqwest; wreq has no wasm target). The refs chain through the crate-local
 # client-reqwest/tls-rustls forwarding below.
 wasm = ["client-reqwest", "tls-rustls"]
-probe = ["kithara/probe"]
+usdt = ["kithara/usdt"]
 mock = ["dep:unimock", "kithara/mock"]
 # HTTP backend forwarding to every kithara-net-reaching dep. `kithara`
 # (native) and the wasm-only `kithara-hls`/`kithara-abr` are target-gated;
@@ -69,7 +69,7 @@ dev = []
 # Exposes JNI entrypoints that render through the offline firewheel
 # backend and write WAV output, bypassing cpal/AAudio. Never ship in a
 # release AAR.
-test = ["kithara/probe", "dep:cpal"]
+test = ["kithara/usdt", "dep:cpal"]
 
 [dependencies]
 kithara = { workspace = true, default-features = false, features = [
@@ -164,8 +164,8 @@ rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara = { workspace = true, features = ["download", "net", "probe", "signal"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
+kithara = { workspace = true, features = ["download", "net", "signal"] }
+kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
 
 futures = { workspace = true }
 tempfile = { workspace = true }

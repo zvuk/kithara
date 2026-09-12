@@ -55,21 +55,17 @@ pub(crate) fn emit_async_runtime_test(
         {
             #tracing_init
             let __rt = #runtime_builder;
-            let __probe_install_id =
-                ::kithara_test_utils::probe::bump_install_id();
             __rt.block_on(
                 ::kithara_test_utils::kithara_platform::flash::participate(
-                    ::kithara_test_utils::probe::OWNED_INSTALL_ID
-                        .scope(__probe_install_id,
-                            ::kithara_test_utils::kithara_platform::flash::with_ambient(
-                                #flash,
-                                ::kithara_test_utils::no_block::watch_root(
-                                    #fn_name_str,
-                                    async {
-                                        #inner_body
-                                    },
-                                ),
-                            )),
+                    ::kithara_test_utils::kithara_platform::flash::with_ambient(
+                        #flash,
+                        ::kithara_test_utils::no_block::watch_root(
+                            #fn_name_str,
+                            async {
+                                #inner_body
+                            },
+                        ),
+                    ),
                     ::core::panic::Location::caller(),
                 ),
             )
@@ -177,16 +173,11 @@ pub(crate) fn emit_async_timeout_test(
         {
             #tracing_init
             let __rt = #runtime_builder;
-            let __probe_install_id =
-                ::kithara_test_utils::probe::bump_install_id();
-
             let __result = ::std::panic::catch_unwind(
                 ::std::panic::AssertUnwindSafe(|| {
                     __rt.block_on(
                         ::kithara_test_utils::kithara_platform::flash::participate(
-                            ::kithara_test_utils::probe::OWNED_INSTALL_ID.scope(
-                                __probe_install_id,
-                                async {
+                            async {
                                     ::kithara_test_utils::kithara_platform::time::timeout(
                                         __timeout_dur,
                                         ::kithara_test_utils::kithara_platform::flash::with_ambient(
@@ -211,8 +202,7 @@ pub(crate) fn emit_async_timeout_test(
                                         );
                                         panic!("{}", __timeout_diagnostic)
                                     })
-                                },
-                            ),
+                            },
                             ::core::panic::Location::caller(),
                         ),
                     )

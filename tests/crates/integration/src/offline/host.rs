@@ -2,7 +2,7 @@ use std::{num::NonZeroU32, ops::Deref};
 
 use kithara::{
     bufpool::{HasPool, PoolRegion},
-    host::{Host, HostConfig, HostLevel, HostOwned, testing::HostProbe},
+    host::{Host, HostConfig, HostLevel, HostOwned},
     output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
@@ -303,9 +303,9 @@ where
             .await
     }
 
-    pub async fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
+    pub async fn update_audio_route(&self, sample_rate: NonZeroU32) -> Result<(), PlayError> {
         self.off
-            .call(move |state| state.host.restart_stream(sample_rate))
+            .call(move |state| state.host.update_audio_route(sample_rate))
             .await
     }
 
@@ -320,7 +320,14 @@ where
     }
 
     pub async fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
-        self.off.call(|state| state.host.transport_revision()).await
+        self.off
+            .call(|state| {
+                state
+                    .host
+                    .session_transport()
+                    .map(|snapshot| snapshot.revision())
+            })
+            .await
     }
 
     pub async fn invalidate_audio_route(&self, reason: impl Into<String>) -> Result<(), PlayError> {

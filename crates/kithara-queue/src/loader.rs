@@ -271,7 +271,7 @@ mod tests {
     use kithara_play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::PlayerControlSource,
     };
-    use kithara_test_utils::{kithara, probe::capture as probe_capture};
+    use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
@@ -347,51 +347,6 @@ mod tests {
         canceller.await.expect("canceller task must not panic");
 
         assert_eq!(state.load(Ordering::SeqCst), 1);
-    }
-
-    #[kithara::test(tokio)]
-    async fn cancellation_wakes_an_attempt_waiting_for_admission() {
-        let probes = probe_capture::install();
-        let fixture = LoaderFixtureSpec::default()
-            .with_cap(NonZeroUsize::MIN)
-            .build();
-        let permit = Arc::clone(&fixture.loader.prefetch_lane)
-            .acquire_owned()
-            .await
-            .expect("loader keeps the prefetch semaphore open");
-        let id = TrackId::allocate();
-        let source = TrackSource::Uri("https://example.com/pending.mp3".into());
-        fixture
-            .tracks
-            .lock()
-            .push(TrackRecord::new(id, "pending".into(), source.clone()));
-        let handle = fixture
-            .loader
-            .spawn_load(id, source, LoadClass::Prefetch)
-            .expect("fresh track starts one load attempt");
-        let admitted = probes
-            .wait_for_probe_async(
-                |event| {
-                    event.target == "kithara_queue_probe"
-                        && event.probe_name() == Some("admission_started")
-                        && event.u64("track_id") == Some(id.as_u64())
-                },
-                Duration::from_secs(1),
-            )
-            .await;
-        assert!(admitted.is_some(), "loader never reached admission");
-
-        fixture.loader.cancel.cancel();
-
-        let result = kithara_platform::tokio::time::timeout(Duration::from_secs(1), handle)
-            .await
-            .expect("cancellation must wake the pending loader")
-            .expect("loader task must not panic");
-        assert!(matches!(
-            result,
-            Err(QueueError::Cancelled(cancelled)) if cancelled == id
-        ));
-        drop(permit);
     }
 
     /// Test fixture: the [`Loader`] under test, the shared

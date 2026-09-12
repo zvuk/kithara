@@ -17,8 +17,7 @@ use kithara::{
     play::{
         AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
         PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome, SessionBinding,
-        SessionDispatcher, SessionDuckingMode, SessionSampleRate, SharedEq, SlotId,
-        bridge::slot_channels,
+        SessionDispatcher, SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
     },
 };
 use kithara_integration_tests::{
@@ -98,7 +97,6 @@ impl SessionDispatcher<TestPools> for FixtureSession {
                 None,
                 Consts::NON_ZERO_SAMPLE_RATE.get(),
             )),
-            Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
             _ => Reply::Ok,
         };
         Ok(reply)

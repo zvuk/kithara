@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "kithara test runtime: probe/hang/mock helpers (no-op in release)."
-keywords = ["audio", "testing", "kithara", "probe"]
+keywords = ["audio", "testing", "kithara", "usdt"]
 categories = ["development-tools::testing"]
 
 [features]
@@ -14,7 +14,7 @@ flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 mock = ["dep:unimock"]
 no-block = ["kithara-platform/no-block"]
-probe = ["dep:backtrace", "dep:usdt", "tracing-subscriber/env-filter"]
+usdt = ["dep:usdt"]
 # HTTP backend forwarding.
 client-reqwest = []
 client-wreq = []
@@ -32,15 +32,11 @@ num-traits = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 unimock = { workspace = true, optional = true }
 url = { workspace = true }
 
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-usdt = { workspace = true, optional = true }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-backtrace = { workspace = true, optional = true }
 serial_test = { workspace = true }
 
 [target.'cfg(rtsan)'.dependencies]
@@ -51,6 +47,9 @@ rtsan-standalone = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tracing-wasm = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+usdt = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-test-utils = { path = ".", default-features = false }

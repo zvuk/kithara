@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
+use std::{io::Write, num::NonZeroU32};
 
 use kithara::{
     audio::{AudioConfig, AudioControl, AudioSession, NoResamplerBackend},
@@ -14,7 +14,7 @@ use kithara::{
         time::{self, Duration, Instant},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig, effects::AudioEffect},
-    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    queue::{Queue, QueueConfig, QueueEvent, TrackStatus, Transition},
     signal::AudioChunk,
     stream::Stream,
     warp::{StretchControls, StretchKind, WarpConfig},
@@ -385,6 +385,19 @@ async fn wait_for_preload(audio: &RegisteredAudio<Stream<MemStream>, TestPools>)
     .expect("audio preload gate must open");
 }
 
+fn local_wav(source: &[u8]) -> tempfile::NamedTempFile {
+    assert!(
+        source.starts_with(b"RIFF") && source.get(8..12) == Some(b"WAVE"),
+        "queue fixture must be a complete RIFF/WAV container"
+    );
+    let mut file = tempfile::Builder::new()
+        .suffix(".wav")
+        .tempfile()
+        .expect("temporary WAV fixture");
+    file.write_all(source).expect("write temporary WAV fixture");
+    file
+}
+
 /// Render the source at the real device cadence and capture the result.
 ///
 /// The guard puts the pacing sleep on the same clock as the decode worker's
@@ -522,27 +535,39 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
         SAMPLE_RATE,
     )
     .await;
-    let worker = harness.worker().clone();
-    let mut audio = worker
-        .open(audio_config(source, stretch, Vec::new()))
-        .await
-        .expect("queue audio construction");
-    wait_for_preload(&audio).await;
-    audio.preload().expect("queue audio preload");
-
     let queue = harness
         .insert_control(Queue::new(
             QueueConfig::builder()
                 .player(harness.take_player())
-                .should_autoplay(false)
                 .build(),
         ))
         .await;
+    let mut events = queue.subscribe::<QueueEvent>();
+    let wav = local_wav(source);
+    let source = wav.path().to_string_lossy().into_owned();
     let id = harness
-        .run(&queue, move |q| {
-            q.insert_loaded_for_test(resource_from_reader(audio))
+        .run(&queue, move |q| q.append(source))
+        .await
+        .expect("append local queue fixture");
+    assert!(
+        time::timeout(Duration::from_secs(5), async {
+            while let Ok(envelope) = events.recv().await {
+                if matches!(
+                    envelope.event,
+                    QueueEvent::TrackStatusChanged {
+                        id: seen,
+                        status: TrackStatus::Loaded,
+                    } if seen == id
+                ) {
+                    return true;
+                }
+            }
+            false
         })
-        .await;
+        .await
+        .unwrap_or(false),
+        "local queue fixture must load through the product loader"
+    );
     harness
         .run(&queue, move |q| q.select(id, Transition::None))
         .await

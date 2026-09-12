@@ -13,7 +13,10 @@ mod worker;
 #[cfg(not(target_arch = "wasm32"))]
 pub use app::{AppQueueFixture, LazyAppQueueFixture, app_queue, insecure_app_queue};
 #[cfg(not(target_arch = "wasm32"))]
-pub use harness::{OfflinePlayerHarness, OfflinePlayerOptions, offline_queue_fixture};
+pub use harness::{
+    OfflinePlayerHarness, OfflinePlayerOptions, offline_queue_fixture,
+    offline_queue_fixture_with_options,
+};
 pub use host::{
     MixTapProbe, OfflineHostHarness, OfflineQueue, OfflineResident, RENDER_PACE,
     assert_playhead_tracks_renderer,

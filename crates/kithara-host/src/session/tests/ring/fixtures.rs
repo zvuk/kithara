@@ -12,12 +12,12 @@ use firewheel::{
         NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara::platform::sync::Arc;
+use kithara_platform::sync::Arc;
 
 use super::RingBackend;
 
 #[derive(Clone, Default)]
-pub struct CountingProbe {
+pub(crate) struct CountingProbe {
     inner: Arc<CountingProbeInner>,
 }
 
@@ -29,33 +29,33 @@ struct CountingProbeInner {
 }
 
 impl CountingProbe {
-    pub fn construction_count(&self) -> usize {
+    pub(crate) fn construction_count(&self) -> usize {
         self.inner.constructions.load(Ordering::SeqCst)
     }
 
-    pub fn construction_sample_rate(&self) -> Option<NonZeroU32> {
+    pub(crate) fn construction_sample_rate(&self) -> Option<NonZeroU32> {
         NonZeroU32::new(self.inner.construction_sample_rate.load(Ordering::SeqCst))
     }
 
-    pub fn new_stream_count(&self) -> usize {
+    pub(crate) fn new_stream_count(&self) -> usize {
         self.inner.new_streams.load(Ordering::SeqCst)
     }
 }
 
 #[derive(Clone, Default)]
-pub struct FixtureNode<S> {
+pub(crate) struct FixtureNode<S> {
     state: S,
 }
 
 impl<S> FixtureNode<S> {
     #[must_use]
-    pub const fn new(state: S) -> Self {
+    pub(crate) const fn new(state: S) -> Self {
         Self { state }
     }
 }
 
-pub type CountingNode = FixtureNode<CountingProbe>;
-pub type DeterministicToneNode = FixtureNode<()>;
+pub(crate) type CountingNode = FixtureNode<CountingProbe>;
+pub(crate) type DeterministicToneNode = FixtureNode<()>;
 
 trait FixtureState: Clone + Send + 'static {
     const DEBUG_NAME: &'static str;
@@ -152,7 +152,7 @@ impl FixtureState for () {
     }
 }
 
-pub fn install_stereo_source<N>(
+pub(crate) fn install_stereo_source<N>(
     ctx: &mut FirewheelCtx<RingBackend>,
     node: N,
 ) -> Result<NodeID, String>

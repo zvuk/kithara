@@ -22,14 +22,14 @@ no-block = ["kithara/no-block"]
 
 [dependencies]
 kithara = { workspace = true, default-features = false, features = [
+    "test-utils",
     "events",
     "platform",
-    "probe",
     "storage",
     "stream",
     "tokio-net",
 ] }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock"] }
 
 futures = { workspace = true }
 thiserror = { workspace = true }

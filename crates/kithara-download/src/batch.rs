@@ -124,8 +124,8 @@ impl BatchGroup {
     /// dispatch as forward progress for the hang watchdog.
     ///
     /// The `batch_size` / `first_request_id` probe values are written as
-    /// `name = expr`: the macro gates them behind `cfg(any(test, feature =
-    /// "probe"))`, so the metric computation is free in production builds.
+    /// `name = expr`: the macro emits them only with the `usdt` feature, so
+    /// ordinary production builds do not evaluate the metric expressions.
     #[kithara::flash(true)]
     #[kithara::probe(
         batch_size = self.entries.len(),

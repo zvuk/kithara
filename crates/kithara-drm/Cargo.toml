@@ -27,7 +27,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-drm = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "hang"] }
 wasm-bindgen-test = { workspace = true }
 
 [lints]

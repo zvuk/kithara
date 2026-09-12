@@ -3,8 +3,6 @@ use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
-#[cfg(any(test, feature = "probe"))]
-use kithara_play::TransportRevision;
 use kithara_play::{
     GroupState, PlayError, SessionBinding, SessionDispatcher, Tempo,
     player::{PlayerControlSource, PlayerMember},
@@ -24,10 +22,8 @@ pub use config::HostConfig;
 use offline::OfflineRuntime;
 use platform::{Platform, PlatformResult};
 
-#[cfg(any(test, feature = "probe"))]
-use crate::api::SessionDuckingMode;
 use crate::{
-    api::HostLevel,
+    api::{HostLevel, SessionTransportSnapshot},
     session::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
     },
@@ -180,21 +176,6 @@ impl<S> Host<S> {
         self.exec_play_ok(Cmd::DisableMixTap)
     }
 
-    /// Reads the shared output-session ducking mode.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session cannot answer the query.
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn ducking_mode(&self) -> Result<SessionDuckingMode, PlayError> {
-        match self.dispatcher.exec(Cmd::SessionDucking)? {
-            Reply::SessionDucking(mode) => Ok(mode),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for ducking query".into(),
-            )),
-        }
-    }
-
     /// Installs one post-limiter group for simultaneous independent outputs.
     ///
     /// # Errors
@@ -268,16 +249,19 @@ impl<S> Host<S> {
         self.root_view.grid().axis().sample_rate()
     }
 
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
+    /// Apply the output rate measured after a platform audio-route change.
+    ///
+    /// # Errors
+    /// Returns an error when the session cannot recreate its output stream.
+    pub fn update_audio_route(&self, sample_rate: NonZeroU32) -> Result<(), PlayError> {
         match self
             .dispatcher
-            .exec_host(HostCmd::RestartOutput { sample_rate })?
+            .exec_host(HostCmd::UpdateOutputRoute { sample_rate })?
         {
             HostReply::Ok => Ok(()),
             HostReply::Err(error) => Err(error),
             _ => Err(PlayError::Internal(
-                "unexpected host reply for stream restart".into(),
+                "unexpected host reply for route update".into(),
             )),
         }
     }
@@ -314,15 +298,6 @@ impl<S> Host<S> {
         })
     }
 
-    /// Updates the shared output-session ducking mode.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session rejects the update.
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn set_ducking_mode(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::SetSessionDucking { mode })
-    }
-
     /// Change the canonical session tempo at the next render boundary.
     ///
     /// # Errors
@@ -331,14 +306,13 @@ impl<S> Host<S> {
         self.exec_play_ok(Cmd::SetSessionTempo { tempo })
     }
 
-    /// Read the canonical session transport revision for probes.
+    /// Read the canonical session transport state.
     ///
     /// # Errors
     /// Returns an error when the Host cannot answer the query.
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
+    pub fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
         match self.dispatcher.exec(Cmd::QuerySessionTransport)? {
-            Reply::SessionTransport(snapshot) => Ok(snapshot.revision()),
+            Reply::SessionTransport(snapshot) => Ok(snapshot),
             Reply::Err(error) => Err(error.into()),
             _ => Err(PlayError::Internal(
                 "unexpected host reply for transport query".into(),

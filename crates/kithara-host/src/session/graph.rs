@@ -15,14 +15,11 @@ use super::{
     transport::SessionTransportState,
 };
 use crate::{
-    api::{SessionDuckingMode, SlotId},
+    api::SlotId,
     bridge::slot_channels,
     effects::eq::{EqBandConfig, EqConfig, GainDb},
     rt::{MasterEqNode, PlayerNode, TapNode},
 };
-pub(super) const fn ducking_gain(mode: SessionDuckingMode) -> f32 {
-    mode.gain()
-}
 /// A level is a linear amplitude, but `Volume::Linear` is a fader taper that
 /// squares its argument, so it must be converted rather than passed through.
 pub(super) fn master_gain(level: f32) -> Volume {
@@ -318,7 +315,6 @@ pub(super) mod lifecycle {
             state.mix_tap = None;
             state.transport = SessionTransportState::default();
             state.session_output_node_id = None;
-            state.session_output_memo = None;
             state.session_limiter_node_id = None;
         }
         Ok(())
@@ -632,21 +628,6 @@ pub(super) mod controls {
         player.master_eq_memo = Some(Memo::new(master_eq));
         Ok(())
     }
-    pub(in crate::session) fn set_session_ducking<B: AudioBackend, S>(
-        state: &mut SessionState<B, S>,
-        mode: SessionDuckingMode,
-    ) {
-        state.session_ducking = mode;
-        if let (Some(fw_ctx), Some(session_id), Some(memo)) = (
-            &mut state.ctx,
-            state.session_output_node_id,
-            &mut state.session_output_memo,
-        ) {
-            memo.volume = Volume::Linear(ducking_gain(mode));
-            let mut queue = fw_ctx.event_queue(session_id);
-            memo.update_memo(&mut queue);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -672,7 +653,7 @@ mod tests {
         session::{
             dispatch::{invalidate_audio_route, run_cmd},
             protocol::Cmd,
-            testing::{attach_player, state as test_state},
+            tests::graph::{attach_player, state as test_state},
         },
     };
 

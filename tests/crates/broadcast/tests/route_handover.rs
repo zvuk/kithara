@@ -182,9 +182,9 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcas
     let before = render_blocks(&harness).await;
     harness
         .host()
-        .restart_stream(NEW_RATE)
+        .update_audio_route(NonZeroU32::new(NEW_RATE).expect("new device rate is non-zero"))
         .await
-        .expect("restart at the new device rate");
+        .expect("apply the measured new device rate");
     let after = render_blocks(&harness).await;
 
     assert_eq!(broadcast_handle.url(), url);

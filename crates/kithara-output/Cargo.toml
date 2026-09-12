@@ -20,7 +20,7 @@ thiserror = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"] }
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 
 [lints]
 workspace = true
