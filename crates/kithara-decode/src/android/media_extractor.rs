@@ -3,7 +3,7 @@
 
 use std::{
     ffi::{CStr, c_void},
-    io::{Read, Seek, SeekFrom},
+    io::{ErrorKind, Read, Seek, SeekFrom},
     ptr::{self, NonNull},
 };
 
@@ -23,8 +23,12 @@ use crate::{
     traits::BoxedSource,
 };
 
+/// `AMediaDataSourceGetSize` reads -1 as "the source has no known length".
+const SIZE_UNKNOWN: i64 = -1;
+
 struct DataSourceCtx {
     source: BoxedSource,
+    /// Resolved once at open; `get_size_callback` runs about once per packet.
     size: i64,
 }
 
@@ -60,13 +64,7 @@ impl AndroidMediaExtractor {
     }
 
     pub(crate) fn open(mut source: BoxedSource) -> DecodeResult<Self> {
-        let end = source
-            .seek(SeekFrom::End(0))
-            .map_err(DecodeError::backend)?;
-        source
-            .seek(SeekFrom::Start(0))
-            .map_err(DecodeError::backend)?;
-        let size = i64::try_from(end).map_err(DecodeError::backend)?;
+        let size = probe_size(&mut source)?;
         let mut ctx = Box::new(DataSourceCtx { source, size });
 
         // SAFETY: `AMediaDataSource_new` returns NULL on failure; we
@@ -256,6 +254,21 @@ fn read_track_format(fmt: NonNull<ffi::AMediaFormat>) -> DecodeResult<TrackForma
         channels: u16::try_from(channels_i.max(0)).unwrap_or(2),
         sample_rate: raw_rate,
     })
+}
+
+/// Total length of `source`, cursor restored to the start.
+/// `ErrorKind::Unsupported` is how a source states it has no authoritative
+/// length, which the data source expresses as [`SIZE_UNKNOWN`].
+fn probe_size(source: &mut BoxedSource) -> DecodeResult<i64> {
+    let size = match source.seek(SeekFrom::End(0)) {
+        Ok(end) => i64::try_from(end).map_err(DecodeError::backend)?,
+        Err(err) if err.kind() == ErrorKind::Unsupported => SIZE_UNKNOWN,
+        Err(err) => return Err(DecodeError::backend(err)),
+    };
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(DecodeError::backend)?;
+    Ok(size)
 }
 
 extern "C" fn read_at_callback(
