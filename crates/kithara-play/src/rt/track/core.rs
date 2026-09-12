@@ -159,6 +159,28 @@ impl PlayerTrack {
         self.ended_at_eof = false;
     }
 
+    pub(crate) fn replace_prepared_launch(
+        &mut self,
+        prepared_epoch: u64,
+        replacement_epoch: u64,
+        transport_epoch: u64,
+        target: f64,
+    ) -> bool {
+        if !self.resource.has_prepared_launch(prepared_epoch) {
+            return false;
+        }
+        if !self
+            .resource
+            .present_replacement_prepared_launch(prepared_epoch, replacement_epoch)
+        {
+            return false;
+        }
+        self.resource.clear_prepared_launch(prepared_epoch);
+        self.observe_seek_epoch(transport_epoch);
+        self.seek(target);
+        true
+    }
+
     /// Update the prefetch lead time used for the preload trigger.
     pub const fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
         self.prefetch_duration = prefetch_duration.max(0.0);

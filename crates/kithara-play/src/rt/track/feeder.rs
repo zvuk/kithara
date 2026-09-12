@@ -458,6 +458,34 @@ impl PlayerResource {
         true
     }
 
+    pub(crate) fn has_prepared_launch(&self, epoch: u64) -> bool {
+        let Some((scheduled_epoch, disposition, _)) = self.scheduled_seek else {
+            return false;
+        };
+        scheduled_epoch == epoch && disposition.is_prepared_launch()
+    }
+
+    pub(crate) fn present_replacement_prepared_launch(
+        &mut self,
+        prepared_epoch: u64,
+        replacement_epoch: u64,
+    ) -> bool {
+        if !self.has_prepared_launch(prepared_epoch) {
+            return false;
+        }
+        match self.resource.get_mut().present_seek(replacement_epoch) {
+            kithara_audio::SeekPresentation::Presented
+            | kithara_audio::SeekPresentation::Current => true,
+            kithara_audio::SeekPresentation::Superseded => false,
+        }
+    }
+
+    pub(crate) fn clear_prepared_launch(&mut self, epoch: u64) {
+        if self.has_prepared_launch(epoch) {
+            self.scheduled_seek = None;
+        }
+    }
+
     pub(crate) fn render_reader(&self) -> Option<RenderReader> {
         self.resource.get().render_reader()
     }

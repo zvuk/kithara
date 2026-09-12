@@ -117,6 +117,35 @@ impl PlayerNodeProcessor {
                         }
                     }
                 }
+                PlayerCmd::CancelPreparedLaunch {
+                    item_id,
+                    prepared_seek_epoch,
+                    replacement_seek_epoch,
+                    transport_seek_epoch,
+                    target,
+                    resume,
+                } => {
+                    let presented = self.tracks.get_mut(item_id).is_some_and(|track| {
+                        track.replace_prepared_launch(
+                            prepared_seek_epoch,
+                            replacement_seek_epoch,
+                            transport_seek_epoch,
+                            target.as_secs_f64(),
+                        )
+                    });
+                    kithara_test_macros::probe_event!(
+                        prepared_launch_cancelled,
+                        item_id = item_id.as_u64(),
+                        prepared_seek_epoch,
+                        replacement_seek_epoch,
+                        transport_seek_epoch,
+                        target_nanos = u64::try_from(target.as_nanos()).unwrap_or(u64::MAX),
+                        presented
+                    );
+                    if presented {
+                        self.playback.playing.store(resume, Ordering::SeqCst);
+                    }
+                }
                 PlayerCmd::SetPaused { paused, item_id } => {
                     let mut prepared = false;
                     for (_, track) in self.tracks.iter_mut() {
@@ -228,7 +257,21 @@ impl PlayerNodeProcessor {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::mock::{AudioControlMock, AudioReadMock, AudioSessionMock};
+    use firewheel::{
+        clock::InstantSamples,
+        dsp::{buffer::ChannelBuffer, declick::DeclickValues},
+        event::{NodeEvent, ProcEvents, ProcEventsIndex, ScheduledEventEntry},
+        log::{RealtimeLoggerConfig, realtime_logger},
+        mask::{ConnectedMask, ConstantMask, SilenceMask},
+        node::{
+            AudioNodeProcessor, NUM_SCRATCH_BUFFERS, ProcBuffers, ProcExtra, ProcInfo, ProcStore,
+            StreamStatus,
+        },
+    };
+    use kithara_audio::{
+        SeekPresentation,
+        mock::{AudioControlMock, AudioReadMock, AudioSessionMock},
+    };
     use kithara_events::EventBus;
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_signal::AudioSpec;
@@ -279,11 +322,54 @@ mod tests {
             .unwrap_or_else(|error| panic!("test player resource: {error}"))
     }
 
+    fn resource_with_presentation(
+        src: Arc<str>,
+        presentation: SeekPresentation,
+    ) -> Box<PlayerResource> {
+        let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
+        let reader = Unimock::new((
+            AudioSessionMock::event_bus
+                .each_call(matching!())
+                .answers(&|mock| mock.make_ref(EventBus::new(1))),
+            AudioSessionMock::duration
+                .each_call(matching!())
+                .returns(Some(Duration::from_secs(1))),
+            AudioReadMock::spec
+                .each_call(matching!())
+                .returns(AudioSpec::new(2, sample_rate)),
+            AudioControlMock::preload
+                .next_call(matching!())
+                .returns(Ok(())),
+            AudioControlMock::present_seek
+                .each_call(matching!())
+                .returns(presentation),
+        ));
+        let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
+        PlayerResource::new(resource, src, &pools())
+            .map(Box::new)
+            .unwrap_or_else(|error| panic!("test player resource: {error}"))
+    }
+
     fn prepared_launch() -> ScheduledSeekDisposition {
         ScheduledSeekDisposition::PreparedLaunch(PreparedLaunchIdentity {
             activation: SessionFrame::new(2_000),
             warp_map: WarpMapRevision::first(),
         })
+    }
+
+    fn load_with_presentation(
+        control: &mut crate::bridge::SlotControl,
+        item_id: TrackId,
+        src: &str,
+        presentation: SeekPresentation,
+    ) {
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::LoadTrack {
+                resource: resource_with_presentation(Arc::from(src), presentation),
+                item_id,
+            })
+            .expect("fixture command queue has capacity");
     }
 
     fn load(control: &mut crate::bridge::SlotControl, item_id: TrackId, src: &str) {
@@ -294,6 +380,24 @@ mod tests {
                 item_id,
             })
             .expect("fixture command queue has capacity");
+    }
+
+    #[kithara::test]
+    fn armed_prepared_schedule_does_not_release_playback_before_readiness() {
+        let (mut processor, mut control) = processor();
+        let item = TrackId::allocate();
+        load(&mut control, item, "current.mp3");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::ScheduleSeek {
+                item_id: item,
+                seek_epoch: 7,
+                disposition: prepared_launch(),
+                armed: true,
+            })
+            .expect("fixture command queue has capacity");
+        processor.drain_commands();
+        assert!(!processor.playback().playing.load(Ordering::SeqCst));
     }
 
     #[kithara::test]
@@ -353,6 +457,140 @@ mod tests {
     }
 
     #[kithara::test]
+    fn cancelling_an_admitted_prepared_launch_releases_requested_playback() {
+        let (mut processor, mut control) = processor();
+        let item = TrackId::allocate();
+        load_with_presentation(&mut control, item, "current.mp3", SeekPresentation::Current);
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::ScheduleSeek {
+                item_id: item,
+                seek_epoch: 7,
+                disposition: prepared_launch(),
+                armed: true,
+            })
+            .expect("fixture command queue has capacity");
+        processor.drain_commands();
+        assert!(!processor.playback().playing.load(Ordering::SeqCst));
+
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::CancelPreparedLaunch {
+                item_id: item,
+                prepared_seek_epoch: 7,
+                replacement_seek_epoch: 8,
+                transport_seek_epoch: 1,
+                target: Duration::ZERO,
+                resume: true,
+            })
+            .expect("fixture command queue has capacity");
+        processor.drain_commands();
+
+        assert!(processor.playback().playing.load(Ordering::SeqCst));
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::SetPaused {
+                paused: false,
+                item_id: Some(item),
+            })
+            .expect("fixture command queue has capacity");
+        processor.drain_commands();
+        assert!(processor.playback().playing.load(Ordering::SeqCst));
+    }
+
+    #[kithara::test]
+    fn failed_replacement_presentation_preserves_prepared_epoch_and_playback() {
+        let (mut processor, mut control) = processor();
+        let item = TrackId::allocate();
+        load_with_presentation(
+            &mut control,
+            item,
+            "current.mp3",
+            SeekPresentation::Superseded,
+        );
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::ScheduleSeek {
+                item_id: item,
+                seek_epoch: 7,
+                disposition: prepared_launch(),
+                armed: true,
+            })
+            .expect("fixture command queue has capacity");
+        processor.drain_commands();
+        processor.playback().position.store(1.0, Ordering::Relaxed);
+
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::CancelPreparedLaunch {
+                item_id: item,
+                prepared_seek_epoch: 7,
+                replacement_seek_epoch: 8,
+                transport_seek_epoch: 1,
+                target: Duration::from_secs(2),
+                resume: true,
+            })
+            .expect("fixture command queue has capacity");
+        processor.drain_commands();
+
+        let track = processor
+            .tracks
+            .get_mut(item)
+            .expect("loaded fixture track");
+        assert!(track.set_prepared_launch_armed(true));
+        assert_eq!(track.position(), 0.0);
+        assert_eq!(processor.playback().position.load(Ordering::Relaxed), 1.0);
+        assert_eq!(processor.playback().seek_epoch.load(Ordering::Relaxed), 0);
+        assert!(!processor.playback().playing.load(Ordering::SeqCst));
+    }
+
+    #[kithara::test]
+    fn future_prepared_schedule_survives_cancellation_of_an_older_epoch() {
+        let (mut processor, mut control) = processor();
+        let item = TrackId::allocate();
+        load(&mut control, item, "current.mp3");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::ScheduleSeek {
+                item_id: item,
+                seek_epoch: 7,
+                disposition: prepared_launch(),
+                armed: true,
+            })
+            .expect("fixture command queue has capacity");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::ScheduleSeek {
+                item_id: item,
+                seek_epoch: 8,
+                disposition: prepared_launch(),
+                armed: true,
+            })
+            .expect("fixture command queue has capacity");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::CancelPreparedLaunch {
+                item_id: item,
+                prepared_seek_epoch: 7,
+                replacement_seek_epoch: 8,
+                transport_seek_epoch: 1,
+                target: Duration::ZERO,
+                resume: false,
+            })
+            .expect("fixture command queue has capacity");
+
+        processor.drain_commands();
+
+        assert!(
+            processor
+                .tracks
+                .get_mut(item)
+                .is_some_and(|track| track.set_prepared_launch_armed(true))
+        );
+        assert!(!processor.playback().playing.load(Ordering::SeqCst));
+    }
+
+    #[kithara::test]
     fn ordinary_launch_play_starts_immediately() {
         let (mut processor, mut control) = processor();
         let item = TrackId::allocate();
@@ -368,5 +606,85 @@ mod tests {
         processor.drain_commands();
 
         assert!(processor.playback().playing.load(Ordering::SeqCst));
+    }
+
+    #[kithara::test]
+    fn ordinary_pause_stays_paused_while_the_gate_drains() {
+        let (mut processor, mut control) = processor();
+        let item = TrackId::allocate();
+        load(&mut control, item, "current.mp3");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(item)))
+            .expect("fixture command queue has capacity");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::SetPaused {
+                paused: false,
+                item_id: Some(item),
+            })
+            .expect("fixture command queue has capacity");
+        processor.drain_commands();
+        assert!(processor.playback().playing.load(Ordering::SeqCst));
+
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::SetPaused {
+                paused: true,
+                item_id: Some(item),
+            })
+            .expect("fixture command queue has capacity");
+        processor.drain_commands();
+
+        let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
+        let mut extra = ProcExtra {
+            logger,
+            store: ProcStore::with_capacity(0),
+            scratch_buffers: ChannelBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(512),
+            declick_values: DeclickValues::new(NonZeroU32::new(16).expect("static declick length")),
+        };
+        let info = ProcInfo {
+            sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
+            frames: 512,
+            in_silence_mask: SilenceMask::default(),
+            out_silence_mask: SilenceMask::default(),
+            in_constant_mask: ConstantMask::default(),
+            out_constant_mask: ConstantMask::default(),
+            in_connected_mask: ConnectedMask::default(),
+            out_connected_mask: ConnectedMask::default(),
+            prev_output_was_silent: false,
+            sample_rate_recip: f64::from(44_100).recip(),
+            clock_samples: InstantSamples(0),
+            duration_since_stream_start: Duration::ZERO,
+            stream_status: StreamStatus::empty(),
+            dropped_frames: 0,
+        };
+        let tail_frames = usize::try_from(
+            (-(44_100.0 * crate::DEFAULT_GATE_SMOOTHING.smooth_seconds)
+                * crate::DEFAULT_GATE_SMOOTHING.settle_epsilon.ln())
+            .ceil() as u64,
+        )
+        .expect("gate-tail frame count fits usize");
+        let mut rendered = Vec::new();
+        for _ in 0..14 {
+            let input: [&[f32]; 0] = [];
+            let mut left = [0.0; 512];
+            let mut right = [0.0; 512];
+            let mut output = [&mut left[..], &mut right[..]];
+            let buffers = ProcBuffers {
+                inputs: &input,
+                outputs: &mut output,
+            };
+            let mut immediate: [Option<NodeEvent>; 0] = [];
+            let mut scheduled: [Option<ScheduledEventEntry>; 0] = [];
+            let mut indices = Vec::<ProcEventsIndex>::new();
+            let mut events = ProcEvents::new(&mut immediate, &mut scheduled, &mut indices);
+            let _ = processor.process(&info, buffers, &mut events, &mut extra);
+
+            assert!(!processor.playback().playing.load(Ordering::SeqCst));
+            rendered.extend(left);
+            assert!(right.iter().all(|sample| *sample == 0.0));
+        }
+        assert!(rendered[tail_frames..].iter().all(|sample| *sample == 0.0));
     }
 }

@@ -2245,6 +2245,366 @@ async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) 
     assert_eq!(first, Some(69_677));
 }
 
+#[ignore = "ignored-red: Disable must cancel an unarmed late-grid launch, 2026-09-13"]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+async fn disable_after_paused_late_grid_cannot_rearm_the_old_launch() {
+    let recorder = probe_capture::install();
+    let case = SyncCase::running(
+        "disable-paused-late-grid",
+        1,
+        48_000,
+        OperationOrder::PlaySyncSeek,
+    )
+    .paused()
+    .hold(124.0);
+    let sources = prepared_sources(Provider::Rhythm(PICKUP_HOUSE_124)).await;
+    let mut harness = ProductHarness::new_track_start(case, &sources, 0).await;
+    harness.request_sync(case).await;
+    harness.play_all().await;
+    let controls: Vec<_> = harness
+        .decks
+        .iter()
+        .map(|deck| deck.control().clone())
+        .collect();
+    harness
+        .host
+        .run(move || controls.iter().for_each(|control| control.pause()))
+        .await;
+    let grid = fixture_grid(PICKUP_HOUSE_124[0]);
+    assert!(matches!(
+        harness
+            .publish_track_grid(0, harness.ids[0][0], grid, BeatGridState::Complete)
+            .await,
+        Ok(SyncAdmission::Prepared { .. })
+    ));
+    harness.request_sync_intent(case, SyncIntent::Disable).await;
+    harness.play_all().await;
+    let capture = harness
+        .capture_frames(case, 24_000, harness.block_frames)
+        .await;
+    assert!(
+        lane_samples(&capture, 0)
+            .iter()
+            .any(|sample| *sample != 0.0)
+    );
+    assert!(
+        !recorder
+            .snapshot()
+            .iter()
+            .any(|event| event.probe_name() == Some("prepared_launch_seek_begun"))
+    );
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+async fn disable_after_admitted_late_grid_cannot_start_the_old_launch() {
+    let recorder = probe_capture::install();
+    let case = SyncCase::running(
+        "disable-admitted-late-grid",
+        1,
+        48_000,
+        OperationOrder::PlaySyncSeek,
+    )
+    .paused()
+    .hold(124.0);
+    let sources = prepared_sources(Provider::Rhythm(PICKUP_HOUSE_124)).await;
+    let mut harness = ProductHarness::new_track_start(case, &sources, 0).await;
+    harness.request_sync(case).await;
+    harness.play_all().await;
+    let grid = fixture_grid(PICKUP_HOUSE_124[0]);
+    assert!(matches!(
+        harness
+            .publish_track_grid(0, harness.ids[0][0], grid, BeatGridState::Complete)
+            .await,
+        Ok(SyncAdmission::Prepared { .. })
+    ));
+    let _ = harness.render(case, harness.block_frames).await;
+    let admitted = recorder
+        .snapshot()
+        .into_iter()
+        .find(|event| {
+            event.probe_name() == Some("prepared_launch_command_admitted")
+                && event.fields["armed"] == 1
+        })
+        .expect("prepared launch is admitted before Disable");
+    let old_epoch = admitted.fields["seek_epoch"];
+    let events_before_disable = recorder.snapshot().len();
+    let served_target = harness.player_controls[0]
+        .position_seconds()
+        .expect("active track exposes its served-media position before Disable");
+    let served_target_source = (served_target * f64::from(case.sample_rate)) as u64;
+
+    harness.request_sync_intent(case, SyncIntent::Disable).await;
+    let capture = harness
+        .capture_frames(case, 100_000, harness.block_frames)
+        .await;
+    assert!(
+        lane_samples(&capture, 0)
+            .iter()
+            .any(|sample| *sample != 0.0)
+    );
+    let after_disable = &recorder.snapshot()[events_before_disable..];
+    assert!(after_disable.iter().any(|event| {
+        event.probe_name() == Some("prepared_launch_cancelled")
+            && event.fields["item_id"] == harness.ids[0][0].as_u64()
+            && event.fields["prepared_seek_epoch"] == old_epoch
+            && event.fields["replacement_seek_epoch"] != old_epoch
+            && event.fields["presented"] == 1
+    }));
+    let replacement_epoch = after_disable
+        .iter()
+        .find(|event| {
+            event.probe_name() == Some("prepared_launch_cancelled")
+                && event.fields["prepared_seek_epoch"] == old_epoch
+                && event.fields["presented"] == 1
+        })
+        .expect("Disable presents its replacement prepared seek")
+        .fields["replacement_seek_epoch"];
+    assert!(!after_disable.iter().any(|event| {
+        event.probe_name() == Some("prepared_launch_readiness_checked")
+            && event.fields["expected_activation"] == 69_677
+    }));
+    assert!(!after_disable.iter().any(|event| {
+        event.probe_name() == Some("scheduled_seek_activated")
+            && event.fields["seek_epoch"] == old_epoch
+    }));
+    let events = recorder.snapshot();
+    assert!(events.iter().any(|event| {
+        event.probe_name() == Some("producer_pcm_admitted")
+            && event.fields["seek_epoch"] == old_epoch
+    }));
+    assert!(!events.iter().any(|event| {
+        event.probe_name() == Some("pcm_reader_admitted") && event.fields["seek_epoch"] == old_epoch
+    }));
+    let replacement_pcm = events
+        .iter()
+        .find(|event| {
+            event.probe_name() == Some("pcm_reader_admitted")
+                && event.fields["seek_epoch"] == replacement_epoch
+        })
+        .expect("Disable admits replacement PCM");
+    let replacement_source_start = replacement_pcm.fields["source_start"];
+    let source_tolerance = u64::try_from(harness.block_frames)
+        .expect("fixture block size fits source-frame tolerance");
+    assert!(
+        replacement_source_start.abs_diff(served_target_source) <= source_tolerance,
+        "Disable replacement source start {replacement_source_start} must follow served target {served_target_source} within {source_tolerance} source frames"
+    );
+}
+
+#[ignore = "ignored-red: Disable before a grid releases only requested playback, 2026-09-13"]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+#[case::playing(true)]
+#[case::paused(false)]
+async fn disable_before_grid_respects_requested_playback(#[case] play: bool) {
+    let case = SyncCase::running(
+        "disable-before-grid",
+        1,
+        48_000,
+        OperationOrder::PlaySyncSeek,
+    )
+    .paused()
+    .hold(124.0);
+    let sources = prepared_sources(Provider::Rhythm(PICKUP_HOUSE_124)).await;
+    let mut harness = ProductHarness::new_track_start(case, &sources, 0).await;
+    harness.request_sync(case).await;
+    if play {
+        harness.play_all().await;
+    }
+    harness.request_sync_intent(case, SyncIntent::Disable).await;
+    let capture = harness
+        .capture_frames(case, 24_000, harness.block_frames)
+        .await;
+    let audible = lane_samples(&capture, 0)
+        .iter()
+        .any(|sample| *sample != 0.0);
+    assert_eq!(audible, play);
+}
+
+#[ignore = "ignored-red: paused late grid resumes its prepared Host phase, 2026-09-13"]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+async fn paused_late_grid_resumes_at_the_prepared_host_phase() {
+    let case = SyncCase::running(
+        "paused-late-grid-resume",
+        1,
+        48_000,
+        OperationOrder::PlaySyncSeek,
+    )
+    .paused()
+    .hold(124.0);
+    let sources = prepared_sources(Provider::Rhythm(PICKUP_HOUSE_124)).await;
+    let mut harness = ProductHarness::new_track_start(case, &sources, 0).await;
+    harness.request_sync(case).await;
+    harness.play_all().await;
+    let controls: Vec<_> = harness
+        .decks
+        .iter()
+        .map(|deck| deck.control().clone())
+        .collect();
+    harness
+        .host
+        .run(move || controls.iter().for_each(|control| control.pause()))
+        .await;
+    let grid = fixture_grid(PICKUP_HOUSE_124[0]);
+    assert!(matches!(
+        harness
+            .publish_track_grid(0, harness.ids[0][0], grid, BeatGridState::Complete)
+            .await,
+        Ok(SyncAdmission::Prepared { .. })
+    ));
+    let silent = harness
+        .capture_frames(case, 8_000, harness.block_frames)
+        .await;
+    assert!(silent.iter().all(|sample| *sample == 0.0));
+    harness.play_all().await;
+    let start = harness.rendered_frames;
+    let pcm = harness
+        .capture_frames(case, 100_000, harness.block_frames)
+        .await;
+    let first = lane_samples(&pcm, 0)
+        .iter()
+        .position(|sample| *sample != 0.0)
+        .map(|frame| start + frame as u64);
+    assert_eq!(first, Some(69_677));
+}
+
+#[ignore = "ignored-red: normal HostSync pause resume keeps PCM continuity, 2026-09-13"]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+async fn normal_hostsync_pause_resume_keeps_pcm_continuity() {
+    let recorder = probe_capture::install();
+    let case = SyncCase::running(
+        "normal-pause-resume",
+        1,
+        48_000,
+        OperationOrder::PlaySyncSeek,
+    )
+    .paused()
+    .hold(124.0);
+    let sources = prepared_sources(Provider::Rhythm(PICKUP_HOUSE_124)).await;
+    let mut harness = ProductHarness::new_track_start(case, &sources, 0).await;
+    prepare_fixture_grids(&mut harness, case, &sources).await;
+    harness.request_sync(case).await;
+    harness.play_all().await;
+    harness.settle_sync_activation(case).await;
+    let before = harness
+        .capture_frames(case, 8_000, harness.block_frames)
+        .await;
+    assert!(lane_samples(&before, 0).iter().any(|sample| *sample != 0.0));
+    let pause_output = harness.rendered_frames;
+    let controls: Vec<_> = harness
+        .decks
+        .iter()
+        .map(|deck| deck.control().clone())
+        .collect();
+    harness
+        .host
+        .run(move || controls.iter().for_each(|control| control.pause()))
+        .await;
+    let paused = harness
+        .capture_frames(case, 8_000, harness.block_frames)
+        .await;
+    let gate = kithara::play::DEFAULT_GATE_SMOOTHING;
+    let settling_frames = (-(f64::from(case.sample_rate) * f64::from(gate.smooth_seconds))
+        * f64::from(gate.settle_epsilon).ln())
+    .ceil() as usize;
+    let gate_tail_frames = settling_frames.div_ceil(harness.block_frames) * harness.block_frames;
+    let paused = lane_samples(&paused, 0);
+    let (_, silence) = paused.split_at(gate_tail_frames);
+    assert!(
+        silence.iter().all(|sample| *sample == 0.0),
+        "paused PCM outlived the {gate_tail_frames}-frame gate tail"
+    );
+    let resume_output = harness.rendered_frames;
+    harness.play_all().await;
+    let after = harness
+        .capture_frames(case, 8_000, harness.block_frames)
+        .await;
+    assert!(lane_samples(&after, 0).iter().any(|sample| *sample != 0.0));
+    let consumed = recorder
+        .snapshot()
+        .into_iter()
+        .filter(|event| event.probe_name() == Some("pcm_consumed"))
+        .map(|event| {
+            serde_json::json!({
+                "output_start": event.fields["output_start"],
+                "output_end": event.fields["output_end"],
+                "source_start": event.fields["source_start"],
+                "source_end": event.fields["source_end"],
+            })
+        })
+        .collect::<Vec<_>>();
+    let pause_tail_end = pause_output + gate_tail_frames as u64;
+    let last_paused = consumed
+        .iter()
+        .filter(|event| {
+            event["output_start"]
+                .as_u64()
+                .is_some_and(|start| start >= pause_output && start < resume_output)
+        })
+        .last()
+        .expect("the pause ramp consumes the held source");
+    assert!(
+        last_paused["output_end"]
+            .as_u64()
+            .is_some_and(|end| end <= pause_tail_end),
+        "pause consumed source after the derived gate tail: {last_paused}"
+    );
+    assert!(
+        !consumed.iter().any(|event| {
+            event["output_start"]
+                .as_u64()
+                .is_some_and(|start| start >= pause_tail_end && start < resume_output)
+        }),
+        "source advanced after the pause gate settled"
+    );
+    let first_resumed = consumed
+        .iter()
+        .find(|event| {
+            event["output_start"]
+                .as_u64()
+                .is_some_and(|start| start >= resume_output)
+        })
+        .expect("resume consumes PCM after the held source");
+    assert_eq!(
+        first_resumed["source_start"], last_paused["source_end"],
+        "resume must continue at the source frontier held after the pause ramp"
+    );
+}
+
 #[derive(Clone, Copy)]
 struct ListeningScenario {
     id: &'static str,

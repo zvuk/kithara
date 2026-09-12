@@ -206,6 +206,10 @@ impl AudioControl for EofReader {
             landed_at: position,
         })
     }
+
+    fn present_seek(&mut self, _epoch: u64) -> kithara_audio::SeekPresentation {
+        kithara_audio::SeekPresentation::Current
+    }
 }
 
 struct RevisionReader {
@@ -425,7 +429,7 @@ fn armed_prepared_launch_renders_only_its_ready_suffix() {
         ),
         true,
     );
-    track.fade_in();
+    track.play();
     let mut tracks = TrackSlots::default();
     assert!(tracks.insert(track).is_none());
     let context = RenderContext::new(
@@ -453,7 +457,7 @@ fn armed_prepared_launch_renders_only_its_ready_suffix() {
         None,
     )
     .expect("fixture pre-activation context is valid");
-    let (started, _) = pass.render_audio(
+    let (started, prepared_launch_started, _) = pass.render_audio(
         Some(&pre_activation),
         RenderTargets {
             notification_tx: &mut inputs.notif_tx,
@@ -467,6 +471,7 @@ fn armed_prepared_launch_renders_only_its_ready_suffix() {
     );
     drop(buffers);
     assert!(!started);
+    assert!(!prepared_launch_started);
     assert!(left.iter().all(|sample| *sample == 0.0));
     assert!(right.iter().all(|sample| *sample == 0.0));
 
@@ -475,12 +480,21 @@ fn armed_prepared_launch_renders_only_its_ready_suffix() {
         inputs: &input,
         outputs: &mut output,
     };
+    let (mut activation_inputs, _) = slot_channels(SharedEq::new(0));
+    let mut activation_pass = RenderPass::new(
+        &pools(),
+        shape,
+        activation_inputs.stretch,
+        activation_inputs.rate_smoothing,
+        activation_inputs.grid,
+        crate::DEFAULT_GATE_SMOOTHING,
+    );
 
-    let (started, _) = pass.render_audio(
+    let (started, prepared_launch_started, _) = activation_pass.render_audio(
         Some(&context),
         RenderTargets {
-            notification_tx: &mut inputs.notif_tx,
-            metrics: inputs.playback.metrics(),
+            notification_tx: &mut activation_inputs.notif_tx,
+            metrics: activation_inputs.playback.metrics(),
             tracks: &mut tracks,
             seek_epoch: 7,
         },
@@ -490,6 +504,7 @@ fn armed_prepared_launch_renders_only_its_ready_suffix() {
     );
 
     assert!(started);
+    assert!(prepared_launch_started);
     assert!(left[..5].iter().all(|sample| *sample == 0.0));
     assert!(right[..5].iter().all(|sample| *sample == 0.0));
     assert!(
@@ -548,7 +563,7 @@ fn unarmed_prepared_launch_remains_silent_at_its_ready_activation() {
         outputs: &mut output,
     };
 
-    let (started, _) = pass.render_audio(
+    let (started, _, _) = pass.render_audio(
         Some(&context),
         RenderTargets {
             notification_tx: &mut inputs.notif_tx,

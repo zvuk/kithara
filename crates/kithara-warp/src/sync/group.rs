@@ -49,6 +49,9 @@ pub enum SyncStatusSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SyncError {
+    /// The real-time command queue cannot admit this transaction yet; retry it unchanged.
+    #[error("real-time command queue is full")]
+    SlotChannelFull,
     /// The canonical group owner stopped before accepting an operation.
     #[error("canonical synchronization-group owner is unavailable")]
     OwnerUnavailable,

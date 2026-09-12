@@ -182,81 +182,15 @@ impl RingConsumer {
         cursor: &mut ChunkCursor,
         ctx: RecvCtx<'_>,
     ) -> RevisionFloorStatus {
-        let stale = self
-            .current_chunk
-            .as_ref()
-            .is_some_and(|chunk| chunk.meta.render_revision < revision);
-        let current_frames = self.current_chunk.as_ref().map_or(0, |chunk| {
-            if replacement_epoch.is_none() && chunk.meta.render_revision >= revision {
-                cursor.remaining_frames(chunk)
-            } else {
-                0
-            }
-        });
-        let future_frames = self.future_fetch.as_ref().map_or(0, |fetch| {
-            let eligible = replacement_epoch.is_some_and(|epoch| fetch.epoch() == epoch)
-                && matches!(fetch, Fetch::Data { data, .. } if data.meta.render_revision >= revision);
-            if eligible {
-                let Fetch::Data { data, .. } = fetch else {
-                    unreachable!();
-                };
-                usize::try_from(data.meta.frames).unwrap_or(usize::MAX)
-            } else {
-                0
-            }
-        });
-        let prepared_frames = self
-            .audio_rx
-            .fold(current_frames.saturating_add(future_frames), |frames, fetch| {
-            let eligible = replacement_epoch.map_or_else(
-                || self.validator.is_valid(fetch),
-                |epoch| fetch.epoch() == epoch,
-            )
-                && matches!(fetch, Fetch::Data { data, .. } if data.meta.render_revision >= revision);
-            if eligible {
-                let Fetch::Data { data, .. } = fetch else {
-                    unreachable!();
-                };
-                frames.saturating_add(
-                    usize::try_from(data.meta.frames).unwrap_or(usize::MAX),
-                )
-            } else {
-                frames
-            }
-            });
-        if prepared_frames < required_frames.get() {
-            return RevisionFloorStatus::WaitingForReplacement;
-        }
-        if replacement_epoch.is_some_and(|epoch| epoch != self.validator.epoch) {
-            return RevisionFloorStatus::ReadyForSeekPresentation;
-        }
-        if self.current_chunk.is_some() && !stale {
-            return RevisionFloorStatus::Current;
-        }
-        if revision > self.render_revision_floor {
-            self.render_revision_floor = revision;
-            self.rendered_source_head = presented_source;
-            self.rendered_warp_revision =
-                presented_source.map(|_| kithara_signal::render_warp_map_revision(revision));
-        }
-        let Some((replacement, source_span)) = self.recv_valid_chunk(ctx) else {
-            return RevisionFloorStatus::WaitingForReplacement;
-        };
-        if stale {
-            kithara::probe_event!(
-                pcm_revision_discarded,
-                revision = self
-                    .current_chunk
-                    .as_ref()
-                    .map_or(0, |chunk| chunk.meta.render_revision)
-            );
-            self.recycle_current();
-        }
-        cursor.begin_chunk(&replacement);
-        self.current_chunk = Some(replacement);
-        self.current_source_span = source_span;
-        self.promote_playing();
-        RevisionFloorStatus::Switched
+        apply_render_revision_floor(
+            self,
+            revision,
+            required_frames,
+            presented_source,
+            replacement_epoch,
+            cursor,
+            ctx,
+        )
     }
 
     pub(super) fn fill(&mut self, cursor: &mut ChunkCursor, ctx: RecvCtx<'_>) -> bool {
@@ -293,7 +227,9 @@ impl RingConsumer {
                 FetchOutcome::Return(None)
             }
             Fetch::Data {
-                data, source_end, ..
+                data,
+                epoch,
+                source_end,
             } => {
                 if data.meta.render_revision < self.render_revision_floor {
                     kithara::probe_event!(
@@ -304,6 +240,15 @@ impl RingConsumer {
                     return FetchOutcome::Continue;
                 }
                 let source_span = self.source_span(&data, source_end);
+                if let Some(source) = source_span {
+                    kithara::probe_event!(
+                        pcm_reader_admitted,
+                        seek_epoch = epoch,
+                        source_start = source.start(),
+                        source_end = source.end(),
+                        render_revision = source.render_revision()
+                    );
+                }
                 FetchOutcome::Return(Some((data, source_span)))
             }
         }
@@ -484,6 +429,90 @@ impl RingConsumer {
     pub(super) fn wake_worker(&self, worker: Option<&dyn WorkerWake>) {
         wake_worker(worker, self.consumer_wake_mode);
     }
+}
+
+fn apply_render_revision_floor(
+    consumer: &mut RingConsumer,
+    revision: u64,
+    required_frames: NonZeroUsize,
+    presented_source: Option<SourceEnd>,
+    replacement_epoch: Option<u64>,
+    cursor: &mut ChunkCursor,
+    ctx: RecvCtx<'_>,
+) -> RevisionFloorStatus {
+    let stale = consumer
+        .current_chunk
+        .as_ref()
+        .is_some_and(|chunk| chunk.meta.render_revision < revision);
+    let current_frames = consumer.current_chunk.as_ref().map_or(0, |chunk| {
+        if replacement_epoch.is_none() && chunk.meta.render_revision >= revision {
+            cursor.remaining_frames(chunk)
+        } else {
+            0
+        }
+    });
+    let future_frames = consumer.future_fetch.as_ref().map_or(0, |fetch| {
+        let eligible = replacement_epoch.is_some_and(|epoch| fetch.epoch() == epoch)
+            && matches!(fetch, Fetch::Data { data, .. } if data.meta.render_revision >= revision);
+        if eligible {
+            let Fetch::Data { data, .. } = fetch else {
+                unreachable!();
+            };
+            usize::try_from(data.meta.frames).unwrap_or(usize::MAX)
+        } else {
+            0
+        }
+    });
+    let prepared_frames = consumer.audio_rx.fold(
+        current_frames.saturating_add(future_frames),
+        |frames, fetch| {
+            let eligible = replacement_epoch.map_or_else(
+                || consumer.validator.is_valid(fetch),
+                |epoch| fetch.epoch() == epoch,
+            ) && matches!(fetch, Fetch::Data { data, .. } if data.meta.render_revision >= revision);
+            if eligible {
+                let Fetch::Data { data, .. } = fetch else {
+                    unreachable!();
+                };
+                frames.saturating_add(usize::try_from(data.meta.frames).unwrap_or(usize::MAX))
+            } else {
+                frames
+            }
+        },
+    );
+    if prepared_frames < required_frames.get() {
+        return RevisionFloorStatus::WaitingForReplacement;
+    }
+    if replacement_epoch.is_some_and(|epoch| epoch != consumer.validator.epoch) {
+        return RevisionFloorStatus::ReadyForSeekPresentation;
+    }
+    if consumer.current_chunk.is_some() && !stale {
+        return RevisionFloorStatus::Current;
+    }
+    if revision > consumer.render_revision_floor {
+        consumer.render_revision_floor = revision;
+        consumer.rendered_source_head = presented_source;
+        consumer.rendered_warp_revision =
+            presented_source.map(|_| kithara_signal::render_warp_map_revision(revision));
+    }
+    let Some((replacement, source_span)) = consumer.recv_valid_chunk(ctx) else {
+        return RevisionFloorStatus::WaitingForReplacement;
+    };
+    if stale {
+        kithara::probe_event!(
+            pcm_revision_discarded,
+            revision = consumer
+                .current_chunk
+                .as_ref()
+                .map_or(0, |chunk| chunk.meta.render_revision)
+        );
+        consumer.recycle_current();
+    }
+    cursor.begin_chunk(&replacement);
+    consumer.current_chunk = Some(replacement);
+    consumer.current_source_span = source_span;
+    consumer.promote_playing();
+    RevisionFloorStatus::Switched
 }
 
 /// A consumer that blocks on underrun waits on the producer thread, so it wakes

@@ -29,6 +29,15 @@ pub enum PlayerCmd {
         disposition: ScheduledSeekDisposition,
         armed: bool,
     },
+    /// Cancel the installed prepared launch for one track.
+    CancelPreparedLaunch {
+        item_id: TrackId,
+        prepared_seek_epoch: u64,
+        replacement_seek_epoch: u64,
+        transport_seek_epoch: u64,
+        target: std::time::Duration,
+        resume: bool,
+    },
     /// Set the paused state.
     SetPaused {
         paused: bool,
@@ -73,6 +82,22 @@ impl fmt::Debug for PlayerCmd {
                 .field("seek_epoch", seek_epoch)
                 .field("disposition", disposition)
                 .field("armed", armed)
+                .finish(),
+            Self::CancelPreparedLaunch {
+                item_id,
+                prepared_seek_epoch,
+                replacement_seek_epoch,
+                transport_seek_epoch,
+                target,
+                resume,
+            } => f
+                .debug_struct("CancelPreparedLaunch")
+                .field("item_id", item_id)
+                .field("prepared_seek_epoch", prepared_seek_epoch)
+                .field("replacement_seek_epoch", replacement_seek_epoch)
+                .field("transport_seek_epoch", transport_seek_epoch)
+                .field("target", target)
+                .field("resume", resume)
                 .finish(),
             Self::SetPaused { paused, item_id } => f
                 .debug_struct("SetPaused")

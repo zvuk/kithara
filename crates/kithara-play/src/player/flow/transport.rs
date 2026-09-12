@@ -333,19 +333,3 @@ where
         let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)));
     }
 }
-
-impl<S> PlayerRuntime<S> {
-    pub(crate) fn release_awaiting_source_cue(&self) {
-        let Some(item) = self.core.items.current_item_id() else {
-            return;
-        };
-        if self.core.items.consume_awaiting_initial_source_cue(item)
-            && self.phase_kind() == crate::player::state::phase::PlayerPhaseKind::Playing
-        {
-            let _ = self.send_to_slot(PlayerCmd::SetPaused {
-                paused: false,
-                item_id: Some(item),
-            });
-        }
-    }
-}

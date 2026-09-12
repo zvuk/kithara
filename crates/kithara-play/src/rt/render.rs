@@ -97,9 +97,9 @@ impl RenderPass {
         buffers: &mut ProcBuffers,
         frames: usize,
         is_playing: bool,
-    ) -> (bool, Option<(f64, f64)>) {
+    ) -> (bool, bool, Option<(f64, f64)>) {
         if buffers.outputs.len() < Self::MIN_STEREO {
-            return (false, None);
+            return (false, false, None);
         }
 
         for ch_buffer in buffers.outputs.iter_mut() {
@@ -120,8 +120,12 @@ impl RenderPass {
         buffers: &mut ProcBuffers,
         frames: usize,
         is_playing: bool,
-    ) -> (bool, Option<(f64, f64)>) {
-        let mut playback_started = false;
+    ) -> (bool, bool, Option<(f64, f64)>) {
+        let mut outputs_modified = false;
+        // Only a prepared launch is allowed to promote the shared playback
+        // state. Ordinary tracks may still render while the pause gate drains
+        // its fade-out, but that must not turn a pause back into playback.
+        let mut prepared_launch_started = false;
         let mut leading_outcome_pos_dur: Option<(f64, f64)> = None;
         let tracks = targets.tracks;
         let prepared_ready = prepared_launch_ready(tracks, context, frames, is_playing);
@@ -129,7 +133,7 @@ impl RenderPass {
         self.update_gate(is_playing);
         // WHY: A closed gate outputs silence whatever the tracks hold, so readers stop only once its ramp has run out.
         if !is_playing && self.gate.has_settled() {
-            return (false, None);
+            return (false, false, None);
         }
 
         let (read, rest) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
@@ -188,12 +192,10 @@ impl RenderPass {
                 }) else {
                     continue;
                 };
-                playback_started |= if prepared_ready.is_some_and(|(slot, _)| slot == *track_handle)
-                {
-                    matches!(outcome, TrackReadOutcome::Full { frames, .. } | TrackReadOutcome::Partial { frames, .. } if frames > 0)
-                } else {
-                    true
-                };
+                let prepared_track = prepared_ready.is_some_and(|(slot, _)| slot == *track_handle);
+                let rendered_frames = matches!(outcome, TrackReadOutcome::Full { frames, .. } | TrackReadOutcome::Partial { frames, .. } if frames > 0);
+                outputs_modified |= !prepared_track || rendered_frames;
+                prepared_launch_started |= prepared_track && rendered_frames;
                 outcome
             };
 
@@ -283,7 +285,11 @@ impl RenderPass {
             frames,
         );
 
-        (playback_started, leading_outcome_pos_dur)
+        (
+            outputs_modified,
+            prepared_launch_started,
+            leading_outcome_pos_dur,
+        )
     }
 
     fn update_gate(&mut self, is_playing: bool) {

@@ -10,7 +10,7 @@ use kithara_warp::{
 };
 
 use super::{PlaybackView, PlayerImpl, PlayerRuntime};
-use crate::{PlayError, SessionBinding, api::TrackId};
+use crate::{PlayError, SessionBinding, api::TrackId, bridge::PlayerCmd};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "protocol/native.rs"]
@@ -180,6 +180,19 @@ where
         let reconcile_transport = alignment_source.is_some()
             && matches!(&operation, SyncOperation::Transport { .. })
             && self.sync.mode() == SyncMode::HostSync;
+        if sync_release
+            && let (Some(slot), Some(item)) = (
+                self.runtime.slot(),
+                self.runtime.core.items.current_item_id(),
+            )
+            && !self.runtime.core.engine.cancel_prepared_launches(
+                slot,
+                item,
+                self.runtime.phase_kind() == crate::player::state::phase::PlayerPhaseKind::Playing,
+            )
+        {
+            return Err(SyncRejected::new(SyncError::SlotChannelFull, operation));
+        }
         let now = self.runtime.presentation_frontier().output();
         let (admission, projection) = self.sync.transact_at(operation, now)?;
         // The mode transition has committed even when reconciliation must wait
@@ -191,8 +204,20 @@ where
         {
             self.runtime.core.items.await_initial_source_cue(item);
         }
-        if sync_release && self.sync.mode() != SyncMode::HostSync {
-            self.runtime.release_awaiting_source_cue();
+        if sync_release
+            && self.sync.mode() != SyncMode::HostSync
+            && let Some(item) = self.runtime.core.items.current_item_id()
+            && self
+                .runtime
+                .core
+                .items
+                .consume_awaiting_initial_source_cue(item)
+            && self.runtime.phase_kind() == crate::player::state::phase::PlayerPhaseKind::Playing
+        {
+            let _ = self.runtime.send_to_slot(PlayerCmd::SetPaused {
+                paused: false,
+                item_id: Some(item),
+            });
         }
         let reconcile_cause = if align_now {
             ReconcileCause::AlignmentRequested

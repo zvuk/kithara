@@ -68,7 +68,10 @@ impl<S> EngineImpl<S> {
             runtime: RuntimeHandle::try_current().ok(),
         }
     }
+}
 
+/// Slot lifecycle owns allocation and release of session resources.
+impl<S> EngineImpl<S> {
     pub fn active_slots(&self) -> Vec<SlotId> {
         self.slots.lock().ids()
     }
@@ -100,6 +103,30 @@ impl<S> EngineImpl<S> {
         Ok(slot_id)
     }
 
+    pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(PlayError::EngineNotRunning);
+        }
+
+        {
+            let slots = self.slots.lock();
+            if !slots.contains(slot) {
+                return Err(PlayError::SlotNotFound(slot));
+            }
+        }
+
+        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
+        self.session.release_slot(player_id, slot)?;
+
+        let _ = self.slots.lock().remove(slot);
+
+        debug!(?slot, player_id, "slot released");
+        self.emit(EngineEvent::SlotReleased { slot });
+        Ok(())
+    }
+}
+
+impl<S> EngineImpl<S> {
     pub(crate) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
         self.validate_session_sample_rate(binding.requested_sample_rate().get())?;
         self.session.bind(binding)
@@ -141,6 +168,18 @@ impl<S> EngineImpl<S> {
         if let Some(control) = self.slots.lock().get_mut(slot) {
             control.disarm_prepared_launches();
         }
+    }
+
+    pub(crate) fn cancel_prepared_launches(
+        &self,
+        slot: SlotId,
+        item: TrackId,
+        resume: bool,
+    ) -> bool {
+        self.slots
+            .lock()
+            .get_mut(slot)
+            .is_some_and(|control| control.cancel_prepared_launches(item, resume))
     }
 
     pub(crate) fn cancel(&self) {
@@ -264,28 +303,6 @@ impl<S> EngineImpl<S> {
             .get_mut(slot)
             .and_then(|handle| handle.notif_rx.try_pop())
     }
-    pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
-        if !self.running.load(Ordering::Acquire) {
-            return Err(PlayError::EngineNotRunning);
-        }
-
-        {
-            let slots = self.slots.lock();
-            if !slots.contains(slot) {
-                return Err(PlayError::SlotNotFound(slot));
-            }
-        }
-
-        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
-        self.session.release_slot(player_id, slot)?;
-
-        let _ = self.slots.lock().remove(slot);
-
-        debug!(?slot, player_id, "slot released");
-        self.emit(EngineEvent::SlotReleased { slot });
-        Ok(())
-    }
-
     /// Runtime handle captured at engine creation.
     ///
     /// Use when building a shared

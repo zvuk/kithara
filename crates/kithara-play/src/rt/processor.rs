@@ -274,7 +274,9 @@ impl PlayerNodeProcessor {
         frames: usize,
         is_playing: bool,
     ) -> (bool, Option<(f64, f64)>) {
-        self.render_with_context(None, buffers, frames, is_playing)
+        let (outputs_modified, _, position_duration) =
+            self.render_with_context(None, buffers, frames, is_playing);
+        (outputs_modified, position_duration)
     }
 
     fn render_context<'a>(
@@ -294,7 +296,7 @@ impl PlayerNodeProcessor {
         buffers: &mut ProcBuffers,
         frames: usize,
         is_playing: bool,
-    ) -> (bool, Option<(f64, f64)>) {
+    ) -> (bool, bool, Option<(f64, f64)>) {
         self.render.render_audio(
             context,
             RenderTargets {
@@ -466,16 +468,16 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
             }
         };
 
-        let (playback_started, leading_outcome_pos_dur) =
+        let (outputs_modified, prepared_launch_started, leading_outcome_pos_dur) =
             self.render_with_context(context, &mut buffers, info.frames, is_playing);
 
         self.update_position_duration(leading_outcome_pos_dur);
-        if playback_started && !is_playing {
+        if prepared_launch_started && !is_playing {
             self.playback.playing.store(true, Ordering::SeqCst);
         }
         self.refresh_effective_rate();
 
-        if playback_started {
+        if outputs_modified {
             ProcessStatus::OutputsModified
         } else {
             ProcessStatus::ClearAllOutputs
