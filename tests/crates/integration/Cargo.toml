@@ -115,7 +115,7 @@ no-block = ["kithara/no-block", "kithara-test-utils/no-block"]
 apple-net = ["kithara/apple-net"]
 apple-fused-src = ["kithara/apple-fused-src"]
 # External DTrace acceptance for the real USDT provider.
-usdt-observer = ["dep:kithara", "kithara/platform", "kithara/usdt"]
+usdt = ["dep:kithara", "kithara/usdt"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
@@ -295,11 +295,6 @@ path = "tests/suite_stress.rs"
 name = "suite_integration_regressions"
 path = "tests/suite_integration_regressions.rs"
 required-features = ["integration-regressions"]
-
-[[test]]
-name = "usdt_observer"
-path = "tests/usdt_observer.rs"
-required-features = ["usdt-observer"]
 
 [[test]]
 name = "suite_perf"

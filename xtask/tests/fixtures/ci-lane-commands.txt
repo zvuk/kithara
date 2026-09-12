@@ -583,106 +583,6 @@
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-# apple-usdt / branch
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
-  /usr/bin/xcodebuild -version
-  just test run --lane=usdt-observer --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls-stress --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-queue --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-# apple-usdt / platforms
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
-  /usr/bin/xcodebuild -version
-  just test run --lane=usdt-observer --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls-stress --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-queue --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-# apple-usdt / merge-request
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
-  /usr/bin/xcodebuild -version
-  just test run --lane=usdt-observer --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls-stress --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-queue --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-# apple-usdt / quarantine
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
-  /usr/bin/xcodebuild -version
-  just test run --lane=usdt-observer --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls-stress --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-queue --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-# apple-usdt / main
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
-  /usr/bin/xcodebuild -version
-  just test run --lane=usdt-observer --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls-stress --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-queue --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-# apple-usdt / nightly
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
-  /usr/bin/xcodebuild -version
-  just test run --lane=usdt-observer --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls-stress --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-queue --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-# apple-usdt / weekly
-  refused: weekly pipelines do not run the Apple USDT observer
-# apple-usdt / release
-  <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
-  /usr/bin/xcodebuild -version
-  just test run --lane=usdt-observer --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-hls-stress --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-queue --profile ci
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-xcframework / branch
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
@@ -2058,6 +1958,94 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
+    CARGO_BUILD_JOBS=2
+# linux-usdt / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-usdt / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=usdt-play --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
 # linux-wasm / branch
   <require os> linux

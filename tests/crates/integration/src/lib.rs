@@ -70,14 +70,14 @@ pub mod rfc6381;
 pub mod rng;
 pub mod server_url;
 pub mod storage_ext;
-#[cfg(feature = "usdt-observer")]
+#[cfg(feature = "usdt")]
 pub mod swallow_detector;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod test_defaults;
 pub mod test_server;
 pub mod token_store;
-#[cfg(feature = "usdt-observer")]
-pub mod usdt_observer;
+#[cfg(feature = "usdt")]
+pub mod usdt_trace;
 /// Scenario machinery for the user-simulation suites: the action vocabulary,
 /// the scripted scenarios built from it, and the harness that applies them to a
 /// `Queue`. It lives here rather than beside one suite because two suites drive

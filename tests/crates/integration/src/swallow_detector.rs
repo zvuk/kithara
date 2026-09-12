@@ -1,27 +1,27 @@
-use kithara::{platform::time::Duration, usdt::operation_id};
+use kithara::platform::time::Duration;
 
-use crate::usdt_observer::ProbeRecord;
+use crate::usdt_trace::ProbeEvent;
 
-const WRITE_PLAYHEAD: u64 = operation_id("write_playhead");
-
-pub fn assert_committed_reached(records: &[ProbeRecord], min: Duration) {
+pub fn assert_committed_reached(records: &[ProbeEvent], min: Duration) {
     let reached = records
         .iter()
-        .filter(|record| record.operation == WRITE_PLAYHEAD)
-        .map(|record| record.payload[0])
+        .filter(|record| record.probe == "write_playhead")
+        .filter_map(|record| record.field("committed_ns"))
         .max()
         .is_some_and(|position| position >= u64::try_from(min.as_nanos()).unwrap_or(u64::MAX));
     assert!(reached, "committed playhead did not reach {min:?}");
 }
 
-pub fn assert_no_committed_swallow(records: &[ProbeRecord], maximum_step: Duration) {
+pub fn assert_no_committed_swallow(records: &[ProbeEvent], maximum_step: Duration) {
     let mut previous = None;
     let maximum = u64::try_from(maximum_step.as_nanos()).unwrap_or(u64::MAX);
     for record in records
         .iter()
-        .filter(|record| record.operation == WRITE_PLAYHEAD)
+        .filter(|record| record.probe == "write_playhead")
     {
-        let current = record.payload[0];
+        let Some(current) = record.field("committed_ns") else {
+            continue;
+        };
         if let Some(previous) = previous {
             assert!(
                 current.saturating_sub(previous) <= maximum,

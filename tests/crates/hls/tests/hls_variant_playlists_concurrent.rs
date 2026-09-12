@@ -25,9 +25,8 @@ use kithara_integration_tests::{
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
-    usdt_observer::{self, ProbeRecord},
+    usdt_trace::{self, ProbeEvent},
 };
-use kithara_test_utils::probe::operation_id;
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -179,16 +178,15 @@ async fn observe_until_loaded(
 /// Largest USDT-observed `BatchGroup::process` batch whose first request is a
 /// variant media playlist. Serial playlist loading yields one request per
 /// batch; concurrent loading produces a batch of at least two.
-fn max_playlist_batch_size(
-    records: &[ProbeRecord],
-    variant_request_ids: &HashSet<u64>,
-) -> Option<u64> {
-    const PROCESS_OPERATION: u64 = operation_id("kithara_download::batch::BatchGroup::process");
+fn max_playlist_batch_size(records: &[ProbeEvent], variant_request_ids: &HashSet<u64>) -> Option<u64> {
     records
         .iter()
-        .filter(|record| record.operation == PROCESS_OPERATION && record.arity == 2)
-        .filter(|record| variant_request_ids.contains(&record.payload[1]))
-        .map(|record| record.payload[0])
+        .filter(|record| record.probe == "process")
+        .filter_map(|record| {
+            let batch_size = record.field("batch_size")?;
+            let first_request_id = record.field("first_request_id")?;
+            variant_request_ids.contains(&first_request_id).then_some(batch_size)
+        })
         .max()
 }
 
@@ -221,8 +219,7 @@ async fn variant_media_playlists_load_concurrently(
             )
             .build();
 
-    let observer = usdt_observer::observe_for(std::process::id(), Duration::from_secs(5))
-        .expect("start external DTrace observer before loading HLS variants");
+    let trace = usdt_trace::scope();
     let track_id = queue
         .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
         .await
@@ -239,7 +236,7 @@ async fn variant_media_playlists_load_concurrently(
             panic!("{error}");
         }
     };
-    let records = observer.collect().expect("collect external USDT batch records");
+    let records = trace.events();
     tick_handle.stop().await;
 
     let max_batch = max_playlist_batch_size(&records, &variant_request_ids);

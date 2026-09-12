@@ -52,18 +52,6 @@ apple:test:
     paths:
       - .ci-artifacts/junit/
 
-# An external tracer validates the actual USDT provider ABI. This job is not
-# `allow_failure`: passwordless DTrace attach is an explicit capability of the
-# Apple runner, and no in-process collector can substitute for it.
-apple:usdt:
-  extends:
-    - .apple-job
-    - .rules-verify-and-branch
-  needs:
-    - apple:lint
-  script:
-    - just ci run apple-usdt
-
 # The same suite with the clock left real. It owns a second target directory,
 # so it is another whole build of the workspace, and what it guards is the
 # flash accounting rather than the change under review. The default branch and

@@ -18,7 +18,7 @@ tls-rustls = ["kithara/tls-rustls"]
 tls-native = ["kithara/tls-native"]
 flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
-usdt = ["kithara/usdt", "kithara-integration-tests/usdt-observer"]
+usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
 
 [dependencies]
 kithara = { workspace = true, features = ["download", "full", "queue", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }

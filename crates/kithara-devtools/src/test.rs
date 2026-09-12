@@ -871,17 +871,26 @@ mod tests {
     }
 
     #[test]
-    fn usdt_observer_lane_has_no_network_backend_features() {
+    fn linux_usdt_contract_lanes_keep_their_product_feature_closures() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let project = ProjectConfig::load(&root).expect("load repository config");
         let test = &project.test;
-        let lane = &test.lanes["usdt-observer"];
         let request = TestRequest::parse(&[]).expect("parse request");
 
-        assert_eq!(
-            features_for(test, lane, &request).expect("features"),
-            BTreeSet::from(["usdt-observer".to_owned()])
-        );
+        for (name, feature) in [
+            ("usdt-play", "kithara-play-tests/usdt"),
+            ("usdt-hls", "kithara-hls-tests/usdt"),
+            ("usdt-hls-stress", "kithara-hls-tests/usdt"),
+            ("usdt-queue", "kithara-queue-tests/usdt"),
+        ] {
+            let lane = &test.lanes[name];
+            let features = features_for(test, lane, &request).expect("features");
+            assert!(features.contains(feature), "{name} keeps {feature}");
+            assert!(
+                !features.contains("usdt-observer"),
+                "{name} no longer reaches the removed observer"
+            );
+        }
     }
 
     #[test]

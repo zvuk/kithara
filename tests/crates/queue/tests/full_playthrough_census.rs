@@ -39,14 +39,14 @@ use kithara_integration_tests::{
     fixture_protocol::PcmPattern,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     test_defaults::packaged_content_frames,
-    usdt_observer::{self, ProbeRecord},
+    usdt_trace::{self, ProbeEvent},
 };
 use kithara_test_fixtures::{
     asset::Asset,
     assets,
     signal::{FrameClass, classify_windows},
 };
-use kithara_test_utils::probe::{IntoProbeArg, operation_id};
+use kithara_test_utils::probe::IntoProbeArg;
 
 use crate::bufpool_ext::TestPools;
 
@@ -387,21 +387,20 @@ struct Firing {
     served: u64,
 }
 
-fn firings(records: &[ProbeRecord]) -> Vec<Firing> {
-    const RENDER_OPERATION: u64 = operation_id("kithara_play::rt::track::read::render");
+fn firings(records: &[ProbeEvent]) -> Vec<Firing> {
     let mut firings: Vec<Firing> = records
         .iter()
-        .filter(|record| record.operation == RENDER_OPERATION && record.arity == 5)
+        .filter(|record| record.probe == "render")
         .filter_map(|record| {
-            let base = record.payload[1];
+            let base = record.field("output_base")?;
             if base == u64::MAX {
                 return None;
             }
-            let range_start: i64 = i64::from_probe_arg(record.payload[2]);
+            let range_start: i64 = i64::from_probe_arg(record.field("range_start")?);
             Some(Firing {
-                track: record.payload[0],
+                track: record.field("track_id")?,
                 block: i64::from_probe_arg(base) + range_start,
-                served: record.payload[4],
+                served: record.field("served_media_frames")?,
             })
         })
         .collect();
@@ -514,12 +513,9 @@ async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &Tes
         sources,
     } = prepared;
     let census = build_queue(sources, seam).await;
-    let observer = usdt_observer::observe(std::process::id())
-        .expect("start external DTrace observer before rendering the queue");
+    let trace = usdt_trace::scope();
     let (rendered, log) = play_to_the_end(&census).await;
-    let records = observer
-        .collect()
-        .expect("collect external USDT render records");
+    let records = trace.events();
 
     assert!(
         log.ended,

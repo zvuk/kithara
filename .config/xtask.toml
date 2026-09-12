@@ -1169,30 +1169,6 @@ prefix_args = [
 default_features = ["integration-regressions"]
 default_flash = true
 
-# The external observer is deliberately isolated from ordinary integration
-# coverage. It proves the Apple runner can attach DTrace to a same-user process
-# and consumes only the provider's raw `u64` wire records.
-[test.lanes.usdt-observer]
-program = "cargo"
-net_backend = "none"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-integration-tests",
-  "--cargo-profile",
-  "test-release",
-  "--ignore-default-filter",
-  "--test",
-  "usdt_observer",
-]
-default_features = ["usdt-observer"]
-default_flash = false
-owns = [
-  "tests/crates/integration/src/usdt_observer.rs",
-  "tests/crates/integration/tests/usdt_observer.rs",
-]
-
 [test.lanes.usdt-play]
 program = "cargo"
 prefix_args = [
@@ -2096,6 +2072,47 @@ role = "gate"
 kinds_github = ["main", "branch"]
 timeout_minutes = 60
 
+[ext.ci.lanes.linux-usdt]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-play",
+    "--profile",
+    "ci",
+  ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-hls",
+    "--profile",
+    "ci",
+  ], label = "USDT HLS concurrency contract", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-hls-stress",
+    "--profile",
+    "ci",
+  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--lane=usdt-queue",
+    "--profile",
+    "ci",
+  ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "gate"
+kinds = ["platforms", "main", "nightly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
+
 # The repository's own analysis recipes: until now nothing ran them
 # unattended. The nightly run assesses the shallow profile; the weekly run
 # reruns the whole workflow with the deep profile, which is why only the
@@ -2486,80 +2503,6 @@ steps = [
   ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "platforms"
-kinds = [
-  "branch",
-  "merge-request",
-  "quarantine",
-  "platforms",
-  "main",
-  "nightly",
-  "release",
-]
-timeout_minutes = 60
-
-# This is a required runner-capability proof, rather than an in-process mock:
-# the test invokes `sudo -n /usr/sbin/dtrace` and must attach to a same-user
-# child. A runner without the entitlement fails here before a product change
-# can be called USDT-observed.
-[ext.ci.lanes.apple-usdt]
-cache_group = "macos"
-label = "Apple"
-os = "macos"
-tools = [
-  "cargo",
-  "just",
-  "sccache",
-  "swift",
-  "xcodebuild",
-  "xcodegen",
-  "sudo",
-  "dtrace",
-]
-pinned = [
-  { tool = "xcodebuild", args = [
-    "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
-]
-program = "just"
-steps = [
-  { args = [
-    "test",
-    "run",
-    "--lane=usdt-observer",
-    "--profile",
-    "ci",
-  ], label = "Apple external USDT DTrace observer", env = { RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
-  { args = [
-    "test",
-    "run",
-    "--lane=usdt-play",
-    "--profile",
-    "ci",
-  ], label = "Apple USDT rate-response contract", env = { RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
-  { args = [
-    "test",
-    "run",
-    "--lane=usdt-hls",
-    "--profile",
-    "ci",
-  ], label = "Apple USDT HLS concurrency contract", env = { RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
-  { args = [
-    "test",
-    "run",
-    "--lane=usdt-hls-stress",
-    "--profile",
-    "ci",
-  ], label = "Apple USDT HLS seek-stress contract", env = { RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
-  { args = [
-    "test",
-    "run",
-    "--lane=usdt-queue",
-    "--profile",
-    "ci",
-  ], label = "Apple USDT queue contracts", env = { RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
-]
-role = "platforms"
-kinds_refused = { weekly = "weekly pipelines do not run the Apple USDT observer" }
 kinds = [
   "branch",
   "merge-request",

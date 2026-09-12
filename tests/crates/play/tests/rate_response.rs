@@ -3,7 +3,6 @@
 use std::{
     num::{NonZeroU32, NonZeroUsize},
     path::Path,
-    process,
 };
 
 use kithara::{
@@ -18,7 +17,7 @@ use kithara_integration_tests::{
     TestTempDir, disk_asset_store, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
-    usdt_observer::{self, ProbeRecord},
+    usdt_trace::{self, ProbeEvent},
     waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
@@ -29,7 +28,6 @@ fn response_source() -> &'static Path {
         .path()
         .expect("generated sine fixture is stored on disk")
 }
-use kithara_test_utils::probe::operation_id;
 
 use crate::bufpool_ext::TestPools;
 
@@ -40,14 +38,6 @@ const TONES_HZ: [f64; 4] = [440.0, 880.0, 1_760.0, 3_520.0];
 const TONE_DOMINANCE_RATIO: f64 = 4.0;
 const MIN_SIGNAL_RMS: f64 = 0.003;
 const WARMUP_BLOCK_BUDGET: usize = 200;
-const OBSERVATION_WINDOW: Duration = Duration::from_secs(5);
-const RATE_REQUESTED_OPERATION: u64 =
-    operation_id("kithara_play::player::flow::control::rate_requested");
-const RATE_APPLIED_OPERATION: u64 =
-    operation_id("kithara_warp::warp::render::renderer::rate_applied");
-const PCM_CONSUMED_OPERATION: u64 = operation_id("kithara_play::rt::track::feeder::pcm_consumed");
-const RENDER_COMMITTED_OPERATION: u64 =
-    operation_id("kithara_warp::warp::render::renderer::render_committed");
 
 fn response_backends() -> ElasticBackendConfig {
     ElasticBackendConfig::builder()
@@ -263,23 +253,26 @@ async fn playing_queue(
     (harness, queue)
 }
 
-fn assert_usdt_response(backend: StretchKind, case: ResponseCase, records: &[ProbeRecord]) {
+fn assert_usdt_response(backend: StretchKind, case: ResponseCase, records: &[ProbeEvent]) {
     let target_rate_bits = u64::from(case.target_rate.to_bits());
     let request_index = records
         .iter()
         .rposition(|record| {
-            record.operation == RATE_REQUESTED_OPERATION && record.payload[1] == target_rate_bits
+            record.probe == "rate_requested"
+                && record.field("target_rate_bits") == Some(target_rate_bits)
         })
         .unwrap_or_else(|| {
             panic!("{backend} emitted no rate_requested USDT record for target rate")
         });
-    let revision = records[request_index].payload[0];
+    let revision = records[request_index]
+        .field("request_revision")
+        .expect("rate_requested carries request_revision");
     let applied_index = records
         .iter()
         .enumerate()
         .skip(request_index + 1)
         .find_map(|(index, record)| {
-            (record.operation == RATE_APPLIED_OPERATION && record.payload[0] == revision)
+            (record.probe == "rate_applied" && record.field("request_revision") == Some(revision))
                 .then_some(index)
         })
         .unwrap_or_else(|| {
@@ -290,7 +283,7 @@ fn assert_usdt_response(backend: StretchKind, case: ResponseCase, records: &[Pro
         .enumerate()
         .skip(applied_index + 1)
         .find_map(|(index, record)| {
-            (record.operation == PCM_CONSUMED_OPERATION && record.payload[0] == revision)
+            (record.probe == "pcm_consumed" && record.field("render_revision") == Some(revision))
                 .then_some(index)
         })
         .unwrap_or_else(|| {
@@ -299,7 +292,7 @@ fn assert_usdt_response(backend: StretchKind, case: ResponseCase, records: &[Pro
     let committed = records
         .iter()
         .skip(request_index + 1)
-        .find(|record| record.operation == RENDER_COMMITTED_OPERATION)
+        .find(|record| record.probe == "render_committed")
         .unwrap_or_else(|| {
             panic!("{backend} emitted no render_committed USDT record after the request")
         });
@@ -307,23 +300,27 @@ fn assert_usdt_response(backend: StretchKind, case: ResponseCase, records: &[Pro
     let applied = &records[applied_index];
     let consumed = &records[consumed_index];
     assert_eq!(
-        requested.arity, 5,
-        "rate_requested USDT payload shape changed"
-    );
-    assert_eq!(applied.arity, 5, "rate_applied USDT payload shape changed");
-    assert_eq!(consumed.arity, 5, "pcm_consumed USDT payload shape changed");
-    assert_eq!(
-        committed.arity, 5,
-        "render_committed USDT payload shape changed"
-    );
-    assert_eq!(
-        requested.payload[1], target_rate_bits,
+        requested.field("target_rate_bits"),
+        Some(target_rate_bits),
         "wrong requested target rate"
     );
-    assert_eq!(applied.payload[0], revision, "wrong applied revision");
-    assert_eq!(consumed.payload[0], revision, "wrong consumed revision");
+    assert_eq!(
+        applied.field("request_revision"),
+        Some(revision),
+        "wrong applied revision"
+    );
+    assert_eq!(
+        consumed.field("render_revision"),
+        Some(revision),
+        "wrong consumed revision"
+    );
     let applied_rate = f32::from_bits(
-        u32::try_from(applied.payload[1]).expect("rate_applied rate bits fit into u32"),
+        u32::try_from(
+            applied
+                .field("applied_rate_bits")
+                .expect("rate_applied carries rate"),
+        )
+        .expect("rate_applied rate bits fit into u32"),
     );
     if case.smooth_frames > 1 {
         let low = case.initial_rate.min(case.target_rate);
@@ -334,19 +331,19 @@ fn assert_usdt_response(backend: StretchKind, case: ResponseCase, records: &[Pro
         );
     }
     assert!(
-        applied.payload[3] <= applied.payload[4],
+        applied.field("source_start") <= applied.field("source_end"),
         "invalid applied source span"
     );
     assert!(
-        consumed.payload[1] <= consumed.payload[2],
+        consumed.field("output_start") <= consumed.field("output_end"),
         "invalid consumed output span"
     );
     assert!(
-        consumed.payload[3] <= consumed.payload[4],
+        consumed.field("source_start") <= consumed.field("source_end"),
         "invalid consumed source span"
     );
     assert!(
-        committed.payload[3] <= committed.payload[4],
+        committed.field("source_start") <= committed.field("source_end"),
         "invalid committed source span"
     );
 }
@@ -366,8 +363,7 @@ async fn run_case(
         queue.is_playing(),
         "{backend} command boundary is not playing"
     );
-    let observer = usdt_observer::observe_for(process::id(), OBSERVATION_WINDOW)
-        .expect("DTrace must be ready before the real set_rate operation");
+    let trace = usdt_trace::scope();
     for command in 0..case.burst {
         queue.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
     }
@@ -384,9 +380,7 @@ async fn run_case(
         !tone_is_dominant(precommand, case.target_tone),
         "{backend} already contained the target tone before set_rate"
     );
-    let records = observer
-        .collect()
-        .expect("DTrace must collect the rate-response USDT records");
+    let records = trace.events();
     assert_usdt_response(backend, case, &records);
     drop(queue);
     harness.close().await;

@@ -114,6 +114,7 @@ pub fn init_tracing(filter: EnvFilter) {
         let _ = tracing_subscriber::registry()
             .with(fmt_layer)
             .with(crate::flight::layer())
+            .with(crate::test::usdt::layer())
             .try_init();
     }
 

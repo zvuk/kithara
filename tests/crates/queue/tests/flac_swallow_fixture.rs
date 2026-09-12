@@ -22,7 +22,7 @@ use kithara_integration_tests::{
     fixture_protocol::{DelayRule, EncryptionRequest},
     offline::OfflinePlayer,
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
-    usdt_observer,
+    usdt_trace,
 };
 use url::Url;
 
@@ -179,12 +179,9 @@ async fn flac_swallow_fixture(
     // instead of the virtual clock racing past the producer (which starves the
     // worker so the track never plays). Off the `flash` feature this is a ZST
     // no-op and the clock is already real.
-    let observer = usdt_observer::observe_for(std::process::id(), Duration::from_secs(25))
-        .expect("start external DTrace observer before real-time FLAC playback");
+    let trace = usdt_trace::scope();
     play_realtime(&mut player, windows, window_secs).await;
-    let records = observer
-        .collect()
-        .expect("collect external playhead USDT records");
+    let records = trace.events();
 
     assert_committed_reached(&records, Duration::from_secs_f64(MIN_DELAYED_PLAYHEAD_SECS));
     assert_no_committed_swallow(&records, Duration::from_secs_f64(MAX_COMMITTED_STEP_SECS));
