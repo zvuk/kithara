@@ -1,8 +1,8 @@
 use std::{
     ffi::{OsStr, OsString},
-    fs,
+    fs::{self, File},
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 use anyhow::{Context, Result, bail};
@@ -18,6 +18,8 @@ use crate::{
 };
 
 const CHUNK_SIZE: usize = 128;
+
+const GIT_LISTING_ARGS: [&str; 4] = ["ls-files", "--cached", "--others", "--exclude-standard"];
 
 #[derive(Debug, Args)]
 pub struct FormatArgs {
@@ -97,6 +99,9 @@ pub fn format_path(root: &Path, path: &Path, tools: &ToolsConfig) -> Result<()> 
         return Ok(());
     };
     let command = path_format_command(target, &root, &path, tools);
+    if target == PathFormatTarget::Json {
+        return write_json_format(&command, &root, &path);
+    }
     let status = Command::new(command.program)
         .current_dir(&root)
         .args(&command.args)
@@ -159,16 +164,54 @@ fn path_format_command<'a>(
             program: tools.program("taplo"),
             args: vec!["format".into(), path.as_os_str().to_owned()],
         },
-        PathFormatTarget::Json => PathFormatCommand {
-            program: tools.program("tidy-json"),
-            args: vec![
-                "--indent".into(),
-                "2".into(),
-                "--write".into(),
-                path.as_os_str().to_owned(),
-            ],
-        },
+        PathFormatTarget::Json => json_format_command(tools),
     }
+}
+
+fn json_format_command(tools: &ToolsConfig) -> PathFormatCommand<'_> {
+    const ARGS: [&str; 4] = ["--indent", "2", "--stdin", "--stdout"];
+
+    PathFormatCommand {
+        program: tools.program("tidy-json"),
+        args: ARGS.iter().map(OsString::from).collect(),
+    }
+}
+
+fn write_json_format(command: &PathFormatCommand<'_>, root: &Path, path: &Path) -> Result<()> {
+    if is_commented_json(path.strip_prefix(root).unwrap_or(path)) {
+        return Ok(());
+    }
+    let Some(formatted) = json_reformatted(command, path)? else {
+        return Ok(());
+    };
+    fs::write(path, formatted).with_context(|| format!("write {}", path.display()))
+}
+
+/// The tidy-json rendering of `path`, or `None` when the file already carries
+/// it byte for byte.
+fn json_reformatted(command: &PathFormatCommand<'_>, path: &Path) -> Result<Option<Vec<u8>>> {
+    let current = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let input = File::open(path).with_context(|| format!("open {} for stdin", path.display()))?;
+    let output = Command::new(command.program)
+        .args(&command.args)
+        .stdin(Stdio::from(input))
+        .output()
+        .with_context(|| format!("run `{}` on {}", command.program, path.display()))?;
+    if !output.status.success() || !output.stderr.is_empty() {
+        return Err(ChildFailure::captured(
+            format!("`{}` on {}", command.program, path.display()),
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ));
+    }
+    if output.stdout.is_empty() {
+        bail!(
+            "`{}` printed nothing for {}",
+            command.program,
+            path.display()
+        );
+    }
+    Ok((output.stdout != current).then_some(output.stdout))
 }
 
 fn selected_targets(args: &FormatArgs) -> Vec<FormatTarget> {
@@ -278,22 +321,37 @@ fn run_toml_format(check: bool, ctx: &Ctx) -> Result<()> {
 }
 
 fn run_json_format(check: bool, ctx: &Ctx) -> Result<()> {
-    let program = ctx.config.tools.program("tidy-json");
+    let command = json_format_command(&ctx.config.tools);
     check_tool(
-        program,
+        command.program,
         &["--version"],
         ctx.config
             .tools
             .install_hint("tidy-json", "cargo install --locked tidy-json"),
     )?;
-    let files = collect_files(Path::new("."), FileKind::Json)?;
-    let mut args = vec!["--indent", "2"];
-    if check {
-        args.push("--check");
-    } else {
-        args.push("--write");
+    let mut unformatted = Vec::new();
+    for file in collect_files(Path::new("."), FileKind::Json)? {
+        let Some(formatted) = json_reformatted(&command, &file)? else {
+            continue;
+        };
+        if check {
+            unformatted.push(file);
+        } else {
+            fs::write(&file, formatted).with_context(|| format!("write {}", file.display()))?;
+        }
     }
-    run_path_status(program, &args, &files)
+    if !unformatted.is_empty() {
+        let listed = unformatted
+            .iter()
+            .map(|path| format!("  {}", path.display()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!(
+            "{} JSON file(s) are not formatted:\n{listed}",
+            unformatted.len()
+        );
+    }
+    Ok(())
 }
 
 fn run_markdown_format(check: bool, ctx: &Ctx) -> Result<()> {
@@ -389,29 +447,44 @@ fn command_line(program: &str, args: &[&str]) -> String {
 }
 
 fn collect_files(root: &Path, kind: FileKind) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    visit_dir(root, root, kind, &mut files)?;
-    files.sort();
-    Ok(files)
+    Ok(select_files(&git_listing(root)?, kind))
 }
 
-fn visit_dir(root: &Path, dir: &Path, kind: FileKind, files: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("read directory {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        let rel = path.strip_prefix(root).unwrap_or(&path);
-        let file_type = entry.file_type()?;
-
-        if file_type.is_dir() {
-            if should_skip_dir(rel) {
-                continue;
-            }
-            visit_dir(root, &path, kind, files)?;
-        } else if file_type.is_file() && matches_file_kind(rel, kind) {
-            files.push(path);
-        }
+/// Every path git accounts for below `root`: tracked files, plus new ones that
+/// `.gitignore` does not cover.
+fn git_listing(root: &Path) -> Result<Vec<PathBuf>> {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(GIT_LISTING_ARGS)
+        .output()
+        .with_context(|| {
+            format!(
+                "run `git {}` in {}",
+                GIT_LISTING_ARGS.join(" "),
+                root.display()
+            )
+        })?;
+    if !output.status.success() {
+        return Err(ChildFailure::captured(
+            format!("`git {}` in {}", GIT_LISTING_ARGS.join(" "), root.display()),
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ));
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(PathBuf::from)
+        .collect())
+}
+
+fn select_files(listing: &[PathBuf], kind: FileKind) -> Vec<PathBuf> {
+    let mut files = listing
+        .iter()
+        .filter(|path| !path.parent().is_some_and(should_skip_dir) && matches_file_kind(path, kind))
+        .cloned()
+        .collect::<Vec<_>>();
+    files.sort();
+    files
 }
 
 fn matches_file_kind(path: &Path, kind: FileKind) -> bool {
@@ -425,8 +498,18 @@ fn matches_file_kind(path: &Path, kind: FileKind) -> bool {
                 path.extension().and_then(OsStr::to_str),
                 Some("json" | "jsonc")
             ) && path.file_name() != Some(OsStr::new("package-lock.json"))
+                && !is_commented_json(path)
         }
     }
+}
+
+/// tidy-json prints plain JSON; these three carry comments.
+fn is_commented_json(path: &Path) -> bool {
+    const COMMENTED: [&str; 3] = [".zed/debug.json", ".zed/settings.json", ".zed/tasks.json"];
+
+    COMMENTED
+        .iter()
+        .any(|commented| path == Path::new(commented))
 }
 
 fn should_skip_dir(path: &Path) -> bool {
@@ -489,13 +572,18 @@ fn is_apple_build_dir(components: &[&OsStr]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsString, fs, path::Path};
+    use std::{
+        ffi::OsString,
+        fs,
+        path::{Path, PathBuf},
+        process::Command,
+    };
 
     use anyhow::Result;
 
     use super::{
-        FileKind, PathFormatTarget, format_path, matches_file_kind, nightly_toolchain,
-        path_format_command, should_skip_dir,
+        FileKind, PathFormatTarget, collect_files, format_path, matches_file_kind,
+        nightly_toolchain, path_format_command, select_files, should_skip_dir,
     };
     use crate::common::tools::ToolsConfig;
 
@@ -550,7 +638,6 @@ mod tests {
         let root = Path::new("/repo");
         let rust = Path::new("/repo/crates/example/src/lib.rs");
         let toml = Path::new("/repo/.config/example.toml");
-        let json = Path::new("/repo/tests/example.jsonc");
         let tools = ToolsConfig::default();
 
         let rust_command = path_format_command(PathFormatTarget::Rust, root, rust, &tools);
@@ -576,11 +663,6 @@ mod tests {
         let toml_command = path_format_command(PathFormatTarget::Toml, root, toml, &tools);
         assert_eq!(toml_command.program, "taplo");
         assert_eq!(toml_command.args, [OsString::from("format"), toml.into()]);
-
-        let json_command = path_format_command(PathFormatTarget::Json, root, json, &tools);
-        assert_eq!(json_command.program, "tidy-json");
-        assert_eq!(json_command.args.last(), Some(&json.as_os_str().to_owned()));
-        assert!(json_command.args.iter().any(|arg| arg == "--write"));
     }
 
     #[test]
@@ -602,6 +684,14 @@ mod tests {
             Path::new("package-lock.json"),
             FileKind::Json
         ));
+        assert!(!matches_file_kind(
+            Path::new(".zed/settings.json"),
+            FileKind::Json
+        ));
+        assert!(matches_file_kind(
+            Path::new(".zed/later.json"),
+            FileKind::Json
+        ));
     }
 
     #[test]
@@ -621,5 +711,98 @@ mod tests {
         assert!(should_skip_dir(Path::new("tests/fuzz/artifacts")));
         assert!(!should_skip_dir(Path::new(".config")));
         assert!(!should_skip_dir(Path::new("crates/kithara/src")));
+    }
+
+    #[test]
+    fn json_path_command_formats_through_stdin() {
+        let json = Path::new("/repo/tests/example.jsonc");
+        let tools = ToolsConfig::default();
+
+        let command = path_format_command(PathFormatTarget::Json, Path::new("/repo"), json, &tools);
+
+        assert_eq!(command.program, "tidy-json");
+        assert_eq!(
+            command.args,
+            ["--indent", "2", "--stdin", "--stdout"].map(OsString::from)
+        );
+        assert!(
+            !command
+                .args
+                .iter()
+                .any(|arg| arg == json.as_os_str() || arg == "--write"),
+            "tidy-json reads the file from stdin"
+        );
+    }
+
+    #[test]
+    fn path_formatter_leaves_commented_zed_files_alone() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        fs::create_dir(root.path().join(".zed"))?;
+        let path = root.path().join(".zed/settings.json");
+        let source = "{\n  // keep this\n  \"a\": 1\n}\n";
+        fs::write(&path, source)?;
+
+        format_path(root.path(), &path, &ToolsConfig::default())?;
+
+        assert_eq!(fs::read_to_string(&path)?, source);
+        Ok(())
+    }
+
+    #[test]
+    fn json_targets_keep_dot_directory_files() {
+        let listing = [
+            PathBuf::from(".claude/settings.json"),
+            PathBuf::from(".zed/settings.json"),
+            PathBuf::from("crates/kithara-ui/assets/lottie/probe.json"),
+        ];
+
+        let targets = select_files(&listing, FileKind::Json);
+
+        assert_eq!(
+            targets,
+            [
+                PathBuf::from(".claude/settings.json"),
+                PathBuf::from("crates/kithara-ui/assets/lottie/probe.json")
+            ]
+        );
+    }
+
+    #[test]
+    fn json_targets_come_from_the_git_listing() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let root = root.path();
+        fs::write(root.join(".gitignore"), ".claude/worktrees/\n")?;
+        fs::create_dir_all(root.join(".claude/worktrees/checkout"))?;
+        fs::create_dir(root.join(".zed"))?;
+        for (path, body) in [
+            (".claude/settings.json", "{}\n"),
+            (".zed/settings.json", "{}\n"),
+            (".claude/worktrees/checkout/foo.json", "{}\n"),
+            ("app.json", "{}\n"),
+        ] {
+            fs::write(root.join(path), body)?;
+        }
+        git(root, &["init", "-q"])?;
+        git(
+            root,
+            &["add", ".claude/settings.json", ".zed/settings.json"],
+        )?;
+
+        let files = collect_files(root, FileKind::Json)?;
+
+        assert_eq!(
+            files,
+            [
+                PathBuf::from(".claude/settings.json"),
+                PathBuf::from("app.json")
+            ]
+        );
+        Ok(())
+    }
+
+    fn git(root: &Path, args: &[&str]) -> Result<()> {
+        let status = Command::new("git").current_dir(root).args(args).status()?;
+        assert!(status.success(), "git {args:?} must succeed");
+        Ok(())
     }
 }

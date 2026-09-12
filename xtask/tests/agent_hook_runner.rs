@@ -55,7 +55,7 @@ printf '%s\n' "$*" >> "$FAKE_CARGO_LOG"
 exit 91
 "#,
         )?;
-        for formatter in ["rustup", "taplo", "tidy-json"] {
+        for formatter in ["rustup", "taplo"] {
             write_executable(
                 &bin.join(formatter),
                 r#"#!/bin/sh
@@ -64,6 +64,15 @@ printf '%s\t%s\n' "${0##*/}" "$*" >> "$FAKE_FORMAT_LOG"
 "#,
             )?;
         }
+        // tidy-json renders the file it reads on stdin.
+        write_executable(
+            &bin.join("tidy-json"),
+            r#"#!/bin/sh
+set -eu
+printf '%s\t%s\n' "${0##*/}" "$*" >> "$FAKE_FORMAT_LOG"
+cat
+"#,
+        )?;
 
         let mut paths = vec![bin];
         if let Some(system_path) = env::var_os("PATH") {
@@ -316,8 +325,8 @@ fn codex_apply_patch_formats_added_updated_and_moved_paths_once() -> Result<()> 
     assert!(lines[0].ends_with("src/added.rs"));
     assert!(lines[1].starts_with("taplo\tformat "));
     assert!(lines[1].ends_with(".config/edited.toml"));
-    assert!(lines[2].starts_with("tidy-json\t--indent 2 --write "));
-    assert!(lines[2].ends_with("moved.json"));
+    assert_eq!(lines[2], "tidy-json\t--indent 2 --stdin --stdout");
+    assert_eq!(fs::read_to_string(fixture.root.join("moved.json"))?, "{}\n");
     fixture.assert_cargo_not_run();
     Ok(())
 }
@@ -335,7 +344,8 @@ fn direct_file_edit_is_path_scoped_and_cargo_free() -> Result<()> {
 
     assert_success(&output);
     let log = fs::read_to_string(&fixture.format_log)?;
-    assert!(log.starts_with("tidy-json\t--indent 2 --write "));
+    assert_eq!(log, "tidy-json\t--indent 2 --stdin --stdout\n");
+    assert_eq!(fs::read_to_string(&path)?, "{}\n");
     fixture.assert_cargo_not_run();
     Ok(())
 }
