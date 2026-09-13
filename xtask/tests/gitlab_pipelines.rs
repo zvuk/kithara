@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::process::Command;
 use std::{collections::BTreeSet, fs, path::Path};
 
 use serde_yaml_ng::{Mapping, Value};
@@ -528,6 +530,45 @@ fn child_pipeline_includes_apple_lanes_and_the_blocking_verdict() {
     );
     assert_eq!(verdict.get("when").and_then(Value::as_str), Some("always"));
     assert!(!verdict.contains_key("allow_failure"));
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_bootstrap_replaces_a_dangling_target_symlink() {
+    let document = yaml(workspace_root().join(".gitlab/ci/common.yml"));
+    let script = document[".unix-job"]["before_script"]
+        .as_sequence()
+        .and_then(|scripts| scripts.first())
+        .and_then(Value::as_str)
+        .expect("Unix GitLab job has a before script");
+    let checkout = tempfile::tempdir().expect("temporary checkout");
+    std::os::unix::fs::symlink("missing-target", checkout.path().join("target"))
+        .expect("dangling target symlink");
+    assert!(
+        Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(checkout.path())
+            .status()
+            .expect("initialize temporary checkout")
+            .success()
+    );
+
+    let output = Command::new("sh")
+        .args(["-ceu", script])
+        .current_dir(checkout.path())
+        .output()
+        .expect("run Unix GitLab bootstrap");
+    assert!(
+        output.status.success(),
+        "Unix GitLab bootstrap failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        checkout
+            .path()
+            .join("target/xtask-self-cache/.inputs")
+            .is_file()
+    );
 }
 
 #[test]

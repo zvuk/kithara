@@ -24,6 +24,9 @@
 .unix-job:
   before_script:
     - |
+      if [ -L target ] || { [ -e target ] && [ ! -d target ]; }; then
+        rm -f target
+      fi
       stamp=target/xtask-self-cache/.inputs
       inputs=$(git ls-files -s xtask crates/kithara-devtools .config Cargo.toml Cargo.lock rust-toolchain.toml | git hash-object --stdin)
       if [ "$(cat "$stamp" 2>/dev/null)" != "$inputs" ]; then
