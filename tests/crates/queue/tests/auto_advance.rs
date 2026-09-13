@@ -167,6 +167,41 @@ async fn crossfade_started_requires_a_live_predecessor(constant_three: &'static 
 }
 
 #[kithara::test(tokio)]
+async fn selecting_a_loaded_track_starts_playback_when_first_load_autoplay_is_disabled(
+    constant_three: &'static [u8],
+) {
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder().build(),
+        SAMPLE_RATE,
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
+    let id = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("selected", 1.0, constant_three))
+        })
+        .await;
+
+    harness
+        .run(&queue, move |q| q.select(id, Transition::None))
+        .await
+        .expect("select loaded track");
+
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
+    assert!(
+        first_onset_frame(&pcm, 0.005).is_some(),
+        "an explicit selection must start playback when first-load autoplay is disabled"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
+#[kithara::test(tokio)]
 async fn repeat_one_natural_advance_keeps_current_track(constant_three: &'static [u8]) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()

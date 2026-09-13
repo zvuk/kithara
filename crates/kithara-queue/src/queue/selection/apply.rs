@@ -106,7 +106,7 @@ where
         if let Err(error) = self.select_player_item(
             index,
             SelectTransition {
-                autoplay: was_playing || self.should_autoplay,
+                autoplay: true,
                 crossfade_seconds: crossfade,
             },
         ) {

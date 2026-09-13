@@ -63,9 +63,16 @@ where
     /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
     /// loop and the engine event handler.
     pub(super) crossfade_armed_for: AtomicTrackId,
-    /// Whether selecting an item from an idle player starts playback. Configured via
-    /// [`QueueConfig::should_autoplay`]. `false` leaves the selection paused until
-    /// the user calls [`Queue::play`].
+    /// Whether this queue auto-starts playback once the first registered
+    /// track finishes loading. Configured via
+    /// [`QueueConfig::should_autoplay`]. `false` means the user must
+    /// call [`Queue::select`] manually.
+    ///
+    /// Currently consumed only by the test-utils harness — the
+    /// production register/insert paths do not arm autoplay yet (see
+    /// `register_for_test` / `complete_load_for_test`). Gated with the
+    /// same `cfg` so the field carries no cost outside tests.
+    #[cfg(any(test, feature = "usdt"))]
     pub(super) should_autoplay: bool,
     /// First registered track id awaiting autoplay-on-load. Set when
     /// `autoplay = true` and the queue has no active selection;
@@ -179,7 +186,10 @@ where
             max_history_size,
             prefetch_duration,
             cue_in,
+            #[cfg(any(test, feature = "usdt"))]
             should_autoplay,
+            #[cfg(not(any(test, feature = "usdt")))]
+                should_autoplay: _,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
         let store = store.unwrap_or_else(|| {
@@ -206,6 +216,7 @@ where
             loader,
             tracks,
             bus,
+            #[cfg(any(test, feature = "usdt"))]
             should_autoplay,
             admission: Mutex::new(()),
             shutdown: cancel,
