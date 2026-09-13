@@ -558,6 +558,51 @@ prefix_args = [
   "test-release",
 ]
 
+# Detached suites selected for the Android ART baseline. The platform adapter
+# adds every package in the shipped product closure and the device-specific
+# Cargo flags; this lane owns only the policy decision about external suites.
+[test.lanes.android]
+program = "cargo"
+default_backend = "wreq"
+default_flash = true
+default_no_block = false
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-abr-tests",
+  "-p",
+  "kithara-assets-tests",
+  "-p",
+  "kithara-audio-tests",
+  "-p",
+  "kithara-bufpool-tests",
+  "-p",
+  "kithara-decode-tests",
+  "-p",
+  "kithara-events-tests",
+  "-p",
+  "kithara-file-tests",
+  "-p",
+  "kithara-hls-tests",
+  "-p",
+  "kithara-integration-tests",
+  "-p",
+  "kithara-net-tests",
+  "-p",
+  "kithara-platform-tests",
+  "-p",
+  "kithara-play-tests",
+  "-p",
+  "kithara-queue-tests",
+  "-p",
+  "kithara-storage-tests",
+  "-p",
+  "kithara-stream-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
 # Core data-flow contracts have no reason to compile decoders, encoders, the
 # player, or the app. Keep their selected packages together because they share
 # the same low-level closure and are all exercised by one branch change.
@@ -2621,6 +2666,7 @@ steps = ["nightly_retained"]
 exclude_packages = []
 
 [ext.android]
+test_lane = "android"
 baseline_tests = [
   "com.kithara.AudioFormatProbeTest#defaultOutputFormatIsF32",
   "com.kithara.HermeticEnqueueTest#aMissingServerUrlFailsSetup",

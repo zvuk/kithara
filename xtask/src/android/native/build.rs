@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::{
     common::project::ProjectConfig,
     lock::FileLock,
-    test::{NextestAction, default_nextest_command},
+    test::{NextestAction, nextest_command_for_lane},
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -56,14 +56,18 @@ pub(super) fn prepare(
         environment,
         lease: cache_lease,
     } = configure(root, &evidence, &abi, target, cancel)?;
-    let product = KitharaExt::load(root)?.android.ffi_crate;
-    let packages = super::android_package_selection(root, target, &product)?;
+    let android = KitharaExt::load(root)?.android;
+    let packages = super::android_product_packages(root, target, &android.ffi_crate)?;
+    let extra = super::art_nextest_list_extra(target, &packages);
+    let mut command =
+        nextest_command_for_lane(config, &android.test_lane, &extra, NextestAction::List)?;
     fs::write(
         evidence.join("package-selection.json"),
-        serde_json::to_vec_pretty(&packages)?,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "lane": android.test_lane,
+            "packages": super::command_packages(&command)?,
+        }))?,
     )?;
-    let extra = super::art_nextest_list_extra(target, &packages);
-    let mut command = default_nextest_command(config, &extra, NextestAction::List)?;
     command
         .current_dir(root)
         .envs(&environment)

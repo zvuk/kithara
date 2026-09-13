@@ -384,24 +384,35 @@ pub fn default_nextest_command(
     extra: &[String],
     action: NextestAction,
 ) -> Result<Command> {
+    nextest_command_for_lane(project, &project.test.default_lane, extra, action)
+}
+
+/// Build a configured suite command for a platform adapter.
+///
+/// # Errors
+/// Returns an error when the named suite or its backend is invalid.
+pub fn nextest_command_for_lane(
+    project: &ProjectConfig,
+    lane_name: &str,
+    extra: &[String],
+    action: NextestAction,
+) -> Result<Command> {
     let test = &project.test;
+    validate_config(test)?;
     let lane = test
         .lanes
-        .get(&test.default_lane)
-        .context("default test lane is not configured")?;
+        .get(lane_name)
+        .with_context(|| format!("test lane `{lane_name}` is not configured"))?;
     let toggles = LaneToggles {
         flash: lane.default_flash.unwrap_or(test.flash.default),
         no_block: lane.default_no_block.unwrap_or(test.no_block.default),
     };
-    let (_, command) = nextest_lane_command_for(
-        project,
-        toggles,
-        lane.default_backend
-            .as_deref()
-            .unwrap_or(&test.default_backend),
-        extra,
-        action,
-    )?;
+    let backend = lane
+        .default_backend
+        .as_deref()
+        .unwrap_or(&test.default_backend);
+    let features = lane_features(test, lane, toggles, backend)?;
+    let (_, command) = nextest_command(test, lane, features, extra, action)?;
     Ok(command)
 }
 
@@ -1144,6 +1155,32 @@ mod tests {
         assert_eq!(
             envs_of(&cmd),
             vec![("DEMO_BROWSER".to_owned(), "firefox".to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_platform_adapter_can_build_a_named_lane_inventory() {
+        let project = synthetic_project();
+        let command = nextest_command_for_lane(
+            &project,
+            "loom",
+            &["-p".to_owned(), "demo-platform-tests".to_owned()],
+            NextestAction::List,
+        )
+        .expect("named lane inventory");
+
+        assert_eq!(
+            args_of(&command),
+            [
+                "nextest",
+                "list",
+                "--features",
+                "base-feature,demo/loom",
+                "-p",
+                "demo-platform-tests",
+                "-E",
+                "test(loom_model_)",
+            ]
         );
     }
 }

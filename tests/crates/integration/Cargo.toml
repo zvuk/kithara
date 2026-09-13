@@ -7,10 +7,6 @@ license.workspace = true
 publish = false
 autotests = false
 
-[package.metadata.kithara.android-tests]
-role = "product-suite"
-product = "kithara"
-
 [package.metadata.cargo-machete]
 ignored = ["serial_test"]
 

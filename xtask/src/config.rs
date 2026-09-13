@@ -517,6 +517,8 @@ pub(crate) struct HookRoute {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct AndroidConfig {
+    /// Test lane whose detached packages are compiled into the ART inventory.
+    pub(crate) test_lane: String,
     /// Required instrumentation cases, identified by class and method.
     pub(crate) baseline_tests: Vec<String>,
     /// Cargo package compiled into the Android JNI libraries.
@@ -988,6 +990,7 @@ upload_timeout_secs = 600
 
 [ext.android]
 ffi_crate = "kithara-ffi"
+test_lane = "android"
 aars = ["kithara.aar"]
 default_avd = "Pixel_6"
 demo_package = "com.kithara.example"
@@ -1013,6 +1016,7 @@ apple_proof_needles = ["AppleCodec"]
         assert_eq!(ext.release.title, "Kithara");
         assert_eq!(ext.release.http_timeout_secs, Some(60));
         assert_eq!(ext.release.upload_timeout_secs, Some(600));
+        assert_eq!(ext.android.test_lane, "android");
         assert_eq!(ext.android.default_avd, "Pixel_6");
         assert_eq!(ext.android.boot_wait_attempts, Some(120));
         assert_eq!(ext.android.boot_poll_interval_secs, Some(1));
