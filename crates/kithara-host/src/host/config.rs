@@ -47,6 +47,16 @@ pub enum HostConfig<S> {
     },
 }
 
+#[cfg(not(feature = "offline"))]
+impl<S> Copy for HostConfig<S> {}
+
+#[cfg(not(feature = "offline"))]
+impl<S> Clone for HostConfig<S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 #[bon::bon]
 impl<S> HostConfig<S> {
     /// Configure a platform realtime session.

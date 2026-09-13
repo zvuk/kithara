@@ -1,4 +1,4 @@
-use kithara::encode::BytesEncodeTarget;
+use kithara_encode::BytesEncodeTarget;
 
 /// Expected `Content-Type` per encode target — the oracle integration tests
 /// assert the encoder's `EncodedBytes::content_type` field against. Production

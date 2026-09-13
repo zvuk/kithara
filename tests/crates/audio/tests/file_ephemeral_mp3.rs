@@ -18,10 +18,38 @@ use kithara_test_fixtures::fixtures::tone_mp3;
 use crate::common::test_defaults::Consts;
 
 #[kithara::test(tokio)]
-#[case::sw_ext_hint(Some("audio.mp3"), Some("mp3"), DecoderBackend::Symphonia)]
-#[case::sw_ext(Some("audio.mp3"), None, DecoderBackend::Symphonia)]
-#[case::sw_no_ext_hint(None, Some("mp3"), DecoderBackend::Symphonia)]
-#[case::sw_no_ext(None, None, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::sw_ext_hint(Some("audio.mp3"), Some("mp3"), DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::sw_ext_hint_android(Some("audio.mp3"), Some("mp3"), DecoderBackend::default())
+)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::sw_ext(Some("audio.mp3"), None, DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::sw_ext_android(Some("audio.mp3"), None, DecoderBackend::default())
+)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::sw_no_ext_hint(None, Some("mp3"), DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::sw_no_ext_hint_android(None, Some("mp3"), DecoderBackend::default())
+)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::sw_no_ext(None, None, DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::sw_no_ext_android(None, None, DecoderBackend::default())
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hw_ext_hint(Some("audio.mp3"), Some("mp3"), DecoderBackend::Apple)
@@ -134,7 +162,8 @@ async fn audio_file_mp3_decodes_with_duration(
 /// server hides, and the waits between reads are paced against that delivery,
 /// which is why the clock stays real.
 #[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(120)))]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)

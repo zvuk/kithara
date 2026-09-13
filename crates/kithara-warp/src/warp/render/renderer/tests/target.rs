@@ -4,6 +4,7 @@ use std::num::NonZero;
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioSpec;
 use kithara_stretch::StretchKind;
+#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 

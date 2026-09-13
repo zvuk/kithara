@@ -466,22 +466,26 @@ async fn packaged_abr_switch_keeps_player_continuity(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-#[case::drm_abr_auto_sw(true, true, DecoderBackend::Symphonia, mixed_encrypted().await)]
+#[cfg_attr(not(target_os = "android"), case::drm_abr_auto_sw(true, true, DecoderBackend::Symphonia, mixed_encrypted().await))]
+#[cfg_attr(target_os = "android", case::drm_abr_auto_android(true, true, DecoderBackend::default(), mixed_encrypted().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::drm_abr_auto_hw(true, true, DecoderBackend::Apple, mixed_encrypted().await)
 )]
-#[case::hls_abr_auto_sw(false, true, DecoderBackend::Symphonia, mixed_plain().await)]
+#[cfg_attr(not(target_os = "android"), case::hls_abr_auto_sw(false, true, DecoderBackend::Symphonia, mixed_plain().await))]
+#[cfg_attr(target_os = "android", case::hls_abr_auto_android(false, true, DecoderBackend::default(), mixed_plain().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hls_abr_auto_hw(false, true, DecoderBackend::Apple, mixed_plain().await)
 )]
-#[case::drm_manual_v0_sw(true, false, DecoderBackend::Symphonia, mixed_encrypted().await)]
+#[cfg_attr(not(target_os = "android"), case::drm_manual_v0_sw(true, false, DecoderBackend::Symphonia, mixed_encrypted().await))]
+#[cfg_attr(target_os = "android", case::drm_manual_v0_android(true, false, DecoderBackend::default(), mixed_encrypted().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::drm_manual_v0_hw(true, false, DecoderBackend::Apple, mixed_encrypted().await)
 )]
-#[case::hls_manual_v0_sw(false, false, DecoderBackend::Symphonia, mixed_plain().await)]
+#[cfg_attr(not(target_os = "android"), case::hls_manual_v0_sw(false, false, DecoderBackend::Symphonia, mixed_plain().await))]
+#[cfg_attr(target_os = "android", case::hls_manual_v0_android(false, false, DecoderBackend::default(), mixed_plain().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hls_manual_v0_hw(false, false, DecoderBackend::Apple, mixed_plain().await)
@@ -712,7 +716,7 @@ async fn seek_after_eof_mmap_produces_samples(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
-                .backend(DecoderBackend::Symphonia)
+                .backend(DecoderBackend::default())
                 .build(),
         )
         .block_on_underrun(true)

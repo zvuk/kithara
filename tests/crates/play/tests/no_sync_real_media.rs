@@ -26,14 +26,18 @@ use kithara::{
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, audio_artifact::write_audio_artifact,
-    cochlea::CochleaReport, fixture_protocol::PackagedSignal, memory_asset_store,
-    offline::OfflineHostHarness,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::PackagedSignal,
+    memory_asset_store, offline::OfflineHostHarness,
 };
+#[cfg(not(target_os = "android"))]
+use kithara_integration_tests::{audio_artifact::write_audio_artifact, cochlea::CochleaReport};
 use kithara_test_fixtures::{SignalAsset, assets::by_name};
-use oracle::{AudioLevelReport, AudioRole, MatchedMixReport, SampleContinuityReport};
+use oracle::AudioRole;
+#[cfg(not(target_os = "android"))]
+use oracle::{AudioLevelReport, MatchedMixReport, SampleContinuityReport};
 use reference::capture_references;
 use runtime::{Deck, DeckObservation, EventPolicy};
+#[cfg(not(target_os = "android"))]
 use serde::Serialize;
 use url::Url;
 
@@ -141,6 +145,7 @@ const CASES: &[Case] = &[
     },
 ];
 
+#[cfg(not(target_os = "android"))]
 #[derive(Serialize)]
 struct ArtifactManifest<'a> {
     case: &'a str,
@@ -335,6 +340,13 @@ async fn run_case(
     }
     runtime::record_transport_state(&host, "after capture", &mut failures).await;
     let oracles = oracle::assess_audio(case.label, case.host_rate, &final_mix.pcm, &mut failures);
+    tracing::debug!(
+        cochlea = ?oracles.cochlea,
+        tap_drops = final_mix.tap_drops,
+        tap_matches_output = final_mix.tap_matches_output,
+        discontinuities = ?oracles.sample_continuity.as_ref().map(|report| &report.discontinuity_boundaries),
+        "real-media continuity assessment"
+    );
 
     let mut audio_levels = direct_references
         .iter()
@@ -372,30 +384,36 @@ async fn run_case(
     ));
     oracle::assess_listening_levels(case.label, &audio_levels, &mut failures);
 
-    let observations: Vec<DeckObservation> =
-        decks.into_iter().map(|deck| deck.observation).collect();
-    let manifest = ArtifactManifest {
-        case: case.label,
-        media: case.media.iter().map(|media| media.label()).collect(),
-        deck_count: case.media.len(),
-        host_sample_rate: case.host_rate,
-        channels: CHANNELS,
-        requested_frames: final_mix.requested_frames,
-        captured_frames: final_mix.pcm.len() / usize::from(CHANNELS),
-        capture_start_positions_secs: &final_mix.start_positions_secs,
-        reference_path: "independent resource decoder and host resampler",
-        direct_reference_gain: 1.0,
-        runtime_deck_gain: mix_level,
-        mix_tap_drops: final_mix.tap_drops,
-        mix_tap_matches_output: final_mix.tap_matches_output,
-        sample_continuity: oracles.sample_continuity.as_ref(),
-        cochlea: oracles.cochlea.as_ref(),
-        audio_levels: &audio_levels,
-        matched_mix: matched_mix.report.as_ref(),
-        decks: &observations,
-        failures: &failures,
-    };
+    #[cfg(target_os = "android")]
+    assert!(
+        !record_artifacts,
+        "listening artifact export belongs to the host suite"
+    );
+    #[cfg(not(target_os = "android"))]
     if record_artifacts {
+        let observations: Vec<DeckObservation> =
+            decks.into_iter().map(|deck| deck.observation).collect();
+        let manifest = ArtifactManifest {
+            case: case.label,
+            media: case.media.iter().map(|media| media.label()).collect(),
+            deck_count: case.media.len(),
+            host_sample_rate: case.host_rate,
+            channels: CHANNELS,
+            requested_frames: final_mix.requested_frames,
+            captured_frames: final_mix.pcm.len() / usize::from(CHANNELS),
+            capture_start_positions_secs: &final_mix.start_positions_secs,
+            reference_path: "independent resource decoder and host resampler",
+            direct_reference_gain: 1.0,
+            runtime_deck_gain: mix_level,
+            mix_tap_drops: final_mix.tap_drops,
+            mix_tap_matches_output: final_mix.tap_matches_output,
+            sample_continuity: oracles.sample_continuity.as_ref(),
+            cochlea: oracles.cochlea.as_ref(),
+            audio_levels: &audio_levels,
+            matched_mix: matched_mix.report.as_ref(),
+            decks: &observations,
+            failures: &failures,
+        };
         let mut audio = direct_references
             .iter()
             .enumerate()

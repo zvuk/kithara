@@ -7,25 +7,36 @@ use std::{
     },
 };
 
+#[cfg(feature = "symphonia")]
 use kithara_bufpool::PoolRegion;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioChunk;
-use kithara_stream::{AudioCodec, ByteMap, PendingReason, SegmentDescriptor};
+#[cfg(feature = "symphonia")]
+use kithara_stream::AudioCodec;
+use kithara_stream::{ByteMap, PendingReason, SegmentDescriptor};
+#[cfg(feature = "symphonia")]
 use kithara_test_fixtures::unit_fixtures::{aac_init, aac_segment};
 use kithara_test_utils::kithara;
 
 use super::test_layout::{FakeSegmented, aac_five, aac_one, aac_three, flac_three};
+#[cfg(all(not(feature = "symphonia"), target_os = "android"))]
+use crate::android::AndroidCodec as TestCodec;
+#[cfg(feature = "symphonia")]
+use crate::symphonia::SymphoniaCodec as TestCodec;
 use crate::{
-    codec::{CodecPriming, FrameCodec, access_unit_frames},
+    codec::CodecPriming,
     composed::{ComposedDecoder, DecoderRuntime},
-    demuxer::{DemuxOutcome, Demuxer, TrackInfo},
-    fmp4::{
-        Fmp4SegmentDemuxer,
-        parsing::{parse_init, parse_segment_frames},
-    },
-    symphonia::{SymphoniaCodec, SymphoniaConfig},
+    demuxer::{DemuxOutcome, Demuxer},
+    fmp4::Fmp4SegmentDemuxer,
     test_pools::{TestPools, pools},
     traits::{BoxedSource, Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
+};
+#[cfg(feature = "symphonia")]
+use crate::{
+    codec::{FrameCodec, access_unit_frames},
+    demuxer::TrackInfo,
+    fmp4::parsing::{parse_init, parse_segment_frames},
+    symphonia::{SymphoniaCodec, SymphoniaConfig},
 };
 
 /// Fixed-layout in-memory test source built from init+segment fixtures.
@@ -58,7 +69,7 @@ impl Seek for InstrumentedSource {
 }
 
 type DecoderHarness = (
-    ComposedDecoder<Fmp4SegmentDemuxer<TestPools>, SymphoniaCodec, TestPools>,
+    ComposedDecoder<Fmp4SegmentDemuxer<TestPools>, TestCodec, TestPools>,
     Arc<Mutex<Vec<Range<u64>>>>,
     Arc<AtomicBool>,
 );
@@ -98,8 +109,11 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
     let pools = pools();
     let demuxer =
         Fmp4SegmentDemuxer::open(source, layout, pools.clone()).expect("BUG: build demuxer");
+    #[cfg(feature = "symphonia")]
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
         .expect("BUG: open codec");
+    #[cfg(all(not(feature = "symphonia"), target_os = "android"))]
+    let codec = TestCodec::open_with_config(demuxer.track_info()).expect("open Android codec");
     let decoder = ComposedDecoder::new(
         demuxer,
         codec,
@@ -136,7 +150,7 @@ fn next_chunk_yields_pcm_from_init_plus_segment_zero(aac_one: (Vec<u8>, FakeSegm
 /// Helper used by the RED scaffolds below: pull one PCM chunk from the
 /// decoder, returning `None` on EOF or after exhausting the retry budget.
 fn pull_one_chunk(
-    decoder: &mut ComposedDecoder<Fmp4SegmentDemuxer<TestPools>, SymphoniaCodec, TestPools>,
+    decoder: &mut ComposedDecoder<Fmp4SegmentDemuxer<TestPools>, TestCodec, TestPools>,
 ) -> Option<AudioChunk> {
     for _ in 0..16 {
         match decoder.next_chunk().ok()? {
@@ -255,7 +269,7 @@ fn red_cursor_byte_range_freezes_when_layout_size_grows() {
 }
 
 /// A boundary seek for an SBR codec backs up into the immediately
-/// preceding segment (`SymphoniaCodec::priming` requests AAC pre-roll, so
+/// preceding segment (the codec requests AAC pre-roll, so
 /// `Fmp4SegmentDemuxer::seek` lands at `target − warmup`) and decodes that
 /// segment as decode-and-discard warm-up before reaching `target`. Reads
 /// must stay confined to the pre-roll segment plus the target segment —
@@ -309,6 +323,7 @@ fn seek_backs_up_one_segment_for_aac_preroll(aac_five: (Vec<u8>, FakeSegmented))
     }
 }
 
+#[cfg(feature = "symphonia")]
 #[kithara::test]
 fn seek_emits_notneeded_for_symphonia_aac_segment_boundary(aac_five: (Vec<u8>, FakeSegmented)) {
     let (blob, segmented) = aac_five;
@@ -327,6 +342,7 @@ fn seek_emits_notneeded_for_symphonia_aac_segment_boundary(aac_five: (Vec<u8>, F
     );
 }
 
+#[cfg(feature = "symphonia")]
 #[kithara::test]
 fn seek_emits_notneeded_for_symphonia_aac_first_segment(aac_five: (Vec<u8>, FakeSegmented)) {
     let (blob, segmented) = aac_five;
@@ -365,12 +381,14 @@ fn seek_emits_notneeded_for_first_segment_flac(flac_three: (Vec<u8>, FakeSegment
     );
 }
 
+#[cfg(feature = "symphonia")]
 type AacFrameHarness = (SymphoniaCodec, Vec<u8>, Vec<(usize, usize)>);
 
 /// Build a `SymphoniaCodec` from the AAC init segment plus the raw AAC
 /// access units in segment 0. Mirrors `Fmp4SegmentDemuxer::build_track_info`
 /// so the codec is opened with the same `TrackInfo` the real demuxer would
 /// produce, then returns the per-frame `(offset, size)` access-unit ranges.
+#[cfg(feature = "symphonia")]
 fn aac_codec_and_frames(aac_init: &[u8], aac_segment: &[u8]) -> AacFrameHarness {
     let init_bytes = aac_init;
     let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
@@ -392,6 +410,7 @@ fn aac_codec_and_frames(aac_init: &[u8], aac_segment: &[u8]) -> AacFrameHarness 
     (codec, seg, ranges)
 }
 
+#[cfg(feature = "symphonia")]
 fn decode_all_aac(
     codec: &mut SymphoniaCodec,
     seg: &[u8],
@@ -415,6 +434,7 @@ fn decode_all_aac(
 /// replaces. Two independent decoder passes over the same real AAC
 /// access units must yield byte-for-byte equal interleaved f32 PCM —
 /// pro-DJ zero tolerance for sample drift.
+#[cfg(feature = "symphonia")]
 #[kithara::test]
 fn symphonia_aac_decode_is_bit_identical_across_passes(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
     let pools = pools();
@@ -431,6 +451,7 @@ fn symphonia_aac_decode_is_bit_identical_across_passes(aac_init: Vec<u8>, aac_se
     );
 }
 
+#[cfg(feature = "symphonia")]
 #[kithara::test]
 fn symphonia_aac_warm_decode_keeps_pool_bytes_stable(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
     let pools = pools();
@@ -470,6 +491,7 @@ fn symphonia_aac_warm_decode_keeps_pool_bytes_stable(aac_init: Vec<u8>, aac_segm
 /// frame offset onto the packet timestamp instead. Observing the strip in
 /// `ComposedDecoder` is what lets its live timeline-gap query hand both the
 /// same figure.
+#[cfg(feature = "symphonia")]
 #[kithara::test]
 fn aac_head_strip_exceeds_the_bias_the_timeline_models(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
     let pools = pools();

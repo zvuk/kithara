@@ -14,7 +14,7 @@ use kithara_integration_tests::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
-    hls_pcm_fifty, hls_pcm_fifty_descending, hls_stream_header,
+    hls_header_fifty, hls_pcm_fifty, hls_pcm_fifty_descending,
 };
 use kithara_test_fixtures::signal::{self, SignalDirection as Direction, detect_direction};
 use tracing::info;
@@ -134,7 +134,7 @@ fn assert_abr_size_probes(fixture: AbrAudioFixture, counter: &SizeProbeCounter) 
 
 #[kithara::fixture]
 async fn wav_abr(
-    hls_stream_header: Vec<u8>,
+    hls_header_fifty: Vec<u8>,
     hls_pcm_fifty: Vec<u8>,
     hls_pcm_fifty_descending: Vec<u8>,
 ) -> (Url, SizeProbeCounter) {
@@ -146,7 +146,7 @@ async fn wav_abr(
         delay_ms: 500,
         ..Default::default()
     }];
-    let init_segment = Arc::new(hls_stream_header);
+    let init_segment = Arc::new(hls_header_fifty);
     let v0_pcm = Arc::new(hls_pcm_fifty);
     let v1_pcm = Arc::new(hls_pcm_fifty_descending);
 

@@ -361,8 +361,8 @@ where
         self.poll_output(out)
     }
 
-    fn decoded_pts(&self, _input_pts: Duration) -> Duration {
-        self.decoded_pts
+    fn decoded_pts(&self) -> Option<Duration> {
+        Some(self.decoded_pts)
     }
 
     fn flush(&mut self) -> DecodeResult<()> {

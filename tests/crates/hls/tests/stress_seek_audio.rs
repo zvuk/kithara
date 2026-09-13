@@ -405,46 +405,86 @@ async fn flac_hundred() -> (Url, SizeProbeCounter) {
     )
 )]
 #[cfg(not(target_arch = "wasm32"))]
-#[case::wav_symphonia_ephemeral(
+#[cfg_attr(not(target_os = "android"), case::wav_symphonia_ephemeral(
     true,
     DecoderBackend::Symphonia,
     SeekAudioFixture::WavFileLike,
     100,
     Some(110),
     wav_hundred().await
-)]
-#[case::wav_symphonia_mmap(
+))]
+#[cfg_attr(target_os = "android", case::wav_android_ephemeral(
+    true,
+    DecoderBackend::default(),
+    SeekAudioFixture::WavFileLike,
+    100,
+    Some(110),
+    wav_hundred().await
+))]
+#[cfg_attr(not(target_os = "android"), case::wav_symphonia_mmap(
     false,
     DecoderBackend::Symphonia,
     SeekAudioFixture::WavFileLike,
     100,
     None,
     wav_hundred().await
-)]
-#[case::wav_symphonia_full_cache(
+))]
+#[cfg_attr(target_os = "android", case::wav_android_mmap(
+    false,
+    DecoderBackend::default(),
+    SeekAudioFixture::WavFileLike,
+    100,
+    None,
+    wav_hundred().await
+))]
+#[cfg_attr(not(target_os = "android"), case::wav_symphonia_full_cache(
     false,
     DecoderBackend::Symphonia,
     SeekAudioFixture::WavFileLike,
     48,
     Some(56),
     wav_forty_eight().await
-)]
-#[case::flac_fmp4_symphonia_ephemeral(
+))]
+#[cfg_attr(target_os = "android", case::wav_android_full_cache(
+    false,
+    DecoderBackend::default(),
+    SeekAudioFixture::WavFileLike,
+    48,
+    Some(56),
+    wav_forty_eight().await
+))]
+#[cfg_attr(not(target_os = "android"), case::flac_fmp4_symphonia_ephemeral(
     true,
     DecoderBackend::Symphonia,
     SeekAudioFixture::FlacFmp4,
     100,
     Some(110),
     flac_hundred().await
-)]
-#[case::flac_fmp4_symphonia_mmap(
+))]
+#[cfg_attr(target_os = "android", case::flac_fmp4_android_ephemeral(
+    true,
+    DecoderBackend::default(),
+    SeekAudioFixture::FlacFmp4,
+    100,
+    Some(110),
+    flac_hundred().await
+))]
+#[cfg_attr(not(target_os = "android"), case::flac_fmp4_symphonia_mmap(
     false,
     DecoderBackend::Symphonia,
     SeekAudioFixture::FlacFmp4,
     100,
     None,
     flac_hundred().await
-)]
+))]
+#[cfg_attr(target_os = "android", case::flac_fmp4_android_mmap(
+    false,
+    DecoderBackend::default(),
+    SeekAudioFixture::FlacFmp4,
+    100,
+    None,
+    flac_hundred().await
+))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::wav_apple_mmap(

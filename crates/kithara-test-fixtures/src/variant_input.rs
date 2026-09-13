@@ -98,7 +98,11 @@ pub(crate) struct VariantArtifact {
     pub(crate) durations: Vec<f64>,
 }
 
-pub(crate) type VariantCatalog = BTreeMap<String, VariantArtifact>;
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub(crate) struct VariantCatalog {
+    pub(crate) frame_samples: BTreeMap<String, usize>,
+    pub(crate) variants: BTreeMap<String, VariantArtifact>,
+}
 
 #[cfg(test)]
 mod tests {

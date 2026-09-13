@@ -6,8 +6,8 @@ mod pcm;
 
 pub use encoded::{
     audio_wav_8000, audio_wav_44100, audio_wav_132300, audio_wav_176400, audio_wav_264600,
-    concurrent_wav, drain_tone, encoder_saw_aac, encoder_saw_flac, encoder_saw_he, encoder_second,
-    flac_config, perf_wav, saw_segments,
+    audio_wav_1323000, concurrent_wav, drain_tone, encoder_saw_aac, encoder_saw_flac,
+    encoder_saw_he, encoder_second, flac_config, perf_wav, saw_segments,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{

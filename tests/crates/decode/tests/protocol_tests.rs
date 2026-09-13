@@ -28,7 +28,7 @@ impl Consts {
 /// Backend selector for cross-decoder comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Backend {
-    Symphonia,
+    Default,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     Apple,
 }
@@ -63,7 +63,7 @@ impl Backend {
     fn to_choice(self) -> kithara::decode::DecoderBackend {
         use kithara::decode::DecoderBackend;
         match self {
-            Self::Symphonia => DecoderBackend::Symphonia,
+            Self::Default => DecoderBackend::default(),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             Self::Apple => DecoderBackend::Apple,
         }
@@ -73,11 +73,11 @@ impl Backend {
 fn available_backends() -> Vec<Backend> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        vec![Backend::Symphonia, Backend::Apple]
+        vec![Backend::Default, Backend::Apple]
     }
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
-        vec![Backend::Symphonia]
+        vec![Backend::Default]
     }
 }
 
@@ -342,7 +342,7 @@ fn apple_decodes_standalone(#[case] case: StandaloneCase, standalone_audio: [&'s
 fn full_decode_l2_norm_matches_within_tolerance(tone_mp3: &'static [u8]) {
     const TOL_REL: f64 = 0.02;
 
-    let mut sym = Backend::Symphonia.make_mp3(tone_mp3);
+    let mut sym = Backend::Default.make_mp3(tone_mp3);
     let mut apl = Backend::Apple.make_mp3(tone_mp3);
 
     let sym_samples = drain_all(&mut *sym);

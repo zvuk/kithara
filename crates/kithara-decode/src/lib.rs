@@ -28,7 +28,7 @@ mod gapless;
 mod mp4;
 mod resampled;
 mod retire;
-#[cfg(feature = "symphonia")]
+#[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
 mod symphonia;
 #[cfg(test)]
 pub(crate) use kithara_bufpool::testing as test_pools;

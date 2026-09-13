@@ -147,7 +147,7 @@ async fn run_scenario(specs: Vec<TrackSpec>, actions: Vec<Action>) {
 }
 
 async fn run_single(kind: PreparedTrack, abr: AbrMode, actions: Vec<Action>) {
-    run_single_backend(kind, abr, DecoderBackend::Symphonia, actions).await;
+    run_single_backend(kind, abr, DecoderBackend::default(), actions).await;
 }
 
 async fn run_single_backend(
@@ -168,7 +168,7 @@ async fn run_multi(kinds: PreparedTracks, actions: Vec<Action>) {
     let (_helper, urls) = kinds;
     let specs = urls
         .into_iter()
-        .map(|url| build_spec(url, AbrMode::Auto(None), DecoderBackend::Symphonia))
+        .map(|url| build_spec(url, AbrMode::Auto(None), DecoderBackend::default()))
         .collect();
     run_scenario(specs, actions).await;
 }
@@ -354,7 +354,7 @@ async fn user_sim_long_play_then_seek_forward(#[case] kind: PreparedTrack, #[cas
 #[case::mp3_streamhq(track_mp3_stream_hq().await, 0.50)]
 async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[case] ratio: f64) {
     let (_helper, url) = kind;
-    let spec = build_spec(url, AbrMode::Auto(None), DecoderBackend::Symphonia);
+    let spec = build_spec(url, AbrMode::Auto(None), DecoderBackend::default());
     let temp = temp_dir();
     let pools = pools();
     let downloader = Downloader::new(
@@ -375,7 +375,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     .store(store)
     .decoder(
         kithara::audio::AudioDecoderConfig::builder()
-            .backend(DecoderBackend::Symphonia)
+            .backend(DecoderBackend::default())
             .build(),
     )
     .initial_abr_mode(AbrMode::Auto(None))

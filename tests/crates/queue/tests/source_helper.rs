@@ -1,3 +1,4 @@
+#![cfg(not(target_os = "android"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::path::PathBuf;

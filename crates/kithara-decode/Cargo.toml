@@ -30,10 +30,10 @@ apple = [
 apple-codec-embedded-resampler = ["apple"]
 # In-tree fdk-aac adapter needs symphonia-core macros (`codec_profile!`,
 # `support_audio_codec!`) which expand to `symphonia_core::*` paths.
-android = []
+android = ["dep:kithara-mpa", "dep:symphonia-core"]
 # Enables the software (Symphonia) decoder path. When disabled, the
 # factory only uses the compiled hardware backend — no fallback.
-symphonia = ["dep:symphonia", "dep:kithara-mpa"]
+symphonia = ["dep:symphonia", "dep:symphonia-core", "dep:kithara-mpa"]
 # Override Symphonia's LC-only AAC decoder with libfdk-aac (HE-AAC
 # v1/v2). Off by default — opt in per-target if needed.
 fdk-aac = ["symphonia", "dep:symphonia-core", "dep:fdk-aac"]

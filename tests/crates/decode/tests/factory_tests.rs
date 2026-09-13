@@ -29,9 +29,13 @@ use kithara_test_fixtures::fixtures::tone_mp3;
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 
 #[kithara::test]
-fn decoder_config_default_uses_symphonia_backend() {
+fn decoder_config_selects_the_expected_backend() {
     let config: TestDecoderConfig = TestDecoderConfig::builder().pools(pools()).build();
-    assert_eq!(config.backend, DecoderBackend::Symphonia);
+    #[cfg(target_os = "android")]
+    let expected = DecoderBackend::Android;
+    #[cfg(not(target_os = "android"))]
+    let expected = DecoderBackend::Symphonia;
+    assert_eq!(config.backend, expected);
     assert!(config.byte_len_handle.is_none());
 }
 

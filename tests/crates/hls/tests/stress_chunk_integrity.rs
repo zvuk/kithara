@@ -27,7 +27,7 @@ use kithara_integration_tests::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
-    hls_pcm_fifty, hls_pcm_fifty_descending, hls_stream_header,
+    hls_header_fifty, hls_pcm_fifty, hls_pcm_fifty_descending,
 };
 use kithara_test_fixtures::signal::{self, SignalDirection as Direction, detect_direction};
 use tracing::{info, warn};
@@ -104,11 +104,11 @@ async fn next_chunk_with_timeout<R: AudioRead>(
 
 #[kithara::fixture]
 async fn audio_server(
-    hls_stream_header: Vec<u8>,
+    hls_header_fifty: Vec<u8>,
     hls_pcm_fifty: Vec<u8>,
     hls_pcm_fifty_descending: Vec<u8>,
 ) -> HlsTestServer {
-    let init_segment = Arc::new(hls_stream_header);
+    let init_segment = Arc::new(hls_header_fifty);
     let v0_pcm = Arc::new(hls_pcm_fifty);
     let v1_pcm = Arc::new(hls_pcm_fifty_descending);
 

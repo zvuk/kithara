@@ -29,12 +29,8 @@ all = [
     "audio",
     "dep:kithara-app",
     "dep:kithara-devtools",
-    "kithara/full",
     "kithara/queue",
     "kithara/backend-cpal",
-    "kithara/encode",
-    "kithara/fdk-aac",
-    "kithara/ffmpeg",
     "kithara-app/analysis-waveform",
     "kithara-app/beat-nn-small",
     "kithara-app/lib-only",
@@ -47,14 +43,12 @@ audio = [
     "kithara/abr",
     "kithara/assets",
     "kithara/audio",
+    "kithara/offline",
     "kithara/bufpool",
-    "kithara/client-reqwest",
     "kithara/decode",
     "kithara/drm",
     "kithara/download",
-    "kithara/encode",
     "kithara/events",
-    "kithara/fdk-aac",
     "kithara/file",
     "kithara/hls",
     "kithara/mock",
@@ -62,16 +56,13 @@ audio = [
     "kithara/platform",
     "kithara/play",
     "kithara/probe",
-    "kithara/record",
     "kithara/resample-rubato",
     "kithara/resampler",
     "kithara/signal",
     "kithara/storage",
     "kithara/stream",
     "kithara/stretch-signalsmith",
-    "kithara/symphonia",
     "kithara/test-utils",
-    "kithara/tls-rustls",
     "kithara/tokio-net",
     "kithara/tokio-rt-multi-thread",
     "kithara/warp",
@@ -118,6 +109,7 @@ apple-fused-src = ["kithara/apple-fused-src"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
+kithara-encode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
@@ -172,10 +164,7 @@ kithara = { workspace = true, default-features = false, optional = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
 kithara = { workspace = true, default-features = false, optional = true }
 
-# Only `architecture_trace` reaches for it, and that module is already native
-# only: the crate's LSP client builds file URLs, which `url` offers everywhere
-# but wasm.
-kithara-devtools = { workspace = true, optional = true }
+# Only `architecture_trace` reaches for it, and that module is already native# only: the crate's LSP client builds file URLs, which `url` offers everywhere# but wasm.
 
 # fdk-aac came from kithara-decode defaults before Phase 2 (workspace
 # default-features=false). HE-AAC v2 fMP4 fixtures in rapid-scrub /
@@ -211,6 +200,11 @@ tower-http = { workspace = true }
 # Mocking
 unimock = { workspace = true }
 
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara = { workspace = true, default-features = false, optional = true, features = ["full", "encode", "fdk-aac", "ffmpeg", "symphonia", "client-reqwest", "tls-rustls"] }
+kithara-app = { workspace = true, default-features = false, optional = true }
+kithara-devtools = { workspace = true, optional = true }
+
 # `bungee-sys` fails through `cmake`/MSVC and its build script refuses Android
 # by target triple. Android stretches through Signalsmith, the backend
 # `kithara-ffi`'s `android` feature selects.
@@ -231,7 +225,7 @@ kithara = { workspace = true, default-features = false, optional = true }
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true, default-features = false, optional = true }
-kithara-app = { workspace = true, default-features = false, optional = true }
+
 kithara-test-fixtures = { workspace = true, default-features = false }
 tokio = { workspace = true, features = ["process"] }
 

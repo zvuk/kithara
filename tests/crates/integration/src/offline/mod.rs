@@ -1,4 +1,4 @@
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 mod app;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod harness;
@@ -10,7 +10,7 @@ mod ticker;
 mod window;
 mod worker;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 pub use app::{AppQueueFixture, LazyAppQueueFixture, app_queue, insecure_app_queue};
 #[cfg(not(target_arch = "wasm32"))]
 pub use harness::{OfflinePlayerHarness, OfflinePlayerOptions, offline_queue_fixture};

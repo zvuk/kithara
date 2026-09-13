@@ -24,7 +24,8 @@ const CHANNELS: u16 = 2;
     timeout(Duration::from_secs(15)),
     hang_timeout_secs(3)
 )]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)

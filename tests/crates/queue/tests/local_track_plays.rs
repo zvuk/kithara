@@ -227,7 +227,7 @@ async fn build_queue_with_tick(
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::mp3_symphonia(local_mp3().await, 42, DecoderBackend::Symphonia, AbrMode::Auto(None))]
+#[cfg_attr(not(target_os = "android"), case::mp3_symphonia(local_mp3().await, 42, DecoderBackend::Symphonia, AbrMode::Auto(None)))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::mp3_apple(local_mp3().await, 42, DecoderBackend::Apple, AbrMode::Auto(None))
@@ -236,12 +236,12 @@ async fn build_queue_with_tick(
     target_os = "android",
     case::mp3_android(local_mp3().await, 42, DecoderBackend::Android, AbrMode::Auto(None))
 )]
-#[case::hls_aac_symphonia(
+#[cfg_attr(not(target_os = "android"), case::hls_aac_symphonia(
     local_hls().await,
     42,
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
-)]
+))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hls_aac_apple(local_hls().await, 42, DecoderBackend::Apple, AbrMode::Auto(None))
@@ -250,12 +250,12 @@ async fn build_queue_with_tick(
     target_os = "android",
     case::hls_aac_android(local_hls().await, 42, DecoderBackend::Android, AbrMode::Auto(None))
 )]
-#[case::hls_aes_symphonia(
+#[cfg_attr(not(target_os = "android"), case::hls_aes_symphonia(
     local_encrypted_hls().await,
     42,
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
-)]
+))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hls_aes_apple(
@@ -465,7 +465,7 @@ fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String
 /// Consumed` (the loader flips straight to `Consumed` when a
 /// `pending_select` was queued for the same track).
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(45)))]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)

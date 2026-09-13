@@ -125,14 +125,20 @@ fn encode(input: &VariantInput) -> Fmp4Package {
     content_type = "application/x-kithara-hls-variants",
     context
 )]
-#[case::catalog()]
+#[case::catalog_with_native_gapless()]
 fn hls_variants(context: &BuildContext<'_>) -> Vec<u8> {
-    let mut catalog = VariantCatalog::new();
+    let mut catalog = VariantCatalog::default();
     for input in inputs() {
         let key = input.key();
-        if catalog.contains_key(&key) {
+        if catalog.variants.contains_key(&key) {
             continue;
         }
+        catalog
+            .frame_samples
+            .entry(format!("{:?}", input.codec))
+            .or_insert_with(|| {
+                EncoderFactory::frame_samples(input.codec).expect("prepared codec frame size")
+            });
         let package = encode(&input);
         let init = context
             .store(&format!("{key}/init"), "mp4", &package.init_segment)
@@ -147,7 +153,7 @@ fn hls_variants(context: &BuildContext<'_>) -> Vec<u8> {
                     .expect("store prepared HLS segment")
             })
             .collect();
-        catalog.insert(
+        catalog.variants.insert(
             key,
             VariantArtifact {
                 init,
@@ -384,6 +390,7 @@ fn gapless_profiles() -> Vec<Profile> {
         (440.0, 0, 960, GaplessEncoding::Edts),
         (880.0, 0, 960, GaplessEncoding::Edts),
         (3_000.0, 67_888, 960, GaplessEncoding::Edts),
+        (3_000.0, 69_632, 960, GaplessEncoding::Edts),
     ] {
         let mut profile = Profile::new(&[AudioCodec::AacLc], 3, 0.5);
         profile.sample_rate = 48_000;

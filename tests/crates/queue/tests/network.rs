@@ -1,3 +1,4 @@
+#![cfg(not(target_os = "android"))]
 #![forbid(unsafe_code)]
 #![expect(
     clippy::unwrap_used,

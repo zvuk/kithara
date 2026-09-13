@@ -1,7 +1,9 @@
 //! Android device selection and ownership of emulator processes and reverse ports.
 
 use std::{
+    env,
     fmt::Write as _,
+    fs,
     io::{ErrorKind, Read as _},
     net::TcpListener,
     path::{Path, PathBuf},
@@ -11,6 +13,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use kithara_devtools::lock::FileLock;
+use sha2::{Digest, Sha256};
 
 use crate::{child, config::AndroidConfig};
 
@@ -71,6 +75,17 @@ pub(crate) struct Selected {
 }
 
 impl Selected {
+    pub(crate) fn lease(&self) -> Result<FileLock> {
+        let home = PathBuf::from(
+            env::var_os("HOME").context("HOME is required for Android device leases")?,
+        );
+        if !home.is_absolute() || !home.is_dir() {
+            bail!("HOME must be an existing absolute directory for Android device leases");
+        }
+        let locks = home.join(".cache/kithara/android-device-locks");
+        device_lease(&locks, &self.serial)
+    }
+
     pub(crate) const fn owns_emulator(&self) -> bool {
         self.emulator.is_some()
     }
@@ -106,6 +121,21 @@ impl Drop for Selected {
     fn drop(&mut self) {
         let _ = self.take_down();
     }
+}
+
+fn device_lease(directory: &Path, serial: &str) -> Result<FileLock> {
+    fs::create_dir_all(directory)?;
+    let name = format!(
+        "kithara-native-device-{}.lock",
+        hex::encode(Sha256::digest(serial.as_bytes()))
+    );
+    let lock = fs::File::options()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(directory.join(name))?;
+    FileLock::try_exclusive(lock).context("another Android run owns this device")
 }
 
 /// A device TCP port forwarded to a port on the host, for the length of one
@@ -934,5 +964,21 @@ mod tests {
         assert!(error.contains("--serial"), "{error}");
         assert!(error.contains("emulator-5554"), "{error}");
         assert!(error.contains("RF8N"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+
+    #[test]
+    fn device_lease_excludes_other_runs_until_cleanup_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        let first = device_lease(root.path(), "emulator-5554").unwrap();
+        assert!(device_lease(root.path(), "emulator-5554").is_err());
+        let other = device_lease(root.path(), "emulator-5556").unwrap();
+        drop(first);
+        let next = device_lease(root.path(), "emulator-5554").unwrap();
+        drop((other, next));
     }
 }

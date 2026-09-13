@@ -48,7 +48,7 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use kithara_test_fixtures::{
-    hls_fixtures::{hls_pcm_boundary, hls_stream_header},
+    hls_fixtures::{hls_header_boundary, hls_pcm_boundary},
     signal,
 };
 use tracing::info;
@@ -76,10 +76,10 @@ fn segment_first_frame(segment: usize) -> u64 {
 
 #[kithara::fixture]
 async fn gated_audio(
-    hls_stream_header: Vec<u8>,
+    hls_header_boundary: Vec<u8>,
     hls_pcm_boundary: Vec<u8>,
 ) -> (HlsTestServer, SegmentGateHandle) {
-    let init_segment = Arc::new(hls_stream_header);
+    let init_segment = Arc::new(hls_header_boundary);
     let pcm = Arc::new(hls_pcm_boundary);
 
     let segment_duration = SEGMENT_SIZE as f64
@@ -186,13 +186,13 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous(
         let decoder_config =
             DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
                 .pools(pools)
-                .backend(DecoderBackend::Symphonia)
+                .backend(DecoderBackend::default())
                 .byte_len_handle(Arc::new(std::sync::atomic::AtomicU64::new(byte_len)))
                 .maybe_byte_map(byte_map)
                 .hint("wav")
                 .build();
         let mut decoder = DecoderFactory::create_from_media_info(stream, &wav_info, decoder_config)
-            .expect("build Symphonia WAV decoder over Stream<Hls>");
+            .expect("build WAV decoder over Stream<Hls>");
 
         let outcome = decoder
             .seek(seek_pos)
@@ -248,11 +248,6 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous(
          give-up Pending (a Pending here means the read abandoned a packet \
          mid-read — the strand bug)"
     );
-    assert!(
-        chunks.len() >= 8,
-        "expected several decoded chunks across the boundary, got {}",
-        chunks.len()
-    );
 
     // Reconstruct the decoded saw-tooth in emission order (one value per
     // frame, channel 0) and assert continuity: each frame's phase is the
@@ -266,8 +261,8 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous(
         }
     }
     assert!(
-        samples.len() > 16,
-        "not enough decoded frames to check continuity"
+        samples.len() >= SEGMENT_SIZE / bytes_per_frame(),
+        "decoded PCM must extend at least 6,144 frames beyond the withheld boundary"
     );
 
     let mut breaks = 0usize;

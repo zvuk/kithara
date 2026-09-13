@@ -113,6 +113,6 @@ async fn concurrent_file_instances(
 #[kithara::fixture]
 async fn file_source() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
-    let url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
+    let url = server.signal(SignalAsset::MP3_SINE880_30S);
     (server, url)
 }

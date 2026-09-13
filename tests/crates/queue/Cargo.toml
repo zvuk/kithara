@@ -19,9 +19,7 @@ network = []
 network-manual = []
 
 [dependencies]
-kithara = { workspace = true, features = ["download", "full", "queue", "probe", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith", "backend-cpal"] }
-kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
-kithara-devtools = { workspace = true }
+kithara = { workspace = true, features = ["backend-cpal", "download", "mock", "offline", "probe", "queue", "resample-rubato", "signal", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
@@ -38,6 +36,11 @@ url = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 kithara = { workspace = true, features = ["download", "apple", "client-wreq"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+kithara = { workspace = true, features = ["full", "symphonia", "fdk-aac"] }
+kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
+kithara-devtools = { workspace = true }
 
 [lints]
 workspace = true

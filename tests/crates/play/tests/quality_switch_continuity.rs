@@ -194,6 +194,7 @@ fn variant_codec(variant: usize) -> AudioCodec {
 
 fn decoder_backend_kind(backend: DecoderBackend) -> DecoderBackendKind {
     match backend {
+        #[cfg(not(target_os = "android"))]
         DecoderBackend::Symphonia => DecoderBackendKind::Symphonia,
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         DecoderBackend::Apple => DecoderBackendKind::Apple,

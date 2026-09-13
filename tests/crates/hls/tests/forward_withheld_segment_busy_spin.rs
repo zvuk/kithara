@@ -58,7 +58,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
-use kithara_test_fixtures::hls_fixtures::{hls_pcm_boundary, hls_stream_header};
+use kithara_test_fixtures::hls_fixtures::{hls_header_boundary, hls_pcm_boundary};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tracing::info;
 
@@ -93,10 +93,10 @@ fn count_decode_steps(recorder: &Recorder) -> usize {
 
 #[kithara::fixture]
 async fn gated_audio(
-    hls_stream_header: Vec<u8>,
+    hls_header_boundary: Vec<u8>,
     hls_pcm_boundary: Vec<u8>,
 ) -> (HlsTestServer, SegmentGateHandle) {
-    let init_segment = Arc::new(hls_stream_header);
+    let init_segment = Arc::new(hls_header_boundary);
     let pcm = Arc::new(hls_pcm_boundary);
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);

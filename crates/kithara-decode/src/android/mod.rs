@@ -1,11 +1,6 @@
-//! Android `MediaCodec` codec surface.
-//!
-//! Two pipelines share `AMediaCodec` for PCM output:
-//! - fMP4 AAC-LC / FLAC over HLS: container parsed by
-//!   `crate::fmp4::Fmp4SegmentDemuxer`, frames decoded by [`AndroidCodec`].
-//! - Standalone WAV / MP3 / ALAC: container parsed via `AMediaExtractor`
-//!   ([`media_extractor::AndroidMediaExtractor`]), frames decoded by
-//!   [`AndroidCodec`]. No Symphonia required.
+//! Android `MediaCodec` decoding with segment-aware fMP4 and exact MPEG readers.
+//! Other standalone containers retain the native extractor's track format.
+//! Unsupported formats fail without selecting another decoder backend.
 
 pub(crate) mod aformat;
 pub(crate) mod codec;

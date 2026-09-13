@@ -174,7 +174,8 @@ struct PostSeekObservation {
     timeout(Duration::from_secs(60)),
     tracing("kithara_hls=debug,kithara_queue=debug,kithara_stream=debug")
 )]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)

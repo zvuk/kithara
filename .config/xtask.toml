@@ -515,6 +515,9 @@ features = ["flash"]
 default = false
 features = ["no-block"]
 
+[test.net_backends.none]
+features = []
+
 [test.net_backends.wreq]
 features = [
   "client-wreq",
@@ -828,6 +831,7 @@ prefix_args = [
 # assessment, release and publish, the platform commands, the xtask self-cache,
 # and the generators that write the CI pipelines. None of it ships.
 [test.lanes.tooling]
+default_backend = "none"
 program = "cargo"
 owns = ["xtask/", "crates/kithara-devtools/"]
 prefix_args = [
@@ -2266,6 +2270,11 @@ os = "macos"
 tools = ["cargo", "curl", "ffmpeg", "java", "just", "make", "pkg-config", "tar"]
 program = "just"
 steps = [
+  { args = [
+    "platform",
+    "android",
+    "clippy",
+  ], label = "Android device Clippy" },
   { args = [
     "platform",
     "android",

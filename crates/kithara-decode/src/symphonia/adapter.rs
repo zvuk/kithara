@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_platform::sync::Arc;
-use symphonia::core::io::MediaSource;
+use symphonia_core::io::MediaSource;
 
 /// Adapter that wraps a Read + Seek source as a Symphonia [`MediaSource`].
 pub(crate) struct ReadSeekAdapter<R> {
@@ -35,12 +35,10 @@ impl<R: Seek> ReadSeekAdapter<R> {
         shared_handle: Option<Arc<AtomicU64>>,
         seek_enabled: bool,
     ) -> Self {
-        let has_shared_value = shared_handle
-            .as_ref()
-            .is_some_and(|h| h.load(Ordering::Acquire) > 0);
+        let has_shared_handle = shared_handle.is_some();
         let byte_len = shared_handle.unwrap_or_else(|| Arc::new(AtomicU64::new(0)));
         let seek_enabled = Arc::new(AtomicBool::new(seek_enabled));
-        if !has_shared_value && let Some(len) = Self::probe_byte_len(&mut inner) {
+        if !has_shared_handle && let Some(len) = Self::probe_byte_len(&mut inner) {
             byte_len.store(len, Ordering::Release);
         }
         let initial_pos = inner.stream_position().unwrap_or(0);
@@ -106,7 +104,7 @@ mod tests {
     use std::io::Cursor;
 
     use kithara_test_utils::kithara;
-    use symphonia::core::io::MediaSource;
+    use symphonia_core::io::MediaSource;
 
     use super::*;
 
@@ -135,5 +133,16 @@ mod tests {
 
         handle.store(2000, Ordering::Release);
         assert_eq!(adapter.byte_len(), Some(2000));
+    }
+
+    #[kithara::test]
+    fn published_unknown_length_stays_owned_by_the_stream() {
+        let length = Arc::new(AtomicU64::new(0));
+        let adapter =
+            ReadSeekAdapter::new(Cursor::new(vec![0u8; 1_000]), Some(length.clone()), false);
+        assert_eq!(adapter.byte_len(), None);
+        assert_eq!(length.load(Ordering::Acquire), 0);
+        length.store(2_000, Ordering::Release);
+        assert_eq!(adapter.byte_len(), Some(2_000));
     }
 }

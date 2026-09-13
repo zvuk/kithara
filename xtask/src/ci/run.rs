@@ -624,6 +624,12 @@ mod tests {
                 ),
                 (
                     "just",
+                    ["platform", "android", "clippy"]
+                        .map(str::to_owned)
+                        .to_vec()
+                ),
+                (
+                    "just",
                     vec![
                         "platform".to_owned(),
                         "android".to_owned(),

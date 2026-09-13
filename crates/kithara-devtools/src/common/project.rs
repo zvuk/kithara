@@ -575,6 +575,8 @@ pub struct TestLaneConfig {
     /// Environment the lane runs with, so what the lane exercises is named by
     /// the lane rather than by whatever the caller happened to export.
     pub env: BTreeMap<String, String>,
+    /// Backend profile used when the caller does not select one.
+    pub default_backend: Option<String>,
     pub default_flash: Option<bool>,
     /// Poll-blocking detector default for this lane, so two schedulers cannot
     /// run the same lane under different rules.

@@ -1,17 +1,13 @@
-use std::{collections::HashMap, sync::RwLock};
+use std::{collections::HashMap, io, sync::RwLock};
 
 use aes::Aes128;
 use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara::{
-    encode::{EncodeError, EncoderFactory},
-    platform::sync::Arc,
-    stream::MediaInfo,
-};
+use kithara::{platform::sync::Arc, stream::MediaInfo};
 use kithara_test_fixtures::{
-    hls_fixtures::{load_header, load_pcm, load_variant, load_wav},
+    hls_fixtures::{frame_samples, load_header, load_pcm, load_variant, load_wav},
     signal::{SweepMode, Wave},
     variant_input::VariantInput,
 };
@@ -270,24 +266,24 @@ fn packaged_frame_layout(
     )
 }
 
-fn packaged_segment_frames(packaged: &ResolvedPackagedAudioSpec) -> Result<usize, EncodeError> {
+fn packaged_segment_frames(packaged: &ResolvedPackagedAudioSpec) -> io::Result<usize> {
     let requested_segment_frames =
         (packaged.segment_duration_secs * f64::from(packaged.sample_rate)).round() as usize;
     let frame_quantum = packaged
         .variants
         .iter()
         .try_fold(1usize, |common, variant| {
-            let frame_samples = EncoderFactory::frame_samples(variant.codec)?;
+            let frame_samples = frame_samples(variant.codec)?;
             least_common_multiple(common, frame_samples)
         })?;
     packaged_content_frames(requested_segment_frames, frame_quantum, 1)
-        .ok_or_else(|| EncodeError::InvalidInput("packaged frame alignment overflow".to_owned()))
+        .ok_or_else(|| io::Error::other("packaged frame alignment overflow"))
 }
 
-fn least_common_multiple(lhs: usize, rhs: usize) -> Result<usize, EncodeError> {
+fn least_common_multiple(lhs: usize, rhs: usize) -> io::Result<usize> {
     lhs.checked_div(greatest_common_divisor(lhs, rhs))
         .and_then(|reduced| reduced.checked_mul(rhs))
-        .ok_or_else(|| EncodeError::InvalidInput("packaged frame alignment overflow".to_owned()))
+        .ok_or_else(|| io::Error::other("packaged frame alignment overflow"))
 }
 
 fn greatest_common_divisor(mut lhs: usize, mut rhs: usize) -> usize {
@@ -304,7 +300,7 @@ fn load_packaged_variant(
     variant: &ResolvedPackagedVariant,
     segment_frames: usize,
 ) -> Result<PackagedVariantData, HlsSpecError> {
-    let frame_samples = EncoderFactory::frame_samples(variant.codec)
+    let frame_samples = frame_samples(variant.codec)
         .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
     let (nominal_content_frames, packets_per_segment, content_frames, aligned_trailing_delay) =
         packaged_frame_layout(packaged, frame_samples, segment_frames);

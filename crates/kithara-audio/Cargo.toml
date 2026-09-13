@@ -81,9 +81,9 @@ web-sys = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-kithara-audio = { path = ".", default-features = false, features = ["mock", "probe", "symphonia"] }
+kithara-audio = { path = ".", default-features = false, features = ["mock", "probe"] }
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia"] }
+kithara-decode = { workspace = true, features = ["mock", "probe"] }
 kithara-storage = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
@@ -104,14 +104,16 @@ wasm-bindgen-test = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
-kithara-net = { workspace = true, default-features = false, features = [
-    "client-reqwest",
-    "tls-rustls",
-] }
+kithara-net = { workspace = true, default-features = false }
 
 axum = { workspace = true }
 hotpath = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
+kithara-audio = { path = ".", default-features = false, features = ["symphonia"] }
+kithara-decode = { workspace = true, features = ["symphonia"] }
+kithara-net = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 
 [lints]
 workspace = true

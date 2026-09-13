@@ -62,7 +62,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-decode = { workspace = true, features = ["symphonia"] }
+kithara-decode = { workspace = true, features = [] }
 kithara-events = { workspace = true }
 kithara-resampler = { workspace = true, features = ["resample-rubato"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
@@ -73,6 +73,9 @@ unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 serde_yaml_ng = { workspace = true }
+
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
+kithara-decode = { workspace = true, features = ["symphonia"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }

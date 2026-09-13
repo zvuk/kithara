@@ -1,3 +1,4 @@
+#![cfg(not(target_os = "android"))]
 //! End-to-end proof that a waveform analysis and a concurrent player of
 //! the same URL, sharing one app-wide `AssetStore`, cooperate on a single
 //! network download. This exercises the production

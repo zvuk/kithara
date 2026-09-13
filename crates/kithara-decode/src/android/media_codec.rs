@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use std::{num::NonZeroU32, ptr::NonNull};
+use std::ptr::NonNull;
 
 use kithara_signal::AudioSpec;
 
@@ -39,6 +39,8 @@ impl InputBuffer {
 
 pub(crate) struct OutputBuffer {
     pub(crate) index: usize,
+    pub(crate) presentation_time_us: i64,
+    pub(crate) end_of_stream: bool,
     ptr: NonNull<u8>,
     len: usize,
 }
@@ -83,13 +85,12 @@ pub(crate) struct OwnedCodec {
 unsafe impl Send for OwnedCodec {}
 
 impl OwnedCodec {
-    /// Create + configure + start an `AMediaCodec` from a freshly built
-    /// `AMediaFormat`. Bypasses `AMediaExtractor` — used by the
-    /// codec-only path (`crate::codec::android::AndroidCodec`).
-    pub(crate) fn create_with_format(
-        mime: &std::ffi::CStr,
-        format: &OwnedFormat,
-    ) -> Result<Self, AndroidBackendError> {
+    /// Select and start a decoder using the input MIME and parameters in
+    /// the track format, whether extracted by Android or built by the demuxer.
+    pub(crate) fn create_with_format(format: &OwnedFormat) -> Result<Self, AndroidBackendError> {
+        let mime = format.get_str(ffi::KEY_MIME).ok_or_else(|| {
+            AndroidBackendError::operation("codec-create-decoder", "track format has no MIME")
+        })?;
         // SAFETY: `mime` is a NUL-terminated C string.
         let codec_raw =
             NonNull::new(unsafe { ffi::AMediaCodec_createDecoderByType(mime.as_ptr()) })
@@ -192,7 +193,7 @@ impl OwnedCodec {
             return Ok(DequeueOutput::TryAgainLater);
         }
         if index == ffi::MEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
-            let format = load_output_format(self)?;
+            let format = OutputFormat::read(&self.output_format()?)?;
             return Ok(DequeueOutput::OutputFormatChanged(format));
         }
         let index = usize::try_from(index).map_err(|_| {
@@ -238,6 +239,8 @@ impl OwnedCodec {
 
         Ok(DequeueOutput::Output(OutputBuffer {
             index,
+            presentation_time_us: info.presentation_time_us,
+            end_of_stream: info.flags & ffi::MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM != 0,
             // SAFETY: `offset` is within the `size` bytes `data` points at.
             ptr: NonNull::new(unsafe { data.as_ptr().add(offset) }).ok_or_else(|| {
                 AndroidBackendError::operation(
@@ -338,26 +341,28 @@ impl Drop for OwnedCodec {
     }
 }
 
-fn load_output_format(codec: &OwnedCodec) -> Result<OutputFormat, AndroidBackendError> {
-    let output = codec.output_format()?;
-    let sample_rate = output.get_u32(KEY_SAMPLE_RATE)?.ok_or_else(|| {
-        AndroidBackendError::operation("codec-output-format", "missing sample-rate")
-    })?;
-    let channels = output.get_u16(KEY_CHANNEL_COUNT)?.ok_or_else(|| {
-        AndroidBackendError::operation("codec-output-format", "missing channel-count")
-    })?;
-    let pcm_encoding = match output.get_i32(KEY_PCM_ENCODING) {
-        None | Some(PCM_ENCODING_16BIT) => AndroidPcmEncoding::Pcm16,
-        Some(PCM_ENCODING_FLOAT) => AndroidPcmEncoding::Float,
-        Some(other) => return Err(AndroidBackendError::UnsupportedPcmEncoding { encoding: other }),
-    };
+impl OutputFormat {
+    pub(crate) fn read(output: &OwnedFormat) -> Result<Self, AndroidBackendError> {
+        let sample_rate = output.get_u32(KEY_SAMPLE_RATE)?.ok_or_else(|| {
+            AndroidBackendError::operation("codec-output-format", "missing sample-rate")
+        })?;
+        let channels = output.get_u16(KEY_CHANNEL_COUNT)?.ok_or_else(|| {
+            AndroidBackendError::operation("codec-output-format", "missing channel-count")
+        })?;
+        let pcm_encoding = match output.get_i32(KEY_PCM_ENCODING) {
+            None | Some(PCM_ENCODING_16BIT) => AndroidPcmEncoding::Pcm16,
+            Some(PCM_ENCODING_FLOAT) => AndroidPcmEncoding::Float,
+            Some(other) => {
+                return Err(AndroidBackendError::UnsupportedPcmEncoding { encoding: other });
+            }
+        };
 
-    let nz_rate = NonZeroU32::new(sample_rate)
-        .ok_or_else(|| AndroidBackendError::operation("codec-output-format", "zero sample-rate"))?;
-    Ok(OutputFormat {
-        pcm_encoding,
-        spec: AudioSpec::new(channels, nz_rate),
-    })
+        let spec = crate::types::checked_audio_spec(channels, sample_rate, "android.codec.output")
+            .map_err(|error| {
+                AndroidBackendError::operation("codec-output-format", error.to_string())
+            })?;
+        Ok(Self { pcm_encoding, spec })
+    }
 }
 
 #[cfg(test)]

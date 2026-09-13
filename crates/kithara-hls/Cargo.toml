@@ -82,11 +82,7 @@ hotpath = { workspace = true, optional = true }
 kithara-abr = { workspace = true, default-features = false, features = ["mock"] }
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-hls = { path = ".", default-features = false, features = ["probe"] }
-kithara-net = { workspace = true, default-features = false, features = [
-    "probe",
-    "client-reqwest",
-    "tls-rustls",
-] }
+kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true, features = ["tokio-net"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
@@ -101,6 +97,13 @@ wasm-bindgen-test = { workspace = true }
 axum = { workspace = true }
 serde_yaml_ng = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
+kithara-net = { workspace = true, default-features = false, features = [
+    "probe",
+    "client-reqwest",
+    "tls-rustls",
+] }
 
 [lints]
 workspace = true

@@ -160,12 +160,13 @@ mod document_tests {
     /// resamples through is not one of its keys.
     #[kithara::test(native, flash(false))]
     fn the_decoder_section_names_the_backend_and_the_gapless_mode() {
-        let patch: AudioConfigPatch = serde_yaml_ng::from_str(
-            "decoder:\n  backend: symphonia\n  gapless_mode:\n    mode: disabled\n",
-        )
+        let backend = DecoderBackend::default();
+        let patch: AudioConfigPatch = serde_yaml_ng::from_str(&format!(
+            "decoder:\n  backend: {backend}\n  gapless_mode:\n    mode: disabled\n",
+        ))
         .expect("the document types");
 
-        assert_eq!(patch.decoder.backend, Some(DecoderBackend::Symphonia));
+        assert_eq!(patch.decoder.backend, Some(backend));
         assert_eq!(patch.decoder.gapless_mode, Some(GaplessMode::Disabled));
     }
 

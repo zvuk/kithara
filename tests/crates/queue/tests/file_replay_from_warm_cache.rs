@@ -107,7 +107,7 @@ fn track_source(url: &Url, session: &Session) -> TrackSource<TestPools> {
         .store(session.store.clone())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
-                .backend(DecoderBackend::Symphonia)
+                .backend(DecoderBackend::default())
                 .build(),
         )
         .initial_abr_mode(AbrMode::Auto(None))

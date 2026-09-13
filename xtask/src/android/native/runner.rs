@@ -172,8 +172,7 @@ fn listed(path: &Path, invoke: &mut dyn FnMut() -> Result<Vec<u8>>) -> Result<Ve
     Ok(output)
 }
 
-/// `slow-timeout` kills the runner outright, so a cache file becomes visible
-/// only once it holds every byte a later process will read back.
+/// Publish only complete JSON so cancellation cannot expose a partial cache file.
 fn store(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -202,9 +201,13 @@ fn resolve(
     } else {
         report::Report::default()
     };
-    if !report.tests.contains_key(test) && !report.finished {
+    while !report.tests.contains_key(test) && !report.finished {
+        let reported = report.tests.len();
         report = extend(report, invoke)?;
         store(path, &serde_json::to_vec(&report)?)?;
+        if !report.finished && report.tests.len() == reported {
+            bail!("device batch made no progress toward a verdict for {test}");
+        }
     }
     let Some(outcome) = report.tests.get(test) else {
         bail!("no device invocation reported a verdict for {test}");
@@ -334,7 +337,8 @@ fn invoke(
         arguments.extend_from_slice(args);
         let mut environment = session.environment.clone();
         for (name, value) in std::env::vars() {
-            if name.starts_with("NEXTEST_")
+            if (name.starts_with("NEXTEST_")
+                && !matches!(name.as_str(), "NEXTEST_TEST_NAME" | "NEXTEST_ATTEMPT_ID"))
                 || matches!(name.as_str(), "RUST_BACKTRACE" | "RUST_LOG")
             {
                 environment.insert(name, value);
@@ -370,7 +374,7 @@ fn invoke(
             .map(|folded| folded.log);
         if let Some(libtest) = &libtest {
             fs::write(evidence.join("libtest.log"), libtest)?;
-        } else if code == 0 {
+        } else {
             bail!("{} left no device log at {remote}", binary.display());
         }
         Ok(Invocation {
@@ -379,6 +383,7 @@ fn invoke(
             response,
         })
     })();
+    let invocation = invocation.or_else(|error| recover(session, &evidence, &remote, error));
     let cleanup = session.shell_raw(
         &cleanup_command(&session.package, &remote),
         None,
@@ -393,6 +398,27 @@ fn invoke(
         );
     }
     Ok(invocation)
+}
+
+fn recover(
+    session: &Session,
+    evidence: &Path,
+    remote: &str,
+    error: anyhow::Error,
+) -> Result<Invocation> {
+    fs::write(evidence.join("interruption.txt"), format!("{error:#}"))?;
+    session.stop()?;
+    let output = session.control(&["run-as", &session.package, "cat", remote], None)?;
+    let log = String::from_utf8_lossy(&output.stdout);
+    if report::parse(&log).in_flight.is_none() {
+        return Err(error);
+    }
+    fs::write(evidence.join("libtest.log"), &output.stdout)?;
+    Ok(Invocation {
+        code: 1,
+        libtest: Some(output.stdout),
+        response: output.stderr,
+    })
 }
 
 fn exit_code(output: &str, shell_success: bool) -> i32 {
@@ -424,6 +450,63 @@ mod tests {
     use std::cell::{Cell, RefCell};
 
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn an_interrupted_batch_keeps_completed_verdicts_and_fails_its_running_test() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let adb = dir.path().join("adb");
+        let trace = dir.path().join("commands");
+        let log = dir.path().join("remote.log");
+        fs::write(&log, INTERRUPTED).unwrap();
+        fs::write(
+            &adb,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$4\" >> {}\ncase \"$4\" in *\"'cat'\"*) {};; esac\n",
+                shell_command(&[trace.to_str().unwrap()]),
+                shell_command(&["cat", log.to_str().unwrap()]),
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&adb, fs::Permissions::from_mode(0o755)).unwrap();
+        let session = Session {
+            adb,
+            serial: "test-device".into(),
+            package: "test.package".into(),
+            directory: String::new(),
+            evidence: dir.path().to_owned(),
+            environment: BTreeMap::new(),
+            binaries: BTreeMap::new(),
+        };
+        let recovered = recover(
+            &session,
+            dir.path(),
+            "/remote.log",
+            anyhow::anyhow!("batch deadline"),
+        )
+        .unwrap();
+        let commands = fs::read_to_string(trace).unwrap();
+        assert!(commands.find("force-stop").unwrap() < commands.find("cat").unwrap());
+        let output = String::from_utf8(recovered.libtest.unwrap()).unwrap();
+        let path = dir.path().join("report.json");
+        let calls = Cell::new(0);
+        assert_eq!(
+            resolved(&path, "aaa_quick", &calls, &output).unwrap().code,
+            0
+        );
+        assert_eq!(
+            resolved(&path, "bbb_slow", &calls, &output).unwrap().code,
+            1
+        );
+        assert_eq!(calls.get(), 1);
+        assert!(
+            fs::read_to_string(dir.path().join("interruption.txt"))
+                .unwrap()
+                .contains("batch deadline")
+        );
+    }
 
     #[test]
     fn a_crashed_libtest_is_not_adb_shell_success() {
@@ -504,6 +587,17 @@ mod tests {
         assert_eq!(calls.get(), 1);
     }
 
+    #[test]
+    fn a_batch_without_test_progress_is_not_restarted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reports/binary.json");
+        let calls = Cell::new(0);
+        let error = resolved(&path, "missing", &calls, "startup failed").unwrap_err();
+
+        assert!(error.to_string().contains("missing"));
+        assert_eq!(calls.get(), 1);
+    }
+
     /// libtest exits 101 on any failure, so the instrumentation reports a
     /// crashed process for every binary holding one.
     #[test]
@@ -539,8 +633,8 @@ mod tests {
             })
         };
 
-        let flight = resolve(&path, "bbb_slow", &mut device).unwrap();
         let remainder = resolve(&path, "ccc_quick", &mut device).unwrap();
+        let flight = resolve(&path, "bbb_slow", &mut device).unwrap();
 
         assert_eq!(flight.code, 1);
         assert_eq!(remainder.code, 0);

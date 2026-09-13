@@ -17,7 +17,6 @@ mod xcresult;
 
 pub(crate) use build_cache::{TARGET_SLOT_CACHE_NAMESPACE, hold_target_lease};
 pub(crate) use command::{CiArgs, is_standalone, run, run_standalone};
-pub(crate) use config::{CiPins, PINS_PATH};
 pub(crate) use topology::{
     LINUX_LINKER_ENV, SCCACHE_SLOT_CACHE_NAMESPACE, SCCACHE_SLOT_CONTROL_NAMESPACE,
 };

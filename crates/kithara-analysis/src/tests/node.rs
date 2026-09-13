@@ -40,8 +40,10 @@ use num_traits::cast::ToPrimitive;
 #[cfg(feature = "analysis-beat")]
 use unimock::{MockFn, Unimock, matching};
 
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+use super::super::beat::BeatDetector;
 #[cfg(feature = "analysis-beat")]
-use super::super::beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats};
+use super::super::beat::{BeatDetectorMock, BeatMark, GridParams, RawBeats};
 #[cfg(feature = "analysis-waveform")]
 use super::fixtures::CH;
 #[cfg(feature = "analysis-beat")]
@@ -63,6 +65,8 @@ use crate::blob::to_bytes;
 use crate::coverage::FrameRange;
 #[cfg(feature = "analysis-waveform")]
 use crate::producer::{AnalysisProducer, ring};
+#[cfg(all(feature = "analysis-beat", not(feature = "analysis-waveform")))]
+use crate::test_pools::pools;
 #[cfg(feature = "analysis-waveform")]
 use crate::waveform::{AnalysisParams, WaveformAnalyzer};
 #[cfg(not(feature = "analysis-waveform"))]
@@ -205,6 +209,7 @@ fn enqueue(
     results
 }
 
+#[cfg(feature = "analysis-waveform")]
 fn latest_analysis(results: &watch::Receiver<Option<AnalysisProgress>>) -> Option<TrackAnalysis> {
     results
         .borrow()

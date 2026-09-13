@@ -1,29 +1,31 @@
-//! Symphonia codec + demuxer surface.
-//!
-//! `SymphoniaCodec` (`FrameCodec` impl over `Box<dyn AudioDecoder>`) and
-//! `SymphoniaDemuxer` (`Demuxer` impl over `Box<dyn FormatReader>`) are the
-//! pieces that pair with `ComposedDecoder` for software-decoded audio
-//! formats (MP3, native FLAC, OGG/Opus/Vorbis, WAV/AIFF, MKV, ADTS,
-//! file-fmp4). Bootstrap helpers — `adapter::ReadSeekAdapter` (`Read+Seek ->
-//! MediaSource` bridge), `probe::{new_direct, probe_with_seek}`, and
-//! `echain` (error-chain inspection) — back both.
+//! Format-reader adapters shared by software decoding and Android MPEG audio.
+//! Android uses the in-tree MPEG demuxer with `MediaCodec`; codec registration
+//! and general container probing require the `symphonia` software backend.
 
 #[cfg(feature = "fdk-aac")]
 pub(crate) mod aac_fdk;
 pub(crate) mod adapter;
+#[cfg(feature = "symphonia")]
 pub(crate) mod codec;
+#[cfg(feature = "symphonia")]
 pub(crate) mod config;
 pub(crate) mod demuxer;
 pub(crate) mod echain;
-#[cfg(test)]
+#[cfg(all(test, feature = "symphonia"))]
 mod mp4_tests;
+#[cfg(feature = "symphonia")]
 pub(crate) mod probe;
+#[cfg(feature = "symphonia")]
 pub(crate) mod registry;
-#[cfg(test)]
+#[cfg(all(test, feature = "symphonia"))]
 mod tests;
 
+#[cfg(feature = "symphonia")]
 pub(crate) use codec::SymphoniaCodec;
+#[cfg(feature = "symphonia")]
 pub(crate) use config::SymphoniaConfig;
-pub(crate) use demuxer::{FileOpen, SymphoniaDemuxer};
+#[cfg(feature = "symphonia")]
+pub(crate) use demuxer::FileOpen;
+pub(crate) use demuxer::SymphoniaDemuxer;
 
 mod packets;

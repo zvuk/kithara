@@ -24,7 +24,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_test_fixtures::hls_fixtures::{hls_pcm_thirty, hls_stream_header};
+use kithara_test_fixtures::hls_fixtures::{hls_header_thirty, hls_pcm_thirty};
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -44,8 +44,8 @@ impl Consts {
 /// is accumulated for buffer level tracking, which is required for up-switch
 /// decisions (`min_buffer_for_up_switch_secs` check).
 #[kithara::fixture]
-async fn audio_server(hls_stream_header: Vec<u8>, hls_pcm_thirty: Vec<u8>) -> HlsTestServer {
-    let init_segment = Arc::new(hls_stream_header);
+async fn audio_server(hls_header_thirty: Vec<u8>, hls_pcm_thirty: Vec<u8>) -> HlsTestServer {
+    let init_segment = Arc::new(hls_header_thirty);
     let pcm_data = Arc::new(hls_pcm_thirty);
 
     let segment_duration = Consts::D.segment_size as f64

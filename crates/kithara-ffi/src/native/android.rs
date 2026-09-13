@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use jni::{
-    Env, JNIEnv,
+    Env, EnvUnowned,
     objects::{Global, JClass, JObject},
     strings::JNIString,
     sys::jint,
@@ -26,7 +26,7 @@ mod android_context {
 )]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
-    mut env: JNIEnv<'_>,
+    mut env: EnvUnowned<'_>,
     _class: JClass<'_>,
     context: JObject<'_>,
     log_level: jint,
@@ -62,8 +62,7 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
     }
 
     let _ = env.with_env_no_catch(|env| -> Result<(), jni::errors::Error> {
-        let result =
-            unsafe { rustls_android::init_with_env(env, JObject::from_raw(env, context.as_raw())) };
+        let result = rustls_android::init_with_env(env, context);
         if let Err(err) = result {
             let message = format!("failed to initialize rustls platform verifier: {err}");
             error!(message = %message);
@@ -104,7 +103,8 @@ fn init_android_context(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), 
         return Err("failed to store android context global ref".into());
     };
 
-    // SAFETY:
+    // SAFETY: Kotlin serializes nativeInit, and READY prevents repeat initialization.
+    // The JVM pointer is live, and GLOBAL retains the application context for its lifetime.
     unsafe {
         ndk_context::initialize_android_context(
             java_vm.get_raw().cast(),

@@ -108,9 +108,12 @@ fn measure_leading_silence(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(1)
 )]
-#[case::symphonia_default(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S, saw().await)]
-#[case::symphonia_320k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_320K, saw_320k().await)]
-#[case::symphonia_64k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_64K, saw_64k().await)]
+#[cfg_attr(not(target_os = "android"), case::symphonia_default(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S, saw().await))]
+#[cfg_attr(target_os = "android", case::android_default(DecoderBackend::default(), SignalAsset::MP3_SAW_2S, saw().await))]
+#[cfg_attr(not(target_os = "android"), case::symphonia_320k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_320K, saw_320k().await))]
+#[cfg_attr(target_os = "android", case::android_320k(DecoderBackend::default(), SignalAsset::MP3_SAW_2S_320K, saw_320k().await))]
+#[cfg_attr(not(target_os = "android"), case::symphonia_64k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_64K, saw_64k().await))]
+#[cfg_attr(target_os = "android", case::android_64k(DecoderBackend::default(), SignalAsset::MP3_SAW_2S_64K, saw_64k().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple_default(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S, saw().await),
@@ -151,7 +154,8 @@ async fn mp3_raw_decoder_shift_vs_reference(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(1)
 )]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)

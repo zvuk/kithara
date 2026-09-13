@@ -20,7 +20,7 @@ flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["assets", "audio", "bufpool", "decode", "file", "platform", "play", "probe", "record", "resample-rubato", "resampler", "signal", "stream", "stretch-signalsmith", "symphonia", "test-utils", "warp"] }
+kithara = { workspace = true, default-features = false, features = ["assets", "audio", "bufpool", "decode", "file", "platform", "play", "probe", "resample-rubato", "resampler", "signal", "stream", "stretch-signalsmith", "test-utils", "warp"] }
 kithara-integration-tests = { workspace = true, default-features = false, features = ["audio"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
@@ -40,6 +40,9 @@ kithara = { workspace = true, default-features = false, features = ["stretch-bun
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 kithara = { workspace = true, features = ["apple", "client-wreq"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+kithara = { workspace = true, features = ["record", "symphonia"] }
 
 [lints]
 workspace = true

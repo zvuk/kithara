@@ -40,6 +40,12 @@ pub fn audio_wav_264600() -> &'static [u8] {
 
 #[kithara::fixture]
 #[must_use]
+pub fn audio_wav_1323000() -> &'static [u8] {
+    assets::audio_wav_frames_1323000().bytes()
+}
+
+#[kithara::fixture]
+#[must_use]
 pub fn encoder_saw_aac() -> Pcm {
     Pcm::from((48_000, 2, assets::encoder_saw_aac().bytes().to_vec()))
 }

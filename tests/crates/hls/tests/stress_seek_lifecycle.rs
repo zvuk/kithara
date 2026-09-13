@@ -18,7 +18,7 @@ use kithara_integration_tests::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
-    hls_pcm_forty, hls_pcm_forty_descending, hls_pcm_forty_shifted, hls_stream_header,
+    hls_header_forty, hls_pcm_forty, hls_pcm_forty_descending, hls_pcm_forty_shifted,
 };
 use kithara_test_fixtures::signal::{self, SignalDirection as Direction, detect_direction};
 use tracing::{info, warn};
@@ -92,12 +92,12 @@ fn freeze_active_variant(abr: &AbrHandle) -> usize {
 /// and full-track integrity verification after seek-to-zero.
 #[kithara::fixture]
 async fn audio_server(
-    hls_stream_header: Vec<u8>,
+    hls_header_forty: Vec<u8>,
     hls_pcm_forty: Vec<u8>,
     hls_pcm_forty_descending: Vec<u8>,
     hls_pcm_forty_shifted: Vec<u8>,
 ) -> HlsTestServer {
-    let init_segment = Arc::new(hls_stream_header);
+    let init_segment = Arc::new(hls_header_forty);
     let v0_pcm = Arc::new(hls_pcm_forty);
     let v1_pcm = Arc::new(hls_pcm_forty_descending);
     let v2_pcm = Arc::new(hls_pcm_forty_shifted);

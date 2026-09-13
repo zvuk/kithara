@@ -462,7 +462,7 @@ fn decoder_backend() -> kithara_decode::DecoderBackend {
     }
     #[cfg(not(all(feature = "apple", any(target_os = "macos", target_os = "ios"))))]
     {
-        kithara_decode::DecoderBackend::Symphonia
+        kithara_decode::DecoderBackend::default()
     }
 }
 

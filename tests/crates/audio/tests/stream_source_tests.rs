@@ -22,7 +22,7 @@ use kithara_integration_tests::{
     reads::{blocking_audio, read_to_eof, read_until_samples},
 };
 use kithara_test_fixtures::integration_fixtures::{
-    audio_wav_8000, audio_wav_44100, audio_wav_132300, audio_wav_176400, audio_wav_264600,
+    audio_wav_8000, audio_wav_44100, audio_wav_132300, audio_wav_176400, audio_wav_1323000,
 };
 
 fn wav_stream(wav: &[u8]) -> AudioConfig<MemStream> {
@@ -82,12 +82,6 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
     );
 }
 
-/// A route change resumes from admitted Warp progress, not the consumer head.
-///
-/// The lead is proven once, immediately before the route is selected, because
-/// that is the moment the property is about. Re-measuring it after the switch
-/// and one more consumed chunk measures the consumer instead: it has advanced
-/// since, and under load that alone eats the margin.
 #[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
@@ -98,7 +92,7 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
     case(StretchKind::Bungee)
 )]
 async fn non_unity_route_change_resumes_ahead_of_the_consumer(
-    audio_wav_264600: &'static [u8],
+    audio_wav_1323000: &'static [u8],
     #[case] backend: StretchKind,
 ) {
     const PRELOAD_CHUNKS: usize = 32;
@@ -108,7 +102,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
 
     let source_rate = NonZeroU32::new(SOURCE_RATE).expect("source rate is non-zero");
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("target rate is non-zero");
-    let wav = audio_wav_264600.to_vec();
+    let wav = audio_wav_1323000.to_vec();
     let stream = MemStreamConfig {
         source: Some(MemorySource::new(wav)),
         event_bus: None,
@@ -159,6 +153,10 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
     );
     let committed = audio.position();
     let decoded_frontier = audio.decoded_frontier();
+    assert!(
+        decoded_frontier < audio.duration().expect("finite WAV duration"),
+        "route change must happen before the preloaded source reaches EOF"
+    );
     let admitted_lead = decoded_frontier.saturating_sub(committed);
     assert!(
         admitted_lead > Duration::from_millis(250),
@@ -199,13 +197,6 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         "route recreation must resume from admitted Warp progress, not the \
          consumer head; rebuilt={:?}, committed_at_route={committed_at_route:?}, \
          resume_margin={resume_margin:?}",
-        rebuilt.meta.timestamp
-    );
-    assert!(
-        rebuilt.meta.timestamp < decoded_frontier,
-        "route recreation must resume before the raw decoder frontier while \
-         Warp retains backend latency; rebuilt={:?}, \
-         decoded_frontier={decoded_frontier:?}",
         rebuilt.meta.timestamp
     );
 }

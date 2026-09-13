@@ -18,6 +18,15 @@ fn hls_stream_header() -> Vec<u8> {
     signal::header(44_100, 2, None)
 }
 
+#[kithara::asset(ext = "bin", content_type = "application/octet-stream", embed)]
+#[case::boundary(8 * 32_768)]
+#[case::thirty(30 * 200_000)]
+#[case::forty(40 * 200_000)]
+#[case::fifty(50 * 200_000)]
+fn hls_finite_header(data_bytes: usize) -> Vec<u8> {
+    signal::header(44_100, 2, Some(data_bytes))
+}
+
 #[kithara::asset(ext = "pcm", content_type = "application/octet-stream")]
 #[case::boundary(8 * 32_768 / 4, Wave::Sawtooth)]
 #[case::thirty(30 * 200_000 / 4, Wave::Sawtooth)]

@@ -26,11 +26,14 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-encode = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
+kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Runtime fixture producers use the same FFmpeg backend as build-time generation.
-kithara-encode = { workspace = true, default-features = false, features = ["client-reqwest", "ffmpeg", "tls-rustls"] }
+kithara-encode = { workspace = true, default-features = false }
 # `AudioCodec` for the fMP4 sample entries.
-kithara-stream = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
+kithara-stream = { workspace = true, default-features = false }
 
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
@@ -75,7 +78,7 @@ toml = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-kithara-analysis = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }
+kithara-analysis = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 # The backend features are what lets `cargo test -p kithara-test-fixtures` stand on
@@ -89,6 +92,9 @@ tempfile = { workspace = true }
 tiny_http = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true }
+
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
+kithara-analysis = { workspace = true, features = ["symphonia"] }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]
 kithara-test-dylib = { workspace = true }

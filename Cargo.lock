@@ -5459,6 +5459,7 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-devtools",
+ "kithara-encode",
  "kithara-events",
  "kithara-test-dylib",
  "kithara-test-fixtures",
@@ -5892,7 +5893,6 @@ name = "kithara-test-dylib"
 version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
- "kithara-app",
  "kithara-integration-tests",
  "kithara-test-fixtures",
  "kithara-test-utils",

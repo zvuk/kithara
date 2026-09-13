@@ -338,7 +338,14 @@ fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-#[case::mp3_symphonia(local_mp3_sine440_60_s_320_k(), DecoderBackend::Symphonia)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::mp3_symphonia(local_mp3_sine440_60_s_320_k(), DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::mp3_android(local_mp3_sine440_60_s_320_k(), DecoderBackend::default())
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::mp3_apple(local_mp3_sine440_60_s_320_k(), DecoderBackend::Apple)
@@ -618,7 +625,7 @@ async fn dump_aac_for_listening(
         "04_decoded_mp3.wav",
         "05_decoded_flac.wav",
     ]) {
-        let pcm = decode_pcm_seconds(asset, DecoderBackend::Symphonia, secs).await;
+        let pcm = decode_pcm_seconds(asset, DecoderBackend::default(), secs).await;
         let mono: Vec<f32> = (0..pcm.len() / chan).map(|f| pcm[f * chan]).collect();
         write_wav_mono_f32(
             &dump_dir.join(name),
@@ -688,7 +695,7 @@ async fn bit_rate_e2e_does_not_hang(#[case] source: ServedSignal) {
     let audio_config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
-                .backend(DecoderBackend::Symphonia)
+                .backend(DecoderBackend::default())
                 .build(),
         )
         .maybe_hint(Some(asset.ext().to_owned()))
@@ -748,41 +755,56 @@ async fn run_codec_compare(asset_a: ServedSignal, asset_b: ServedSignal, backend
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-#[case::mp3_vs_wav_symphonia(
+#[cfg_attr(not(target_os = "android"), case::mp3_vs_wav_symphonia(
     signal_mp3_sine440_60_s().await,
     signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
-)]
-#[case::aac_vs_wav_symphonia(
+))]
+#[cfg_attr(not(target_os = "android"), case::aac_vs_wav_symphonia(
     signal_aac_sine440_60_s().await,
     signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
-)]
-#[case::m4a_vs_wav_symphonia(
+))]
+#[cfg_attr(not(target_os = "android"), case::m4a_vs_wav_symphonia(
     signal_m4_a_sine440_60_s().await,
     signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
-)]
-#[case::flac_vs_wav_symphonia(
+))]
+#[cfg_attr(not(target_os = "android"), case::flac_vs_wav_symphonia(
     signal_flac_sine440_60_s().await,
     signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
-)]
-#[case::aac_320k_vs_wav_symphonia(
+))]
+#[cfg_attr(not(target_os = "android"), case::aac_320k_vs_wav_symphonia(
     signal_aac_sine440_60_s_320_k().await,
     signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
-)]
-#[case::m4a_320k_vs_wav_symphonia(
+))]
+#[cfg_attr(target_os = "android", case::aac_320k_vs_wav_symphonia_product_android(
+    signal_aac_sine440_60_s_320_k().await,
+    signal_wav_sine440_60_s().await,
+    DecoderBackend::default()
+))]
+#[cfg_attr(not(target_os = "android"), case::m4a_320k_vs_wav_symphonia(
     signal_m4_a_sine440_60_s_320_k().await,
     signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
-)]
-#[case::mp3_320k_vs_wav_symphonia(
+))]
+#[cfg_attr(target_os = "android", case::m4a_320k_vs_wav_symphonia_product_android(
+    signal_m4_a_sine440_60_s_320_k().await,
+    signal_wav_sine440_60_s().await,
+    DecoderBackend::default()
+))]
+#[cfg_attr(not(target_os = "android"), case::mp3_320k_vs_wav_symphonia(
     signal_mp3_sine440_60_s_320_k().await,
     signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
-)]
+))]
+#[cfg_attr(target_os = "android", case::mp3_320k_vs_wav_symphonia_product_android(
+    signal_mp3_sine440_60_s_320_k().await,
+    signal_wav_sine440_60_s().await,
+    DecoderBackend::default()
+))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::mp3_vs_wav_apple(
@@ -900,18 +922,24 @@ async fn codec_distortion_profile(
     any(target_os = "macos", target_os = "ios"),
     case::mp3_apple_eph_10seek(signal_mp3_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 10)
 )]
-#[case::mp3_symphonia_eph_e2e(
+#[cfg_attr(not(target_os = "android"), case::mp3_symphonia_eph_e2e(
     signal_mp3_sine440_60_s_320_k().await,
     DecoderBackend::Symphonia,
     true,
     0
-)]
-#[case::mp3_symphonia_eph_10seek(
+))]
+#[cfg_attr(not(target_os = "android"), case::mp3_symphonia_eph_10seek(
     signal_mp3_sine440_60_s_320_k().await,
     DecoderBackend::Symphonia,
     true,
     10
-)]
+))]
+#[cfg_attr(target_os = "android", case::mp3_symphonia_eph_10seek_product_android(
+    signal_mp3_sine440_60_s_320_k().await,
+    DecoderBackend::default(),
+    true,
+    10
+))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::m4a_apple_eph_e2e(signal_m4_a_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 0)
@@ -920,27 +948,33 @@ async fn codec_distortion_profile(
     any(target_os = "macos", target_os = "ios"),
     case::m4a_apple_eph_10seek(signal_m4_a_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 10)
 )]
-#[case::m4a_symphonia_eph_e2e(
+#[cfg_attr(not(target_os = "android"), case::m4a_symphonia_eph_e2e(
     signal_m4_a_sine440_60_s_320_k().await,
     DecoderBackend::Symphonia,
     true,
     0
-)]
+))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::flac_apple_eph_e2e(signal_flac_sine440_60_s().await, DecoderBackend::Apple, true, 0)
 )]
-#[case::flac_symphonia_eph_e2e(signal_flac_sine440_60_s().await, DecoderBackend::Symphonia, true, 0)]
+#[cfg_attr(not(target_os = "android"), case::flac_symphonia_eph_e2e(signal_flac_sine440_60_s().await, DecoderBackend::Symphonia, true, 0))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_apple_eph_e2e(signal_aac_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 0)
 )]
-#[case::aac_symphonia_eph_e2e(
+#[cfg_attr(not(target_os = "android"), case::aac_symphonia_eph_e2e(
     signal_aac_sine440_60_s_320_k().await,
     DecoderBackend::Symphonia,
     true,
     0
-)]
+))]
+#[cfg_attr(target_os = "android", case::aac_symphonia_eph_e2e_product_android(
+    signal_aac_sine440_60_s_320_k().await,
+    DecoderBackend::default(),
+    true,
+    0
+))]
 #[cfg_attr(
     target_os = "android",
     case::mp3_android_eph_e2e(signal_mp3_sine440_60_s_320_k().await, DecoderBackend::Android, true, 0)
@@ -1062,7 +1096,11 @@ fn first_signal_window_phase(
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-#[case::aac_symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::aac_symphonia(DecoderBackend::Symphonia)
+)]
+#[cfg_attr(target_os = "android", case::aac_android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_apple(DecoderBackend::Apple)

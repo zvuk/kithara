@@ -378,9 +378,12 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
 //   - Apple is on for `target_os = "macos" | "ios"`,
 //   - Android is on for `target_os = "android"`.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[case::aac_lc_symphonia("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::Symphonia, aac_fragment().await)]
-#[case::aac_he_v2_symphonia("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::Symphonia, he_fragment().await)]
-#[case::flac_symphonia("flac_symphonia", AudioCodec::Flac, DecoderBackend::Symphonia, flac_fragment().await)]
+#[cfg_attr(not(target_os = "android"), case::aac_lc_symphonia("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::Symphonia, aac_fragment().await))]
+#[cfg_attr(target_os = "android", case::aac_lc_symphonia_product_android("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::default(), aac_fragment().await))]
+#[cfg_attr(not(target_os = "android"), case::aac_he_v2_symphonia("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::Symphonia, he_fragment().await))]
+#[cfg_attr(target_os = "android", case::aac_he_v2_symphonia_product_android("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::default(), he_fragment().await))]
+#[cfg_attr(not(target_os = "android"), case::flac_symphonia("flac_symphonia", AudioCodec::Flac, DecoderBackend::Symphonia, flac_fragment().await))]
+#[cfg_attr(target_os = "android", case::flac_symphonia_product_android("flac_symphonia", AudioCodec::Flac, DecoderBackend::default(), flac_fragment().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_lc_apple("aac_lc_apple", AudioCodec::AacLc, DecoderBackend::Apple, aac_fragment().await),

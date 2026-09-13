@@ -111,7 +111,7 @@ async fn startup_issues_no_eager_size_probe_storm(
         .media_info(fixture.media_info())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
-                .backend(DecoderBackend::Symphonia)
+                .backend(DecoderBackend::default())
                 .build(),
         )
         .block_on_underrun(true)

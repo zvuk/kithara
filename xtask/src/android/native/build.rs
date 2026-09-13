@@ -15,7 +15,7 @@ use kithara_devtools::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use super::{Prepared, deps, link, logged, runner::Session, sha256};
+use super::{Prepared, link, logged, runner::Session, sha256};
 use crate::{
     android::{android_sdk_root, device::Selected, ndk_prebuilt, ndk_root},
     child,
@@ -31,25 +31,6 @@ pub(super) fn prepare(
     evidence_dir: &Path,
     cancel: &child::Cancel,
 ) -> Result<Prepared> {
-    let lock_name = format!(
-        "kithara-native-device-{}.lock",
-        hex::encode(Sha256::digest(device.serial.as_bytes()))
-    );
-    let home =
-        PathBuf::from(env::var_os("HOME").context("HOME is required for Android device leases")?);
-    if !home.is_absolute() || !home.is_dir() {
-        bail!("HOME must be an existing absolute directory for Android device leases");
-    }
-    let locks = home.join(".cache/kithara/android-device-locks");
-    fs::create_dir_all(&locks)?;
-    let lock = fs::File::options()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(locks.join(lock_name))?;
-    let lease = FileLock::try_exclusive(lock)
-        .context("another native baseline owns this Android device")?;
     let evidence = evidence_dir.join("native");
     fs::create_dir_all(&evidence)?;
     let abi = child::output(
@@ -83,6 +64,7 @@ pub(super) fn prepare(
         .env_remove("FFMPEG_DIR")
         .env("RUSTFLAGS", "-C prefer-dynamic")
         .env("CARGO_TARGET_DIR", &cargo_target);
+    crate::android::composition::verify(root, target, &command, &evidence)?;
     logged(
         &mut command,
         &evidence.join("binaries.json"),
@@ -142,7 +124,6 @@ pub(super) fn prepare(
         cargo_target,
         environment,
         session,
-        _lease: lease,
         _cache_lease: cache_lease,
     })
 }
@@ -405,7 +386,6 @@ fn configure(
         cancel,
     )?;
     let compiler = toolchain.join(format!("bin/{target}{api}-clang"));
-    let prefix = deps::prepare(root, target, &compiler, evidence, cancel)?;
     let bridge = cache.join(format!("bridge-{target}.o"));
     let mut cc = Command::new(&compiler);
     cc.args(["-fPIC", "-c"])
@@ -444,19 +424,6 @@ fn configure(
     let mut environment: BTreeMap<String, String> = serde_json::from_slice(&output.stdout)?;
     // Native build scripts read the NDK out of the environment.
     environment.insert("ANDROID_NDK_HOME".into(), ndk.display().to_string());
-    // `fdk-aac-sys` compiles against a header only AOSP ships. Its `cc::Build`
-    // leaves the C driver selected for the C++ sources, so the flags arrive
-    // through `CFLAGS`.
-    let shim = root.join(".config/android/fdk-aac-shim");
-    let flags = environment.entry(format!("CFLAGS_{target}")).or_default();
-    flags.push_str(&format!(" -I{}", shim.display()));
-    environment.insert(format!("PKG_CONFIG_{target}"), "pkg-config".into());
-    environment.insert(
-        format!("PKG_CONFIG_LIBDIR_{target}"),
-        prefix.join("lib/pkgconfig").display().to_string(),
-    );
-    environment.insert(format!("PKG_CONFIG_PATH_{target}"), String::new());
-    environment.insert(format!("PKG_CONFIG_SYSROOT_DIR_{target}"), "/".into());
     let target_key = target.replace('-', "_").to_ascii_uppercase();
     environment.remove(&format!("CARGO_TARGET_{target_key}_RUNNER"));
     environment.insert(

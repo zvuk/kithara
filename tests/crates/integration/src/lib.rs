@@ -22,12 +22,20 @@ pub mod analysis_pass;
     any(target_os = "macos", target_os = "ios")
 ))]
 pub mod apple_warmup;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+#[cfg(all(
+    feature = "all",
+    not(target_arch = "wasm32"),
+    not(target_os = "android")
+))]
 pub mod architecture_trace;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod asset_fixture;
 pub mod assets_ext;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+#[cfg(all(
+    feature = "all",
+    not(target_arch = "wasm32"),
+    not(target_os = "android")
+))]
 pub mod audio_artifact;
 #[cfg(feature = "all")]
 pub mod audio_mock;
@@ -120,5 +128,5 @@ pub use test_server::{
 };
 pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
 
-#[cfg(any(feature = "all", feature = "wasm"))]
+#[cfg(any(feature = "audio", feature = "wasm"))]
 pub mod event;

@@ -56,6 +56,34 @@ pub fn hls_stream_header() -> Vec<u8> {
     assets::hls_stream_header_stereo().bytes().to_vec()
 }
 
+/// Sized stereo WAV header for the corresponding HLS PCM fixture.
+#[kithara::fixture]
+#[must_use]
+pub fn hls_header_boundary() -> Vec<u8> {
+    assets::hls_finite_header_boundary().bytes().to_vec()
+}
+
+/// Sized stereo WAV header for the corresponding HLS PCM fixture.
+#[kithara::fixture]
+#[must_use]
+pub fn hls_header_thirty() -> Vec<u8> {
+    assets::hls_finite_header_thirty().bytes().to_vec()
+}
+
+/// Sized stereo WAV header for the corresponding HLS PCM fixture.
+#[kithara::fixture]
+#[must_use]
+pub fn hls_header_forty() -> Vec<u8> {
+    assets::hls_finite_header_forty().bytes().to_vec()
+}
+
+/// Sized stereo WAV header for the corresponding HLS PCM fixture.
+#[kithara::fixture]
+#[must_use]
+pub fn hls_header_fifty() -> Vec<u8> {
+    assets::hls_finite_header_fifty().bytes().to_vec()
+}
+
 /// Prepared stereo PCM input for HLS segment tests.
 #[kithara::fixture]
 #[must_use]
@@ -138,14 +166,10 @@ pub fn hls_sized_wav_hundred() -> Vec<u8> {
 /// Panics if the generated catalog is malformed, has no parent directory, or
 /// the input uses a codec unsupported by [`VariantInput::key`].
 pub fn load_variant(input: &VariantInput) -> io::Result<Fmp4Package> {
-    static CATALOG: OnceLock<VariantCatalog> = OnceLock::new();
-    let asset = assets::hls_variants_catalog();
-    let catalog = CATALOG.get_or_init(|| {
-        toml::from_str(from_utf8(asset.bytes()).expect("UTF-8 HLS catalog"))
-            .expect("valid build-time HLS catalog")
-    });
+    let catalog = variant_catalog();
+    let asset = assets::hls_variants_catalog_with_native_gapless();
     let key = input.key();
-    let artifact = catalog.get(&key).ok_or_else(|| {
+    let artifact = catalog.variants.get(&key).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
             format!("unregistered HLS fixture: {key}"),
@@ -222,4 +246,35 @@ pub fn load_pcm(sample_rate: u32, channels: u16, frames: usize, wave: Wave) -> i
         }
     };
     Ok(asset.bytes().to_vec())
+}
+
+fn variant_catalog() -> &'static VariantCatalog {
+    static CATALOG: OnceLock<VariantCatalog> = OnceLock::new();
+    let asset = assets::hls_variants_catalog_with_native_gapless();
+    CATALOG.get_or_init(|| {
+        toml::from_str(from_utf8(asset.bytes()).expect("UTF-8 HLS catalog"))
+            .expect("valid build-time HLS catalog")
+    })
+}
+
+/// Frame size recorded by the host encoder that produced the HLS fixtures.
+///
+/// # Errors
+///
+/// Returns `NotFound` when the catalog contains no fixture for this codec.
+///
+/// # Panics
+///
+/// Panics if the generated catalog is malformed.
+pub fn frame_samples(codec: kithara_stream::AudioCodec) -> io::Result<usize> {
+    variant_catalog()
+        .frame_samples
+        .get(&format!("{codec:?}"))
+        .copied()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no prepared HLS frame size for {codec:?}"),
+            )
+        })
 }

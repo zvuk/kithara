@@ -10,22 +10,22 @@ pub(crate) struct Config;
 #[derive(Default)]
 pub(crate) struct Slot;
 
-pub(crate) fn build<S>(
-    _config: &Config,
-    _rate: NonZeroU32,
-    _pools: &PoolRegion<S>,
-) -> Result<Slot, PoolError>
+impl<S> TryFrom<(&Config, NonZeroU32, &PoolRegion<S>)> for Slot
 where
     S: HasPool<f32>,
 {
-    Ok(Slot)
+    type Error = PoolError;
+
+    fn try_from(_: (&Config, NonZeroU32, &PoolRegion<S>)) -> Result<Self, Self::Error> {
+        Ok(Self)
+    }
 }
 
-pub(crate) const fn cache_tag(_config: &Config) -> Option<String> {
+pub(crate) const fn cache_tag(_config: Config) -> Option<String> {
     None
 }
 
-pub(crate) const fn config_is_empty(_config: &Config) -> bool {
+pub(crate) const fn config_is_empty(_config: Config) -> bool {
     true
 }
 
@@ -51,7 +51,7 @@ pub(crate) const fn write_resume(_slot: &Slot) -> Option<Vec<u8>> {
 pub(crate) fn restore<S>(
     _slot: &mut Slot,
     _pools: &PoolRegion<S>,
-    resume: Option<WaveformResume>,
+    resume: Option<&WaveformResume>,
 ) -> Result<(), BlobError>
 where
     S: HasPool<f32>,

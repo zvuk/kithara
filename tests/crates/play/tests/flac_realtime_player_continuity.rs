@@ -25,7 +25,8 @@ use url::Url;
 use crate::{
     bufpool_ext::{TestPools, pools},
     phase_continuity::common::{
-        CHANNELS, FREQ_HZ, PhaseDrift, SAMPLE_RATE, SinePhaseSpec, scan_rendered_pcm,
+        CHANNELS, FREQ_HZ, PhaseDrift, READ_FRAMES_AFTER_SEEK, SAMPLE_RATE, SinePhaseSpec,
+        check_against_previous,
     },
 };
 
@@ -255,29 +256,49 @@ async fn run_case(
 /// Run with `--run-ignored`.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[ignore = "load-dependent flake, not yet deterministic — paced offline render starves decode under host load and trips the player underrun path; needs a forced-underrun trigger to become a reliable RED for the production forward-skip"]
-#[case::sustained_flac_symphonia(Scenario::SustainedFlac, DecoderBackend::Symphonia, flac_source().await, 44_100)]
-#[case::switch_to_flac_symphonia(Scenario::SwitchToFlac, DecoderBackend::Symphonia, flac_source().await, 44_100)]
-#[case::switch_to_flac_symphonia_delay(
+#[cfg_attr(not(target_os = "android"), case::sustained_flac_symphonia(Scenario::SustainedFlac, DecoderBackend::Symphonia, flac_source().await, 44_100))]
+#[cfg_attr(target_os = "android", case::sustained_flac_android(Scenario::SustainedFlac, DecoderBackend::default(), flac_source().await, 44_100))]
+#[cfg_attr(not(target_os = "android"), case::switch_to_flac_symphonia(Scenario::SwitchToFlac, DecoderBackend::Symphonia, flac_source().await, 44_100))]
+#[cfg_attr(target_os = "android", case::switch_to_flac_android(Scenario::SwitchToFlac, DecoderBackend::default(), flac_source().await, 44_100))]
+#[cfg_attr(not(target_os = "android"), case::switch_to_flac_symphonia_delay(
     Scenario::SwitchToFlac,
     DecoderBackend::Symphonia,
     delayed_flac_source().await,
     44_100
-)]
+))]
+#[cfg_attr(target_os = "android", case::switch_to_flac_android_delay(
+    Scenario::SwitchToFlac,
+    DecoderBackend::default(),
+    delayed_flac_source().await,
+    44_100
+))]
 // Host output rate 48 kHz ≠ content 44.1 kHz: activates the playback-pipeline
 // resampler, the dominant real-cpal condition absent from same-rate offline
 // pulls. This is where a periodic forward jump during sustained FLAC would live.
-#[case::sustained_flac_symphonia_resamp(
+#[cfg_attr(not(target_os = "android"), case::sustained_flac_symphonia_resamp(
     Scenario::SustainedFlac,
     DecoderBackend::Symphonia,
     flac_source().await,
     48_000
-)]
-#[case::switch_to_flac_symphonia_resamp(
+))]
+#[cfg_attr(target_os = "android", case::sustained_flac_android_resamp(
+    Scenario::SustainedFlac,
+    DecoderBackend::default(),
+    flac_source().await,
+    48_000
+))]
+#[cfg_attr(not(target_os = "android"), case::switch_to_flac_symphonia_resamp(
     Scenario::SwitchToFlac,
     DecoderBackend::Symphonia,
     flac_source().await,
     48_000
-)]
+))]
+#[cfg_attr(target_os = "android", case::switch_to_flac_android_resamp(
+    Scenario::SwitchToFlac,
+    DecoderBackend::default(),
+    flac_source().await,
+    48_000
+))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::switch_to_flac_apple_resamp(Scenario::SwitchToFlac, DecoderBackend::Apple, flac_source().await, 48_000)
@@ -310,4 +331,33 @@ async fn flac_source() -> (TestServerHelper, Url, Option<u64>) {
 #[kithara::fixture]
 async fn delayed_flac_source() -> (TestServerHelper, Url, Option<u64>) {
     prepare_flac_source(Some(150)).await
+}
+
+fn scan_rendered_pcm(
+    pcm: &[f32],
+    sine: SinePhaseSpec,
+    scan_interval_frames: u64,
+) -> Vec<PhaseDrift> {
+    let chan = sine.channels as usize;
+    let total_frames = (pcm.len() / chan) as u64;
+    let want = READ_FRAMES_AFTER_SEEK;
+    let mut anchor: Option<(u64, f64)> = None;
+    let mut drifts: Vec<PhaseDrift> = Vec::new();
+    let mut at: u64 = 0;
+    while at + want as u64 <= total_frames {
+        let start = usize::try_from(at).unwrap_or(0) * chan;
+        let end = start + want * chan;
+        if let Some(drift) = check_against_previous(
+            &mut anchor,
+            at,
+            &pcm[start..end],
+            chan,
+            sine,
+            "render phase",
+        ) {
+            drifts.push(drift);
+        }
+        at = at.saturating_add(scan_interval_frames);
+    }
+    drifts
 }

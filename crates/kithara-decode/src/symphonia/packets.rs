@@ -1,4 +1,4 @@
-use symphonia::core::{
+use symphonia_core::{
     errors::Result,
     formats::{
         FormatReader, SeekMode, SeekTo, SeekedTo,

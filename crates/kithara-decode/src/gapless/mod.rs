@@ -3,12 +3,14 @@ mod info;
 #[cfg(any(
     test,
     feature = "symphonia",
+    all(feature = "android", target_os = "android"),
     all(feature = "apple", any(target_os = "macos", target_os = "ios"))
 ))]
 mod mp3;
 mod mp4;
 #[cfg(any(
     feature = "symphonia",
+    all(feature = "android", target_os = "android"),
     all(feature = "apple", any(target_os = "macos", target_os = "ios"))
 ))]
 mod probe;
@@ -19,6 +21,7 @@ pub use info::{GaplessInfo, GaplessTailCompensation};
 pub use mp4::probe_mp4_gapless;
 #[cfg(any(
     feature = "symphonia",
+    all(feature = "android", target_os = "android"),
     all(feature = "apple", any(target_os = "macos", target_os = "ios"))
 ))]
 pub(crate) use probe::scoped_probe;

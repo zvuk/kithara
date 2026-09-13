@@ -1,17 +1,22 @@
+#[cfg(feature = "symphonia")]
+use std::io::{Read, Seek};
 use std::{
-    io::{ErrorKind, Read, Seek},
+    io::ErrorKind,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use kithara_platform::{sync::Arc, time::Duration};
+#[cfg(feature = "symphonia")]
+use kithara_stream::ContainerFormat;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, NotReadyCause, PendingReason, PrerollHint, StreamPending,
-    StreamSeekPastEof,
+    AudioCodec, NotReadyCause, PendingReason, PrerollHint, StreamPending, StreamSeekPastEof,
 };
 use kithara_test_utils::kithara;
-#[cfg(test)]
-use symphonia::core::packet::Packet;
-use symphonia::core::{
+#[cfg(feature = "symphonia")]
+use symphonia_core::formats::FormatOptions;
+#[cfg(all(test, feature = "symphonia"))]
+use symphonia_core::packet::Packet;
+use symphonia_core::{
     codecs::{
         CodecParameters,
         audio::{
@@ -37,19 +42,20 @@ use symphonia::core::{
         },
     },
     errors::{Error as SymphoniaError, SeekErrorKind},
-    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType},
+    formats::{FormatReader, SeekMode, SeekTo, Track, TrackType},
     units::{Duration as SymphoniaDuration, Time, TimeBase, Timestamp},
 };
 
+#[cfg(feature = "symphonia")]
+use crate::symphonia::{
+    config::SymphoniaConfig,
+    probe::{ReaderBootstrap, new_direct, probe_with_seek},
+};
 use crate::{
     codec::CodecPriming,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PreparedPacket, TrackInfo},
     error::{DecodeError, DecodeResult},
-    symphonia::{
-        config::SymphoniaConfig,
-        packets::Packets,
-        probe::{ReaderBootstrap, new_direct, probe_with_seek},
-    },
+    symphonia::packets::Packets,
 };
 
 /// Demuxer adapter over Symphonia's [`FormatReader`].
@@ -58,6 +64,7 @@ pub(crate) struct SymphoniaDemuxer {
     /// the matching [`SymphoniaCodec::open_native`] path can build a
     /// decoder for codecs whose generic [`AudioCodec`] enum representation
     /// loses information (PCM bit-depth/endianness, ADPCM dialect).
+    #[cfg(feature = "symphonia")]
     pub(crate) native_params: AudioCodecParameters,
     format_reader: Packets,
     prepared: Option<PreparedPacket>,
@@ -93,6 +100,7 @@ pub(crate) struct SymphoniaDemuxer {
 /// format `hint` (file extension), an explicit `container` format that
 /// skips probing when known, the bootstrap `byte_len_handle`, and an
 /// optional `byte_map` over the underlying source.
+#[cfg(feature = "symphonia")]
 pub(crate) struct FileOpen {
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     pub(crate) byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
@@ -147,6 +155,7 @@ impl SymphoniaDemuxer {
             format_reader: Packets::new(format_reader),
             track_id,
             track_info,
+            #[cfg(feature = "symphonia")]
             native_params,
             time_base,
             byte_pos_handle,
@@ -167,6 +176,7 @@ impl SymphoniaDemuxer {
     ///
     /// Surfaces probe-side errors verbatim ([`DecodeError::Backend`])
     /// and missing-track errors ([`DecodeError::ProbeFailed`]).
+    #[cfg(feature = "symphonia")]
     pub(crate) fn open_file<R>(source: R, open: FileOpen) -> DecodeResult<(Self, Arc<AtomicU64>)>
     where
         R: Read + Seek + Send + Sync + 'static,
@@ -407,14 +417,7 @@ impl SymphoniaDemuxer {
             .map(|_| ())
     }
 
-    /// Override the `track.gapless` slot built by `from_reader` with a
-    /// container-level probe result.
-    ///
-    /// `build_track_info` cannot probe the source itself — by the time it
-    /// runs, the format reader has already consumed the relevant bytes.
-    /// The factory layer probes the underlying source separately
-    /// (e.g. `probe_mp4_gapless` for AAC fMP4) and pipes the result
-    /// through this setter so the codec sees the captured trim counts.
+    /// Set encoder trim obtained from container metadata.
     pub(crate) const fn set_gapless(&mut self, gapless: Option<crate::GaplessInfo>) {
         self.track_info.gapless = gapless;
     }
@@ -622,7 +625,7 @@ const fn mdct_packet_frames(codec: AudioCodec) -> u32 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "symphonia"))]
 mod tests {
     use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 

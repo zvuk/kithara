@@ -1,3 +1,4 @@
+mod composition;
 mod device;
 mod evidence;
 mod native;
@@ -17,6 +18,7 @@ use cargo_metadata::MetadataCommand;
 use kithara_devtools::{
     Ctx,
     common::{project::ProjectConfig, tools::ToolsConfig},
+    lock::FileLock,
     util::{check_rust_target, check_tool},
 };
 
@@ -196,8 +198,12 @@ const RUST_TARGETS: &[(&str, &str)] = &[
 /// `symphonia` is absent: `MediaCodec` is the sole decoder there.
 const fn device_features(profile: BuildProfile) -> &'static str {
     match profile {
-        BuildProfile::Release => "uniffi,android,stretch-signalsmith",
-        BuildProfile::Debug => "uniffi,android,dev,test,stretch-signalsmith",
+        BuildProfile::Release => {
+            "kithara-ffi/uniffi,kithara-ffi/android,kithara-ffi/stretch-signalsmith"
+        }
+        BuildProfile::Debug => {
+            "kithara-ffi/uniffi,kithara-ffi/android,kithara-ffi/dev,kithara-ffi/test,kithara-ffi/stretch-signalsmith"
+        }
     }
 }
 
@@ -232,32 +238,21 @@ fn cargo_ndk(api_level: &str) -> Result<Command> {
 /// Clippy over the Android backends. The host lint chain compiles for the
 /// host, where every `target_os = "android"` item is configured out and unseen.
 fn run_clippy(root: &Path, android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
-    // Crates carrying `target_os = "android"` code that build outside the
-    // full device graph, in the feature set the device build resolves.
-    const CLIPPY_PACKAGES: &[&str] = &["kithara-decode", "kithara-audio"];
-    const CLIPPY_FEATURES: &[&str] = &["android", "client-wreq", "resample-rubato"];
+    const CLIPPY_PACKAGES: &[&str] = &["kithara-ffi", "kithara-decode", "kithara-audio"];
 
     check_ndk_toolchain(tools)?;
     let api_level = require_android_str(&android.api_level, "api_level")?;
 
     println!("==> Linting the Android backends");
 
-    let features = CLIPPY_PACKAGES
-        .iter()
-        .flat_map(|package| {
-            CLIPPY_FEATURES
-                .iter()
-                .map(move |feature| format!("{package}/{feature}"))
-        })
-        .collect::<Vec<_>>()
-        .join(",");
+    let features = device_features(BuildProfile::Release);
 
     let mut cmd = cargo_ndk(api_level)?;
     cmd.arg("clippy");
     for package in CLIPPY_PACKAGES {
         cmd.args(["-p", package]);
     }
-    cmd.args(["--no-default-features", "--features", &features]);
+    cmd.args(["--no-default-features", "--features", features]);
     cmd.args(["--", "-D", "warnings"]);
     cmd.current_dir(root);
 
@@ -523,6 +518,7 @@ fn run_tests(
     skip_build: bool,
     android: &AndroidConfig,
 ) -> Result<()> {
+    let _run_lease = test_run_lease(workspace_root)?;
     let evidence = evidence::Dir::create(workspace_root)?;
     let report = workspace_root.join("target/android-test/junit.xml");
     if report.exists() {
@@ -532,6 +528,7 @@ fn run_tests(
     let cancel = child::Cancel::install()?;
 
     let mut device = None;
+    let mut device_lease = None;
     let mut server = None;
     let mut reverse = None;
     let tests = (|| {
@@ -571,6 +568,7 @@ fn run_tests(
             ),
         )?);
         let selected = device.as_ref().context("selected device")?;
+        device_lease = Some(record.stage("device_lease", selected.lease())?);
         record.device(&layout.workspace_root, selected, &cancel);
         let process = ambient_process(&layout.workspace_root);
         server = Some(record.stage(
@@ -650,7 +648,20 @@ fn run_tests(
         owned_reverse,
     );
     let written = record.write();
+    drop(device_lease);
     tests.and(unmapped).and(stopped).and(released).and(written)
+}
+
+fn test_run_lease(root: &Path) -> Result<FileLock> {
+    let directory = root.join("target/android-test");
+    fs::create_dir_all(&directory)?;
+    let file = fs::File::options()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(directory.join("run.lock"))?;
+    FileLock::try_exclusive(file).context("another Android test run owns this workspace")
 }
 
 /// Waiting on Gradle's exit status would leave a cancelled run holding the

@@ -1,4 +1,4 @@
-#![cfg(feature = "symphonia")]
+#![cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
 #![forbid(unsafe_code)]
 
 use std::{
@@ -410,7 +410,7 @@ fn standalone_decoder_seek_reanchors_output_to_trimmed_target(
     resampled_markers: Vec<f32>,
     resampled_wav_seek: &'static [u8],
 ) {
-    const TARGET: Duration = Duration::from_millis(30);
+    const TARGET: Duration = Duration::from_millis(31);
 
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
     let mut decoder = decoder_over(
@@ -451,7 +451,10 @@ fn standalone_decoder_seek_rounds_timeline_frames_half_up(
 ) {
     const SOURCE_TARGET_FRAME: u64 = 1_441;
     const ROUNDING_TARGET_RATE: u32 = 44_085;
+    #[cfg(not(target_os = "android"))]
     const EXPECTED_LANDED_FRAME: u64 = 1_152;
+    #[cfg(target_os = "android")]
+    const EXPECTED_LANDED_FRAME: u64 = 1_440;
     const EXPECTED_OUTPUT_FRAME: u64 = 1_441;
 
     let target = test_duration(SOURCE_RATE, SOURCE_TARGET_FRAME);
@@ -477,7 +480,7 @@ fn standalone_decoder_seek_rounds_timeline_frames_half_up(
 
     assert_eq!(
         test_frames(ROUNDING_TARGET_RATE, landed_at),
-        1_151,
+        usize::try_from(EXPECTED_LANDED_FRAME - 1).expect("landing fits usize"),
         "test landing must distinguish floor from half-up"
     );
     assert_eq!(

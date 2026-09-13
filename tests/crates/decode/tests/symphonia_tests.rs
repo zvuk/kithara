@@ -162,8 +162,16 @@ fn test_unsupported_container_returns_error() {
         &media_info,
         TestDecoderConfig::builder().pools(pools()).build(),
     );
+    #[cfg(not(target_os = "android"))]
     assert!(matches!(
         result,
         Err(DecodeError::UnsupportedContainer { .. })
+    ));
+    #[cfg(target_os = "android")]
+    assert!(matches!(
+        result,
+        Err(DecodeError::UnsupportedCodec {
+            codec: AudioCodec::AacLc
+        })
     ));
 }

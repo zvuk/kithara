@@ -64,18 +64,14 @@ retries = 1
 [profile.ci.junit]
 path = "junit.xml"
 
-# The Android adapter gives each test binary one device process, so the limit
-# below bounds a whole binary rather than a single test. The slowest binary
-# runs its 219 selected tests in 240s on an idle emulator; 600s leaves the
-# headroom a loaded CI emulator needs while a wedge still fails inside the
-# lane's own budget. `leak-timeout` is stated here for the same reason: the
-# batched process exits once, and the value has to be a decision rather than
-# an inheritance.
+# Android runs a whole binary behind the first nextest request. The adapter
+# owns its one-hour process deadline and preserves partial libtest results.
+# Nextest reports slow batches without killing an already-passed first test.
 [profile.android]
 test-threads = 1
 retries = 0
 fail-fast = false
-slow-timeout = { period = "600s", terminate-after = 1 }
+slow-timeout = { period = "600s" }
 leak-timeout = "2s"
 
 [profile.android.junit]

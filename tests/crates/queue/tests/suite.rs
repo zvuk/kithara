@@ -11,6 +11,7 @@ use kithara_test_dylib as _;
 #[cfg(not(target_arch = "wasm32"))]
 mod source_helper;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_os = "android"))]
 pub(crate) use source_helper::{app_disk_asset_store, app_track_source};
 
 mod advance_boundary_provenance;

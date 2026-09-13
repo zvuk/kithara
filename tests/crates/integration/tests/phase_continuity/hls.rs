@@ -348,7 +348,7 @@ async fn run_case_paced(
         flac_source().await,
     )
 )]
-#[case::aac_he_v2_symphonia_eph_manual_multi(
+#[cfg_attr(not(target_os = "android"), case::aac_he_v2_symphonia_eph_manual_multi(
     Fixture::Single(Codec::AacHeV2),
     DecoderBackend::Symphonia,
     true,
@@ -356,8 +356,8 @@ async fn run_case_paced(
     multi_switch(),
     None,
         he_source().await,
-    )]
-#[case::aac_he_v2_symphonia_eph_manual_e2e(
+    ))]
+#[cfg_attr(not(target_os = "android"), case::aac_he_v2_symphonia_eph_manual_e2e(
     Fixture::Single(Codec::AacHeV2),
     DecoderBackend::Symphonia,
     true,
@@ -365,8 +365,8 @@ async fn run_case_paced(
     e2e(AbrMode::manual(0)),
     None,
         he_source().await,
-    )]
-#[case::aac_lc_symphonia_eph_manual_multi(
+    ))]
+#[cfg_attr(not(target_os = "android"), case::aac_lc_symphonia_eph_manual_multi(
     Fixture::Single(Codec::AacLc),
     DecoderBackend::Symphonia,
     true,
@@ -374,8 +374,8 @@ async fn run_case_paced(
     multi_switch(),
     Some(320_000),
         aac_high_source().await,
-    )]
-#[case::aac_lc_symphonia_eph_manual_e2e(
+    ))]
+#[cfg_attr(not(target_os = "android"), case::aac_lc_symphonia_eph_manual_e2e(
     Fixture::Single(Codec::AacLc),
     DecoderBackend::Symphonia,
     true,
@@ -383,7 +383,16 @@ async fn run_case_paced(
     e2e(AbrMode::manual(0)),
     Some(320_000),
         aac_high_source().await,
-    )]
+    ))]
+#[cfg_attr(target_os = "android", case::aac_lc_symphonia_eph_manual_e2e_product_android(
+    Fixture::Single(Codec::AacLc),
+    DecoderBackend::default(),
+    true,
+    false,
+    e2e(AbrMode::manual(0)),
+    Some(320_000),
+        aac_high_source().await,
+    ))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_he_v2_apple_eph_auto_multi(
@@ -420,7 +429,7 @@ async fn run_case_paced(
         he_source().await,
     )
 )]
-#[case::prod_flac_top_sustained_symphonia(
+#[cfg_attr(not(target_os = "android"), case::prod_flac_top_sustained_symphonia(
     Fixture::AacWithFlacTop,
     DecoderBackend::Symphonia,
     true,
@@ -428,8 +437,17 @@ async fn run_case_paced(
     e2e(AbrMode::manual(TOP_VARIANT)),
     None,
         mixed_source().await,
-    )]
-#[case::flac_only_top_sustained_symphonia(
+    ))]
+#[cfg_attr(target_os = "android", case::prod_flac_top_sustained_symphonia_product_android(
+    Fixture::AacWithFlacTop,
+    DecoderBackend::default(),
+    true,
+    false,
+    e2e(AbrMode::manual(TOP_VARIANT)),
+    None,
+        mixed_source().await,
+    ))]
+#[cfg_attr(not(target_os = "android"), case::flac_only_top_sustained_symphonia(
     Fixture::Single(Codec::Flac),
     DecoderBackend::Symphonia,
     true,
@@ -437,7 +455,16 @@ async fn run_case_paced(
     e2e(AbrMode::manual(TOP_VARIANT)),
     None,
         flac_source().await,
-    )]
+    ))]
+#[cfg_attr(target_os = "android", case::flac_only_top_sustained_symphonia_product_android(
+    Fixture::Single(Codec::Flac),
+    DecoderBackend::default(),
+    true,
+    false,
+    e2e(AbrMode::manual(TOP_VARIANT)),
+    None,
+        flac_source().await,
+    ))]
 #[cfg_attr(
     target_os = "android",
     case::aac_he_v2_android_eph_manual_multi(
@@ -532,20 +559,34 @@ fn late_switches() -> Vec<(AbrMode, f64)> {
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(10)
 )]
-#[case::aac_lc_symphonia_pace1ms(
+#[cfg_attr(not(target_os = "android"), case::aac_lc_symphonia_pace1ms(
     Fixture::Single(Codec::AacLc),
     DecoderBackend::Symphonia,
     Some(320_000),
     1,
         aac_high_source().await,
-    )]
-#[case::aac_he_v2_symphonia_pace1ms(
+    ))]
+#[cfg_attr(target_os = "android", case::aac_lc_android_pace1ms(
+    Fixture::Single(Codec::AacLc),
+    DecoderBackend::default(),
+    Some(320_000),
+    1,
+        aac_high_source().await,
+    ))]
+#[cfg_attr(not(target_os = "android"), case::aac_he_v2_symphonia_pace1ms(
     Fixture::Single(Codec::AacHeV2),
     DecoderBackend::Symphonia,
     None,
     1,
         he_source().await,
-    )]
+    ))]
+#[cfg_attr(target_os = "android", case::aac_he_v2_android_pace1ms(
+    Fixture::Single(Codec::AacHeV2),
+    DecoderBackend::default(),
+    None,
+    1,
+        he_source().await,
+    ))]
 async fn phase_continuity_hls_diag_paced(
     #[case] fixture: Fixture,
     #[case] backend: DecoderBackend,
@@ -622,20 +663,34 @@ async fn phase_continuity_hls_diag_paced(
         mixed_high_source().await,
     )
 )]
-#[case::cross_codec_switch_symphonia_drm(
+#[cfg_attr(not(target_os = "android"), case::cross_codec_switch_symphonia_drm(
     Fixture::AacWithFlacTop,
     DecoderBackend::Symphonia,
     true,
     switch_to_top_mid(),
         mixed_encrypted_source().await,
-    )]
-#[case::cross_codec_switch_symphonia_plain(
+    ))]
+#[cfg_attr(target_os = "android", case::cross_codec_androiditch_android_drm(
+    Fixture::AacWithFlacTop,
+    DecoderBackend::default(),
+    true,
+    switch_to_top_mid(),
+        mixed_encrypted_source().await,
+    ))]
+#[cfg_attr(not(target_os = "android"), case::cross_codec_switch_symphonia_plain(
     Fixture::AacWithFlacTop,
     DecoderBackend::Symphonia,
     false,
     switch_to_top_mid(),
         mixed_high_source().await,
-    )]
+    ))]
+#[cfg_attr(target_os = "android", case::cross_codec_androiditch_android_plain(
+    Fixture::AacWithFlacTop,
+    DecoderBackend::default(),
+    false,
+    switch_to_top_mid(),
+        mixed_high_source().await,
+    ))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::he_v2_in_variant_seek_apple(

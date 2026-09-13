@@ -11,6 +11,12 @@ autotests = false
 crate-type = ["lib", "dylib"]
 
 [dependencies]
+kithara = { workspace = true, features = ["mock", "probe", "offline", "signal", "tokio-net", "tokio-rt-multi-thread"] }
+kithara-integration-tests = { workspace = true }
+kithara-test-fixtures = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
 kithara = { workspace = true, features = [
     "analysis",
     "backend-cpal",
@@ -26,17 +32,6 @@ kithara = { workspace = true, features = [
     "symphonia",
     "tokio-net",
     "tokio-rt-multi-thread",
-] }
-kithara-integration-tests = { workspace = true }
-kithara-test-fixtures = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
-
-[target.'cfg(target_os = "android")'.dependencies]
-kithara = { workspace = true, features = ["android", "client-wreq"] }
-kithara-app = { workspace = true, features = [
-    "analysis-waveform",
-    "beat-nn-small",
-    "lib-only",
 ] }
 
 [lints]

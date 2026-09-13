@@ -53,7 +53,10 @@ where
         Self {
             pools,
             beat: Config::default(),
+            #[cfg(feature = "analysis-waveform")]
             waveform: waveform::Config::default(),
+            #[cfg(not(feature = "analysis-waveform"))]
+            waveform: waveform::Config,
             beat_config: None,
         }
     }
@@ -68,7 +71,7 @@ where
             revision,
             token,
             beat: self.beat.build(rate, &self.pools),
-            waveform: waveform::build(&self.waveform, rate, &self.pools)?,
+            waveform: waveform::Slot::try_from((&self.waveform, rate, &self.pools))?,
             coverage: Coverage::default(),
             fingerprint: self.fingerprint(),
             settled: false,
@@ -87,13 +90,13 @@ where
                 .as_ref()
                 .and_then(BeatAnalysisConfig::cache_tag)
                 .as_deref(),
-            waveform::cache_tag(&self.waveform).as_deref(),
+            waveform::cache_tag(self.waveform).as_deref(),
         )
     }
 
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        waveform::config_is_empty(&self.waveform) && self.beat.is_empty()
+        waveform::config_is_empty(self.waveform) && self.beat.is_empty()
     }
 
     pub(crate) fn restore(
@@ -119,7 +122,7 @@ where
 
     pub(crate) fn resume_shape(&self) -> (bool, bool) {
         (
-            !waveform::config_is_empty(&self.waveform),
+            !waveform::config_is_empty(self.waveform),
             !self.beat.is_empty(),
         )
     }

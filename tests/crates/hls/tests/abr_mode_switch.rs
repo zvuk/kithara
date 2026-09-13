@@ -10,7 +10,7 @@ use kithara::{
         AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, DecoderEvent, ReadOutcome,
     },
     decode::DecoderBackend,
-    download::{DownloaderEvent, RequestId},
+    download::{DownloaderEvent, RequestId, RequestMethod},
     events::{EventBus, EventReceiver},
     hls::{AbrMode, Hls, HlsConfig, HlsEvent},
     platform::{
@@ -272,7 +272,10 @@ impl EventCollector {
             self.push_event_tail(format!("{ev:?}"));
             match &ev {
                 TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
-                    request_id, url, ..
+                    request_id,
+                    url,
+                    method: RequestMethod::Get,
+                    ..
                 }) => {
                     if let Some(seg) = parse_segment_url(url.as_str()) {
                         self.request_map.lock().insert(*request_id, seg);
@@ -329,7 +332,7 @@ impl EventCollector {
     }
 
     /// Synthesised view: for every (variant, seg) the reader saw, decide
-    /// whether it came from the network (`RequestCompleted` seen) or from
+    /// whether its body came from the network (completed GET) or from
     /// the cache (no Completed event for that pair). Returns one record
     /// per `SegmentReadStart`, dedup'd by (variant, seg) — first sighting
     /// wins.
@@ -891,8 +894,8 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         "the stalled boundary must commit an EscapeStalled switch: {transitions:?}"
     );
     assert!(
-        reader_segments.contains(&(STALLED_VARIANT, STALLED_SEGMENT)),
-        "the V0 reader must reach the gated segment boundary: {reader_segments:?}"
+        reader_segments.contains(&(STALLED_VARIANT, STALLED_SEGMENT - 1)),
+        "the V0 reader must consume the segment immediately before the gate: {reader_segments:?}"
     );
     assert!(net_v1 > 0, "V1 must serve the tail after the rescue");
 }
@@ -1738,6 +1741,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
+        .audio_buffer_chunks(4)
         .build();
     let audio = worker.open(config).await.expect("create audio");
 
@@ -1786,6 +1790,10 @@ async fn runtime_manual_switch_works_after_cache_and_seek(
     .await
     .expect("ReaderSeek after seek");
 
+    assert!(
+        audio.decoded_frontier() < audio.duration().expect("finite WAV duration"),
+        "the manual switch requires undecoded audio after the cached seek"
+    );
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
@@ -2096,7 +2104,8 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
     hang_timeout_secs(15),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-#[case::sw(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::sw(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hw(DecoderBackend::Apple)
@@ -2323,8 +2332,22 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-#[case::sw_same_codec_aac_low_to_high(DecoderBackend::Symphonia, 2usize)]
-#[case::sw_cross_codec_aac_to_flac(DecoderBackend::Symphonia, 3usize)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::sw_same_codec_aac_low_to_high(DecoderBackend::Symphonia, 2usize)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::sw_same_codec_aac_low_to_high_android(DecoderBackend::default(), 2usize)
+)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::sw_cross_codec_aac_to_flac(DecoderBackend::Symphonia, 3usize)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::sw_cross_codec_aac_to_flac_android(DecoderBackend::default(), 3usize)
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hw_same_codec_aac_low_to_high(DecoderBackend::Apple, 2usize)

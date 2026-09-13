@@ -1,3 +1,5 @@
+#[cfg(any(feature = "all", feature = "wasm"))]
+use kithara::queue::{ItemEvent, QueueEvent};
 use kithara::{
     abr::AbrEvent,
     assets::AssetEvent,
@@ -7,7 +9,6 @@ use kithara::{
     hls::HlsEvent,
     host::TransportEvent,
     play::PlayerEvent,
-    queue::{ItemEvent, QueueEvent},
 };
 use kithara_events::{BusEvent, EventSet};
 
@@ -23,8 +24,10 @@ pub enum TestEvent {
     Downloader(DownloaderEvent),
     File(FileEvent),
     Hls(HlsEvent),
+    #[cfg(any(feature = "all", feature = "wasm"))]
     Item(ItemEvent),
     Player(PlayerEvent),
+    #[cfg(any(feature = "all", feature = "wasm"))]
     Queue(QueueEvent),
     Transport(TransportEvent),
 }

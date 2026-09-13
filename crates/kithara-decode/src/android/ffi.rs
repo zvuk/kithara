@@ -6,10 +6,13 @@ pub(crate) const MEDIA_STATUS_OK: i32 = 0;
 pub(crate) const MEDIA_CODEC_INFO_OUTPUT_BUFFERS_CHANGED: i32 = -3;
 pub(crate) const MEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED: i32 = -2;
 pub(crate) const MEDIA_CODEC_INFO_TRY_AGAIN_LATER: i32 = -1;
+pub(crate) const MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM: u32 = 4;
 pub(crate) const PCM_ENCODING_16BIT: i32 = 2;
 pub(crate) const PCM_ENCODING_FLOAT: i32 = 4;
 pub(crate) const SEEK_MODE_PREVIOUS_SYNC: u32 = 0;
 
+pub(crate) const KEY_ENCODER_DELAY: &CStr = c"encoder-delay";
+pub(crate) const KEY_ENCODER_PADDING: &CStr = c"encoder-padding";
 pub(crate) const KEY_MIME: &CStr = c"mime";
 pub(crate) const KEY_SAMPLE_RATE: &CStr = c"sample-rate";
 pub(crate) const KEY_CHANNEL_COUNT: &CStr = c"channel-count";

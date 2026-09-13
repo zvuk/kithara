@@ -19,8 +19,9 @@ use kithara::{
     stream::Stream,
     warp::{StretchControls, StretchKind, WarpConfig},
 };
+#[cfg(not(target_os = "android"))]
+use kithara_integration_tests::audio_artifact::write_audio_artifact;
 use kithara_integration_tests::{
-    audio_artifact::write_audio_artifact,
     bufpool_ext::{TestPools, pools},
     cochlea::{
         CochleaReport, assert_oracle_load_bearing, continuity_failures, percentile_f32,
@@ -192,6 +193,7 @@ struct RealtimeCapture {
     load_observed_during_capture: bool,
 }
 
+#[cfg(not(target_os = "android"))]
 #[derive(Serialize)]
 struct CaptureMetrics {
     warmup_decode_errors: u64,
@@ -231,6 +233,7 @@ struct MarkerTiming {
     measured_interval_frames: usize,
 }
 
+#[cfg(not(target_os = "android"))]
 impl From<&RealtimeCapture> for CaptureMetrics {
     fn from(capture: &RealtimeCapture) -> Self {
         Self {
@@ -243,6 +246,7 @@ impl From<&RealtimeCapture> for CaptureMetrics {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 #[derive(Serialize)]
 struct PassthroughManifest<'a> {
     case: &'static str,
@@ -260,6 +264,7 @@ struct PassthroughManifest<'a> {
     failures: &'a [String],
 }
 
+#[cfg(not(target_os = "android"))]
 #[derive(Serialize)]
 struct ActiveStretchManifest<'a> {
     case: &'static str,
@@ -978,23 +983,29 @@ async fn run_no_sync_passthrough(
         failures.push("unity+load: no bounded shared-worker burst began during capture".to_owned());
     }
 
-    let backend_label = backend.to_string().to_ascii_lowercase();
-    let manifest = PassthroughManifest {
-        case: "no-sync-unity-passthrough",
-        backend: &backend_label,
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        block_frames: BLOCK_FRAMES,
-        baseline: CaptureMetrics::from(&baseline),
-        unity: CaptureMetrics::from(&unity),
-        unity_under_load: CaptureMetrics::from(&loaded),
-        baseline_source_fit: &baseline_source_fit,
-        baseline_cochlea: &baseline_report,
-        unity_cochlea: &unity_report,
-        unity_under_load_cochlea: &loaded_report,
-        failures: &failures,
-    };
+    #[cfg(target_os = "android")]
+    assert!(
+        !record_artifacts,
+        "listening artifact export belongs to the host suite"
+    );
+    #[cfg(not(target_os = "android"))]
     if record_artifacts {
+        let backend_label = backend.to_string().to_ascii_lowercase();
+        let manifest = PassthroughManifest {
+            case: "no-sync-unity-passthrough",
+            backend: &backend_label,
+            sample_rate: SAMPLE_RATE,
+            channels: CHANNELS,
+            block_frames: BLOCK_FRAMES,
+            baseline: CaptureMetrics::from(&baseline),
+            unity: CaptureMetrics::from(&unity),
+            unity_under_load: CaptureMetrics::from(&loaded),
+            baseline_source_fit: &baseline_source_fit,
+            baseline_cochlea: &baseline_report,
+            unity_cochlea: &unity_report,
+            unity_under_load_cochlea: &loaded_report,
+            failures: &failures,
+        };
         let artifact_case = format!("no-sync-unity-passthrough-{backend_label}");
         let written = write_audio_artifact(
             &artifact_case,
@@ -1117,6 +1128,12 @@ async fn run_active_stretch(
     assert_oracle_load_bearing(&control.pcm, CHANNELS, SAMPLE_RATE, BLOCK_FRAMES);
     assert_oracle_load_bearing(&candidate.pcm, CHANNELS, SAMPLE_RATE, BLOCK_FRAMES);
     assert_frame_oracle_load_bearing(&candidate.pcm);
+    #[cfg(target_os = "android")]
+    assert!(
+        !record_artifacts,
+        "listening artifact export belongs to the host suite"
+    );
+    #[cfg(not(target_os = "android"))]
     if record_artifacts {
         let backend_label = backend.to_string().to_ascii_lowercase();
         let artifact_case = format!("no-sync-active-keylock-{backend_label}");
@@ -1156,7 +1173,7 @@ async fn run_active_stretch(
     }
     assert!(
         failures.is_empty(),
-        "active no-SYNC stretch failed for {backend}: {}\ncontrol={control_report:?}\ncandidate={candidate_report:?}",
+        "active no-SYNC stretch failed for {backend}: {}\ncontrol={control_report:?}\ncandidate={candidate_report:?}\ncontinuity={candidate_continuity:?}",
         failures.join("; "),
     );
 }

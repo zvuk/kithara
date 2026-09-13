@@ -60,9 +60,12 @@ fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, pools: Pools) -> AssetSt
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(10)
 )]
-#[case::silvercomet_mp3_symphonia(
-    "https://stream.silvercomet.top/track.mp3",
-    DecoderBackend::Symphonia
+#[cfg_attr(
+    not(target_os = "android"),
+    case::silvercomet_mp3_symphonia(
+        "https://stream.silvercomet.top/track.mp3",
+        DecoderBackend::Symphonia
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -75,9 +78,12 @@ fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, pools: Pools) -> AssetSt
         DecoderBackend::Android
     )
 )]
-#[case::silvercomet_hls_symphonia(
-    "https://stream.silvercomet.top/hls/master.m3u8",
-    DecoderBackend::Symphonia
+#[cfg_attr(
+    not(target_os = "android"),
+    case::silvercomet_hls_symphonia(
+        "https://stream.silvercomet.top/hls/master.m3u8",
+        DecoderBackend::Symphonia
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -93,9 +99,12 @@ fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, pools: Pools) -> AssetSt
         DecoderBackend::Android
     )
 )]
-#[case::zvuk_27390231_symphonia(
-    "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
-    DecoderBackend::Symphonia
+#[cfg_attr(
+    not(target_os = "android"),
+    case::zvuk_27390231_symphonia(
+        "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
+        DecoderBackend::Symphonia
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -111,9 +120,12 @@ fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, pools: Pools) -> AssetSt
         DecoderBackend::Android
     )
 )]
-#[case::zvuk_151585912_symphonia(
-    "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
-    DecoderBackend::Symphonia
+#[cfg_attr(
+    not(target_os = "android"),
+    case::zvuk_151585912_symphonia(
+        "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
+        DecoderBackend::Symphonia
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -129,9 +141,12 @@ fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, pools: Pools) -> AssetSt
         DecoderBackend::Android
     )
 )]
-#[case::zvuk_125475417_symphonia(
-    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
-    DecoderBackend::Symphonia
+#[cfg_attr(
+    not(target_os = "android"),
+    case::zvuk_125475417_symphonia(
+        "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+        DecoderBackend::Symphonia
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -235,9 +250,12 @@ async fn live_remote_resource_decodes_with_duration(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(10)
 )]
-#[case::silvercomet_mp3_symphonia(
-    "https://stream.silvercomet.top/track.mp3",
-    DecoderBackend::Symphonia
+#[cfg_attr(
+    not(target_os = "android"),
+    case::silvercomet_mp3_symphonia(
+        "https://stream.silvercomet.top/track.mp3",
+        DecoderBackend::Symphonia
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -250,9 +268,12 @@ async fn live_remote_resource_decodes_with_duration(
         DecoderBackend::Android
     )
 )]
-#[case::zvuk_125475417_symphonia(
-    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
-    DecoderBackend::Symphonia
+#[cfg_attr(
+    not(target_os = "android"),
+    case::zvuk_125475417_symphonia(
+        "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+        DecoderBackend::Symphonia
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

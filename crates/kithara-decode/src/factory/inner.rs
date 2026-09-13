@@ -34,25 +34,6 @@ const READER_READ_AHEAD_BYTES: NonZeroU64 = match NonZeroU64::new(32 * 1_024) {
     None => unreachable!(),
 };
 
-/// Explicit backend selection for [`DecoderFactory`].
-///
-/// Replaces the legacy boolean `prefer_hardware` flag with a typed
-/// enum so callers spell out which backend they want. Failures of the
-/// selected backend are terminal — there is no fallback chain.
-///
-/// Variants are gated on cargo features: a hardware variant exists in
-/// the type only when its platform feature is enabled (and only on a
-/// matching `target_os`). Picking `DecoderBackend::Apple` on Linux is
-/// therefore a compile error, not a runtime `BackendUnavailable`.
-///
-/// Default = [`DecoderBackend::WebCodecs`] on wasm32 when its feature is
-/// enabled. Elsewhere the default is [`DecoderBackend::Symphonia`], unless a
-/// device build enables only its platform backend. There is no runtime backend
-/// fallback.
-///
-/// Exactly one backend feature is expected per build: device builds
-/// (`apple` / `android`) compile with `--no-default-features` so
-/// `symphonia` is absent, and the hardware variant is the sole default.
 #[cfg(not(any(
     feature = "symphonia",
     all(feature = "apple", any(target_os = "macos", target_os = "ios")),
@@ -72,6 +53,11 @@ compile_error!(
 /// are gated by the features and targets that can actually provide them, so a
 /// build that has no Apple backend refuses `apple` by name rather than
 /// accepting a value it could not honour.
+///
+/// Defaults to `WebCodecs` on supported wasm builds, Symphonia when enabled,
+/// or the enabled native platform backend. Android never dispatches to another
+/// backend. Apple and `WebCodecs` can use Symphonia for unsupported formats when
+/// that feature is also enabled.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, Deserialize, derive_more::Display, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -173,14 +159,11 @@ pub struct DecoderConfig<B, S> {
     pub epoch: u64,
 }
 
-/// Factory for creating decoders with a single, strict backend selection.
+/// Creates decoders under the backend selected by [`DecoderConfig::backend`].
 ///
-/// Backend matrix (driven by [`DecoderConfig::backend`]):
-/// - [`DecoderBackend::Apple`] / [`DecoderBackend::Android`] — hardware
-///   backend, only present in the type when the matching feature and
-///   `target_os` are active. No runtime fallback.
-/// - [`DecoderBackend::Symphonia`] — software backend, present when
-///   the `symphonia` feature is enabled. No runtime fallback.
+/// Backend variants are available only on their configured targets. Android
+/// selection stays within the native extractor/codec pipeline; unsupported
+/// formats return [`DecodeError::UnsupportedCodec`].
 pub struct DecoderFactory;
 
 impl DecoderFactory {
@@ -643,13 +626,7 @@ where
                 AndroidCodec::open_with_config(track)
             });
         }
-        #[cfg(feature = "symphonia")]
-        return create_fmp4_segment_symphonia(source, codec, layout, config);
-        #[cfg(not(feature = "symphonia"))]
-        {
-            let _ = layout;
-            return Err(DecodeError::UnsupportedCodec { codec });
-        }
+        return Err(DecodeError::UnsupportedCodec { codec });
     }
 
     if android_standalone_supports(codec, container) {
@@ -661,13 +638,7 @@ where
         return build_android_standalone_decoder(source, codec, container, config);
     }
 
-    #[cfg(feature = "symphonia")]
-    return create_symphonia(source, codec, container, config);
-    #[cfg(not(feature = "symphonia"))]
-    {
-        let _ = (source, container, config);
-        Err(DecodeError::UnsupportedCodec { codec })
-    }
+    Err(DecodeError::UnsupportedCodec { codec })
 }
 
 #[cfg(all(feature = "android", target_os = "android"))]
@@ -677,12 +648,20 @@ fn android_standalone_supports(codec: AudioCodec, container: Option<ContainerFor
         (AudioCodec::Pcm, Some(ContainerFormat::Wav))
             | (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio))
             | (AudioCodec::Alac, Some(ContainerFormat::Mp4))
+            | (
+                AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
+                Some(ContainerFormat::Adts | ContainerFormat::Mp4 | ContainerFormat::Fmp4)
+            )
+            | (
+                AudioCodec::Flac,
+                Some(ContainerFormat::Flac | ContainerFormat::Mp4 | ContainerFormat::Fmp4)
+            )
     )
 }
 
 #[cfg(all(feature = "android", target_os = "android"))]
 fn build_android_standalone_decoder<B, S>(
-    source: BoxedSource,
+    mut source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
     config: DecoderConfig<B, S>,
@@ -692,23 +671,45 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     use crate::{
-        android::{AndroidCodec, AndroidMediaExtractorDemuxer},
+        android::{
+            AndroidCodec, AndroidMediaExtractorDemuxer,
+            ffi::{KEY_ENCODER_DELAY, KEY_ENCODER_PADDING},
+        },
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
+        gapless::probe_mp4_gapless,
     };
-    let demuxer = match (codec, container) {
-        (AudioCodec::Pcm, Some(ContainerFormat::Wav)) => {
-            AndroidMediaExtractorDemuxer::open_wav(source)?
-        }
-        (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio)) => {
-            AndroidMediaExtractorDemuxer::open_mp3(source)?
-        }
-        (AudioCodec::Alac, Some(ContainerFormat::Mp4)) => {
-            AndroidMediaExtractorDemuxer::open_alac_m4a(source)?
-        }
-        _ => return Err(DecodeError::UnsupportedCodec { codec }),
+    if codec == AudioCodec::Mp3 {
+        return build_android_mpeg_decoder(source, config);
+    }
+    let gapless = if config.gapless
+        && matches!(
+            container,
+            Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
+        ) {
+        probe_mp4_gapless(&mut source, &config.pools)?
+    } else {
+        None
     };
-    let codec_impl = AndroidCodec::open_with_config(demuxer.track_info())?;
+    let init_end = (container == Some(ContainerFormat::Wav))
+        .then(|| config.byte_map.as_ref().map(|map| map.init_segment_range()))
+        .flatten()
+        .filter(|range| range.start == 0 && !range.is_empty())
+        .map(|range| range.end);
+    let (demuxer, mut format) = AndroidMediaExtractorDemuxer::open(
+        source,
+        codec,
+        config.byte_map.clone(),
+        config.byte_len_handle.clone(),
+        init_end,
+    )?;
+    let mut track = demuxer.track_info().clone();
+    track.gapless = gapless;
+    if gapless.is_some() || !config.gapless {
+        format.set_i32(KEY_ENCODER_DELAY, 0);
+        format.set_i32(KEY_ENCODER_PADDING, 0);
+    }
+    let codec_impl = AndroidCodec::open_with_format(&track, &format)?;
     let pools = config.pools.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
@@ -722,6 +723,62 @@ where
         },
     );
     crate::resampled::wrap(Box::new(decoder), resampler, &pools)
+}
+
+#[cfg(all(feature = "android", target_os = "android"))]
+fn build_android_mpeg_decoder<B, S>(
+    mut source: BoxedSource,
+    config: DecoderConfig<B, S>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    use kithara_mpa::MpaReader;
+    use symphonia_core::{
+        formats::FormatOptions,
+        io::{MediaSourceStream, MediaSourceStreamOptions},
+    };
+
+    use crate::{
+        android::AndroidCodec,
+        composed::{ComposedDecoder, DecoderRuntime},
+        demuxer::Demuxer,
+        gapless::scoped_probe,
+        symphonia::{SymphoniaDemuxer, adapter::ReadSeekAdapter},
+    };
+
+    let gapless = if config.gapless {
+        scoped_probe(&mut *source, AudioCodec::Mp3, &config.pools)?
+    } else {
+        None
+    };
+    let adapter = ReadSeekAdapter::new(source, config.byte_len_handle, false);
+    let byte_len_handle = adapter.byte_len_handle();
+    let byte_pos_handle = adapter.byte_pos_handle();
+    let seek_enabled = adapter.seek_enabled_handle();
+    let stream = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
+    let reader =
+        MpaReader::try_new(stream, FormatOptions::default()).map_err(DecodeError::backend)?;
+    seek_enabled.store(true, std::sync::atomic::Ordering::Release);
+    let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
+        Box::new(reader),
+        Some(byte_pos_handle),
+        config.byte_map,
+    )?;
+    demuxer.set_gapless(gapless);
+    let codec = AndroidCodec::open_with_config(demuxer.track_info())?;
+    let decoder = ComposedDecoder::new(
+        demuxer,
+        codec,
+        DecoderRuntime {
+            pools: config.pools.clone(),
+            epoch: config.epoch,
+            byte_len_handle: Some(byte_len_handle),
+            hooks: config.hooks,
+        },
+    );
+    crate::resampled::wrap(Box::new(decoder), config.resampler, &config.pools)
 }
 
 #[cfg(feature = "symphonia")]

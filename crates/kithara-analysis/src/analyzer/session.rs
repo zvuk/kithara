@@ -191,7 +191,11 @@ where
         {
             return Err(BlobError::Corrupt);
         }
-        waveform::restore(&mut self.waveform, &self.pools, resume.waveform)?;
+        #[cfg(not(feature = "analysis-waveform"))]
+        let waveform_resume = resume.waveform.as_ref();
+        #[cfg(feature = "analysis-waveform")]
+        let waveform_resume = resume.waveform;
+        waveform::restore(&mut self.waveform, &self.pools, waveform_resume)?;
         self.beat.restore(&self.pools, resume.beat)?;
         self.coverage = analysis.coverage().clone();
         self.settled = false;

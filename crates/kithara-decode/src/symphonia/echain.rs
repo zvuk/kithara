@@ -2,7 +2,7 @@ use std::{error::Error as StdError, io};
 
 #[cfg(test)]
 use kithara_stream::PendingReason::SeekPending;
-use symphonia::core::errors::Error;
+use symphonia_core::errors::Error;
 
 pub(crate) type SymphoniaError = Error;
 

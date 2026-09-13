@@ -33,6 +33,7 @@ fn default_pcm() -> Vec<u8> {
 #[case::frames_8000(8000)]
 #[case::frames_132300(132300)]
 #[case::frames_264600(264600)]
+#[case::frames_1323000(1323000)]
 #[case::frames_16(16)]
 #[case::frames_100(100)]
 #[case::frames_1000(1000)]

@@ -1,3 +1,4 @@
+#![cfg(not(target_os = "android"))]
 #![forbid(unsafe_code)]
 
 use std::io::Cursor;

@@ -8,27 +8,31 @@ use crate::{
 };
 
 pub(crate) type Config = Option<usize>;
-pub(crate) type Slot = Option<WaveformPass>;
+#[derive(Default)]
+pub(crate) struct Slot(Option<WaveformPass>);
 
-pub(crate) fn build<S>(
-    config: &Config,
-    rate: NonZeroU32,
-    pools: &PoolRegion<S>,
-) -> Result<Slot, PoolError>
+impl<S> TryFrom<(&Config, NonZeroU32, &PoolRegion<S>)> for Slot
 where
     S: HasPool<f32>,
 {
-    config
-        .as_ref()
-        .map(|buckets| WaveformPass::new(rate.get(), *buckets, pools))
-        .transpose()
+    type Error = PoolError;
+
+    fn try_from(
+        (config, rate, pools): (&Config, NonZeroU32, &PoolRegion<S>),
+    ) -> Result<Self, Self::Error> {
+        config
+            .as_ref()
+            .map(|buckets| WaveformPass::new(rate.get(), *buckets, pools))
+            .transpose()
+            .map(Self)
+    }
 }
 
-pub(crate) fn cache_tag(config: &Config) -> Option<String> {
+pub(crate) fn cache_tag(config: Config) -> Option<String> {
     config.map(|buckets| format!("wave:native:max{buckets}:v1"))
 }
 
-pub(crate) const fn config_is_empty(config: &Config) -> bool {
+pub(crate) const fn config_is_empty(config: Config) -> bool {
     config.is_none()
 }
 
@@ -37,6 +41,7 @@ where
     S: HasPool<f32>,
 {
     let failure = slot
+        .0
         .as_mut()
         .and_then(|analyzer| analyzer.push(pools, pcm, channels, at).err());
     if let Some(error) = failure {
@@ -44,16 +49,16 @@ where
             ?error,
             "waveform analysis buffer allocation failed; waveform disabled"
         );
-        *slot = None;
+        slot.0 = None;
     }
 }
 
 pub(crate) fn snapshot(slot: &mut Slot, extent: Option<u64>) -> Option<Waveform> {
-    slot.as_mut().map(|analyzer| analyzer.snapshot(extent))
+    slot.0.as_mut().map(|analyzer| analyzer.snapshot(extent))
 }
 
 pub(crate) fn write_resume(slot: &Slot) -> Option<Vec<u8>> {
-    slot.as_ref().map(|analyzer| {
+    slot.0.as_ref().map(|analyzer| {
         let mut out = Vec::new();
         analyzer.write_resume(&mut out);
         out
@@ -68,7 +73,7 @@ pub(crate) fn restore<S>(
 where
     S: HasPool<f32>,
 {
-    match (slot.as_mut(), resume) {
+    match (slot.0.as_mut(), resume) {
         (Some(analyzer), Some(resume)) => analyzer.restore(pools, resume),
         (None, None) => Ok(()),
         (Some(_), None) | (None, Some(_)) => Err(BlobError::Corrupt),

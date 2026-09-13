@@ -1,9 +1,7 @@
 mod build;
-mod deps;
 mod link;
 mod report;
 mod runner;
-mod stage;
 
 use std::{
     collections::BTreeMap,
@@ -21,21 +19,22 @@ use sha2::{Digest, Sha256};
 use super::device::Selected;
 use crate::child;
 
-/// Packages the ART inventory excludes. The first group carries a mechanism
-/// that stops the build or the run; the second sits outside the closure of
-/// `cargo tree -p kithara-ffi --no-default-features --features
-/// uniffi,android,stretch-signalsmith --target aarch64-linux-android -e normal`.
+/// Packages outside the mobile product or owned by host support suites.
 const ART_TEST_EXCLUDES: &[&str] = &[
-    "kithara-app",        // android-activity in its graph fails to compile for this target
-    "kithara-apple",      // Apple platform backend
-    "kithara-test-dylib", // shared graph the other images load; a lib test relinks it
-    "kithara-workspace-hack", // dependency unification crate with an empty lib
-    "kithara-beat",       // beat backend; kithara-analysis leaves analysis-beat empty
-    "kithara-broadcast",  // live HLS packaging behind the facade broadcast feature
-    "kithara-encode",     // encoding for kithara-app, kithara-broadcast, fixture export
-    "kithara-encode-tests", // test crate for kithara-encode
-    "kithara-mpa",        // MPEG-audio demuxer behind kithara-decode optional symphonia
-    "kithara-record",     // master recording for kithara-app
+    "kithara-harness-tests",   // host test-harness contracts
+    "kithara-test-fixtures",   // host fixture-store and producer contracts
+    "kithara-app-tests",       // desktop application scenarios
+    "kithara-analysis-tests",  // waveform and beat analysis outside the mobile composition
+    "kithara-broadcast-tests", // live packaging outside the mobile composition
+    "kithara-app",             // desktop application
+    "kithara-apple",           // Apple platform backend
+    "kithara-test-dylib",      // shared graph the other images load; a lib test relinks it
+    "kithara-workspace-hack",  // dependency unification crate with an empty lib
+    "kithara-beat",            // beat backend; kithara-analysis leaves analysis-beat empty
+    "kithara-broadcast",       // live HLS packaging behind the facade broadcast feature
+    "kithara-encode",          // encoding for kithara-app, kithara-broadcast, fixture export
+    "kithara-encode-tests",    // test crate for kithara-encode
+    "kithara-record",          // master recording for kithara-app
 ];
 
 fn cargo_package_excludes() -> Vec<String> {
@@ -49,6 +48,9 @@ fn cargo_package_excludes() -> Vec<String> {
 fn art_nextest_list_extra(target: &str) -> Vec<String> {
     [
         vec![
+            "--no-default-features".into(),
+            "--features".into(),
+            super::device_features(crate::BuildProfile::Debug).into(),
             "--tests".into(),
             "--target".into(),
             target.into(),
@@ -71,7 +73,6 @@ pub(crate) struct Prepared {
     cargo_target: PathBuf,
     environment: BTreeMap<String, String>,
     session: runner::Session,
-    _lease: FileLock,
     _cache_lease: FileLock,
 }
 
@@ -120,8 +121,6 @@ impl Prepared {
     fn run_inner(&self, device_url: &str, cancel: &child::Cancel) -> Result<()> {
         let started = std::time::Instant::now();
         let mut session = self.session.clone();
-        let beat = self.root.join("crates/kithara-beat/tests/fixtures");
-        stage::directory(&session, &beat, "beat-fixtures", cancel)?;
         session
             .environment
             .extend(art_session_environment(&session.directory, device_url));
@@ -261,10 +260,6 @@ fn art_session_environment(directory: &str, device_url: &str) -> BTreeMap<String
             format!("{directory}/fixtures"),
         ),
         ("KITHARA_FIXTURE_ORIGIN".into(), device_url.to_owned()),
-        (
-            "KITHARA_BEAT_FIXTURE_DIR".into(),
-            format!("{directory}/beat-fixtures"),
-        ),
         ("KITHARA_TEST_SERVER_URL".into(), device_url.to_owned()),
         ("TMPDIR".into(), directory.to_owned()),
     ])
@@ -349,42 +344,22 @@ mod tests {
             env.get("KITHARA_FIXTURE_ORIGIN")
         );
         assert_eq!(
-            env.get("KITHARA_BEAT_FIXTURE_DIR").map(String::as_str),
-            Some("/data/user/0/com.kithara.nativetest/files/run-1/beat-fixtures")
-        );
-        assert_eq!(
             env.get("TMPDIR").map(String::as_str),
             Some("/data/user/0/com.kithara.nativetest/files/run-1")
         );
     }
 
     #[test]
-    fn art_excludes_exactly_the_recorded_packages() {
-        assert_eq!(
-            cargo_package_excludes(),
-            [
-                "--exclude",
-                "kithara-app",
-                "--exclude",
-                "kithara-apple",
-                "--exclude",
-                "kithara-test-dylib",
-                "--exclude",
-                "kithara-workspace-hack",
-                "--exclude",
-                "kithara-beat",
-                "--exclude",
-                "kithara-broadcast",
-                "--exclude",
-                "kithara-encode",
-                "--exclude",
-                "kithara-encode-tests",
-                "--exclude",
-                "kithara-mpa",
-                "--exclude",
-                "kithara-record",
-            ]
-        );
+    fn host_support_and_application_suites_do_not_get_device_images() {
+        for package in [
+            "kithara-app-tests",
+            "kithara-analysis-tests",
+            "kithara-harness-tests",
+            "kithara-test-fixtures",
+            "kithara-beat",
+        ] {
+            assert!(ART_TEST_EXCLUDES.contains(&package));
+        }
     }
 
     #[test]
@@ -416,7 +391,7 @@ mod tests {
                 "{package} sits in the Android product closure"
             );
         }
-        for package in ["kithara-stream-tests", "kithara-test-fixtures"] {
+        for package in ["kithara-stream-tests"] {
             assert!(
                 !excludes.iter().any(|arg| arg == package),
                 "{package} carries device cases the lane runs"
@@ -432,6 +407,9 @@ mod tests {
         assert_eq!(
             flags,
             [
+                "--no-default-features",
+                "--features",
+                crate::android::device_features(crate::BuildProfile::Debug),
                 "--tests",
                 "--target",
                 "aarch64-linux-android",

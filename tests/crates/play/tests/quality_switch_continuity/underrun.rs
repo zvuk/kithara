@@ -265,16 +265,26 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     hang_timeout_secs(3),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug")
 )]
-#[case::delayed_symphonia(
+#[cfg_attr(not(target_os = "android"), case::delayed_symphonia(
     DecoderBackend::Symphonia,
     TARGET_SEGMENT_DELAY_MS,
     "delayed target rebuild"
-, target_source().await)]
-#[case::slow_symphonia(
+, target_source().await))]
+#[cfg_attr(target_os = "android", case::delayed_android(
+    DecoderBackend::default(),
+    TARGET_SEGMENT_DELAY_MS,
+    "delayed target rebuild"
+, target_source().await))]
+#[cfg_attr(not(target_os = "android"), case::slow_symphonia(
     DecoderBackend::Symphonia,
     SLOW_TARGET_SEGMENT_DELAY_MS,
     "manual AAC-to-FLAC switch"
-, slow_source().await)]
+, slow_source().await))]
+#[cfg_attr(target_os = "android", case::slow_android(
+    DecoderBackend::default(),
+    SLOW_TARGET_SEGMENT_DELAY_MS,
+    "manual AAC-to-FLAC switch"
+, slow_source().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::delayed_apple(
@@ -329,7 +339,8 @@ async fn target_rebuild_keeps_player_output_continuous(
     hang_timeout_secs(3),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug")
 )]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)

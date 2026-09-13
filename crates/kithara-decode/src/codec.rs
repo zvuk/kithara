@@ -58,11 +58,10 @@ pub(crate) trait FrameCodec: Send + 'static {
         Ok(())
     }
 
-    /// Presentation time of the PCM produced by the most recent non-empty
-    /// [`Self::decode_frame`] call. Queue codecs override this when output lags
-    /// the packet supplied to that call.
-    fn decoded_pts(&self, input_pts: Duration) -> Duration {
-        input_pts
+    /// Codec-owned presentation time of the most recent non-empty PCM output.
+    /// `None` uses synchronous packet timing and infers leading strip from its duration.
+    fn decoded_pts(&self) -> Option<Duration> {
+        None
     }
 
     /// Decoder-side algorithmic delay in PCM frames for `codec` — the

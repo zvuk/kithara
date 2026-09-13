@@ -403,18 +403,24 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
     tokio,
     browser,
     serial,
-    timeout(Consts::browser_timeout(30, 120)),
+    timeout(if cfg!(target_os = "android") {
+        Duration::from_secs(120)
+    } else {
+        Consts::browser_timeout(30, 120)
+    }),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
     )
 )]
-#[case::hls_sw("HLS", DecoderBackend::Symphonia, mixed_plain().await)]
+#[cfg_attr(not(target_os = "android"), case::hls_sw("HLS", DecoderBackend::Symphonia, mixed_plain().await))]
+#[cfg_attr(target_os = "android", case::hls_android("HLS", DecoderBackend::default(), mixed_plain().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hls_hw("HLS", DecoderBackend::Apple, mixed_plain().await)
 )]
-#[case::drm_sw("DRM", DecoderBackend::Symphonia, mixed_encrypted().await)]
+#[cfg_attr(not(target_os = "android"), case::drm_sw("DRM", DecoderBackend::Symphonia, mixed_encrypted().await))]
+#[cfg_attr(target_os = "android", case::drm_android("DRM", DecoderBackend::default(), mixed_encrypted().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::drm_hw("DRM", DecoderBackend::Apple, mixed_encrypted().await)
@@ -1235,12 +1241,14 @@ async fn live_ephemeral_small_cache_playback(
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-#[case::hls_sw(false, "HLS", DecoderBackend::Symphonia, mixed_plain().await)]
+#[cfg_attr(not(target_os = "android"), case::hls_sw(false, "HLS", DecoderBackend::Symphonia, mixed_plain().await))]
+#[cfg_attr(target_os = "android", case::hls_android(false, "HLS", DecoderBackend::default(), mixed_plain().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hls_hw(false, "HLS", DecoderBackend::Apple, mixed_plain().await)
 )]
-#[case::drm_sw(true, "DRM", DecoderBackend::Symphonia, mixed_encrypted().await)]
+#[cfg_attr(not(target_os = "android"), case::drm_sw(true, "DRM", DecoderBackend::Symphonia, mixed_encrypted().await))]
+#[cfg_attr(target_os = "android", case::drm_android(true, "DRM", DecoderBackend::default(), mixed_encrypted().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::drm_hw(true, "DRM", DecoderBackend::Apple, mixed_encrypted().await)

@@ -37,12 +37,7 @@ pub(crate) fn run(args: &[OsString]) -> Result<()> {
             .map(|context| bootstrap(&config, context))
             .transpose()?;
         command.args(args.iter().filter(|arg| arg.as_os_str() != "-pie"));
-        // The test image resolves its own globals, which keeps FFmpeg's aarch64
-        // tables non-preemptible.
-        command
-            .arg("-shared")
-            .arg("-Wl,-Bsymbolic")
-            .arg(&config.bridge);
+        command.arg("-shared").arg(&config.bridge);
         if let Some(object) = object {
             command.arg(object);
         }

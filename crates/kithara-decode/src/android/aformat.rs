@@ -12,6 +12,17 @@ pub(crate) struct OwnedFormat {
 }
 
 impl OwnedFormat {
+    pub(crate) fn get_str(&self, key: &CStr) -> Option<&CStr> {
+        let mut value = std::ptr::null();
+        // SAFETY: the format and key are live; value is a writable out-parameter.
+        let found = unsafe { ffi::AMediaFormat_getString(self.raw(), key.as_ptr(), &mut value) };
+        if !found || value.is_null() {
+            return None;
+        }
+        // SAFETY: the successful query returns a NUL-terminated string owned by this format.
+        Some(unsafe { CStr::from_ptr(value) })
+    }
+
     pub(crate) fn get_i32(&self, key: &CStr) -> Option<i32> {
         let mut value = 0;
         // SAFETY: `raw` is live; `key` is NUL-terminated and `value` is an out-param.

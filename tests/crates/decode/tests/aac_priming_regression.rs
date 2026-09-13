@@ -1,3 +1,5 @@
+#![cfg(not(target_os = "android"))]
+
 use std::io::Cursor;
 
 use kithara::{

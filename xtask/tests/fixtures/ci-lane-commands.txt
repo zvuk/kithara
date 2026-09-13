@@ -41,34 +41,42 @@
 # android-test / branch
   <require os> macos
   <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
   just platform android test --avd Kithara_CI_API_36
 # android-test / platforms
   <require os> macos
   <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
   just platform android test --avd Kithara_CI_API_36
 # android-test / merge-request
   <require os> macos
   <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
   just platform android test --avd Kithara_CI_API_36
 # android-test / quarantine
   <require os> macos
   <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
   just platform android test --avd Kithara_CI_API_36
 # android-test / main
   <require os> macos
   <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
   just platform android test --avd Kithara_CI_API_36
 # android-test / nightly
   <require os> macos
   <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
   just platform android test --avd Kithara_CI_API_36
 # android-test / weekly
   <require os> macos
   <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
   just platform android test --avd Kithara_CI_API_36
 # android-test / release
   <require os> macos
   <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
   just platform android test --avd Kithara_CI_API_36
 # apple-e2e / branch
   <require os> macos

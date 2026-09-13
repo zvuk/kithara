@@ -39,8 +39,6 @@ pub(crate) struct CiPins {
     pub(crate) cmake_version: String,
     pub(crate) cmake_windows_amd64_sha256: String,
     pub(crate) expected_xcode_version: String,
-    pub(crate) ffmpeg_source_sha256: String,
-    pub(crate) ffmpeg_source_version: String,
     pub(crate) geckodriver_linux_amd64_sha256: String,
     pub(crate) geckodriver_linux_arm64_sha256: String,
     pub(crate) geckodriver_version: String,
@@ -52,8 +50,6 @@ pub(crate) struct CiPins {
     pub(crate) gitleaks_linux_amd64_sha256: String,
     pub(crate) gitleaks_linux_arm64_sha256: String,
     pub(crate) gitleaks_version: String,
-    pub(crate) lame_source_sha256: String,
-    pub(crate) lame_source_version: String,
     pub(crate) linux_base_digest: String,
     pub(crate) linux_android_image: String,
     pub(crate) linux_android_runner_image: String,
@@ -116,8 +112,6 @@ impl CiPins {
                 self.android_commandline_tools_version.as_str(),
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
-            ("ffmpeg_source_version", self.ffmpeg_source_version.as_str()),
-            ("lame_source_version", self.lame_source_version.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
             (
                 "expected_xcode_version",
@@ -216,8 +210,6 @@ impl CiPins {
                 "gitleaks_linux_arm64_sha256",
                 self.gitleaks_linux_arm64_sha256.as_str(),
             ),
-            ("ffmpeg_source_sha256", self.ffmpeg_source_sha256.as_str()),
-            ("lame_source_sha256", self.lame_source_sha256.as_str()),
             ("linux_base_digest", self.linux_base_digest.as_str()),
             (
                 "rtsan_linux_amd64_sha256",
@@ -361,11 +353,6 @@ mod tests {
             declared.split('.').next().unwrap(),
             line,
             "ffmpeg-next {declared} binds to headers ffmpeg@{line} does not carry"
-        );
-        assert_eq!(
-            pins.ffmpeg_source_version.split('.').next().unwrap(),
-            line,
-            "Android FFmpeg source must match the bindings ABI line"
         );
     }
 

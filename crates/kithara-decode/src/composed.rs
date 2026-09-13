@@ -281,10 +281,13 @@ where
                     }
                 };
             let prior_head_strip = self.head_strip.frames();
-            self.head_strip.record(
-                self.spec.frame_at(frame_duration).unwrap_or(u64::MAX),
-                u64::from(frames),
-            );
+            let decoded_pts = self.codec.decoded_pts();
+            if decoded_pts.is_none() {
+                self.head_strip.record(
+                    self.spec.frame_at(frame_duration).unwrap_or(u64::MAX),
+                    u64::from(frames),
+                );
+            }
             let zero_frame_budget_reached = if frames == 0 {
                 self.zero_frame_count = self.zero_frame_count.saturating_add(1);
                 self.zero_frame_count >= ZERO_FRAME_BUDGET
@@ -294,10 +297,12 @@ where
             };
             let mut chunk_pts = if frames == 0 {
                 frame_pts
+            } else if let Some(decoded_pts) = decoded_pts {
+                decoded_pts
             } else {
                 // A head-trimmed packet keeps its end time; the missing prefix precedes its PCM.
                 let stripped = self.head_strip.frames().saturating_sub(prior_head_strip);
-                self.codec.decoded_pts(frame_pts).saturating_add(
+                frame_pts.saturating_add(
                     self.codec
                         .spec()
                         .duration_for(stripped)
@@ -305,16 +310,12 @@ where
                 )
             };
             if let Some(target) = self.pending_seek_target {
-                let decoded_end = if chunk_pts == frame_pts {
-                    frame_end
-                } else {
-                    chunk_pts.saturating_add(
-                        self.codec
-                            .spec()
-                            .duration_for(u64::from(frames))
-                            .unwrap_or(Duration::from_nanos(u64::MAX)),
-                    )
-                };
+                let decoded_end = chunk_pts.saturating_add(
+                    self.codec
+                        .spec()
+                        .duration_for(u64::from(frames))
+                        .unwrap_or(Duration::from_nanos(u64::MAX)),
+                );
                 if (frames == 0 && frame_end <= target) || (frames > 0 && decoded_end <= target) {
                     self.output = Some(Ok(buf));
                     if zero_frame_budget_reached {
@@ -532,12 +533,14 @@ impl DecoderRuntime<crate::test_pools::TestPools> {
     }
 }
 
-#[cfg(all(test, feature = "symphonia"))]
+#[cfg(test)]
+#[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
 mod default_priming_tests {
     use std::io::Cursor;
 
     use kithara_stream::AudioCodec;
     use kithara_test_fixtures::fixtures::tone_mp3;
+    #[cfg(feature = "symphonia")]
     use symphonia::{
         core::{
             formats::{FormatOptions, probe::Hint},
@@ -548,9 +551,11 @@ mod default_priming_tests {
     };
 
     use super::*;
+    #[cfg(feature = "symphonia")]
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
 
-    fn build_mp3_decoder(
+    #[cfg(feature = "symphonia")]
+    pub(super) fn build_mp3_decoder(
         tone_mp3: &[u8],
     ) -> ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec, crate::test_pools::TestPools> {
         let cursor = Cursor::new(tone_mp3.to_vec());
@@ -570,6 +575,27 @@ mod default_priming_tests {
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
+        ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test())
+    }
+
+    #[cfg(all(not(feature = "symphonia"), feature = "android", target_os = "android"))]
+    pub(super) fn build_mp3_decoder(
+        tone_mp3: &[u8],
+    ) -> ComposedDecoder<
+        crate::android::AndroidMediaExtractorDemuxer,
+        crate::android::AndroidCodec,
+        crate::test_pools::TestPools,
+    > {
+        let (demuxer, format) = crate::android::AndroidMediaExtractorDemuxer::open(
+            Box::new(Cursor::new(tone_mp3.to_vec())),
+            AudioCodec::Mp3,
+            None,
+            None,
+            None,
+        )
+        .expect("MP3 extractor");
+        let codec = crate::android::AndroidCodec::open_with_format(demuxer.track_info(), &format)
+            .expect("MP3 codec");
         ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test())
     }
 
@@ -688,6 +714,7 @@ mod default_priming_tests {
         }
     }
 
+    #[cfg(feature = "symphonia")]
     #[kithara::test]
     fn composed_decoder_priming_combines_encoder_and_symphonia_mp3_algo_delay(
         tone_mp3: &'static [u8],
@@ -721,50 +748,23 @@ fn frames_to_trim(frame_pts: Duration, target: Duration, sample_rate: u32) -> u6
     u64::try_from(frames_u128).unwrap_or(u64::MAX)
 }
 
-#[cfg(all(test, feature = "symphonia"))]
+#[cfg(test)]
+#[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
 mod smoke_tests {
 
+    #[cfg(feature = "symphonia")]
     use std::io::Cursor;
 
-    use kithara_stream::AudioCodec;
     use kithara_test_fixtures::fixtures::tone_mp3;
-    use kithara_test_utils::kithara;
-    use symphonia::{
-        core::{
-            formats::{FormatOptions, probe::Hint},
-            io::{MediaSourceStream, MediaSourceStreamOptions},
-            meta::MetadataOptions,
-        },
-        default,
-    };
 
-    use super::*;
-    use crate::{
-        symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
-        traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
-    };
-
-    fn build_mp3_demuxer(tone_mp3: &[u8]) -> SymphoniaDemuxer {
-        let cursor = Cursor::new(tone_mp3.to_vec());
-        let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
-        let mut hint = Hint::new();
-        hint.with_extension("mp3");
-        let format_reader = default::get_probe()
-            .probe(
-                &hint,
-                mss,
-                FormatOptions::default(),
-                MetadataOptions::default(),
-            )
-            .expect("BUG: MP3 probe should succeed");
-        SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
-            .expect("BUG: MP3 demuxer should build")
-    }
+    use super::{default_priming_tests::build_mp3_decoder, *};
+    #[cfg(feature = "symphonia")]
+    use crate::symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
 
     #[kithara::test]
     fn mp3_track_info_carries_codec_and_rate(tone_mp3: &'static [u8]) {
-        let demuxer = build_mp3_demuxer(tone_mp3);
-        let info = demuxer.track_info();
+        let decoder = build_mp3_decoder(tone_mp3);
+        let info = decoder.demuxer.track_info();
         assert_eq!(info.codec, AudioCodec::Mp3);
         assert!(info.sample_rate > 0, "sample rate must be populated");
         assert!(info.channels > 0, "channels must be populated");
@@ -772,11 +772,7 @@ mod smoke_tests {
 
     #[kithara::test]
     fn mp3_universal_decoder_emits_non_empty_chunks(tone_mp3: &'static [u8]) {
-        let demuxer = build_mp3_demuxer(tone_mp3);
-        let track_info = demuxer.track_info().clone();
-        let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
-            .expect("BUG: MP3 codec should open");
-        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+        let mut decoder = build_mp3_decoder(tone_mp3);
 
         let mut got_chunk = false;
         for _ in 0..16 {
@@ -800,11 +796,7 @@ mod smoke_tests {
 
     #[kithara::test]
     fn mp3_universal_decoder_seeks_back_to_start_after_pulling_chunks(tone_mp3: &'static [u8]) {
-        let demuxer = build_mp3_demuxer(tone_mp3);
-        let track_info = demuxer.track_info().clone();
-        let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
-            .expect("BUG: MP3 codec should open");
-        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+        let mut decoder = build_mp3_decoder(tone_mp3);
 
         for _ in 0..4 {
             let _ = decoder
@@ -828,6 +820,7 @@ mod smoke_tests {
         }
     }
 
+    #[cfg(feature = "symphonia")]
     #[kithara::test]
     fn symphonia_mp3_demuxer_emits_notneeded_preroll_after_seek(tone_mp3: &'static [u8]) {
         let (demuxer, _byte_len_handle) = SymphoniaDemuxer::open_file(
@@ -984,8 +977,8 @@ mod test_stub_codec {
             super::write_silent_test_frame(&self.pcm, self.spec, self.frames_per_call, out)
         }
 
-        fn decoded_pts(&self, _input_pts: Duration) -> Duration {
-            self.decoded_pts
+        fn decoded_pts(&self) -> Option<Duration> {
+            Some(self.decoded_pts)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -1267,6 +1260,7 @@ mod seek_trim_tests {
     enum SeekTrimLayout {
         RegularPackets,
         RoundedPastTarget,
+        UnknownPacketDuration,
     }
 
     impl Demuxer for ThreeFrameDemuxer {
@@ -1367,6 +1361,13 @@ mod seek_trim_tests {
         match layout {
             SeekTrimLayout::RegularPackets => regular_seek_frames(),
             SeekTrimLayout::RoundedPastTarget => rounded_past_target_frames(target),
+            SeekTrimLayout::UnknownPacketDuration => regular_seek_frames()
+                .into_iter()
+                .map(|frame| BoundaryFrame {
+                    duration: Duration::ZERO,
+                    ..frame
+                })
+                .collect(),
         }
     }
 
@@ -1586,6 +1587,11 @@ mod seek_trim_tests {
 
         assert_eq!(chunk.meta.timestamp, target);
         assert_eq!(chunk.meta.frames, FRAME_FRAMES / 2);
+        assert_eq!(
+            decoder.timeline_gap_frames(),
+            0,
+            "buffered PCM must not count as discarded leading frames"
+        );
     }
 
     #[kithara::test]
@@ -1596,6 +1602,10 @@ mod seek_trim_tests {
     #[case::mid_packet(
         test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512),
         SeekTrimLayout::RegularPackets
+    )]
+    #[case::unknown_packet_duration(
+        test_duration(Consts::SAMPLE_RATE, 512),
+        SeekTrimLayout::UnknownPacketDuration
     )]
     #[case::rounding_hair_past_boundary(
         test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
