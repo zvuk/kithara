@@ -103,7 +103,7 @@ client-wreq = ["kithara/client-wreq"]
 # placing the reported bug above the Rust layer. Kept out of the main gate so
 # known red does not turn the baseline into noise. A fixed regression test
 # moves to `suite_light.rs` and leaves this lane.
-integration-regressions = []
+integration-regressions = ["all"]
 # Deterministic virtual-clock test mode. Routes the platform's blocking waits
 # (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed
 # waits collapse to virtual time. Off by default; enabling it compiles every
@@ -204,7 +204,7 @@ mmap-io = { workspace = true }
 rand = { workspace = true }
 
 # HTTP server (axum stack not available on WASM)
-reqwest = { workspace = true, features = ["rustls", "stream"] }
+reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 
 tokio-stream = { workspace = true }
 tower = { workspace = true }
