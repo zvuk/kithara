@@ -4,7 +4,7 @@ mod report;
 mod runner;
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fs,
     io::Read as _,
@@ -13,39 +13,36 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use cargo_metadata::{Metadata, MetadataCommand};
 use kithara_devtools::{common::project::ProjectConfig, lock::FileLock, test::NextestAction};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::device::Selected;
 use crate::child;
 
-/// Packages outside the mobile product or owned by host support suites.
-const ART_TEST_EXCLUDES: &[&str] = &[
-    "kithara-harness-tests",   // host test-harness contracts
-    "kithara-test-fixtures",   // host fixture-store and producer contracts
-    "kithara-app-tests",       // desktop application scenarios
-    "kithara-analysis-tests",  // waveform and beat analysis outside the mobile composition
-    "kithara-broadcast-tests", // live packaging outside the mobile composition
-    "kithara-app",             // desktop application
-    "kithara-apple",           // Apple platform backend
-    "kithara-test-dylib",      // shared graph the other images load; a lib test relinks it
-    "kithara-workspace-hack",  // dependency unification crate with an empty lib
-    "kithara-beat",            // beat backend; kithara-analysis leaves analysis-beat empty
-    "kithara-broadcast",       // live HLS packaging behind the facade broadcast feature
-    "kithara-encode",          // encoding for kithara-app, kithara-broadcast, fixture export
-    "kithara-encode-tests",    // test crate for kithara-encode
-    "kithara-record",          // master recording for kithara-app
-];
-
-fn cargo_package_excludes() -> Vec<String> {
-    ART_TEST_EXCLUDES
-        .iter()
-        .flat_map(|package| ["--exclude", *package])
-        .map(str::to_owned)
-        .collect()
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+enum AndroidTestRole {
+    DeviceHarness,
+    FixtureProvider,
+    ProductSuite,
 }
 
-fn art_nextest_list_extra(target: &str) -> Vec<String> {
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AndroidTestMetadata {
+    product: Option<String>,
+    role: AndroidTestRole,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+struct SelectedPackage {
+    package: String,
+    reason: String,
+}
+
+fn art_nextest_list_extra(target: &str, packages: &[SelectedPackage]) -> Vec<String> {
     [
         vec![
             "--no-default-features".into(),
@@ -61,9 +58,133 @@ fn art_nextest_list_extra(target: &str) -> Vec<String> {
             "--message-format".into(),
             "json".into(),
         ],
-        cargo_package_excludes(),
+        packages
+            .iter()
+            .flat_map(|selected| ["-p".to_owned(), selected.package.clone()])
+            .collect(),
     ]
     .concat()
+}
+
+fn android_package_selection(
+    root: &Path,
+    target: &str,
+    product: &str,
+) -> Result<Vec<SelectedPackage>> {
+    let product_packages = android_product_packages(root, target, product)?;
+    let metadata = MetadataCommand::new()
+        .current_dir(root)
+        .no_deps()
+        .exec()
+        .context("reading workspace packages for Android test ownership")?;
+    select_android_packages(&metadata, &product_packages)
+}
+
+fn android_product_packages(root: &Path, target: &str, product: &str) -> Result<BTreeSet<String>> {
+    let output = Command::new("cargo")
+        .current_dir(root)
+        .args([
+            "tree",
+            "-p",
+            product,
+            "--target",
+            target,
+            "--no-default-features",
+            "--features",
+            super::device_features(crate::BuildProfile::Release),
+            "--edges",
+            "normal",
+            "--prefix",
+            "none",
+            "--format",
+            "{p}",
+            "--locked",
+        ])
+        .output()
+        .context("resolving shipped Android package graph")?;
+    if !output.status.success() {
+        bail!(
+            "resolving shipped Android package graph failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let packages = product_packages_from_tree(root, &String::from_utf8(output.stdout)?)?;
+    if !packages.contains(product) {
+        bail!("Android product package `{product}` is absent from its resolved graph");
+    }
+    Ok(packages)
+}
+
+fn product_packages_from_tree(root: &Path, tree: &str) -> Result<BTreeSet<String>> {
+    let workspace_prefix = format!("({}/", root.display());
+    let mut packages = BTreeSet::new();
+    for line in tree.lines().filter(|line| line.contains(&workspace_prefix)) {
+        let package = line
+            .split_ascii_whitespace()
+            .next()
+            .context("cargo tree emitted an empty package line")?;
+        packages.insert(package.to_owned());
+    }
+    Ok(packages)
+}
+
+fn select_android_packages(
+    metadata: &Metadata,
+    product_packages: &BTreeSet<String>,
+) -> Result<Vec<SelectedPackage>> {
+    let workspace: BTreeSet<_> = metadata
+        .workspace_members
+        .iter()
+        .filter_map(|id| metadata.packages.iter().find(|package| package.id == *id))
+        .map(|package| package.name.to_string())
+        .collect();
+    let declarations = metadata
+        .packages
+        .iter()
+        .filter(|package| workspace.contains(package.name.as_str()))
+        .filter_map(|package| {
+            package
+                .metadata
+                .pointer("/kithara/android-tests")
+                .map(|value| (package.name.as_str(), value))
+        });
+    select_android_package_declarations(product_packages, declarations)
+}
+
+fn select_android_package_declarations<'a>(
+    product_packages: &BTreeSet<String>,
+    declarations: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
+) -> Result<Vec<SelectedPackage>> {
+    let mut selected: BTreeMap<String, String> = product_packages
+        .iter()
+        .map(|package| (package.clone(), "shipped-product-closure".to_owned()))
+        .collect();
+    for (package, value) in declarations {
+        let declaration: AndroidTestMetadata = serde_json::from_value(value.clone())
+            .with_context(|| format!("reading Android test ownership for {package}"))?;
+        match declaration.role {
+            AndroidTestRole::ProductSuite => {
+                let owner = declaration.product.as_deref().with_context(|| {
+                    format!("Android product-suite {package} has no product owner")
+                })?;
+                if !product_packages.contains(owner) {
+                    bail!(
+                        "Android product-suite {package} names `{owner}`, which is outside the shipped product closure"
+                    );
+                }
+                selected.insert(package.to_owned(), format!("product-suite:{owner}"));
+            }
+            AndroidTestRole::DeviceHarness | AndroidTestRole::FixtureProvider => {
+                if declaration.product.is_some() {
+                    bail!("Android support package {package} must not name a product");
+                }
+            }
+        }
+    }
+    Ok(selected
+        .into_iter()
+        .map(|(package, reason)| SelectedPackage { package, reason })
+        .collect())
 }
 
 pub(crate) struct Prepared {
@@ -350,60 +471,37 @@ mod tests {
     }
 
     #[test]
-    fn host_support_and_application_suites_do_not_get_device_images() {
-        for package in [
-            "kithara-app-tests",
-            "kithara-analysis-tests",
-            "kithara-harness-tests",
-            "kithara-test-fixtures",
-            "kithara-beat",
-        ] {
-            assert!(ART_TEST_EXCLUDES.contains(&package));
-        }
+    fn product_tree_keeps_only_workspace_packages() {
+        let root = Path::new("/workspace");
+        let tree = "\
+kithara-ffi v0.0.1 (/workspace/crates/kithara-ffi)\n\
+bytes v1.0.0\n\
+kithara v0.0.1 (/workspace/crates/kithara)\n\
+kithara-stream v0.0.1 (/workspace/crates/kithara-stream)\n";
+        assert_eq!(
+            product_packages_from_tree(root, tree).unwrap(),
+            BTreeSet::from([
+                "kithara".to_owned(),
+                "kithara-ffi".to_owned(),
+                "kithara-stream".to_owned(),
+            ])
+        );
     }
 
     #[test]
-    fn android_closure_packages_keep_their_art_images() {
-        let excludes = cargo_package_excludes();
-        for package in [
-            "kithara",
-            "kithara-abr",
-            "kithara-analysis",
-            "kithara-audio",
-            "kithara-drm",
-            "kithara-events",
-            "kithara-ffi",
-            "kithara-file",
-            "kithara-hls",
-            "kithara-host",
-            "kithara-net",
-            "kithara-output",
-            "kithara-queue",
-            "kithara-resampler",
-            "kithara-signal",
-            "kithara-storage",
-            "kithara-stream",
-            "kithara-warp",
-            "kithara-worker",
-        ] {
-            assert!(
-                !excludes.iter().any(|arg| arg == package),
-                "{package} sits in the Android product closure"
-            );
-        }
-        for package in ["kithara-stream-tests"] {
-            assert!(
-                !excludes.iter().any(|arg| arg == package),
-                "{package} carries device cases the lane runs"
-            );
-        }
-    }
-
-    #[test]
-    fn art_nextest_list_extra_carries_the_lane_flags_and_excludes() {
-        let extra = art_nextest_list_extra("aarch64-linux-android");
-        let excludes = cargo_package_excludes();
-        let (flags, tail) = extra.split_at(extra.len() - excludes.len());
+    fn art_nextest_list_extra_selects_positive_packages() {
+        let packages = [
+            SelectedPackage {
+                package: "kithara-audio".into(),
+                reason: "shipped-product-closure".into(),
+            },
+            SelectedPackage {
+                package: "kithara-audio-tests".into(),
+                reason: "product-suite:kithara-audio".into(),
+            },
+        ];
+        let extra = art_nextest_list_extra("aarch64-linux-android", &packages);
+        let (flags, tail) = extra.split_at(extra.len() - 4);
         assert_eq!(
             flags,
             [
@@ -421,7 +519,94 @@ mod tests {
                 "json",
             ]
         );
-        assert_eq!(tail, excludes.as_slice());
+        assert_eq!(tail, ["-p", "kithara-audio", "-p", "kithara-audio-tests"]);
+        assert!(!extra.iter().any(|argument| argument == "--exclude"));
+    }
+
+    #[test]
+    fn package_selection_rejects_unknown_roles() {
+        let products = BTreeSet::from(["kithara-ffi".to_owned()]);
+        let declaration = serde_json::json!({"role": "host-suite"});
+        let error =
+            select_android_package_declarations(&products, [("kithara-host-tests", &declaration)])
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("reading Android test ownership for kithara-host-tests")
+        );
+    }
+
+    #[test]
+    fn package_selection_rejects_non_product_owners() {
+        let products = BTreeSet::from(["kithara-ffi".to_owned()]);
+        let declaration = serde_json::json!({
+            "role": "product-suite",
+            "product": "kithara-app"
+        });
+        let error =
+            select_android_package_declarations(&products, [("kithara-app-tests", &declaration)])
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("outside the shipped product closure")
+        );
+    }
+
+    #[test]
+    fn package_selection_adds_product_growth_without_host_growth() {
+        let products = BTreeSet::from(["kithara-ffi".to_owned(), "kithara-new-product".to_owned()]);
+        let suite = serde_json::json!({
+            "role": "product-suite",
+            "product": "kithara-new-product"
+        });
+        let selected =
+            select_android_package_declarations(&products, [("kithara-new-product-tests", &suite)])
+                .unwrap();
+        let names: BTreeSet<_> = selected
+            .iter()
+            .map(|package| package.package.as_str())
+            .collect();
+        assert!(names.contains("kithara-new-product"));
+        assert!(names.contains("kithara-new-product-tests"));
+        assert!(!names.contains("kithara-new-host-tool"));
+    }
+
+    #[test]
+    fn support_roles_cannot_claim_product_ownership() {
+        let products = BTreeSet::from(["kithara-ffi".to_owned()]);
+        for role in ["device-harness", "fixture-provider"] {
+            let declaration = serde_json::json!({
+                "role": role,
+                "product": "kithara-ffi"
+            });
+            let error = select_android_package_declarations(
+                &products,
+                [("kithara-test-support", &declaration)],
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("must not name a product"));
+        }
+    }
+
+    #[test]
+    fn workspace_android_selection_follows_product_and_suite_ownership() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask lives below the workspace root");
+        let selected = android_package_selection(root, "aarch64-linux-android", "kithara-ffi")
+            .expect("workspace Android package selection");
+        let names: BTreeSet<_> = selected
+            .iter()
+            .map(|package| package.package.as_str())
+            .collect();
+        assert!(names.contains("kithara-stream"));
+        assert!(names.contains("kithara-stream-tests"));
+        assert!(!names.contains("kithara-app"));
+        assert!(!names.contains("kithara-app-tests"));
+        assert!(!names.contains("kithara-beat"));
+        assert!(!names.contains("kithara-encode-tests"));
     }
 
     #[test]

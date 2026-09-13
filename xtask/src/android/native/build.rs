@@ -56,7 +56,13 @@ pub(super) fn prepare(
         environment,
         lease: cache_lease,
     } = configure(root, &evidence, &abi, target, cancel)?;
-    let extra = super::art_nextest_list_extra(target);
+    let product = KitharaExt::load(root)?.android.ffi_crate;
+    let packages = super::android_package_selection(root, target, &product)?;
+    fs::write(
+        evidence.join("package-selection.json"),
+        serde_json::to_vec_pretty(&packages)?,
+    )?;
+    let extra = super::art_nextest_list_extra(target, &packages);
     let mut command = default_nextest_command(config, &extra, NextestAction::List)?;
     command
         .current_dir(root)
