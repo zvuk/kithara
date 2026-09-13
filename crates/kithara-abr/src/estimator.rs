@@ -182,6 +182,33 @@ mod tests {
     }
 
     #[kithara::test]
+    fn ewma_normalizes_weighted_samples() {
+        let mut ewma = Ewma::new(2.0);
+        ewma.add_sample(1.0, 8_000_000.0);
+        ewma.add_sample(1.0, 16_000_000.0);
+        ewma.add_sample(2.0, 4_000_000.0);
+
+        assert!((ewma.get_estimate() - 6_895_430.500_338_413).abs() < 0.001);
+    }
+
+    #[kithara::test]
+    fn network_sample_converts_bytes_and_milliseconds_to_bits_per_second() {
+        let estimator = ThroughputEstimator::new();
+        estimator.push_sample(100_000, Duration::from_secs(1), BandwidthSource::Network);
+
+        assert_eq!(estimator.estimate_bps(), Some(800_000));
+    }
+
+    #[kithara::test]
+    fn elapsed_time_weights_later_network_samples() {
+        let estimator = ThroughputEstimator::new();
+        estimator.push_sample(1_000_000, Duration::from_secs(1), BandwidthSource::Network);
+        estimator.push_sample(4_000_000, Duration::from_secs(2), BandwidthSource::Network);
+
+        assert_eq!(estimator.estimate_bps(), Some(13_515_892));
+    }
+
+    #[kithara::test]
     fn min_chunk_size_filtering() {
         let est = ThroughputEstimator::new();
         est.push_sample(10_000, Duration::from_millis(100), BandwidthSource::Network);
@@ -189,6 +216,18 @@ mod tests {
 
         est.push_sample(100_000, Duration::from_secs(1), BandwidthSource::Network);
         assert!(est.estimate_bps().is_some());
+    }
+
+    #[kithara::test]
+    fn min_chunk_size_is_inclusive() {
+        let est = ThroughputEstimator::new();
+        est.push_sample(
+            ThroughputEstimator::MIN_CHUNK_BYTES,
+            Duration::from_secs(1),
+            BandwidthSource::Network,
+        );
+
+        assert_eq!(est.estimate_bps(), Some(128_000));
     }
 
     #[kithara::test]
