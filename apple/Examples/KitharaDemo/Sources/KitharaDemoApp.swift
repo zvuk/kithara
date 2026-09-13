@@ -1,10 +1,18 @@
+import AVFAudio
 import Kithara
 import SwiftUI
 
 @main
 struct KitharaDemoApp: App {
+    #if os(iOS)
+    private let isAudioSessionReady: Bool
+    #endif
+
     init() {
         Kithara.initLogging(level: .debug)
+        #if os(iOS)
+        isAudioSessionReady = Self.configureAudioSession()
+        #endif
     }
 
     #if os(macOS)
@@ -24,8 +32,14 @@ struct KitharaDemoApp: App {
             if Self.isHostingTests {
                 Color.clear
             } else {
+                #if os(iOS)
+                if !isAudioSessionReady {
+                    Text("KitharaDemo could not configure audio playback.")
+                } else {
+                    PlayerView()
+                }
+                #else
                 PlayerView()
-                #if os(macOS)
                 .onAppear {
                     // CLI-launched executables (not .app bundles) don't
                     // automatically become the active app on macOS,
@@ -44,6 +58,35 @@ struct KitharaDemoApp: App {
         .defaultSize(width: 520, height: 760)
         #endif
     }
+
+    #if os(iOS)
+    /// App-owned policy, applied before `PlayerView` can allocate its player.
+    private static func configureAudioSession() -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback)
+            try session.setPreferredSampleRate(48_000)
+            try session.setPreferredIOBufferDuration(128.0 / 48_000)
+            try session.setActive(true)
+
+            let sampleRate = session.sampleRate
+            let bufferDuration = session.ioBufferDuration
+            let frames = sampleRate * bufferDuration
+            print(
+                "[KitharaDemo] audio session: sampleRate=\(sampleRate), "
+                    + "ioBufferDuration=\(bufferDuration), frames=\(frames)"
+            )
+            guard sampleRate > 0, bufferDuration > 0 else {
+                print("[KitharaDemo] audio session granted invalid values")
+                return false
+            }
+            return true
+        } catch {
+            print("[KitharaDemo] audio session setup failed: \(error)")
+            return false
+        }
+    }
+    #endif
 }
 
 #if os(macOS)
