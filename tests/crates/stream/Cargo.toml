@@ -7,9 +7,6 @@ license.workspace = true
 publish = false
 autotests = false
 
-[lib]
-name = "kithara_stream_test_support"
-
 [features]
 default = ["client-reqwest", "tls-rustls"]
 client-reqwest = ["kithara/client-reqwest"]
@@ -19,7 +16,7 @@ tls-native = ["kithara/tls-native"]
 flash = ["kithara/flash"]
 no-block = ["kithara/no-block"]
 
-[dependencies]
+[dev-dependencies]
 kithara = { workspace = true, default-features = false, features = [
     "events",
     "platform",
