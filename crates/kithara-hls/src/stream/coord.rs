@@ -9,7 +9,7 @@ use kithara_bufpool::HasPool;
 use kithara_events::DeferredBus;
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, WaitGate},
+    sync::{Arc, Mutex, WaitGate},
     time::Duration,
 };
 use kithara_storage::WaitOutcome;
@@ -75,6 +75,12 @@ where
     /// Narrow seek-observe handle — derived from `seek` at construction.
     /// Used by internal methods that only need epoch/target/pending reads.
     seek_obs: Arc<dyn SeekObserve>,
+    /// Whether this coord currently holds the ABR lock for an in-flight seek.
+    /// The ABR lock is a shared counter, so the coord records its own level
+    /// rather than reading the counter back: it must never release a level it
+    /// did not take. The mutex also serialises the two threads that reconcile
+    /// the mirror — the peer poll and the produce pass that plans a reader.
+    abr_seek_lock: Mutex<bool>,
     signal: SizeSignal,
 }
 
@@ -129,6 +135,7 @@ where
             playhead,
             seek,
             seek_obs,
+            abr_seek_lock: Mutex::new(false),
             abr,
             abr_publisher,
             variants,
@@ -338,13 +345,22 @@ where
     }
 
     /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
+    ///
+    /// `plan_variant_reader` reconciles before it reads the claim, because it
+    /// is the site that mints a switch: a plan refused against a mirror that
+    /// still reads locked after the seek settled is refused for good — nothing
+    /// re-derives the pending intent, and the switch is lost. Idempotent, and
+    /// safe from any thread: the coord owns at most one lock level and moves
+    /// it only on an edge, so it never releases a level it did not take.
     pub(crate) fn sync_abr_lock(&self) {
+        let mut held = self.abr_seek_lock.lock();
         let pending = self.seek_obs.is_pending();
-        let locked = self.abr.is_locked();
-        if pending && !locked {
+        if pending && !*held {
             self.abr.lock();
-        } else if !pending && locked {
+            *held = true;
+        } else if !pending && *held {
             self.abr.unlock();
+            *held = false;
         }
     }
 
@@ -1553,6 +1569,36 @@ pub(super) mod tests {
     }
 
     #[kithara::test]
+    fn a_settled_seek_stops_refusing_a_switch_plan_before_the_next_peer_poll() {
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+        let epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.sync_abr_lock();
+        assert!(coord.abr.is_locked());
+        coord.seek_control().clear_pending(epoch);
+
+        let plan = coord
+            .plan_variant_reader(None)
+            .expect("plan after the seek settled")
+            .expect("a settled seek must not refuse the pending switch");
+
+        assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
+    }
+
+    #[kithara::test]
+    fn a_live_seek_refuses_a_switch_plan_without_a_peer_poll() {
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+
+        assert_eq!(
+            coord
+                .plan_variant_reader(None)
+                .expect("plan while the seek is live"),
+            None
+        );
+        assert!(coord.abr.is_locked());
+    }
+
+    #[kithara::test]
     fn ready_stale_plan_drops_old_epoch_incoming_without_deleting_selection() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let plan = coord
@@ -1658,6 +1704,7 @@ pub(super) mod tests {
         coord.prepare_for_seek();
 
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
+        coord.seek_control().clear_pending(next_epoch);
         let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("manual selection survives seek");
@@ -1683,6 +1730,7 @@ pub(super) mod tests {
         coord.prepare_for_seek();
 
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
+        coord.seek_control().clear_pending(next_epoch);
         let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("automatic selection survives seek");
@@ -1725,6 +1773,7 @@ pub(super) mod tests {
         );
         assert_eq!(coord.variant_index(), 0);
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
+        coord.seek_control().clear_pending(next_epoch);
         let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("manual selection survives epoch change");
