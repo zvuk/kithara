@@ -4,10 +4,11 @@ Domain suites live in `tests/crates/<domain>/tests/`, with each package's
 `Cargo.toml` beside that directory. Suite entrypoints select focused modules;
 subdirectories group scenarios rather than repeat the package name.
 
-`tests/crates/integration` owns cross-component scenarios (multi-instance,
-phase continuity, thread budgets and integration regressions), shared fixture
-helpers in `src/`, performance scenarios and benches. Its package name remains
-`kithara-integration-tests`, which domain packages use for shared helpers.
+The root `kithara-integration-tests` package owns shared fixture helpers in
+`tests/src`, support binaries, performance scenarios and benches. Domain
+packages consume that library. `tests/crates/integration` contains only the
+cross-component test targets: multi-instance, phase continuity, thread budgets
+and integration regressions.
 `tests/crates/harness` owns fixture-artifact, browser-runner, blocking-detector,
 flash and timeout tests. ABR contracts live in `abr`; platform loom models live
 in `platform`. Fuzz targets remain in `tests/fuzz`.
@@ -64,7 +65,7 @@ the same binary on `http://127.0.0.1:3444`, which `TEST_SERVER_URL` overrides.
 Complex `/signal` and `/stream` specs register through `POST /token`; helpers
 hand back ordinary `Url`s, so a test never sees the token.
 
-`tests/crates/integration/src/fixture_protocol.rs` owns the synthetic-HLS wire types (`DataMode`,
+`tests/src/fixture_protocol.rs` owns the synthetic-HLS wire types (`DataMode`,
 `InitMode`, `DelayRule`, `EncryptionRequest`) and the deterministic byte oracles,
 so byte assertions agree across helpers. Audio inputs, including small PCM
 arrays and encoded `/signal/*` assets, are prepared by `kithara-test-fixtures`
@@ -85,7 +86,7 @@ check/build/size-check only and runs no tests.
 - Only `suite_heavy` is built for `wasm32`, with every native module compiled
   out — `kithara_ffi_web` and `kithara_play::offline_browser` are the
   browser-visible coverage.
-- The offline harness in `tests/crates/integration/src/offline` builds on both targets; only
+- The offline harness in `tests/src/offline` builds on both targets; only
   `app.rs`, which needs `kithara-app`, is gated to native.
 - `OfflineWorker` owns the `OfflinePlayer`, on wasm from a Web Worker, because
   `Platform::offline` refuses a Host on the browser main thread. Open the
@@ -103,7 +104,7 @@ already-running page or driver instead of starting one.
 
 ## Perf and benches
 
-Perf scenarios are `#[ignore]`d. Criterion targets in `tests/crates/integration/benches` set
+Perf scenarios are `#[ignore]`d. Criterion targets in `tests/benches` set
 `harness = false` and are compiled only by `just perf bench`, which only builds
 in its default mode. No test lane touches them, so a changed signature breaks
 them silently.
@@ -113,7 +114,7 @@ Fuzzing: `fuzz/README.md`.
 ## Adding a test
 
 - Name the module in its suite root (`tests/crates/integration/tests/suite_*.rs`,
-  `tests/crates/integration/perf/suite_perf.rs`). A file nobody names compiles into nothing and
+  `tests/perf/suite_perf.rs`). A file nobody names compiles into nothing and
   passes silently. A perf file also needs `#![cfg(feature = "perf")]` and a
   `[[test]]` entry carrying `required-features = ["perf"]`.
 - Pick the suite and `#[kithara::test]` flags from the contract under test,

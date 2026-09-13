@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, bail};
 use fs4::TryLockError;
 use kithara_devtools::{Ctx, lease, lock::FileLock};
 use serde::{Deserialize, Serialize};
@@ -264,7 +264,12 @@ pub(crate) struct CiEnvironment {
 }
 
 impl CiEnvironment {
-    pub(crate) fn prepare(ctx: &Ctx, config: &CiConfig, cache_group: CacheGroup) -> Result<Self> {
+    pub(crate) fn prepare(
+        ctx: &Ctx,
+        config: &CiConfig,
+        cache_group: CacheGroup,
+        isolated_target: bool,
+    ) -> Result<Self> {
         config.validate()?;
         raise_open_file_limit()?;
         let project_root =
@@ -273,26 +278,19 @@ impl CiEnvironment {
             .or_else(|| env::var_os("USERPROFILE"))
             .map(PathBuf::from)
             .context("HOME or USERPROFILE must be set")?;
-        let shared_root = shared_root(config, cache_group);
-        let shared_root = if shared_root.is_dir() {
-            shared_root
-        } else if is_ci() {
-            bail!(
-                "shared CI cache is not mounted at {}",
-                shared_root.display()
-            );
-        } else {
-            home.join(".cache/kithara-ci")
-        };
-        fs::create_dir_all(&shared_root)
-            .with_context(|| format!("creating CI cache root {}", shared_root.display()))?;
+        let shared_root = prepare_shared_root(config, cache_group, &home)?;
 
         let trust = CacheTrust::from_environment()?;
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
         let target_scope = format!("{}-{platform}", trust.as_str());
         let cache_root = shared_root.join(trust.as_str()).join(&platform);
-        let (target, target_lease) =
-            prepare_build_target(&project_root, &shared_root, &target_scope, config)?;
+        let (target, target_lease) = prepare_build_target(
+            &project_root,
+            &shared_root,
+            &target_scope,
+            config,
+            isolated_target,
+        )?;
 
         ensure_room_for_a_job(config, &shared_root)?;
 
@@ -499,47 +497,76 @@ fn shared_root(config: &CiConfig, cache_group: CacheGroup) -> PathBuf {
     }
 }
 
+fn prepare_shared_root(config: &CiConfig, cache_group: CacheGroup, home: &Path) -> Result<PathBuf> {
+    let configured = shared_root(config, cache_group);
+    let root = if configured.is_dir() {
+        configured
+    } else if is_ci() {
+        bail!("shared CI cache is not mounted at {}", configured.display());
+    } else {
+        home.join(".cache/kithara-ci")
+    };
+    fs::create_dir_all(&root)
+        .with_context(|| format!("creating CI cache root {}", root.display()))?;
+    Ok(root)
+}
+
 fn is_ci() -> bool {
     env::var_os("CI").is_some_and(|value| !value.is_empty())
+}
+
+enum TargetOwner {
+    Checkout,
+    Job(String),
+    Slot(String, usize),
+}
+
+fn target_owner(config: &CiConfig, isolated: bool) -> Result<TargetOwner> {
+    if !is_gitlab() || cfg!(windows) {
+        return Ok(TargetOwner::Checkout);
+    }
+    if isolated {
+        return Ok(TargetOwner::Job(
+            env::var("CI_JOB_ID").context("CI_JOB_ID must identify the GitLab job")?,
+        ));
+    }
+    Ok(TargetOwner::Slot(
+        env::var("CI_CONCURRENT_ID")
+            .context("CI_CONCURRENT_ID must identify the disposable runner slot")?,
+        config.host.job_concurrency,
+    ))
 }
 
 fn build_target_dir(
     project_root: &Path,
     shared_root: &Path,
     target_scope: &str,
-    target_is_windows: bool,
-    gitlab: bool,
-    job_id: Option<&str>,
+    owner: TargetOwner,
 ) -> Result<PathBuf> {
-    if gitlab && !target_is_windows {
-        let job_id = job_id.context("CI_JOB_ID must identify the GitLab job")?;
-        ensure!(
-            !job_id.is_empty() && job_id.bytes().all(|byte| byte.is_ascii_digit()),
-            "CI_JOB_ID must be decimal digits"
-        );
-        return Ok(shared_root
-            .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
-            .join(format!("{target_scope}-job-{job_id}"))
-            .join("cargo"));
-    }
-    Ok(project_root.join("target"))
+    let owner = match owner {
+        TargetOwner::Checkout => return Ok(project_root.join("target")),
+        TargetOwner::Job(job_id) => {
+            format!("job-{}", parse_decimal_id("CI_JOB_ID", &job_id)?)
+        }
+        TargetOwner::Slot(concurrent_id, slots) => {
+            format!("slot-{}", disposable_slot(Some(&concurrent_id), slots)?)
+        }
+    };
+    Ok(shared_root
+        .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
+        .join(format!("{target_scope}-{owner}"))
+        .join("cargo"))
 }
 
 fn prepare_build_target(
     project_root: &Path,
     shared_root: &Path,
     target_scope: &str,
-    _config: &CiConfig,
+    config: &CiConfig,
+    isolated_target: bool,
 ) -> Result<(PathBuf, Option<lease::Lease>)> {
-    let job_id = env::var("CI_JOB_ID").ok();
-    let backing = build_target_dir(
-        project_root,
-        shared_root,
-        target_scope,
-        cfg!(windows),
-        is_gitlab(),
-        job_id.as_deref(),
-    )?;
+    let owner = target_owner(config, isolated_target)?;
+    let backing = build_target_dir(project_root, shared_root, target_scope, owner)?;
     fs::create_dir_all(&backing)
         .with_context(|| format!("creating CI build cache {}", backing.display()))?;
     // Claimed before anything is reclaimed, including by this job itself. Its
@@ -945,7 +972,8 @@ mod tests {
             let ctx = Ctx::new(project, ProjectConfig::default());
             let config = super::super::config::fixture();
 
-            let environment = CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos).unwrap();
+            let environment =
+                CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos, false).unwrap();
             let vars = environment.vars();
             assert_eq!(
                 vars.get(OsStr::new("KITHARA_FIXTURE_CACHE"))
@@ -955,6 +983,23 @@ mod tests {
             let cache_root =
                 root.join("review")
                     .join(format!("{}-{}", env::consts::OS, env::consts::ARCH));
+            assert_eq!(
+                fs::canonicalize(
+                    vars.get(OsStr::new("CARGO_TARGET_DIR"))
+                        .expect("prepared environment names its Cargo target")
+                )
+                .unwrap(),
+                fs::canonicalize(
+                    root.join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
+                        .join(format!(
+                            "review-{}-{}-slot-1",
+                            env::consts::OS,
+                            env::consts::ARCH
+                        ))
+                        .join("cargo")
+                )
+                .unwrap()
+            );
 
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_DIR")).map(OsString::as_os_str),
@@ -1002,6 +1047,7 @@ mod tests {
             .env("CI_JOB_ID", "29")
             .env("HOME", directory.path().join("home"))
             .env_remove("CI")
+            .env_remove("CI_PROJECT_DIR")
             .output()
             .unwrap();
 
@@ -1023,7 +1069,7 @@ mod tests {
             let ctx = Ctx::new(project, ProjectConfig::default());
             let config = super::super::config::fixture();
 
-            let Err(error) = CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos) else {
+            let Err(error) = CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos, false) else {
                 panic!("prepare unexpectedly succeeded");
             };
             assert!(error.to_string().contains("joining CI PATH"));
@@ -1047,6 +1093,7 @@ mod tests {
             .env("CI_JOB_ID", "30")
             .env("HOME", directory.path().join("invalid:home"))
             .env_remove("CI")
+            .env_remove("CI_PROJECT_DIR")
             .output()
             .unwrap();
 
@@ -1156,20 +1203,18 @@ mod tests {
     }
 
     #[test]
-    fn gitlab_targets_are_private_to_one_job() {
+    fn gitlab_targets_are_persistent_and_private_to_one_slot() {
         let target = build_target_dir(
             Path::new("/builds/disrupt/kithara"),
             Path::new("/cache"),
             "review-linux-aarch64",
-            false,
-            true,
-            Some("4711"),
+            TargetOwner::Slot("0".to_owned(), 2),
         )
         .unwrap();
 
         assert_eq!(
             target,
-            Path::new("/cache/target-slots/review-linux-aarch64-job-4711/cargo")
+            Path::new("/cache/target-slots/review-linux-aarch64-slot-0/cargo")
         );
         assert_ne!(
             target,
@@ -1177,9 +1222,7 @@ mod tests {
                 Path::new("/builds/disrupt/kithara"),
                 Path::new("/cache"),
                 "review-linux-aarch64",
-                false,
-                true,
-                Some("4712"),
+                TargetOwner::Slot("1".to_owned(), 2),
             )
             .unwrap()
         );
@@ -1188,11 +1231,19 @@ mod tests {
                 Path::new("/builds/disrupt/kithara"),
                 Path::new("/cache"),
                 "review-linux-aarch64",
-                false,
-                true,
-                Some("../trusted"),
+                TargetOwner::Slot("../trusted".to_owned(), 2),
             )
             .is_err()
+        );
+        assert_eq!(
+            build_target_dir(
+                Path::new("/builds/disrupt/kithara"),
+                Path::new("/cache"),
+                "review-linux-aarch64",
+                TargetOwner::Job("4711".to_owned()),
+            )
+            .unwrap(),
+            Path::new("/cache/target-slots/review-linux-aarch64-job-4711/cargo")
         );
     }
 
@@ -1235,9 +1286,7 @@ mod tests {
             Path::new("/work/kithara"),
             Path::new("/cache"),
             "review-macos-aarch64",
-            false,
-            false,
-            None,
+            TargetOwner::Checkout,
         )
         .unwrap();
 

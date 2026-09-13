@@ -15,11 +15,11 @@ use kithara_devtools::{lease, lock::FileLock};
 use tracing::info;
 
 pub(crate) const TARGET_SLOT_CACHE_NAMESPACE: &str = "target-slots";
+pub(crate) const TARGET_HEARTBEAT_FILE: &str = ".kithara-job-heartbeat";
 
 struct Consts;
 
 impl Consts {
-    const HEARTBEAT_FILE: &'static str = ".kithara-job-heartbeat";
     // Two cleanup intervals tolerate a paused VM while bounding a killed job's
     // stale claim. A live helper refreshes this every 30 seconds.
     const HEARTBEAT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
@@ -187,7 +187,7 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
             .with_context(|| format!("reading build cache metadata for {}", path.display()))?;
         if !metadata.file_type().is_dir() {
             if metadata.file_type().is_file()
-                && path.file_name() == Some(OsStr::new(Consts::HEARTBEAT_FILE))
+                && path.file_name() == Some(OsStr::new(TARGET_HEARTBEAT_FILE))
             {
                 contents.active |= heartbeat_is_fresh(&path, &metadata);
             }
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn a_fresh_cross_vm_heartbeat_defers_eviction() {
         let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join(Consts::HEARTBEAT_FILE), b"").unwrap();
+        fs::write(directory.path().join(TARGET_HEARTBEAT_FILE), b"").unwrap();
 
         assert!(candidate_entries(directory.path()).unwrap().active);
     }
@@ -736,7 +736,7 @@ mod tests {
     #[test]
     fn a_stale_cross_vm_heartbeat_leaves_the_target_evictable() {
         let directory = tempfile::tempdir().unwrap();
-        let heartbeat = directory.path().join(Consts::HEARTBEAT_FILE);
+        let heartbeat = directory.path().join(TARGET_HEARTBEAT_FILE);
         let file = File::create(&heartbeat).unwrap();
         file.set_times(
             FileTimes::new().set_modified(

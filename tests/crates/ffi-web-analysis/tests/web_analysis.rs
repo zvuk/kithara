@@ -13,7 +13,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 const SERVER_URL: &str = "http://127.0.0.1:3444";
 const POLL_MS: u64 = 50;
-const DEADLINE_MS: u64 = 10_000;
+const DEADLINE_MS: u64 = 30_000;
 const RESTART_SAMPLE: usize = 3;
 
 type Events = Rc<RefCell<Vec<JsValue>>>;

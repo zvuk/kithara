@@ -72,10 +72,15 @@ import os
 import sys
 
 results = json.loads(os.environ["RESULTS"])
+required_lanes = set(os.environ["REQUIRED_LANES"].split())
+optional_required = bool(required_lanes)
+ui_required = "all" in required_lanes or "deep-ui" in required_lanes
 incomplete = {
     name: job["result"]
     for name, job in results.items()
     if job["result"] != "success"
+    and not (name in {"deep", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
+    and not (name == "ui" and job["result"] == "skipped" and not ui_required)
 }
 if incomplete:
     print(f"required CI jobs did not execute successfully: {incomplete}")
@@ -336,6 +341,35 @@ fn assert_hosted_authorization(job: &Mapping) {
 #[test]
 fn github_ci_is_fail_closed_and_aggregates_every_job() {
     let workflow = github_workflow("ci.yml");
+    let root = workflow.as_mapping().expect("workflow is a mapping");
+    let triggers = mapping_field(root, "on")
+        .as_mapping()
+        .expect("workflow triggers are a mapping");
+    for trigger in ["workflow_call", "workflow_dispatch"] {
+        let inputs = mapping_field(
+            mapping_field(triggers, trigger)
+                .as_mapping()
+                .unwrap_or_else(|| panic!("{trigger} is a mapping")),
+            "inputs",
+        )
+        .as_mapping()
+        .expect("workflow inputs are a mapping");
+        assert_eq!(
+            inputs
+                .keys()
+                .map(|name| name.as_str().expect("input name is a string"))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["required_lanes"])
+        );
+        let required_lanes = mapping_field(inputs, "required_lanes")
+            .as_mapping()
+            .expect("required_lanes is a mapping");
+        assert_eq!(
+            mapping_field(required_lanes, "type").as_str(),
+            Some("string")
+        );
+        assert_eq!(mapping_field(required_lanes, "default").as_str(), Some(""));
+    }
     let concurrency = workflow_concurrency(&workflow);
     assert_eq!(
         mapping_field(concurrency, "group").as_str(),
@@ -399,6 +433,29 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         .as_mapping()
         .expect("the gate call passes inputs");
     assert_eq!(mapping_field(with, "role").as_str(), Some("gate"));
+    assert!(
+        mapping_field(with, "only")
+            .as_str()
+            .expect("gate passes the selector")
+            .contains("inputs.required_lanes")
+    );
+    for (name, role) in [
+        ("deep", "deep"),
+        ("platforms", "platforms"),
+        ("quality", "quality"),
+    ] {
+        let job = workflow_job(jobs, name);
+        let with = mapping_field(job, "with")
+            .as_mapping()
+            .unwrap_or_else(|| panic!("{name} passes inputs"));
+        assert_eq!(mapping_field(with, "role").as_str(), Some(role));
+        assert!(
+            mapping_field(with, "only")
+                .as_str()
+                .unwrap_or_else(|| panic!("{name} passes the selector"))
+                .contains("inputs.required_lanes")
+        );
+    }
     for name in workflow_job_names(jobs) {
         let job = workflow_job(jobs, &name);
         assert_no_key(&Value::Mapping(job.clone()), "strategy");
@@ -431,6 +488,12 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         Some("${{ toJSON(needs) }}")
     );
     assert_eq!(
+        mapping_field(env, "REQUIRED_LANES").as_str(),
+        Some(
+            "${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}"
+        )
+    );
+    assert_eq!(
         mapping_field(step, "run")
             .as_str()
             .expect("required step is a script")
@@ -439,8 +502,8 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     );
 }
 
-// One entry reacts to every push, and it is the gate. Workflows may still react
-// to a restricted branch set, such as the UI suite on `main`.
+// One entry reacts to every push. Optional suites belong inside that run so a
+// commit has one verdict rather than independent CI and UI results.
 #[test]
 fn the_gate_is_the_only_workflow_every_push_starts() {
     let mut entries = Vec::new();
@@ -1741,6 +1804,18 @@ fn a_request_for_one_lane_starts_nothing_beside_it() {
 // restate what it runs.
 #[test]
 fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
+    let ci = github_workflow("ci.yml");
+    let ui = workflow_job(workflow_jobs(&ci), "ui");
+    assert_eq!(
+        mapping_field(ui, "uses").as_str(),
+        Some("./.github/workflows/ui.yml")
+    );
+    let condition = mapping_field(ui, "if")
+        .as_str()
+        .expect("the UI call is conditional");
+    assert!(condition.contains("github.event.repository.default_branch"));
+    assert!(condition.contains("inputs.required_lanes"));
+
     let text = github_workflow_text("ui.yml");
     assert!(
         text.contains("just ci lane deep-ui"),
@@ -1791,18 +1866,27 @@ fn a_lane_builds_on_the_volume_that_outlives_it() {
     let fixtures = mapping_field(env, "KITHARA_FIXTURE_CACHE")
         .as_str()
         .expect("the executor names where the fixtures are read from");
+    let bootstrap = mapping_field(env, "KITHARA_CI_CACHE_ROOT")
+        .as_str()
+        .expect("the executor names where xtask is bootstrapped");
 
+    let cache_root = Path::new(fixtures)
+        .parent()
+        .expect("the fixture store has a mounted-volume parent")
+        .display()
+        .to_string();
     assert!(
-        Path::new(target).is_absolute(),
-        "a relative build directory is one inside the checkout: {target}"
+        target.contains(&format!("'{cache_root}/target'")),
+        "ordinary lanes must keep the runner's persistent target: {target}"
     );
     assert!(
-        Path::new(target).starts_with(
-            Path::new(fixtures)
-                .parent()
-                .expect("the fixture store has a mounted-volume parent")
-        ),
-        "the build directory and the fixture store share the mounted volume"
+        target.contains(&format!("'{cache_root}/target/jobs/")),
+        "snapshot lanes need an empty job target: {target}"
+    );
+    assert_eq!(
+        bootstrap,
+        format!("{cache_root}/target/.kithara-ci"),
+        "xtask bootstrap must outlive the checkout"
     );
 }
 
@@ -1974,6 +2058,11 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         Some("/cache/target"),
         "matrix selection reuses the fleet build cache"
     );
+    assert_eq!(
+        mapping_field(workflow_env, "KITHARA_CI_CACHE_ROOT").as_str(),
+        Some("/cache/target/.kithara-ci"),
+        "matrix selection reuses its xtask bootstrap"
+    );
     let jobs = workflow_jobs(&workflow);
     assert_eq!(
         workflow_job_names(jobs),
@@ -2023,6 +2112,11 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
             mapping_field(with, "runner").as_str(),
             Some("${{ matrix.runner || '' }}"),
             "the fan-out loses the lane's runner affinity"
+        );
+        assert_eq!(
+            mapping_field(with, "isolated-target").as_str(),
+            Some("${{ matrix.isolated_target }}"),
+            "the fan-out loses the lane's target isolation policy"
         );
     }
     assert_eq!(

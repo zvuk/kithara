@@ -325,6 +325,7 @@ fn features_for(
     let backend_name = request
         .net_backend
         .clone()
+        .or_else(|| lane.net_backend.clone())
         .unwrap_or_else(|| config.default_backend.clone());
     lane_features(config, lane, LaneToggles { flash, no_block }, &backend_name)
 }
@@ -642,6 +643,7 @@ mod tests {
                 default_features: Vec::new(),
                 default_flash: None,
                 default_no_block: None,
+                net_backend: None,
                 passthrough: String::new(),
                 env: BTreeMap::new(),
                 owns: Vec::new(),
@@ -660,6 +662,7 @@ mod tests {
                 default_features: vec!["demo/loom".to_owned()],
                 default_flash: Some(false),
                 default_no_block: None,
+                net_backend: None,
                 passthrough: String::new(),
                 env: BTreeMap::new(),
                 owns: Vec::new(),
@@ -674,6 +677,7 @@ mod tests {
                 default_features: Vec::new(),
                 default_flash: None,
                 default_no_block: Some(true),
+                net_backend: None,
                 passthrough: String::new(),
                 env: BTreeMap::new(),
                 owns: Vec::new(),
@@ -688,6 +692,7 @@ mod tests {
                 default_features: Vec::new(),
                 default_flash: Some(false),
                 default_no_block: None,
+                net_backend: Some("native".to_owned()),
                 passthrough: "after-suffix".to_owned(),
                 env: BTreeMap::from([("DEMO_BROWSER".to_owned(), "firefox".to_owned())]),
                 owns: Vec::new(),
@@ -786,6 +791,18 @@ mod tests {
 
         let feats = features_for(test, lane, &request).expect("features");
         assert!(!feats.contains("nb-detect"));
+    }
+
+    #[test]
+    fn lane_backend_overrides_the_project_default() {
+        let project = synthetic_project();
+        let test = &project.test;
+        let lane = &test.lanes["browser"];
+        let request = TestRequest::parse(&[]).expect("parse request");
+
+        let feats = features_for(test, lane, &request).expect("features");
+
+        assert!(feats.contains("demo/native-net"));
     }
 
     #[test]

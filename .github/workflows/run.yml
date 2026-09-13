@@ -34,6 +34,7 @@ env:
   CARGO_TERM_COLOR: always
   # Matrix selection compiles xtask, so keep that build across ephemeral jobs.
   CARGO_TARGET_DIR: /cache/target
+  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
   RUST_BACKTRACE: 1
 
 jobs:
@@ -100,6 +101,7 @@ jobs:
       artifact-path: ${{ matrix.artifact.path || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
+      isolated-target: ${{ matrix.isolated_target }}
 
   # A lane that reads what the matrix produced. It runs under `always()` so a
   # report still describes a night in which one measurement failed - a report
@@ -125,3 +127,4 @@ jobs:
       artifact-path: ${{ matrix.artifact.path || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
+      isolated-target: ${{ matrix.isolated_target }}

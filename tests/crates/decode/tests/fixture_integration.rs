@@ -371,7 +371,7 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
 // (no string indirection) — only the cases whose backend variant is
 // compiled into this binary stay active.
 //
-// `tests/crates/integration/Cargo.toml` arranges the target.cfg dependency rows so that:
+// `tests/Cargo.toml` arranges the target.cfg dependency rows so that:
 //   - Symphonia is always on (kithara-decode/symphonia in [dependencies]),
 //   - Apple is on for `target_os = "macos" | "ios"`,
 //   - Android is on for `target_os = "android"`.

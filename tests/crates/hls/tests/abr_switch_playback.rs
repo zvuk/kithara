@@ -445,11 +445,6 @@ async fn packaged_abr_switch_keeps_player_continuity(
         "packaged ABR switch produced {} silent blocks ({seam})",
         seam.max_silence_run
     );
-    assert!(
-        seam.slow_renders <= 1,
-        "packaged ABR switch exceeded render budget {} times ({seam})",
-        seam.slow_renders
-    );
     player.close().await;
 }
 

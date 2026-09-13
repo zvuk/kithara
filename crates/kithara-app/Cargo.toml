@@ -18,6 +18,7 @@ default = ["gui", "analysis-waveform", "beat-nn-small", "stretch-signalsmith"]
 # HTTP stack lands in each build. The dev-only kithara-net mirrors the same
 # per-target split (see the target `dev-dependencies` below) so test builds
 # stay single-stack too.
+backend-cpal = ["kithara/backend-cpal"]
 client-reqwest = ["kithara/client-reqwest"]
 client-wreq = ["kithara/client-wreq"]
 tls-rustls = ["kithara/tls-rustls"]

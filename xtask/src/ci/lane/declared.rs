@@ -3,6 +3,7 @@ use std::env;
 use anyhow::{Context, Result, bail};
 use kithara_devtools::common::tools::ToolsConfig;
 use toml::Value;
+use tracing::warn;
 
 use crate::{
     ci::{cache::snapshot, config::CiPins, process::Process, run::PipelineKind},
@@ -84,7 +85,9 @@ pub(crate) fn run(
     }
     if let Some(fingerprint) = target_snapshot_to_publish.flatten() {
         let mc = process.resolve_program(tools.program("mc"))?;
-        snapshot::publish_for_lane(&process.target_dir(), &fingerprint, &mc)?;
+        if let Err(error) = snapshot::publish_for_lane(&process.target_dir(), &fingerprint, &mc) {
+            warn!(%error, %fingerprint, "could not publish optional target snapshot");
+        }
     }
     Ok(())
 }

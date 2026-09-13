@@ -10,7 +10,9 @@ machete:
     cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests xtask
 
 shear:
-    cargo shear --deny-warnings
+    # Advisory: this source-only scan cannot see every cfg-, bench-, and
+    # wasm-only dependency closure, so it reports findings without gating CI.
+    cargo shear || true
 
 hack:
     just _xtask powerset --no-dev-deps

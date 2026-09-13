@@ -96,13 +96,14 @@ wasm = [
     "kithara/tls-rustls",
 ]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
+client-wreq = ["kithara/client-wreq"]
 # Regression tests for the player bugs QA filed against the zvooq-ios
 # integration. Some reproduce an open bug and are red on purpose; the rest
 # passed and stay as the contract that keeps them passing, and as the alibi
 # placing the reported bug above the Rust layer. Kept out of the main gate so
 # known red does not turn the baseline into noise. A fixed regression test
 # moves to `suite_light.rs` and leaves this lane.
-integration-regressions = []
+integration-regressions = ["all"]
 # Deterministic virtual-clock test mode. Routes the platform's blocking waits
 # (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed
 # waits collapse to virtual time. Off by default; enabling it compiles every
@@ -203,7 +204,7 @@ mmap-io = { workspace = true }
 rand = { workspace = true }
 
 # HTTP server (axum stack not available on WASM)
-reqwest = { workspace = true, features = ["rustls", "stream"] }
+reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 
 tokio-stream = { workspace = true }
 tower = { workspace = true }
@@ -277,23 +278,23 @@ workspace = true
 
 [[test]]
 name = "suite_light"
-path = "tests/suite_light.rs"
+path = "crates/integration/tests/suite_light.rs"
 
 [[test]]
 name = "suite_heavy"
-path = "tests/suite_heavy.rs"
+path = "crates/integration/tests/suite_heavy.rs"
 
 [[test]]
 name = "suite_live_web_audio"
-path = "tests/suite_live_web_audio.rs"
+path = "crates/integration/tests/suite_live_web_audio.rs"
 
 [[test]]
 name = "suite_stress"
-path = "tests/suite_stress.rs"
+path = "crates/integration/tests/suite_stress.rs"
 
 [[test]]
 name = "suite_integration_regressions"
-path = "tests/suite_integration_regressions.rs"
+path = "crates/integration/tests/suite_integration_regressions.rs"
 required-features = ["integration-regressions"]
 
 [[test]]

@@ -41,7 +41,29 @@ members = [
     "crates/kithara-warp",
     "crates/kithara-worker",
     "crates/kithara-workspace-hack",
-    "tests/crates/*",
+    "tests",
+    "tests/crates/abr",
+    "tests/crates/analysis",
+    "tests/crates/app",
+    "tests/crates/assets",
+    "tests/crates/audio",
+    "tests/crates/broadcast",
+    "tests/crates/bufpool",
+    "tests/crates/core",
+    "tests/crates/decode",
+    "tests/crates/encode",
+    "tests/crates/events",
+    "tests/crates/ffi-web",
+    "tests/crates/ffi-web-analysis",
+    "tests/crates/file",
+    "tests/crates/harness",
+    "tests/crates/hls",
+    "tests/crates/net",
+    "tests/crates/platform",
+    "tests/crates/play",
+    "tests/crates/queue",
+    "tests/crates/storage",
+    "tests/crates/stream",
     "tests/fuzz",
     "xtask",
 ]
@@ -80,7 +102,29 @@ default-members = [
     "crates/kithara-ui",
     "crates/kithara-warp",
     "crates/kithara-worker",
-    "tests/crates/*",
+    "tests",
+    "tests/crates/abr",
+    "tests/crates/analysis",
+    "tests/crates/app",
+    "tests/crates/assets",
+    "tests/crates/audio",
+    "tests/crates/broadcast",
+    "tests/crates/bufpool",
+    "tests/crates/core",
+    "tests/crates/decode",
+    "tests/crates/encode",
+    "tests/crates/events",
+    "tests/crates/ffi-web",
+    "tests/crates/ffi-web-analysis",
+    "tests/crates/file",
+    "tests/crates/harness",
+    "tests/crates/hls",
+    "tests/crates/net",
+    "tests/crates/platform",
+    "tests/crates/play",
+    "tests/crates/queue",
+    "tests/crates/storage",
+    "tests/crates/stream",
 ]
 
 [workspace.lints.rust]
@@ -226,7 +270,7 @@ kithara-ffi = { path = "crates/kithara-ffi", default-features = false }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default-features = false }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha4", default-features = false }
-kithara-integration-tests = { path = "tests/crates/integration", default-features = false }
+kithara-integration-tests = { path = "tests", default-features = false }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha4" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha4", default-features = false }
 kithara-output = { path = "crates/kithara-output", version = "0.0.1-alpha4" }

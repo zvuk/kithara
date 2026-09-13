@@ -364,7 +364,15 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     ci_config.pins.validate_tool_pins(&ctx.config.tools)?;
     let image_attestation = LinuxImageAttestation::from_gitlab()?;
     require_provisioned_linux_image(lane.cache_group(), &ci_config, image_attestation.as_ref())?;
-    let environment = CiEnvironment::prepare(ctx, &ci_config, lane.cache_group())?;
+    let environment = CiEnvironment::prepare(
+        ctx,
+        &ci_config,
+        lane.cache_group(),
+        ext.ci
+            .lanes
+            .get(&args.lane)
+            .is_some_and(|lane| lane.target_snapshot.is_some()),
+    )?;
     info!(
         lane = %args.lane,
         kind = ?args.kind,

@@ -500,7 +500,7 @@ features = []
 shared_paths = [
   ".config/xtask.toml",
   ".config/nextest.toml",
-  "tests/crates/integration/Cargo.toml",
+  "tests/Cargo.toml",
 ]
 
 # Cargo applies an unqualified workspace feature to every selected package
@@ -516,14 +516,13 @@ default = false
 features = ["no-block"]
 
 [test.net_backends.wreq]
-features = [
-  "client-wreq",
-  "kithara-net/client-wreq",
-  "kithara-test-utils/client-wreq",
-]
+features = ["client-wreq"]
 
 [test.net_backends.apple]
 features = ["kithara/apple-net"]
+
+[test.net_backends.none]
+features = []
 
 # The default product suite is one Cargo graph. Domain tests remain separate
 # packages, so Cargo can reuse every unchanged test binary while compiling the
@@ -830,6 +829,7 @@ prefix_args = [
 [test.lanes.tooling]
 program = "cargo"
 owns = ["xtask/", "crates/kithara-devtools/"]
+net_backend = "none"
 prefix_args = [
   "nextest",
   "run",
@@ -876,6 +876,7 @@ default_features = [
   "kithara-test-utils/client-reqwest",
   "kithara-test-utils/tls-rustls",
   "kithara-platform/flash",
+  "kithara-platform/tokio-rt-multi-thread",
   "kithara-test-utils/flash",
 ]
 prefix_args = [
@@ -902,12 +903,13 @@ prefix_args = [
 [test.lanes.fixtures]
 program = "cargo"
 owns = [
-  "tests/crates/integration/src/",
+  "tests/src/",
   "tests/crates/harness/tests/suite_harness.rs",
   "tests/crates/harness/tests/flash_lexical.rs",
   "tests/crates/harness/tests/timeout_guard.rs",
 ]
-default_features = ["harness", "kithara-test-fixtures/generate"]
+net_backend = "none"
+default_features = ["harness"]
 prefix_args = [
   "nextest",
   "run",
@@ -928,6 +930,7 @@ prefix_args = [
 program = "cargo"
 owns = ["crates/kithara-ui/", "crates/kithara-app/src/gui/"]
 default_features = [
+  "kithara-app/backend-cpal",
   "kithara-ui/capture",
   "kithara-ui/gpu",
   "kithara-ui/masonry",
@@ -952,6 +955,7 @@ suffix_args = [
 
 [test.lanes.ui-perf]
 program = "cargo"
+net_backend = "none"
 default_features = ["kithara-ui/gpu", "kithara-ui/masonry", "kithara-ui/perf"]
 default_flash = false
 prefix_args = [
@@ -961,12 +965,15 @@ prefix_args = [
   "kithara-ui",
   "--cargo-profile",
   "test-release",
+  "--test-threads",
+  "1",
   "--ignore-default-filter",
 ]
 suffix_args = ["-E", "binary(frame_perf) | binary(page_perf)"]
 
 [test.lanes.ui-doc]
 program = "cargo"
+net_backend = "none"
 default_features = ["kithara-ui/gpu", "kithara-ui/masonry"]
 default_flash = false
 prefix_args = ["test", "--doc", "-p", "kithara-ui"]

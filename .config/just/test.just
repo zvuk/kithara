@@ -349,6 +349,7 @@ miri *ARGS:
     # crates reads on the way to its first assertion.
     MIRIFLAGS="-Zmiri-disable-isolation" \
         cargo +nightly miri test --lib \
+        --features kithara-platform/tokio-rt-multi-thread \
         -p kithara-abr \
         -p kithara-bufpool \
         -p kithara-download \

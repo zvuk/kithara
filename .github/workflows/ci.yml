@@ -6,7 +6,17 @@ name: CI
 on:
   push:
   workflow_call:
+    inputs:
+      required_lanes:
+        description: Space-separated additional required lane names, or all.
+        type: string
+        default: ''
   workflow_dispatch:
+    inputs:
+      required_lanes:
+        description: Space-separated additional required lane names, or all.
+        type: string
+        default: ''
 
 env:
   CARGO_TERM_COLOR: always
@@ -111,6 +121,61 @@ jobs:
     with:
       role: gate
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
+      only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}
+
+  deep:
+    name: Deep
+    needs: gate
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      || inputs.required_lanes != ''
+    concurrency:
+      group: heavy-linux-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+    uses: ./.github/workflows/run.yml
+    with:
+      role: deep
+      kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
+      only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
+
+  platforms:
+    name: Platforms
+    needs: gate
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      || inputs.required_lanes != ''
+    uses: ./.github/workflows/run.yml
+    with:
+      role: platforms
+      kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
+      only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
+
+  quality:
+    name: Quality
+    needs: gate
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      || inputs.required_lanes != ''
+    concurrency:
+      group: heavy-linux-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+    uses: ./.github/workflows/run.yml
+    with:
+      role: quality
+      kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
+      only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
+
+  ui:
+    name: UI
+    needs: gate
+    if: >-
+      vars.KITHARA_GPU_RUNNER_LABELS != ''
+      && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      || contains(format(' {0} ', inputs.required_lanes), ' all ')
+      || contains(format(' {0} ', inputs.required_lanes), ' deep-ui '))
+    uses: ./.github/workflows/ui.yml
 
   # This is the one stable required status. GitHub treats a skipped job as an
   # acceptable required check, so the aggregate must run unconditionally and
@@ -125,12 +190,17 @@ jobs:
       - authorize
       - gate
       - lanes
+      - deep
+      - platforms
+      - quality
+      - ui
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require every CI job to have executed successfully
         env:
           RESULTS: ${{ toJSON(needs) }}
+          REQUIRED_LANES: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}
         run: |
           python3 - <<'PY'
           import json
@@ -138,10 +208,15 @@ jobs:
           import sys
 
           results = json.loads(os.environ["RESULTS"])
+          required_lanes = set(os.environ["REQUIRED_LANES"].split())
+          optional_required = bool(required_lanes)
+          ui_required = "all" in required_lanes or "deep-ui" in required_lanes
           incomplete = {
               name: job["result"]
               for name, job in results.items()
               if job["result"] != "success"
+              and not (name in {"deep", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
+              and not (name == "ui" and job["result"] == "skipped" and not ui_required)
           }
           if incomplete:
               print(f"required CI jobs did not execute successfully: {incomplete}")

@@ -51,7 +51,7 @@ help:
 [no-exit-message]
 [positional-arguments]
 _xtask *ARGS:
-    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then exec just _xtask-unleased "$@"; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; system=$(uname -s); arch=$(uname -m); build_target="${CARGO_TARGET_DIR:-$PWD/target}"; if [[ "$system" = Linux && -z "${CARGO_TARGET_DIR:-}" ]]; then job="${CI_JOB_ID:-${GITHUB_RUN_ID:-$$}}"; build_target="$KITHARA_CI_CACHE_ROOT/target-slots/$trust-linux-$arch-job-$job/cargo"; fi; mkdir -p "$build_target"; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$build_target/.kithara-job-lease" just _xtask-unleased "$@"
+    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then exec just _xtask-unleased "$@"; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; system=$(uname -s); arch=$(uname -m); build_target="${CARGO_TARGET_DIR:-$PWD/target}"; if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then if [[ "$system" = Linux ]]; then job="${CI_JOB_ID:-${GITHUB_RUN_ID:-$$}}"; build_target="$KITHARA_CI_CACHE_ROOT/target-slots/$trust-linux-$arch-job-$job/cargo"; else owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; build_target="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust/target-$system-$arch-$owner"; fi; fi; mkdir -p "$build_target"; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$build_target/.kithara-job-lease" just _xtask-unleased "$@"
 
 [no-exit-message]
 [positional-arguments]
@@ -79,7 +79,7 @@ _xtask-ready:
 [positional-arguments]
 [private]
 _xtask-bootstrap *ARGS:
-    @target="$PWD/target/xtask-self-cache"; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; root="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust"; system=$(uname -s); arch=$(uname -m); export SCCACHE_DIR="$root/sccache" CARGO_HOME="$root/cargo-$system-$arch"; target="$root/target-$system-$arch"; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
+    @target="$PWD/target/xtask-self-cache"; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; root="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust"; system=$(uname -s); arch=$(uname -m); owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; export SCCACHE_DIR="$root/sccache" CARGO_HOME="$root/cargo-$system-$arch"; target="$root/target-$system-$arch-$owner"; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
 
 [no-exit-message]
 [positional-arguments]

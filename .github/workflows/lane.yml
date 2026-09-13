@@ -57,6 +57,10 @@ on:
         description: Stable runner label for a lane-owned persistent build cache.
         default: ''
         type: string
+      isolated-target:
+        description: Use an empty private target for an immutable snapshot restore.
+        default: false
+        type: boolean
 
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
@@ -68,9 +72,12 @@ env:
   # called workflow inherits nothing from its caller, so every workflow that
   # runs a lane on that fleet says it for itself.
   KITHARA_FIXTURE_CACHE: /cache/fixtures
-  # The target is private to this job. A lane restores a verified immutable
-  # snapshot before Cargo starts; no two jobs can write the restored tree.
-  CARGO_TARGET_DIR: /cache/target/jobs/${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.lane }}
+  # Bootstrap xtask beside the runner's persistent Cargo target. Without this,
+  # every fresh Actions checkout recompiles xtask before the lane can start.
+  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
+  # Every container mounts its own persistent target. Snapshot lanes alone need
+  # an empty job directory because they restore a verified immutable tree.
+  CARGO_TARGET_DIR: ${{ inputs.isolated-target && format('/cache/target/jobs/{0}-{1}-{2}', github.run_id, github.run_attempt, inputs.lane) || '/cache/target' }}
 
 jobs:
   # Named after the lane, not after this file. A caller reaches this workflow

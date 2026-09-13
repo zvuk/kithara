@@ -236,5 +236,6 @@ args = {step_args}
         let declared = production(declared);
         assert!(declared.contains("snapshot::restore_for_lane"));
         assert!(declared.contains("snapshot::publish_for_lane"));
+        assert!(declared.contains("could not publish optional target snapshot"));
     }
 }

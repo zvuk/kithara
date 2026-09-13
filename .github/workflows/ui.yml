@@ -1,13 +1,10 @@
 name: UI
 
 # UI tests are isolated from the general workspace suite: unit and integration
-# targets, real GPU rendering, and host screenshots all run here. It runs after
-# main changes and through the nightly dispatcher; a hand can start it too.
+# targets, real GPU rendering, and host screenshots all run here. The main CI
+# and nightly dispatcher call it when UI coverage is due.
 on:
-  push:
-    branches: [main]
   workflow_call:
-  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always

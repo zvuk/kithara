@@ -226,7 +226,7 @@ fn run_report(
 | Traits with mock coverage | {unimock_traits} |
 | rstest test cases | {rstest_cases} |
 | Plain #[test]/#[tokio::test] markers | {plain_tests} |
-| perf test files (tests/crates/integration/perf) | {perf_tests} |
+| perf test files (tests/perf) | {perf_tests} |
 | bench targets (*/benches/*.rs) | {bench_targets} |
 | Local HTTP server bind sites in tests | {local_http_servers} |
 

@@ -271,7 +271,7 @@ mod tests {
     use kithara_play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::PlayerControlSource,
     };
-    use kithara_test_utils::{kithara, probe::capture as probe_capture};
+    use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
@@ -351,7 +351,6 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn cancellation_wakes_an_attempt_waiting_for_admission() {
-        let probes = probe_capture::install();
         let fixture = LoaderFixtureSpec::default()
             .with_cap(NonZeroUsize::MIN)
             .build();
@@ -369,17 +368,9 @@ mod tests {
             .loader
             .spawn_load(id, source, LoadClass::Prefetch)
             .expect("fresh track starts one load attempt");
-        let admitted = probes
-            .wait_for_probe_async(
-                |event| {
-                    event.target == "kithara_queue_probe"
-                        && event.probe_name() == Some("admission_started")
-                        && event.u64("track_id") == Some(id.as_u64())
-                },
-                Duration::from_secs(1),
-            )
-            .await;
-        assert!(admitted.is_some(), "loader never reached admission");
+        assert!(fixture.tracks.lock().iter().any(|track| {
+            track.id == id && track.load.as_ref().is_some_and(|attempt| attempt.waiting)
+        }));
 
         fixture.loader.cancel.cancel();
 

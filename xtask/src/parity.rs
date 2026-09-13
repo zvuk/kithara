@@ -156,7 +156,7 @@ fn studio_capture(root: &Path, dir: &Path) -> Result<()> {
             "--lib",
             "--no-default-features",
             "--features",
-            "masonry,stretch-signalsmith",
+            "backend-cpal,masonry,stretch-signalsmith",
             "studio_capture_writes_both_hosts",
             "--",
             "--nocapture",

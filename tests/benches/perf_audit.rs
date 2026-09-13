@@ -275,7 +275,7 @@ fn assert_complete_analysis(worker: &AnalysisWorker, progress: &AnalysisProgress
 
 fn bench_analysis_worker(c: &mut Criterion) {
     let rt = make_runtime();
-    let file_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets/test.mp3");
+    let file_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)

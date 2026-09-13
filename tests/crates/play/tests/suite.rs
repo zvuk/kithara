@@ -15,6 +15,7 @@ mod continuity;
 pub use kithara_integration_tests::gapless as gapless_common;
 
 mod cochlea_continuity_oracle;
+mod crossfade_hls_to_mp3_repeats;
 mod engine_tests;
 mod gapless_offline_e2e;
 mod gapless_startup_regressions;
@@ -37,7 +38,6 @@ mod player_resource_internal;
 mod player_track_internal;
 mod quality_switch_continuity;
 mod rate_response;
-mod red_crossfade_hls_to_mp3_blocks_render;
 mod resource_internal;
 mod resource_regressions;
 #[cfg(not(target_arch = "wasm32"))]
