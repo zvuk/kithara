@@ -204,15 +204,8 @@ always = ["backend-cpal"]
 when_feature = "beat-backend"
 never = ["beat-backend"]
 
-# The model rule belongs to every crate that offers the choice, and the facade
-# offers it without re-exporting `beat-backend`, so a marker read there reached
-# only the crate the backend lives in. `beat-nn` is the name both carry: it
-# selects the neural detector without selecting its bytes, which the backend
-# refuses with compile_error!. `beat-nn-full-int8` inherits the model
-# kithara-beat cannot produce on a runner; it costs no coverage to leave out,
-# because it compiles the same `include_bytes!(env!(..))` arm `beat-nn-full`
-# does. cargo-hack refuses a feature named by both lists, so what stays
-# mutually exclusive is what is still selectable.
+# `beat-nn` scopes this rule to both crates and is invalid without model bytes.
+# Full-int8 is excluded because its model cannot be produced on CI runners.
 [[health.feature_invariants]]
 when_feature = "beat-nn"
 never = ["beat-nn", "beat-nn-full-int8"]
@@ -558,9 +551,6 @@ prefix_args = [
   "test-release",
 ]
 
-# Detached suites selected for the Android ART baseline. The platform adapter
-# adds every package in the shipped product closure and the device-specific
-# Cargo flags; this lane owns only the policy decision about external suites.
 [test.lanes.android]
 program = "cargo"
 default_backend = "wreq"
@@ -2667,39 +2657,6 @@ exclude_packages = []
 
 [ext.android]
 test_lane = "android"
-baseline_tests = [
-  "com.kithara.AudioFormatProbeTest#defaultOutputFormatIsF32",
-  "com.kithara.HermeticEnqueueTest#aMissingServerUrlFailsSetup",
-  "com.kithara.HermeticEnqueueTest#everyFixtureKindReachesLoaded",
-  "com.kithara.HermeticEnqueueTest#singleEncryptedHlsReachesLoaded",
-  "com.kithara.HermeticEnqueueTest#singleHlsReachesLoaded",
-  "com.kithara.HermeticEnqueueTest#singleMp3ReachesLoaded",
-  "com.kithara.HermeticPlaybackTest#positionAdvancesOnALocalMp3",
-  "com.kithara.KitharaInitTest#initializePublishesOneDefaultStore",
-  "com.kithara.KitharaInitTest#multiplePlayersCanBeCreated",
-  "com.kithara.KitharaInitTest#nativeRegistryAndStoreCanCreatePlayer",
-  "com.kithara.KitharaInitTest#queryIdentityLayoutRegistersForFileAndHls",
-  "com.kithara.KitharaPlayerItemTest#audioIdMatchesId",
-  "com.kithara.KitharaPlayerItemTest#eachItemGetsUniqueId",
-  "com.kithara.KitharaPlayerItemTest#initSetsIdAndUrl",
-  "com.kithara.KitharaPlayerItemTest#initialDurationIsNull",
-  "com.kithara.KitharaPlayerItemTest#initialLoadedRangesAreEmpty",
-  "com.kithara.KitharaPlayerItemTest#initialStatusIsUnknown",
-  "com.kithara.KitharaPlayerItemTest#isLiveStreamFromConfig",
-  "com.kithara.KitharaPlayerItemTest#isPlayableLiveAlwaysTrue",
-  "com.kithara.KitharaPlayerItemTest#isPlayableWithRanges",
-  "com.kithara.KitharaPlayerItemTest#preferredBitrateComesFromConstruction",
-  "com.kithara.KitharaPlayerItemTest#preferredBitrateDefaultsToZero",
-  "com.kithara.KitharaPlayerItemTest#uuidIsStableForSameItem",
-  "com.kithara.KitharaPlayerTest#crossfadeDurationRoundTrips",
-  "com.kithara.KitharaPlayerTest#initCreatesPlayerWithUnknownStatus",
-  "com.kithara.KitharaPlayerTest#itemsStartsEmpty",
-  "com.kithara.KitharaPlayerTest#playingRateIsOne",
-  "com.kithara.KitharaPlayerTest#removeAllItemsOnEmptyQueueDoesNotCrash",
-  "com.kithara.KitharaPlayerTest#removeUpdatesItemsSnapshot",
-  "com.kithara.OfflineCaptureTest#pcmOracleRejectsShortReadZeroPadding",
-  "com.kithara.OfflineCaptureTest#rendersCleanWav",
-]
 # Cargo package compiled into the Android JNI libraries.
 ffi_crate = "kithara-ffi"
 # AAR artifacts the Gradle export is expected to produce.

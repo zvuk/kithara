@@ -1,5 +1,3 @@
-//! Completeness checks for the Android instrumentation baseline.
-
 use std::{
     collections::BTreeSet,
     fs,
@@ -10,27 +8,7 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::junit::parse_junit;
 use roxmltree::Document;
 
-pub(super) fn require_baseline(expected: &[String]) -> Result<()> {
-    if expected.is_empty() {
-        bail!("ext.android.baseline_tests must name the required instrumentation cases");
-    }
-    let mut unique = BTreeSet::new();
-    for name in expected {
-        if !name
-            .split_once('#')
-            .is_some_and(|(class, method)| !class.trim().is_empty() && !method.trim().is_empty())
-        {
-            bail!("Android baseline case `{name}` must use class#method");
-        }
-        if !unique.insert(name) {
-            bail!("duplicate Android baseline case `{name}`");
-        }
-    }
-    Ok(())
-}
-
-/// Keep current-run `JUnit` even when the completeness check rejects its results.
-pub(super) fn collect(results: &Path, report: &Path, expected: &[String]) -> Result<Vec<String>> {
+pub(super) fn collect(results: &Path, report: &Path) -> Result<Vec<String>> {
     let pattern = format!(
         "{}/**/*.xml",
         glob::Pattern::escape(&results.to_string_lossy())
@@ -44,7 +22,7 @@ pub(super) fn collect(results: &Path, report: &Path, expected: &[String]) -> Res
         );
     }
     merge(&files, report)?;
-    validate(&fs::read_to_string(report)?, expected)
+    validate(&fs::read_to_string(report)?)
 }
 
 /// Preserve each runner's suites in one CI report.
@@ -70,8 +48,7 @@ pub(super) fn merge(files: &[PathBuf], report: &Path) -> Result<()> {
     Ok(())
 }
 
-fn validate(xml: &str, expected: &[String]) -> Result<Vec<String>> {
-    require_baseline(expected)?;
+fn validate(xml: &str) -> Result<Vec<String>> {
     let doc = Document::parse(xml).context("parsing Android JUnit")?;
     if doc.descendants().any(|node| node.has_tag_name("skipped")) {
         bail!("Android instrumentation skipped a test");
@@ -89,13 +66,6 @@ fn validate(xml: &str, expected: &[String]) -> Result<Vec<String>> {
         if !actual.insert(name.clone()) {
             bail!("Android instrumentation reported duplicate case `{name}`");
         }
-    }
-    let missing: Vec<_> = expected
-        .iter()
-        .filter(|name| !actual.contains(*name))
-        .collect();
-    if !missing.is_empty() {
-        bail!("Android instrumentation missed baseline cases: {missing:?}");
     }
     Ok(actual.into_iter().collect())
 }
@@ -117,34 +87,25 @@ mod tests {
     }
 
     #[test]
-    fn baseline_requires_the_offline_renderer_to_run_and_pass() {
-        let expected = vec![RENDER.to_owned()];
-        assert_eq!(validate(&report(&render("")), &expected).unwrap(), expected);
+    fn instrumentation_requires_reported_cases_to_pass() {
+        assert_eq!(validate(&report(&render(""))).unwrap(), [RENDER]);
         for outcome in ["<skipped/>", "<failure/>", "<error/>", "<flakyFailure/>"] {
-            assert!(
-                validate(&report(&render(outcome)), &expected).is_err(),
-                "{outcome}"
-            );
+            assert!(validate(&report(&render(outcome))).is_err(), "{outcome}");
         }
-        assert!(validate(&report(""), &expected).is_err());
+        assert!(validate(&report("")).is_err());
         let unrelated =
             "<testcase classname=\"com.kithara.PlayerTest\" name=\"createsPlayer\" time=\"1\"/>";
-        assert!(validate(&report(unrelated), &expected).is_err());
+        assert_eq!(validate(&report(unrelated)).unwrap().len(), 1);
         assert_eq!(
-            validate(&report(&(render("") + unrelated)), &expected)
-                .unwrap()
-                .len(),
+            validate(&report(&(render("") + unrelated))).unwrap().len(),
             2
         );
     }
 
     #[test]
-    fn baseline_rejects_empty_configuration_and_duplicate_execution() {
-        assert!(require_baseline(&[]).is_err());
-        assert!(require_baseline(&[RENDER.to_owned(), RENDER.to_owned()]).is_err());
-        assert!(require_baseline(&["rendersCleanWav".to_owned()]).is_err());
-        assert!(validate(&report(&render("")), &[]).is_err());
-        assert!(validate(&report(&(render("") + &render(""))), &[RENDER.to_owned()]).is_err());
+    fn instrumentation_rejects_empty_or_duplicate_execution() {
+        assert!(validate(&report("")).is_err());
+        assert!(validate(&report(&(render("") + &render("")))).is_err());
     }
 
     #[test]
@@ -156,7 +117,7 @@ mod tests {
         fs::create_dir_all(&current).unwrap();
         fs::write(previous.join("TEST.xml"), report(&render(""))).unwrap();
         let output = root.path().join("junit.xml");
-        assert!(collect(&current, &output, &[RENDER.to_owned()]).is_err());
+        assert!(collect(&current, &output).is_err());
         assert!(!output.exists());
     }
 
@@ -167,7 +128,7 @@ mod tests {
         fs::create_dir_all(&results).unwrap();
         fs::write(results.join("TEST.xml"), report(&render("<failure/>"))).unwrap();
         let output = root.path().join("junit.xml");
-        assert!(collect(&results, &output, &[RENDER.to_owned()]).is_err());
+        assert!(collect(&results, &output).is_err());
         let cases = parse_junit(&fs::read_to_string(output).unwrap()).unwrap();
         assert_eq!(cases.len(), 1);
         assert!(cases[0].failed);

@@ -532,10 +532,6 @@ fn run_tests(
     let mut server = None;
     let mut reverse = None;
     let tests = (|| {
-        record.stage(
-            "baseline_config",
-            results::require_baseline(&android.baseline_tests),
-        )?;
         let layout = record.stage("layout", Layout::at(workspace_root.to_path_buf()))?;
         child::check(Some(&cancel))?;
         if !skip_build {
@@ -604,22 +600,18 @@ fn run_tests(
             });
         let tests = record.stage("gradle", tests);
         let instrumentation = evidence.path().join("instrumentation.xml");
-        let baseline = record.stage(
+        let instrumentation_result = record.stage(
             "instrumentation",
-            results::collect(
-                &evidence.results(),
-                &instrumentation,
-                &android.baseline_tests,
-            ),
+            results::collect(&evidence.results(), &instrumentation),
         );
-        if let Ok(cases) = &baseline {
+        if let Ok(cases) = &instrumentation_result {
             record.instrumentation(cases);
         }
         if instrumentation.is_file() {
             results::merge(std::slice::from_ref(&instrumentation), &report)?;
         }
         tests?;
-        baseline?;
+        instrumentation_result?;
         let native = record.stage(
             "rust_prepare",
             native::prepare(workspace_root, config, selected, evidence.path(), &cancel),

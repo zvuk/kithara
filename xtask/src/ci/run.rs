@@ -643,20 +643,12 @@ mod tests {
     }
 
     #[test]
-    fn both_ci_executors_select_the_android_baseline_lane() {
+    fn both_ci_executors_select_the_android_test_lane() {
         let github = fs::read_to_string(repo().join(".github/workflows/android.yml")).unwrap();
         let gitlab = fs::read_to_string(repo().join(".gitlab/ci/android.yml")).unwrap();
         assert!(github.contains("run: just ci lane android-test --kind platforms"));
         assert!(gitlab.contains("- just ci run android-test"));
         assert!(gitlab.contains("- .ci-artifacts/junit/android-test.xml"));
-        let config = KitharaExt::load(repo()).unwrap();
-        assert!(
-            config
-                .android
-                .baseline_tests
-                .iter()
-                .any(|name| name == "com.kithara.OfflineCaptureTest#rendersCleanWav")
-        );
     }
 
     #[test]

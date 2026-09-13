@@ -517,10 +517,7 @@ pub(crate) struct HookRoute {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct AndroidConfig {
-    /// Test lane whose detached packages are compiled into the ART inventory.
     pub(crate) test_lane: String,
-    /// Required instrumentation cases, identified by class and method.
-    pub(crate) baseline_tests: Vec<String>,
     /// Cargo package compiled into the Android JNI libraries.
     pub(crate) ffi_crate: String,
     /// AAR artifacts the Gradle export is expected to produce.

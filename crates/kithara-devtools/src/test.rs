@@ -387,10 +387,9 @@ pub fn default_nextest_command(
     nextest_command_for_lane(project, &project.test.default_lane, extra, action)
 }
 
-/// Build a configured suite command for a platform adapter.
-///
+/// Build the command for a configured test lane.
 /// # Errors
-/// Returns an error when the named suite or its backend is invalid.
+/// Returns an error when the lane or its backend configuration is invalid.
 pub fn nextest_command_for_lane(
     project: &ProjectConfig,
     lane_name: &str,
