@@ -491,6 +491,16 @@ default_lane = "workspace"
 default_backend = "wreq"
 feature_arg = "--features"
 loom_lane = "loom"
+# The file that owns every runner profile. A lane's verdict reads the retry
+# count and the report location from there instead of repeating them here.
+nextest_config = ".config/nextest.toml"
+# Tests a lane may pass on a retry, each naming the issue that owns the defect:
+# `{ test = "<suite>::<test>", issue = "<url>" }`.
+#
+# Empty, and meant to stay that way. A retry keeps the failing attempt's
+# evidence; it does not make the lane clean. Adding an entry admits in the diff
+# that a known defect is being waited on instead of fixed.
+known_flakes = []
 # Features shared by every lane. UI renderer features belong to the dedicated
 # `ui` lane so the general workspace run does not build those test targets.
 features = []

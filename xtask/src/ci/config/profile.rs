@@ -95,10 +95,12 @@ mod tests {
         }
     }
 
-    /// Without retries a single flaky failure reads as a regression: the first
-    /// merge request judged was held by two tests it had not touched.
+    /// The retry is what keeps the failing attempt: nextest records it inside
+    /// `flakyFailure`, and the lane's verdict fails on a retried pass anyway.
+    /// Without the retry the same throw leaves one red attempt and no record
+    /// that the test reached a pass on the next one.
     #[test]
-    fn the_judged_profile_does_not_take_one_failure_as_evidence() {
+    fn the_judged_profile_keeps_the_attempt_it_retried() {
         let nextest: toml::Value = toml::from_str(
             &fs::read_to_string(workspace_root().join(".config/nextest.toml")).unwrap(),
         )
@@ -107,7 +109,7 @@ mod tests {
         let retries = nextest["profile"]["ci"].get("retries");
         assert!(
             retries.is_some_and(|value| value.as_integer().is_some_and(|count| count > 0)),
-            "the CI profile must retry, or every flake reads as a regression"
+            "the CI profile must retry, or a flake leaves no record of being one"
         );
     }
 

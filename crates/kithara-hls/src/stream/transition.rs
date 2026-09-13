@@ -283,6 +283,7 @@ where
         &self,
         landing: Option<Duration>,
     ) -> StreamResult<Option<VariantReaderPlan>> {
+        self.sync_abr_lock();
         let mut state = self.sessions.transition.lock();
         let claim = match self.abr.pending_claim() {
             PendingAbrClaim::Absent => {

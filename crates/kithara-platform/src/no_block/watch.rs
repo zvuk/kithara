@@ -58,6 +58,7 @@ impl<F: Future> Future for Watched<F> {
         }
 
         let paused_before = ctx::paused_nanos();
+        let paused_cpu_before = ctx::paused_cpu_nanos();
         let wall_start = Instant::now();
         // WHY: Snapshot can be up to 1 ms old, which is safe: budgets are 25 ms strict / 3000 ms blanket.
         let cpu_start = clock::snapshot(wall_start);
@@ -65,15 +66,20 @@ impl<F: Future> Future for Watched<F> {
             let _scope = PollScope::enter((this.name, this.loc));
             this.fut.poll(cx)
         };
-        let paused = ctx::paused_nanos().saturating_sub(paused_before);
-        let paused = Duration::from_nanos(u64::try_from(paused).unwrap_or(u64::MAX));
+        let paused = nanos_since(ctx::paused_nanos(), paused_before);
         let wall = wall_start.elapsed().saturating_sub(paused);
         if wall > *this.budget {
-            let cpu = clock::thread_cpu_elapsed(cpu_start);
+            let paused_cpu = nanos_since(ctx::paused_cpu_nanos(), paused_cpu_before);
+            let cpu =
+                clock::thread_cpu_elapsed(cpu_start).map(|cpu| cpu.saturating_sub(paused_cpu));
             report::over_budget(this.name, this.loc, wall, cpu, *this.budget, *this.tier);
         }
         res
     }
+}
+
+fn nanos_since(now: u128, before: u128) -> Duration {
+    Duration::from_nanos(u64::try_from(now.saturating_sub(before)).unwrap_or(u64::MAX))
 }
 
 #[doc(hidden)]

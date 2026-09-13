@@ -210,7 +210,6 @@ fn worker_persists_resource_deletion_without_checkpoint() {
         CancelToken::never(),
         FlushPolicy {
             debounce: Duration::ZERO,
-            poll_interval: Duration::from_millis(100),
             force_every_n_ops: NonZeroUsize::MIN,
         },
     );

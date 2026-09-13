@@ -532,12 +532,35 @@ pub struct TestCommandConfig {
     pub default_lane: String,
     pub feature_arg: String,
     pub loom_lane: String,
+    /// The file that owns every runner profile, so a lane's verdict reads the
+    /// retry count and the report location where they are declared rather than
+    /// keeping a second copy of them here.
+    pub nextest_config: String,
     pub flash: TestFlashConfig,
     pub no_block: TestNoBlockConfig,
     pub features: Vec<String>,
+    /// Tests whose retried pass a lane tolerates, each naming the issue that
+    /// owns the defect.
+    ///
+    /// Empty is the intended state. A retry exists to keep the failing
+    /// attempt's evidence, not to let the lane pass on it, so an entry here is
+    /// a visible act in the diff with an owner attached — not a list a lane
+    /// grows to stay green.
+    pub known_flakes: Vec<KnownFlake>,
     /// Paths that belong to no single lane: a change to one of them runs every
     /// lane that declares `owns`, because the routing itself moved.
     pub shared_paths: Vec<String>,
+}
+
+/// One test allowed to reach a pass through a retry, and the issue it waits on.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct KnownFlake {
+    /// The issue that owns the defect, so the entry names who removes it.
+    pub issue: String,
+    /// `<suite>::<test>`, exactly as the `JUnit` report names the case.
+    pub test: String,
 }
 
 #[derive(Debug, Deserialize)]

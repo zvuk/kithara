@@ -11,8 +11,15 @@ pub enum FrameClass {
 }
 
 /// Per-window classification of a mono f32 stream.
+///
 /// `window` = frames per window; `tol` = allowed deviation of the mean
 /// per-frame modular delta from +/-1.0 i16 units.
+///
+/// A window's mean covers the step into its first frame as well as the steps
+/// between its own frames, so the windows together read every step the stream
+/// contains. Reading only the interior steps would drop one step per window --
+/// precisely the steps that land on a window boundary -- and a splice that
+/// landed there would be invisible to every caller.
 #[must_use]
 pub fn classify_windows(left: &[f32], window: usize, tol: f32) -> Vec<FrameClass> {
     if window < 2 {
@@ -20,7 +27,11 @@ pub fn classify_windows(left: &[f32], window: usize, tol: f32) -> Vec<FrameClass
     }
 
     left.chunks_exact(window)
-        .map(|samples| classify_window(samples, tol))
+        .enumerate()
+        .map(|(index, samples)| {
+            let preceding = (index > 0).then(|| left[index * window - 1]);
+            classify_window(samples, preceding, tol)
+        })
         .collect()
 }
 
@@ -80,16 +91,18 @@ pub fn ascending_phase_replays(
     replays
 }
 
-fn classify_window(samples: &[f32], tol: f32) -> FrameClass {
+fn classify_window(samples: &[f32], preceding: Option<f32>, tol: f32) -> FrameClass {
     if samples.iter().all(|sample| is_silence(*sample)) {
         return FrameClass::Silence;
     }
 
-    let delta_sum = samples
-        .windows(2)
-        .map(|pair| f32::from(phase::delta(phase::units(pair[0]), phase::units(pair[1]))))
+    let entry = preceding.map(|prior| step(prior, samples[0]));
+    let delta_sum = entry
+        .into_iter()
+        .chain(samples.windows(2).map(|pair| step(pair[0], pair[1])))
         .sum::<f32>();
-    let steps: f32 = cast(samples.len() - 1).expect("invariant: a window length fits f32");
+    let count = samples.len() - 1 + usize::from(entry.is_some());
+    let steps: f32 = cast(count).expect("invariant: a window length fits f32");
     let mean_delta = delta_sum / steps;
 
     if (mean_delta - 1.0).abs() <= tol {
@@ -99,6 +112,10 @@ fn classify_window(samples: &[f32], tol: f32) -> FrameClass {
     } else {
         FrameClass::Unknown
     }
+}
+
+fn step(from: f32, to: f32) -> f32 {
+    f32::from(phase::delta(phase::units(from), phase::units(to)))
 }
 
 fn expected_phase_error(sample: f32, base_phase: usize, frame_offset: usize) -> i32 {
@@ -115,7 +132,7 @@ fn is_silence(sample: f32) -> bool {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{FrameClass, Replay, ascending_phase_replays, classify_windows};
+    use super::{FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows};
     use crate::fixtures::{
         ascending_pcm, ascending_wrap_pcm, descending_pcm, descending_wrap_pcm, provenance_silence,
     };
@@ -144,6 +161,23 @@ mod tests {
         assert_eq!(
             classify_windows(&silence, WINDOW, 0.5),
             vec![FrameClass::Silence]
+        );
+    }
+
+    /// A splice is a splice wherever it falls. The frame it lands on is set by
+    /// whatever the renderer had committed when the flush arrived, so a reader
+    /// that saw only the steps inside a window would report the same stream as
+    /// continuous in one run and broken in the next.
+    #[kithara::test(native, flash(false))]
+    fn a_splice_on_a_window_boundary_still_breaks_the_class(ascending_pcm: Vec<f32>) {
+        const JUMP: usize = SAW_PERIOD / 2;
+
+        let mut left = ascending_pcm[..WINDOW * 2].to_vec();
+        left[WINDOW..].copy_from_slice(&ascending_pcm[JUMP..JUMP + WINDOW]);
+
+        assert_eq!(
+            classify_windows(&left, WINDOW, 0.5),
+            vec![FrameClass::Ascending, FrameClass::Unknown]
         );
     }
 

@@ -68,6 +68,22 @@ impl Default for PendingState {
     }
 }
 
+impl PendingState {
+    /// Hand out the identity of one transition attempt. Two intents that
+    /// share a ticket are indistinguishable to every holder of it, so a
+    /// slot written for a new reason takes a new ticket.
+    ///
+    /// # Panics
+    ///
+    /// Panics after exhausting the monotonic ABR ticket space.
+    fn mint_ticket(&mut self) -> AbrTicket {
+        assert!(self.next_ticket < u64::MAX, "ABR ticket space exhausted");
+        let ticket = AbrTicket::new(self.next_ticket);
+        self.next_ticket += 1;
+        ticket
+    }
+}
+
 /// Captured intent of a pending switch: the target variant index plus
 /// the reason the requestor (controller, manual UI, scheduler) wants
 /// recorded once the boundary commit lands.
@@ -419,9 +435,7 @@ impl AbrState {
         {
             return;
         }
-        assert!(state.next_ticket < u64::MAX, "ABR ticket space exhausted");
-        let ticket = AbrTicket::new(state.next_ticket);
-        state.next_ticket += 1;
+        let ticket = state.mint_ticket();
         state.pending = Some(PendingApply {
             reason,
             ticket,
@@ -467,19 +481,34 @@ impl AbrState {
     }
 
     /// Applies a validated mode and clears any superseded pending switch.
-    /// A matching manual target keeps its ticket and becomes a manual override.
+    ///
+    /// A manual pin on the target the slot already holds keeps that intent
+    /// alive, but under a fresh ticket. The ticket is the identity of one
+    /// transition attempt, and the slot it finds may already be claimed:
+    /// reusing the ticket would let that attempt's abort cancel the command
+    /// the listener has just given. Re-pinning what is already a manual
+    /// override on that target restates nothing and keeps its ticket.
+    ///
+    /// # Panics
+    ///
+    /// Panics after exhausting the monotonic ABR ticket space.
     pub fn set_mode(&self, mode: AbrMode) {
         let mut state = self.pending.lock();
         self.mode.store(mode.into(), Ordering::Release);
         let restated = match mode {
-            AbrMode::Manual(target) => state
-                .pending
-                .as_mut()
-                .filter(|pending| pending.target == target),
+            AbrMode::Manual(target) => state.pending.filter(|pending| pending.target == target),
             AbrMode::Auto(_) => None,
         };
         match restated {
-            Some(pending) => pending.reason = AbrReason::ManualOverride,
+            Some(pending) if matches!(pending.reason, AbrReason::ManualOverride) => {}
+            Some(pending) => {
+                let ticket = state.mint_ticket();
+                state.pending = Some(PendingApply {
+                    reason: AbrReason::ManualOverride,
+                    ticket,
+                    ..pending
+                });
+            }
             None => state.pending = None,
         }
     }

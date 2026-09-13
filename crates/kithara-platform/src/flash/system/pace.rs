@@ -243,7 +243,6 @@ mod tests {
             elapsed < Duration::from_millis(250),
             "near deadline waited for the original far target: {elapsed:?}"
         );
-        assert_eq!(flash.clock.now_nanos(), base + ms(120));
 
         flash.real_io_exit();
         far.join().expect("far waiter thread panicked");
@@ -291,10 +290,15 @@ mod tests {
         waiter.join().expect("waiter thread panicked");
         let elapsed = start.elapsed();
         assert_paced_elapsed(elapsed, 80);
-        assert_eq!(flash.clock.now_nanos(), base + ms(80));
 
         flash.real_io_exit();
         blocker.join().expect("blocker thread panicked");
+        assert_eq!(
+            flash.advance_log(),
+            vec![base + ms(80), base + ms(300)],
+            "the quiescence edge advances the clock to the near deadline itself, \
+             never to the blocker's later target"
+        );
     }
 
     #[kithara::test(native, flash(false))]

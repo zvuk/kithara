@@ -9,6 +9,7 @@ use kithara::{
     platform::{
         thread::paced_backoff,
         time::{Duration, sleep},
+        tokio::task::spawn_blocking,
     },
     play::RegisteredAudio,
     stream::{Stream, StreamType},
@@ -189,7 +190,16 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
     end_frame.saturating_sub(frames_read)
 }
 
-/// Async twin of [`read_block_with_position`]; same reason for the guard.
+/// Async twin of [`read_block_with_position`]; same reason for the guard, and
+/// the same budget.
+///
+/// The backoff goes through `spawn_blocking` because [`paced_backoff`] blocks
+/// its thread. A bare `sleep` would date the retry instead, and under flash a
+/// dated retry is free: the engine services that deadline in isolation, so a
+/// pull whose producer has nothing to give walks the virtual clock forward by
+/// itself until it has expired the producer's own deadlines. The blocking
+/// closure is real work in flight and holds the engine's slot for its lifetime,
+/// so a retry spends real time and no virtual time at all.
 #[kithara::flash(true)]
 async fn read_block_async<T>(
     audio: &mut RegisteredAudio<Stream<T>, TestPools>,
@@ -199,11 +209,19 @@ async fn read_block_async<T>(
 where
     T: StreamType<Events = EventBus>,
 {
+    let mut retries = 0usize;
     loop {
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
             Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(1)).await;
+                retries += 1;
+                assert!(
+                    retries < READ_PENDING_RETRIES,
+                    "{label}: pending exceeded {READ_PENDING_RETRIES} retries (decoder starved)",
+                );
+                spawn_blocking(|| paced_backoff(Duration::from_millis(1)))
+                    .await
+                    .expect("phase scan pending pace");
             }
             Ok(ReadOutcome::Eof { .. }) => return None,
             Err(e) => panic!("{label}: read error: {e}"),

@@ -276,17 +276,28 @@ fn worker_skips_not_ready_tracks() {
     assert_eq!(b, 0, "not-ready track should receive nothing");
 }
 
+/// A ring of one is the tightest backpressure the port has: the producer
+/// fills it, reports `Backpressured`, and may only continue once the
+/// consumer has taken that one chunk. The second chunk therefore cannot
+/// exist before the first is popped, which is what makes this a statement
+/// about resuming rather than about how fast the scheduler ran.
 #[kithara::test]
-fn worker_overflow_on_full_ringbuf() {
+fn worker_resumes_after_a_full_ringbuf_drains() {
     let pools = pools();
     let handle = test_scheduler();
     let (node, mut pop, _) = make_node(MockSource::new(pools.clone(), 5), 1, 1);
     let _id = register(&handle, node);
 
-    thread_sleep(Duration::from_millis(50));
-    assert!(pop().is_some(), "should have at least one chunk");
-    thread_sleep(Duration::from_millis(50));
-    assert!(pop().is_some(), "overflow slot should have been flushed");
+    assert_eq!(
+        wait_for_chunks(&mut pop, 1, Duration::from_secs(5)),
+        1,
+        "the producer must fill a ring of one"
+    );
+    assert_eq!(
+        wait_for_chunks(&mut pop, 1, Duration::from_secs(5)),
+        1,
+        "the producer must resume once the consumer drained the ring"
+    );
 }
 
 #[kithara::test]

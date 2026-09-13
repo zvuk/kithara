@@ -477,6 +477,70 @@ fn decoder_node_live_upstream_demand_does_not_tick_hang_wait() {
     assert_eq!(node.tick(), TickResult::UpstreamPending);
 }
 
+/// A producer parked on upstream bytes opens the preload latch. The chunk
+/// count reachable before the demuxer reads past the delivered segment is not
+/// a property the pipeline controls, so a latch that only counts chunks leaves
+/// resource construction waiting on a fetch that may not land.
+#[kithara::test]
+#[case(WaitingReason::Waiting)]
+#[case(WaitingReason::WaitingDemand)]
+#[case(WaitingReason::WaitingMetadata)]
+fn decoder_node_upstream_park_opens_the_preload_gate(#[case] reason: WaitingReason) {
+    let gate = Arc::new(PreloadGate::default());
+    let (port, _pop) = ProducerPort::probe(2);
+
+    let source = Unimock::new(
+        AudioSourceMock::step_track
+            .next_call(matching!())
+            .returns(TrackStep::Blocked(reason)),
+    );
+
+    let mut node = test_node(
+        source,
+        port,
+        Arc::clone(&gate),
+        Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+    );
+
+    let _ = node.tick();
+
+    assert!(
+        gate.is_ready(),
+        "a producer parked on {reason:?} must not strand the construction wait"
+    );
+}
+
+/// The park opener does not weaken the count opener: a producer that keeps
+/// delivering never reaches a park, so the latch still waits for the full
+/// chunk quota.
+#[kithara::test]
+fn decoder_node_preload_gate_stays_shut_below_the_chunk_quota() {
+    let pools = pools();
+    let gate = Arc::new(PreloadGate::default());
+    let (port, _pop) = ProducerPort::probe(4);
+
+    let source = Unimock::new(
+        AudioSourceMock::step_track
+            .next_call(matching!())
+            .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
+    );
+
+    let mut node = test_node(
+        source,
+        port,
+        Arc::clone(&gate),
+        Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+    );
+    node.preload_chunks = 2;
+
+    let _ = node.tick();
+
+    assert!(
+        !gate.is_ready(),
+        "one chunk of a two-chunk quota is not preload"
+    );
+}
+
 #[kithara::test]
 fn decoder_node_seek_rearms_preload_gate() {
     let pools = pools();

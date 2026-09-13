@@ -360,6 +360,26 @@ impl ActiveDecode {
         mem::replace(&mut self.active, active)
     }
 
+    /// Retires the transition join a seek invalidated.
+    ///
+    /// A priming incoming means a join is armed on the active generation:
+    /// `outgoing_holdback_is_active` reports one, and decode output flows
+    /// through the holdback so the incoming can be spliced at the frontier it
+    /// latched. Retiring the active generation's staged PCM disarms that
+    /// holdback, and the claim outlives it — the next chunk is rejected as
+    /// unprepared, and the rejection fails the track. Re-arming is no answer
+    /// either: the latched frontier is pre-seek and the repositioned
+    /// generation never reaches it. So the incoming half goes back for
+    /// retirement, and the surviving ABR intent mints a fresh transition.
+    #[must_use]
+    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) -> Option<DecoderGeneration> {
+        self.active.notify_seek(retire);
+        if !matches!(self.incoming, Some(IncomingDecode::Priming { .. })) {
+            return None;
+        }
+        self.discard_incoming()
+    }
+
     pub(crate) fn reset(&mut self) {
         self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
         self.stage_error = None;
@@ -427,7 +447,6 @@ impl ActiveDecode {
             #[call(finish)]
             pub(crate) fn finish_active(&mut self);
             pub(crate) fn mark_source_exhausted(&mut self);
-            pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire);
         }
         to self.output {
             pub(crate) const fn stats(&self) -> (u64, u64);
@@ -474,7 +493,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        pipeline::decode::transition::IncomingPrime,
+        pipeline::{decode::transition::IncomingPrime, rebuild::retire::Retired},
         test_pools::{Pools, pools, sample_buffer},
         traits::{AudioObserveError, AudioObserverMock},
     };
@@ -652,6 +671,58 @@ mod tests {
             decode.active().staged_span().map(|(_, end, _)| end),
             Some(4)
         );
+    }
+
+    #[kithara::test]
+    fn a_seek_retires_the_transition_join_it_invalidated(decode_quarter: Vec<f32>) {
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let active = generation(spec);
+        let incoming = generation(spec);
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Awaiting,
+        });
+        decode.prepare_incoming_profile(BlenderProfile::new(spec));
+        let make_chunk = |offset| {
+            AudioChunk::new(
+                AudioChunkInfo {
+                    spec,
+                    frame_offset: offset,
+                    frames: 4,
+                    ..Default::default()
+                },
+                sample_buffer(&pools, &decode_quarter[..4 * usize::from(spec.channels)]),
+            )
+        };
+        decode
+            .push(make_chunk(0))
+            .expect("first holdback chunk is valid");
+
+        let retired = Retired::new(1, 1);
+
+        let invalidated = decode.notify_seek(&retired);
+
+        assert!(
+            invalidated.is_some(),
+            "a seek that retires the join must hand back the incoming half claiming it"
+        );
+        assert!(decode.incoming_transition().is_none());
+        decode
+            .push(make_chunk(1_443_179))
+            .expect("PCM resumed by a seek must not be judged against a join the seek retired");
     }
 
     #[kithara::test]

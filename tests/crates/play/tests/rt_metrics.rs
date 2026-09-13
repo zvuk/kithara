@@ -12,12 +12,14 @@ use kithara::{
     platform::{sync::Arc, time::Duration},
     play::{
         Resource, SharedEq,
-        bridge::{PlayerCmd, RtMetricsSnapshot, SlotControl, slot_channels},
+        bridge::{PlayerCmd, RtMetricsSnapshot, SlotControl, TrackTransition, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::{Fault, MockReader, TestPcmReader};
+use kithara_integration_tests::audio_mock::{
+    Fault, MockReader, TEST_PCM_DEFAULT_VALUE, TestPcmReader,
+};
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use ringbuf::traits::Producer;
 
@@ -25,6 +27,9 @@ use crate::bufpool_ext::pools;
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: u32 = 128;
+const CROSSFADE_SECONDS: f32 = 0.5;
+const CROSSFADE_BLOCKS: usize = 8;
+const AUDIBLE_FRACTION: f32 = 0.5;
 
 fn block_len() -> usize {
     usize::try_from(BLOCK_FRAMES).expect("block frames fit usize")
@@ -81,6 +86,26 @@ fn load(control: &mut SlotControl, resource: Box<PlayerResource>) -> TrackId {
     item_id
 }
 
+fn pump(processor: &mut PlayerNodeProcessor, blocks: usize) -> Vec<f32> {
+    let mut out_l = vec![0.0f32; block_len()];
+    for _ in 0..blocks {
+        let mut out_r = vec![0.0f32; block_len()];
+        let inputs: [&[f32]; 0] = [];
+        let mut outputs = [&mut out_l[..], &mut out_r[..]];
+        let mut buffers = ProcBuffers {
+            inputs: &inputs,
+            outputs: &mut outputs,
+        };
+        let _ = processor.render_audio(&mut buffers, block_len(), true);
+    }
+
+    out_l
+}
+
+fn peak(rendered: &[f32]) -> f32 {
+    rendered.iter().fold(0.0f32, |acc, s| acc.max(s.abs()))
+}
+
 fn render_loaded_blocks(
     resource: Box<PlayerResource>,
     blocks: usize,
@@ -94,19 +119,9 @@ fn render_loaded_blocks(
         track.play();
     }
 
-    let mut out_l = vec![0.0f32; block_len()];
-    for _ in 0..blocks {
-        let mut out_r = vec![0.0f32; block_len()];
-        let inputs: [&[f32]; 0] = [];
-        let mut outputs = [&mut out_l[..], &mut out_r[..]];
-        let mut buffers = ProcBuffers {
-            inputs: &inputs,
-            outputs: &mut outputs,
-        };
-        let _ = processor.render_audio(&mut buffers, block_len(), true);
-    }
+    let rendered = pump(&mut processor, blocks);
 
-    (processor, out_l)
+    (processor, rendered)
 }
 
 fn render_loaded(resource: Box<PlayerResource>) -> PlayerNodeProcessor {
@@ -135,10 +150,64 @@ fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
         metrics(&processor).underruns() > 0,
         "a zero-filled block short of EOF is an underrun"
     );
-    let peak = rendered.iter().fold(0.0f32, |acc, s| acc.max(s.abs()));
+    let peak = peak(&rendered);
     assert!(
         peak == 0.0,
         "an underrun must render silence, not stale scratch (peak {peak})"
+    );
+}
+
+/// A crossfade underruns the incoming track instead of waiting for its PCM.
+///
+/// The outgoing track keeps carrying the mix while the incoming one has nothing
+/// ready. A `process()` that waits for the incoming PCM never returns from
+/// `render_audio`, and one that mixes the stall over the outgoing track drops a
+/// mix that was at full level one block earlier. The crossfade lasts
+/// `CROSSFADE_SECONDS` and only `CROSSFADE_BLOCKS` of it are rendered, so the
+/// outgoing gain has barely left 1.0 and the surviving level is the outgoing
+/// material, not a residue of the fade.
+#[kithara::test]
+fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: &'static [u8]) {
+    let (mut processor, mut control) = processor();
+    let outgoing = load(&mut control, healthy_track(constant_half, "outgoing.mp3"));
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::SetFadeDuration(0.0))
+        .ok();
+    control.cmd_tx.try_push(PlayerCmd::SetPaused(false)).ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(outgoing)))
+        .ok();
+    processor.drain_commands();
+
+    let before = peak(&pump(&mut processor, CROSSFADE_BLOCKS));
+    assert!(
+        (before - TEST_PCM_DEFAULT_VALUE).abs() < f32::EPSILON,
+        "the outgoing track plays at full level before the crossfade ({before})"
+    );
+
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::SetFadeDuration(CROSSFADE_SECONDS))
+        .ok();
+    let incoming = load(&mut control, faulty_track("incoming.mp3", Fault::Stall));
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(incoming)))
+        .ok();
+    processor.drain_commands();
+
+    let during = peak(&pump(&mut processor, CROSSFADE_BLOCKS));
+
+    assert!(
+        metrics(&processor).underruns() > 0,
+        "a crossfade into a source with nothing ready must count an underrun"
+    );
+    assert!(
+        during >= before * AUDIBLE_FRACTION,
+        "the outgoing track must keep carrying the mix while the incoming one \
+         underruns (before {before}, during {during})"
     );
 }
 

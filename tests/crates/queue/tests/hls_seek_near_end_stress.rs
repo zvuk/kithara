@@ -1,6 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
+use std::cell::Cell;
+
 use kithara::{
     abr::AbrMode,
     assets::AssetStore,
@@ -34,9 +36,9 @@ struct Consts;
 impl Consts {
     /// Number of fresh-player iterations. User reports the bug at
     /// roughly 1/19; 30 fresh runs gives >80 % catch probability if
-    /// the production rate is comparable. Bounded by `IterDeadline`
-    /// below so a hung iteration cannot exceed its share of the
-    /// outer test timeout.
+    /// the production rate is comparable. Each iteration is capped by
+    /// [`Self::ITER_DEADLINE`], so a stalled one costs that much of the
+    /// test's own timeout rather than the whole run.
     const FRESH_ITERATIONS: u32 = 30;
     /// HLS fixture shape: 8 segments × 4 s = 32 s total. Big enough
     /// that "near end" is well past the warmup window and any byte-range
@@ -65,16 +67,25 @@ impl Consts {
     /// Time given to the player to consume some PCM after the seek
     /// before we sample position.
     const POST_SEEK_RENDER_WALL: Duration = Duration::from_millis(1_500);
-    /// Loader settle deadline.
-    const LOAD_DEADLINE: Duration = Duration::from_secs(15);
+    /// Loader settle deadline. Measured settle is under 200 ms; the
+    /// margin is wide because a loaded runner parks on real sockets
+    /// while short timers keep the virtual clock moving. It stays under
+    /// [`Self::ITER_DEADLINE`] so a stalled load reports itself instead
+    /// of being preempted by the backstop.
+    const LOAD_DEADLINE: Duration = Duration::from_secs(8);
+    /// Warmup settle deadline, on the same footing as
+    /// [`Self::LOAD_DEADLINE`]: measured warmup is under 350 ms.
+    const WARMUP_DEADLINE: Duration = Duration::from_secs(8);
     /// Pre-seek warmup. Mirrors "just opened, briefly listened, then
     /// dragged the playhead". Short enough that the player is still
     /// inside segment 0 when seek fires — prod scenario from the user.
     const PRE_SEEK_PLAY_S: f64 = 0.5;
-    /// Hard ceiling per iteration. Anything past this is a hang in
-    /// `run_one_attempt` itself (e.g. the player never produces
-    /// position updates). Bounds the worst-case test runtime to
-    /// `FRESH_ITERATIONS * ITER_DEADLINE` ≈ 5 min.
+    /// Backstop for the steps that own no budget of their own — queue
+    /// construction, append and select. Every other step is bounded by
+    /// the phase budgets above, all of which stay below this value so
+    /// they fire first and name themselves. The attempt reports the
+    /// phase it was in, because this deadline cannot know which wait it
+    /// interrupted.
     const ITER_DEADLINE: Duration = Duration::from_secs(10);
 }
 
@@ -93,6 +104,53 @@ enum IterOutcome {
         target: f64,
         error: String,
     },
+}
+
+/// Every per-phase budget must be reachable. The iteration deadline backstops
+/// the steps that own no budget; a phase budget at or above it can never fire,
+/// so the phase would be reported by the backstop, which does not know which
+/// wait it interrupted.
+#[kithara::test]
+fn every_phase_budget_is_reachable_under_the_iteration_deadline() {
+    for (name, budget) in [
+        ("LOAD_DEADLINE", Consts::LOAD_DEADLINE),
+        ("WARMUP_DEADLINE", Consts::WARMUP_DEADLINE),
+        ("SEEK_BUDGET", Consts::SEEK_BUDGET),
+        ("POST_SEEK_RENDER_WALL", Consts::POST_SEEK_RENDER_WALL),
+    ] {
+        assert!(
+            budget < Consts::ITER_DEADLINE,
+            "{name} ({budget:?}) cannot fire under ITER_DEADLINE ({:?})",
+            Consts::ITER_DEADLINE,
+        );
+    }
+}
+
+/// The step an attempt is executing, published so the iteration backstop can
+/// name the wait it interrupted instead of guessing one.
+#[derive(Debug, Clone, Copy)]
+enum AttemptPhase {
+    Setup,
+    Append,
+    Select,
+    Load,
+    Warmup,
+    Seek,
+    PostSeek,
+}
+
+impl AttemptPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Setup => "queue construction",
+            Self::Append => "queue.append",
+            Self::Select => "queue.select",
+            Self::Load => "loader settle",
+            Self::Warmup => "pre-seek warmup",
+            Self::Seek => "seek landing",
+            Self::PostSeek => "post-seek advance",
+        }
+    }
 }
 
 async fn build_hls(helper: &TestServerHelper, include_sidx: bool) -> Url {
@@ -162,180 +220,176 @@ async fn run_one_attempt(
     url: &Url,
     target_offset: f64,
     backend: DecoderBackend,
+    phase: &Cell<AttemptPhase>,
 ) -> IterOutcome {
     let temp = temp_dir();
+    phase.set(AttemptPhase::Setup);
     let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
 
-    let src = match ResourceSrc::parse(url.as_str()) {
-        Ok(src) => src,
-        Err(e) => {
-            drop(tick_handle);
+    let outcome = async {
+        let src = match ResourceSrc::parse(url.as_str()) {
+            Ok(src) => src,
+            Err(e) => {
+                return IterOutcome::Errored {
+                    iter,
+                    target: f64::NAN,
+                    error: format!("ResourceSrc::parse failed: {e}"),
+                };
+            }
+        };
+        let builder = ResourceConfig::for_src(src);
+        let cfg = builder
+            .downloader(downloader.clone())
+            .store(store)
+            .initial_abr_mode(AbrMode::Auto(None))
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .build();
+        phase.set(AttemptPhase::Append);
+        let track_id = match queue
+            .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+            .await
+        {
+            Ok(track_id) => track_id,
+            Err(error) => {
+                return IterOutcome::Errored {
+                    iter,
+                    target: f64::NAN,
+                    error: format!("queue.append failed: {error}"),
+                };
+            }
+        };
+
+        // Subscribe before the action that drives loading/playback so no
+        // status or progress event can slip between `select` and the first
+        // `recv`. The queue bus is the player bus (`Queue::new` clones
+        // `player.bus()`), so audio sink-truth events arrive here too.
+        let mut rx = queue.subscribe();
+
+        phase.set(AttemptPhase::Select);
+        if let Err(e) = queue
+            .run(move |q| q.select(track_id, Transition::None))
+            .await
+        {
             return IterOutcome::Errored {
                 iter,
                 target: f64::NAN,
-                error: format!("ResourceSrc::parse failed: {e}"),
+                error: format!("queue.select failed: {e}"),
             };
         }
-    };
-    let builder = ResourceConfig::for_src(src);
-    let cfg = builder
-        .downloader(downloader.clone())
-        .store(store)
-        .initial_abr_mode(AbrMode::Auto(None))
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
+
+        phase.set(AttemptPhase::Load);
+        if let Err(e) =
+            wait_for_loader_done_event(&mut rx, &queue, track_id, Consts::LOAD_DEADLINE).await
+        {
+            return IterOutcome::Errored {
+                iter,
+                target: f64::NAN,
+                error: format!("loader: {e}"),
+            };
+        }
+
+        phase.set(AttemptPhase::Warmup);
+        if let Err(e) = wait_for_position_event(
+            &mut rx,
+            &queue,
+            Consts::PRE_SEEK_PLAY_S,
+            Consts::WARMUP_DEADLINE,
         )
-        .build();
-    let track_id = match queue
-        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
         .await
-    {
-        Ok(track_id) => track_id,
-        Err(error) => {
-            drop(tick_handle);
+        {
             return IterOutcome::Errored {
                 iter,
                 target: f64::NAN,
-                error: format!("queue.append failed: {error}"),
+                error: format!("warmup: {e}"),
             };
         }
-    };
 
-    // Subscribe before the action that drives loading/playback so no
-    // status or progress event can slip between `select` and the first
-    // `recv`. The queue bus is the player bus (`Queue::new` clones
-    // `player.bus()`), so audio sink-truth events arrive here too.
-    let mut rx = queue.subscribe();
-
-    if let Err(e) = queue
-        .run(move |q| q.select(track_id, Transition::None))
-        .await
-    {
-        drop(tick_handle);
-        return IterOutcome::Errored {
-            iter,
-            target: f64::NAN,
-            error: format!("queue.select failed: {e}"),
+        phase.set(AttemptPhase::Seek);
+        let duration = if let Some(d) = queue.duration_seconds() {
+            d
+        } else {
+            return IterOutcome::Errored {
+                iter,
+                target: f64::NAN,
+                error: "duration unknown after Loaded".into(),
+            };
         };
-    }
 
-    if let Err(e) =
-        wait_for_loader_done_event(&mut rx, &queue, track_id, Consts::LOAD_DEADLINE).await
-    {
-        drop(tick_handle);
-        return IterOutcome::Errored {
-            iter,
-            target: f64::NAN,
-            error: format!("loader: {e}"),
-        };
-    }
+        let target = (duration - target_offset).max(0.0);
+        let pos_before = queue.position_seconds().unwrap_or(0.0);
 
-    if let Err(e) = wait_for_position_event(
-        &mut rx,
-        &queue,
-        Consts::PRE_SEEK_PLAY_S,
-        Duration::from_secs(15),
-    )
-    .await
-    {
-        drop(tick_handle);
-        return IterOutcome::Errored {
-            iter,
-            target: f64::NAN,
-            error: format!("warmup: {e}"),
-        };
-    }
-
-    let duration = if let Some(d) = queue.duration_seconds() {
-        d
-    } else {
-        drop(tick_handle);
-        return IterOutcome::Errored {
-            iter,
-            target: f64::NAN,
-            error: "duration unknown after Loaded".into(),
-        };
-    };
-
-    let target = (duration - target_offset).max(0.0);
-    let pos_before = queue.position_seconds().unwrap_or(0.0);
-
-    if let Err(e) = queue.seek(target) {
-        drop(tick_handle);
-        return IterOutcome::Errored {
-            iter,
-            target,
-            error: format!("queue.seek returned Err: {e}"),
-        };
-    }
-
-    // Seek-landed: wait on the sink-truth events the worker emits after
-    // applying the seek — `SeekComplete` (post-seek output committed) or a
-    // `PlaybackProgress` whose position is within tolerance of `target` —
-    // rather than polling the tick-cached position. A `Failed` transition is
-    // the failure branch. The budget is a virtual hang ceiling under flash.
-    match wait_for_seek_landed(&mut rx, &queue, track_id, target, Consts::SEEK_BUDGET).await {
-        SeekLanded::Landed => {}
-        SeekLanded::Failed(err) => {
-            drop(tick_handle);
+        if let Err(e) = queue.seek(target) {
             return IterOutcome::Errored {
                 iter,
                 target,
-                error: err,
+                error: format!("queue.seek returned Err: {e}"),
             };
         }
-        SeekLanded::Timeout => {
-            let pos_after = queue.position_seconds().unwrap_or(0.0);
-            drop(tick_handle);
-            return IterOutcome::Hung {
-                iter,
-                target,
-                pos_before,
-                pos_after,
-                budget_ms: Consts::SEEK_BUDGET.as_millis(),
-            };
-        }
-    }
 
-    // Post-seek "playing again": wait for real PCM-commit progress past the
-    // seek target by `MIN_POST_SEEK_ADVANCE_S`, observed via
-    // `PlaybackProgress`, rather than a fixed render wall.
-    match wait_for_post_seek_advance(
-        &mut rx,
-        &queue,
-        track_id,
-        target,
-        Consts::MIN_POST_SEEK_ADVANCE_S,
-        Consts::POST_SEEK_RENDER_WALL,
-    )
-    .await
-    {
-        PostSeekAdvance::Advanced => {
-            tick_handle.stop().await;
-            queue.close().await;
-            IterOutcome::Ok
+        // Seek-landed: wait on the sink-truth events the worker emits after
+        // applying the seek — `SeekComplete` (post-seek output committed) or a
+        // `PlaybackProgress` whose position is within tolerance of `target` —
+        // rather than polling the tick-cached position. A `Failed` transition is
+        // the failure branch. The budget is a virtual hang ceiling under flash.
+        match wait_for_seek_landed(&mut rx, &queue, track_id, target, Consts::SEEK_BUDGET).await {
+            SeekLanded::Landed => {}
+            SeekLanded::Failed(err) => {
+                return IterOutcome::Errored {
+                    iter,
+                    target,
+                    error: err,
+                };
+            }
+            SeekLanded::Timeout => {
+                let pos_after = queue.position_seconds().unwrap_or(0.0);
+                return IterOutcome::Hung {
+                    iter,
+                    target,
+                    pos_before,
+                    pos_after,
+                    budget_ms: Consts::SEEK_BUDGET.as_millis(),
+                };
+            }
         }
-        PostSeekAdvance::Failed(err) => {
-            drop(tick_handle);
-            IterOutcome::Errored {
+
+        // Post-seek "playing again": wait for real PCM-commit progress past the
+        // seek target by `MIN_POST_SEEK_ADVANCE_S`, observed via
+        // `PlaybackProgress`, rather than a fixed render wall.
+        phase.set(AttemptPhase::PostSeek);
+        match wait_for_post_seek_advance(
+            &mut rx,
+            &queue,
+            track_id,
+            target,
+            Consts::MIN_POST_SEEK_ADVANCE_S,
+            Consts::POST_SEEK_RENDER_WALL,
+        )
+        .await
+        {
+            PostSeekAdvance::Advanced => IterOutcome::Ok,
+            PostSeekAdvance::Failed(err) => IterOutcome::Errored {
                 iter,
                 target,
                 error: err,
-            }
-        }
-        PostSeekAdvance::Timeout(pos_after) => {
-            drop(tick_handle);
-            IterOutcome::Hung {
+            },
+            PostSeekAdvance::Timeout(pos_after) => IterOutcome::Hung {
                 iter,
                 target,
                 pos_before,
                 pos_after,
-                budget_ms: Consts::SEEK_BUDGET.as_millis(),
-            }
+                budget_ms: Consts::POST_SEEK_RENDER_WALL.as_millis(),
+            },
         }
     }
+    .await;
+
+    tick_handle.stop().await;
+    queue.close().await;
+    outcome
 }
 
 enum SeekLanded {
@@ -502,9 +556,10 @@ async fn hls_seek_near_end_fresh_player_stress(
     let mut outcomes: Vec<IterOutcome> = Vec::with_capacity(Consts::FRESH_ITERATIONS as usize);
     for iter in 0..Consts::FRESH_ITERATIONS {
         let offset = Consts::NEAR_END_OFFSETS_S[(iter as usize) % Consts::NEAR_END_OFFSETS_S.len()];
+        let phase = Cell::new(AttemptPhase::Setup);
         let outcome = match time::timeout(
             Consts::ITER_DEADLINE,
-            run_one_attempt(iter, &url, offset, backend),
+            run_one_attempt(iter, &url, offset, backend, &phase),
         )
         .await
         {
@@ -513,8 +568,9 @@ async fn hls_seek_near_end_fresh_player_stress(
                 iter,
                 target: f64::NAN,
                 error: format!(
-                    "iteration exceeded ITER_DEADLINE ({:?}) — hung outside seek budget",
+                    "iteration exceeded ITER_DEADLINE ({:?}) while in {}",
                     Consts::ITER_DEADLINE,
+                    phase.get().label(),
                 ),
             },
         };

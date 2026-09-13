@@ -1,8 +1,8 @@
 use kithara::platform::{
     no_block::force_panic_mode,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use kithara_integration_tests::kithara;
 
@@ -47,6 +47,30 @@ async fn allow_block_bridge_passes() {
         cvar.notify_all();
     });
     sanctioned_bridge(&pair);
+}
+
+/// A message already in the queue is not a licence. `recv` is a blocking API
+/// at every call site, and which side wins the race with its producer changes
+/// between runs; a detector that reads only the park reports the same code in
+/// one run and stays silent in the next.
+#[kithara::test(flash(false))]
+#[should_panic(expected = "[no_block]")]
+async fn a_queued_message_does_not_hide_mpsc_recv() {
+    let _mode = force_panic_mode();
+    let (tx, rx) = mpsc::channel();
+    tx.send(()).expect("the receiver is alive");
+    let _ = rx.recv();
+}
+
+/// The deadline form blocks for the same reason and is reported the same way,
+/// whatever the queue holds when it is called.
+#[kithara::test(flash(false))]
+#[should_panic(expected = "[no_block]")]
+async fn a_queued_message_does_not_hide_mpsc_recv_timeout() {
+    let _mode = force_panic_mode();
+    let (tx, rx) = mpsc::channel();
+    tx.send(()).expect("the receiver is alive");
+    let _ = rx.recv_timeout(Instant::now());
 }
 
 #[kithara::allow_block]

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig},
-    sccache, touched,
+    retried, sccache, touched,
     verdict::ChildFailure,
 };
 
@@ -115,21 +115,26 @@ impl TestRequest {
 }
 
 pub(crate) fn run(args: &TestArgs) -> Result<()> {
+    /// Where the test command is run from, and so where every path it reads
+    /// or judges is anchored.
+    const ROOT: &str = ".";
+
     let request = TestRequest::parse(&args.args)?;
-    let project = ProjectConfig::load(Path::new("."))?;
+    let root = Path::new(ROOT);
+    let project = ProjectConfig::load(root)?;
     let test = &project.test;
     validate_config(test)?;
 
     if request.touched {
-        return run_touched(&project, &request);
+        return run_touched(&project, root, &request);
     }
     let (lane_name, lane) = select_lane(test, &request)?;
-    run_lane(&project, lane_name, lane, &request)
+    run_lane(&project, root, lane_name, lane, &request)
 }
 
 /// Run every lane the branch touched, serially, without letting the first
 /// failure hide the rest: this exists to name which lane broke.
-fn run_touched(project: &ProjectConfig, request: &TestRequest) -> Result<()> {
+fn run_touched(project: &ProjectConfig, root: &Path, request: &TestRequest) -> Result<()> {
     if request.lane.is_some() {
         bail!("--touched selects its own lanes and conflicts with --lane");
     }
@@ -146,7 +151,7 @@ fn run_touched(project: &ProjectConfig, request: &TestRequest) -> Result<()> {
             .get(lane_name)
             .with_context(|| format!("test lane `{lane_name}` is not configured"))?;
         println!("=== {lane_name} ===");
-        if run_lane(project, lane_name, lane, request).is_err() {
+        if run_lane(project, root, lane_name, lane, request).is_err() {
             failed.push(lane_name.clone());
         }
     }
@@ -158,6 +163,7 @@ fn run_touched(project: &ProjectConfig, request: &TestRequest) -> Result<()> {
 
 fn run_lane(
     project: &ProjectConfig,
+    root: &Path,
     lane_name: &str,
     lane: &TestLaneConfig,
     request: &TestRequest,
@@ -177,7 +183,7 @@ fn run_lane(
             status.code(),
         ));
     }
-    Ok(())
+    retried::verdict(lane_name, root, &project.test, &cmd)
 }
 
 fn lane_command(
@@ -239,6 +245,9 @@ fn validate_config(config: &TestCommandConfig) -> Result<()> {
     if config.feature_arg.is_empty() {
         bail!("missing test.feature_arg in .config/xtask.toml");
     }
+    if config.nextest_config.is_empty() {
+        bail!("missing test.nextest_config in .config/xtask.toml");
+    }
     if !config.lanes.contains_key(&config.default_lane) {
         bail!(
             "test.default_lane `{}` is not defined in test.lanes",
@@ -262,6 +271,21 @@ fn validate_config(config: &TestCommandConfig) -> Result<()> {
             bail!("test.lanes.{name}.program is empty");
         }
         passthrough_position(lane).with_context(|| format!("test.lanes.{name}.passthrough"))?;
+    }
+    let mut named = BTreeSet::new();
+    for flake in &config.known_flakes {
+        if flake.test.is_empty() {
+            bail!("test.known_flakes entry names no test");
+        }
+        if flake.issue.is_empty() {
+            bail!(
+                "test.known_flakes entry `{}` names no issue: an entry without an owner is a flake nobody removes",
+                flake.test
+            );
+        }
+        if !named.insert(flake.test.as_str()) {
+            bail!("test.known_flakes names `{}` twice", flake.test);
+        }
     }
     Ok(())
 }
@@ -599,11 +623,13 @@ fn parse_toggle(name: &str, value: &str) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, fs};
+
+    use tempfile::TempDir;
 
     use super::*;
     use crate::common::project::{
-        AuditClippyConfig, HealthConfig, LintExcludeConfig, OrphansConfig, PerfConfig,
+        AuditClippyConfig, HealthConfig, KnownFlake, LintExcludeConfig, OrphansConfig, PerfConfig,
         ProjectIdentity, QualityConfig, StressConfig, TestFlashConfig, TestNetBackendConfig,
         TestNoBlockConfig, WorkspaceScan,
     };
@@ -721,6 +747,8 @@ mod tests {
                 default_lane: "workspace".to_owned(),
                 default_backend: "http".to_owned(),
                 feature_arg: "--features".to_owned(),
+                nextest_config: ".config/nextest.toml".to_owned(),
+                known_flakes: Vec::new(),
                 features: vec!["base-feature".to_owned()],
                 flash: TestFlashConfig {
                     features: vec!["virtual-time".to_owned()],
@@ -1070,6 +1098,68 @@ mod tests {
         let cmd = lane_command(&project, name, lane, &request).expect("default lane command");
 
         assert!(envs_of(&cmd).is_empty());
+    }
+
+    /// A lane is clean only once its report agrees. The verdict lives past
+    /// the exit code because nextest exits zero on a retried pass, so a lane
+    /// read by status alone reported a defect that reproduced as a clean run.
+    ///
+    /// The lane runs a program that exits without building anything while its
+    /// command line still names the runner profile it would have run under.
+    #[test]
+    fn a_green_status_is_not_the_whole_verdict_of_a_retrying_lane() {
+        let temp = TempDir::new().expect("temp root");
+        fs::create_dir_all(temp.path().join(".config")).expect("create .config");
+        fs::write(
+            temp.path().join(".config").join("nextest.toml"),
+            "[profile.ci]\nretries = 1\n",
+        )
+        .expect("write nextest config");
+        let mut project = synthetic_project();
+        project.test.nextest_config = ".config/nextest.toml".to_owned();
+        project.test.lanes.insert(
+            "retrying".to_owned(),
+            TestLaneConfig {
+                program: "cargo".to_owned(),
+                prefix_args: vec![
+                    "--version".to_owned(),
+                    "nextest".to_owned(),
+                    "run".to_owned(),
+                    "--profile".to_owned(),
+                    "ci".to_owned(),
+                ],
+                suffix_args: Vec::new(),
+                default_features: Vec::new(),
+                default_flash: Some(false),
+                default_no_block: Some(false),
+                passthrough: String::new(),
+                env: BTreeMap::new(),
+                owns: Vec::new(),
+            },
+        );
+        let request = TestRequest::parse(&[]).expect("parse request");
+        let lane = &project.test.lanes["retrying"];
+
+        let error = run_lane(&project, temp.path(), "retrying", lane, &request)
+            .expect_err("a lane that ran a retrying profile is judged by its report")
+            .to_string();
+
+        assert!(error.contains("declares no JUnit report"), "{error}");
+    }
+
+    #[test]
+    fn a_tolerated_flake_without_an_owner_is_not_configuration() {
+        let mut project = synthetic_project();
+        project.test.known_flakes = vec![KnownFlake {
+            test: "kithara_queue::delayed_target".to_owned(),
+            issue: String::new(),
+        }];
+
+        let error = validate_config(&project.test)
+            .expect_err("an entry nobody owns is a flake nobody removes")
+            .to_string();
+
+        assert!(error.contains("names no issue"), "{error}");
     }
 
     #[test]

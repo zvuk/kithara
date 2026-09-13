@@ -43,6 +43,16 @@ impl<S> DecoderNode<S> {
     const BUFFER_HEALTH_EMIT_MIN: Duration = Duration::from_millis(250);
     const ENGINE_LOAD_EMIT_MIN: Duration = Duration::from_millis(500);
 
+    /// Open the one-shot preload latch that resource construction waits on.
+    ///
+    /// Openers are the chunk count, a terminal step (EOF, failure, cancel),
+    /// and an upstream park. The park belongs here because the latch gates on
+    /// the decoder, not on the network: once the producer is waiting for
+    /// bytes, every chunk the delivered data can yield has been yielded, and
+    /// how many that is depends on where the demuxer's buffered read lands
+    /// relative to the delivered segment's end. Keeping the latch shut would
+    /// make construction — which owns no deadline — wait for a fetch the
+    /// loader already owns and already bounds.
     fn complete_preload(&mut self) {
         if !self.runtime.preloaded {
             self.preload_gate.signal_epoch(self.runtime.seek_epoch);
@@ -222,10 +232,13 @@ where
                 TickResult::Progress
             }
 
-            TrackStep::Blocked(reason) => match reason {
-                WaitingReason::WaitingDemand => TickResult::UpstreamPending,
-                WaitingReason::Waiting | WaitingReason::WaitingMetadata => TickResult::Waiting,
-            },
+            TrackStep::Blocked(reason) => {
+                self.complete_preload();
+                match reason {
+                    WaitingReason::WaitingDemand => TickResult::UpstreamPending,
+                    WaitingReason::Waiting | WaitingReason::WaitingMetadata => TickResult::Waiting,
+                }
+            }
 
             TrackStep::Eof if self.runtime.eof_sent => TickResult::Backpressured,
 

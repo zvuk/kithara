@@ -14,13 +14,21 @@ pub(crate) const CONTINUITY_BLOCK_FRAMES: usize = 512;
 pub(crate) const CONTINUITY_SAMPLE_RATE: u32 = 44_100;
 const ACTIVE_SAMPLE_THRESHOLD: f32 = 0.001;
 
+/// One offline render window, judged by what the mix carried.
+///
+/// `max_render` is wall time and belongs to the log, never to an assertion. The
+/// render's own work is a few microseconds of thread CPU; the rest of the call
+/// is the round-trip to the host's owner thread, so a budget on it reads how
+/// promptly the machine schedules two threads, not how much the graph costs.
+/// What the render must not do — wait on a source with nothing ready instead of
+/// underrunning it — is pinned on the audio thread, where such a wait is a hang
+/// rather than a slow block.
 #[derive(Debug, Clone)]
 pub(crate) struct OutputGapStats {
     pub(crate) label: String,
     pub(crate) blocks: u32,
     pub(crate) max_silence_run: u32,
     pub(crate) max_render: Duration,
-    pub(crate) slow_renders: u32,
     block_frames: usize,
     sample_rate: u32,
 }
@@ -43,13 +51,8 @@ impl fmt::Display for OutputGapStats {
             f64::from(self.max_silence_run) * self.block_budget().as_secs_f64() * 1000.0;
         write!(
             f,
-            "{}: {} blocks, silence={} ({:.1}ms) max_render={:?} slow={}",
-            self.label,
-            self.blocks,
-            self.max_silence_run,
-            silence_ms,
-            self.max_render,
-            self.slow_renders,
+            "{}: {} blocks, silence={} ({:.1}ms) max_render={:?}",
+            self.label, self.blocks, self.max_silence_run, silence_ms, self.max_render,
         )
     }
 }
@@ -108,21 +111,13 @@ pub(crate) async fn render_offline_window(
     let mut max_silence = 0u32;
     let mut current_silence = 0u32;
     let mut max_render = Duration::ZERO;
-    let mut slow = 0u32;
 
     for _ in 0..blocks {
-        // Render timing stays on REAL time: `slow_renders`/`max_render` measure
-        // the actual CPU cost of pulling one block through the graph, which is a
-        // wall-clock contract (RTSan / block-budget). `Instant::now`/`elapsed`
-        // here read real time because this helper runs with `active=false`.
         let started = Instant::now();
         let out = player.render(block_frames).await;
         let elapsed = started.elapsed();
         if elapsed > max_render {
             max_render = elapsed;
-        }
-        if elapsed > block_budget {
-            slow += 1;
         }
         if out
             .iter()
@@ -156,7 +151,6 @@ pub(crate) async fn render_offline_window(
         blocks,
         max_silence_run: max_silence,
         max_render,
-        slow_renders: slow,
         block_frames,
         sample_rate,
     }

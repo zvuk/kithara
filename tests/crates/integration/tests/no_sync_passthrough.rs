@@ -165,6 +165,16 @@ impl AudioEffect for BurstLoadEffect {
         0
     }
 
+    /// Pass the chunk through, burning real CPU on every `LOAD_INTERVAL_BLOCKS`th
+    /// one.
+    ///
+    /// The real region is what makes the burst a burst. This runs on the
+    /// producer thread, which the quiescence engine counts as running, so a
+    /// virtual `Instant` would have the spin wait for a clock that cannot move
+    /// until the spin ends. Carving the region REAL keeps the deadline on the
+    /// host clock, so the contention the load player is here to create stays
+    /// contention under flash as well as off it.
+    #[kithara::flash(false)]
     fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         self.blocks = self.blocks.saturating_add(1);
         if self.blocks.is_multiple_of(LOAD_INTERVAL_BLOCKS) {
@@ -375,6 +385,17 @@ async fn wait_for_preload(audio: &RegisteredAudio<Stream<MemStream>, TestPools>)
     .expect("audio preload gate must open");
 }
 
+/// Render the source at the real device cadence and capture the result.
+///
+/// The guard puts the pacing sleep on the same clock as the decode worker's
+/// park: the worker is a registered pacer, so a block period elapses only once
+/// it has produced. Without it the sleep is a real `tokio` timer — the test
+/// macro rewrites time calls in the test body, not in the helpers it calls —
+/// and the consumer would advance at host speed against a producer advancing at
+/// virtual speed, draining the ring into zeros and making every PCM oracle a
+/// property of the machine. The burst load stays REAL: `BurstLoadEffect` spins
+/// on the producer thread, whose callstack never enters this guard.
+#[kithara::flash(true)]
 async fn render_passthrough(
     source: &[u8],
     stretch: Option<(StretchKind, f32)>,
@@ -486,6 +507,11 @@ async fn render_passthrough(
     capture
 }
 
+/// Render the same source through a `Queue` control at the same cadence.
+///
+/// Carries the clock guard of [`render_passthrough`] for the same reason: the
+/// tick-and-render pair must not outrun the decode worker.
+#[kithara::flash(true)]
 async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
     let stretch = stretch_controls(stretch);
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -786,13 +812,7 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
     );
 }
 
-#[kithara::test(
-    tokio,
-    flash(false),
-    serial,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
@@ -805,13 +825,7 @@ async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
     run_no_sync_passthrough(source_pcm, backend, false).await;
 }
 
-#[kithara::test(
-    tokio,
-    flash(false),
-    serial,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
@@ -826,13 +840,7 @@ async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(
     run_active_stretch(source_pcm, marked_source_pcm, shifted_pitch, backend, false).await;
 }
 
-#[kithara::test(
-    tokio,
-    flash(false),
-    serial,
-    timeout(Duration::from_secs(60)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
@@ -846,13 +854,7 @@ async fn record_no_sync_unity_playback_artifacts(
     run_no_sync_passthrough(source_pcm, backend, true).await;
 }
 
-#[kithara::test(
-    tokio,
-    flash(false),
-    serial,
-    timeout(Duration::from_secs(60)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(60)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),

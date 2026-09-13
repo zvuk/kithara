@@ -1577,6 +1577,106 @@ fn a_planned_segment_is_owed_not_escalated() {
     );
 }
 
+/// Segments in the fixture an exact-seek dispatch is measured on. The
+/// landing sits short of the last one so "the prefix through the landing"
+/// and "every segment" are different answers.
+const EXACT_SEEK_SEGMENTS: u32 = 5;
+const EXACT_SEEK_LANDING: u32 = 2;
+const EXACT_SEEK_SEGMENT_BYTES: u64 = 256;
+const EXACT_SEEK_INIT_BYTES: u64 = 64;
+
+/// Register an exact-seek demand on `EXACT_SEEK_LANDING`, then report the URL
+/// of every fetch one plan emits. The fetch queue is left empty on purpose:
+/// with no body planned, the only thing a dispatch can emit is a size probe,
+/// so the returned list *is* the probe list. `sizes_known` seeds the segments
+/// exact, standing for a variant whose lengths the machine already learned.
+fn exact_seek_probe_urls(
+    codec: Option<AudioCodec>,
+    container: Option<ContainerFormat>,
+    sizes_known: bool,
+) -> Vec<Url> {
+    let ctx = test_ctx(10);
+    let segments: Vec<Segment> = (0..EXACT_SEEK_SEGMENTS)
+        .map(|idx| {
+            if sizes_known {
+                make_seg(idx, EXACT_SEEK_SEGMENT_BYTES, &ctx.scope)
+            } else {
+                make_placeholder_seg(idx, EXACT_SEEK_SEGMENT_BYTES, &ctx.scope)
+            }
+        })
+        .collect();
+    let init = if sizes_known {
+        make_init(EXACT_SEEK_INIT_BYTES, &ctx.scope)
+    } else {
+        Some(make_placeholder_init(EXACT_SEEK_INIT_BYTES, &ctx.scope))
+    };
+    let v = VariantParts {
+        segments,
+        init,
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec,
+        container,
+    }
+    .into_variant(0, &ctx);
+    let anchor = EXACT_SEEK_SEGMENT_BYTES * u64::from(EXACT_SEEK_LANDING);
+    v.set_prefetch_anchor(anchor);
+    v.set_exact_seek_demand(anchor, EXACT_SEEK_LANDING);
+    let session = active_session(&v, &ctx, anchor);
+
+    session
+        .dispatch(&ctx, 10)
+        .iter()
+        .map(|cmd| cmd.url().clone())
+        .collect()
+}
+
+fn segment_url(idx: u32) -> Url {
+    format!("https://example.com/seg{idx}.m4s")
+        .parse()
+        .expect("valid url")
+}
+
+fn init_url() -> Url {
+    "https://example.com/init.mp4".parse().expect("valid url")
+}
+
+/// A file-like container reaches a seek target by adding byte lengths up, so
+/// it must learn the ones it does not know — the init and the segments before
+/// the landing, and none past it.
+#[kithara::test]
+fn an_exact_seek_probes_the_unknown_prefix_and_nothing_else() {
+    let probed = exact_seek_probe_urls(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav), false);
+
+    assert_eq!(
+        probed,
+        vec![
+            init_url(),
+            segment_url(0),
+            segment_url(1),
+            segment_url(EXACT_SEEK_LANDING),
+        ]
+    );
+}
+
+/// A length already known is not worth a request. This is the run the stress
+/// lane keeps hitting: a warm-up that committed every body leaves the seek
+/// nothing to ask, and that silence is the contract, not a lost race.
+#[kithara::test]
+fn an_exact_seek_over_known_sizes_probes_nothing() {
+    let probed = exact_seek_probe_urls(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav), true);
+
+    assert!(probed.is_empty(), "nothing left to learn: {probed:?}");
+}
+
+/// A container whose ranges are addressed by segment index never needs a byte
+/// length, so the same seek raises no demand at all.
+#[kithara::test]
+fn an_exact_seek_on_a_segment_addressed_container_probes_nothing() {
+    let probed = exact_seek_probe_urls(Some(AudioCodec::Flac), Some(ContainerFormat::Fmp4), false);
+
+    assert!(probed.is_empty(), "fMP4 resolves by index: {probed:?}");
+}
+
 fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {
     let ctx = test_ctx(3);
     let seek = Arc::new(SeekState::new());

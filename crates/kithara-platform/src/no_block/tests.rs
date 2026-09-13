@@ -30,6 +30,7 @@ const BLANKET_TEST_SPIN_MS: u64 = 50;
 const CENSUS_LOG_BUDGET_MS: u64 = 10_000;
 const CENSUS_LOG_SLEEP_MS: u64 = 1;
 const FORCED_SPIN_CPU_MS: u64 = 10_000;
+const PAUSED_CPU_SLEEP_MS: u64 = 20;
 
 static LOG_FILE_ID: AtomicUsize = AtomicUsize::new(FIRST_LOG_FILE_ID);
 
@@ -204,6 +205,37 @@ fn budget_ignores_paused_time() {
         spin_for(Duration::from_millis(50));
     });
     let _ = poll_once(fut);
+}
+
+/// The CPU twin of [`budget_ignores_paused_time`]. A pause takes its region out
+/// of the poll's wall, so the CPU that region burned has to leave with it:
+/// weighing a net wall against a gross CPU reads every sanctioned pass of real
+/// arithmetic as a spin, and the blanket tier panics on exactly that label. The
+/// Cochlea oracle poll reported 129ms of CPU inside 2.8ms of wall on that
+/// arithmetic.
+#[kithara::test(native, flash(false))]
+fn budget_ignores_paused_cpu() {
+    force_mode(Mode::Census);
+    force_no_log_path();
+    force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
+
+    let traced = capture_tracing(|| {
+        let fut = watch_blanket("paused_cpu_task", async {
+            {
+                let _p = permit();
+                spin_for(Duration::from_millis(BLANKET_TEST_SPIN_MS));
+            }
+            thread::sleep(Duration::from_millis(PAUSED_CPU_SLEEP_MS));
+        });
+        let _ = poll_once(fut);
+    });
+
+    let line = traced
+        .lines()
+        .find(|line| line.contains("single poll took"))
+        .expect("over-budget census line");
+    assert!(line.contains("paused_cpu_task"), "got: {line}");
+    assert!(line.contains("blocked wait"), "got: {line}");
 }
 
 #[kithara::test(native, flash(false))]

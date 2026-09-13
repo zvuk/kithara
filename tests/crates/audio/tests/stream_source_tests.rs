@@ -84,10 +84,15 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
 
 /// A route change resumes from admitted Warp progress, not the consumer head.
 ///
-/// The lead is proven once, immediately before the route is selected, because
-/// that is the moment the property is about. Re-measuring it after the switch
-/// and one more consumed chunk measures the consumer instead: it has advanced
-/// since, and under load that alone eats the margin.
+/// The consumer head is read once, immediately before the route is selected,
+/// because that is the moment the property is about. Read after the switch it
+/// also carries whatever the switch handed the reader, so the head climbs
+/// towards the resume point and the comparison ends up between a number and
+/// itself. The read that follows the switch stays: an off-thread consumer
+/// wakes the worker by reading, so the rebuild needs it to make progress at
+/// all. The bounds bracket the resume inside the admitted window the fixture
+/// has just proven: above the head the consumer had taken, below the raw
+/// decoder frontier.
 #[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
@@ -166,7 +171,6 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
 
     audio.set_host_sample_rate(target_rate);
     let (mut audio, _queued) = wait_for_chunk(audio, Duration::from_secs(2)).await;
-    let committed_at_route = audio.position();
 
     loop {
         let envelope = events.recv().await.expect("decoder event bus remains open");
@@ -192,9 +196,9 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         }
     };
     assert!(
-        rebuilt.meta.timestamp >= committed_at_route.saturating_add(resume_margin),
+        rebuilt.meta.timestamp >= committed.saturating_add(resume_margin),
         "route recreation must resume from admitted Warp progress, not the \
-         consumer head; rebuilt={:?}, committed_at_route={committed_at_route:?}, \
+         consumer head; rebuilt={:?}, committed={committed:?}, \
          resume_margin={resume_margin:?}",
         rebuilt.meta.timestamp
     );

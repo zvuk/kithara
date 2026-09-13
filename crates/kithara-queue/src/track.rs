@@ -306,8 +306,12 @@ where
     }
 
     /// Atomically mutate `record.status` and publish
-    /// [`QueueEvent::TrackStatusChanged`]. `Cancelled` also aborts the
-    /// track's live attempt — a cancelled track never keeps loading.
+    /// [`QueueEvent::TrackStatusChanged`]. `Cancelled` and `Loaded` also
+    /// abort the track's live attempt: a cancelled track never keeps
+    /// loading, and a track whose resource is already in the player has
+    /// nothing left to load. Without the latter an attempt that outlives
+    /// the resource it was meant to fetch reports its own outcome
+    /// afterwards and overwrites a track that is already playable.
     /// No-op when `id` is not present (caller raced `Queue::remove`).
     pub(crate) fn set_status(&self, id: TrackId, status: TrackStatus) {
         let mut guard = self.lock();
@@ -315,7 +319,7 @@ where
             return;
         };
         record.status = status.clone();
-        let aborted = matches!(status, TrackStatus::Cancelled)
+        let aborted = matches!(status, TrackStatus::Cancelled | TrackStatus::Loaded)
             .then(|| record.load.take())
             .flatten();
         drop(guard);
@@ -412,6 +416,23 @@ mod tests {
             .expect("cancelled attempt must be replaceable");
         assert!(!tracks.mark_loading(&first), "replaced ticket loses claim");
         assert!(tracks.mark_loading(&second));
+    }
+
+    /// A track whose resource is already in the player has nothing left
+    /// to load. The attempt still in flight for it is fetching something
+    /// nobody waits for, and which side of that race the machine picks
+    /// must not decide whether the track is playable.
+    #[kithara::test]
+    fn a_loaded_track_is_not_failed_by_the_attempt_it_outlived() {
+        let tracks = tracks_with(TrackId(1));
+        let attempt = tracks
+            .begin_attempt(TrackId(1), token())
+            .expect("BUG: vacant record must accept an attempt");
+
+        tracks.set_status(TrackId(1), TrackStatus::Loaded);
+        tracks.finish_attempt(&attempt, Some("HTTP 404".to_owned()));
+
+        assert!(matches!(tracks.lock()[0].status, TrackStatus::Loaded));
     }
 
     #[kithara::test]

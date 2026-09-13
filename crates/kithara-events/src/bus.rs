@@ -150,6 +150,20 @@ mod tests {
         Error { error: String },
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, crate::Event)]
+    struct Early(u8);
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, crate::Event)]
+    struct Late(u8);
+
+    /// `Late` is declared first so that declaration order and publication
+    /// order can disagree.
+    #[derive(Clone, Debug, crate::EventSet)]
+    enum Pair {
+        Late(Late),
+        Early(Early),
+    }
+
     #[kithara::test]
     fn publish_without_subscribers_does_not_panic() {
         let bus = EventBus::new(16);
@@ -276,6 +290,26 @@ mod tests {
         let ea = rx_a.recv().await.unwrap();
         assert_eq!(ea.event, TestEvent::EndOfStream);
         assert!(rx_a.try_recv().is_err());
+    }
+
+    /// The bus carries one channel per event type, so a receiver spanning
+    /// several of them has no cross-topic order to report: it hands back
+    /// whichever member it polls first. A caller that wants to know what was
+    /// published first has to subscribe to that one topic.
+    #[kithara::test(tokio)]
+    async fn a_receiver_over_several_topics_does_not_preserve_publication_order() {
+        let bus = EventBus::new(16);
+        let mut pair = bus.subscribe::<Pair>();
+        let mut early = bus.subscribe::<Early>();
+
+        bus.publish(Early(1));
+        bus.publish(Late(2));
+
+        assert!(matches!(
+            pair.try_recv().map(|envelope| envelope.event),
+            Ok(Pair::Late(Late(2)))
+        ));
+        assert_eq!(early.try_recv().unwrap().event, Early(1));
     }
 
     #[kithara::test]

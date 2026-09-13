@@ -76,10 +76,17 @@ impl<T> Drop for Sender<T> {
 impl<T> Receiver<T> {
     /// Block until a value arrives.
     ///
+    /// The `no_block` detector hears this at the call and not at the park: a
+    /// message already queued returns without ever waiting, and a detector
+    /// that only saw the wait would judge the same code differently from one
+    /// run to the next.
+    ///
     /// # Errors
     ///
     /// Returns [`RecvError`] if all senders have been dropped.
+    #[track_caller]
     pub fn recv(&self) -> Result<T, RecvError> {
+        crate::no_block::forbid("mpsc::recv");
         let mut q = self.0.queue.lock();
         loop {
             if let Some(v) = q.pop_front() {
@@ -99,7 +106,11 @@ impl<T> Receiver<T> {
     /// Returns [`RecvTimeoutError::Timeout`] when no value arrives before
     /// `deadline`, or [`RecvTimeoutError::Disconnected`] if all senders are
     /// dropped.
+    ///
+    /// Reaches the `no_block` detector at the call, like [`Self::recv`].
+    #[track_caller]
     pub fn recv_timeout(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
+        crate::no_block::forbid("mpsc::recv_timeout");
         let mut q = self.0.queue.lock();
         loop {
             if let Some(v) = q.pop_front() {

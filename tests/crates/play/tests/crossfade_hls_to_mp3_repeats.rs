@@ -29,8 +29,11 @@ use crate::{
 
 struct Consts;
 impl Consts {
-    const READ_TIMEOUT: Duration = Shared::READ_TIMEOUT;
     const BLOCK: usize = 512;
+    /// The bound `stress_offline_crossfade_no_gaps` holds a single crossfade to,
+    /// on the same material and the same window length.
+    const MAX_SILENCE_BLOCKS: u32 = 2;
+    const READ_TIMEOUT: Duration = Shared::READ_TIMEOUT;
     const SR: u32 = Shared::SAMPLE_RATE;
 }
 
@@ -52,13 +55,21 @@ async fn hls_server(saw_segments: &'static [u8]) -> HlsTestServer {
     .await
 }
 
+/// Ten HLS→MP3 crossfades in a row leave no silence gap.
+///
+/// Starting an MP3 while the shared worker is still busy on HLS can starve the
+/// incoming track, and a starved mix runs out of PCM and zero-fills. One
+/// transition rarely shows it, so the run repeats and keeps the worst window.
+/// That the render must underrun rather than wait for the missing PCM is a
+/// claim about the audio thread and is pinned in `rt_metrics`, where such a
+/// wait is a hang instead of a slow block.
 #[kithara::test(
     tokio,
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(10),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
-async fn red_hls_to_mp3_crossfade_no_render_budget_violations(
+async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
     tone_mp3: &'static [u8],
     #[future(awt)] hls_server: HlsTestServer,
 ) {
@@ -121,8 +132,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations(
         }
     };
 
-    let mut worst_slow_renders: u32 = 0;
-    let mut worst_max_render: Duration = Duration::ZERO;
+    let mut worst_silence_run: u32 = 0;
     let mut worst_label = String::new();
 
     for iter in 0..10 {
@@ -142,35 +152,29 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations(
             .await
             .expect("MP3 preload")
             .expect("MP3 preload result");
-        let before_fade = Instant::now();
         player.load_and_fadein(mp3).await;
         let fade_stats = render_offline_window(
             &mut player,
             60,
-            &format!("HLS→MP3 red #{iter}"),
+            &format!("HLS→MP3 #{iter}"),
             Consts::BLOCK,
             Consts::SR,
         )
         .await;
-        info!(
-            "iter {iter}: {fade_stats}, wall={:?}",
-            before_fade.elapsed()
-        );
+        info!("iter {iter}: {fade_stats}");
 
-        if fade_stats.slow_renders > worst_slow_renders {
-            worst_slow_renders = fade_stats.slow_renders;
-            worst_max_render = fade_stats.max_render;
+        if fade_stats.max_silence_run > worst_silence_run {
+            worst_silence_run = fade_stats.max_silence_run;
             worst_label = fade_stats.label.clone();
         }
     }
 
     assert!(
-        worst_slow_renders <= 1,
-        "red: HLS→MP3 crossfade exceeded render budget on {} blocks \
-         (worst label={worst_label}, max_render={worst_max_render:?}) — \
-         render thread was blocked synchronously waiting for MP3 PCM chunks \
-         while the shared worker was busy on HLS",
-        worst_slow_renders,
+        worst_silence_run <= Consts::MAX_SILENCE_BLOCKS,
+        "repeated HLS→MP3 crossfade ran out of PCM for {} blocks in a row \
+         (worst label={worst_label}) — the incoming MP3 starved while the \
+         shared worker was busy on HLS",
+        worst_silence_run,
     );
     player.close().await;
 }

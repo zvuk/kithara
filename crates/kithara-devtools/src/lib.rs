@@ -27,6 +27,7 @@ pub mod powerset;
 pub mod quality;
 pub mod quality_assessment;
 pub mod quality_lab;
+mod retried;
 pub mod sccache;
 pub mod scope;
 pub mod semver;
