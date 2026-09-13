@@ -85,6 +85,7 @@ fn start_stream(ctx: &mut FirewheelCtx<CpalBackend>, sample_rate: u32) -> Result
     ctx.start_stream(firewheel::cpal::CpalConfig {
         output: firewheel::cpal::CpalOutputConfig {
             desired_sample_rate: Some(sample_rate),
+            desired_block_frames: Some(128),
             ..Default::default()
         },
         ..Default::default()
