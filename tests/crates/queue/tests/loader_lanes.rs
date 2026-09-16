@@ -203,6 +203,7 @@ async fn select_pending_track_parked_behind_hung_load_promotes(tone_mp3: &'stati
         .run(move |q| q.select(fast_id, Transition::None))
         .await
         .expect("select fast");
+    queue.run(QueueControl::play).await;
 
     let load_result = wait_for_loader_done(&queue, fast_id, Consts::FAST_DEADLINE).await;
     assert_hung_still_loading(&queue, hung_id);
@@ -267,6 +268,7 @@ async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static
         .run(move |q| q.select(fast_id, Transition::None))
         .await
         .expect("select fast");
+    queue.run(QueueControl::play).await;
 
     wait_for_loader_done(&queue, fast_id, Consts::FAST_DEADLINE)
         .await

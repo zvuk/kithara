@@ -151,11 +151,23 @@ fn processor_seek_without_tracks_does_not_panic() {
 fn processor_set_paused_updates_playback() {
     let (mut processor, mut control) = make_processor();
 
-    control.cmd_tx.try_push(PlayerCmd::SetPaused(false)).ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        })
+        .ok();
     processor.drain_commands();
     assert!(processor.playback().playing.load(AtomicOrdering::SeqCst));
 
-    control.cmd_tx.try_push(PlayerCmd::SetPaused(true)).ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::SetPaused {
+            paused: true,
+            item_id: None,
+        })
+        .ok();
     processor.drain_commands();
     assert!(!processor.playback().playing.load(AtomicOrdering::SeqCst));
 }

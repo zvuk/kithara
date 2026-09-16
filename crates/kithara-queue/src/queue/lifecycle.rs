@@ -189,6 +189,7 @@ where
 
     fn remove_inner(&self, id: TrackId) -> Result<(), QueueError> {
         let was_current = self.current().map(|e| e.id) == Some(id);
+        let was_playing = was_current && self.player.is_playing();
         let successor_id = if was_current {
             let guard = self.lock_tracks();
             let pos = guard.iter().position(|e| e.id == id);
@@ -217,8 +218,12 @@ where
 
         if was_current {
             if let Some(next) = successor_id {
-                let _ =
-                    self.select_with_reason(next, Transition::None, AdvanceReason::RemovedCurrent);
+                let _ = self.select_with_start_intent(
+                    next,
+                    Transition::None,
+                    AdvanceReason::RemovedCurrent,
+                    was_playing,
+                );
             } else {
                 self.player.pause();
             }

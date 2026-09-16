@@ -10,4 +10,4 @@ pub use contract::AudioEffect;
 pub use contract::AudioEffectMock;
 pub(crate) use drain::{EffectDrain, EffectDrainStep};
 pub(crate) use kithara_warp::supports_playback_rate;
-pub use limiter::{LimiterError, PeakLimiter};
+pub use limiter::{LimiterConfig, LimiterError, PeakLimiter};

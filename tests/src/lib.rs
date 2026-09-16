@@ -29,6 +29,8 @@ pub mod apple_warmup;
 ))]
 pub mod architecture_trace;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+pub mod artifact_timeline;
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod asset_fixture;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod assets_ext;
@@ -65,6 +67,8 @@ pub mod fixtures;
 pub mod flash_pace;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod gapless;
+#[cfg(all(any(feature = "all", feature = "audio"), not(target_arch = "wasm32")))]
+pub mod grid;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod hls_blob_store;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
@@ -115,6 +119,8 @@ pub mod test_defaults;
 pub mod test_server;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod token_store;
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+pub mod underrun_ledger;
 pub mod usdt_trace;
 /// Scenario machinery for the user-simulation suites: the action vocabulary,
 /// the scripted scenarios built from it, and the harness that applies them to a

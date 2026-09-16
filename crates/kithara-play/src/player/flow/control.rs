@@ -1,5 +1,5 @@
 use kithara_test_macros as kithara;
-use kithara_warp::StretchControls;
+use kithara_warp::{PresentationFrontier, SessionFrame, StretchControls};
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -96,6 +96,36 @@ impl<S> PlayerRuntime<S> {
         self.core
             .params
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
+    }
+
+    /// The frontier the active slot renders next, or the session origin when
+    /// nothing renders.
+    pub(crate) fn presentation_frontier(&self) -> PresentationFrontier {
+        self.slot()
+            .and_then(|slot| self.core.engine.slot_render_snapshot(slot))
+            .map_or_else(
+                || {
+                    PresentationFrontier::builder()
+                        .output(SessionFrame::new(0))
+                        .source(0)
+                        .build()
+                },
+                |snapshot| snapshot.frontier(),
+            )
+    }
+
+    pub(crate) fn presentation_frontier_for(
+        &self,
+        item: crate::api::TrackId,
+        warp_map: Option<kithara_warp::WarpMapRevision>,
+    ) -> Option<PresentationFrontier> {
+        self.slot()
+            .and_then(|slot| {
+                self.core
+                    .engine
+                    .slot_render_snapshot_for(slot, item, warp_map)
+            })
+            .map(|snapshot| snapshot.frontier())
     }
 
     /// Set the requested rate target, clamped to

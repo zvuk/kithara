@@ -105,7 +105,7 @@ mod tests {
         AssetAxis, AssetFrame, Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRevision,
         BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker, BeatOrdinal,
         FrameUncertainty, MapAxis, MapPoint, MapPosition, MapSegment, SegmentFacts, SegmentSet,
-        SessionAnchor, SessionEpoch, SessionFrame,
+        SessionAnchor, SessionAxis, SessionEpoch, SessionFrame,
     };
 
     use super::{SessionBeat, SyncUnavailable, TrackBinding};
@@ -218,9 +218,13 @@ mod tests {
 
     #[kithara::test]
     fn session_grid_cannot_become_an_asset_track_binding() {
-        let anchor =
-            SessionAnchor::new(SessionFrame::new(0), session_beat(0.0), 2.0, sample_rate())
-                .expect("invariant: fixture session anchor is valid");
+        let anchor = SessionAnchor::new(
+            SessionFrame::new(0),
+            session_beat(0.0),
+            2.0,
+            SessionAxis::new(sample_rate(), SessionEpoch::new(0)),
+        )
+        .expect("invariant: fixture session anchor is valid");
         let session_grid = BeatGridSnapshot::session(
             grid_id(),
             BeatGridRevision::first(),

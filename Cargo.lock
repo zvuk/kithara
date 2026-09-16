@@ -5636,6 +5636,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.18",
  "tracing",
+ "triple_buffer",
  "unimock",
  "url",
 ]
@@ -5684,6 +5685,7 @@ dependencies = [
  "kithara-play",
  "kithara-queue",
  "kithara-test-utils",
+ "kithara-warp",
  "kithara-workspace-hack",
  "serde",
  "serde_yaml_ng",
@@ -5849,6 +5851,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-derive",
  "kithara-platform",
+ "kithara-resampler",
  "kithara-signal",
  "kithara-test-dylib",
  "kithara-test-fixtures",

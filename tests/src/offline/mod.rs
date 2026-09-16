@@ -19,7 +19,7 @@ pub use harness::{
 };
 pub use host::{
     MixTapProbe, OfflineHostHarness, OfflineQueue, OfflineResident, RENDER_PACE,
-    assert_playhead_tracks_renderer,
+    assert_playhead_tracks_renderer, audio_clock_pace,
 };
 pub use player::{
     NotificationKind, OfflinePlayer, resource_from_reader, resource_from_reader_with_src,

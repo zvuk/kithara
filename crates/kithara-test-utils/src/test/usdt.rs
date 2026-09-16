@@ -6,7 +6,10 @@ use std::{
     thread::{self, ThreadId},
 };
 
-use kithara_platform::sync::{Arc, Notify};
+use kithara_platform::{
+    sync::{Arc, Notify},
+    time::timeout,
+};
 use tracing::{
     Event, Metadata, Subscriber,
     field::{Field, Visit},
@@ -40,6 +43,11 @@ pub struct ProbeEvent {
 }
 
 impl ProbeEvent {
+    /// Every payload field this firing carried, in the order the probe named them.
+    pub fn fields(&self) -> impl Iterator<Item = (&'static str, u64)> + '_ {
+        self.fields[..self.len].iter().copied()
+    }
+
     #[must_use]
     pub fn field(&self, name: &str) -> Option<u64> {
         self.fields[..self.len]
@@ -86,6 +94,9 @@ static STATE: Mutex<State> = Mutex::new(State {
     recorded: None,
 });
 static SCOPE: Mutex<()> = Mutex::new(());
+/// Thread that owns the live recording and the handle nested scopes join,
+/// while one is open.
+static NESTING: Mutex<Option<(ThreadId, Arc<Notify>)>> = Mutex::new(None);
 /// Lock-free gate for the probe hot path: set only while a [`Scope`] lives.
 static ARMED: AtomicBool = AtomicBool::new(false);
 
@@ -95,12 +106,35 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 pub struct Scope {
     recorded: Arc<Notify>,
-    _serial: MutexGuard<'static, ()>,
+    /// Held by the outermost scope on the recording thread; a nested scope
+    /// carries `None` and leaves the serialisation to the one that opened it.
+    /// Which of the two this is decides what dropping it does.
+    serial: Option<MutexGuard<'static, ()>>,
 }
 
 /// Records every probe firing until the scope drops.
+///
+/// The process keeps one recording, so a scope taken while this thread already
+/// holds one joins it rather than starting a second: the history survives until
+/// the outermost scope drops. Another thread waits for that drop.
+///
+/// A nested scope closes before the one it joined, which is what holding it in
+/// a local or a nested value gives. Outliving that one leaves it reading a
+/// recording the outer drop already closed.
 #[must_use]
 pub fn scope() -> Scope {
+    let here = thread::current().id();
+    {
+        let nesting = lock(&NESTING);
+        if let Some((owner, recorded)) = nesting.as_ref()
+            && *owner == here
+        {
+            return Scope {
+                recorded: Arc::clone(recorded),
+                serial: None,
+            };
+        }
+    }
     let serial = lock(&SCOPE);
     let recorded = Arc::new(Notify::default());
     {
@@ -110,10 +144,11 @@ pub fn scope() -> Scope {
         state.overflowed = false;
         state.recorded = Some(Arc::clone(&recorded));
     }
+    *lock(&NESTING) = Some((here, Arc::clone(&recorded)));
     ARMED.store(true, Ordering::Release);
     Scope {
         recorded,
-        _serial: serial,
+        serial: Some(serial),
     }
 }
 
@@ -121,6 +156,17 @@ pub fn scope() -> Scope {
 #[must_use]
 pub fn events() -> Vec<ProbeEvent> {
     lock(&STATE).history().to_vec()
+}
+
+/// The firings recorded so far, and whether the history stopped growing.
+///
+/// The reader for evidence written from a destructor: [`events`] fails on an
+/// overflowed history, and a panic there aborts the process instead of
+/// reporting the assertion the test was already failing.
+#[must_use]
+pub fn recorded() -> (Vec<ProbeEvent>, bool) {
+    let state = lock(&STATE);
+    (state.events.clone(), state.overflowed)
 }
 
 /// The latest firing of `probe` recorded by the live [`Scope`].
@@ -146,27 +192,87 @@ impl Scope {
 
     /// Resolves once the firings recorded so far satisfy `holds`,
     /// re-checking after every newly recorded firing.
+    ///
+    /// The wait carries the watchdog budget, so a condition the product never
+    /// satisfies fails the test with what was recorded instead of parking it
+    /// until the runner kills the binary. The budget is real time, so the
+    /// caller runs under `flash(false)`: a virtual clock jumps the deadline
+    /// while the work it waits on runs on a real-time thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `holds` has not held within that budget.
     pub async fn wait_for<F>(&self, mut holds: F)
     where
         F: FnMut(&[ProbeEvent]) -> bool,
     {
-        loop {
-            let recorded = self.recorded.notified();
-            if holds(lock(&STATE).history()) {
-                return;
+        let budget = crate::hang::default_timeout();
+        let wait = async {
+            loop {
+                let recorded = self.recorded.notified();
+                if holds(lock(&STATE).history()) {
+                    return;
+                }
+                recorded.await;
             }
-            recorded.await;
+        };
+        if timeout(budget, wait).await.is_err() {
+            panic!("{}", Self::unsatisfied_wait(budget));
         }
+    }
+
+    /// Describe a wait that ran out of budget: how long it waited and which
+    /// probes it did see, so the failure names the missing firing.
+    fn unsatisfied_wait(budget: kithara_platform::time::Duration) -> String {
+        let (events, overflowed) = recorded();
+        let mut counts: Vec<(&'static str, usize, ProbeEvent)> = Vec::new();
+        for event in &events {
+            match counts.iter_mut().find(|(probe, ..)| *probe == event.probe) {
+                Some((_, count, latest)) => {
+                    *count += 1;
+                    *latest = *event;
+                }
+                None => counts.push((event.probe, 1, *event)),
+            }
+        }
+        counts.sort_unstable_by_key(|(_, count, _)| std::cmp::Reverse(*count));
+        let seen = counts
+            .iter()
+            .map(|(probe, count, latest)| {
+                let fields = latest
+                    .fields()
+                    .map(|(name, value)| format!("{name}={value}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("{probe} x{count} [{fields}]")
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let overflow = if overflowed {
+            " (history overflowed)"
+        } else {
+            ""
+        };
+        format!(
+            "usdt scope waited {budget:?} without its condition holding; \
+             recorded {} firings{overflow}, latest of each: {seen}",
+            events.len()
+        )
     }
 }
 
 impl Drop for Scope {
     fn drop(&mut self) {
+        if self.serial.is_none() {
+            return;
+        }
+        *lock(&NESTING) = None;
         ARMED.store(false, Ordering::Release);
         let mut state = lock(&STATE);
         state.recorded = None;
         state.events = Vec::new();
         state.latest = Vec::new();
+        state.overflowed = false;
     }
 }
 
@@ -271,7 +377,7 @@ impl Visit for FieldVisitor<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_EVENTS, scope};
+    use super::{MAX_EVENTS, events, recorded, scope};
 
     fn fire(probe: &'static str, value: u64) {
         tracing::event!(target: "kithara_test_probe", tracing::Level::TRACE, probe = probe, value = value);
@@ -315,5 +421,62 @@ mod tests {
         }
 
         let _ = trace.events();
+    }
+
+    #[test]
+    fn a_complete_history_reads_back_untruncated() {
+        crate::test::setup_tracing();
+        let _trace = scope();
+        fire("first", 1);
+        fire("second", 2);
+
+        let (events, truncated) = recorded();
+
+        assert!(!truncated);
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn an_overflowing_history_reads_back_truncated_for_a_destructor() {
+        crate::test::setup_tracing();
+        let _trace = scope();
+        for value in 0..=MAX_EVENTS as u64 {
+            fire("tick", value);
+        }
+
+        let (events, truncated) = recorded();
+
+        assert!(truncated);
+        assert_eq!(events.len(), MAX_EVENTS);
+    }
+
+    #[test]
+    fn a_nested_scope_joins_the_live_recording() {
+        crate::test::setup_tracing();
+        let outer = scope();
+        fire("before", 1);
+        let nested = scope();
+        fire("during", 2);
+
+        assert_eq!(nested.events().len(), 2);
+
+        drop(nested);
+        fire("after", 3);
+
+        assert_eq!(outer.events().len(), 3);
+    }
+
+    #[test]
+    fn only_the_outermost_scope_closes_the_recording() {
+        crate::test::setup_tracing();
+        let outer = scope();
+        fire("kept", 1);
+        drop(scope());
+
+        assert_eq!(outer.events().len(), 1);
+
+        drop(outer);
+
+        assert!(events().is_empty());
     }
 }

@@ -581,7 +581,7 @@ mod tests {
     #[test]
     fn cfg_test_nested_in_any_is_still_test_code() {
         let source = "\
-#[cfg(any(test, feature = \"probe\"))]
+#[cfg(any(test, feature = \"usdt\"))]
 fn under_either(&self) {}
 fn always(&self) {}
 ";

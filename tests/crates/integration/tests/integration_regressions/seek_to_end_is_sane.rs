@@ -146,6 +146,7 @@ async fn run_case(
     queue
         .select(id, Transition::None)
         .expect("select HLS track");
+    queue.play();
     wait_for_loader_done_event(&mut rx, &queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|error| panic!("precondition: {error}"));

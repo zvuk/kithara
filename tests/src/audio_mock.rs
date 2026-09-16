@@ -17,7 +17,7 @@ use std::{
 use kithara::{
     audio::{
         AudioControl, AudioRead, AudioSession, ConsumerWakeMode, PendingReason, ReadOutcome,
-        SeekBegin, SeekOutcome,
+        ScheduledSeek, SeekBegin, SeekOutcome,
     },
     decode::{DecodeError, TrackMetadata},
     events::EventBus,
@@ -44,6 +44,15 @@ enum Source {
 pub const TEST_PCM_DEFAULT_VALUE: f32 = 0.5;
 
 impl TestPcmReader {
+    #[must_use]
+    pub fn new(spec: AudioSpec, duration_secs: f64) -> Self {
+        let frames = (f64::from(spec.sample_rate.get()) * duration_secs) as usize;
+        Self::from_samples(
+            spec,
+            vec![TEST_PCM_DEFAULT_VALUE; frames * usize::from(spec.channels)],
+        )
+    }
+
     #[must_use]
     pub fn from_samples(spec: AudioSpec, samples: Vec<f32>) -> Self {
         let total_frames = samples.len() as u64;
@@ -601,6 +610,20 @@ impl SeekBegin for SeekSpy {
         SeekOutcome::Landed {
             target: position,
             landed_at: position,
+        }
+    }
+
+    fn begin_prepared(&self, position: Duration) -> ScheduledSeek {
+        ScheduledSeek {
+            epoch: 1,
+            outcome: self.begin(position),
+        }
+    }
+
+    fn begin_scheduled(&self, position: Duration) -> ScheduledSeek {
+        ScheduledSeek {
+            epoch: 1,
+            outcome: self.begin(position),
         }
     }
 }

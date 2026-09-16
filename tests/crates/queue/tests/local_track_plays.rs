@@ -23,7 +23,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE, assert_playhead_tracks_renderer},
+    offline::{OfflineQueue, QueueTicker, assert_playhead_tracks_renderer, audio_clock_pace},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
@@ -193,6 +193,7 @@ async fn build_queue_with_tick(
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
     let session = HostConfig::offline(pools.clone()).build();
+    let render_pace = audio_clock_pace(&session);
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -209,7 +210,7 @@ async fn build_queue_with_tick(
                 .store(store.clone())
                 .build(),
         ),
-        RENDER_PACE,
+        render_pace,
     )
     .await
     .expect("create product offline queue");
@@ -320,6 +321,7 @@ async fn local_track_plays_end_to_end(
         .run(move |q| q.select(track_id, Transition::None))
         .await
         .expect("select");
+    queue.run(QueueControl::play).await;
     wait_for_position_event(&mut rx, &queue, 0.5, Duration::from_secs(15))
         .await
         .unwrap_or_else(|e| panic!("play fail [{label}]: {e}"));
@@ -514,6 +516,7 @@ async fn local_queue_playlist_behavior(
         })
         .await
         .expect("select first");
+    queue.run(QueueControl::play).await;
     wait_for_loader_done_event(&mut rx, &queue, ids[0], Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("first track load [{}]: {e}", urls[0]));

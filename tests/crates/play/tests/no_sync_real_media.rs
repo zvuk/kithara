@@ -35,7 +35,7 @@ use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use oracle::AudioRole;
 #[cfg(not(target_os = "android"))]
 use oracle::{AudioLevelReport, MatchedMixReport, SampleContinuityReport};
-use reference::capture_references;
+use reference::{ReferenceCapture, capture_references};
 use runtime::{Deck, DeckObservation, EventPolicy};
 #[cfg(not(target_os = "android"))]
 use serde::Serialize;
@@ -45,7 +45,7 @@ use crate::bufpool_ext::{TestPools, pools};
 
 const CHANNELS: u16 = 2;
 const SOURCE_RATE: u32 = 44_100;
-const BLOCK_FRAMES: usize = 512;
+const BLOCK_FRAMES: usize = 128;
 const CAPTURE_SECS: u32 = 2;
 const CAPTURE_START_SECS: f64 = 10.0;
 const CAPTURE_START_STEP_SECS: f64 = 4.0;
@@ -156,6 +156,7 @@ struct ArtifactManifest<'a> {
     requested_frames: usize,
     captured_frames: usize,
     capture_start_positions_secs: &'a [f64],
+    reference_captures: &'a [ReferenceCapture],
     reference_path: &'static str,
     direct_reference_gain: f32,
     runtime_deck_gain: f32,
@@ -326,7 +327,7 @@ async fn run_case(
     let direct_references = capture_references(case, &mut decks, &final_mix, &mut failures).await;
     let direct_reference_pcm = direct_references
         .iter()
-        .map(Vec::as_slice)
+        .map(|reference| reference.pcm.as_slice())
         .collect::<Vec<_>>();
     let matched_mix = oracle::assess_matched_mix(
         case.label,
@@ -357,7 +358,7 @@ async fn run_case(
                 &format!("direct-reference-{deck_index}"),
                 AudioRole::DirectReference,
                 case.host_rate,
-                reference,
+                &reference.pcm,
             )
         })
         .collect::<Vec<_>>();
@@ -403,6 +404,7 @@ async fn run_case(
             requested_frames: final_mix.requested_frames,
             captured_frames: final_mix.pcm.len() / usize::from(CHANNELS),
             capture_start_positions_secs: &final_mix.start_positions_secs,
+            reference_captures: &direct_references,
             reference_path: "independent resource decoder and host resampler",
             direct_reference_gain: 1.0,
             runtime_deck_gain: mix_level,
@@ -421,7 +423,7 @@ async fn run_case(
             .map(|(deck_index, reference)| {
                 (
                     format!("direct-reference-{deck_index}"),
-                    reference.as_slice(),
+                    reference.pcm.as_slice(),
                 )
             })
             .collect::<Vec<_>>();

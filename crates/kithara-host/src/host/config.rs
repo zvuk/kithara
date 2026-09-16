@@ -1,5 +1,6 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
+use kithara_play::effects::LimiterConfig;
 #[cfg(feature = "offline")]
 use {
     kithara_bufpool::PoolRegion,
@@ -20,8 +21,10 @@ pub enum HostConfig<S> {
     Realtime {
         /// Initial device-rate hint; `Host::set_sample_rate` moves it later.
         sample_rate_hint: NonZeroU32,
-        /// Optional native output callback-size override. `None` preserves the backend default.
+        /// Requested native callback size; defaults to 128 frames. `None` uses the backend default.
         output_block_frames: Option<NonZeroU32>,
+        /// Session output limiter policy.
+        limiter: LimiterConfig,
         marker: PhantomData<fn() -> S>,
     },
     /// Device-free finite renderer.
@@ -38,6 +41,8 @@ pub enum HostConfig<S> {
         declick_frames: NonZeroU32,
         /// Declared device-equivalent latency used by transport calculations.
         declared_latency: Duration,
+        /// Session output limiter policy.
+        limiter: LimiterConfig,
         /// Shared worker configuration for the session scheduler.
         worker: WorkerConfig,
         /// Dispatcher budgets for the single offline session task.
@@ -67,11 +72,14 @@ impl<S> HostConfig<S> {
     )]
     fn new(
         #[builder(default = DEFAULT_SAMPLE_RATE)] sample_rate_hint: NonZeroU32,
+        #[builder(required, with = Some, default = NonZeroU32::new(128))]
         output_block_frames: Option<NonZeroU32>,
+        #[builder(default)] limiter: LimiterConfig,
     ) -> Self {
         Self::Realtime {
             sample_rate_hint,
             output_block_frames,
+            limiter,
             marker: PhantomData,
         }
     }

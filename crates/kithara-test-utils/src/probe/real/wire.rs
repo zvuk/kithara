@@ -44,7 +44,7 @@ pub trait IntoProbeArg: Copy {
     /// that drop bits may return a partial value with sentinel-filled
     /// fields — document the lossy fields on the impl.
     ///
-    /// Tests should call `T::from_probe_arg(event.u64("name").unwrap())`
+    /// Tests should call `T::from_probe_arg(event.field("name").unwrap())`
     /// instead of writing private decode helpers next to `IntoProbeArg`
     /// impls.
     #[must_use]

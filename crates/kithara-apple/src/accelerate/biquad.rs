@@ -48,6 +48,23 @@ impl BiquadFilter {
         frames
     }
 
+    pub fn retune_low_pass(&mut self, sample_rate: f64, cutoff_hz: f64, q: f64) -> bool {
+        let Some(coefficients) = rbj_low_pass_coefficients(sample_rate, cutoff_hz, q) else {
+            return false;
+        };
+        // SAFETY: coefficients points at one [b0,b1,b2,a1,a2] biquad section.
+        let setup = unsafe { vDSP_biquad_CreateSetup(coefficients.as_ptr(), 1) };
+        if setup.is_null() {
+            return false;
+        }
+        // SAFETY: self.setup is live and is replaced exactly once by the new live setup.
+        unsafe {
+            vDSP_biquad_DestroySetup(self.setup);
+        }
+        self.setup = setup;
+        true
+    }
+
     pub fn reset(&mut self) {
         clear_f32(&mut self.delay);
     }

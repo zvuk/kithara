@@ -145,7 +145,11 @@ where
     ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
         let (config, cancel) = match self.attempt_config(id, source) {
             Ok(pair) => pair,
-            Err(err) => return Some(self.spawn_config_failure(id, err)),
+            Err(err) => {
+                self.tracks
+                    .set_status(id, TrackStatus::Failed(err.to_string()));
+                return None;
+            }
         };
         let ticket = self.tracks.promote_attempt(id, cancel.clone())?;
         Some(self.spawn_attempt(ticket, config, cancel, LoadClass::Interactive))
@@ -198,20 +202,6 @@ where
         })
     }
 
-    /// Wrap a synchronous config failure (e.g. invalid URI) in a resolved
-    /// handle so callers keep one completion path. No lane, no permit.
-    fn spawn_config_failure(
-        &self,
-        id: TrackId,
-        err: QueueError,
-    ) -> JoinHandle<Result<Resource, QueueError>> {
-        let tracks = Arc::clone(&self.tracks);
-        spawn(async move {
-            tracks.set_status(id, TrackStatus::Failed(format!("{err}")));
-            Err(err)
-        })
-    }
-
     /// Spawn a fresh async load in the given lane. `None` when a live
     /// attempt already exists - one track never occupies two permits.
     pub(crate) fn spawn_load(
@@ -222,7 +212,11 @@ where
     ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
         let (config, cancel) = match self.attempt_config(id, source) {
             Ok(pair) => pair,
-            Err(err) => return Some(self.spawn_config_failure(id, err)),
+            Err(err) => {
+                self.tracks
+                    .set_status(id, TrackStatus::Failed(err.to_string()));
+                return None;
+            }
         };
         let ticket = self.tracks.begin_attempt(id, cancel.clone())?;
         Some(self.spawn_attempt(ticket, config, cancel, class))
@@ -262,6 +256,7 @@ where
 mod tests {
     use std::{
         future,
+        num::NonZeroU32,
         sync::atomic::{AtomicUsize, Ordering},
     };
 
@@ -269,9 +264,11 @@ mod tests {
     use kithara_events::EventBus;
     use kithara_platform::{time::Duration, tokio::sync::oneshot};
     use kithara_play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::PlayerControlSource,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, StreamShape, mock,
+        player::PlayerControlSource,
     };
     use kithara_test_utils::kithara;
+    use kithara_warp::WarpConfig;
 
     use super::*;
     use crate::{
@@ -527,15 +524,17 @@ mod tests {
         let mut rx = fx.bus.subscribe();
         let loader = fx.loader;
 
-        let handle = loader
-            .spawn_load(
-                TrackId(42),
-                TrackSource::Uri("not-a-url".into()),
-                LoadClass::Prefetch,
-            )
-            .expect("config failure still yields a completion handle");
-        let result = handle.await.expect("BUG: spawned task panicked");
-        assert!(matches!(result, Err(QueueError::InvalidUrl(_))));
+        assert!(
+            loader
+                .spawn_load(
+                    TrackId(42),
+                    TrackSource::Uri("not-a-url".into()),
+                    LoadClass::Prefetch,
+                )
+                .is_none()
+        );
+        let status = fx.tracks.lock()[0].status.clone();
+        assert!(matches!(&status, TrackStatus::Failed(_)));
 
         // Invalid config fails synchronously without ever loading: the
         // track goes straight to Failed, no fictional Loading first.
@@ -554,14 +553,86 @@ mod tests {
                     event:
                         QueueEvent::TrackStatusChanged {
                             id: TrackId(42),
-                            status: TrackStatus::Failed(_),
+                            status: event_status,
                         },
                     ..
-                })) => saw_failed = true,
+                })) if event_status == status => saw_failed = true,
                 Ok(Ok(_)) => {}
                 Ok(Err(_)) | Err(_) => break,
             }
         }
         assert!(saw_failed, "Failed status event missing");
+    }
+
+    #[kithara::test]
+    fn config_failure_without_runtime_updates_tracks_synchronously() {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(worker)
+                .session(mock::session_with_shape(Some(StreamShape::new(
+                    NonZeroU32::new(128).expect("fixture output block is non-zero"),
+                    mock::SAMPLE_RATE,
+                ))))
+                .warp(
+                    WarpConfig::builder()
+                        .render_quantum_frames(
+                            NonZeroUsize::new(64).expect("fixture quantum is non-zero"),
+                        )
+                        .build(),
+                )
+                .build(),
+        );
+        let bus = player.bus().clone();
+        let tracks = Arc::new(Tracks::new(bus.clone()));
+        let loader = Arc::new(Loader::new(
+            player.control(),
+            AssetStore::builder(player.pools().clone()).build(),
+            NonZeroUsize::MIN,
+            Arc::clone(&tracks),
+            CancelToken::root(),
+        ));
+        let source = TrackSource::Uri("not a url".into());
+        let spawn_id = TrackId(42);
+        let promote_id = TrackId(43);
+        tracks.lock().extend([
+            TrackRecord::new(spawn_id, String::new(), source.clone()),
+            TrackRecord::new(promote_id, String::new(), source.clone()),
+        ]);
+        let Err(expected) = loader.build_config(spawn_id, source.clone()) else {
+            panic!("fixture source must be rejected");
+        };
+        assert!(matches!(expected, QueueError::InvalidUrl(_)));
+        let reason = expected.to_string();
+        let mut rx = bus.subscribe::<QueueEvent>();
+
+        assert!(
+            loader
+                .spawn_load(spawn_id, source.clone(), LoadClass::Prefetch)
+                .is_none()
+        );
+        assert_eq!(tracks.lock()[0].status, TrackStatus::Failed(reason.clone()));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Envelope {
+                event: QueueEvent::TrackStatusChanged { id, status },
+                ..
+            }) if id == spawn_id && status == TrackStatus::Failed(reason.clone())
+        ));
+
+        assert!(loader.promote_load(promote_id, source).is_none());
+        assert_eq!(tracks.lock()[1].status, TrackStatus::Failed(reason.clone()));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Envelope {
+                event: QueueEvent::TrackStatusChanged { id, status },
+                ..
+            }) if id == promote_id && status == TrackStatus::Failed(reason)
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "config failure must not emit Loading"
+        );
     }
 }

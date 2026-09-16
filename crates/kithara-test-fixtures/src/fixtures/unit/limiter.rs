@@ -2,13 +2,6 @@ use kithara_test_macros as kithara;
 
 use crate::{assets, fixtures::samples};
 
-/// Prepared build-time PCM input for limiter unity.
-#[kithara::fixture]
-#[must_use]
-pub fn limiter_unity() -> Vec<f32> {
-    samples(&assets::unit_pcm_limiter_unity())
-}
-
 /// Prepared build-time PCM input for limiter peak.
 #[kithara::fixture]
 #[must_use]
@@ -70,6 +63,32 @@ pub fn limiter_half() -> Vec<f32> {
 #[must_use]
 pub fn limiter_spike() -> Vec<f32> {
     samples(&assets::unit_pcm_limiter_spike())
+}
+
+/// Prepared build-time PCM input for a limiter signal that stays below the ceiling
+/// between its samples as well as at them: a smooth sinusoid at half scale.
+#[kithara::fixture]
+#[must_use]
+pub fn limiter_smooth() -> Vec<f32> {
+    samples(&assets::unit_pcm_limiter_smooth())
+}
+
+/// Prepared build-time PCM input for a limiter overload whose true peak is stable:
+/// a smooth sinusoid at twice full scale, free of the discontinuity that makes a
+/// step's reconstructed peak depend on the reconstruction kernel.
+#[kithara::fixture]
+#[must_use]
+pub fn limiter_sine() -> Vec<f32> {
+    samples(&assets::unit_pcm_limiter_sine())
+}
+
+/// Prepared build-time PCM input for limiter inter-sample peaks: a quarter-rate
+/// sinusoid sampled at its 45-degree phase, so every sample sits at 1/sqrt(2)
+/// while the reconstructed waveform reaches full scale between them.
+#[kithara::fixture]
+#[must_use]
+pub fn limiter_intersample() -> Vec<f32> {
+    samples(&assets::unit_pcm_limiter_intersample())
 }
 
 /// Prepared build-time PCM input for limiter silence.

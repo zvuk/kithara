@@ -35,9 +35,9 @@ pub use eq::{
     eq_sine_1000, eq_sine_10000, eq_sine_15000, eq_transition,
 };
 pub use limiter::{
-    limiter_attack, limiter_half, limiter_infinity, limiter_left, limiter_negative,
-    limiter_negative_infinity, limiter_peak, limiter_quiet, limiter_recovery, limiter_right,
-    limiter_silence, limiter_spike, limiter_two, limiter_unity,
+    limiter_attack, limiter_half, limiter_infinity, limiter_intersample, limiter_left,
+    limiter_negative, limiter_negative_infinity, limiter_peak, limiter_quiet, limiter_recovery,
+    limiter_right, limiter_silence, limiter_sine, limiter_smooth, limiter_spike, limiter_two,
 };
 pub use resampler::{
     apple_planar_44100, apple_planar_48000, glide_alias, glide_quadratic, glide_transition,
@@ -56,4 +56,4 @@ pub use trim::{
     trim_silence_trim_trailing_disabled_by_default, trim_silence_trim_trailing_enabled,
     trim_stereo_quiet, trim_stereo_silence, trim_trailing_sine,
 };
-pub use warp::{warp_clicks, warp_constant, warp_pair, warp_sine};
+pub use warp::{warp_clicks, warp_constant, warp_nominal_clicks, warp_pair, warp_sine};

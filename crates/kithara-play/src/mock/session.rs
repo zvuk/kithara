@@ -44,7 +44,7 @@ impl<S> SessionDispatcher<S> for SessionMock {
                 let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
                 let (inputs, control) = slot_channels(SharedEq::new(10));
                 self.nodes.lock().push(inputs);
-                Reply::SlotAllocated(AllocatedSlot::new(control, slot))
+                Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
             }
             Cmd::QuerySampleRate => {
                 Reply::SampleRate(SessionSampleRate::new(None, self.sample_rate.get()))

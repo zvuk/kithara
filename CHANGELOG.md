@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   of the deck's stream, picked by hand or handed back to automatic.
 - UI (`kithara-ui`): `Popover.align` places the surface by its start or end edge;
   the deck's quality menu opens flush with the right edge of its cell.
+- Host (`kithara-host`): `HostConfig` carries a `LimiterConfig` (ceiling and
+  release) for the session output limiter instead of fixed constants.
 
 ## [0.0.1-alpha1](https://github.com/zvuk/kithara/releases/tag/v0.0.1-alpha1) - 2026-05-19
 

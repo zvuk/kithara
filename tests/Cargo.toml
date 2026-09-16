@@ -36,6 +36,7 @@ all = [
     "kithara-app/analysis-waveform",
     "kithara-app/beat-nn-small",
     "kithara-app/lib-only",
+    "kithara/analysis-beat",
 ]
 # Helpers used by `kithara-audio-tests`. Cross-component recording and offline
 # player coverage lives in this crate's full integration suite, so this closure

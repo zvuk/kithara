@@ -192,6 +192,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         .run(move |q| q.select(id, Transition::None))
         .await
         .expect("select");
+    queue.run(QueueControl::play).await;
     wait_for_position_at_least(&queue, 0.5, Duration::from_secs(15))
         .await
         .unwrap_or_else(|e| panic!("play fail: {e}"));

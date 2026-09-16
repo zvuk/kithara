@@ -1,7 +1,4 @@
-use std::{
-    any::Any,
-    num::{NonZeroU32, NonZeroUsize},
-};
+use std::{any::Any, num::NonZeroU32};
 
 use firewheel::FirewheelCtx;
 use kithara_audio::ConsumerWakeMode;
@@ -400,8 +397,6 @@ fn bootstrap(
         master_volume: 1.0,
         player_id,
         render_quantum_frames: None,
-        response_budget_frames: NonZeroUsize::new(448)
-            .expect("fixture response budget is non-zero"),
         sample_rate: session_rate.get(),
     }) {
         Reply::Ok => {}

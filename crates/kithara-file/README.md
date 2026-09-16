@@ -80,7 +80,7 @@ Local sources (`FileSrc::Local`) open directly via `AssetStore` and skip all net
 
 <tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation (also enables <code>kithara-net/perf</code>)</td></tr>
 
-<tr><td><code>probe</code></td><td>no</td><td>Compatibility feature for probe-aware test macro expansions</td></tr>
+<tr><td><code>usdt</code></td><td>no</td><td>USDT instrumentation</td></tr>
 
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to network-reaching deps</td></tr>
 

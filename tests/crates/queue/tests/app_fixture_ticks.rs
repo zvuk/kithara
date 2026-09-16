@@ -46,6 +46,7 @@ async fn app_fixture_updates_position_without_manual_ticks(
         .run(move |queue| {
             let id = queue.append(source).expect("append local track");
             queue.select(id, Transition::None).expect("select track");
+            queue.play();
         })
         .await;
 

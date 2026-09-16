@@ -160,7 +160,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
 
     // Capture `write_playhead` USDT firings: each carries the committed
     // playhead in nanoseconds.
-    let recorder = usdt_trace::scope();
+    let trace = usdt_trace::scope();
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(test_pools())
@@ -186,7 +186,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     }
 
     assert_no_committed_swallow(
-        &recorder.events(),
+        &trace.events(),
         Duration::from_secs_f64(MAX_COMMITTED_STEP_SECS),
     );
     player.close().await;

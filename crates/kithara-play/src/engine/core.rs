@@ -1,10 +1,13 @@
 mod registration;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PoolRegion;
-use kithara_events::{EventBus, EventReceiver, EventSet};
+use kithara_events::{EventBus, EventReceiver, EventSet, TrackId};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -19,11 +22,14 @@ use tracing::{debug, info};
 use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SessionDuckingMode, SlotId},
-    bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SlotControl},
+    bridge::{
+        PlaybackShared, PlayerCmd, PlayerNotification, SlotControl, channels::ScheduledSeekReanchor,
+    },
     effects::eq::EqBandConfig,
     error::PlayError,
     rt::StreamShape,
     session::{RegisteredPlayer, SessionBinding, SessionHandle, SessionSampleRate},
+    sync::DeckGrid,
 };
 
 type SlotHandle = SlotControl;
@@ -69,7 +75,205 @@ impl<S> EngineImpl<S> {
             runtime: RuntimeHandle::try_current().ok(),
         }
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use kithara_audio::{ScheduledSeek, SeekBegin, SeekOutcome};
+    use kithara_events::TrackId;
+    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_test_utils::kithara;
+    use kithara_warp::{BeatGridId, SessionFrame};
+
+    use super::EngineImpl;
+    use crate::{
+        EngineConfig, PlayError, SharedEq, SlotId,
+        bridge::{ScheduledSeekDisposition, slot_channels},
+        rt::PlayerNodeProcessor,
+        test_pools::{TestPools, pools},
+    };
+
+    struct Seek(AtomicUsize);
+
+    impl SeekBegin for Seek {
+        fn begin(&self, position: Duration) -> SeekOutcome {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            }
+        }
+
+        fn begin_prepared(&self, position: Duration) -> ScheduledSeek {
+            ScheduledSeek {
+                epoch: 1,
+                outcome: self.begin(position),
+            }
+        }
+
+        fn begin_scheduled(&self, position: Duration) -> ScheduledSeek {
+            ScheduledSeek {
+                epoch: 1,
+                outcome: self.begin(position),
+            }
+        }
+    }
+
+    fn engine() -> EngineImpl<TestPools> {
+        EngineImpl::new(
+            EngineConfig::builder()
+                .grid_id(BeatGridId::allocate().expect("fixture grid identity"))
+                .pools(pools())
+                .sample_rate(std::num::NonZeroU32::new(48_000).expect("fixture sample rate"))
+                .response_budget_frames(
+                    std::num::NonZeroUsize::new(448).expect("fixture response budget"),
+                )
+                .build(),
+            Default::default(),
+        )
+    }
+
+    #[kithara::test]
+    fn host_seek_requires_the_replacement_seek_binding() {
+        let engine = engine();
+        let slot = SlotId::new(0);
+        let missing = TrackId::allocate();
+        let replaced = TrackId::allocate();
+        let (_, mut control) = slot_channels(SharedEq::new(0));
+        let old: Arc<dyn SeekBegin> = Arc::new(Seek(AtomicUsize::new(0)));
+        control.bind_seek(replaced, old.clone());
+        control.unbind_seek(replaced, &old);
+        let replacement: Arc<dyn SeekBegin> = Arc::new(Seek(AtomicUsize::new(0)));
+        control.bind_seek(replaced, replacement);
+        engine.slots.lock().insert(slot, control);
+        let mut committed = false;
+
+        let missing_result = engine.commit_validated_track_seek(
+            slot,
+            missing,
+            Duration::ZERO,
+            ScheduledSeekDisposition::SeekOnly {
+                activation: SessionFrame::new(0),
+            },
+            || {
+                committed = true;
+                Ok(())
+            },
+        );
+        assert!(
+            matches!(missing_result, Err(PlayError::MissingSeekBinding { item, .. }) if item == missing)
+        );
+        assert!(!committed);
+
+        engine
+            .commit_validated_track_seek(
+                slot,
+                replaced,
+                Duration::ZERO,
+                ScheduledSeekDisposition::SeekOnly {
+                    activation: SessionFrame::new(0),
+                },
+                || {
+                    committed = true;
+                    Ok(())
+                },
+            )
+            .expect("replacement seek binding is current");
+        assert!(committed);
+    }
+
+    #[kithara::test]
+    fn full_host_seek_schedule_does_not_run_the_owner_commit() {
+        let engine = engine();
+        let slot = SlotId::new(0);
+        let current = TrackId::allocate();
+        let (_, mut control) = slot_channels(SharedEq::new(0));
+        control.bind_seek(current, Arc::new(Seek(AtomicUsize::new(0))));
+        for _ in 0..PlayerNodeProcessor::MAX_TRACKS {
+            control.schedule_track_seek(
+                TrackId::allocate(),
+                Duration::ZERO,
+                ScheduledSeekDisposition::SeekOnly {
+                    activation: SessionFrame::new(0),
+                },
+            );
+        }
+        engine.slots.lock().insert(slot, control);
+        let mut committed = false;
+
+        let result = engine.commit_validated_track_seek(
+            slot,
+            current,
+            Duration::ZERO,
+            ScheduledSeekDisposition::SeekOnly {
+                activation: SessionFrame::new(0),
+            },
+            || {
+                committed = true;
+                Ok(())
+            },
+        );
+
+        assert!(
+            matches!(result, Err(PlayError::ScheduledSeekCapacity { slot: actual }) if actual == slot)
+        );
+        assert!(!committed);
+        let slots = engine.slots.lock();
+        let control = slots.get(slot).expect("fixture slot remains resident");
+        assert!(!control.can_schedule_track_seek(current));
+    }
+}
+
+/// The sample rates the engine runs on. Decoded audio is resampled to the
+/// output rate before it reaches a renderer, so every frame coordinate that
+/// crosses the decoder boundary is measured against this axis.
+impl<S> EngineImpl<S> {
+    pub(crate) const fn configured_sample_rate(&self) -> u32 {
+        self.config.sample_rate.get()
+    }
+
+    /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
+    ///
+    /// Returns the config default if the engine is not running yet.
+    /// Used to pre-initialise the resampler in `ResourceConfig` so that
+    /// `make_sincs` runs while the resource is prepared (off the worker thread)
+    /// instead of lazily on the first `step_track()` call.
+    pub fn master_sample_rate(&self) -> u32 {
+        if !self.running.load(Ordering::Acquire) {
+            return self.config.sample_rate.get();
+        }
+        self.session
+            .sample_rate()
+            .map_or_else(|_| self.config.sample_rate.get(), SessionSampleRate::output)
+    }
+
+    /// The output frame axis as a rate, for the coordinate conversions that
+    /// cannot accept a zero. The configured rate is non-zero by construction
+    /// and stands in until the session reports its own.
+    pub(crate) fn output_sample_rate(&self) -> NonZeroU32 {
+        NonZeroU32::new(self.master_sample_rate()).unwrap_or(self.config.sample_rate)
+    }
+
+    pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
+        self.session.stream_shape()
+    }
+
+    /// Output frames a control change needs to replace audible PCM; `None`
+    /// before a render quantum and a session output are known.
+    pub(crate) fn response_frames(&self) -> Result<Option<NonZeroUsize>, PlayError> {
+        let Some(quantum) = self.config.render_quantum_frames else {
+            return Ok(None);
+        };
+        self.stream_shape()?
+            .map(|shape| shape.response_frames(quantum).map_err(PlayError::from))
+            .transpose()
+    }
+}
+
+/// Slot lifecycle owns allocation and release of session resources.
+impl<S> EngineImpl<S> {
     pub fn active_slots(&self) -> Vec<SlotId> {
         self.slots.lock().ids()
     }
@@ -87,7 +291,11 @@ impl<S> EngineImpl<S> {
         }
 
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
-        let allocated = self.session.allocate_slot(player_id)?;
+        let allocated = self.session.allocate_slot(
+            player_id,
+            Arc::clone(&self.config.stretch),
+            self.config.rate_smoothing,
+        )?;
         let slot_id = allocated.slot;
 
         self.slots.lock().insert(slot_id, allocated.control);
@@ -97,6 +305,30 @@ impl<S> EngineImpl<S> {
         Ok(slot_id)
     }
 
+    pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(PlayError::EngineNotRunning);
+        }
+
+        {
+            let slots = self.slots.lock();
+            if !slots.contains(slot) {
+                return Err(PlayError::SlotNotFound(slot));
+            }
+        }
+
+        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
+        self.session.release_slot(player_id, slot)?;
+
+        let _ = self.slots.lock().remove(slot);
+
+        debug!(?slot, player_id, "slot released");
+        self.emit(EngineEvent::SlotReleased { slot });
+        Ok(())
+    }
+}
+
+impl<S> EngineImpl<S> {
     pub(crate) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
         self.validate_session_sample_rate(binding.requested_sample_rate().get())?;
         self.session.bind(binding)
@@ -108,6 +340,120 @@ impl<S> EngineImpl<S> {
             handle.begin_seek(position);
         }
         drop(slots);
+    }
+
+    pub(crate) fn schedule_track_seek(
+        &self,
+        slot: SlotId,
+        item: TrackId,
+        position: Duration,
+        disposition: crate::bridge::ScheduledSeekDisposition,
+    ) -> Result<(), PlayError> {
+        let mut slots = self.slots.lock();
+        let result = slots
+            .get_mut(slot)
+            .ok_or(PlayError::SlotNotFound(slot))
+            .and_then(|control| {
+                if control.has_seek_binding(item) && control.can_schedule_track_seek(item) {
+                    control.schedule_track_seek(item, position, disposition);
+                    Ok(())
+                } else if control.has_seek_binding(item) {
+                    Err(PlayError::ScheduledSeekCapacity { slot })
+                } else {
+                    Err(PlayError::MissingSeekBinding { slot, item })
+                }
+            });
+        drop(slots);
+        result
+    }
+
+    pub(crate) fn validate_track_seek(&self, slot: SlotId, item: TrackId) -> Result<(), PlayError> {
+        let slots = self.slots.lock();
+        let result = slots
+            .get(slot)
+            .ok_or(PlayError::SlotNotFound(slot))
+            .and_then(|control| {
+                control
+                    .has_seek_binding(item)
+                    .then_some(())
+                    .ok_or(PlayError::MissingSeekBinding { slot, item })
+            });
+        drop(slots);
+        result
+    }
+
+    pub(crate) fn commit_validated_track_seek<R>(
+        &self,
+        slot: SlotId,
+        item: TrackId,
+        position: Duration,
+        disposition: crate::bridge::ScheduledSeekDisposition,
+        commit: impl FnOnce() -> Result<R, PlayError>,
+    ) -> Result<R, PlayError> {
+        let mut slots = self.slots.lock();
+        let control = slots.get(slot).ok_or(PlayError::SlotNotFound(slot))?;
+        if !control.has_seek_binding(item) {
+            return Err(PlayError::MissingSeekBinding { slot, item });
+        }
+        if !control.can_schedule_track_seek(item) {
+            return Err(PlayError::ScheduledSeekCapacity { slot });
+        }
+        let committed = commit()?;
+        slots
+            .get_mut(slot)
+            .unwrap_or_else(|| unreachable!("held Host seek slot must remain resident"))
+            .schedule_track_seek(item, position, disposition);
+        drop(slots);
+        Ok(committed)
+    }
+
+    pub(crate) fn set_prepared_launch_armed(
+        &self,
+        slot: SlotId,
+        item: TrackId,
+        armed: bool,
+    ) -> bool {
+        self.slots
+            .lock()
+            .get_mut(slot)
+            .is_some_and(|control| control.set_prepared_launch_armed(item, armed))
+    }
+
+    pub(crate) fn disarm_prepared_launches(&self, slot: SlotId) {
+        if let Some(control) = self.slots.lock().get_mut(slot) {
+            control.disarm_prepared_launches();
+        }
+    }
+
+    /// Moves a pending synchronized seek and, once it moved, runs `install`
+    /// before the slots lock is released, so no tick begins the moved seek
+    /// against the previous region plan.
+    pub(crate) fn reanchor_scheduled_seek(
+        &self,
+        slot: SlotId,
+        reanchor: ScheduledSeekReanchor,
+        install: impl FnOnce(),
+    ) -> bool {
+        self.slots.lock().get_mut(slot).is_some_and(|control| {
+            let moved =
+                control.reanchor_scheduled_seek(reanchor, self.config.response_budget_frames);
+            if moved {
+                install();
+            }
+            moved
+        })
+    }
+
+    pub(crate) fn cancel_prepared_launches(
+        &self,
+        slot: SlotId,
+        item: TrackId,
+        resume: bool,
+    ) -> bool {
+        self.slots
+            .lock()
+            .get_mut(slot)
+            .is_some_and(|control| control.cancel_prepared_launches(item, resume))
     }
 
     pub(crate) fn cancel(&self) {
@@ -147,10 +493,6 @@ impl<S> EngineImpl<S> {
     /// actuated the graph.
     pub(crate) fn commit_desired_master_volume(&self, level: f32) {
         self.master_volume.store(level, Ordering::Relaxed);
-    }
-
-    pub(crate) const fn configured_sample_rate(&self) -> u32 {
-        self.config.sample_rate.get()
     }
 
     pub(crate) fn consumer_wake_mode(&self) -> ConsumerWakeMode {
@@ -202,21 +544,6 @@ impl<S> EngineImpl<S> {
         self.running.load(Ordering::Acquire)
     }
 
-    /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
-    ///
-    /// Returns the config default if the engine is not running yet.
-    /// Used to pre-initialise the resampler in `ResourceConfig` so that
-    /// `make_sincs` runs while the resource is prepared (off the worker thread)
-    /// instead of lazily on the first `step_track()` call.
-    pub fn master_sample_rate(&self) -> u32 {
-        if !self.running.load(Ordering::Acquire) {
-            return self.config.sample_rate.get();
-        }
-        self.session
-            .sample_rate()
-            .map_or_else(|_| self.config.sample_rate.get(), SessionSampleRate::output)
-    }
-
     pub fn master_volume(&self) -> f32 {
         self.master_volume.load(Ordering::Relaxed)
     }
@@ -235,28 +562,6 @@ impl<S> EngineImpl<S> {
             .get_mut(slot)
             .and_then(|handle| handle.notif_rx.try_pop())
     }
-    pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
-        if !self.running.load(Ordering::Acquire) {
-            return Err(PlayError::EngineNotRunning);
-        }
-
-        {
-            let slots = self.slots.lock();
-            if !slots.contains(slot) {
-                return Err(PlayError::SlotNotFound(slot));
-            }
-        }
-
-        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
-        self.session.release_slot(player_id, slot)?;
-
-        let _ = self.slots.lock().remove(slot);
-
-        debug!(?slot, player_id, "slot released");
-        self.emit(EngineEvent::SlotReleased { slot });
-        Ok(())
-    }
-
     /// Runtime handle captured at engine creation.
     ///
     /// Use when building a shared
@@ -335,12 +640,8 @@ impl<S> EngineImpl<S> {
 
         let player_id = self.ensure_player_id()?;
         let master_volume = self.master_volume.load(Ordering::Relaxed);
-        self.session.start_player(
-            player_id,
-            master_volume,
-            self.config.render_quantum_frames,
-            self.config.response_budget_frames,
-        )?;
+        self.session
+            .start_player(player_id, master_volume, self.config.render_quantum_frames)?;
 
         self.running.store(true, Ordering::Release);
 
@@ -371,15 +672,14 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
-    pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
-        self.session.stream_shape()
-    }
-
     pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
         self.bus.subscribe()
     }
 
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
+        self.slots
+            .lock()
+            .service_scheduled_seeks(self.config.response_budget_frames);
         self.session.tick()
     }
 
@@ -394,10 +694,18 @@ impl<S> EngineImpl<S> {
 
     delegate::delegate! {
         to self.slots.lock() {
+            pub(crate) fn publish_deck_grid(&self, grid: DeckGrid);
             #[call(playback)]
             pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
             #[call(render_snapshot)]
             pub(crate) fn slot_render_snapshot(&self, slot: SlotId) -> Option<RenderSnapshot>;
+            #[call(render_snapshot_for)]
+            pub(crate) fn slot_render_snapshot_for(
+                &self,
+                slot: SlotId,
+                item_id: TrackId,
+                warp_map: Option<kithara_warp::WarpMapRevision>,
+            ) -> Option<RenderSnapshot>;
         }
     }
 }

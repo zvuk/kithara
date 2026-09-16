@@ -55,6 +55,27 @@ impl Default for AudioChunkInfo {
     }
 }
 
+/// Packs rate and Warp-map identities into the existing opaque PCM revision word.
+#[must_use]
+pub const fn pack_render_revision(rate: u64, warp_map: u64) -> Option<u64> {
+    if rate > u32::MAX as u64 || warp_map > u32::MAX as u64 {
+        return None;
+    }
+    Some((warp_map << u32::BITS) | rate)
+}
+
+/// Returns the Warp-map identity carried by an opaque PCM revision word.
+#[must_use]
+pub const fn render_warp_map_revision(revision: u64) -> u64 {
+    revision >> u32::BITS
+}
+
+/// Returns the rate identity carried by an opaque PCM revision word.
+#[must_use]
+pub const fn render_rate_revision(revision: u64) -> u64 {
+    revision & u32::MAX as u64
+}
+
 /// One owning chunk of interleaved decoded samples and timeline information.
 #[derive(Debug)]
 pub struct AudioChunk {

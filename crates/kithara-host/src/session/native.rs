@@ -11,7 +11,9 @@ use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
 };
-use kithara_play::{GroupState, SessionSampleRate, StreamShape, player::PlayerMember};
+use kithara_play::{
+    GroupState, SessionSampleRate, StreamShape, effects::LimiterConfig, player::PlayerMember,
+};
 use tracing::{debug, warn};
 
 use super::{
@@ -65,7 +67,7 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
 
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
-            HostReply::Play(reply) => Ok(reply),
+            HostReply::Play(reply) => Ok(*reply),
             HostReply::Err(error) => Err(error),
             _ => Err(PlayError::Internal(
                 "unexpected host reply for player session command".into(),
@@ -100,6 +102,7 @@ fn engine_thread<B: AudioBackend, S>(
     root_view: RootView,
     sample_rate: NonZeroU32,
     requested_max_block_frames: Option<NonZeroU32>,
+    limiter: LimiterConfig,
     start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
@@ -109,6 +112,7 @@ fn engine_thread<B: AudioBackend, S>(
         root_view,
         sample_rate,
         requested_max_block_frames,
+        limiter,
         start_stream_fn,
     );
     debug!("[KITHARA-ROUTE] native session worker started");
@@ -132,6 +136,7 @@ fn spawn_session_client<B, S>(
     root_view: RootView,
     sample_rate: NonZeroU32,
     requested_max_block_frames: Option<NonZeroU32>,
+    limiter: LimiterConfig,
     start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 ) -> Arc<SessionClient<S>>
 where
@@ -147,6 +152,7 @@ where
             root_view,
             sample_rate,
             requested_max_block_frames,
+            limiter,
             start_stream_fn,
         );
     });
@@ -193,6 +199,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root_view: RootView,
     sample_rate: NonZeroU32,
     output_block_frames: Option<NonZeroU32>,
+    limiter: LimiterConfig,
 ) -> Arc<dyn HostDispatcher<S>> {
     spawn_session_client::<CpalBackend, S>(
         "kithara-engine",
@@ -200,6 +207,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         root_view,
         sample_rate,
         output_block_frames,
+        limiter,
         move |ctx, sample_rate| start_stream_cpal(ctx, sample_rate, output_block_frames),
     )
 }

@@ -15,6 +15,7 @@ use std::{
 use firewheel::dsp::fade::FadeCurve;
 use kithara::{
     self,
+    audio::AudioRead,
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
@@ -84,6 +85,44 @@ fn make_track_from_resource(resource: Resource, src: Arc<str>, item_id: TrackId)
 
 fn make_track(constant_half: &'static [u8]) -> PlayerTrack {
     make_track_with(constant_half, 60.0, TrackId::allocate())
+}
+
+fn render_to(track: &mut PlayerTrack, tx: &mut HeapProd<PlayerNotification>, seconds: f64) {
+    let frames = ((seconds - track.position()) * f64::from(Consts::AUDIO_SPEC.sample_rate.get()))
+        .round() as usize;
+    let mut scratch_l = [0.0; 512];
+    let mut scratch_r = [0.0; 512];
+    let mut mix_l = [0.0; 512];
+    let mut mix_r = [0.0; 512];
+    let metrics = RtMetrics::default();
+    for offset in (0..frames).step_by(512) {
+        let count = (frames - offset).min(512);
+        let outcome = track.read(
+            &mut [&mut scratch_l, &mut scratch_r],
+            &mut [&mut mix_l, &mut mix_r],
+            0..count,
+            &mut RtSink::new(tx, &metrics, NO_SEEK_PENDING),
+        );
+        assert!(matches!(outcome, TrackReadOutcome::Full { .. }));
+    }
+    assert!((track.position() - seconds).abs() <= 1.0 / 44100.0);
+}
+
+#[kithara::test]
+fn unpresented_source_prefix_does_not_advance_the_media_clock() {
+    let mut reader = TestPcmReader::new(Consts::AUDIO_SPEC, 1.0);
+    reader
+        .read(&mut [0.0; 128])
+        .expect("discard decoded prefix");
+    assert!(reader.position() > Duration::ZERO);
+    let mut track = make_track_from_resource(
+        Resource::from_reader(reader, None),
+        Arc::from("trimmed.wav"),
+        TrackId::allocate(),
+    );
+    let (mut notifications, _received) = HeapRb::new(32).split();
+    track.play();
+    render_to(&mut track, &mut notifications, 512.0 / 44100.0);
 }
 
 fn collect_notifications(
@@ -431,7 +470,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold(constant_half:
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(9.79);
+    render_to(&mut track, &mut notification_tx, 9.79);
 
     let mut handover_count = 0;
     let mut saw_eof_stop = false;
@@ -673,7 +712,7 @@ async fn prefetch_fires_before_handover(
 
     track.play();
     if let Some(position) = seek_position {
-        track.seek(position);
+        render_to(&mut track, &mut notification_tx, position);
     }
 
     let _ = track.read(
@@ -718,7 +757,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold(
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(8.5);
+    render_to(&mut track, &mut notification_tx, 8.5);
 
     let _ = track.read(
         &mut scratch_bufs,
@@ -739,7 +778,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold(
         ))
     );
 
-    track.seek(9.79);
+    render_to(&mut track, &mut notification_tx, 9.79);
 
     let mut saw_handover = false;
     for _ in 0..4 {
@@ -780,7 +819,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide(constant_half:
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(5.0);
+    render_to(&mut track, &mut notification_tx, 5.0);
     let _ = track.read(
         &mut scratch_bufs,
         &mut mix_bufs,
@@ -793,7 +832,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide(constant_half:
         PlayerNotification::Requested | PlayerNotification::HandoverRequested { .. }
     )));
 
-    track.seek(9.79);
+    render_to(&mut track, &mut notification_tx, 9.79);
     let mut prefetch_count = 0;
     let mut handover_count = 0;
     for _ in 0..4 {

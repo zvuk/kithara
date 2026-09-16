@@ -1,12 +1,15 @@
 use kithara_bufpool::HasPool;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_play::TransportRevision;
 use kithara_play::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, PlayError, SeekOutcome, SessionBinding, SyncAdmission,
-    SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected,
-    SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, PlayError, SeekOutcome, SegmentSet,
+    SessionAnchor, SessionBinding, SyncAdmission, SyncApplied, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
     player::{PlaybackView, Player, PlayerControlSource, PlayerMember},
 };
 
 use super::Queue;
+use crate::TrackId;
 
 impl<S> BeatGrid for Queue<S>
 where
@@ -61,13 +64,36 @@ where
         to self {
             #[call(seek_player)]
             fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError>;
-            #[call(tick_player)]
-            fn tick(&self) -> Result<(), PlayError>;
         }
         to self.player {
+            #[cfg(not(target_arch = "wasm32"))]
+            fn seek_from_host(
+                &mut self,
+                seconds: f64,
+                transport: TransportRevision,
+            ) -> Result<SeekOutcome, PlayError>;
             fn set_host_level(&self, level: f32);
             fn host_level(&self) -> f32;
+            fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError>;
+            fn publish_item_grid(
+                &mut self,
+                item: TrackId,
+                segments: SegmentSet,
+                state: BeatGridState,
+            ) -> Result<SyncAdmission, SyncError>;
+            fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError>;
         }
+    }
+
+    fn tick(&mut self) -> Result<(), PlayError> {
+        let _admission = self.control.lock_admission();
+        self.control.ensure_open()?;
+        self.player.tick()?;
+        self.control.player.process_notifications();
+        self.control.drain_player_events();
+        self.control.update_cached_position();
+        self.control.maybe_arm_crossfade();
+        Ok(())
     }
 }
 

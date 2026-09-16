@@ -166,6 +166,57 @@ pub fn marked_synchronization_failures(
     synchronization_failures_with(label, tracks, channels, sample_rate, target_bpm, false)
 }
 
+/// Extract deterministic fixture beat and downbeat markers with the calibrated
+/// score-marker detector used by the synchronization oracle.
+///
+/// A first cluster within one cluster window of the buffer start, with no silent
+/// analysis window before it, is the body of an event that began before the
+/// capture and carries no position; it is dropped rather than read as a beat.
+#[must_use]
+pub fn marked_rhythm_markers(
+    samples: &[f32],
+    channels: u16,
+    sample_rate: u32,
+) -> (Vec<usize>, Vec<usize>) {
+    rhythm_markers(samples, usize::from(channels), sample_rate)
+}
+
+/// Every exact fixture beat marker in `track` that starts off its nearest Host beat.
+///
+/// `host_beats` are frames of the authoritative Host grid inside the same capture,
+/// so a deck that keeps its phase with other decks but trails the Host still fails.
+#[must_use]
+pub fn host_beat_alignment_failures(
+    label: &str,
+    track: &[f32],
+    channels: u16,
+    sample_rate: u32,
+    host_beats: &[usize],
+) -> Vec<String> {
+    if host_beats.is_empty() {
+        return vec![format!("{label}: capture holds no Host beats")];
+    }
+    let (markers, _) = marked_rhythm_markers(track, channels, sample_rate);
+    if markers.is_empty() {
+        return vec![format!("{label}: capture holds no exact beat markers")];
+    }
+    markers
+        .into_iter()
+        .filter_map(|marker| {
+            let beat = *host_beats
+                .iter()
+                .min_by_key(|beat| beat.abs_diff(marker))
+                .expect("Host beats are not empty");
+            (marker != beat).then(|| {
+                let offset = marker as i64 - beat as i64;
+                format!(
+                    "{label}: beat marker at frame {marker} is {offset:+} frames from Host beat at frame {beat}"
+                )
+            })
+        })
+        .collect()
+}
+
 fn synchronization_failures_with(
     label: &str,
     tracks: &[&[f32]],
@@ -199,18 +250,15 @@ fn synchronization_failures_with(
             "track {index} must contain complete frames"
         );
 
-        let (markers, downbeats) = rhythm_markers(samples, channel_count, sample_rate);
+        let (markers, downbeats) = marked_rhythm_markers(samples, channels, sample_rate);
+        let marker_debug = markers.iter().take(8).copied().collect::<Vec<_>>();
         let Some(&first) = markers.first() else {
             failures.push(format!("{label}: track {index} has no exact beat markers"));
             continue;
         };
-        let marker_period = match markers.windows(2).map(|pair| pair[1] - pair[0]).min() {
-            Some(period) => period,
-            None if estimate => beat_period,
-            None => {
-                failures.push(format!("{label}: track {index} has no detected tempo"));
-                continue;
-            }
+        let Some(marker_period) = markers.windows(2).map(|pair| pair[1] - pair[0]).min() else {
+            failures.push(format!("{label}: track {index} has no detected tempo"));
+            continue;
         };
         if estimate {
             let tempo = estimate_tempo(
@@ -224,21 +272,15 @@ fn synchronization_failures_with(
             match tempo.bpm {
                 Some(actual) if (actual - target_bpm).abs() <= TEMPO_TOLERANCE_BPM => {}
                 Some(actual) => failures.push(format!(
-                    "{label}: track {index} tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}",
+                    "{label}: track {index} estimated tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}; markers={marker_debug:?}",
                 )),
                 None => failures.push(format!("{label}: track {index} has no detected tempo")),
             }
-            if !tempo.clear_rhythm {
-                failures.push(format!(
-                    "{label}: track {index} has no clear rhythm: confidence={:.6}",
-                    tempo.confidence,
-                ));
-            }
         } else {
-            let actual = f64::from(sample_rate) * SECONDS_PER_MINUTE / marker_period as f64;
-            if (actual - target_bpm).abs() > TEMPO_TOLERANCE_BPM {
+            let marker_bpm = f64::from(sample_rate) * SECONDS_PER_MINUTE / marker_period as f64;
+            if (marker_bpm - target_bpm).abs() > TEMPO_TOLERANCE_BPM {
                 failures.push(format!(
-                    "{label}: track {index} tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}",
+                    "{label}: track {index} tempo is {marker_bpm:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}; markers={marker_debug:?}",
                 ));
             }
         }
@@ -283,6 +325,37 @@ fn synchronization_failures_with(
     failures
 }
 
+/// Whether any analysis window before `frame` sits at or below Cochlea's silence floor.
+///
+/// A window, not a sample: decoded media crosses exact zero on ordinary waveform
+/// crossings, so a single zero frame says nothing about whether a gap preceded an onset.
+fn lead_in_has_silence(samples: &[f32], channels: usize, sample_rate: u32, frame: usize) -> bool {
+    let Ok(channel_count) = u16::try_from(channels) else {
+        return false;
+    };
+    let lead_in = &samples[..(frame * channels).min(samples.len())];
+    if lead_in.is_empty() {
+        return false;
+    }
+    segment_timeline(
+        &Audio {
+            samples: lead_in.to_vec(),
+            channels: channel_count,
+            sample_rate,
+        },
+        &SegmentOpts::default().with_window_ms(WINDOW_MS),
+    )
+    .segments
+    .iter()
+    .any(|segment| segment.silent)
+}
+
+/// Cluster loud frames into beat and downbeat markers.
+///
+/// The leading cluster is dropped when no silent window precedes it: within one
+/// cluster window of the start an onset and the body of an event that began
+/// before the capture look the same, and reading such a fragment as a beat moves
+/// one deck's phase by its length while a quieter deck keeps its real beat.
 fn rhythm_markers(samples: &[f32], channels: usize, sample_rate: u32) -> (Vec<usize>, Vec<usize>) {
     let track_peak = samples
         .chunks_exact(channels)
@@ -303,15 +376,11 @@ fn rhythm_markers(samples: &[f32], channels: usize, sample_rate: u32) -> (Vec<us
             continue;
         }
         match active {
-            Some((best_frame, best_peak, last_frame)) if frame - last_frame <= cluster_gap => {
-                active = Some(if peak > best_peak {
-                    (frame, peak, frame)
-                } else {
-                    (best_frame, best_peak, frame)
-                });
+            Some((first_frame, best_peak, last_frame)) if frame - last_frame <= cluster_gap => {
+                active = Some((first_frame, best_peak.max(peak), frame));
             }
-            Some((best_frame, best_peak, _)) => {
-                markers.push((best_frame, best_peak));
+            Some((first_frame, best_peak, _)) => {
+                markers.push((first_frame, best_peak));
                 active = Some((frame, peak, frame));
             }
             None => active = Some((frame, peak, frame)),
@@ -319,6 +388,13 @@ fn rhythm_markers(samples: &[f32], channels: usize, sample_rate: u32) -> (Vec<us
     }
     if let Some((frame, peak, _)) = active {
         markers.push((frame, peak));
+    }
+
+    let truncated_body = markers.first().is_some_and(|(frame, _)| {
+        *frame < cluster_gap && !lead_in_has_silence(samples, channels, sample_rate, *frame)
+    });
+    if truncated_body {
+        markers.remove(0);
     }
 
     let downbeat_threshold = track_peak * DOWNBEAT_MARKER_RATIO;
@@ -370,7 +446,13 @@ fn cochlea_failures(
         ));
     }
     if candidate.true_peak_over_0dbtp && !control.true_peak_over_0dbtp {
-        failures.push(format!("{label}: candidate-only true peak over 0 dBTP"));
+        failures.push(format!(
+            "{label}: candidate-only true peak over 0 dBTP: candidate={:?} dBTP/{:?} dBFS, control={:?} dBTP/{:?} dBFS",
+            candidate.true_peak_dbtp,
+            candidate.sample_peak_dbfs,
+            control.true_peak_dbtp,
+            control.sample_peak_dbfs
+        ));
     }
     if candidate.leading_silence_ms > control.leading_silence_ms + WINDOW_MS {
         failures.push(format!(

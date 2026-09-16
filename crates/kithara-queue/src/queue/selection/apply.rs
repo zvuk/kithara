@@ -24,13 +24,16 @@ where
     /// Takes the admission lock and dispatches through the session's
     /// synchronous command bridge, so the caller waits for a reply. On a
     /// runtime worker that wait parks the executor thread.
+    ///
+    /// The apply lock is held across the whole synchronous block and never
+    /// across an await, so the cancellation re-check and the selection that
+    /// follows it observe one state.
     fn apply_loaded(&self, id: TrackId, resource: Resource) {
         let _admission = self.lock_admission();
         if self.is_closed() {
             return;
         }
 
-        // WHY: Held across the whole synchronous block (never across .await): the Cancelled re-check and select_item must be atomic w.r.t. a
         let _apply = self
             .select_apply
             .lock()
@@ -88,7 +91,7 @@ where
             let selection = match *phase {
                 SelectPhase::Pending(pending) if pending.id == id => {
                     *phase = SelectPhase::Idle;
-                    Some(pending.transition)
+                    Some(pending)
                 }
                 _ => None,
             };
@@ -96,13 +99,14 @@ where
             selection
         };
 
-        let autoplay = self.autoplay_target.disarm_if_matches(id);
-        let Some(transition) = selection.or_else(|| autoplay.then_some(Transition::None)) else {
+        let armed = self.autoplay_target.disarm_if_matches(id);
+        let Some((transition, reason, autoplay)) = selection
+            .map(|pending| (pending.transition, pending.reason, pending.autoplay))
+            .or_else(|| armed.then_some((Transition::None, AdvanceReason::UserSelect, true)))
+        else {
             return;
         };
-        if let Err(error) =
-            self.select_loaded_item(index, id, transition, AdvanceReason::UserSelect)
-        {
+        if let Err(error) = self.select_loaded_item(index, id, transition, reason, autoplay) {
             warn!(id = id.as_u64(), error = %error, "pending select failed");
         }
     }

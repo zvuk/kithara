@@ -80,3 +80,21 @@ deps:semver:
     - if: $KITHARA_PIPELINE_KIND == "release"
   script:
     - just ci run deps-semver
+
+# Warp is a required gate on every push and merge request, so it carries no
+# platform opt-in: its remaining red contract stays visible until the change is
+# green.
+deep:warp:
+  extends: .linux-job
+  stage: deep
+  needs: []
+  interruptible: false
+  timeout: 180 minutes
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "branch"
+      interruptible: true
+    - if: $KITHARA_PIPELINE_KIND == "merge-request"
+      interruptible: true
+    - if: $KITHARA_PIPELINE_KIND == "main"
+  script:
+    - just ci run deep-warp

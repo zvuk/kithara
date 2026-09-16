@@ -22,7 +22,7 @@ pub trait IntoProbeArg: Copy {
     #[must_use]
     fn from_probe_arg(packed: u64) -> Self {
         let _ = packed;
-        unimplemented!("noop probe: from_probe_arg not supported without `probe` feature")
+        unimplemented!("noop probe: from_probe_arg not supported without `usdt` feature")
     }
 
     fn into_probe_arg(self) -> u64;

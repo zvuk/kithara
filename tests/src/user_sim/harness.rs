@@ -238,6 +238,7 @@ impl SimHarness {
         self.run(move |queue| queue.select(id, Transition::None))
             .await
             .unwrap_or_else(|e| panic!("select track {idx}: {e}"));
+        self.run(QueueControl::play).await;
 
         wait_for_loaded(&self.queue, id, Duration::from_secs(30))
             .await

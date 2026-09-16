@@ -19,7 +19,7 @@ use kithara::{
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -215,6 +215,7 @@ async fn hls_seek_near_end_skips_prefix(
         .run(move |q| q.select(track_id, Transition::None))
         .await
         .expect("select");
+    queue.run(QueueControl::play).await;
 
     wait_for_loader_done(&queue, track_id, Consts::LOAD_DEADLINE)
         .await

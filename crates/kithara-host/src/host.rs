@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use kithara_bufpool::HasPool;
+use kithara_events::TrackId;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{
@@ -8,9 +9,9 @@ use kithara_play::{
     player::{PlayerControlSource, PlayerMember},
 };
 use kithara_warp::{
-    BeatGrid, BeatGridId, SessionEpoch, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
-    TopologyOperation,
+    BeatGrid, BeatGridId, BeatGridState, SegmentSet, SessionEpoch, SyncAdmission, SyncApplied,
+    SyncError, SyncGroup, SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
+    SyncRejected, SyncStatusSnapshot, TopologyOperation,
 };
 mod config;
 #[cfg(feature = "offline")]
@@ -54,6 +55,44 @@ impl<P: PlayerControlSource> Deref for HostOwned<P> {
 
     fn deref(&self) -> &Self::Target {
         &self.control
+    }
+}
+
+impl<S> Host<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    /// Returns the canonical synchronization status of one Host-owned deck.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the deck is no longer owned by this Host or the
+    /// Host dispatcher cannot return its status.
+    pub fn deck_sync_status<P>(&self, deck: &HostOwned<P>) -> Result<SyncStatusSnapshot, PlayError>
+    where
+        P: PlayerControlSource<Schema = S>,
+    {
+        self.validate_removal(deck)?;
+        self.sync_status(deck.id())
+    }
+
+    /// Reads one deck's canonical synchronization status by stable identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no matching deck exists or the Host dispatcher
+    /// cannot return its status.
+    pub fn sync_status(&self, deck: BeatGridId) -> Result<SyncStatusSnapshot, PlayError> {
+        match self
+            .dispatcher
+            .exec_host(HostCmd::DeckSyncStatus { deck })?
+        {
+            HostReply::DeckSyncStatus(status) => status,
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for deck synchronization status".into(),
+            )),
+        }
     }
 }
 
@@ -279,6 +318,7 @@ impl<S> Host<S> {
             sample_rate,
             SessionEpoch::new(0),
             SyncMemberKind::Group,
+            SyncMode::LocalSync,
         );
         let view = RootView::new(&group, sample_rate);
         Ok(SessionRoot {
@@ -295,6 +335,32 @@ impl<S> Host<S> {
     /// Returns an error when the Host rejects or cannot dispatch the update.
     pub fn set_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
         self.exec_play_ok(Cmd::SetSessionTempo { tempo })
+    }
+
+    /// Publish the asset grid of one queued track on the deck that owns it;
+    /// the deck reconciles the track onto its own tempo.
+    ///
+    /// # Errors
+    /// Returns an error when the deck is unknown or rejects the grid.
+    pub fn publish_track_grid(
+        &self,
+        deck: BeatGridId,
+        item: TrackId,
+        segments: SegmentSet,
+        state: BeatGridState,
+    ) -> Result<SyncAdmission, PlayError> {
+        match self.dispatcher.exec(Cmd::PublishTrackGrid {
+            deck,
+            item,
+            segments,
+            state,
+        })? {
+            Reply::SyncAdmission(admission) => Ok(admission),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for a track grid".into(),
+            )),
+        }
     }
 
     fn validate_removal<P>(&self, player: &HostOwned<P>) -> Result<(), PlayError>
@@ -334,6 +400,7 @@ where
             HostConfig::Realtime {
                 sample_rate_hint,
                 output_block_frames,
+                limiter,
                 ..
             } => {
                 let root = Self::session_root(sample_rate_hint)?;
@@ -342,6 +409,7 @@ where
                     root.view.clone(),
                     root.sample_rate,
                     output_block_frames,
+                    limiter,
                 )
                 .resolve()?;
                 Ok(Self::owner(
@@ -427,7 +495,7 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn realtime_config_preserves_output_block_default_and_allows_override() {
+    fn realtime_config_defaults_to_small_blocks_and_allows_override() {
         let default = HostConfig::<TestPools>::builder().build();
         let HostConfig::Realtime {
             output_block_frames,
@@ -436,9 +504,9 @@ mod tests {
         else {
             panic!("default Host config must be realtime");
         };
-        assert_eq!(output_block_frames, None);
+        assert_eq!(output_block_frames, NonZeroU32::new(128));
 
-        let frames = NonZeroU32::new(128).expect("test block size is non-zero");
+        let frames = NonZeroU32::new(256).expect("test block size is non-zero");
         let configured = HostConfig::<TestPools>::builder()
             .output_block_frames(frames)
             .build();

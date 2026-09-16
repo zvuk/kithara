@@ -21,6 +21,7 @@ pub struct GlideResampler {
     mode: ResamplerMode,
     options: ResamplerOptions,
     previous: SmallVec<[SampleBuffer; 8]>,
+    previous_valid: bool,
     current_ratio: f64,
     cursor: f64,
     input_frames: usize,
@@ -51,6 +52,7 @@ impl GlideResampler {
             engine,
             glide,
             previous,
+            previous_valid: false,
             channels: settings.channels,
             current_ratio: ratio,
             input_frames: settings.options.chunk_size,
@@ -58,6 +60,66 @@ impl GlideResampler {
             options: settings.options,
             cursor: 0.0,
         })
+    }
+
+    /// Render one exact source/output span without backend buffering.
+    ///
+    /// # Errors
+    /// Returns [`ResamplerError`] when the planar shape or prepared limits do
+    /// not match the requested span.
+    pub fn process_exact_span(
+        &mut self,
+        input: &[&[f32]],
+        output: &mut [&mut [f32]],
+    ) -> Result<(), ResamplerError> {
+        let input_frames = validate_input(input, self.channels.get())?;
+        let output_frames = validate_output(output, self.channels.get())?;
+        if input_frames == 0 || output_frames == 0 {
+            return Err(ResamplerError::InvalidBuffer {
+                detail: "exact Glide spans must be non-empty",
+            });
+        }
+        if input_frames > self.input_frames || output_frames > self.engine.position_capacity() {
+            return Err(ResamplerError::InvalidBuffer {
+                detail: "exact Glide span exceeds prepared frame limits",
+            });
+        }
+        let ratio = input_frames
+            .to_f64()
+            .and_then(|input| output_frames.to_f64().map(|output| input / output))
+            .ok_or(ResamplerError::InvalidBuffer {
+                detail: "exact Glide span ratio is not representable",
+            })?;
+        validate_runtime_ratio(self.options, ratio)?;
+        self.seed_previous(input);
+        let positions = self.engine.positions_mut(output_frames)?;
+        for (frame, position) in positions.iter_mut().enumerate() {
+            *position = frame
+                .to_f64()
+                .map(|frame| frame.mul_add(ratio, 1.0))
+                .and_then(|position| position.to_f32())
+                .ok_or(ResamplerError::InvalidBuffer {
+                    detail: "exact Glide source position is not representable",
+                })?;
+        }
+        self.engine.render(RenderRequest {
+            input,
+            output,
+            produced: output_frames,
+            filter_ratio: if (ratio - 1.0).abs() <= self.options.passthrough_tolerance {
+                1.0
+            } else {
+                ratio
+            },
+            previous: &self.previous,
+            config: self.config,
+            mode: self.mode,
+        })?;
+        self.store_previous(input, input_frames);
+        self.current_ratio = ratio;
+        self.glide = GlideState::default();
+        self.cursor = 0.0;
+        Ok(())
     }
 
     fn can_passthrough(&self) -> bool {
@@ -144,6 +206,20 @@ impl GlideResampler {
             .for_each(|(previous, input)| {
                 previous[0] = input[frame];
             });
+        self.previous_valid = true;
+    }
+
+    fn seed_previous(&mut self, input: &[&[f32]]) {
+        if self.previous_valid {
+            return;
+        }
+        self.previous[..self.channels.get()]
+            .iter_mut()
+            .zip(&input[..self.channels.get()])
+            .for_each(|(previous, input)| {
+                previous[0] = input.first().copied().unwrap_or(0.0);
+            });
+        self.previous_valid = true;
     }
 }
 
@@ -199,6 +275,7 @@ impl Resampler for GlideResampler {
         if input_frames == 0 || output_capacity == 0 {
             return Ok(ResamplerProcess::new(0, 0));
         }
+        self.seed_previous(input);
 
         let produced = if self.can_passthrough() {
             let frames = input_frames.min(output_capacity);
@@ -217,6 +294,7 @@ impl Resampler for GlideResampler {
         for previous in &mut self.previous {
             previous[0] = 0.0;
         }
+        self.previous_valid = false;
         self.engine.reset();
         self.cursor = 0.0;
     }

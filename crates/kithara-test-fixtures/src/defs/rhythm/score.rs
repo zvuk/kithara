@@ -42,6 +42,29 @@ pub(super) enum Style {
     Breakbeat,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum ChannelLayout {
+    Stereo,
+    LeftOnly,
+    RightOnly,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum Origin {
+    Pickup,
+    Zero,
+}
+
+impl ChannelLayout {
+    const fn frame(self, stereo: [i16; 2]) -> [i16; 2] {
+        match self {
+            Self::Stereo => stereo,
+            Self::LeftOnly => [stereo[0], 0],
+            Self::RightOnly => [0, stereo[1]],
+        }
+    }
+}
+
 impl Style {
     const fn bass(self, beat: usize) -> Pitch {
         match self {
@@ -138,22 +161,63 @@ impl From<Truth> for BeatArtifact {
 }
 
 pub(super) fn wav(style: Style, control: Control) -> Vec<u8> {
-    let pcm = pcm(style, control);
+    wav_with_layout(style, control, ChannelLayout::Stereo)
+}
+
+pub(super) fn wav_with_layout(style: Style, control: Control, layout: ChannelLayout) -> Vec<u8> {
+    wav_with_layout_at_origin(style, control, layout, Origin::Pickup)
+}
+
+pub(super) fn wav_with_layout_at_origin(
+    style: Style,
+    control: Control,
+    layout: ChannelLayout,
+    origin: Origin,
+) -> Vec<u8> {
+    wav_with_layout_at_origin_for_frames(
+        style,
+        control,
+        layout,
+        origin,
+        Consts::TOTAL_FRAMES as u64,
+    )
+}
+
+pub(super) fn wav_with_layout_at_origin_for_frames(
+    style: Style,
+    control: Control,
+    layout: ChannelLayout,
+    origin: Origin,
+    total_frames: u64,
+) -> Vec<u8> {
+    let total_frames = usize::try_from(total_frames).expect("fixture frame count fits usize");
+    let pcm = pcm(style, control, layout, origin, total_frames);
     let mut bytes = header(Consts::SAMPLE_RATE, Consts::CHANNELS, Some(pcm.len()));
     bytes.extend(pcm);
     bytes
 }
 
 pub(super) fn truth(style: Style, control: Control) -> Truth {
+    truth_at_origin(style, control, Origin::Pickup)
+}
+
+pub(super) fn truth_at_origin(style: Style, control: Control, origin: Origin) -> Truth {
+    truth_at_origin_for_frames(style, control, origin, Consts::TOTAL_FRAMES as u64)
+}
+
+pub(super) fn truth_at_origin_for_frames(
+    style: Style,
+    control: Control,
+    origin: Origin,
+    total_frames: u64,
+) -> Truth {
+    let total_frames = usize::try_from(total_frames).expect("fixture frame count fits usize");
     let beat_frames = beat_frames(style);
-    let first = beat_frames + phase_frames(control);
+    let first = first_beat_frame(beat_frames, control, origin);
     let bar_phase = usize::from(matches!(control, Control::OneBeatBarLate));
     let mut beats = Vec::new();
     let mut downbeats = Vec::new();
-    for (beat, frame) in (first..Consts::TOTAL_FRAMES)
-        .step_by(beat_frames)
-        .enumerate()
-    {
+    for (beat, frame) in (first..total_frames).step_by(beat_frames).enumerate() {
         if matches!(control, Control::MissingBeat) && beat == Consts::MISSING_BEAT {
             continue;
         }
@@ -170,23 +234,29 @@ pub(super) fn truth(style: Style, control: Control) -> Truth {
     }
 }
 
-fn pcm(style: Style, control: Control) -> Vec<u8> {
+fn pcm(
+    style: Style,
+    control: Control,
+    layout: ChannelLayout,
+    origin: Origin,
+    total_frames: usize,
+) -> Vec<u8> {
     let beat_frames = beat_frames(style);
-    let first = beat_frames + phase_frames(control);
+    let first = first_beat_frame(beat_frames, control, origin);
     let bed = bed(style, beat_frames);
     let mut bytes =
-        Vec::with_capacity(Consts::TOTAL_FRAMES * usize::from(Consts::CHANNELS) * size_of::<i16>());
+        Vec::with_capacity(total_frames * usize::from(Consts::CHANNELS) * size_of::<i16>());
 
-    for frame in 0..Consts::TOTAL_FRAMES {
+    for frame in 0..total_frames {
         let Some(since_first) = frame.checked_sub(first) else {
-            push_frame(&mut bytes, [0, 0]);
+            push_frame(&mut bytes, layout.frame([0, 0]));
             continue;
         };
         let beat = since_first / beat_frames;
         let within = since_first % beat_frames;
         let missing = matches!(control, Control::MissingBeat) && beat == Consts::MISSING_BEAT;
         if missing {
-            push_frame(&mut bytes, [0, 0]);
+            push_frame(&mut bytes, layout.frame([0, 0]));
             continue;
         }
 
@@ -198,7 +268,7 @@ fn pcm(style: Style, control: Control) -> Vec<u8> {
             } else {
                 22_000
             };
-            push_frame(&mut bytes, [marker, marker]);
+            push_frame(&mut bytes, layout.frame([marker, marker]));
             continue;
         }
 
@@ -214,7 +284,7 @@ fn pcm(style: Style, control: Control) -> Vec<u8> {
             .map_or([0, 0], |samples| {
                 [pcm_sample(samples[0]), pcm_sample(samples[1])]
             });
-        push_frame(&mut bytes, frame);
+        push_frame(&mut bytes, layout.frame(frame));
     }
     bytes
 }
@@ -376,6 +446,14 @@ fn pcm_sample(sample: f32) -> i16 {
 fn beat_frames(style: Style) -> usize {
     cast((f64::from(Consts::SAMPLE_RATE) * Consts::SECONDS_PER_MINUTE / style.bpm()).round())
         .expect("invariant: a rhythm beat period fits usize")
+}
+
+const fn first_beat_frame(beat_frames: usize, control: Control, origin: Origin) -> usize {
+    let pickup = match origin {
+        Origin::Pickup => beat_frames,
+        Origin::Zero => 0,
+    };
+    pickup + phase_frames(control)
 }
 
 const fn phase_frames(control: Control) -> usize {

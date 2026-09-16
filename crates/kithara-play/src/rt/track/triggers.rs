@@ -21,7 +21,7 @@ impl TrackTriggers {
         let block_frames_f32: f32 = input.block_frames.as_();
         let sr_f32: f32 = input.sample_rate.as_();
         let block_seconds = block_frames_f32 / sr_f32;
-        let fade_threshold = input.fade_duration + block_seconds;
+        let fade_threshold = input.fade_duration;
         let prefetch_threshold = input.prefetch_duration.max(input.fade_duration) + block_seconds;
 
         if let Some(frames_until_eof) = input.frames_until_eof {
@@ -30,7 +30,7 @@ impl TrackTriggers {
             if remaining <= prefetch_threshold {
                 self.emit_track_requested(notification_tx);
             }
-            if remaining <= fade_threshold {
+            if remaining <= fade_threshold + block_seconds {
                 self.emit_handover_requested(notification_tx, track);
             }
             return;

@@ -8,8 +8,8 @@ use firewheel::{
     dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON, param::smoother::SmootherConfig,
 };
 use kithara_bufpool::PoolRegion;
-use kithara_platform::CancelToken;
-use kithara_warp::BeatGridId;
+use kithara_platform::{CancelToken, sync::Arc};
+use kithara_warp::{BeatGridId, DEFAULT_RATE_SMOOTHING, StretchControls};
 
 use crate::{
     effects::eq::{EqBandConfig, generate_log_spaced_bands},
@@ -26,6 +26,12 @@ pub const DEFAULT_GATE_SMOOTHING: SmootherConfig = SmootherConfig {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct EngineConfig<S> {
+    /// Player-owned live multiplier sampled by the RT render pass.
+    #[builder(default = StretchControls::new(1.0))]
+    pub(crate) stretch: Arc<StretchControls>,
+    /// Plain multiplier smoothing on the output clock.
+    #[builder(default = DEFAULT_RATE_SMOOTHING)]
+    pub(crate) rate_smoothing: SmootherConfig,
     /// Stable synchronization identity of the owning player.
     pub(crate) grid_id: BeatGridId,
     /// Initial output sample rate supplied by the owning player session.
@@ -66,6 +72,8 @@ pub struct EngineConfig<S> {
 impl<S> Clone for EngineConfig<S> {
     fn clone(&self) -> Self {
         Self {
+            stretch: Arc::clone(&self.stretch),
+            rate_smoothing: self.rate_smoothing,
             response_budget_frames: self.response_budget_frames,
             render_quantum_frames: self.render_quantum_frames,
             grid_id: self.grid_id,

@@ -1,6 +1,9 @@
 use std::num::NonZeroUsize;
 
 use bon::Builder;
+use firewheel_core::{
+    dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON, param::smoother::SmootherConfig,
+};
 use kithara_derive::Patch;
 use kithara_platform::sync::Arc;
 #[cfg(all(
@@ -11,10 +14,31 @@ use kithara_stretch::{ElasticBackendConfig, ElasticBackendConfigPatch};
 
 use crate::StretchControls;
 
-const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
-    Some(frames) => frames,
-    None => unreachable!(),
-};
+struct Defaults;
+
+impl Defaults {
+    const ACTIVATION_BLEND_FRAMES: NonZeroUsize = match NonZeroUsize::new(40) {
+        Some(frames) => frames,
+        None => unreachable!(),
+    };
+    const RATE_SMOOTHING: SmootherConfig = SmootherConfig {
+        smooth_seconds: 0.02,
+        settle_epsilon: DEFAULT_SETTLE_EPSILON,
+    };
+    const SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
+        Some(frames) => frames,
+        None => unreachable!(),
+    };
+}
+
+/// Smoothing of the player's plain playback-rate multiplier.
+pub const DEFAULT_RATE_SMOOTHING: SmootherConfig = Defaults::RATE_SMOOTHING;
+
+/// Time constant a group's tempo approaches a new target over, in seconds.
+///
+/// A knob turned quickly lands every value it passes through; this is how fast
+/// the group's beat line follows them.
+pub const DEFAULT_TEMPO_SMOOTHING_SECONDS: f64 = 0.005;
 
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
@@ -24,6 +48,10 @@ const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) 
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct WarpConfig {
+    /// Output frames blended when a new region plan activates.
+    #[builder(default = Defaults::ACTIVATION_BLEND_FRAMES)]
+    #[field(get, copy)]
+    activation_blend_frames: NonZeroUsize,
     /// Live temporal controls consumed by the resident Warp lane. Not a
     /// document key: this is the handle the UI and the deck already share, so
     /// a document naming a stretch ratio would be overwritten by the first
@@ -47,15 +75,20 @@ pub struct WarpConfig {
     #[patch(nested)]
     backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
-    #[builder(default = DEFAULT_SOURCE_BLOCK_FRAMES)]
+    #[builder(default = Defaults::SOURCE_BLOCK_FRAMES)]
     #[field(get, copy)]
     source_block_frames: NonZeroUsize,
-    /// Output-frame window used to smooth live rate changes.
-    #[builder(default = NonZeroUsize::MIN)]
+    /// Plain multiplier smoothing in the player's RT render pass.
+    /// Beat-derived ratios are not smoothed.
+    #[builder(default = DEFAULT_RATE_SMOOTHING)]
     #[field(get, copy)]
-    rate_smooth_frames: NonZeroUsize,
-    /// Optional output-frame cap between samples of live temporal controls.
-    /// Without a cap, Warp consumes the complete source span accepted by its backend.
+    rate_smoothing: SmootherConfig,
+    /// Seconds a sync group's tempo approaches a new target over.
+    #[builder(default = DEFAULT_TEMPO_SMOOTHING_SECONDS)]
+    #[field(get, copy)]
+    tempo_smoothing_seconds: f64,
+    /// Output-frame cap between samples of live temporal controls.
+    /// Without a cap, standalone Warp consumes the complete source span.
     #[field(get, copy)]
     render_quantum_frames: Option<NonZeroUsize>,
 }
@@ -84,6 +117,21 @@ mod tests {
             config.render_quantum_frames().map(NonZeroUsize::get),
             expected
         );
+    }
+
+    #[kithara::test]
+    fn activation_blend_is_configurable_in_output_frames() {
+        let configured = NonZeroUsize::new(64).expect("fixture blend is non-zero");
+        let default = WarpConfig::builder().build();
+        let custom = WarpConfig::builder()
+            .activation_blend_frames(configured)
+            .build();
+
+        assert_eq!(
+            default.activation_blend_frames(),
+            Defaults::ACTIVATION_BLEND_FRAMES
+        );
+        assert_eq!(custom.activation_blend_frames(), configured);
     }
 
     /// Backend geometry merges one engine at a time: a patch naming only

@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
@@ -6,7 +6,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 
 use super::{ChunkOutcome, ReadOutcome, SeekOutcome};
-use crate::{ConsumerWakeMode, producer::PreloadGate};
+use crate::{ConsumerWakeMode, SourceEnd, producer::PreloadGate};
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -141,6 +141,40 @@ pub trait SeekBegin: Send + Sync {
     /// Begin a seek to `position` and report where it will land. Blocking by design — never call
     /// this from an audio callback.
     fn begin(&self, position: Duration) -> SeekOutcome;
+
+    /// Prepare producer output immediately while leaving consumer presentation pending.
+    fn begin_prepared(&self, position: Duration) -> ScheduledSeek;
+
+    /// Prepare decoder output for a later explicit presentation boundary.
+    fn begin_scheduled(&self, position: Duration) -> ScheduledSeek;
+}
+
+/// Decoder seek prepared off RT and awaiting presentation by the consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScheduledSeek {
+    pub epoch: u64,
+    pub outcome: SeekOutcome,
+}
+
+/// Result of presenting a previously prepared decoder seek.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeekPresentation {
+    Presented,
+    Current,
+    Superseded,
+}
+
+/// Result of asking a revisioned reader to make newer PCM presentable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevisionFloorStatus {
+    /// The current PCM already satisfies the requested revision.
+    Current,
+    /// The reader replaced older PCM with a prepared revision.
+    Switched,
+    /// A future seek epoch has enough PCM and can now be presented.
+    ReadyForSeekPresentation,
+    /// The requested replacement is not prepared yet; existing PCM is intact.
+    WaitingForReplacement,
 }
 
 /// Decoded-audio control operations and runtime knobs.
@@ -197,9 +231,30 @@ pub trait AudioControl {
     /// Used for dynamic updates when the host sample rate changes at runtime.
     fn set_host_sample_rate(&self, _sample_rate: NonZeroU32) {}
 
+    /// Replace buffered PCM older than `revision` once eligible PCM is ready.
+    /// Reports whether the revision was already current, was switched now, or
+    /// is still waiting for replacement PCM.
+    /// Readers without a revisioned producer keep the default no-op.
+    fn set_render_revision_floor(
+        &mut self,
+        _revision: u64,
+        _required_frames: NonZeroUsize,
+        _presented_source: Option<SourceEnd>,
+    ) -> RevisionFloorStatus {
+        RevisionFloorStatus::WaitingForReplacement
+    }
+
     /// Adopt a seek epoch begun through [`seek_handle`](Self::seek_handle). Must be lock-free —
     /// this is the only half an audio callback may run.
     fn sync_seek(&mut self) {}
+
+    /// Keep current PCM presentable until the begun seek epoch has queued output.
+    fn defer_seek_until_pcm(&mut self) {}
+
+    /// Make one prepared seek epoch visible to this reader and adopt it.
+    fn present_seek(&mut self, _epoch: u64) -> SeekPresentation {
+        SeekPresentation::Superseded
+    }
 }
 
 /// Primary interface for reading and controlling decoded audio.

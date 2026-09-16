@@ -4,7 +4,7 @@ use kithara_bufpool::HasPool;
 use crate::backends::BungeeElastic;
 #[cfg(feature = "stretch-signalsmith")]
 use crate::backends::SignalsmithElastic;
-use crate::{ElasticConfig, ElasticEngine, ElasticError, StretchKind};
+use crate::{ElasticConfig, ElasticEngine, ElasticError, StretchKind, backends::VarispeedElastic};
 
 /// Prepares the selected exact-span engine.
 ///
@@ -24,4 +24,17 @@ where
             BungeeElastic::prepare(config).map(|engine| Box::new(engine) as Box<dyn ElasticEngine>)
         }
     }
+}
+
+/// Prepares the exact-span varispeed engine used when pitch follows transport.
+///
+/// # Errors
+/// Returns [`ElasticError`] when the configured shape cannot be prepared.
+pub fn build_varispeed_engine<S>(
+    config: ElasticConfig<S>,
+) -> Result<Box<dyn ElasticEngine>, ElasticError>
+where
+    S: HasPool<f32>,
+{
+    VarispeedElastic::prepare(config).map(|engine| Box::new(engine) as Box<dyn ElasticEngine>)
 }

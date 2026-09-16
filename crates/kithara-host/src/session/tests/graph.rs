@@ -8,13 +8,13 @@ use kithara_platform::sync::Arc;
 use kithara_play::player::PlayerControlSource;
 use kithara_play::{
     GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
-    player::PlayerMember,
+    effects::LimiterConfig, player::PlayerMember,
 };
 #[cfg(test)]
 use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::{
-    BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
-    TopologyOperation,
+    BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncMode,
+    SyncOperation, TopologyOperation,
 };
 
 use super::super::{
@@ -114,9 +114,17 @@ where
         sample_rate,
         SessionEpoch::new(0),
         SyncMemberKind::Group,
+        SyncMode::LocalSync,
     );
     let root_view = RootView::new(&root, sample_rate);
-    SessionState::new(root, root_view, sample_rate, None, start_stream_fn)
+    SessionState::new(
+        root,
+        root_view,
+        sample_rate,
+        None,
+        LimiterConfig::default(),
+        start_stream_fn,
+    )
 }
 
 #[cfg(test)]

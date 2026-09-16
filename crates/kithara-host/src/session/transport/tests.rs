@@ -825,6 +825,180 @@ fn repeated_route_reset_preserves_the_beat_until_the_new_axis_renders() {
 }
 
 #[kithara::test]
+fn a_later_tempo_intent_replaces_the_pending_one_without_a_rejection() {
+    let (mut processor, mut extra, mut output, active) = active_harness();
+    let third_revision = second_revision()
+        .checked_next()
+        .expect("invariant: third transport revision exists");
+    let boundary = SessionFrame::new(block_frame(2));
+    let stamp = |tempo, revision| {
+        TransportCommitStamp::new(
+            Some(active),
+            commit(tempo, true, revision),
+            boundary,
+            sample_rate(),
+        )
+    };
+
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(1)),
+        &mut extra,
+        Some(stage_event(stamp(122.0, second_revision()))),
+        Some(stage_event(stamp(124.0, third_revision))),
+    );
+    assert_eq!(
+        observation(&mut output).completion(),
+        None,
+        "the replaced intent is not a rejection"
+    );
+
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(2)),
+        &mut extra,
+        Some(apply_event(second_revision())),
+        Some(apply_event(third_revision)),
+    );
+    assert_eq!(
+        observation(&mut output).completion(),
+        Some(TransportCommitResult::Applied(third_revision))
+    );
+    assert_eq!(
+        snapshot(&mut output).tempo(),
+        Tempo::new(124.0).expect("invariant: test tempo is valid")
+    );
+}
+
+#[kithara::test]
+fn an_intent_staged_on_the_commit_it_replaces_lands_after_that_commit_rendered() {
+    let (mut processor, mut extra, mut output, active) = active_harness();
+    let third_revision = second_revision()
+        .checked_next()
+        .expect("invariant: third transport revision exists");
+    let replaced = TransportCommitStamp::new(
+        Some(active),
+        commit(122.0, true, second_revision()),
+        SessionFrame::new(block_frame(2)),
+        sample_rate(),
+    );
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(1)),
+        &mut extra,
+        Some(stage_event(replaced)),
+        None,
+    );
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(2)),
+        &mut extra,
+        Some(apply_event(second_revision())),
+        None,
+    );
+    assert_eq!(
+        observation(&mut output).completion(),
+        Some(TransportCommitResult::Applied(second_revision()))
+    );
+
+    let latest = TransportCommitStamp::new(
+        Some(active),
+        commit(124.0, true, third_revision),
+        SessionFrame::new(block_frame(4)),
+        sample_rate(),
+    );
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(3)),
+        &mut extra,
+        Some(stage_event(latest)),
+        None,
+    );
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(4)),
+        &mut extra,
+        Some(apply_event(third_revision)),
+        None,
+    );
+
+    assert_eq!(
+        observation(&mut output).completion(),
+        Some(TransportCommitResult::Applied(third_revision)),
+        "the latest intent lands even though the control saw the older commit"
+    );
+    assert_eq!(
+        snapshot(&mut output).tempo(),
+        Tempo::new(124.0).expect("invariant: test tempo is valid")
+    );
+}
+
+#[kithara::test]
+fn a_seek_carried_by_a_late_intent_does_not_jump_back_after_it_rendered() {
+    let (mut processor, mut extra, mut output, active) = active_harness();
+    let third_revision = second_revision()
+        .checked_next()
+        .expect("invariant: third transport revision exists");
+    let target = SessionBeat::new(64.0).expect("invariant: fixture beat is valid");
+    let tempo = |bpm| Tempo::new(bpm).expect("invariant: test tempo is valid");
+    let seek = TransportCommitStamp::new(
+        Some(active),
+        SessionTransportCommit::relocate(tempo(120.0), true, second_revision(), target),
+        SessionFrame::new(block_frame(2)),
+        sample_rate(),
+    );
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(1)),
+        &mut extra,
+        Some(stage_event(seek)),
+        None,
+    );
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(2)),
+        &mut extra,
+        Some(apply_event(second_revision())),
+        None,
+    );
+    let sought = snapshot(&mut output).position();
+
+    let late = TransportCommitStamp::new(
+        Some(active),
+        SessionTransportCommit::relocate(tempo(124.0), true, third_revision, target),
+        SessionFrame::new(block_frame(4)),
+        sample_rate(),
+    );
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(3)),
+        &mut extra,
+        Some(stage_event(late)),
+        None,
+    );
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(4)),
+        &mut extra,
+        Some(apply_event(third_revision)),
+        None,
+    );
+
+    assert_eq!(
+        observation(&mut output).completion(),
+        Some(TransportCommitResult::Applied(third_revision))
+    );
+    let landed = snapshot(&mut output);
+    assert_eq!(landed.tempo(), tempo(124.0));
+    let one_block = f64::from(sought) - f64::from(target);
+    assert!(
+        f64::from(landed.position()) - f64::from(sought) >= one_block,
+        "the rendered seek is not repeated: {:?} after {sought:?}",
+        landed.position()
+    );
+}
+
+#[kithara::test]
 fn duplicate_stage_in_one_block_is_rejected() {
     let (mut extra, _output) = proc_extra();
     let active = commit(120.0, true, TransportRevision::first());

@@ -50,6 +50,8 @@ impl Transition {
 pub(super) struct PendingSelect {
     pub(super) id: TrackId,
     pub(super) transition: Transition,
+    pub(super) reason: crate::event::AdvanceReason,
+    pub(super) autoplay: bool,
 }
 
 /// Crossfade-arm coordination state. Replaces the `u64::MAX` sentinel
@@ -400,11 +402,15 @@ mod tests {
         let phase = SelectPhase::Pending(PendingSelect {
             id: TrackId(5),
             transition: Transition::None,
+            reason: crate::event::AdvanceReason::UserSelect,
+            autoplay: false,
         });
         match phase {
             SelectPhase::Pending(p) => {
                 assert_eq!(p.id, TrackId(5));
                 assert_eq!(p.transition, Transition::None);
+                assert_eq!(p.reason, crate::event::AdvanceReason::UserSelect);
+                assert!(!p.autoplay);
             }
             SelectPhase::Idle => panic!("expected Pending"),
         }

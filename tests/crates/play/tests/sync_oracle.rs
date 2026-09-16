@@ -1,5 +1,8 @@
 use kithara_integration_tests::{
-    cochlea::{marked_synchronization_failures, synchronization_failures},
+    cochlea::{
+        host_beat_alignment_failures, marked_rhythm_markers, marked_synchronization_failures,
+        synchronization_failures,
+    },
     kithara,
 };
 use kithara_test_fixtures::{
@@ -40,7 +43,7 @@ fn rhythm_controls(style: &str) -> [Vec<f32>; 4] {
     .map(|control| rhythm(style, control))
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 #[case::ambient_dub(rhythm_ambient_dub_62(), "ambient_dub_62", 62.0)]
 #[case::trip_hop(rhythm_trip_hop_74(), "trip_hop_74", 74.0)]
 #[case::downtempo(rhythm_downtempo_96(), "downtempo_96", 96.0)]
@@ -97,7 +100,7 @@ fn rich_rhythmic_oracle_covers_style_tempo_and_negative_controls(
     );
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 fn static_rhythmic_oracle_accepts_aligned_stems_and_rejects_one_frame_phase_error(
     deck_a: Vec<f32>,
     deck_b: Vec<f32>,
@@ -146,7 +149,7 @@ fn static_rhythmic_oracle_accepts_aligned_stems_and_rejects_one_frame_phase_erro
     );
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 #[case::missing_beat(
     Some(deck_b_missing_beat()),
     "missing static beat",
@@ -191,6 +194,100 @@ fn static_rhythmic_oracle_rejects_invalid_stems_for_the_expected_reason(
     } else {
         assert_eq!(failure, expected);
     }
+}
+
+#[kithara::test(native)]
+#[case::sustained_tone(sustained_tone(), "sustained tone")]
+#[case::white_noise(white_noise(), "white noise")]
+fn estimate_oracle_rejects_a_track_without_rhythm(#[case] track: Vec<f32>, #[case] label: &str) {
+    let failures = synchronization_failures(
+        label,
+        &[track.as_slice()],
+        CHANNELS,
+        SAMPLE_RATE,
+        TARGET_BPM,
+    );
+
+    assert_eq!(
+        failures,
+        [format!("{label}: track 0 has no exact beat markers")],
+        "a track with no rhythmic events must fail for that reason and no other",
+    );
+}
+
+/// Frames of one short full-scale click, the event the leading-cluster rule reasons about.
+const CLICK_FRAMES: usize = 96;
+/// One beat at `TARGET_BPM`.
+const BEAT_FRAMES: usize = 24_000;
+
+/// Interleaved stereo clicks starting at `first`, one per beat, over two seconds.
+fn clicks_from(first: usize) -> Vec<f32> {
+    let frames = usize::try_from(SAMPLE_RATE).expect("sample rate fits usize") * 2;
+    let mut samples = vec![0.0; frames * usize::from(CHANNELS)];
+    for start in (first..frames).step_by(BEAT_FRAMES) {
+        for frame in start..(start + CLICK_FRAMES).min(frames) {
+            samples[frame * usize::from(CHANNELS)..][..usize::from(CHANNELS)].fill(0.9);
+        }
+    }
+    samples
+}
+
+#[kithara::test(native)]
+fn a_capture_that_opens_inside_an_event_does_not_read_its_tail_as_a_beat() {
+    let mut track = clicks_from(BEAT_FRAMES);
+    track[..CLICK_FRAMES / 2 * usize::from(CHANNELS)].fill(0.9);
+
+    let (beats, _) = marked_rhythm_markers(&track, CHANNELS, SAMPLE_RATE);
+
+    assert_eq!(beats.first(), Some(&BEAT_FRAMES));
+}
+
+#[kithara::test(native)]
+fn one_exact_zero_frame_before_an_opening_peak_is_not_silence() {
+    let body_frames = CLICK_FRAMES * 2;
+    let mut track = clicks_from(BEAT_FRAMES);
+    track[..body_frames * usize::from(CHANNELS)].fill(0.3);
+    track[CLICK_FRAMES * usize::from(CHANNELS)..][..usize::from(CHANNELS)].fill(0.0);
+    track[body_frames * usize::from(CHANNELS)..][..CLICK_FRAMES / 2 * usize::from(CHANNELS)]
+        .fill(0.9);
+
+    let (beats, _) = marked_rhythm_markers(&track, CHANNELS, SAMPLE_RATE);
+
+    assert_eq!(beats.first(), Some(&BEAT_FRAMES));
+}
+
+#[kithara::test(native)]
+fn an_onset_after_silence_near_the_start_is_kept_as_a_beat() {
+    let onset = usize::try_from(SAMPLE_RATE).expect("sample rate fits usize") / 20;
+
+    let (beats, _) = marked_rhythm_markers(&clicks_from(onset), CHANNELS, SAMPLE_RATE);
+
+    assert_eq!(beats.first(), Some(&onset));
+}
+
+fn sustained_tone() -> Vec<f32> {
+    let frames = SAMPLE_RATE as usize * 10;
+    (0..frames)
+        .flat_map(|frame| {
+            let phase = std::f32::consts::TAU * 440.0 * frame as f32 / SAMPLE_RATE as f32;
+            let sample = phase.sin() * 0.5;
+            [sample, sample]
+        })
+        .collect()
+}
+
+fn white_noise() -> Vec<f32> {
+    let frames = SAMPLE_RATE as usize * 10;
+    let mut state = 0x9E37_79B9_u32;
+    (0..frames)
+        .flat_map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let sample = (state as f32 / u32::MAX as f32).mul_add(1.0, -0.5);
+            [sample, sample]
+        })
+        .collect()
 }
 
 #[kithara::fixture]
@@ -256,4 +353,34 @@ fn rhythm_techno_132() -> [Vec<f32>; 4] {
 #[kithara::fixture]
 fn rhythm_breakbeat_140() -> [Vec<f32>; 4] {
     rhythm_controls("breakbeat_140")
+}
+
+#[kithara::test(native)]
+fn host_beat_oracle_rejects_a_deck_one_frame_behind_the_host() {
+    let host_beats = [BEAT_FRAMES, BEAT_FRAMES * 2, BEAT_FRAMES * 3];
+
+    assert!(
+        host_beat_alignment_failures(
+            "on beat",
+            &clicks_from(BEAT_FRAMES),
+            CHANNELS,
+            SAMPLE_RATE,
+            &host_beats,
+        )
+        .is_empty(),
+        "clicks on the Host beats must pass",
+    );
+    assert_eq!(
+        host_beat_alignment_failures(
+            "late",
+            &clicks_from(BEAT_FRAMES + 1),
+            CHANNELS,
+            SAMPLE_RATE,
+            &host_beats,
+        ),
+        host_beats.map(|beat| format!(
+            "late: beat marker at frame {} is +1 frames from Host beat at frame {beat}",
+            beat + 1,
+        )),
+    );
 }

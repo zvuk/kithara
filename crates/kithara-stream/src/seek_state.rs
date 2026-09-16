@@ -43,9 +43,31 @@ pub trait SeekObserve: Send + Sync {
 /// Mutating seek coordination — `FLUSH_START` / `FLUSH_STOP` protocol.
 pub trait SeekControl: Send + Sync {
     fn begin(&self, target: Duration) -> u64;
+    fn begin_scheduled(&self, target: Duration) -> u64;
+    fn activate_scheduled(&self) -> ScheduledSeekActivation;
     fn clear_pending(&self, epoch: u64);
     fn complete(&self, epoch: u64);
     fn mark_pending(&self, epoch: u64);
+    fn scheduled_epoch(&self) -> Option<u64>;
+}
+
+/// Result of publishing a previously registered scheduled seek.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScheduledSeekActivation {
+    Activated { epoch: u64 },
+    NoRequest,
+}
+
+#[derive(Clone, Copy)]
+struct ScheduledSeekRequest {
+    epoch: u64,
+    target: Duration,
+}
+
+#[derive(Default)]
+struct SeekCoordination {
+    next_epoch: u64,
+    scheduled: Option<ScheduledSeekRequest>,
 }
 
 /// Activity flag — whether the audio FSM has this timeline as active decode target.
@@ -76,7 +98,7 @@ pub struct SeekState {
     flags: AtomicU8,
     /// Serializes seek-epoch publication with off-RT commits that must belong
     /// to one exact epoch. Observers remain lock-free.
-    epoch_commit: Mutex<()>,
+    coordination: Mutex<SeekCoordination>,
 }
 
 impl fmt::Debug for SeekState {
@@ -105,7 +127,7 @@ impl SeekState {
     where
         F: FnOnce() -> T,
     {
-        let _guard = self.epoch_commit.lock();
+        let _guard = self.coordination.lock();
         (self.seek_epoch.load(Ordering::Acquire) == epoch).then(commit)
     }
 
@@ -133,7 +155,7 @@ impl SeekState {
 impl Default for SeekState {
     fn default() -> Self {
         Self {
-            epoch_commit: Mutex::new(()),
+            coordination: Mutex::new(SeekCoordination::default()),
             seek_epoch: Arc::new(AtomicU64::new(0)),
             seek_target_ns: AtomicU64::new(Self::NO_SEEK_TARGET),
             pending_seek_epoch: AtomicU64::new(Self::NO_PENDING_SEEK),
@@ -209,25 +231,36 @@ impl SeekControl for SeekState {
     /// Panics if `target` overflows `u64::MAX` nanoseconds (≈584 years —
     /// not reachable for any realistic seek target).
     fn begin(&self, target: Duration) -> u64 {
-        let _guard = self.epoch_commit.lock();
-        let nanos = u64::try_from(target.as_nanos())
-            .expect("BUG: initiate_seek target.as_nanos() fits in u64 for any realistic Duration");
-        let epoch = self.seek_epoch.fetch_add(1, Ordering::SeqCst) + 1;
-        self.seek_target_ns.store(nanos, Ordering::Release);
-        // NOTE: do NOT pre-set `committed_position` to `target` here.
-        self.flags
-            .fetch_or(TimelineFlags::SEEK_PENDING.bits(), Ordering::Release);
-        self.flags
-            .fetch_or(TimelineFlags::FLUSHING.bits(), Ordering::Release);
-        self.seek_preempt_latch.store(true, Ordering::Release);
-        self.decoder_node_seek_latch.store(true, Ordering::Release);
+        let mut coordination = self.coordination.lock();
+        coordination.next_epoch = coordination.next_epoch.wrapping_add(1);
+        coordination.scheduled = None;
+        let epoch = coordination.next_epoch;
+        drop(coordination);
+        self.publish_seek(target, epoch);
         epoch
     }
 
-    /// Clear seek-pending flag after the decoder successfully applied the seek.
-    ///
-    /// Only clears if `epoch` matches the current seek epoch, preventing a
-    /// stale completion from clearing a newer seek.
+    fn begin_scheduled(&self, target: Duration) -> u64 {
+        let mut coordination = self.coordination.lock();
+        coordination.next_epoch = coordination.next_epoch.wrapping_add(1);
+        let epoch = coordination.next_epoch;
+        coordination.scheduled = Some(ScheduledSeekRequest { epoch, target });
+        epoch
+    }
+
+    fn activate_scheduled(&self) -> ScheduledSeekActivation {
+        let mut coordination = self.coordination.lock();
+        let Some(request) = coordination.scheduled else {
+            return ScheduledSeekActivation::NoRequest;
+        };
+        coordination.scheduled = None;
+        drop(coordination);
+        self.publish_seek(request.target, request.epoch);
+        ScheduledSeekActivation::Activated {
+            epoch: request.epoch,
+        }
+    }
+
     fn clear_pending(&self, epoch: u64) {
         if self.seek_epoch.load(Ordering::Acquire) == epoch {
             self.flags
@@ -235,19 +268,10 @@ impl SeekControl for SeekState {
         }
     }
 
-    /// Complete a seek (`FLUSH_STOP`).
-    ///
-    /// Clears flushing flag only if `epoch` is still current.
-    /// A superseding `begin` will have incremented the epoch,
-    /// preventing an older completion from clearing the new seek.
-    ///
-    /// Uses a double-check to guard against the race where a new
-    /// `begin` fires between our epoch load and flushing store.
     fn complete(&self, epoch: u64) {
         if self.seek_epoch.load(Ordering::SeqCst) != epoch {
             return;
         }
-        // NOTE: we do NOT clear seek_target_ns here.
         self.flags
             .fetch_and(!TimelineFlags::FLUSHING.bits(), Ordering::SeqCst);
         if self.seek_epoch.load(Ordering::SeqCst) != epoch {
@@ -258,6 +282,29 @@ impl SeekControl for SeekState {
 
     fn mark_pending(&self, epoch: u64) {
         self.pending_seek_epoch.store(epoch, Ordering::Release);
+    }
+
+    fn scheduled_epoch(&self) -> Option<u64> {
+        self.coordination
+            .lock()
+            .scheduled
+            .map(|request| request.epoch)
+    }
+}
+
+impl SeekState {
+    fn publish_seek(&self, target: Duration, epoch: u64) {
+        let nanos = u64::try_from(target.as_nanos())
+            .expect("BUG: initiate_seek target.as_nanos() fits in u64 for any realistic Duration");
+        self.seek_epoch.store(epoch, Ordering::SeqCst);
+        self.seek_target_ns.store(nanos, Ordering::Release);
+        // NOTE: do NOT pre-set `committed_position` to `target` here.
+        self.flags
+            .fetch_or(TimelineFlags::SEEK_PENDING.bits(), Ordering::Release);
+        self.flags
+            .fetch_or(TimelineFlags::FLUSHING.bits(), Ordering::Release);
+        self.seek_preempt_latch.store(true, Ordering::Release);
+        self.decoder_node_seek_latch.store(true, Ordering::Release);
     }
 }
 
@@ -310,6 +357,44 @@ mod tests {
         assert_eq!(e2, 2);
         assert_eq!(e3, 3);
         assert_eq!(s.epoch(), 3);
+    }
+
+    #[kithara::test]
+    fn scheduled_seek_does_not_publish_until_activation() {
+        let state = state();
+        let target = Duration::from_secs(5);
+
+        let epoch = state.begin_scheduled(target);
+
+        assert_eq!(state.epoch(), 0);
+        assert_eq!(state.target(), None);
+        assert!(!state.is_flushing());
+        assert!(!state.is_pending());
+        assert!(!state.take_decoder_seek());
+        assert_eq!(
+            state.activate_scheduled(),
+            ScheduledSeekActivation::Activated { epoch }
+        );
+        assert_eq!(state.epoch(), epoch);
+        assert_eq!(state.target(), Some(target));
+        assert!(state.is_flushing());
+        assert!(state.is_pending());
+        assert!(state.take_decoder_seek());
+    }
+
+    #[kithara::test]
+    fn newer_seek_supersedes_a_registered_scheduled_seek() {
+        let state = state();
+        let scheduled = state.begin_scheduled(Duration::from_secs(5));
+        let immediate = state.begin(Duration::from_secs(7));
+
+        assert!(immediate > scheduled);
+        assert_eq!(
+            state.activate_scheduled(),
+            ScheduledSeekActivation::NoRequest
+        );
+        assert_eq!(state.epoch(), immediate);
+        assert_eq!(state.target(), Some(Duration::from_secs(7)));
     }
 
     #[kithara::test]

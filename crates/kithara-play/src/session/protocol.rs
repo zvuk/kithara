@@ -3,8 +3,12 @@ mod wire {
 
     use firewheel::param::smoother::SmootherConfig;
     use kithara_bufpool::PoolRegion;
-    use kithara_events::EventBus;
-    use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
+    use kithara_events::{EventBus, TrackId};
+    use kithara_platform::sync::Arc;
+    use kithara_warp::{
+        BeatGridId, BeatGridIdAllocationError, BeatGridState, SegmentSet, StretchControls,
+        SyncAdmission, SyncError,
+    };
 
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
@@ -61,15 +65,6 @@ mod wire {
         TransportFrameExhausted,
         #[error("session transport revision is exhausted")]
         TransportRevisionExhausted,
-        #[error(
-            "session output requires {required_frames} response frames for block {max_block_frames} and quantum {render_quantum_frames}, exceeding budget {budget_frames}"
-        )]
-        ResponseBudgetExceeded {
-            max_block_frames: u32,
-            render_quantum_frames: usize,
-            required_frames: usize,
-            budget_frames: usize,
-        },
         #[error("session output response geometry overflowed")]
         ResponseGeometryOverflow,
         #[error(transparent)]
@@ -96,7 +91,6 @@ mod wire {
             master_volume: f32,
             player_id: PlayerId,
             render_quantum_frames: Option<NonZeroUsize>,
-            response_budget_frames: NonZeroUsize,
             sample_rate: u32,
         },
         StopPlayer {
@@ -104,6 +98,8 @@ mod wire {
         },
         AllocateSlot {
             player_id: PlayerId,
+            stretch: Arc<StretchControls>,
+            rate_smoothing: SmootherConfig,
         },
         ReleaseSlot {
             player_id: PlayerId,
@@ -135,6 +131,12 @@ mod wire {
         },
         SetSessionTempo {
             tempo: Tempo,
+        },
+        PublishTrackGrid {
+            deck: BeatGridId,
+            item: TrackId,
+            segments: SegmentSet,
+            state: BeatGridState,
         },
         SetSessionPlaying {
             playing: bool,
@@ -175,9 +177,10 @@ mod wire {
         Ok,
         PlayerRegistered(RegisteredPlayer),
         SessionTransport(SessionTransportSnapshot),
-        SlotAllocated(AllocatedSlot),
+        SlotAllocated(Box<AllocatedSlot>),
         SampleRate(SessionSampleRate),
         StreamShape(Option<StreamShape>),
+        SyncAdmission(SyncAdmission),
         Err(SessionError),
     }
 
@@ -235,7 +238,7 @@ mod handle {
         maybe_send::{MaybeSend, MaybeSync},
         sync::{Arc, Mutex},
     };
-    use kithara_warp::BeatGridId;
+    use kithara_warp::{BeatGridId, StretchControls};
 
     use super::wire::{
         AllocatedSlot, Cmd, PlayerId, PlayerLevel, RegisteredPlayer, Reply, SessionSampleRate,
@@ -349,9 +352,18 @@ mod handle {
             }))
         }
 
-        pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
-            match self.exec_ok(Cmd::AllocateSlot { player_id })? {
-                Reply::SlotAllocated(allocated) => Ok(allocated),
+        pub fn allocate_slot(
+            &self,
+            player_id: PlayerId,
+            stretch: Arc<StretchControls>,
+            rate_smoothing: SmootherConfig,
+        ) -> Result<AllocatedSlot, PlayError> {
+            match self.exec_ok(Cmd::AllocateSlot {
+                player_id,
+                stretch,
+                rate_smoothing,
+            })? {
+                Reply::SlotAllocated(allocated) => Ok(*allocated),
                 _ => Err(PlayError::Internal(
                     "unexpected reply for session allocate slot".into(),
                 )),
@@ -499,14 +511,12 @@ mod handle {
             player_id: PlayerId,
             master_volume: f32,
             render_quantum_frames: Option<NonZeroUsize>,
-            response_budget_frames: NonZeroUsize,
         ) -> Result<(), PlayError> {
             let sample_rate = self.requested_sample_rate()?.get();
             self.exec_ok(Cmd::StartPlayer {
                 master_volume,
                 player_id,
                 render_quantum_frames,
-                response_budget_frames,
                 sample_rate,
             })
             .map(|_| ())
@@ -561,7 +571,7 @@ pub use wire::{
 #[cfg(test)]
 mod tests {
     use std::{
-        num::{NonZeroU32, NonZeroUsize},
+        num::NonZeroU32,
         sync::atomic::{AtomicU32, Ordering},
     };
 
@@ -686,12 +696,7 @@ mod tests {
 
         capture.applied.store(0, Ordering::Relaxed);
         handle
-            .start_player(
-                player_id,
-                1.0,
-                None,
-                NonZeroUsize::new(448).expect("fixture response budget is non-zero"),
-            )
+            .start_player(player_id, 1.0, None)
             .expect("start player");
         assert_eq!(capture.applied.load(Ordering::Relaxed), sample_rate().get());
     }
@@ -718,12 +723,7 @@ mod tests {
             .expect("register player")
             .id;
         handle
-            .start_player(
-                player_id,
-                1.0,
-                None,
-                NonZeroUsize::new(448).expect("fixture response budget is non-zero"),
-            )
+            .start_player(player_id, 1.0, None)
             .expect("start player");
 
         assert_eq!(capture.queries.load(Ordering::Relaxed), 0);

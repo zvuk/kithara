@@ -207,7 +207,7 @@ impl MapSegment {
         }
     }
 
-    fn tempo(&self, axis: MapAxis) -> Option<BeatsPerMinute> {
+    pub(super) fn tempo(&self, axis: MapAxis) -> Option<BeatsPerMinute> {
         let frames =
             f64::try_from(self.end_position).ok()? - f64::try_from(self.start_position).ok()?;
         let beats = f64::from(self.end_beat) - f64::from(self.start_beat);
@@ -371,6 +371,24 @@ impl SegmentSet {
             .checked_sub(1)
             .and_then(|index| self.segments.get(index))
             .filter(|segment| segment.contains_position(position))
+    }
+
+    pub(crate) fn beat_at_or_next(
+        &self,
+        position: MapPosition,
+    ) -> Option<(Beat, BeatEvidence, FrameUncertainty)> {
+        let segment = self.segments.get(
+            self.segments
+                .partition_point(|segment| segment.end_position() < position),
+        )?;
+        if position <= segment.start_position() {
+            return Some((
+                segment.start_beat(),
+                segment.start_evidence,
+                segment.start_uncertainty,
+            ));
+        }
+        segment.beat_at(position)
     }
 
     pub(crate) fn uncovered_region(&self, position: MapPosition) -> MapRegion {

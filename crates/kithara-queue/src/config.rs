@@ -18,6 +18,17 @@ pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize
 /// Mirrors `kithara_play::PlayerConfig::prefetch_duration` default.
 pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 
+/// Source cue used for a newly selected queue item.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[non_exhaustive]
+pub enum CueIn {
+    /// Preserve the existing reconciliation cue: the first source downbeat.
+    #[default]
+    FirstDownbeat,
+    /// Start from asset frame zero and preserve its meter phase on the Host.
+    TrackStart,
+}
+
 /// Configuration for a [`Queue`](crate::Queue).
 ///
 /// Holds queue-level defaults plus the owned [`PlayerImpl`] instance whose
@@ -33,6 +44,10 @@ pub struct QueueConfig<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    /// Source cue used when a queue selection begins its first synchronized launch.
+    #[builder(default)]
+    pub cue_in: CueIn,
+
     /// Max concurrent background prefetch loads. Default: 3.
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,

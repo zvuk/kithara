@@ -87,7 +87,13 @@ fn render_loaded_blocks(
 ) -> (PlayerNodeProcessor, Vec<f32>) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, resource);
-    control.cmd_tx.try_push(PlayerCmd::SetPaused(false)).ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        })
+        .ok();
     processor.drain_commands();
 
     if let Some(track) = processor.track_mut(item_id) {
@@ -170,8 +176,8 @@ fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
     );
     assert_eq!(
         counts.syncs(),
-        1,
-        "it adopts the target that begin published"
+        0,
+        "player-owned seeks wait for replacement PCM before adopting the target"
     );
     assert_eq!(
         counts.begins(),

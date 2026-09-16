@@ -36,7 +36,7 @@ pub use reader::{
     VariantReaderTake,
 };
 pub use seek::SeekEpoch;
-pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};
+pub use seek_state::{Activity, ScheduledSeekActivation, SeekControl, SeekObserve, SeekState};
 pub use source::{
     ByteMap, NotReadyCause, PendingReason, ReadOutcome, SeekPrepare, SegmentDescriptor, Source,
     SourcePhase, SourceProbe, SourceSeekAnchor, VariantControl,

@@ -1,6 +1,8 @@
 use firewheel::FirewheelCtx;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_play::SeekOutcome;
 pub(crate) use kithara_play::{
     AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
     SessionSampleRate,
@@ -19,8 +21,20 @@ pub(crate) type StartStreamFn<B> =
 pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),
     Sync(SyncCmd),
-    ApplyMix { levels: Box<[HostLevel]> },
-    EnableOutput { outputs: OutputGroup },
+    ApplyMix {
+        levels: Box<[HostLevel]>,
+    },
+    EnableOutput {
+        outputs: OutputGroup,
+    },
+    DeckSyncStatus {
+        deck: kithara_warp::BeatGridId,
+    },
+    #[cfg(not(target_arch = "wasm32"))]
+    SeekDeck {
+        deck: kithara_warp::BeatGridId,
+        seconds: f64,
+    },
     Shutdown,
 }
 
@@ -31,11 +45,14 @@ pub(crate) enum SyncCmd {
 }
 
 pub(crate) enum HostReply {
-    Play(Reply),
+    Play(Box<Reply>),
     Admission(Result<SyncAdmission, SyncRejected<PlayerMember>>),
     Acknowledged(Result<SyncStatusSnapshot, SyncError>),
     Ok,
     Err(PlayError),
+    DeckSyncStatus(Result<SyncStatusSnapshot, PlayError>),
+    #[cfg(not(target_arch = "wasm32"))]
+    Seek(Result<SeekOutcome, PlayError>),
 }
 
 pub(crate) struct HostCmdMsg<S> {

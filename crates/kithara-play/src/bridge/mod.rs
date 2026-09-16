@@ -9,7 +9,8 @@ pub use eq::SharedEq;
 pub use metrics::{RtMetrics, RtMetricsSnapshot};
 pub use playback::{PlaybackShared, PlaybackSnapshot};
 pub use protocol::{
-    PlayerCmd, PlayerNotification, TrackPlaybackStopReason, TrackState, TrackTransition,
+    PlayerCmd, PlayerNotification, PreparedLaunchIdentity, ScheduledSeekDisposition,
+    TrackPlaybackStopReason, TrackState, TrackTransition,
 };
 
 pub use crate::session::{

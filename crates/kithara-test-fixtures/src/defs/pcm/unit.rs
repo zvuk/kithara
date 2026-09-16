@@ -20,6 +20,10 @@ impl Consts {
     ];
     const TEST_DECAY: f32 = 400.0;
     const TEST_BURST_SECONDS: f32 = 0.01;
+    const WARP_BEATS: usize = 8;
+    const WARP_CLICK_OFFSET: usize = 8_192;
+    const WARP_NOMINAL_FRAMES: usize = 176_400;
+    const WARP_NOMINAL_PERIOD: usize = 22_050;
 }
 
 #[kithara::asset(ext = "f32le", content_type = "application/octet-stream", embed)]
@@ -65,7 +69,6 @@ impl Consts {
 #[case::accelerate_clear(vec![1.0, -2.0, 3.0])]
 #[case::accelerate_ramp(vec![0.0, 1.0, 2.0, 3.0])]
 #[case::accelerate_wave(vec![0.0, 1.0, 0.0, -1.0, 0.0])]
-#[case::limiter_unity(vec![0.5, -0.3, 0.1, -0.7, 0.0, 0.97, -0.97])]
 #[case::limiter_peak(vec![2.0_f32; 8])]
 #[case::limiter_negative(vec![-2.0_f32; 8])]
 #[case::limiter_right((0u16..512).map(|i| (f32::from(i) * 0.07).cos() * 2.5).collect())]
@@ -75,6 +78,15 @@ impl Consts {
 #[case::limiter_attack(vec![2.0_f32; 4])]
 #[case::limiter_half(vec![0.5_f32])]
 #[case::limiter_spike(vec![4.0_f32])]
+#[case::limiter_smooth((0u16..256)
+        .map(|i| 0.5 * (core::f32::consts::TAU * f32::from(i) / 64.0).sin())
+        .collect())]
+#[case::limiter_sine((0u16..256)
+        .map(|i| 2.0 * (core::f32::consts::TAU * f32::from(i) / 64.0).sin())
+        .collect())]
+#[case::limiter_intersample((0u16..256)
+        .map(|i| (core::f32::consts::FRAC_PI_2 * f32::from(i) + core::f32::consts::FRAC_PI_4).sin())
+        .collect())]
 #[case::limiter_silence(vec![0.0_f32; 16])]
 #[case::limiter_recovery(vec![0.5_f32; 64])]
 #[case::limiter_negative_infinity(vec![f32::NEG_INFINITY])]
@@ -127,6 +139,7 @@ impl Consts {
 #[case::warp_sine(warp_tone(352_800))]
 #[case::warp_pair(vec![0.25, -0.5])]
 #[case::warp_constant(vec![0.25; 10240])]
+#[case::warp_nominal_clicks({ let mut src = warp_silence(Consts::WARP_NOMINAL_FRAMES); for k in 0..Consts::WARP_BEATS { warp_click(&mut src, k * Consts::WARP_NOMINAL_PERIOD + Consts::WARP_CLICK_OFFSET); } src })]
 #[case::warp_clicks({     let mut src = warp_silence(352_800);
     for k in 0..8 {
         warp_click(&mut src, k * 19_845 + 8192);

@@ -17,7 +17,7 @@ use super::{
     types::{AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase},
 };
 use crate::{
-    config::QueueConfig,
+    config::{CueIn, QueueConfig},
     loader::Loader,
     navigation::NavigationState,
     track::{TrackRecord, Tracks},
@@ -35,6 +35,8 @@ pub struct QueueRuntime<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    /// Queue-owned policy for the selected item's first synchronized launch.
+    pub(super) cue_in: CueIn,
     /// Serializes every state-changing command against terminal close.
     pub(super) admission: Mutex<()>,
     /// Authoritative playback position updated on every `tick`. Filters
@@ -155,6 +157,7 @@ where
             max_concurrent_loads,
             max_history_size,
             prefetch_duration,
+            cue_in,
             should_autoplay,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
@@ -178,6 +181,7 @@ where
         ));
         let player_rx = player.subscribe();
         let runtime = Arc::new(QueueRuntime {
+            cue_in,
             loader,
             tracks,
             bus,
@@ -223,7 +227,7 @@ where
         let _ = self.with_open(operation);
     }
 
-    fn ensure_open(&self) -> Result<(), PlayError> {
+    pub(in crate::queue) fn ensure_open(&self) -> Result<(), PlayError> {
         if self.is_closed() {
             Err(PlayError::Closed)
         } else {
@@ -400,7 +404,7 @@ pub(crate) mod tests {
                     let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
                     let (inputs, control) = slot_channels(SharedEq::new(10));
                     self.nodes.lock().push(inputs);
-                    Reply::SlotAllocated(AllocatedSlot::new(control, slot))
+                    Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
                 }
                 Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
                 Cmd::QueryStreamShape => Reply::StreamShape(None),

@@ -148,19 +148,29 @@ where
         usize::from(self.source_spec.channels)
     }
 
+    /// Resamples every whole block the buffered input affords and emits them
+    /// as one chunk.
+    ///
+    /// A resampler consumes a fixed input block, so emitting one chunk per
+    /// block would hand the consumer pieces a fraction of the size the
+    /// decoder produced, while the bypassed path hands over whole decoder
+    /// chunks. A consumer that plans its work per chunk then sees the stream
+    /// break up for no reason other than the presence of a resampler, so the
+    /// blocks of one input chunk are coalesced back into one output chunk.
     fn drain_ready(&mut self) -> DecodeResult<Option<AudioChunk>> {
-        let input_frames = self.resampler.input_frames_next();
-        if self.input.frames().get() < input_frames {
-            return self.finish_output();
+        loop {
+            let input_frames = self.resampler.input_frames_next();
+            if self.input.frames().get() < input_frames {
+                return self.finish_output();
+            }
+            let process = self.process_block(input_frames)?;
+            if process.input_frames > input_frames {
+                return Err(DecodeError::InvalidData {
+                    detail: "decoder resampler consumed more frames than supplied",
+                });
+            }
+            self.drop_consumed(process.input_frames)?;
         }
-        let process = self.process_block(input_frames)?;
-        if process.input_frames > input_frames {
-            return Err(DecodeError::InvalidData {
-                detail: "decoder resampler consumed more frames than supplied",
-            });
-        }
-        self.drop_consumed(process.input_frames)?;
-        self.finish_output()
     }
 
     fn drop_consumed(&mut self, frames: usize) -> DecodeResult<()> {

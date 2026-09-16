@@ -2,32 +2,24 @@ use kithara_platform::time::Duration;
 use kithara_test_macros as kithara;
 use url::Url;
 
-use crate::{
-    context::BuildContext,
-    remote_file::{RemoteFileError, fetch_verified},
-};
+use crate::remote_file::fetch_verified;
 
 enum Library {}
 
 impl Library {
     const BASE: &str = "https://stream.silvercomet.top/fixtures/";
-    const ENV: &str = "KITHARA_REMOTE_FIXTURES";
     const TIMEOUT: Duration = Duration::from_secs(600);
+
+    fn fetch(file: &str, sha256: &str, length: u64) -> Vec<u8> {
+        let url = Url::parse(Self::BASE)
+            .and_then(|base| base.join(file))
+            .unwrap_or_else(|error| panic!("library fixture `{file}` has no URL: {error}"));
+        fetch_verified(&url, sha256, length, Self::TIMEOUT)
+            .unwrap_or_else(|error| panic!("library fixture `{file}` failed verification: {error}"))
+    }
 }
 
-fn enabled() -> Result<(), RemoteFileError> {
-    std::env::var_os(Library::ENV)
-        .filter(|value| !value.is_empty())
-        .map(|_| ())
-        .ok_or(RemoteFileError::Missing(Library::ENV))
-}
-
-#[kithara::asset(
-    ext = "flac",
-    content_type = "audio/flac",
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
-)]
+#[kithara::asset(ext = "flac", content_type = "audio/flac")]
 #[case::newtechno(
     "newtechno.flac",
     "7ee0e157a3dd1ea44554c9e22f81a72ed1100942a2f17982e90043f40801f1b2",
@@ -83,27 +75,14 @@ fn enabled() -> Result<(), RemoteFileError> {
     "92dd30f8dace371e081685ee18b2ad34407360fd279b7b3a0f0ded78d3436789",
     55173208
 )]
-fn library_flac(
-    _context: &BuildContext<'_>,
-    file: &str,
-    sha256: &str,
-    length: u64,
-) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
-    let url = Url::parse(Library::BASE)?.join(file)?;
-    Ok(
-        fetch_verified(&url, sha256, length, Library::TIMEOUT).unwrap_or_else(|error| {
-            panic!("requested library fixture `{file}` failed verification: {error}")
-        }),
-    )
+fn library_flac(file: &str, sha256: &str, length: u64) -> Vec<u8> {
+    Library::fetch(file, sha256, length)
 }
 
 #[kithara::asset(
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
     depends_on = ["library_flac_{case}"],
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
 )]
 #[case::newtechno()]
 #[case::ryabina()]
@@ -116,14 +95,72 @@ fn library_flac(
 #[case::c343()]
 #[case::e101()]
 #[case::g242()]
-fn library_analysis(
-    _context: &BuildContext<'_>,
-    inputs: &[&[u8]],
-) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
-    let flac = inputs
-        .first()
-        .ok_or(RemoteFileError::Missing("library_flac dependency"))?;
-    let (artifact, frames) = super::rhythm::beat_flac(flac);
-    Ok(super::rhythm::analysis_file(artifact, frames))
+fn library_analysis(inputs: &[&[u8]]) -> Vec<u8> {
+    let [flac] = inputs else {
+        panic!(
+            "library_analysis expects one dependency, got {}",
+            inputs.len()
+        );
+    };
+    let (artifact, frames) = super::rhythm::beat_encoded(flac, "flac");
+    super::rhythm::analysis_file(artifact, frames)
+}
+
+/// Playlist tracks the application is exercised with, published as delivered
+/// by the zvuk CDN: 320 kbit/s MP3, no re-encoding.
+#[kithara::asset(ext = "mp3", content_type = "audio/mpeg")]
+#[case::zvuk_27390231(
+    "zvuk_27390231.mp3",
+    "91e3657174821e9a570744d3f3c6b2b7fe09c161d285d08751480554884bb5a4",
+    27984819
+)]
+#[case::zvuk_151585912(
+    "zvuk_151585912.mp3",
+    "9c5aee51a544fb268ef1f5aa42ef28bfc6019ddb7d174b9748f92fc21b6dffdb",
+    17318137
+)]
+#[case::zvuk_125475417(
+    "zvuk_125475417.mp3",
+    "05e52e3ee8ff9e324b7319cfb9bb4f6844588187ef3db63baedd016e7fa6d729",
+    20401920
+)]
+#[case::zvuk_138535169(
+    "zvuk_138535169.mp3",
+    "0c954428a6266a20cb0693ea269d058eaf9e4a4d92b60bd92b968f907e8a331b",
+    8232750
+)]
+#[case::zvuk_130432502(
+    "zvuk_130432502.mp3",
+    "1ee4fb70e14a90b4a0fb0f337f0d8b2682642928a230e1f5f1fd91d79257e278",
+    16042317
+)]
+#[case::zvuk_132017169(
+    "zvuk_132017169.mp3",
+    "156fc1ae2cab368cbaa0c2b8c5eec4adaf3fcc88be4a59e1144f3164a8c0afa7",
+    13842807
+)]
+fn library_mp3(file: &str, sha256: &str, length: u64) -> Vec<u8> {
+    Library::fetch(file, sha256, length)
+}
+
+#[kithara::asset(
+    ext = "analysis",
+    content_type = "application/x-kithara-analysis",
+    depends_on = ["library_mp3_{case}"],
+)]
+#[case::zvuk_27390231()]
+#[case::zvuk_151585912()]
+#[case::zvuk_125475417()]
+#[case::zvuk_138535169()]
+#[case::zvuk_130432502()]
+#[case::zvuk_132017169()]
+fn library_mp3_analysis(inputs: &[&[u8]]) -> Vec<u8> {
+    let [mp3] = inputs else {
+        panic!(
+            "library_mp3_analysis expects one dependency, got {}",
+            inputs.len()
+        );
+    };
+    let (artifact, frames) = super::rhythm::beat_encoded(mp3, "mp3");
+    super::rhythm::analysis_file(artifact, frames)
 }

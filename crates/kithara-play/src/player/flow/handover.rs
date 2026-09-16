@@ -168,6 +168,9 @@ where
         self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.current_index();
         if index != current_index {
+            if let Some(outgoing) = self.core.items.current_item_id() {
+                self.core.items.cancel_outgoing_free_adoption(outgoing);
+            }
             self.core.items.set_current(index);
             self.announce_current_item(index);
         }

@@ -100,6 +100,12 @@ impl WarpMapRevision {
     pub const fn first() -> Self {
         Self(NonZeroU64::MIN)
     }
+
+    /// Restores a revision carried through opaque PCM provenance.
+    #[must_use]
+    pub const fn from_raw(value: NonZeroU64) -> Self {
+        Self(value)
+    }
 }
 
 /// Monotonic identity of one track load into a stable deck.

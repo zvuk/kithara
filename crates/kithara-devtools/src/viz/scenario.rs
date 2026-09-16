@@ -351,7 +351,7 @@ mod tests {
             package: "demo-package".to_string(),
             test: "architecture".to_string(),
             filter: Some("flow".to_string()),
-            features: vec!["probe".to_string(), "fixture".to_string()],
+            features: vec!["usdt".to_string(), "fixture".to_string()],
             ignored: false,
             timeout_secs: 30,
         };
@@ -365,7 +365,7 @@ mod tests {
                 "--test",
                 "architecture",
                 "--features",
-                "probe,fixture",
+                "usdt,fixture",
                 "flow",
                 "--",
                 "--nocapture"

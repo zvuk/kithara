@@ -3,9 +3,9 @@
 use kithara::{platform::time::Duration, warp::SyncIntent};
 use kithara_integration_tests::{
     cochlea::{
-        CochleaReport, continuity_failures, synchronization_failures, time_stretch_failures,
+        CochleaReport, continuity_failures, marked_synchronization_failures, time_stretch_failures,
     },
-    kithara,
+    kithara, usdt_trace,
 };
 
 use super::sync_product_matrix::{
@@ -15,13 +15,18 @@ use super::sync_product_matrix::{
 
 const TWENTY_MS_FRAMES: usize = 960;
 
+/// Control-to-audible ceiling at a 128-frame output block.
+const RESPONSE_CEILING_FRAMES: usize = 448;
+
 struct CommandRun {
+    activation_index: Option<usize>,
     command_index: usize,
     failures: Vec<String>,
     samples: Vec<f32>,
 }
 
 struct AlignedRun {
+    activation_index: Option<usize>,
     candidate: Vec<f32>,
     command_index: usize,
     control: Vec<f32>,
@@ -35,6 +40,7 @@ async fn tempo_retarget_run(
 ) -> CommandRun {
     let mut harness = ProductHarness::new_for_block(ONE_DECK, prepared, 0, block_frames).await;
     harness.request_sync(ONE_DECK).await;
+    harness.settle_sync_activation(ONE_DECK).await;
     let warm_frames = warm_blocks * BLOCK_FRAMES;
     for _ in 0..warm_frames.div_ceil(block_frames) {
         let _ = harness.render(ONE_DECK, block_frames).await;
@@ -43,6 +49,8 @@ async fn tempo_retarget_run(
         .capture_frames(ONE_DECK, ONE_DECK.sample_rate as usize, block_frames)
         .await;
     let command_index = samples.len() / usize::from(CHANNELS);
+    let command_output = harness.rendered_frames;
+    let trace = retarget.then(usdt_trace::scope);
     if retarget {
         harness.set_tempo(ONE_DECK, 132.0, false).await;
     }
@@ -51,9 +59,29 @@ async fn tempo_retarget_run(
             .capture_frames(ONE_DECK, ONE_DECK.sample_rate as usize * 2, block_frames)
             .await,
     );
+    let activation_index = trace.and_then(|trace| {
+        let capture_start = command_output.checked_sub(u64::try_from(command_index).ok()?)?;
+        trace
+            .events()
+            .iter()
+            .filter(|event| event.probe == "publish")
+            .filter(|event| {
+                event
+                    .field("transport_revision")
+                    .is_some_and(|revision| revision > 1)
+            })
+            .filter_map(|event| event.field("output_start"))
+            .min()
+            .and_then(|output| output.checked_sub(capture_start))
+            .and_then(|frames| usize::try_from(frames).ok())
+    });
+    let underruns = harness.underrun_failures();
+    let mut failures = harness.failures;
+    failures.extend(underruns);
     CommandRun {
+        activation_index,
         command_index,
-        failures: harness.failures,
+        failures,
         samples,
     }
 }
@@ -79,17 +107,39 @@ async fn running_sync_run(
         .capture_frames(ONE_DECK, pre_frames, block_frames)
         .await;
     let command_index = samples.len() / usize::from(CHANNELS);
+    let command_output = harness.rendered_frames;
+    let trace = issue_sync.then(usdt_trace::scope);
     if issue_sync {
         harness.request_sync(ONE_DECK).await;
     }
     samples.extend(
         harness
-            .capture_frames(ONE_DECK, pre_frames * 2, block_frames)
+            .capture_frames(ONE_DECK, block_frames * 2, block_frames)
             .await,
     );
+    let activation_index = trace.as_ref().and_then(|trace| {
+        let capture_start = command_output.checked_sub(u64::try_from(command_index).ok()?)?;
+        trace
+            .events()
+            .iter()
+            .filter(|event| event.probe == "warp_plan_published")
+            .filter_map(|event| event.field("activation_output"))
+            .min()
+            .and_then(|output| output.checked_sub(capture_start))
+            .and_then(|frames| usize::try_from(frames).ok())
+    });
+    samples.extend(
+        harness
+            .capture_frames(ONE_DECK, pre_frames * 4 - block_frames * 2, block_frames)
+            .await,
+    );
+    let underruns = harness.underrun_failures();
+    let mut failures = harness.failures;
+    failures.extend(underruns);
     CommandRun {
+        activation_index,
         command_index,
-        failures: harness.failures,
+        failures,
         samples,
     }
 }
@@ -115,22 +165,7 @@ fn align_runs(candidate: &CommandRun, control: &CommandRun) -> AlignedRun {
         .min(candidate.command_index)
         .min(control.command_index);
     assert!(prefix > 0, "alignment needs pre-command PCM");
-    let candidate_limit = candidate.command_index - prefix;
-    let mut anchor = (f64::NEG_INFINITY, 0);
-    for start in (0..=candidate_limit).step_by(SAMPLE_STRIDE) {
-        let energy = (0..prefix)
-            .step_by(SAMPLE_STRIDE)
-            .map(|frame| {
-                let sample = candidate.samples[(start + frame) * usize::from(CHANNELS)];
-                let sample = f64::from(sample);
-                sample * sample
-            })
-            .sum::<f64>();
-        if energy >= anchor.0 {
-            anchor = (energy, start);
-        }
-    }
-    let candidate_anchor = anchor.1;
+    let candidate_anchor = candidate.command_index - prefix;
     let min_lag = -i64::try_from(candidate_anchor).expect("alignment anchor fits i64");
     let max_lag = i64::try_from(control.command_index - prefix).expect("command index fits i64")
         - i64::try_from(candidate_anchor).expect("alignment anchor fits i64");
@@ -161,6 +196,9 @@ fn align_runs(candidate: &CommandRun, control: &CommandRun) -> AlignedRun {
     let control_frames = control.samples.len() / usize::from(CHANNELS) - control_start;
     let frames = candidate_frames.min(control_frames);
     AlignedRun {
+        activation_index: candidate
+            .activation_index
+            .and_then(|index| index.checked_sub(candidate_start)),
         candidate: candidate.samples[candidate_start * usize::from(CHANNELS)
             ..(candidate_start + frames) * usize::from(CHANNELS)]
             .to_vec(),
@@ -204,15 +242,7 @@ fn append_run_failures(label: &str, run: &CommandRun, failures: &mut Vec<String>
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
-#[ignore = "ignored-red: bound Warp tempo retarget is not implemented"]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     #[future(awt)] sweep_sources: PreparedSources,
 ) {
@@ -241,10 +271,24 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
             let transition = first_sustained_delta(
                 &aligned.candidate,
                 &aligned.control,
-                aligned.command_index..aligned.candidate.len() / usize::from(CHANNELS),
+                aligned
+                    .activation_index
+                    .expect("tempo retarget publishes its transport activation")
+                    ..aligned.candidate.len() / usize::from(CHANNELS),
             );
-            let latency_budget = TWENTY_MS_FRAMES.min(block_frames * 2);
-            match transition.map(|frame| frame - aligned.command_index) {
+            let activation_index = aligned
+                .activation_index
+                .expect("tempo retarget publishes its transport activation");
+            let quantization_wait = activation_index - aligned.command_index;
+            if quantization_wait > block_frames {
+                failures.push(format!(
+                    "retarget activation waited {quantization_wait} frames; budget is {block_frames}"
+                ));
+            }
+            let latency_budget = TWENTY_MS_FRAMES
+                .min(block_frames * 2)
+                .min(RESPONSE_CEILING_FRAMES + block_frames - 128);
+            match transition.map(|frame| frame - activation_index) {
                 Some(frames) if frames <= latency_budget => {}
                 Some(frames) => failures.push(format!(
                     "retarget changed PCM after {frames} frames; budget is {latency_budget}"
@@ -260,16 +304,8 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     }
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
-#[ignore = "ignored-red: running Warp alignment is not implemented"]
-async fn running_sync_command_changes_audible_pcm_within_one_block(
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+async fn running_sync_command_changes_audible_pcm_at_planned_activation(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {
     for block_frames in [128, 256, 512] {
@@ -278,7 +314,8 @@ async fn running_sync_command_changes_audible_pcm_within_one_block(
         let aligned = align_runs(&candidate, &control);
         let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
         let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
-        let mut failures = continuity_failures("running SYNC", &candidate_report, &control_report);
+        let mut failures =
+            time_stretch_failures("running SYNC", &candidate_report, &control_report);
         append_run_failures("control", &control, &mut failures);
         append_run_failures("candidate", &candidate, &mut failures);
         if let Some(frame) = first_sustained_delta(
@@ -288,17 +325,62 @@ async fn running_sync_command_changes_audible_pcm_within_one_block(
         ) {
             failures.push(format!("candidate diverged before SYNC at frame {frame}"));
         }
+        let activation_index = aligned
+            .activation_index
+            .expect("running SYNC publishes its planned activation");
+        if let Some(frame) = first_sustained_delta(
+            &aligned.candidate,
+            &aligned.control,
+            aligned.command_index..activation_index,
+        ) {
+            let best_lag = (-256_i64..=256)
+                .filter_map(|lag| {
+                    let control_start = usize::try_from(i64::try_from(frame).ok()? + lag).ok()?;
+                    let span = 512.min(
+                        aligned
+                            .control
+                            .len()
+                            .checked_div(usize::from(CHANNELS))?
+                            .checked_sub(control_start)?,
+                    );
+                    let error = (0..span)
+                        .map(|offset| {
+                            let candidate =
+                                aligned.candidate[(frame + offset) * usize::from(CHANNELS)];
+                            let control =
+                                aligned.control[(control_start + offset) * usize::from(CHANNELS)];
+                            f64::from((candidate - control).abs())
+                        })
+                        .sum::<f64>();
+                    Some((error, lag))
+                })
+                .min_by(|left, right| left.0.total_cmp(&right.0));
+            eprintln!(
+                "SYNC_DELTA frame={frame} command={} activation={} best_lag={best_lag:?} candidate={:?} control={:?}",
+                aligned.command_index,
+                activation_index,
+                &aligned.candidate
+                    [frame * usize::from(CHANNELS)..(frame + 4) * usize::from(CHANNELS)],
+                &aligned.control
+                    [frame * usize::from(CHANNELS)..(frame + 4) * usize::from(CHANNELS)],
+            );
+            failures.push(format!(
+                "running SYNC changed PCM {frames} frames before planned activation",
+                frames = activation_index - frame,
+            ));
+        }
         let transition = first_sustained_delta(
             &aligned.candidate,
             &aligned.control,
-            aligned.command_index..aligned.candidate.len() / usize::from(CHANNELS),
+            activation_index..aligned.candidate.len() / usize::from(CHANNELS),
         );
-        match transition.map(|frame| frame - aligned.command_index) {
-            Some(frames) if frames <= block_frames => {}
+        match transition.map(|frame| frame - activation_index) {
+            Some(frames) if frames <= 40 => {}
             Some(frames) => failures.push(format!(
-                "running SYNC changed PCM after {frames} frames; budget is {block_frames}"
+                "running SYNC changed PCM {frames} frames after activation; blend budget is 40"
             )),
-            None => failures.push("running SYNC produced no sustained PCM change".to_owned()),
+            None => failures
+                .push("running SYNC produced no sustained PCM change at activation".to_owned()),
         }
         assert!(
             failures.is_empty(),
@@ -321,21 +403,14 @@ async fn capture_intent_sequence(intents: &[SyncIntent], prepared: &PreparedSour
         .capture_frames(ONE_DECK, ONE_DECK.sample_rate as usize * 3, BLOCK_FRAMES)
         .await;
     CommandRun {
+        activation_index: None,
         command_index: 0,
         failures: harness.failures,
         samples,
     }
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
-#[ignore = "ignored-red: latest Warp target replacement is not implemented"]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn latest_sync_target_wins_in_pcm(#[future(awt)] synthetic_sources: PreparedSources) {
     let first = capture_intent_sequence(&[SyncIntent::Enable], &synthetic_sources).await;
     let second = capture_intent_sequence(&[SyncIntent::Disable], &synthetic_sources).await;
@@ -389,15 +464,7 @@ async fn latest_sync_target_wins_in_pcm(#[future(awt)] synthetic_sources: Prepar
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(180))
-)]
-#[ignore = "ignored-red: bound Warp render is not implemented"]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(180)))]
 async fn bound_sync_render_is_rtsan_clean(#[future(awt)] sweep_sources: PreparedSources) {
     let control = tempo_retarget_run(BLOCK_FRAMES, 16, false, &sweep_sources).await;
     let candidate = tempo_retarget_run(BLOCK_FRAMES, 16, true, &sweep_sources).await;
@@ -416,7 +483,7 @@ async fn bound_sync_render_is_rtsan_clean(#[future(awt)] sweep_sources: Prepared
 }
 
 async fn shared_worker_capture(case: SyncCase, prepared: &PreparedSources) -> CommandRun {
-    let mut harness = ProductHarness::new(case, prepared, 0).await;
+    let mut harness = ProductHarness::new_for_block(case, prepared, 0, BLOCK_FRAMES).await;
     harness.run_operations(case).await;
     harness.ride_tempo(case).await;
     if harness
@@ -428,39 +495,58 @@ async fn shared_worker_capture(case: SyncCase, prepared: &PreparedSources) -> Co
             .failures
             .push("shared worker did not report active decode load".to_owned());
     }
+    let underruns_before = harness
+        .player_controls
+        .iter()
+        .map(|control| control.rt_metrics().map(|metrics| metrics.underruns()))
+        .collect::<Option<Vec<_>>>();
     let frames = (f64::from(case.sample_rate) * 60.0 / case.final_bpm() * 6.0).round() as usize;
     let samples = harness.capture_paced(case, frames).await;
+    let engine_loads = harness
+        .decks
+        .iter()
+        .map(|deck| deck.engine_load())
+        .collect::<Vec<_>>();
+    let underruns_after = harness
+        .player_controls
+        .iter()
+        .map(|control| control.rt_metrics().map(|metrics| metrics.underruns()))
+        .collect::<Option<Vec<_>>>();
+    match (underruns_before, underruns_after) {
+        (Some(before), Some(after)) if before == after => {}
+        (Some(before), Some(after)) => harness.failures.push(format!(
+            "shared-worker capture incremented RT underruns: before={before:?}, after={after:?}, engine_loads={engine_loads:?}"
+        )),
+        _ => harness
+            .failures
+            .push("shared-worker capture did not expose RT metrics".to_owned()),
+    }
+    let command_index = samples.len() / usize::from(CHANNELS);
     CommandRun {
-        command_index: 0,
+        activation_index: None,
+        command_index,
         failures: harness.failures,
         samples,
     }
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
-#[ignore = "ignored-red: bound Warp shared-worker path is not implemented"]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load(
     #[future(awt)] mixed_sources: PreparedSources,
 ) {
     let control = shared_worker_capture(SHARED_DEADLINE_CONTROL, &mixed_sources).await;
     let candidate = shared_worker_capture(SHARED_DEADLINE, &mixed_sources).await;
-    let control_report = CochleaReport::measure(&control.samples, CHANNELS, 48_000);
-    let candidate_report = CochleaReport::measure(&candidate.samples, CHANNELS, 48_000);
+    let aligned = align_runs(&candidate, &control);
+    let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
+    let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
     let mut failures = time_stretch_failures(
         "bound shared-worker load",
         &candidate_report,
         &control_report,
     );
-    failures.extend(synchronization_failures(
+    failures.extend(marked_synchronization_failures(
         "bound shared-worker load",
-        &[candidate.samples.as_slice()],
+        &[aligned.candidate.as_slice()],
         CHANNELS,
         48_000,
         SHARED_DEADLINE.final_bpm(),

@@ -5,7 +5,7 @@ use kithara_platform::{
     sync::{Arc, mpsc},
     time::Duration,
 };
-use kithara_play::{GroupState, PlayError, player::PlayerMember};
+use kithara_play::{GroupState, PlayError, effects::LimiterConfig, player::PlayerMember};
 use kithara_worker::{Dispatcher, Task, TaskConfig, TaskHandle, TickResult};
 use thiserror::Error;
 use tracing::warn;
@@ -51,6 +51,7 @@ pub(crate) struct OfflineTaskConfig<S> {
     pub(crate) max_block_frames: NonZeroU32,
     pub(crate) declick_frames: NonZeroU32,
     pub(crate) declared_latency: Duration,
+    pub(crate) limiter: LimiterConfig,
 }
 
 impl<S> OfflineSessionTask<S>
@@ -79,6 +80,7 @@ where
             .position
             .checked_add(u64::from(frames))
             .ok_or(OfflineSessionError::TimelineOverflow)?;
+        super::transport::acknowledge_prepared_decks(state);
         Ok(output)
     }
 
@@ -177,6 +179,7 @@ where
         max_block_frames,
         declick_frames,
         declared_latency,
+        limiter,
     } = config;
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let pending = dispatcher.reserve(task_config).map_err(|error| {
@@ -212,6 +215,7 @@ where
                     root_view,
                     sample_rate,
                     Some(max_block_frames),
+                    limiter,
                     start_stream,
                 )),
             }

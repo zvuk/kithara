@@ -12,7 +12,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
@@ -133,6 +133,7 @@ async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, labe
         .run(move |q| q.select(id, Transition::None))
         .await
         .expect("select after load");
+    session.queue.run(QueueControl::play).await;
     wait_for_position_at_least(&session.queue, min_play_secs, Duration::from_secs(15))
         .await
         .unwrap_or_else(|e| panic!("[{label}] play: {e}"));

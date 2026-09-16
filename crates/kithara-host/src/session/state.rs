@@ -10,7 +10,8 @@ use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    GroupState, SessionSampleRate, StreamShape, player::PlayerMember, session::RegisteredPlayer,
+    GroupState, SessionSampleRate, StreamShape, effects::LimiterConfig, player::PlayerMember,
+    session::RegisteredPlayer,
 };
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, SyncError, SyncGroup,
@@ -220,6 +221,9 @@ pub(crate) struct SessionState<B: AudioBackend, S> {
     pub(super) mix_tap: Option<MixTap>,
     pub(super) requested_max_block_frames: Option<NonZeroU32>,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
+    /// The session anchor the decks last took.
+    pub(super) delivered_anchor: Option<kithara_warp::SessionAnchor>,
+    pub(super) limiter: LimiterConfig,
     pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) session_ducking: SessionDuckingMode,
     pub(super) session_output_memo: Option<Memo<VolumeNode>>,
@@ -244,6 +248,7 @@ impl<B: AudioBackend, S> SessionState<B, S> {
         root_view: RootView,
         sample_rate: NonZeroU32,
         requested_max_block_frames: Option<NonZeroU32>,
+        limiter: LimiterConfig,
         start_stream_fn: F,
     ) -> Self
     where
@@ -254,6 +259,7 @@ impl<B: AudioBackend, S> SessionState<B, S> {
         generation.commit_revision(BeatGridRevision::first());
         let state = Self {
             requested_max_block_frames,
+            limiter,
             root,
             root_view,
             start_stream_fn: Box::new(start_stream_fn),
@@ -269,6 +275,7 @@ impl<B: AudioBackend, S> SessionState<B, S> {
             stream_needs_restart: false,
             transport: SessionTransportState::default(),
             reserved_session_grid: Some(generation),
+            delivered_anchor: None,
             graph: GraphRegistry::default(),
         };
         state.publish_root();
@@ -408,13 +415,14 @@ fn create_session_output<B: AudioBackend, S>(
     state: &mut SessionState<B, S>,
 ) -> Result<(), SessionError> {
     debug!("[KITHARA-ROUTE] creating session output graph");
+    let limiter = LimiterNode::new(state.limiter);
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err(SessionError::NoContext);
     };
     let session_node = VolumeNode::from_linear(state.session_ducking.gain());
     let session_memo = Memo::new(session_node);
     let session_id = fw_ctx.add_node(session_node, None);
-    let limiter_id = fw_ctx.add_node(LimiterNode, None);
+    let limiter_id = fw_ctx.add_node(limiter, None);
     let graph_out = fw_ctx.graph_out_node_id();
     fw_ctx
         .connect(session_id, limiter_id, &[(0, 0), (1, 1)], false)

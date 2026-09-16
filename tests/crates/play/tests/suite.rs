@@ -18,6 +18,7 @@ pub use kithara_integration_tests::gapless as gapless_common;
 mod cochlea_continuity_oracle;
 mod crossfade_hls_to_mp3_repeats;
 mod engine_tests;
+mod free_handoff_latency;
 mod gapless_offline_e2e;
 mod gapless_startup_regressions;
 mod generated_gapless_hls;
@@ -49,4 +50,5 @@ mod sync_listening;
 #[cfg(not(target_arch = "wasm32"))]
 mod sync_oracle;
 mod sync_product_matrix;
+mod sync_queue_seam;
 mod sync_runtime_oracles;

@@ -32,7 +32,7 @@ impl<S> EngineImpl<S> {
         if let Some(quantum) = self.config.render_quantum_frames
             && let Some(shape) = self.stream_shape()?
         {
-            shape.playback_buffers(quantum, self.config.response_budget_frames)?;
+            shape.playback_buffers(quantum)?;
         }
         self.ensure_player_id().map(|_| ())
     }

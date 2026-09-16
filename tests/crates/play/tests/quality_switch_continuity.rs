@@ -23,7 +23,9 @@ use kithara::{
         time::{Duration, Instant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{
+        PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc, effects::LimiterConfig,
+    },
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -40,7 +42,7 @@ use crate::bufpool_ext::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
-const BLOCK_FRAMES: usize = 512;
+const BLOCK_FRAMES: usize = 128;
 const SINE_HZ: f64 = 441.0;
 const SEGMENT_SECS: f64 = 0.5;
 const SEGMENTS_PER_VARIANT: usize = 16;
@@ -335,9 +337,18 @@ async fn prepare_player(
     let abr = resource
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
+    // WHY: The fixture sine peaks at full scale, above the default session
+    // ceiling. A unity ceiling leaves the limiter bit-exact on it, so the
+    // control measures the decode path at the scale the oracle was calibrated on.
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+            .limiter(
+                LimiterConfig::builder()
+                    .ceiling(1.0)
+                    .build()
+                    .expect("a unity ceiling is a valid limiter policy"),
+            )
             .build(),
     )
     .await;

@@ -168,8 +168,8 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case(crate::bridge::PlayerCmd::SetPaused(true))]
-    #[case(crate::bridge::PlayerCmd::SetPaused(false))]
+    #[case(crate::bridge::PlayerCmd::SetPaused { paused: true, item_id: None })]
+    #[case(crate::bridge::PlayerCmd::SetPaused { paused: false, item_id: None })]
     #[case(crate::bridge::PlayerCmd::SetFadeDuration(0.25))]
     fn player_node_with_inputs(#[case] cmd: crate::bridge::PlayerCmd) {
         let (node, mut control) = make_node();

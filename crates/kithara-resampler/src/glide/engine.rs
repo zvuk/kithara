@@ -30,6 +30,7 @@ const FILTER_PARAMS: FilterParams = FilterParams {
 #[derive(fieldwork::Fieldwork)]
 pub(in crate::glide) struct GlideEngine {
     filter_cutoff: Option<f64>,
+    filtered_previous: SampleBuffer,
     positions: SampleBuffer,
     filtered: SmallVec<[SampleBuffer; 8]>,
     filters: SmallVec<[Option<backend::Filter>; 8]>,
@@ -53,6 +54,9 @@ impl GlideEngine {
         let max_output_frames = max_output_frames(max_input_frames, max_ratio_adjustment);
         let mut positions = pools.get::<f32>();
         ensure_build_len(&mut positions, max_output_frames, backend)?;
+        let mut filtered_previous = pools.get::<f32>();
+        ensure_build_len(&mut filtered_previous, channels.get(), backend)?;
+        filtered_previous.fill(0.0);
         let mut padded = SmallVec::new();
         let mut filtered = SmallVec::new();
         let mut filters = SmallVec::new();
@@ -76,6 +80,7 @@ impl GlideEngine {
         }
         Ok(Self {
             positions,
+            filtered_previous,
             padded,
             filtered,
             filters,
@@ -93,8 +98,13 @@ impl GlideEngine {
             return Ok(());
         }
         for filter in &mut self.filters {
-            *filter = backend::new_filter(sample_rate, cutoff, FILTER_PARAMS.low_pass_q);
-            if filter.is_none() {
+            let ready = if let Some(filter) = filter {
+                backend::retune_filter(filter, sample_rate, cutoff, FILTER_PARAMS.low_pass_q)
+            } else {
+                *filter = backend::new_filter(sample_rate, cutoff, FILTER_PARAMS.low_pass_q);
+                filter.is_some()
+            };
+            if !ready {
                 return Err(ResamplerError::Backend {
                     op: backend::FILTER_OP,
                     detail: backend::FILTER_ERROR.into(),
@@ -151,7 +161,7 @@ impl GlideEngine {
             let padded = &mut self.padded[channel_idx];
             padded[0] = previous[channel_idx][0];
             backend::copy(source, &mut padded[1..input_frames.saturating_add(1)]);
-            padded[input_frames.saturating_add(1)] = 0.0;
+            padded[input_frames.saturating_add(1)] = source.last().copied().unwrap_or(0.0);
 
             let source = if cutoff.is_some() {
                 let filtered = &mut self.filtered[channel_idx];
@@ -162,7 +172,14 @@ impl GlideEngine {
                             op: backend::FILTER_OP,
                             detail: "anti-alias filter was not initialized".into(),
                         })?;
-                backend::filter(filter, &padded[..input_frames.saturating_add(2)], filtered);
+                filtered[0] = self.filtered_previous[channel_idx];
+                backend::filter(
+                    filter,
+                    source,
+                    &mut filtered[1..input_frames.saturating_add(1)],
+                );
+                self.filtered_previous[channel_idx] = filtered[input_frames];
+                filtered[input_frames.saturating_add(1)] = filtered[input_frames];
                 &filtered[..input_frames.saturating_add(2)]
             } else {
                 &padded[..input_frames.saturating_add(2)]
@@ -179,6 +196,7 @@ impl GlideEngine {
     }
 
     pub(in crate::glide) fn reset(&mut self) {
+        self.filtered_previous.fill(0.0);
         for filter in self.filters.iter_mut().flatten() {
             backend::reset(filter);
         }
@@ -264,6 +282,15 @@ mod backend {
     pub(super) fn reset(filter: &mut Filter) {
         filter.reset();
     }
+
+    pub(super) fn retune_filter(
+        filter: &mut Filter,
+        sample_rate: f64,
+        cutoff: f64,
+        q: f64,
+    ) -> bool {
+        filter.retune_low_pass(sample_rate, cutoff, q)
+    }
 }
 
 #[cfg(not(all(
@@ -315,6 +342,19 @@ mod backend {
 
     pub(super) fn reset(filter: &mut Filter) {
         filter.reset();
+    }
+
+    pub(super) fn retune_filter(
+        filter: &mut Filter,
+        sample_rate: f64,
+        cutoff: f64,
+        q: f64,
+    ) -> bool {
+        let Some(coefficients) = rbj_low_pass_coefficients(sample_rate, cutoff, q) else {
+            return false;
+        };
+        filter.coefficients = coefficients;
+        true
     }
 
     impl Filter {

@@ -353,7 +353,7 @@ fn standalone_decoder_adapter_wraps_configured_backend(
 }
 
 #[kithara::test(native, flash(false))]
-fn standalone_decoder_adapter_emits_one_resampler_block_per_call(
+fn standalone_decoder_adapter_emits_one_chunk_per_decoded_chunk(
     resampled_markers: Vec<f32>,
     resampled_wav_eight: &'static [u8],
 ) {
@@ -369,14 +369,27 @@ fn standalone_decoder_adapter_emits_one_resampler_block_per_call(
         .expect("first chunk")
         .try_into()
         .expect("first adapter output chunk");
-    let second: AudioChunk = decoder
-        .next_chunk()
-        .expect("second chunk")
-        .try_into()
-        .expect("second adapter output chunk");
 
-    assert_eq!(first.frames(), FRAMES);
-    assert_eq!(second.frames(), FRAMES);
+    assert_eq!(
+        first.frames(),
+        2 * FRAMES,
+        "one decoded chunk resamples into one output chunk, not one per resampler block"
+    );
+    let tail: AudioChunk = decoder
+        .next_chunk()
+        .expect("eof tail")
+        .try_into()
+        .expect("eof tail chunk");
+
+    assert_eq!(
+        tail.meta.frame_offset,
+        u64::try_from(first.frames()).expect("frame count fits u64"),
+        "only the end-of-stream flush follows, and it continues where the chunk ended"
+    );
+    assert!(
+        matches!(decoder.next_chunk().expect("eof"), DecoderChunkOutcome::Eof),
+        "nothing of the input is left behind the flush"
+    );
 }
 
 #[kithara::test(native, flash(false))]
@@ -436,7 +449,6 @@ fn standalone_decoder_seek_reanchors_output_to_trimmed_target(
         u64::try_from(test_frames(TARGET_RATE, TARGET)).expect("target frame fits u64");
 
     assert_eq!(output.meta.frame_offset, target_frame);
-    assert_eq!(output.frames(), FRAMES);
     assert_eq!(output.meta.timestamp, TARGET);
     assert_eq!(
         output.meta.timestamp,

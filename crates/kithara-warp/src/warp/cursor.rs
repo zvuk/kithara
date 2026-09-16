@@ -1,10 +1,13 @@
-use crate::{SessionFrame, WarpMapRevision};
+use crate::{SessionBeat, SessionFrame, WarpMapRevision};
 
 /// Renderer-local progress through one immutable [`super::WarpMap`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct WarpCursor {
+    /// Session beat pinned to the output activation frame.
+    #[field(get, copy)]
+    beat: SessionBeat,
     /// Exclusive session-output boundary already rendered.
     #[field(get, copy)]
     output: SessionFrame,
@@ -17,8 +20,14 @@ pub struct WarpCursor {
 }
 
 impl WarpCursor {
-    pub(super) const fn new(revision: WarpMapRevision, source: u64, output: SessionFrame) -> Self {
+    pub(super) const fn new(
+        revision: WarpMapRevision,
+        source: u64,
+        output: SessionFrame,
+        beat: SessionBeat,
+    ) -> Self {
         Self {
+            beat,
             output,
             revision,
             source,

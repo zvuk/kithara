@@ -111,6 +111,31 @@ impl BeatGridView for SegmentGridView {
         ))
     }
 
+    fn beat_at_or_next(
+        &self,
+        position: MapPoint<MapPosition>,
+    ) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>> {
+        if let Some(stale) = self.stale(position.stamp()) {
+            return stale;
+        }
+        if position.value().kind() != self.axis().kind() {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        }
+        if self.outside_asset_extent(*position.value()) {
+            return BeatGridQuery::OutsideDomain;
+        }
+        let Some((beat, evidence, uncertainty)) = self.segments.beat_at_or_next(*position.value())
+        else {
+            return self.missing_position(*position.value());
+        };
+        BeatGridQuery::Resolved(BeatEstimate::new(
+            MapPoint::new(self.stamp(), beat),
+            evidence,
+            uncertainty,
+            self.stamp(),
+        ))
+    }
+
     fn id(&self) -> BeatGridId {
         self.id
     }
@@ -219,8 +244,8 @@ mod tests {
         AssetAxis, AssetFrame, Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRegion,
         BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatGridView, BeatMarker, BeatOrdinal,
         FrameUncertainty, MapAxis, MapPoint, MapPosition, MapRegion, MapRegionError, MapSegment,
-        Meter, MeterFacts, SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat,
-        SessionEpoch, SessionFrame, beat_grid::session::SessionGridView,
+        Meter, MeterFacts, SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionAxis,
+        SessionBeat, SessionEpoch, SessionFrame, beat_grid::session::SessionGridView,
     };
 
     struct Consts;
@@ -296,7 +321,7 @@ mod tests {
             SessionFrame::new(0),
             SessionBeat::new(0.0).expect("invariant: fixture beat is finite"),
             2.0,
-            sample_rate(),
+            SessionAxis::new(sample_rate(), SessionEpoch::new(0)),
         )
         .expect("invariant: fixture tempo is invertible");
         let session = SessionGridView::new(
@@ -399,6 +424,54 @@ mod tests {
             SegmentSet::new(MapAxis::Asset(asset_axis), vec![beyond_segment]),
             Err(SegmentError::OutsideExtent { index: 0 })
         );
+    }
+
+    #[kithara::test]
+    fn asset_grid_round_trips_a_nonzero_first_beat() {
+        let first = asset_frame(6_000.0);
+        let second = asset_frame(30_000.0);
+        let segment = MapSegment::new(
+            asset_marker(f64::from(first), 0),
+            asset_marker(f64::from(second), 1),
+            SegmentFacts::new(BeatEvidence::Observed, FrameUncertainty::ZERO, None),
+        )
+        .expect("nonzero first beat defines valid source geometry");
+        let grid = BeatGridSnapshot::segments(
+            BeatGridId::allocate().expect("grid id"),
+            BeatGridRevision::first(),
+            BeatGridState::Complete,
+            SegmentSet::new(
+                MapAxis::Asset(AssetAxis::new(sample_rate(), Consts::FRAME_COUNT)),
+                vec![segment],
+            )
+            .expect("segment set"),
+        )
+        .expect("asset grid");
+
+        for (frame, expected_beat) in [(6_000.0, 0.0), (18_000.0, 0.5), (30_000.0, 1.0)] {
+            let position = MapPoint::new(grid.stamp(), MapPosition::Asset(asset_frame(frame)));
+            let beat = match grid.beat_at(position) {
+                BeatGridQuery::Resolved(beat) => beat,
+                other => panic!("source frame must resolve, got {other:?}"),
+            };
+            assert_eq!(
+                *beat.value().value(),
+                Beat::new(expected_beat).expect("finite beat")
+            );
+            let round_trip = match grid.position_at(*beat.value()) {
+                BeatGridQuery::Resolved(position) => position,
+                other => panic!("source beat must resolve, got {other:?}"),
+            };
+            assert_eq!(*round_trip.value(), position);
+        }
+
+        assert!(matches!(
+            grid.beat_at(MapPoint::new(
+                grid.stamp(),
+                MapPosition::Asset(asset_frame(5_999.0))
+            )),
+            BeatGridQuery::OutsideDomain
+        ));
     }
 
     #[kithara::test]

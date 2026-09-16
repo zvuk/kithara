@@ -159,6 +159,28 @@ impl PlayerTrack {
         self.ended_at_eof = false;
     }
 
+    pub(crate) fn replace_prepared_launch(
+        &mut self,
+        prepared_epoch: u64,
+        replacement_epoch: u64,
+        transport_epoch: u64,
+        target: f64,
+    ) -> bool {
+        if !self.resource.has_prepared_launch(prepared_epoch) {
+            return false;
+        }
+        if !self
+            .resource
+            .present_replacement_prepared_launch(prepared_epoch, replacement_epoch)
+        {
+            return false;
+        }
+        self.resource.clear_prepared_launch(prepared_epoch);
+        self.observe_seek_epoch(transport_epoch);
+        self.seek(target);
+        true
+    }
+
     /// Update the prefetch lead time used for the preload trigger.
     pub const fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
         self.prefetch_duration = prefetch_duration.max(0.0);
@@ -204,6 +226,11 @@ impl PlayerTrack {
 
     delegate::delegate! {
         to self.resource {
+            pub(crate) fn prepared_launch_readiness(
+                &mut self,
+                context: &kithara_warp::RenderContext,
+                frames: usize,
+            ) -> super::feeder_read::PreparedLaunchReadiness;
             /// Cached span in seconds: how much of the source is on disk.
             #[must_use]
             pub fn cached_span(&self) -> f64;
@@ -217,6 +244,13 @@ impl PlayerTrack {
             /// Control-plane handle used to begin this track's seeks off the audio thread.
             #[must_use]
             pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
+            pub fn schedule_seek(
+                &mut self,
+                epoch: u64,
+                disposition: crate::bridge::ScheduledSeekDisposition,
+                armed: bool,
+            );
+            pub(crate) fn set_prepared_launch_armed(&mut self, armed: bool) -> bool;
             pub(crate) fn render_reader(&self) -> Option<RenderReader>;
             /// Source identifier.
             #[must_use]

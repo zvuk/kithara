@@ -43,6 +43,10 @@ fn artifact(style: &str, control: &str) -> BeatArtifact {
 
 fn artifact_named(prefix: &str, style: &str, control: &str) -> BeatArtifact {
     let name = format!("{prefix}_{style}_{control}");
+    artifact_by_name(&name)
+}
+
+fn artifact_by_name(name: &str) -> BeatArtifact {
     let asset = by_name(&name).unwrap_or_else(|| panic!("missing `{name}`"));
     assert_eq!(asset.entry().content_type, "application/x-kithara-analysis");
     let fingerprint = AnalysisFingerprint::new(Some(Consts::ANALYSIS_FINGERPRINT), None);
@@ -99,6 +103,46 @@ fn aligned_styles_have_a_stereo_musical_bed() {
         let asset = by_name(&name).unwrap_or_else(|| panic!("missing `{name}`"));
         let ratio = stereo_side_ratio(asset.bytes());
         assert!(ratio > 0.0001, "{style}: stereo side ratio is only {ratio}");
+    }
+}
+
+#[kithara::test(native, flash(false))]
+fn scenario_1_stereo_separated_fixtures_preserve_score_truth() {
+    for (name, style, active_channel) in [
+        ("scenario_1_downtempo_96_left_only", "downtempo_96", 0),
+        ("scenario_1_house_124_right_only", "house_124", 1),
+    ] {
+        let wav_name = format!("rhythm_wav_{name}");
+        let wav = by_name(&wav_name).unwrap_or_else(|| panic!("missing `{wav_name}`"));
+        let (beats, downbeats) = exact_score_map(style, "aligned");
+        assert_eq!(
+            artifact_by_name(&format!("rhythm_expected_analysis_{name}")).beats(),
+            beats,
+            "{name}: expected analysis must retain score beats"
+        );
+        assert_eq!(
+            artifact_by_name(&format!("rhythm_expected_analysis_{name}")).downbeats(),
+            downbeats,
+            "{name}: expected analysis must retain score downbeats"
+        );
+        assert_eq!(
+            wav_channel_markers(wav.bytes(), active_channel, false),
+            beats,
+            "{name}: active lane beat markers must retain score truth"
+        );
+        assert_eq!(
+            wav_channel_markers(wav.bytes(), active_channel, true),
+            downbeats,
+            "{name}: active lane downbeat markers must retain score truth"
+        );
+        assert!(
+            wav_channel_is_zero(wav.bytes(), 1 - active_channel),
+            "{name}: diagnostic inactive lane must be digitally silent"
+        );
+        assert!(
+            wav_channel_has_rich_bed(wav.bytes(), active_channel),
+            "{name}: active lane must retain the generated musical bed"
+        );
     }
 }
 
@@ -273,4 +317,40 @@ fn wav_markers(wav: &[u8], downbeats_only: bool) -> Vec<u64> {
             marker.then(|| u64::try_from(frame).expect("fixture frame fits u64"))
         })
         .collect()
+}
+
+fn wav_channel_markers(wav: &[u8], channel: usize, downbeats_only: bool) -> Vec<u64> {
+    wav[Consts::WAV_HEADER_BYTES..]
+        .chunks_exact(4)
+        .enumerate()
+        .filter_map(|(frame, bytes)| {
+            let offset = channel * size_of::<i16>();
+            let sample = i16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+            let marker = if downbeats_only {
+                sample == Consts::DOWNBEAT_MARKER
+            } else {
+                matches!(sample, Consts::BEAT_MARKER | Consts::DOWNBEAT_MARKER)
+            };
+            marker.then(|| u64::try_from(frame).expect("fixture frame fits u64"))
+        })
+        .collect()
+}
+
+fn wav_channel_is_zero(wav: &[u8], channel: usize) -> bool {
+    wav[Consts::WAV_HEADER_BYTES..]
+        .chunks_exact(4)
+        .all(|bytes| {
+            let offset = channel * size_of::<i16>();
+            i16::from_le_bytes([bytes[offset], bytes[offset + 1]]) == 0
+        })
+}
+
+fn wav_channel_has_rich_bed(wav: &[u8], channel: usize) -> bool {
+    wav[Consts::WAV_HEADER_BYTES..]
+        .chunks_exact(4)
+        .any(|bytes| {
+            let offset = channel * size_of::<i16>();
+            let sample = i16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+            sample != 0 && !matches!(sample, Consts::BEAT_MARKER | Consts::DOWNBEAT_MARKER)
+        })
 }

@@ -3,6 +3,7 @@
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 )))]
 mod identity;
+mod progress;
 #[cfg(all(
     test,
     not(target_arch = "wasm32"),
@@ -40,6 +41,7 @@ mod renderer_target;
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 )))]
 pub use identity::WarpRenderer;
+pub use progress::ScheduledActivationProgress;
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")

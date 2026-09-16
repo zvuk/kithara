@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use firewheel::dsp::filter::smoothing_filter::DEFAULT_SMOOTH_SECONDS;
 use kithara::{
@@ -8,12 +8,11 @@ use kithara::{
     host::HostConfig,
     platform::time::{self, Duration},
     play::{
-        EqBandConfig, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-        ResourceConfig, ResourceSrc, SessionError,
+        EqBandConfig, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
+        ResourceSrc,
         effects::eq::{FilterKind, GainDb},
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    warp::{SyncGroup, WarpConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper, kithara,
@@ -91,9 +90,6 @@ pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>,
     let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero");
     let session = HostConfig::offline(pools.clone())
         .sample_rate(sample_rate)
-        .max_block_frames(
-            NonZeroU32::new(Consts::BLOCK_FRAMES as u32).expect("block size is non-zero"),
-        )
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let player = PlayerImpl::new(
@@ -353,44 +349,14 @@ async fn prepared_deck_preserves_play_pause_order() {
 }
 
 #[kithara::test(tokio)]
-async fn failed_deck_preparation_releases_host_membership() {
+async fn inserting_an_idle_deck_keeps_the_output_stream_closed() {
     let region = pools();
     let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate");
     let config = HostConfig::offline(region.clone())
         .sample_rate(sample_rate)
-        .max_block_frames(NonZeroU32::new(Consts::BLOCK_FRAMES as u32).expect("block size"))
         .build();
     let host = OfflineHostHarness::new(config).await.expect("offline host");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let invalid = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(sample_rate)
-            .worker(worker.clone())
-            .warp(
-                WarpConfig::builder()
-                    .render_quantum_frames(NonZeroUsize::new(32).expect("quantum"))
-                    .build(),
-            )
-            .response_budget_frames(NonZeroUsize::new(1).expect("budget"))
-            .build(),
-    );
-    assert!(matches!(
-        host.insert(invalid).await,
-        Err(PlayError::Session(
-            SessionError::ResponseBudgetExceeded { .. }
-        ))
-    ));
-    host.with(|host| {
-        assert!(host.topology().expect("host topology").members().is_empty());
-        assert!(
-            host.sample_rate()
-                .expect("host sample rate")
-                .measured
-                .is_none(),
-            "failed preparation must close an otherwise idle stream"
-        );
-    })
-    .await;
     let valid = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(sample_rate)

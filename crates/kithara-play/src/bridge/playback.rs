@@ -1,5 +1,9 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::{
+    num::NonZeroUsize,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
+use num_traits::ToPrimitive;
 use portable_atomic::{AtomicF32, AtomicF64, AtomicU32};
 
 use super::RtMetrics;
@@ -29,6 +33,30 @@ pub struct PlaybackSnapshot {
     pub(crate) position: f64,
     /// Current output sample rate.
     pub(crate) sample_rate: u32,
+}
+
+impl PlaybackSnapshot {
+    /// Decoded source frontier after the configured control-response budget.
+    #[must_use]
+    pub fn preparation_source(
+        self,
+        presentation_source: u64,
+        response_budget_frames: NonZeroUsize,
+    ) -> u64 {
+        let sample_rate = f64::from(self.sample_rate);
+        let decoded = (self.frontier * sample_rate)
+            .ceil()
+            .max(0.0)
+            .to_u64()
+            .unwrap_or(u64::MAX);
+        let advance = (response_budget_frames.get().to_f64().unwrap_or(f64::MAX)
+            * f64::from(self.rate.max(0.0)))
+        .ceil()
+        .max(0.0)
+        .to_u64()
+        .unwrap_or(u64::MAX);
+        decoded.max(presentation_source).saturating_add(advance)
+    }
 }
 
 /// Atomic playback state written by the RT processor and read by control code.
@@ -183,6 +211,38 @@ mod tests {
             "frontier {} must cover position {}",
             snap.frontier,
             snap.position
+        );
+    }
+
+    #[kithara::test]
+    fn preparation_source_covers_the_response_budget_at_the_live_rate() {
+        let snapshot = PlaybackSnapshot {
+            playing: true,
+            rate: 1.25,
+            frontier: 8.0,
+            sample_rate: 48_000,
+            ..PlaybackSnapshot::default()
+        };
+
+        assert_eq!(
+            snapshot.preparation_source(384_000, NonZeroUsize::new(448).expect("fixture budget"),),
+            384_560,
+        );
+    }
+
+    #[kithara::test]
+    fn preparation_source_never_trails_presentation() {
+        let snapshot = PlaybackSnapshot {
+            playing: true,
+            rate: 1.0,
+            frontier: 0.0,
+            sample_rate: 48_000,
+            ..PlaybackSnapshot::default()
+        };
+
+        assert_eq!(
+            snapshot.preparation_source(383_872, NonZeroUsize::new(448).expect("fixture budget"),),
+            384_320,
         );
     }
 }

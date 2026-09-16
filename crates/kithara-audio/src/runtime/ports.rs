@@ -47,6 +47,11 @@ impl<T> Outlet<T> {
         self.overflow.is_none() && !self.producer.is_full()
     }
 
+    /// Items waiting for the consumer, including a parked overflow item.
+    pub(crate) fn queued_len(&self) -> usize {
+        self.producer.occupied_len() + usize::from(self.overflow.is_some())
+    }
+
     /// Try to drain the parked overflow item into the ring buffer.
     ///
     /// Returns `true` if the overflow slot is empty after the call (either
@@ -154,6 +159,10 @@ pub(crate) struct Inlet<T> {
 }
 
 impl<T> Inlet<T> {
+    pub(crate) fn fold<U>(&mut self, initial: U, fold: impl FnMut(U, &T) -> U) -> U {
+        self.consumer.iter().fold(initial, fold)
+    }
+
     delegate::delegate! {
         to self.consumer {
             /// Pop an item from the inlet. Returns `None` if empty.

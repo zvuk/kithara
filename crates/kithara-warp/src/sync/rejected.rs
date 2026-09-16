@@ -12,20 +12,23 @@ pub struct SyncRejected<G: SyncGroup> {
     error: SyncError,
     /// Returns the still-owned operation that was not committed.
     #[field(get)]
-    operation: SyncOperation<G>,
+    operation: Box<SyncOperation<G>>,
 }
 
 impl<G: SyncGroup> SyncRejected<G> {
     /// Preserves a failed operation for inspection or explicit disposal.
     #[must_use]
-    pub const fn new(error: SyncError, operation: SyncOperation<G>) -> Self {
-        Self { error, operation }
+    pub fn new(error: SyncError, operation: SyncOperation<G>) -> Self {
+        Self {
+            error,
+            operation: Box::new(operation),
+        }
     }
 }
 
 impl<G: SyncGroup> From<SyncRejected<G>> for (SyncError, SyncOperation<G>) {
     fn from(rejected: SyncRejected<G>) -> Self {
-        (rejected.error, rejected.operation)
+        (rejected.error, *rejected.operation)
     }
 }
 

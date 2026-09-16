@@ -1,14 +1,14 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{
     Audio, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode, PreloadGate,
-    ReadOutcome, SeekBegin, SeekOutcome,
+    ReadOutcome, RevisionFloorStatus, SeekBegin, SeekOutcome, SourceEnd,
 };
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
-use kithara_warp::{RenderPublisher, Warp};
+use kithara_warp::{RegionPlanSlot, RenderPublisher, Warp};
 use kithara_worker::{TaskControl, TaskHandle};
 
 use super::{PlayWorker, scheduler::ServiceClass};
@@ -52,14 +52,20 @@ impl<S> TrackLease<S> {
 /// buffers are released before the final worker owner can shut down.
 pub struct RegisteredAudio<T, S> {
     _lease: TrackLease<S>,
+    free_adoption: Option<super::FreeAdoptionControl>,
     warp: Warp<Audio<T>>,
 }
 
 impl<T, S> RegisteredAudio<T, S> {
-    pub(super) const fn new(warp: Warp<Audio<T>>, lease: TrackLease<S>) -> Self {
+    pub(super) const fn new(
+        warp: Warp<Audio<T>>,
+        lease: TrackLease<S>,
+        free_adoption: super::FreeAdoptionControl,
+    ) -> Self {
         Self {
             warp,
             _lease: lease,
+            free_adoption: Some(free_adoption),
         }
     }
 
@@ -67,8 +73,17 @@ impl<T, S> RegisteredAudio<T, S> {
         self._lease.priority()
     }
 
-    pub(crate) fn take_publisher(&mut self) -> Option<RenderPublisher> {
-        self.warp.take_publisher()
+    pub(crate) fn take_free_adoption(&mut self) -> Option<super::FreeAdoptionControl> {
+        self.free_adoption.take()
+    }
+
+    delegate::delegate! {
+        to self.warp {
+            pub(crate) fn take_publisher(&mut self) -> Option<RenderPublisher>;
+            /// Region plan slot of this resident item, installed by its deck.
+            #[expr(Arc::clone($))]
+            pub(crate) fn region_plan(&self) -> Arc<RegionPlanSlot>;
+        }
     }
 }
 
@@ -115,6 +130,14 @@ impl<T: MaybeSend, S> AudioControl for RegisteredAudio<T, S> {
             fn preload(&mut self) -> Result<(), DecodeError>;
             fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
             fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode);
+            fn set_render_revision_floor(
+                &mut self,
+                revision: u64,
+                required_frames: NonZeroUsize,
+                presented_source: Option<SourceEnd>,
+            ) -> RevisionFloorStatus;
+            fn defer_seek_until_pcm(&mut self);
+            fn present_seek(&mut self, epoch: u64) -> kithara_audio::SeekPresentation;
             fn sync_seek(&mut self);
         }
         to self.warp.source() {

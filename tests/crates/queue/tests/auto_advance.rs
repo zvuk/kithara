@@ -391,7 +391,6 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, play::PlayerEvent};
 
-    const TRACK_SECS: f64 = 1.0;
     const CROSSFADE_SECS: f32 = 0.2;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -544,8 +543,6 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
 #[kithara::test(tokio)]
 async fn queue_stops_live_playback_when_last_track_ends() {
     use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, queue::QueueEvent};
-
-    const TRACK_SECS: f64 = 0.4;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()

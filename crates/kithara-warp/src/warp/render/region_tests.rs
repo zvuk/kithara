@@ -3,11 +3,12 @@ use std::num::NonZero;
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::StretchKind;
-use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_sine};
+use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_nominal_clicks, warp_sine};
 use kithara_test_utils::kithara;
 
 use crate::{
-    GridSegment, RegionPlan, RegionPlanError, StretchControls, Warp, WarpConfig,
+    GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext, SessionBeat,
+    SessionEpoch, SessionFrame, StretchControls, SyncMode, TransportRevision, Warp, WarpConfig,
     test_pools::{Pools, pools, sample_buffer},
 };
 
@@ -65,13 +66,42 @@ fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
 /// 4096-frame chunks with advancing `frame_offset` (source frames).
 #[kithara::hang_watchdog]
 fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
+    render_on_grid(backend, speed, plan, source, (SyncMode::HostSync, 1.0))
+}
+
+#[kithara::hang_watchdog]
+fn render_on_grid(
+    backend: StretchKind,
+    speed: f32,
+    plan: Option<RegionPlan>,
+    source: &[f32],
+    grid: (SyncMode, f64),
+) -> Vec<f32> {
     let pools = pools();
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    controls.set_region_plan(plan.map(Arc::new));
-    let config = WarpConfig::builder().stretch(controls).build();
-    let mut fx = Warp::new((), &config).renderer(spec(), pools.clone());
+    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let mut warp = Warp::new((), &config);
+    let publisher = warp.take_publisher().expect("fixture owns publisher");
+    let context = RenderContext::new(
+        SessionFrame::new(0)..SessionFrame::new(i64::from(SR)),
+        spec().sample_rate,
+        Some(SessionBeat::default()..SessionBeat::new(grid.1).expect("beat")),
+        SessionEpoch::new(0),
+        Some(TransportRevision::first()),
+    )
+    .expect("fixture context")
+    .with_rate(grid.0, controls.rate_target());
+    publisher.publish(
+        &context,
+        PresentationFrontier::builder()
+            .source(0)
+            .output(SessionFrame::new(0))
+            .build(),
+    );
+    warp.region_plan().install(plan.map(Arc::new));
+    let mut fx = warp.renderer(spec(), pools.clone());
     let mut out = Vec::new();
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {
@@ -160,53 +190,62 @@ fn rms_profile(mono: &[f32]) -> (f32, f32) {
 }
 
 #[kithara::test]
-fn plan_rejects_inverted_overlapping_and_bad_ratio_segments() {
+fn plan_rejects_inverted_overlapping_and_bad_tempo_segments() {
     assert!(matches!(
-        RegionPlan::new(vec![seg(10, 10, 1.0)]),
+        RegionPlan::new(spec().sample_rate, vec![seg(10, 10, 1.0)]),
         Err(RegionPlanError::Inverted { index: 0 })
     ));
     assert!(matches!(
-        RegionPlan::new(vec![seg(0, 10, 0.0)]),
+        RegionPlan::new(spec().sample_rate, vec![seg(0, 10, 0.0)]),
         Err(RegionPlanError::Ratio { index: 0, .. })
     ));
     assert!(matches!(
-        RegionPlan::new(vec![seg(0, 10, f64::NAN)]),
+        RegionPlan::new(spec().sample_rate, vec![seg(0, 10, f64::NAN)]),
         Err(RegionPlanError::Ratio { index: 0, .. })
     ));
     assert!(matches!(
-        RegionPlan::new(vec![seg(0, 100, 1.0), seg(50, 200, 1.0)]),
+        RegionPlan::new(
+            spec().sample_rate,
+            vec![seg(0, 100, 1.0), seg(50, 200, 1.0)]
+        ),
         Err(RegionPlanError::Overlap { index: 1 })
     ));
     assert!(matches!(
-        RegionPlan::new(vec![seg(100, 200, 1.0), seg(0, 50, 1.0)]),
+        RegionPlan::new(
+            spec().sample_rate,
+            vec![seg(100, 200, 1.0), seg(0, 50, 1.0)]
+        ),
         Err(RegionPlanError::Overlap { index: 1 })
     ));
-    let valid = RegionPlan::new(vec![seg(0, 100, 1.1), seg(100, 200, 0.9)]);
+    let valid = RegionPlan::new(
+        spec().sample_rate,
+        vec![seg(0, 100, 1.1), seg(100, 200, 0.9)],
+    );
     assert!(valid.is_ok(), "adjacent segments are legal");
 }
 
 #[kithara::test]
 fn region_lookup_covers_segments_and_gaps() {
-    let plan = RegionPlan::new(vec![seg(100, 200, 1.1), seg(300, 400, 0.9)]).expect("valid plan");
+    let plan = RegionPlan::new(
+        spec().sample_rate,
+        vec![seg(100, 200, 1.1), seg(300, 400, 0.9)],
+    )
+    .expect("valid plan");
     let cases = [
-        (0_u64, 0_u64, 100_u64, 1.0),
-        (150, 100, 200, 1.1),
-        (250, 200, 300, 1.0),
-        (350, 300, 400, 0.9),
-        (450, 400, u64::MAX, 1.0),
+        (0_u64, 0_u64, 100_u64, None),
+        (150, 100, 200, Some(1.1)),
+        (250, 200, 300, None),
+        (350, 300, 400, Some(0.9)),
+        (450, 400, u64::MAX, None),
     ];
     for (frame, start, end, correction) in cases {
-        let r = plan.region_at(frame);
+        let r = plan.region_at(frame, spec().sample_rate);
         assert_eq!(
             (r.start(), r.end()),
             (start, end),
             "bounds at frame {frame}"
         );
-        assert!(
-            (r.correction() - correction).abs() < 1e-12,
-            "correction at frame {frame}: got {}, want {correction}",
-            r.correction()
-        );
+        assert_eq!(r.beats_per_second(), correction);
         assert!(r.contains(frame));
     }
 }
@@ -225,10 +264,13 @@ fn corrections_align_drifting_clicks_to_nominal_grid(
     warp_clicks: Vec<f32>,
 ) {
     let src = warp_clicks;
-    let plan = RegionPlan::new(vec![
-        seg(0, BOUNDARY, f64_of(NOMINAL) / f64_of(P1)),
-        seg(BOUNDARY, TOTAL, f64_of(NOMINAL) / f64_of(P2)),
-    ])
+    let plan = RegionPlan::new(
+        spec().sample_rate,
+        vec![
+            seg(0, BOUNDARY, f64_of(NOMINAL) / f64_of(P1)),
+            seg(BOUNDARY, TOTAL, f64_of(NOMINAL) / f64_of(P2)),
+        ],
+    )
     .expect("valid plan");
 
     let raw_clicks = click_positions(&mono(&src));
@@ -276,8 +318,11 @@ fn corrections_align_drifting_clicks_to_nominal_grid(
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let src = warp_sine[..(TOTAL) * 2].to_vec();
-    let plan = RegionPlan::new(vec![seg(0, BOUNDARY, 1.0), seg(BOUNDARY, TOTAL, 1.04)])
-        .expect("valid plan");
+    let plan = RegionPlan::new(
+        spec().sample_rate,
+        vec![seg(0, BOUNDARY, 1.0), seg(BOUNDARY, TOTAL, 1.04)],
+    )
+    .expect("valid plan");
     let out = mono(&render(backend, 1.0, Some(plan), &src));
     assert!(out.len() > BOUNDARY + 16_384, "output too short");
 
@@ -304,9 +349,13 @@ fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind, wa
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let src = warp_sine[..(TOTAL) * 2].to_vec();
-    let merged = RegionPlan::new(vec![seg(0, TOTAL, 1.05)]).expect("valid plan");
-    let split = RegionPlan::new(vec![seg(0, BOUNDARY, 1.05), seg(BOUNDARY, TOTAL, 1.05)])
-        .expect("valid plan");
+    let merged =
+        RegionPlan::new(spec().sample_rate, vec![seg(0, TOTAL, 1.05)]).expect("valid plan");
+    let split = RegionPlan::new(
+        spec().sample_rate,
+        vec![seg(0, BOUNDARY, 1.05), seg(BOUNDARY, TOTAL, 1.05)],
+    )
+    .expect("valid plan");
     let a = render(backend, 1.0, Some(merged), &src);
     let b = render(backend, 1.0, Some(split), &src);
     assert_eq!(
@@ -332,9 +381,13 @@ fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind, warp_sine: Vec
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn empty_plan_matches_no_plan(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let src = warp_sine[..(TOTAL / 4) * 2].to_vec();
-    let empty = RegionPlan::new(Vec::new()).expect("empty plan is valid");
+    let empty = RegionPlan::new(spec().sample_rate, Vec::new()).expect("empty plan is valid");
     let with = render(backend, 0.5, Some(empty), &src);
     let without = render(backend, 0.5, None, &src);
+    assert_eq!(
+        without, src,
+        "HostSync without asset geometry must preserve original audio and ignore manual speed"
+    );
     assert_eq!(
         with.len(),
         without.len(),
@@ -345,4 +398,35 @@ fn empty_plan_matches_no_plan(#[case] backend: StretchKind, warp_sine: Vec<f32>)
         min_rms >= median_rms * 0.5,
         "empty plan dented the envelope: min {min_rms}, median {median_rms}"
     );
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn rendered_beats_follow_deck_tempo_and_ignore_manual_speed(
+    #[case] backend: StretchKind,
+    warp_nominal_clicks: Vec<f32>,
+) {
+    let frames = NOMINAL * BARS;
+    let source = warp_nominal_clicks;
+    for (mode, bps, interval) in [
+        (SyncMode::HostSync, 2.0, NOMINAL),
+        (SyncMode::LocalSync, 1.5, NOMINAL * 4 / 3),
+    ] {
+        let plan =
+            RegionPlan::new(spec().sample_rate, vec![seg(0, frames, 2.0)]).expect("120 BPM asset");
+        let output = render_on_grid(backend, 0.5, Some(plan), &source, (mode, bps));
+        let clicks = click_positions(&mono(&output));
+        assert_eq!(clicks.len(), BARS, "every source beat survives {mode:?}");
+        for pair in clicks.windows(2) {
+            let actual = pair[1] - pair[0];
+            assert!(
+                actual.abs_diff(interval) <= interval / 20,
+                "{mode:?}: beat interval {actual}, expected {interval}"
+            );
+        }
+    }
 }

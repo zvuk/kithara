@@ -1,6 +1,7 @@
 use std::mem::size_of;
 
 use kithara_integration_tests::{
+    artifact_timeline::ArtifactTimeline,
     audio_artifact::{AssetReader, AudioArtifactSet, ReadSide, audio_artifact_path},
     bufpool_ext::TestPools,
 };
@@ -13,6 +14,42 @@ fn read(reader: &AssetReader<TestPools>) -> Vec<u8> {
     let read = reader.read_at(0, &mut bytes).expect("read audio artifact");
     assert_eq!(read, bytes.len());
     bytes
+}
+
+#[kithara::test(native, flash(false))]
+fn timeline_svg_preserves_output_and_source_coordinates() {
+    let temp = tempdir().expect("temporary artifact directory");
+    let set =
+        AudioArtifactSet::new(temp.path(), "timeline", 48_000, 2).expect("audio artifact set");
+    let mut timeline = ArtifactTimeline::default();
+    timeline.span(
+        "deck<1",
+        100,
+        200,
+        "presented",
+        "beat & span",
+        Some((1_000, 1_120)),
+    );
+
+    let reader = set
+        .write_bytes("timeline.svg", timeline.svg().as_bytes())
+        .expect("write timeline SVG");
+    let svg = String::from_utf8(read(&reader)).expect("timeline is UTF-8");
+
+    assert!(svg.contains("deck&lt;1"));
+    assert!(svg.contains("beat &amp; span: output 100..200, source 1000..1120"));
+    assert!(svg.contains("class=\"event presented\""));
+}
+
+#[kithara::test(native, flash(false))]
+fn timeline_coalesces_adjacent_presented_spans() {
+    let mut timeline = ArtifactTimeline::default();
+    timeline.span("deck", 0, 128, "presented", "PCM", Some((20, 148)));
+    timeline.span("deck", 128, 256, "presented", "PCM", Some((148, 276)));
+    timeline.record_probes(&[]);
+
+    assert_eq!(timeline.events().len(), 1);
+    assert!(timeline.svg().contains("output 0..256, source 20..276"));
 }
 
 #[kithara::test(native, flash(false))]

@@ -21,6 +21,14 @@ pub trait BeatGridView: Debug + Send + Sync + 'static {
         position: MapPoint<MapPosition>,
     ) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
 
+    /// Resolves the beat at a native position, or the next mapped beat after a gap.
+    fn beat_at_or_next(
+        &self,
+        position: MapPoint<MapPosition>,
+    ) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>> {
+        self.beat_at(position)
+    }
+
     /// Returns the stable identity of the owning live grid.
     fn id(&self) -> BeatGridId;
 

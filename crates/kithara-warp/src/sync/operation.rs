@@ -2,7 +2,7 @@ use super::{
     LoadGeneration, PresentationFrontier, SyncGroup, SyncMember, SyncOperationId, TopologyStamp,
     TransportRevision, WarpMapRevision,
 };
-use crate::{Beat, BeatGridId, MapPoint, MapRegion, SessionFrame};
+use crate::{Beat, BeatGridId, BeatsPerMinute, MapPoint, MapRegion, RateTarget, SessionFrame};
 
 /// A beat on a source grid aligned with a beat on a target grid.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -30,9 +30,55 @@ impl BeatAlignment {
 #[non_exhaustive]
 pub enum AlignmentSource {
     /// Decoded audio has not become audible and may be positioned before playback.
-    Prepared,
+    Prepared(PresentationFrontier),
     /// Decoded audio is already audible at the stated exact presentation frontier.
-    Audible(PresentationFrontier),
+    Audible {
+        /// Last source/output boundary copied into Host output.
+        presentation: PresentationFrontier,
+        /// Decoded source frontier beyond which a replacement can still be prepared.
+        preparation_source: u64,
+        /// Effective media seconds consumed per output second by the audible mapping.
+        playback_rate: RateTarget,
+    },
+}
+
+impl AlignmentSource {
+    /// Exact source/output frontier observed for this request.
+    #[must_use]
+    pub const fn frontier(self) -> PresentationFrontier {
+        match self {
+            Self::Prepared(frontier) => frontier,
+            Self::Audible { presentation, .. } => presentation,
+        }
+    }
+
+    /// First source coordinate that has not already passed decoder preparation.
+    #[must_use]
+    pub fn preparation_source(self) -> u64 {
+        if let Self::Audible {
+            preparation_source, ..
+        } = self
+        {
+            preparation_source
+        } else {
+            self.frontier().source()
+        }
+    }
+
+    /// Effective rate of an audible free-running mapping.
+    #[must_use]
+    pub const fn playback_rate(self) -> Option<RateTarget> {
+        match self {
+            Self::Prepared(_) => None,
+            Self::Audible { playback_rate, .. } => Some(playback_rate),
+        }
+    }
+
+    /// Whether the selected source cue must lie strictly after the frontier.
+    #[must_use]
+    pub const fn requires_future_cue(self) -> bool {
+        matches!(self, Self::Audible { .. })
+    }
 }
 
 /// One operation routed through the live synchronization-group owner.
@@ -71,6 +117,13 @@ pub enum SyncOperation<G: SyncGroup> {
         /// Requested synchronization state transition.
         intent: SyncIntent,
     },
+    /// Sets the local tempo of one group that owns its tempo.
+    Tempo {
+        /// Group whose local tempo changes.
+        target: BeatGridId,
+        /// New local tempo.
+        tempo: BeatsPerMinute,
+    },
     /// Re-evaluates an active warp map after one material control-plane change.
     Reconcile {
         /// Stable Deck grid whose active warp map is being re-evaluated.
@@ -81,8 +134,10 @@ pub enum SyncOperation<G: SyncGroup> {
         transport: TransportRevision,
         /// Change that requires reconciliation.
         cause: ReconcileCause,
-        /// Last source/output boundary consumed by the callback.
-        frontier: PresentationFrontier,
+        /// Playback state and exact source/output boundary being reconciled.
+        source: AlignmentSource,
+        /// Optional already-resolved source beat for a one-shot initial launch cue.
+        source_cue: Option<Beat>,
     },
 }
 
@@ -94,6 +149,7 @@ impl<G: SyncGroup> SyncOperation<G> {
             Self::Topology { base, .. } => base.group_id,
             Self::Transport { target, .. }
             | Self::Sync { target, .. }
+            | Self::Tempo { target, .. }
             | Self::Reconcile { target, .. } => *target,
         }
     }
@@ -161,6 +217,8 @@ pub enum SyncIntent {
     Enable,
     /// Stop future parent-group correction and latch the current settings.
     Disable,
+    /// Leave the beat timeline: the group plays at its plain rate multiplier.
+    Free,
     /// Snap immediately to the parent group's tempo and phase.
     AlignNow,
 }
@@ -169,12 +227,17 @@ pub enum SyncIntent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ReconcileCause {
+    /// A one-shot phase alignment was explicitly requested for the audible member.
+    AlignmentRequested,
     /// A previously unavailable grid became usable.
     GridAvailable,
     /// A newer grid revision materially changed the active relation.
     GridRefined,
     /// The authoritative session transport changed.
     TransportChanged,
+    /// The session tempo changed on the live axis; the audible mapping
+    /// continues through its current source frame.
+    TempoRetargeted,
     /// The recursive ownership tree changed.
     TopologyChanged,
 }
@@ -205,6 +268,14 @@ pub enum SyncAdmission {
         /// Exact topology published by the transaction.
         topology: TopologyStamp,
     },
+    /// A mode or tempo transition was applied; nothing waits on the render
+    /// boundary.
+    StateChanged {
+        /// Operation that carried the transition.
+        operation: SyncOperationId,
+        /// Topology the transition was applied under.
+        topology: TopologyStamp,
+    },
     /// A validated SYNC-off transport command may enter the existing sample path.
     Accepted {
         /// Identity of the admitted operation.
@@ -226,6 +297,12 @@ pub enum SyncAdmission {
         warp_map: WarpMapRevision,
         /// Exact output boundary at which the warp map takes effect.
         activation: SessionFrame,
+    },
+    /// A Free handoff is reserved and awaits worker boundary adoption.
+    Preparing {
+        operation: SyncOperationId,
+        topology: TopologyStamp,
+        warp_map: WarpMapRevision,
     },
     /// The requested operation already matches committed state.
     Unchanged {

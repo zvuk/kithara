@@ -551,15 +551,6 @@ mod tests {
         assert_eq!(server.finish().values().sum::<usize>(), 4);
     }
 
-    #[kithara::test(native, flash(false))]
-    fn missing_remote_configuration_names_the_required_input() {
-        let error = RemoteFileError::Missing("KITHARA_REMOTE_FIXTURES");
-        assert_eq!(
-            error.to_string(),
-            "repository variable KITHARA_REMOTE_FIXTURES is missing"
-        );
-    }
-
     struct TestServer {
         handle: JoinHandle<HashMap<String, usize>>,
         url: Url,

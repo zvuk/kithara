@@ -57,11 +57,8 @@ async fn every_provider_materialises_two_sources(#[future(awt)] provider_sources
             );
         }
     }
-    if std::env::var_os("KITHARA_REMOTE_FIXTURES").is_some_and(|value| !value.is_empty()) {
-        assert!(
-            blocked.is_empty(),
-            "requested remote fixtures are unavailable: {blocked:?}"
-        );
-    }
-    eprintln!("blocked providers: {blocked:?}");
+    assert!(
+        blocked.is_empty(),
+        "library fixtures are unavailable: {blocked:?}"
+    );
 }

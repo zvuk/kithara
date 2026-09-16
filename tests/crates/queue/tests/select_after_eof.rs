@@ -80,8 +80,6 @@ async fn seek_updates_cached_position_optimistically() {
 /// A again must reload the retained product source and restart playback.
 #[kithara::test(tokio, flash(false))]
 async fn reselect_finished_track_restarts_when_next_track_never_loads() {
-    const TRACK_SECS: f64 = 0.4;
-
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let source_a = assets::constant_wav_three_0_4s();
     let id_a = append_loaded(&harness, &queue, &source_a).await;
@@ -126,7 +124,6 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
 #[case::selected(InitialStart::Select)]
 #[case::play_button(InitialStart::Play)]
 async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: InitialStart) {
-    const TRACK_SECS: f64 = 8.0;
     const WARMUP_BLOCKS: usize = 64;
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
@@ -202,7 +199,6 @@ async fn play_button_marks_current_loaded_track_consumed() {
 /// unavailable, so its eventual completion cannot barge into playback.
 #[kithara::test(tokio)]
 async fn reselect_playing_track_cancels_pending_switch() {
-    const TRACK_SECS: f64 = 5.0;
     const WARMUP_BLOCKS: usize = 64;
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;

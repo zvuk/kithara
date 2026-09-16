@@ -3,7 +3,9 @@ use std::{cell::Cell, num::NonZeroU32};
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, Mutex, mpsc};
-use kithara_play::{GroupState, SessionSampleRate, StreamShape, player::PlayerMember};
+use kithara_play::{
+    GroupState, SessionSampleRate, StreamShape, effects::LimiterConfig, player::PlayerMember,
+};
 
 use super::bridge::{init_bridge_state, reset_bridge_state, start_stream_web_audio};
 use crate::{
@@ -92,7 +94,7 @@ where
 
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
-            HostReply::Play(reply) => Ok(reply),
+            HostReply::Play(reply) => Ok(*reply),
             HostReply::Err(error) => Err(error),
             _ => Err(PlayError::Internal(
                 "unexpected host reply for player session command".into(),
@@ -118,6 +120,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
+    limiter: LimiterConfig,
 ) -> Result<(Arc<dyn HostDispatcher<S>>, WebSessionState<S>), PlayError> {
     WASM_SESSION_ACTIVE.with(|active| {
         if active.replace(true) {
@@ -130,6 +133,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         root_view.clone(),
         sample_rate,
         None,
+        limiter,
         start_stream_web_audio,
     ))));
     init_bridge_state();

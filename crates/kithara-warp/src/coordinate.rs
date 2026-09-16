@@ -241,6 +241,29 @@ impl MapAxis {
         }
     }
 
+    /// Converts a frame the decoded stream carries at `output_rate` back to
+    /// this grid-native axis, the inverse of [`Self::output_frame`].
+    ///
+    /// Producer positions and frontiers reach the grid on the output axis
+    /// while every marker, segment and cue is measured on the native one.
+    #[must_use]
+    pub fn native_frame(self, output_frame: u64, output_rate: NonZeroU32) -> f64 {
+        output_frame.to_f64().unwrap_or(0.0) * f64::from(self.sample_rate().get())
+            / f64::from(output_rate.get())
+    }
+    /// Converts a frame measured on this grid-native axis into the frame the
+    /// decoded stream carries once it is resampled to `output_rate`.
+    ///
+    /// Analysis measures an asset in its own frames while every producer
+    /// position, frontier and activation downstream of the decoder counts
+    /// output frames, so a coordinate crossing that boundary is scaled here.
+    /// A session axis already counts output frames and scales by one.
+    #[must_use]
+    pub fn output_frame(self, frame: f64, output_rate: NonZeroU32) -> u64 {
+        let scaled = frame * f64::from(output_rate.get()) / f64::from(self.sample_rate().get());
+        scaled.round().to_u64().unwrap_or(0)
+    }
+
     /// Returns the sample rate defining this grid-native frame axis.
     #[must_use]
     pub const fn sample_rate(self) -> NonZeroU32 {

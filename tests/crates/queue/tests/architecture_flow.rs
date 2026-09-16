@@ -66,6 +66,7 @@ async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelpe
     queue
         .select(track_id, Transition::None)
         .expect("select loaded MP3");
+    queue.play();
 
     let peak = kithara::platform::time::timeout(Duration::from_secs(30), async {
         for _ in 0..RENDER_BLOCK_BUDGET {

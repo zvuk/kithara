@@ -103,38 +103,68 @@ pub struct StreamShape {
 }
 
 impl StreamShape {
-    /// Compute decoder buffer depths within the output response budget.
+    /// Compute decoder buffer depths from the output block.
+    ///
+    /// The preload spans two output blocks and the ring holds one chunk more,
+    /// so a replacement can cover the rest of one callback and the next one.
+    /// Depth does not delay a control change: rate and tempo changes replace
+    /// queued PCM instead of draining it.
     ///
     /// # Errors
-    /// Returns an error when the geometry overflows or exceeds the budget.
+    /// Returns an error when the geometry overflows.
     pub fn playback_buffers(
         self,
         quantum: NonZeroUsize,
-        budget: NonZeroUsize,
     ) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
         let output_frames = usize::try_from(self.max_block_frames.get())
             .map_err(|_| SessionError::ResponseGeometryOverflow)?;
-        let preload = output_frames.div_ceil(quantum.get());
+        let preload = output_frames
+            .div_ceil(quantum.get())
+            .checked_mul(2)
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
         let ring = preload
             .checked_add(1)
             .ok_or(SessionError::ResponseGeometryOverflow)?;
-        let required_frames = ring
-            .checked_add(1)
-            .and_then(|chunks| chunks.checked_mul(quantum.get()))
-            .and_then(|frames| frames.checked_sub(1))
-            .ok_or(SessionError::ResponseGeometryOverflow)?;
-        if required_frames > budget.get() {
-            return Err(SessionError::ResponseBudgetExceeded {
-                required_frames,
-                max_block_frames: self.max_block_frames.get(),
-                render_quantum_frames: quantum.get(),
-                budget_frames: budget.get(),
-            });
-        }
         Ok((
             NonZeroUsize::new(preload).ok_or(SessionError::ResponseGeometryOverflow)?,
             NonZeroUsize::new(ring).ok_or(SessionError::ResponseGeometryOverflow)?,
         ))
+    }
+
+    /// Output frames between a control change and its first replaced PCM:
+    /// the output block, the ring's extra chunk and one quantum being rendered.
+    ///
+    /// # Errors
+    /// Returns an error when the geometry overflows.
+    pub fn response_frames(self, quantum: NonZeroUsize) -> Result<NonZeroUsize, SessionError> {
+        usize::try_from(self.max_block_frames.get())
+            .ok()
+            .map(|frames| frames.div_ceil(quantum.get()))
+            .and_then(|chunks| chunks.checked_add(2))
+            .and_then(|chunks| chunks.checked_mul(quantum.get()))
+            .and_then(|frames| frames.checked_sub(1))
+            .and_then(NonZeroUsize::new)
+            .ok_or(SessionError::ResponseGeometryOverflow)
+    }
+
+    /// Fill the response budget with a preload and a one-chunk-deeper ring.
+    ///
+    /// # Errors
+    /// Returns an error when the budget holds no preload chunk.
+    pub(crate) fn budget_buffers(
+        quantum: NonZeroUsize,
+        budget: NonZeroUsize,
+    ) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
+        let (budget, quantum) = (budget.get(), quantum.get());
+        let whole = budget / quantum + usize::from(budget % quantum == quantum - 1);
+        let preload = whole
+            .checked_sub(2)
+            .and_then(NonZeroUsize::new)
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
+        let ring = preload
+            .checked_add(1)
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
+        Ok((preload, ring))
     }
 
     #[must_use]
@@ -274,7 +304,9 @@ impl PlayerNodeProcessor {
         frames: usize,
         is_playing: bool,
     ) -> (bool, Option<(f64, f64)>) {
-        self.render_with_context(None, buffers, frames, is_playing)
+        let (outputs_modified, _, position_duration) =
+            self.render_with_context(None, buffers, frames, is_playing);
+        (outputs_modified, position_duration)
     }
 
     fn render_context<'a>(
@@ -294,7 +326,7 @@ impl PlayerNodeProcessor {
         buffers: &mut ProcBuffers,
         frames: usize,
         is_playing: bool,
-    ) -> (bool, Option<(f64, f64)>) {
+    ) -> (bool, bool, Option<(f64, f64)>) {
         self.render.render_audio(
             context,
             RenderTargets {
@@ -404,7 +436,14 @@ impl PlayerNodeProcessor {
             trash_tx: inputs.trash_tx,
             playback: inputs.playback,
             sample_rate: shape.sample_rate,
-            render: RenderPass::new(pools, shape, gate_smoothing),
+            render: RenderPass::new(
+                pools,
+                shape,
+                inputs.stretch,
+                inputs.rate_smoothing,
+                inputs.grid,
+                gate_smoothing,
+            ),
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
             tracks: TrackSlots::default(),
@@ -459,13 +498,16 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
             }
         };
 
-        let (playback_started, leading_outcome_pos_dur) =
+        let (outputs_modified, prepared_launch_started, leading_outcome_pos_dur) =
             self.render_with_context(context, &mut buffers, info.frames, is_playing);
 
         self.update_position_duration(leading_outcome_pos_dur);
+        if prepared_launch_started && !is_playing {
+            self.playback.playing.store(true, Ordering::SeqCst);
+        }
         self.refresh_effective_rate();
 
-        if playback_started {
+        if outputs_modified {
             ProcessStatus::OutputsModified
         } else {
             ProcessStatus::ClearAllOutputs

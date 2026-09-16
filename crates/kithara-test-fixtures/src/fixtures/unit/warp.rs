@@ -23,6 +23,13 @@ pub fn warp_constant() -> Vec<f32> {
     samples(&assets::unit_pcm_warp_constant())
 }
 
+/// Prepared build-time PCM input for nominal warp clicks.
+#[kithara::fixture]
+#[must_use]
+pub fn warp_nominal_clicks() -> Vec<f32> {
+    samples(&assets::unit_pcm_warp_nominal_clicks())
+}
+
 /// Prepared build-time PCM input for warp clicks.
 #[kithara::fixture]
 #[must_use]
