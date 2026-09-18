@@ -43,6 +43,10 @@ analysis-waveform = ["kithara/analysis-waveform"]
 # modules without pulling in iced. Used by integration tests
 # (`tests/crates/queue/tests/real_playlist.rs`).
 lib-only = []
+# Hand the no-block gate the facade the app is built on, so a lane that runs
+# this package under the gate detects a blocking call made from the app as
+# well as from the crates beneath it.
+no-block = ["kithara/no-block"]
 # Enable app and facade USDT probes together.
 usdt = ["kithara/usdt"]
 # Production Apple decode shape: embedded AudioConverter SRC inside the Apple
@@ -91,7 +95,7 @@ fieldwork = { workspace = true }
 # for the iOS framework closure. Keeping them off iOS lets the workspace-hack
 # leave env-filter (and regex/regex-automata/aho-corasick) out of the iOS build.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["download", "signal"] }
+kithara = { workspace = true, default-features = false, features = ["download", "signal", "backend-cpal"] }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 bon = { workspace = true }

@@ -3,48 +3,20 @@
 //! them far past its history cap.
 
 use std::{
-    alloc::{GlobalAlloc, Layout, System},
     mem::size_of,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{
-        Barrier,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Barrier,
     thread,
 };
 
 use kithara_test_utils::{
+    memory::{self, Counting},
     test::{
         setup_tracing,
         usdt::{MAX_EVENTS, ProbeEvent, scope},
     },
     tracing::{Level, event},
 };
-
-/// Heap bytes live right now, and the highest value since the last reset.
-struct Counting;
-
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
-
-// SAFETY: every call forwards to `System` unchanged; the counters only observe.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: forwarded verbatim to the system allocator.
-        let ptr = unsafe { System.alloc(layout) };
-        if !ptr.is_null() {
-            let live = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
-            PEAK.fetch_max(live, Ordering::Relaxed);
-        }
-        ptr
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-        // SAFETY: forwarded verbatim to the system allocator.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
 
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
@@ -68,18 +40,27 @@ fn fire(probe: &'static str, value: u64) {
     );
 }
 
-/// Warms up on `warm` then fires `probe` from [`THREADS`] threads, returning
-/// the peak heap growth over the warm baseline and the growth left after the
-/// threads finish.
-fn hammer(warm_probe: &'static str, probe: &'static str) -> (usize, usize) {
+/// Warms up on `warm_probe` then fires `probe` from [`THREADS`] threads,
+/// returning the peak heap growth over the warm baseline and the growth left
+/// after the threads finish.
+///
+/// `warm_probe` is `None` once the backend is already warm from an earlier
+/// call. It has to be: a warm-up fires real probes, and a scope standing at
+/// the time records them into the history of the probe it warms on, so
+/// warming again would grow that history before the baseline is taken and
+/// leave the measurement reading what was left to grow rather than what the
+/// history costs.
+fn hammer(warm_probe: Option<&'static str>, probe: &'static str) -> (usize, usize) {
     let warm = Barrier::new(THREADS + 1);
     let go = Barrier::new(THREADS + 1);
     let mut baseline = 0;
     thread::scope(|threads| {
         for _ in 0..THREADS {
             threads.spawn(|| {
-                for value in 0..WARMUP {
-                    fire(warm_probe, value);
+                if let Some(warm_probe) = warm_probe {
+                    for value in 0..WARMUP {
+                        fire(warm_probe, value);
+                    }
                 }
                 warm.wait();
                 go.wait();
@@ -89,12 +70,12 @@ fn hammer(warm_probe: &'static str, probe: &'static str) -> (usize, usize) {
             });
         }
         warm.wait();
-        baseline = LIVE.load(Ordering::Relaxed);
-        PEAK.store(baseline, Ordering::Relaxed);
+        baseline = memory::live_bytes();
+        memory::reset_peak();
         go.wait();
     });
-    let peak = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
-    let left = LIVE.load(Ordering::Relaxed).saturating_sub(baseline);
+    let peak = memory::peak_bytes().saturating_sub(baseline);
+    let left = memory::live_bytes().saturating_sub(baseline);
     (peak, left)
 }
 
@@ -111,25 +92,24 @@ fn continuous_probes_keep_the_heap_bounded() {
     setup_tracing();
     prime_panic_backtrace();
 
-    let (peak, left) = hammer("unobserved", "unobserved");
+    let (peak, left) = hammer(Some("unobserved"), "unobserved");
     eprintln!("unobserved: peak +{peak} B, left +{left} B");
     assert!(
         peak <= STEADY_BUDGET,
         "unobserved probes grew the heap by {peak} B"
     );
 
-    let before = LIVE.load(Ordering::Relaxed);
+    let before = memory::live_bytes();
     let history = scope();
-    let (peak, _) = hammer("unobserved", "history");
-    let probes_recorded = 2;
-    let history_bytes = probes_recorded * MAX_EVENTS * size_of::<ProbeEvent>();
+    let (peak, _) = hammer(None, "history");
+    let history_bytes = MAX_EVENTS * size_of::<ProbeEvent>();
     assert!(
         peak >= history_bytes,
         "a scope past MAX_EVENTS must have held the full history, peak {peak} B"
     );
     let history_budget = history_bytes + history_bytes / 2 + STEADY_BUDGET;
     eprintln!(
-        "history: peak +{peak} B for {MAX_EVENTS} events of each of {probes_recorded} probes at {} B (budget {history_budget} B)",
+        "history: peak +{peak} B for {MAX_EVENTS} events of {} B (budget {history_budget} B)",
         size_of::<ProbeEvent>()
     );
     assert!(
@@ -147,7 +127,7 @@ fn continuous_probes_keep_the_heap_bounded() {
     );
     drop(history);
 
-    let left = LIVE.load(Ordering::Relaxed).saturating_sub(before);
+    let left = memory::live_bytes().saturating_sub(before);
     eprintln!("after the scopes: left +{left} B");
     assert!(
         left <= STEADY_BUDGET,

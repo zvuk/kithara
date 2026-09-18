@@ -33,6 +33,9 @@ use crate::{
 pub(crate) struct PickerLayer {
     menu: PickerMenu,
     engine: Rc<HostedEngine>,
+    /// Encoding buffer the paint pass refills instead of allocating a new one
+    /// per frame; `Scene::reset` keeps the capacity already grown into.
+    scratch: Scene,
     text: TextContext,
 }
 
@@ -41,6 +44,7 @@ impl PickerLayer {
         Self {
             engine,
             menu: PickerMenu::new(skin),
+            scratch: Scene::new(),
             text: TextContext::from(skin.text_resources()),
         }
     }
@@ -109,10 +113,10 @@ impl Widget for PickerLayer {
             open.highlighted,
         );
         let bounds = layer.bounds();
-        let mut menu = Scene::new();
-        replay(layer.draw(), &mut VelloBackend::new(&mut menu));
+        self.scratch.reset();
+        replay(layer.draw(), &mut VelloBackend::new(&mut self.scratch));
         scene.append(
-            &menu,
+            &self.scratch,
             Some(Affine::translate((
                 f64::from(bounds.x),
                 f64::from(bounds.y),

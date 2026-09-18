@@ -4,7 +4,7 @@ use iced::{
     Element, Event, Length, Rectangle, Renderer, Size, Theme,
     keyboard::{Event as KeyboardEvent, Modifiers},
     mouse::{self, Button, Cursor, Interaction},
-    widget::canvas::{self, Action, Canvas, Frame, Geometry},
+    widget::canvas::{self, Action, Canvas, Geometry},
 };
 use kithara_platform::time::Instant;
 
@@ -20,7 +20,7 @@ use crate::{
         recognizers::{Scalar, ScalarState, Track},
     },
     module::WaveStyle,
-    render::{Skin, UiEvent, Widget, controls::snapped, scalar, scalar_child},
+    render::{Skin, UiEvent, Widget, controls::snapped, immediate::cache, scalar, scalar_child},
     shaping::TextContext,
 };
 
@@ -75,12 +75,39 @@ struct MiniWaveCanvas<'skin> {
     path: String,
 }
 
-#[derive(Default)]
 struct MiniWaveState {
     modifiers: Modifiers,
     loop_start: Option<f32>,
     text: RefCell<Option<TextContext>>,
     drag: ScalarState,
+    /// Tessellated picture kept between frames. Without it every frame hands
+    /// the renderer freshly built geometry, and its buffer pool grows to the
+    /// high-water mark of all of them and never gives it back.
+    cache: canvas::Cache,
+    /// Everything the picture is built from. The cache is dropped exactly when
+    /// this changes, so a reused picture can never be a stale one.
+    painted: RefCell<Option<Painted>>,
+}
+
+impl Default for MiniWaveState {
+    fn default() -> Self {
+        Self {
+            cache: cache::canvas(),
+            drag: ScalarState::default(),
+            loop_start: None,
+            modifiers: Modifiers::default(),
+            painted: RefCell::default(),
+            text: RefCell::default(),
+        }
+    }
+}
+
+/// The inputs that decide what the wave looks like.
+#[derive(PartialEq)]
+struct Painted {
+    data: Drawn,
+    bounds: Rectangle,
+    overlay: bool,
 }
 
 impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
@@ -106,14 +133,29 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
             },
         )));
         let bounds = local_bounds(&bounds, placed);
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.skin.text_resources().into());
-        let mut list = DrawListBuilder::default();
-        self.painter
-            .paint(&mut list, text, &self.data, bounds, show_overlay);
-        let mut frame = Frame::new(renderer, Size::new(placed.width, placed.height));
-        replay_ordered(&list.finish(), &mut frame, self.skin.text_resources());
-        vec![frame.into_geometry()]
+        let stale = state.painted.borrow().as_ref().is_none_or(|painted| {
+            painted.data != self.data || painted.bounds != placed || painted.overlay != show_overlay
+        });
+        if stale {
+            state.cache.clear();
+            *state.painted.borrow_mut() = Some(Painted {
+                bounds: placed,
+                data: self.data.clone(),
+                overlay: show_overlay,
+            });
+        }
+        let geometry =
+            state
+                .cache
+                .draw(renderer, Size::new(placed.width, placed.height), |frame| {
+                    let mut text = state.text.borrow_mut();
+                    let text = text.get_or_insert_with(|| self.skin.text_resources().into());
+                    let mut list = DrawListBuilder::default();
+                    self.painter
+                        .paint(&mut list, text, &self.data, bounds, show_overlay);
+                    replay_ordered(&list.finish(), frame, self.skin.text_resources());
+                });
+        vec![geometry]
     }
 
     fn mouse_interaction(

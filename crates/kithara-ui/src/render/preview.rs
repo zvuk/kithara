@@ -1,9 +1,11 @@
+use std::cell::RefCell;
+
 use iced::{
     Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
     mouse::Cursor,
     widget::{
         Canvas,
-        canvas::{self, Frame, Geometry, Stroke},
+        canvas::{self, Geometry, Stroke},
     },
 };
 
@@ -42,51 +44,76 @@ struct Preview {
     palette: RenderPalette,
 }
 
+/// What the preview keeps between frames: the tessellated picture and the
+/// layout it was built from, so it is rebuilt only when the layout moves.
+struct PreviewState {
+    cache: canvas::Cache,
+    painted: RefCell<Option<(Vec<PreviewArea>, Rectangle)>>,
+}
+
+impl Default for PreviewState {
+    fn default() -> Self {
+        Self {
+            cache: crate::render::immediate::cache::canvas(),
+            painted: RefCell::default(),
+        }
+    }
+}
+
 impl<Message> canvas::Program<Message> for Preview {
-    type State = ();
+    type State = PreviewState;
 
     fn draw(
         &self,
-        _state: &(),
+        state: &PreviewState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(
-            Point::ORIGIN,
-            bounds.size(),
-            Color::from(self.palette.bg_deep),
-        );
-
-        for area in self.geometry.iter() {
-            let mut point = Point::new(area.bounds.x * bounds.width, area.bounds.y * bounds.height);
-            let mut size = Size::new(
-                area.bounds.width * bounds.width,
-                area.bounds.height * bounds.height,
-            );
-            let color = match area.kind {
-                AreaKind::Split => self.palette.line_soft.into(),
-                AreaKind::Module => {
-                    point.x += self.metrics.module_inset;
-                    point.y += self.metrics.module_inset;
-                    size.width = (size.width - self.metrics.module_inset * 2.0).max(0.0);
-                    size.height = (size.height - self.metrics.module_inset * 2.0).max(0.0);
-                    frame.fill_rectangle(point, size, Color::from(self.palette.bg_panel));
-                    self.palette.line.into()
-                }
-            };
-            frame.stroke_rectangle(
-                point,
-                size,
-                Stroke::default()
-                    .with_color(color)
-                    .with_width(self.metrics.line_width),
-            );
+        let stale = state
+            .painted
+            .borrow()
+            .as_ref()
+            .is_none_or(|(areas, at)| areas[..] != self.geometry[..] || *at != bounds);
+        if stale {
+            state.cache.clear();
+            *state.painted.borrow_mut() = Some((self.geometry.to_vec(), bounds));
         }
+        vec![state.cache.draw(renderer, bounds.size(), |frame| {
+            frame.fill_rectangle(
+                Point::ORIGIN,
+                bounds.size(),
+                Color::from(self.palette.bg_deep),
+            );
 
-        vec![frame.into_geometry()]
+            for area in self.geometry.iter() {
+                let mut point =
+                    Point::new(area.bounds.x * bounds.width, area.bounds.y * bounds.height);
+                let mut size = Size::new(
+                    area.bounds.width * bounds.width,
+                    area.bounds.height * bounds.height,
+                );
+                let color = match area.kind {
+                    AreaKind::Split => self.palette.line_soft.into(),
+                    AreaKind::Module => {
+                        point.x += self.metrics.module_inset;
+                        point.y += self.metrics.module_inset;
+                        size.width = (size.width - self.metrics.module_inset * 2.0).max(0.0);
+                        size.height = (size.height - self.metrics.module_inset * 2.0).max(0.0);
+                        frame.fill_rectangle(point, size, Color::from(self.palette.bg_panel));
+                        self.palette.line.into()
+                    }
+                };
+                frame.stroke_rectangle(
+                    point,
+                    size,
+                    Stroke::default()
+                        .with_color(color)
+                        .with_width(self.metrics.line_width),
+                );
+            }
+        })]
     }
 }
 
@@ -101,7 +128,7 @@ impl PreviewGeometry {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct PreviewArea {
     kind: AreaKind,
     bounds: UnitRect,
@@ -113,7 +140,7 @@ enum AreaKind {
     Module,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct UnitRect {
     height: f32,
     width: f32,

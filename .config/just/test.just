@@ -177,6 +177,11 @@ audio-artifacts OUTPUT:
 # assert is that a run did the thing it claims to measure, so the numbers stay
 # a report and the censuses become a gate.
 #
+# The memory budget runs last, in its own binary and on one thread: the graphics
+# device counts bytes for the whole process, so a reading taken while another
+# test draws is a reading of that test. One thread is what makes each stage a
+# difference this test alone caused.
+#
 # The last step builds the gallery's suite with the toolkit's default features
 # - iced alone, no retained host - and runs it there. Everything above is one
 # feature set, so a page, a walk or a census that only holds when both hosts
@@ -192,6 +197,7 @@ ui:
     just test run --lane=ui-perf
     just test parity --dir "$dir"
     cargo test -p kithara-ui --test gallery --features kithara-ui/capture --profile test-release
+    cargo test -p kithara-ui --test ui_memory --features kithara-ui/capture,kithara-ui/masonry --profile test-release -- --test-threads=1
 
 # The picture parity programme on its own. `just test ui` runs it after the UI
 # lanes; run it alone to re-check a drawing change without paying for the

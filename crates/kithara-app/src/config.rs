@@ -189,6 +189,11 @@ pub struct AppConfig {
     #[builder(default)]
     #[patch(skip)]
     pub queue: QueueConfigPatch,
+    /// Live heap a debug build tolerates before it prints the allocating
+    /// stack and aborts. `0` lifts the ceiling. A release build installs no
+    /// counting allocator, so this is read only under `debug_assertions`.
+    #[builder(default = crate::memory::DEFAULT_LIMIT_BYTES)]
+    pub memory_limit_bytes: usize,
     /// What the document's `dispatcher:` section says about the background
     /// dispatchers the app builds, carried as a patch for the same reason
     /// [`AppConfig::player`] is: each construction site keeps its own thread

@@ -1,4 +1,5 @@
 mod anchored;
+pub(crate) mod cache;
 mod chrome;
 mod custom;
 #[path = "../preview.rs"]

@@ -21,6 +21,7 @@ pub mod bufpool;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flight;
 pub mod hang;
+pub mod memory;
 pub mod mock;
 pub mod no_block;
 #[cfg(not(target_arch = "wasm32"))]

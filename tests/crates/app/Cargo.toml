@@ -43,3 +43,9 @@ workspace = true
 [[test]]
 name = "app"
 path = "tests/suite.rs"
+
+# Its own binary: the counting allocator it installs would otherwise measure
+# every other test in the `app` suite alongside the construction under test.
+[[test]]
+name = "app_memory"
+path = "tests/memory_suite.rs"

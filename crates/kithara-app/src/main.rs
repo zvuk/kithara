@@ -18,6 +18,7 @@ use kithara_app::{
     deck::{Deck, DeckId, DeckSet},
     document::Config,
     gui::{self, GuiFrontend},
+    memory,
     pools::{self, AppHost, AppStore, AppWorker},
     tracing_init::init_tracing,
 };
@@ -56,6 +57,14 @@ struct Args {
     #[arg(long)]
     insecure: bool,
 }
+
+/// Count what this build allocates and abort on the first allocation that
+/// carries the process past [`memory::DEFAULT_LIMIT_BYTES`], so an unbounded
+/// allocator leaves the stack that crossed the ceiling. A release build keeps
+/// the platform allocator and pays nothing.
+#[cfg(debug_assertions)]
+#[global_allocator]
+static HEAP: memory::Ceiling = memory::Ceiling;
 
 /// Where a release lays its UI documents out: beside the executable.
 fn shipped_ui_package() -> Option<std::path::PathBuf> {
@@ -204,6 +213,7 @@ fn main() -> AppResult {
         .maybe_ui_package(shipped_ui_package())
         .build();
     config.apply(app);
+    memory::set_limit(config.memory_limit_bytes);
     if let Some(package) = args.ui_package {
         config.ui_package = Some(package);
     }

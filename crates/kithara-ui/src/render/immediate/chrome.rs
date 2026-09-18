@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use iced::{
     Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
     border::Radius,
@@ -331,6 +333,7 @@ where
         .into()
 }
 
+#[derive(Clone, Copy, PartialEq)]
 struct FrameChrome {
     frame_color: Color,
     /// The window corners the framed box stands at, and the radius they take.
@@ -341,7 +344,7 @@ struct FrameChrome {
     radius: f32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct CornerTicks {
     color: Color,
     offset: f32,
@@ -378,55 +381,75 @@ impl CornerTicks {
     }
 }
 
+/// The drawn chrome and the shape it was drawn for, kept between frames so an
+/// unchanged window border is not tessellated again on every redraw.
+struct ChromeState {
+    cache: canvas::Cache,
+    painted: Cell<Option<(FrameChrome, Rectangle)>>,
+}
+
+impl Default for ChromeState {
+    fn default() -> Self {
+        Self {
+            cache: crate::render::immediate::cache::canvas(),
+            painted: Cell::default(),
+        }
+    }
+}
+
 impl<Message> canvas::Program<Message> for FrameChrome {
-    type State = ();
+    type State = ChromeState;
 
     fn draw(
         &self,
-        _state: &(),
+        state: &ChromeState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        if self.round.any() && self.radius > 0.0 {
-            self.rounded(&mut frame, bounds);
-            self.ticks(&mut frame, bounds);
-            return vec![frame.into_geometry()];
+        if state.painted.get() != Some((*self, bounds)) {
+            state.cache.clear();
+            state.painted.set(Some((*self, bounds)));
         }
-        let right = (bounds.width - self.frame_width).max(0.0);
-        let bottom = (bounds.height - self.frame_width).max(0.0);
-        if self.sides.top {
-            frame.fill_rectangle(
-                Point::ORIGIN,
-                Size::new(bounds.width, self.frame_width),
-                self.frame_color,
-            );
-        }
-        if self.sides.right {
-            frame.fill_rectangle(
-                Point::new(right, 0.0),
-                Size::new(self.frame_width, bounds.height),
-                self.frame_color,
-            );
-        }
-        if self.sides.bottom {
-            frame.fill_rectangle(
-                Point::new(0.0, bottom),
-                Size::new(bounds.width, self.frame_width),
-                self.frame_color,
-            );
-        }
-        if self.sides.left {
-            frame.fill_rectangle(
-                Point::ORIGIN,
-                Size::new(self.frame_width, bounds.height),
-                self.frame_color,
-            );
-        }
-        self.ticks(&mut frame, bounds);
-        vec![frame.into_geometry()]
+        vec![state.cache.draw(renderer, bounds.size(), |frame| {
+            if self.round.any() && self.radius > 0.0 {
+                self.rounded(frame, bounds);
+                self.ticks(frame, bounds);
+                return;
+            }
+            let right = (bounds.width - self.frame_width).max(0.0);
+            let bottom = (bounds.height - self.frame_width).max(0.0);
+            if self.sides.top {
+                frame.fill_rectangle(
+                    Point::ORIGIN,
+                    Size::new(bounds.width, self.frame_width),
+                    self.frame_color,
+                );
+            }
+            if self.sides.right {
+                frame.fill_rectangle(
+                    Point::new(right, 0.0),
+                    Size::new(self.frame_width, bounds.height),
+                    self.frame_color,
+                );
+            }
+            if self.sides.bottom {
+                frame.fill_rectangle(
+                    Point::new(0.0, bottom),
+                    Size::new(bounds.width, self.frame_width),
+                    self.frame_color,
+                );
+            }
+            if self.sides.left {
+                frame.fill_rectangle(
+                    Point::ORIGIN,
+                    Size::new(self.frame_width, bounds.height),
+                    self.frame_color,
+                );
+            }
+            self.ticks(frame, bounds);
+        })]
     }
 }
 

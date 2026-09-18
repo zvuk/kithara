@@ -11,6 +11,7 @@ pub mod config;
 pub mod crossfade;
 pub mod deck;
 pub mod document;
+pub mod memory;
 pub mod mix;
 pub mod pools;
 pub mod recording;

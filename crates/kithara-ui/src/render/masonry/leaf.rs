@@ -350,6 +350,10 @@ where
     geometry: Rc<Cell<MasonryRect>>,
     map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     pointer: Rc<Cell<Option<Pt>>>,
+    /// Encoding buffer the paint pass refills instead of allocating a new one
+    /// per frame. `Scene::reset` keeps the capacity the widget has already
+    /// grown into, so a steady interface stops asking the heap for anything.
+    scratch: Scene,
     state: Program::State,
 }
 
@@ -368,6 +372,7 @@ where
             map_event,
             pointer,
             program,
+            scratch: Scene::new(),
             state: Program::State::default(),
         }
     }
@@ -521,11 +526,11 @@ where
         if layer.draw().commands().is_empty() {
             return;
         }
-        let mut local = Scene::new();
-        replay(layer.draw(), &mut VelloBackend::new(&mut local));
+        self.scratch.reset();
+        replay(layer.draw(), &mut VelloBackend::new(&mut self.scratch));
         let bounds = layer.bounds();
         scene.append(
-            &local,
+            &self.scratch,
             Some(Affine::translate((
                 f64::from(bounds.x),
                 f64::from(bounds.y),

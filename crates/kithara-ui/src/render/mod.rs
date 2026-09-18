@@ -5,6 +5,7 @@ pub mod document;
 pub mod event;
 #[cfg(feature = "iced")]
 pub mod fonts;
+pub mod gpu;
 mod hosted;
 mod icons;
 #[cfg(feature = "iced")]

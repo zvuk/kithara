@@ -74,7 +74,7 @@ where
 {
     fn default() -> Self {
         Self {
-            geometry: Cache::default(),
+            geometry: crate::render::immediate::cache::canvas(),
             kept: RefCell::default(),
         }
     }

@@ -5838,6 +5838,7 @@ dependencies = [
  "masonry",
  "naga 26.0.0",
  "num-traits",
+ "objc2 0.6.4",
  "parley",
  "png 0.17.16",
  "pollster",
