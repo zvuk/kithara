@@ -9,7 +9,7 @@ use kithara_test_utils::kithara;
 use super::{
     ConsumerPhase, DecodeError, PendingReason, ReadOutcome, chunk_position,
     event::AudioEvents,
-    ring::{RecvCtx, RingConsumer},
+    ring::{RecvCtx, RingConsumer, Wait},
 };
 use crate::SourceSpan;
 
@@ -178,7 +178,7 @@ impl ChunkCursor {
                 break;
             }
             let was_playing = ring.phase == ConsumerPhase::Playing;
-            let filled = ring.fill(self, recv);
+            let filled = ring.fill(self, recv, Wait::ForProducer);
             events.fill_result(
                 filled,
                 was_playing,

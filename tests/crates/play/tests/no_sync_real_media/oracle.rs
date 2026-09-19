@@ -469,9 +469,14 @@ mod tests {
         watched_oracles(&capture).await;
     }
 
-    /// A millisecond is far below any Cochlea pass, so the strict tier answers
-    /// an unsanctioned call whatever the host's CPU-to-wall ratio says.
-    #[kithara::no_block(budget_ms = 1)]
+    /// The budget is CPU the poll must not spend outside a sanctioned region,
+    /// and every call below is sanctioned. A wall budget had nothing left to
+    /// measure but the host: a 2.8ms deschedule failed the lane at 2%, and a
+    /// 58.7ms one failed it again against 42us of CPU. A Cochlea pass over this
+    /// capture is ~129ms of arithmetic, so dropping either `allow_block` still
+    /// overruns fivefold; that the budget bites at all is pinned by
+    /// `a_work_budget_flags_a_poll_that_spent_it` in the crate that owns it.
+    #[kithara::no_block(cpu_budget_ms = 25)]
     async fn watched_oracles(capture: &[f32]) {
         let mut failures = Vec::new();
         let _ = assess_audio("no-block-guard", SOURCE_RATE, capture, &mut failures);

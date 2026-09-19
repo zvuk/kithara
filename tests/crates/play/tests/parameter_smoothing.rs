@@ -26,6 +26,7 @@ use crate::bufpool_ext::{TestPools, pools};
 struct Consts;
 
 impl Consts {
+    const AUDIBLE_PEAK: f32 = 0.1;
     const BLOCK_FRAMES: usize = 480;
     const CHANNELS: usize = 2;
     const EQ_SMOOTH_SECONDS: f32 = 0.01;
@@ -86,6 +87,12 @@ fn peak(pcm: &[f32]) -> f32 {
         .fold(0.0_f32, |acc, sample| acc.max(sample.abs()))
 }
 
+/// A playing sine deck, settled and confirmed audible.
+///
+/// Audibility is confirmed by waiting for an audible block rather than by
+/// reading the settle window's last one: an offline render the decoder could
+/// not fill is zero-filled, and one such block at the end of that window reads
+/// exactly like a deck that never started.
 pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>, u64) {
     let pools = pools();
     let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero");
@@ -101,6 +108,7 @@ pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>,
             .sample_rate(sample_rate)
             .worker(worker)
             .maybe_eq_layout(case.eq_layout.map(layout))
+            .block_on_underrun(true)
             .build(),
     );
     let queue = Queue::new(QueueConfig::builder().player(player).build());
@@ -125,16 +133,23 @@ pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>,
             deck.play();
         })
         .await;
-    let warm = observe(&harness, Consts::SETTLE_BLOCKS).await;
-    assert!(
-        last_block_peak(&warm) > 0.1,
-        "sine must be audible before the parameter change"
-    );
+    observe(&harness, Consts::SETTLE_BLOCKS).await;
+    let (_, audible) = observe_until(&harness, |block| {
+        last_block_peak(block) > Consts::AUDIBLE_PEAK
+    })
+    .await;
+    assert!(audible, "sine must be audible before the parameter change");
     (harness, id.as_u64())
 }
 
-/// Render `blocks` at the block's own pace: a tight render loop outruns the
-/// decoder and the window fills with zeros, which every oracle here would pass.
+/// Render `blocks` of decoded output, one block of deck time per turn.
+///
+/// The sleep is the deck's clock rather than a tolerance: under the simulated
+/// clock it is the only thing that advances time here, so a loop without it
+/// renders every block before the deck has started and hands every oracle
+/// silence. The fixture parks its reads on an underrun, so a block this
+/// returns carries frames the decoder produced and a jump across a window
+/// boundary can only have come from DSP.
 async fn observe(harness: &OfflineQueue<TestPools>, blocks: usize) -> Vec<f32> {
     let block_budget =
         Duration::from_secs_f64(Consts::BLOCK_FRAMES as f64 / f64::from(Consts::SAMPLE_RATE));
@@ -199,6 +214,32 @@ fn assert_step_is_ramped(
         "{label}: a step reached DSP unsmoothed: max jump {observed} > bound {bound} (baseline \
          {baseline}, amplitude delta {amplitude_delta}, smooth {smooth_seconds}s)"
     );
+}
+
+/// Every window the smoothing oracles read is decoded output.
+///
+/// A render the decoder cannot fill writes the frames it had and zero-fills the
+/// rest, and the silence lands inside the window as a jump no ramp bound
+/// allows: the oracle then reports an unsmoothed step the DSP never produced.
+/// The fixture parks its reads instead, so the window its siblings measure
+/// carries no block the decoder never produced.
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+async fn the_observation_window_carries_no_silent_block() {
+    let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
+
+    let pcm = observe(&harness, Consts::OBSERVE_BLOCKS).await;
+
+    let block = Consts::BLOCK_FRAMES * Consts::CHANNELS;
+    let quietest = pcm
+        .chunks_exact(block)
+        .map(peak)
+        .fold(f32::INFINITY, f32::min);
+    assert!(
+        quietest > Consts::AUDIBLE_PEAK,
+        "the observation window carried a block at peak {quietest}; the window the step \
+         oracles measure carries frames the decoder never produced"
+    );
+    harness.close().await;
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]

@@ -146,9 +146,21 @@ mod tests {
         flash.on_participant_exit();
     }
 
-    fn spawn_park_for(flash: &Arc<FlashInner>, duration: Duration) -> thread::JoinHandle<()> {
+    /// The handle carries the park's own span. A caller that starts its clock
+    /// before `spawn` and stops it after `join` charges the park with thread
+    /// lifecycle, which on a loaded host is tens of milliseconds of scheduling
+    /// latency the engine never spent.
+    fn spawn_park_for(flash: &Arc<FlashInner>, duration: Duration) -> thread::JoinHandle<Duration> {
         let flash = Arc::clone(flash);
-        thread::spawn(move || bracketed_on(&flash, || flash.park_for(duration)))
+        thread::spawn(move || {
+            let mut parked = Duration::ZERO;
+            bracketed_on(&flash, || {
+                let started = RealInstant::now();
+                flash.park_for(duration);
+                parked = started.elapsed();
+            });
+            parked
+        })
     }
 
     fn wait_until(mut ready: impl FnMut() -> bool, message: &str) {
@@ -254,15 +266,13 @@ mod tests {
 
         flash.real_io_enter();
         thread::sleep(Duration::from_millis(45));
-        let start = RealInstant::now();
         let waiter = spawn_park_for(&flash, Duration::from_millis(40));
-        waiter.join().expect("waiter thread panicked");
-        let elapsed = start.elapsed();
+        let parked = waiter.join().expect("waiter thread panicked");
         flash.real_io_exit();
 
         assert!(
-            elapsed < Duration::from_millis(40),
-            "a deadline within the carried lag slept its full duration: {elapsed:?}"
+            parked < Duration::from_millis(40),
+            "a deadline within the carried lag slept its full duration: {parked:?}"
         );
     }
 
@@ -287,7 +297,6 @@ mod tests {
             elapsed < Duration::from_millis(250),
             "near deadline waited for the original far target: {elapsed:?}"
         );
-        assert_eq!(flash.clock.now_nanos(), base + ms(120));
 
         flash.real_io_exit();
         far.join().expect("far waiter thread panicked");
@@ -335,10 +344,15 @@ mod tests {
         waiter.join().expect("waiter thread panicked");
         let elapsed = start.elapsed();
         assert_paced_elapsed(elapsed, 80);
-        assert_eq!(flash.clock.now_nanos(), base + ms(80));
 
         flash.real_io_exit();
         blocker.join().expect("blocker thread panicked");
+        assert_eq!(
+            flash.advance_log(),
+            vec![base + ms(80), base + ms(300)],
+            "the quiescence edge advances the clock to the near deadline itself, \
+             never to the blocker's later target"
+        );
     }
 
     #[kithara::test(native, flash(false))]

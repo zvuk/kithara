@@ -79,6 +79,12 @@ async fn create_packaged_abr_fixture() -> (TestServerHelper, Url) {
     (server, created.master_url())
 }
 
+/// Open the packaged ABR fixture as decoded audio.
+///
+/// `block_on_underrun` decides what an empty producer ring returns. A caller
+/// that drives the read loop itself and handles [`ReadOutcome::Pending`] wants
+/// `false`; a caller that reads the rendered PCM back wants `true`, because a
+/// zero-filled range is indistinguishable from rendered silence.
 async fn open_packaged_hls_audio(
     worker: &PlayWorker<TestPools>,
     pools: &Pools,
@@ -86,6 +92,7 @@ async fn open_packaged_hls_audio(
     store: AssetStore<TestPools>,
     abr: AbrMode,
     bus: Option<EventBus>,
+    block_on_underrun: bool,
 ) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     let cancel = CancelToken::never();
     let downloader = Downloader::new(
@@ -110,6 +117,7 @@ async fn open_packaged_hls_audio(
 
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .maybe_events(bus)
+        .block_on_underrun(block_on_underrun)
         .build();
 
     let mut audio = worker
@@ -223,6 +231,14 @@ async fn abr_switch_on_production_ladder_does_not_hang(
     .expect("read phase join");
 }
 
+/// A packaged ABR variant switch leaves no gap in the rendered PCM.
+///
+/// The seam window reads its own output back, so it renders over a reader that
+/// parks on an empty producer ring: a zero-filled underrun would otherwise
+/// arrive as silence the decoder never produced, and the measurement would read
+/// how promptly the machine scheduled the decode thread instead of what the
+/// switch did to the signal. With the park in place a silent block can only be
+/// decoded silence, so the run has no tolerance to spend.
 #[kithara::test(
     tokio,
     native,
@@ -253,6 +269,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
         store.clone(),
         packaged_switch_abr_mode(),
         Some(bus.clone()),
+        false,
     )
     .await;
     let abr = progress_audio
@@ -355,18 +372,12 @@ async fn packaged_abr_switch_keeps_player_continuity(
         progress_probe.max_gap_between_events
     );
 
-    // Offline render below pulls PCM on the real-time graph thread, which
-    // CANNOT block: a worker underrun there is zero-filled to silence (see
-    // `PlayerResource::fill_scratch`). Under flash the only clock advance
-    // during `render_offline_window` is its own per-block virtual sleep, so a
-    // network stall at the ABR seam (the V0 segment delay rule) would drop the
-    // worker behind the real-time render pace and produce a long silent run.
     // Prime the shared store with EVERY segment of BOTH variants FIRST, on the
-    // blocking pool with `block_on_underrun(true)` so each `read()` parks on the
-    // worker (engine-aware, drives the virtual clock). Forcing each variant with
-    // a manual mode guarantees full coverage regardless of which path the
-    // offline render's `auto(0)` ABR then takes — after this the offline render
-    // is a decode-from-cache path with no network stall to fall behind on.
+    // blocking pool, so the offline render below decodes from cache: the V0
+    // segment delay rule would otherwise park the seam read past the render's
+    // `hang_timeout_secs`. Forcing each variant with a manual mode guarantees
+    // full coverage regardless of which path the offline render's `auto(0)` ABR
+    // then takes.
     for variant in [0usize, 1usize] {
         let warm_config = AudioConfig::<Hls<TestPools>>::for_stream(
             HlsConfig::for_url(url.clone())
@@ -411,6 +422,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
         store,
         packaged_switch_abr_mode(),
         None,
+        true,
     )
     .await;
     let mut resource = resource_from_reader(decode_audio);
@@ -440,8 +452,8 @@ async fn packaged_abr_switch_keeps_player_continuity(
         CONTINUITY_SAMPLE_RATE,
     )
     .await;
-    assert!(
-        seam.max_silence_run <= 2,
+    assert_eq!(
+        seam.max_silence_run, 0,
         "packaged ABR switch produced {} silent blocks ({seam})",
         seam.max_silence_run
     );

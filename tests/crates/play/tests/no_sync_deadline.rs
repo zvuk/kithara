@@ -1,14 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{hint::black_box, num::NonZeroU32, sync::atomic::Ordering};
+use std::{collections::BTreeMap, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
     events::TrackId,
-    platform::{
-        sync::Arc,
-        time::{Duration, Instant},
-    },
+    platform::sync::Arc,
     play::{
         Resource, SharedEq,
         bridge::{PlayerCmd, SlotControl, slot_channels},
@@ -18,6 +15,7 @@ use kithara::{
 };
 use kithara_integration_tests::{audio_mock::TestPcmReader, offline::peak};
 use kithara_test_fixtures::integration_fixtures::deadline_tracks;
+use kithara_test_utils::test::usdt::{self, ProbeEvent};
 use ringbuf::traits::Producer;
 
 use crate::bufpool_ext::pools;
@@ -26,22 +24,21 @@ struct Consts;
 
 impl Consts {
     const BLOCK_FRAMES: [u32; 4] = [128, 256, 512, 1_024];
+    /// Callbacks one census window covers. A mix that walked its track list per
+    /// frame would fire the probe `block_frames` times per track per callback,
+    /// and this window keeps even that history inside `usdt::MAX_EVENTS`, so
+    /// the walk count is what fails there, not the recorder.
+    const CENSUS_BLOCKS: usize = 32;
     const CHANNELS: u16 = 2;
+    /// Callbacks a cell renders after warmup, read as
+    /// `MEASURED_BLOCKS / CENSUS_BLOCKS` windows. Every one of them is checked
+    /// for the exact sum of all its tracks, so the length is the PCM evidence;
+    /// the walk count is already exact inside a single window.
     const MEASURED_BLOCKS: usize = 4_096;
     const SAMPLE_RATE: u32 = 48_000;
     const TRACK_COUNTS: [usize; 3] = [1, 2, 4];
     const TRACK_SECONDS: f64 = 300.0;
     const WARMUP_BLOCKS: usize = 512;
-}
-
-#[derive(Debug)]
-struct CellTiming {
-    block_frames: u32,
-    max: Duration,
-    p50: Duration,
-    p99: Duration,
-    period: Duration,
-    tracks: usize,
 }
 
 fn non_zero(value: u32, label: &str) -> NonZeroU32 {
@@ -130,7 +127,7 @@ fn render_block(
     control: &SlotControl,
     out_l: &mut [f32],
     out_r: &mut [f32],
-) -> Duration {
+) {
     let frames = out_l.len();
     let is_playing = control.playback.playing.load(Ordering::SeqCst);
     let inputs: [&[f32]; 0] = [];
@@ -140,14 +137,9 @@ fn render_block(
         outputs: &mut outputs,
     };
 
-    let start = Instant::now();
     processor.drain_commands();
     processor.cleanup_finished_tracks();
-    let outcome = processor.render_audio(&mut buffers, frames, is_playing);
-    let elapsed = start.elapsed();
-
-    black_box(outcome);
-    elapsed
+    let _ = processor.render_audio(&mut buffers, frames, is_playing);
 }
 
 fn assert_all_tracks_contributed(
@@ -165,13 +157,50 @@ fn assert_all_tracks_contributed(
     );
 }
 
-fn percentile(sorted: &[Duration], pct: usize) -> Duration {
-    let rank = (sorted.len() * pct).div_ceil(100);
-    let idx = rank.saturating_sub(1).min(sorted.len() - 1);
-    sorted[idx]
+/// How many times the mix walked each track, keyed by the track it walked.
+fn walks_per_track(recorded: &[ProbeEvent]) -> BTreeMap<u64, usize> {
+    let mut walks = BTreeMap::new();
+    for event in recorded.iter().filter(|event| event.probe == "render") {
+        let track = event
+            .field("track_id")
+            .expect("the render probe carries the track it walked");
+        *walks.entry(track).or_insert(0_usize) += 1;
+    }
+    walks
 }
 
-fn measure(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4]) -> CellTiming {
+fn assert_one_walk_per_track_per_block(recorded: &[ProbeEvent], block_frames: u32, tracks: usize) {
+    let walks = walks_per_track(recorded);
+    assert_eq!(
+        walks.len(),
+        tracks,
+        "a census window at {block_frames} frames must walk every one of the \
+         {tracks} playing track(s), observed {walks:?}"
+    );
+    assert!(
+        walks.values().all(|count| *count == Consts::CENSUS_BLOCKS),
+        "the mix must walk each of {tracks} track(s) once per callback; \
+         {} callbacks at {block_frames} frames walked {walks:?}",
+        Consts::CENSUS_BLOCKS,
+    );
+}
+
+fn assert_each_walk_covers_the_block(recorded: &[ProbeEvent], block_frames: u32, tracks: usize) {
+    let sliced = recorded
+        .iter()
+        .filter(|event| event.probe == "render")
+        .find(|event| {
+            event.field("range_start") != Some(0)
+                || event.field("range_end") != Some(u64::from(block_frames))
+        });
+    assert!(
+        sliced.is_none(),
+        "a mix walk must cover the whole callback of {block_frames} frames with \
+         {tracks} track(s), not a slice of it: {sliced:?}"
+    );
+}
+
+fn census(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4]) {
     let (mut processor, mut control) = processor(block_frames);
     let expected_sample = load_tracks(&mut processor, &mut control, tracks, deadline_tracks);
     assert_eq!(
@@ -186,32 +215,26 @@ fn measure(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4]
     let metrics_before = control.playback.metrics().snapshot();
 
     for _ in 0..Consts::WARMUP_BLOCKS {
-        black_box(render_block(
-            &mut processor,
-            &control,
-            &mut out_l,
-            &mut out_r,
-        ));
+        render_block(&mut processor, &control, &mut out_l, &mut out_r);
     }
-    let warm_peak = peak(&out_l).max(peak(&out_r));
     assert!(
-        warm_peak > 0.0,
-        "deadline cell must reach audible PCM before timing ({block_frames} frames, {tracks} track(s))"
+        peak(&out_l).max(peak(&out_r)) > 0.0,
+        "deadline cell must reach audible PCM before the census ({block_frames} frames, {tracks} track(s))"
     );
     assert_all_tracks_contributed(&out_l, expected_sample, block_frames, tracks);
     assert_all_tracks_contributed(&out_r, expected_sample, block_frames, tracks);
 
-    let mut durations = Vec::with_capacity(Consts::MEASURED_BLOCKS);
-    for _ in 0..Consts::MEASURED_BLOCKS {
-        durations.push(render_block(
-            &mut processor,
-            &control,
-            &mut out_l,
-            &mut out_r,
-        ));
-        assert_all_tracks_contributed(&out_l, expected_sample, block_frames, tracks);
-        assert_all_tracks_contributed(&out_r, expected_sample, block_frames, tracks);
-        black_box((&out_l, &out_r));
+    for _ in 0..Consts::MEASURED_BLOCKS / Consts::CENSUS_BLOCKS {
+        let trace = usdt::scope();
+        for _ in 0..Consts::CENSUS_BLOCKS {
+            render_block(&mut processor, &control, &mut out_l, &mut out_r);
+            assert_all_tracks_contributed(&out_l, expected_sample, block_frames, tracks);
+            assert_all_tracks_contributed(&out_r, expected_sample, block_frames, tracks);
+        }
+        let recorded = trace.events();
+        drop(trace);
+        assert_one_walk_per_track_per_block(&recorded, block_frames, tracks);
+        assert_each_walk_covers_the_block(&recorded, block_frames, tracks);
     }
 
     let metrics_after = control.playback.metrics().snapshot();
@@ -232,64 +255,26 @@ fn measure(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4]
     );
     assert!(
         peak(&out_l).max(peak(&out_r)) > 0.0,
-        "measured callbacks must finish on audible PCM, not silence"
+        "census callbacks must finish on audible PCM, not silence"
     );
-    durations.sort_unstable();
-    CellTiming {
-        block_frames,
-        max: percentile(&durations, 100),
-        p50: percentile(&durations, 50),
-        p99: percentile(&durations, 99),
-        period: Duration::from_secs_f64(f64::from(block_frames) / f64::from(Consts::SAMPLE_RATE)),
-        tracks,
-    }
 }
 
-fn micros(duration: Duration) -> f64 {
-    duration.as_secs_f64() * 1e6
-}
-
-fn period_share(duration: Duration, period: Duration) -> f64 {
-    duration.as_secs_f64() / period.as_secs_f64() * 100.0
-}
-
+/// Mixing a track costs the same however many tracks play.
+///
+/// The hot path scans the active tracks again inside its per-track loop, so a
+/// stray per-frame step there turns the mix quadratic and the audio deadline
+/// stops holding as the queue fills. The `render` probe fires on every walk the
+/// mix makes over a track, so a callback's firings are that work itself: one
+/// per playing track, each covering the whole block. A mix that walks per frame
+/// multiplies both by the block size. Counting walks asks no clock, so the
+/// verdict holds whatever else the runner is doing. Absolute block cost belongs
+/// to the `rt_block_budget` bench, which times this processor and asks the
+/// clock for no verdict.
 #[kithara::test(native, serial, flash(false))]
-fn no_sync_player_render_hot_path_p99_stays_below_half_period(deadline_tracks: [&'static [u8]; 4]) {
-    let mut timings = Vec::with_capacity(Consts::BLOCK_FRAMES.len() * Consts::TRACK_COUNTS.len());
-
+fn mixing_a_track_costs_the_same_however_many_tracks_play(deadline_tracks: [&'static [u8]; 4]) {
     for block_frames in Consts::BLOCK_FRAMES {
         for tracks in Consts::TRACK_COUNTS {
-            timings.push(measure(block_frames, tracks, deadline_tracks));
+            census(block_frames, tracks, deadline_tracks);
         }
-    }
-
-    for timing in &timings {
-        println!(
-            "no-SYNC render hot path: frames={:>4} tracks={} p50={:>8.2} us ({:>6.2}%) \
-             p99={:>8.2} us ({:>6.2}%) max={:>8.2} us ({:>6.2}%)",
-            timing.block_frames,
-            timing.tracks,
-            micros(timing.p50),
-            period_share(timing.p50, timing.period),
-            micros(timing.p99),
-            period_share(timing.p99, timing.period),
-            micros(timing.max),
-            period_share(timing.max, timing.period),
-        );
-    }
-
-    for timing in timings {
-        let half_period = timing.period / 2;
-        assert!(
-            timing.p99 < half_period,
-            "no-SYNC player render p99 must stay below 50% of its period: frames={}, tracks={}, \
-             p99={:.2} us ({:.2}%), half-period={:.2} us; max={:.2} us is diagnostic only",
-            timing.block_frames,
-            timing.tracks,
-            micros(timing.p99),
-            period_share(timing.p99, timing.period),
-            micros(half_period),
-            micros(timing.max),
-        );
     }
 }

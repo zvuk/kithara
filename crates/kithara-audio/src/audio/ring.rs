@@ -19,6 +19,20 @@ enum FetchOutcome {
     Return(Option<(AudioChunk, Option<SourceSpan>)>),
 }
 
+/// Whether a fill may park on the producer.
+///
+/// The startup latch that authorises a preload also opens when the producer
+/// parks on the network, so the prime it authorises has nothing to wait for
+/// and must not turn an empty ring into a park.
+#[derive(Clone, Copy)]
+pub(super) enum Wait {
+    /// Park per the ring's underrun policy until a chunk or a terminal step
+    /// lands.
+    ForProducer,
+    /// Take only what the producer has already delivered.
+    Never,
+}
+
 pub(super) enum RecvOutcome {
     Closed,
     Empty,
@@ -129,8 +143,8 @@ impl RingConsumer {
         }
     }
 
-    pub(super) fn fill(&mut self, cursor: &mut ChunkCursor, ctx: RecvCtx<'_>) -> bool {
-        let Some((chunk, source_span)) = self.recv_valid_chunk(ctx) else {
+    pub(super) fn fill(&mut self, cursor: &mut ChunkCursor, ctx: RecvCtx<'_>, wait: Wait) -> bool {
+        let Some((chunk, source_span)) = self.recv_valid_chunk(ctx, wait) else {
             return false;
         };
         cursor.begin_chunk(&chunk);
@@ -177,8 +191,10 @@ impl RingConsumer {
         }
     }
 
-    pub(super) fn recv_outcome(&mut self, ctx: RecvCtx<'_>) -> RecvOutcome {
-        if receive_is_nonblocking(self.preloaded, self.block_on_underrun) {
+    pub(super) fn recv_outcome(&mut self, ctx: RecvCtx<'_>, wait: Wait) -> RecvOutcome {
+        if matches!(wait, Wait::Never)
+            || receive_is_nonblocking(self.preloaded, self.block_on_underrun)
+        {
             if let Some(fetch) =
                 try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
             {
@@ -229,13 +245,14 @@ impl RingConsumer {
     pub(super) fn recv_valid_chunk(
         &mut self,
         ctx: RecvCtx<'_>,
+        wait: Wait,
     ) -> Option<(AudioChunk, Option<SourceSpan>)> {
         if self.phase.is_terminal() {
             return None;
         }
 
         loop {
-            match self.recv_outcome(ctx) {
+            match self.recv_outcome(ctx, wait) {
                 RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
                     FetchOutcome::Continue => {
                         hang_tick!();
@@ -436,7 +453,7 @@ mod tests {
 
         fn recv(&mut self) -> Option<AudioChunk> {
             self.ring
-                .recv_valid_chunk(empty_ctx())
+                .recv_valid_chunk(empty_ctx(), Wait::ForProducer)
                 .map(|(chunk, _source_span)| chunk)
         }
 
@@ -555,20 +572,71 @@ mod tests {
         let cancel = CancelToken::never();
         cancel.cancel();
         assert!(matches!(
-            fixture.ring.recv_outcome(RecvCtx {
-                cancel: Some(&cancel),
-                worker: None,
-                abr: None,
-            }),
+            fixture.ring.recv_outcome(
+                RecvCtx {
+                    cancel: Some(&cancel),
+                    worker: None,
+                    abr: None,
+                },
+                Wait::ForProducer,
+            ),
             RecvOutcome::Closed
         ));
+    }
+
+    /// The startup latch also opens on an upstream park, so the prime it
+    /// authorises has nothing to wait for. One second instead of the ambient
+    /// ten for the same reason as
+    /// `blocking_recv_without_preload_panics_when_no_chunk_arrives`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(hang_timeout_secs(1))]
+    fn a_prime_on_an_empty_ring_returns_instead_of_parking() {
+        let mut fixture =
+            RingFixture::with_wake_mode(true, true, ConsumerWakeMode::RealtimeDeferred);
+
+        assert!(
+            !fixture
+                .ring
+                .fill(&mut fixture.cursor, empty_ctx(), Wait::Never)
+        );
+    }
+
+    #[kithara::test]
+    fn a_prime_takes_a_delivered_chunk(ring_pcm: Vec<f32>) {
+        let mut fixture =
+            RingFixture::with_wake_mode(true, true, ConsumerWakeMode::RealtimeDeferred);
+        let chunk = fixture.chunk(&ring_pcm[..2]);
+        fixture
+            .data_tx
+            .try_push(Fetch::data(chunk, 0))
+            .expect("chunk reaches ring");
+
+        assert!(
+            fixture
+                .ring
+                .fill(&mut fixture.cursor, empty_ctx(), Wait::Never)
+        );
+    }
+
+    /// The prime stopped parking; an audio-thread read under `block_on_underrun`
+    /// must still park, which is what trades an underrun for waiting on decode.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(hang_timeout_secs(1))]
+    #[should_panic(expected = "recv_outcome_blocking")]
+    fn a_preloaded_read_still_parks_when_underruns_block() {
+        let mut fixture =
+            RingFixture::with_wake_mode(true, true, ConsumerWakeMode::RealtimeDeferred);
+
+        let _filled = fixture
+            .ring
+            .fill(&mut fixture.cursor, empty_ctx(), Wait::ForProducer);
     }
 
     #[kithara::test]
     fn preloaded_recv_is_nonblocking() {
         let mut fixture = RingFixture::new(true);
         assert!(matches!(
-            fixture.ring.recv_outcome(empty_ctx()),
+            fixture.ring.recv_outcome(empty_ctx(), Wait::ForProducer),
             RecvOutcome::Empty
         ));
     }
@@ -587,7 +655,11 @@ mod tests {
             .data_tx
             .try_push(Fetch::data(chunk, 0))
             .expect("chunk reaches ring");
-        assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
+        assert!(
+            fixture
+                .ring
+                .fill(&mut fixture.cursor, empty_ctx(), Wait::ForProducer)
+        );
         assert_eq!(fixture.ring.phase, ConsumerPhase::Playing);
     }
 
@@ -610,7 +682,11 @@ mod tests {
             .data_tx
             .try_push(Fetch::data(chunk, 1))
             .expect("post-seek chunk reaches ring");
-        assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
+        assert!(
+            fixture
+                .ring
+                .fill(&mut fixture.cursor, empty_ctx(), Wait::ForProducer)
+        );
         assert_eq!(fixture.ring.phase, ConsumerPhase::Playing);
     }
 
@@ -693,11 +769,14 @@ mod tests {
         assert!(
             fixture
                 .ring
-                .recv_valid_chunk(RecvCtx {
-                    cancel: Some(&cancel),
-                    worker: None,
-                    abr: None,
-                })
+                .recv_valid_chunk(
+                    RecvCtx {
+                        cancel: Some(&cancel),
+                        worker: None,
+                        abr: None,
+                    },
+                    Wait::ForProducer,
+                )
                 .is_none()
         );
         assert_eq!(

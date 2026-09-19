@@ -402,7 +402,10 @@ impl<T: StreamType> Stream<T> {
             let read_epoch = seek_obs.epoch();
             let pos = self.source.position();
             let requested_end = pos.saturating_add(buf.len() as u64);
-            let unit_end = if matches!(wait, WaitMode::Probe) && self.source.peer_wake().is_some() {
+            // WHY: A read never awaits bytes it will not return: `read_len` is this same clamp, so awaiting past the unit holding the cursor
+            // parks on segments the caller is not being handed. Segmented readiness is all-or-nothing over a range, so one wide wait couples the
+            // read to every segment it spans - a slow tail then blocks a read the resident head could already satisfy.
+            let unit_end = if self.source.peer_wake().is_some() {
                 self.source.byte_map().and_then(|map| {
                     let init = map.init_segment_range();
                     if init.contains(&pos) {
@@ -1267,7 +1270,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn blocking_read_preserves_the_full_construction_range() {
+    fn blocking_read_stops_at_ready_segment_boundary() {
         let source = ScriptSource::new(
             Arc::new(SeekState::new()),
             [],
@@ -1281,12 +1284,42 @@ mod tests {
 
         let outcome = stream
             .try_read_with(&mut buf, WaitMode::Block)
-            .expect("the unavailable construction range is a pending status");
+            .expect("the ready current segment must produce a partial read");
+        let StreamReadOutcome::Bytes {
+            count,
+            byte_position,
+        } = outcome
+        else {
+            panic!("a blocking read must not park on a segment past the cursor: {outcome:?}");
+        };
+
+        assert_eq!(count.get(), 4);
+        assert_eq!(byte_position, 4);
+        assert_eq!(&buf[..4], b"ABCD");
+    }
+
+    #[kithara::test]
+    fn blocking_read_reports_not_ready_when_its_own_segment_is_unready() {
+        let source = ScriptSource::new(
+            Arc::new(SeekState::new()),
+            [],
+            [ScriptRead::Data(8)],
+            b"ABCDEFGH".to_vec(),
+        )
+        .with_segments([0..4, 4..8], 4)
+        .with_peer_wake(Arc::new(DeferredWake::default()));
+        let mut stream = Stream::<DummyType> { source };
+        stream.source.set_position(4);
+        let mut buf = [0u8; 8];
+
+        let outcome = stream
+            .try_read_with(&mut buf, WaitMode::Block)
+            .expect("an unready segment under the cursor is a pending status");
         assert!(matches!(
             outcome,
             StreamReadOutcome::Pending(PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted))
         ));
-        assert_eq!(stream.position(), 0);
+        assert_eq!(stream.position(), 4);
     }
 
     #[kithara::test]

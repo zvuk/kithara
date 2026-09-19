@@ -809,6 +809,24 @@ mod native {
         );
     }
 
+    /// Polling for a deferred edge divides the wait; it does not shorten it.
+    #[kithara::test(native, flash(false))]
+    fn a_backpressure_wait_parks_for_the_whole_wait_budget() {
+        let wake = Wake::default();
+        let mut configured = budgets();
+        configured.backpressure_poll_interval = PARK_BUDGET / 5;
+        configured.wait_timeout = PARK_BUDGET;
+        let mut streak = 0;
+        let started = Instant::now();
+
+        park_after_outcome(&wake, configured, backpressured_report(1), &mut streak);
+
+        assert!(
+            started.elapsed() >= PARK_BUDGET,
+            "a backpressure wait no edge woke parks on the wait budget, not on one poll interval"
+        );
+    }
+
     #[kithara::test(native, flash(false))]
     fn configured_slow_threshold_and_fairness_interval_are_load_bearing() {
         let mut slots = vec![slot(1, Priority::default(), FixedTask(TickResult::Done))];
@@ -835,15 +853,27 @@ mod native {
         assert_eq!(streak, 0);
     }
 
+    /// A backpressured task ticks no more often than its park budget allows.
+    ///
+    /// Both ends of the count are read at the window's own edges. The task
+    /// starts ticking before the observer can time it, and on a loaded host
+    /// the gap between its first tick and the window opening is itself worth
+    /// several parks; counting from task start charges the window with ticks
+    /// that happened outside it. The window's own ceiling needs no slack
+    /// beyond the park already in flight when it opened.
     #[kithara::test(native, flash(false))]
     fn scheduler_does_not_busy_spin_on_backpressure() {
+        const OBSERVE_WINDOW: Duration = Duration::from_millis(80);
+        const PARK_BUDGET: Duration = Duration::from_millis(20);
+        const PARK_IN_FLIGHT_AT_WINDOW_OPEN: usize = 1;
+
         let ticks = Arc::new(AtomicUsize::new(0));
         let (first_tick, first_tick_rx) = mpsc::channel();
         let worker = crate::Worker::new(crate::WorkerConfig::new());
         let dispatcher = worker.dispatcher(
             DispatcherConfig::builder()
                 .name("backpressure-park-test")
-                .wait_timeout(Duration::from_millis(20))
+                .wait_timeout(PARK_BUDGET)
                 .build(),
         );
         let handle = dispatcher
@@ -859,13 +889,20 @@ mod native {
         first_tick_rx
             .recv_timeout(Instant::now() + Duration::from_secs(2))
             .expect("backpressured task must start");
-        thread::sleep(Duration::from_millis(80));
+        let window_started = Instant::now();
+        let before_window = ticks.load(Ordering::Relaxed);
+        thread::sleep(OBSERVE_WINDOW);
+        let observed = ticks.load(Ordering::Relaxed).saturating_sub(before_window);
+        let window = window_started.elapsed();
 
-        let observed = ticks.load(Ordering::Relaxed);
         drop(handle);
+        let budgeted_parks =
+            usize::try_from(window.as_nanos() / PARK_BUDGET.as_nanos()).unwrap_or(usize::MAX);
+        let ceiling = budgeted_parks.saturating_add(PARK_IN_FLIGHT_AT_WINDOW_OPEN);
         assert!(
-            observed < 16,
-            "backpressured task ran {observed} times in 80ms despite a 20ms park budget"
+            observed <= ceiling,
+            "backpressured task ran {observed} times in {window:?} despite a {PARK_BUDGET:?} \
+             park budget, above the {ceiling} that window allows"
         );
     }
 

@@ -222,6 +222,18 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// Applies a seek to the decode core, retiring what the seek invalidates.
+    ///
+    /// Repositioning the active generation retires the transition join with
+    /// it, so the incoming half that claimed one cannot outlive the call.
+    /// Pairing the two here is what keeps a caller from doing one and not the
+    /// other.
+    pub(super) fn notify_seek(&mut self) {
+        if let Some(generation) = self.decode.notify_seek(&self.retired) {
+            self.retired.retire_generation(generation);
+        }
+    }
+
     /// Drops the in-flight transition an applied seek superseded.
     ///
     /// `VariantTransitionId` binds a transition to the seek epoch that minted

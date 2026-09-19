@@ -84,7 +84,7 @@ pub(super) fn over_budget(
                 "CPU spin" => OverBudgetAction::Panic,
                 _ => OverBudgetAction::Census,
             },
-            Tier::Strict => OverBudgetAction::Panic,
+            Tier::Strict | Tier::Work => OverBudgetAction::Panic,
         },
     };
 

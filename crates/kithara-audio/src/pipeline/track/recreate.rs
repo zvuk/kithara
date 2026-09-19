@@ -212,7 +212,7 @@ fn transition_to_seek_request<T: StreamType>(
 ) -> TrackStep<AudioChunk> {
     src.update_state(Track::<SeekRequested>::new(request).erase());
     src.decode.reset();
-    src.decode.notify_seek(&src.retired);
+    src.notify_seek();
     TrackStep::StateChanged
 }
 

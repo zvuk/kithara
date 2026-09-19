@@ -65,6 +65,20 @@ impl FlashSleep {
             handle: None,
         }
     }
+
+    /// Register the deadline (and run the advance rule) WITHOUT consuming a
+    /// grant. The engine computes a deadline from the clock it reads at
+    /// registration, so a caller whose deadline must bound work that can itself
+    /// move the clock has to arm before running that work - see [`FlashTimeout`].
+    /// Idempotent: arming an already-armed sleep is a no-op.
+    pub(crate) fn arm(mut self: Pin<&mut Self>, cx: &mut Context<'_>) {
+        if self.handle.is_some() {
+            return;
+        }
+        let (handle, adv) = system::register_sleep_async(self.delta_nanos, cx.waker().clone());
+        self.handle = Some(handle);
+        adv.fire();
+    }
 }
 
 impl Future for FlashSleep {
@@ -81,9 +95,7 @@ impl Future for FlashSleep {
             }
             return Poll::Pending;
         }
-        let (handle, adv) = system::register_sleep_async(self.delta_nanos, cx.waker().clone());
-        self.handle = Some(handle);
-        adv.fire();
+        self.arm(cx);
         Poll::Pending
     }
 }

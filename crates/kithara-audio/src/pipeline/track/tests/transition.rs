@@ -204,6 +204,41 @@ async fn an_applied_seek_retires_the_incoming_its_epoch_superseded(route_pcm: Ro
 }
 
 #[kithara::test(tokio)]
+async fn a_preempting_seek_retires_the_incoming_it_leaves_without_a_join(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
+    let plan = incoming_plan();
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    fixture.control.set_exact_reader_ready();
+
+    fixture.source.flush_deferred();
+    wait_for_incoming_priming(&mut fixture, transition).await;
+
+    assert!(fixture.source.decode.incoming_is_priming(transition));
+    assert!(fixture.drops.lock().is_empty());
+
+    fixture
+        .source
+        .shared_stream
+        .seek_control()
+        .begin(Duration::from_secs(1));
+
+    assert!(matches!(
+        fixture.source.step_track(),
+        TrackStep::StateChanged
+    ));
+
+    assert!(matches!(fixture.source.state, CurrentFsm::SeekRequested(_)));
+    assert!(fixture.source.decode.incoming_transition().is_none());
+    assert!(!fixture.source.decode.transition_holds_output());
+    assert_eq!(fixture.control.aborted_transition(), None);
+
+    fixture.source.flush_deferred();
+
+    assert_eq!(fixture.drops.lock().as_slice(), &[99]);
+}
+
+#[kithara::test(tokio)]
 async fn failed_source_removal_retires_staged_incoming_and_aborts_variant(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let plan = incoming_plan();

@@ -97,6 +97,16 @@ impl SizeProbeCounter {
     }
 }
 
+/// Bound the size-probes a whole ABR stress run was allowed to issue.
+///
+/// Only an upper bound is a property. A probe is what the machine issues
+/// when it does not know a byte length, so a run whose warm-up committed
+/// every body arrives at the seeks with nothing left to ask and probes
+/// nothing at all — a lower bound here would assert that the downloader
+/// lost a race. That the demand is raised, covers exactly the seek prefix,
+/// and dies once the sizes are known is pinned deterministically at the
+/// construction site by `an_exact_seek_probes_the_unknown_prefix_and_nothing_else`
+/// in `kithara-hls`.
 fn assert_abr_size_probes(fixture: AbrAudioFixture, counter: &SizeProbeCounter) {
     let total = counter.total_size_probe_count();
     let per_variant: Vec<u64> = (0..counter.variant_count())
@@ -113,10 +123,6 @@ fn assert_abr_size_probes(fixture: AbrAudioFixture, counter: &SizeProbeCounter) 
             let all_variant_bound =
                 u64::try_from(counter.variant_count() * counter.segment_count())
                     .expect("small fixture size");
-            assert!(
-                total > 0,
-                "WAV ABR seeks must resolve exact byte sizes on demand; saw zero size-probes"
-            );
             assert!(
                 total < all_variant_bound,
                 "WAV ABR lazy size probes must not probe every segment of every variant: \

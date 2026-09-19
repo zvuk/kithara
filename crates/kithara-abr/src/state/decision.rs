@@ -123,8 +123,10 @@ fn is_rescue(decision: &AbrDecision) -> bool {
 /// schedules them in parallel.
 ///
 /// Phase 2: a single tuple-match dispatches to the early-exit outcome or
-/// extracts the bandwidth estimate for the actual decision logic. One
-/// statement, one decision site — jump-table eligible.
+/// extracts the bandwidth estimate. One statement, one decision site —
+/// jump-table eligible. The manual arm precedes the lock arm: a lock gates
+/// *publication* of a pending decision, never the formation of the user's
+/// intent, which [`AbrState::pending_claim`] withholds until unlock.
 ///
 /// Phase 3: bandwidth-aware switch logic (`up_switch` / `down_switch`)
 /// runs on the gates' shared output; no further early returns.
@@ -138,21 +140,21 @@ fn decide(state: &AbrState, view: &AbrView<'_>) -> AbrDecision {
     };
     let estimate_bps = view.estimate_bps;
 
-    let estimate_bps: u64 = match (locked, manual_target, estimate_bps) {
-        (true, _, _) => {
+    let estimate_bps: u64 = match (manual_target, locked, estimate_bps) {
+        (Some(idx), _, _) => return manual_decision(current, idx),
+        (None, true, _) => {
             return AbrDecision::Stay {
                 current,
                 reason: AbrReason::Locked,
             };
         }
-        (_, Some(idx), _) => return manual_decision(current, idx),
-        (_, _, None) => {
+        (None, false, None) => {
             return AbrDecision::Stay {
                 current,
                 reason: AbrReason::NoEstimate,
             };
         }
-        (false, None, Some(bps)) => bps,
+        (None, false, Some(bps)) => bps,
     };
 
     let escaping = state.is_escaping();

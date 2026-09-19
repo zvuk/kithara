@@ -51,9 +51,12 @@ leak-timeout = "2s"
 fail-fast = false
 test-threads = "num-cpus"
 leak-timeout = "2s"
-# The verdict reads a single failure as a regression, so one bad throw blocks
-# whichever change is under it. One retry removes that class; a test that
-# survives two attempts is a bug to look at, not a number to raise.
+# One retry, and a retried pass still fails the lane: `test.known_flakes` in
+# `.config/xtask.toml` owns the exceptions, and starts empty. What the extra
+# attempt buys is evidence — nextest keeps the failing attempt inside
+# `flakyFailure` with its streams and its dump, and whether the second attempt
+# passes is what separates a test that is non-deterministic from a change that
+# broke it.
 retries = 1
 
 # `path` resolves against the profile's store directory

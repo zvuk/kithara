@@ -1,8 +1,15 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! Decoder construction must remain bounded when media data is withheld.
-//! Construction probes the container, so every platform reports the stream's
-//! typed readiness error. Releasing the body restores playback.
+//! Decoder construction must stay bounded when the bytes it reads are
+//! withheld, and must surface the stream's typed readiness error rather than a
+//! synthetic timeout. Releasing the body restores playback.
+//!
+//! The WAV header heads segment 0 instead of riding a separate `EXT-X-MAP`
+//! init, because the withheld unit has to be the one construction reads: a
+//! read never awaits past the unit holding its cursor, so an init leaves
+//! construction satisfied by those 44 bytes and the withheld segment asserts
+//! nothing: construction with an init returns `Ok` in 0.25 s, while reading
+//! the withheld unit spends the 1.5 s blocking-read budget and then fails.
 use std::num::NonZeroUsize;
 
 use kithara::{
@@ -35,8 +42,8 @@ const SEGMENT_COUNT: usize = 8;
 
 #[kithara::fixture]
 fn fixture_config(hls_header_boundary: Vec<u8>, hls_pcm_boundary: Vec<u8>) -> HlsTestServerConfig {
-    let init_segment = Arc::new(hls_header_boundary);
-    let pcm = Arc::new(hls_pcm_boundary);
+    let mut media = hls_header_boundary;
+    media.extend_from_slice(&hls_pcm_boundary);
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
     HlsTestServerConfig {
@@ -44,8 +51,7 @@ fn fixture_config(hls_header_boundary: Vec<u8>, hls_pcm_boundary: Vec<u8>) -> Hl
         segments_per_variant: SEGMENT_COUNT,
         segment_size: SEGMENT_SIZE,
         segment_duration_secs: segment_duration,
-        custom_data_per_variant: Some(vec![pcm]),
-        init_data_per_variant: Some(vec![init_segment]),
+        custom_data_per_variant: Some(vec![Arc::new(media)]),
         variant_bandwidths: Some(vec![1_000_000]),
         ..Default::default()
     }
@@ -95,7 +101,7 @@ fn audio_config(
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
 async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsTestServerConfig) {
-    let (server, gate) = HlsTestServer::with_segment_gate(fixture_config, 0, 0).await;
+    let (server, _gate) = HlsTestServer::with_segment_gate(fixture_config, 0, 0).await;
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -111,11 +117,9 @@ async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsTes
         elapsed < Duration::from_secs(5),
         "opening must be bounded while media is withheld: {elapsed:?}"
     );
-    gate.release();
-
     let err = result
         .err()
-        .expect("the container probe requires media bytes");
+        .expect("construction reads the withheld segment it opens in");
     let message = err.to_string();
     info!(?elapsed, %message, is_interrupted = err.is_interrupted(), "PlayWorker::open failed");
     let lower = message.to_ascii_lowercase();

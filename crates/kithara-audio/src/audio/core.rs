@@ -18,7 +18,7 @@ use super::{
     PendingReason, PreloadGate, PreparedAudioLane, ReadOutcome, SeekOutcome, chunk_position,
     cursor::ChunkCursor,
     event::AudioEvents,
-    ring::{RecvCtx, RingConsumer},
+    ring::{RecvCtx, RingConsumer, Wait},
     seek::{SeekHandle, SeekHandleParts},
 };
 use crate::{ConsumerWakeMode, traits::SeekBegin};
@@ -130,10 +130,15 @@ impl<S> Audio<S> {
         self.session.abr_handle.as_ref()?.current_variant()
     }
 
-    pub(crate) fn fill_buffer(&mut self) -> bool {
+    /// Prime the first chunk from what the producer has already delivered.
+    ///
+    /// Never parks: the preload latch this serves also opens when the producer
+    /// parks upstream, so a parking prime would wait on a fetch that
+    /// construction neither owns nor bounds.
+    pub(crate) fn prime_buffer(&mut self) -> bool {
         let recv = recv_ctx(&self.session, &self.runtime);
         let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
-        let filled = self.ring.fill(&mut self.cursor, recv);
+        let filled = self.ring.fill(&mut self.cursor, recv, Wait::Never);
         self.events.fill_result(
             filled,
             was_playing,
@@ -159,6 +164,10 @@ impl<S> Audio<S> {
 
     /// Enables non-blocking reads and primes the first PCM chunk.
     ///
+    /// Returns as soon as the producer's delivered chunks are drained, with or
+    /// without a primed chunk; waiting for the first chunk belongs to the
+    /// preload latch this call sits behind, never to the prime itself.
+    ///
     /// # Errors
     ///
     /// Returns [`DecodeError`] if the producer channel closes during preload.
@@ -168,7 +177,7 @@ impl<S> Audio<S> {
             self.ring.preloaded = true;
         }
         if self.ring.current_chunk.is_none() && self.ring.phase != super::ConsumerPhase::AtEof {
-            self.fill_buffer();
+            self.prime_buffer();
             if let super::ConsumerPhase::Failed { source } = self.ring.phase {
                 return Err(DecodeError::audio_stream("preload", source));
             }
@@ -280,7 +289,7 @@ impl<S> AudioRead for Audio<S> {
             let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
             let chunk = self
                 .ring
-                .recv_valid_chunk(recv_ctx(&self.session, &self.runtime));
+                .recv_valid_chunk(recv_ctx(&self.session, &self.runtime), Wait::ForProducer);
             self.events.fill_result(
                 chunk.is_some(),
                 was_playing,
@@ -454,12 +463,12 @@ mod tests {
 
     impl Default for AudioFixture {
         fn default() -> Self {
-            Self::with_wake_mode(ConsumerWakeMode::RealtimeDeferred)
+            Self::with_wake_mode(ConsumerWakeMode::RealtimeDeferred, false)
         }
     }
 
     impl AudioFixture {
-        fn with_wake_mode(consumer_wake_mode: ConsumerWakeMode) -> Self {
+        fn with_wake_mode(consumer_wake_mode: ConsumerWakeMode, block_on_underrun: bool) -> Self {
             let (data_tx, data_rx) = connect::<Fetch<AudioChunk>>(1, None);
             let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
             let epoch = Arc::new(AtomicU64::new(0));
@@ -469,7 +478,7 @@ mod tests {
                 consumer_wake_mode,
                 audio_rx: data_rx,
                 reader_wake: Arc::new(ThreadWake::default()),
-                block_on_underrun: false,
+                block_on_underrun,
             });
             let seek_state = Arc::new(SeekState::new());
             let seek: Arc<dyn SeekControl> = seek_state.clone();
@@ -519,6 +528,23 @@ mod tests {
             .seek(Duration::from_millis(250))
             .expect("seek should arm epoch");
         assert!(!fixture.audio.session.preload_gate.is_ready());
+    }
+
+    /// The preload latch opens on an upstream park too, so construction must
+    /// come back from a ring the producer has not filled. One second instead of
+    /// the ambient ten: the regression is a park, and on the flash-off lane that
+    /// park is spent in real time.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(hang_timeout_secs(1))]
+    fn preload_returns_when_the_producer_has_delivered_nothing() {
+        let mut fixture = AudioFixture::with_wake_mode(ConsumerWakeMode::RealtimeDeferred, true);
+
+        fixture
+            .audio
+            .preload()
+            .expect("preload primes whatever the producer delivered");
+
+        assert!(fixture.audio.is_preloaded());
     }
 
     fn staged_chunk(trim_silence: &[f32]) -> AudioChunk {
@@ -572,7 +598,7 @@ mod tests {
 
     #[kithara::test]
     fn off_rt_read_publishes_the_seek_completion_it_births(trim_silence: Vec<f32>) {
-        let mut fixture = AudioFixture::with_wake_mode(ConsumerWakeMode::ImmediateOffRt);
+        let mut fixture = AudioFixture::with_wake_mode(ConsumerWakeMode::ImmediateOffRt, false);
         let mut receiver = fixture.audio.events.bus().subscribe();
         let epoch = seek_and_stage(&trim_silence, &mut fixture);
 
@@ -589,7 +615,7 @@ mod tests {
 
     #[kithara::test]
     fn an_adopted_realtime_mode_moves_the_reader_events_with_the_ring(trim_silence: Vec<f32>) {
-        let mut fixture = AudioFixture::with_wake_mode(ConsumerWakeMode::ImmediateOffRt);
+        let mut fixture = AudioFixture::with_wake_mode(ConsumerWakeMode::ImmediateOffRt, false);
         let mut receiver = fixture.audio.events.bus().subscribe();
         AudioControl::set_consumer_wake_mode(
             &mut fixture.audio,

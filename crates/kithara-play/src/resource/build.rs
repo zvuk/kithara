@@ -271,4 +271,32 @@ mod tests {
 
         assert_eq!(built.audio_buffer_chunks(), 24);
     }
+
+    /// `block_on_underrun` is the one audio knob no document can name, so the
+    /// only route from a caller to the producer ring is this field. An offline
+    /// suite that reads its own rendered PCM opts in through it; were the field
+    /// dropped here the opt-in would compile and read as a zero-filled range
+    /// indistinguishable from rendered silence.
+    #[kithara::test]
+    fn the_underrun_block_choice_reaches_the_built_hls_config() {
+        let mut config = config("https://example.com/live.m3u8");
+        config.block_on_underrun = true;
+
+        let built = config
+            .build_hls_config(&worker(), None)
+            .expect("valid HLS config");
+
+        assert!(built.block_on_underrun);
+    }
+
+    /// The file branch reads the same field from the same place.
+    #[kithara::test]
+    fn the_underrun_block_choice_reaches_the_built_file_config() {
+        let mut config = config("https://example.com/song.mp3");
+        config.block_on_underrun = true;
+
+        let built = config.build_file_config(&worker(), None);
+
+        assert!(built.block_on_underrun);
+    }
 }

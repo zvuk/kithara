@@ -12,7 +12,12 @@ crate-type = ["lib", "dylib"]
 
 [dependencies]
 kithara = { workspace = true, features = ["usdt", "mock", "offline", "signal", "tokio-net", "tokio-rt-multi-thread"] }
-kithara-integration-tests = { workspace = true }
+# The workspace entry pins `default-features = false`, so a dependency that
+# names no closure gets a crate whose ungated modules still reach for
+# `kithara::assets`, `kithara::bufpool` and the rest: it does not compile.
+# `audio` is the smallest closure that does, and it is a floor rather than a
+# choice — a binary that needs `all` asks for it itself, and Cargo unifies.
+kithara-integration-tests = { workspace = true, features = ["audio"] }
 kithara-test-fixtures = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 

@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use cpu_time::ThreadTime;
 use kithara_test_utils::kithara;
 use tracing_subscriber::fmt::MakeWriter;
 
@@ -30,6 +31,10 @@ const BLANKET_TEST_SPIN_MS: u64 = 50;
 const CENSUS_LOG_BUDGET_MS: u64 = 10_000;
 const CENSUS_LOG_SLEEP_MS: u64 = 1;
 const FORCED_SPIN_CPU_MS: u64 = 10_000;
+const PAUSED_CPU_SLEEP_MS: u64 = 20;
+const WORK_TEST_BUDGET_MS: u64 = 10;
+const WORK_TEST_SLEEP_MS: u64 = 50;
+const WORK_TEST_SPIN_CPU_MS: u64 = 50;
 
 static LOG_FILE_ID: AtomicUsize = AtomicUsize::new(FIRST_LOG_FILE_ID);
 
@@ -53,6 +58,19 @@ fn temp_log_path(name: &str) -> PathBuf {
 fn spin_for(d: Duration) {
     let start = Instant::now();
     while start.elapsed() < d {
+        std::hint::spin_loop();
+    }
+}
+
+/// Spend `cpu` of this thread's own CPU time.
+///
+/// A work budget reads CPU, and wall time buys an unknown share of it: a
+/// loaded runner can hand a 50 ms wall spin less than the 10 ms of CPU the
+/// budget is asking about, and the poll under test would then have spent
+/// nothing to flag.
+fn spin_cpu_for(cpu: Duration) {
+    let start = ThreadTime::try_now().expect("thread CPU clock");
+    while start.try_elapsed().expect("thread CPU clock") < cpu {
         std::hint::spin_loop();
     }
 }
@@ -204,6 +222,81 @@ fn budget_ignores_paused_time() {
         spin_for(Duration::from_millis(50));
     });
     let _ = poll_once(fut);
+}
+
+/// The CPU twin of [`budget_ignores_paused_time`]. A pause takes its region out
+/// of the poll's wall, so the CPU that region burned has to leave with it:
+/// weighing a net wall against a gross CPU reads every sanctioned pass of real
+/// arithmetic as a spin, and the blanket tier panics on exactly that label. The
+/// Cochlea oracle poll reported 129ms of CPU inside 2.8ms of wall on that
+/// arithmetic.
+#[kithara::test(native, flash(false))]
+fn budget_ignores_paused_cpu() {
+    force_mode(Mode::Census);
+    force_no_log_path();
+    force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
+
+    let traced = capture_tracing(|| {
+        let fut = watch_blanket("paused_cpu_task", async {
+            {
+                let _p = permit();
+                spin_for(Duration::from_millis(BLANKET_TEST_SPIN_MS));
+            }
+            thread::sleep(Duration::from_millis(PAUSED_CPU_SLEEP_MS));
+        });
+        let _ = poll_once(fut);
+    });
+
+    let line = traced
+        .lines()
+        .find(|line| line.contains("single poll took"))
+        .expect("over-budget census line");
+    assert!(line.contains("paused_cpu_task"), "got: {line}");
+    assert!(line.contains("blocked wait"), "got: {line}");
+}
+
+/// A poll that sat without working does not spend a work budget.
+///
+/// This is the shape a loaded runner produces: 58.7ms of wall against 42us of
+/// CPU, which a wall budget reads as an overrun and a work budget reads as the
+/// deschedule it was.
+#[kithara::test(native, flash(false))]
+fn a_work_budget_ignores_a_poll_that_did_no_work() {
+    force_mode(Mode::Panic);
+
+    let fut = watch_cpu_budget("descheduled_task", WORK_TEST_BUDGET_MS, async {
+        thread::sleep(Duration::from_millis(WORK_TEST_SLEEP_MS));
+    });
+    let _ = poll_once(fut);
+}
+
+/// Sanctioned arithmetic leaves the work budget where it found it, so the
+/// budget still reads what the unsanctioned remainder spent.
+#[kithara::test(native, flash(false))]
+fn a_work_budget_ignores_sanctioned_work() {
+    force_mode(Mode::Panic);
+
+    let fut = watch_cpu_budget("sanctioned_work_task", WORK_TEST_BUDGET_MS, async {
+        let _p = permit();
+        spin_cpu_for(Duration::from_millis(WORK_TEST_SPIN_CPU_MS));
+    });
+    let _ = poll_once(fut);
+}
+
+#[kithara::test(native, flash(false))]
+fn a_work_budget_flags_a_poll_that_spent_it() {
+    force_mode(Mode::Panic);
+
+    let caught = std::panic::catch_unwind(|| {
+        let fut = watch_cpu_budget("work_task", WORK_TEST_BUDGET_MS, async {
+            spin_cpu_for(Duration::from_millis(WORK_TEST_SPIN_CPU_MS));
+        });
+        let _ = poll_once(fut);
+    });
+    let err = caught.expect_err("a poll that spent the work budget must panic");
+    let msg = err.downcast_ref::<String>().expect("panic payload");
+    assert!(msg.contains("work_task"), "got: {msg}");
+    assert!(msg.contains("budget"), "got: {msg}");
 }
 
 #[kithara::test(native, flash(false))]

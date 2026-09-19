@@ -5,6 +5,14 @@ use syn::{Error, Expr, ExprLit, ItemFn, Lit, MetaNameValue, parse_macro_input, p
 
 const DEFAULT_BUDGET_MS: u64 = 25;
 
+/// What a watched poll's budget is spent on.
+enum Budget {
+    /// Wall the poll must not sit in, sanctioned regions removed.
+    Wall(u64),
+    /// Thread CPU the poll must not spend, sanctioned regions removed.
+    Cpu(u64),
+}
+
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_with_path(attr, item, &quote!(::kithara_test_utils::no_block))
 }
@@ -14,13 +22,17 @@ pub(crate) fn expand_allow_block(attr: TokenStream, item: TokenStream) -> TokenS
 }
 
 fn expand_with_path(attr: TokenStream, item: TokenStream, path: &TokenStream2) -> TokenStream {
-    let budget_ms = if attr.is_empty() {
-        DEFAULT_BUDGET_MS
+    let budget = if attr.is_empty() {
+        Budget::Wall(DEFAULT_BUDGET_MS)
     } else {
         match parse_budget(attr) {
             Ok(v) => v,
             Err(e) => return e.to_compile_error().into(),
         }
+    };
+    let (watch, budget_ms) = match budget {
+        Budget::Wall(ms) => (quote!(watch), ms),
+        Budget::Cpu(ms) => (quote!(watch_cpu), ms),
     };
     let mut f = parse_macro_input!(item as ItemFn);
     if f.sig.asyncness.is_none() {
@@ -34,7 +46,7 @@ fn expand_with_path(attr: TokenStream, item: TokenStream, path: &TokenStream2) -
     let name = f.sig.ident.to_string();
     let block = &f.block;
     *f.block = parse_quote!({
-        #path::watch(
+        #path::#watch(
             concat!(module_path!(), "::", #name),
             #budget_ms,
             async move #block,
@@ -82,18 +94,22 @@ fn expand_allow_block_with_path(
     }
 }
 
-fn parse_budget(attr: TokenStream) -> syn::Result<u64> {
+fn parse_budget(attr: TokenStream) -> syn::Result<Budget> {
     let meta = syn::parse::<MetaNameValue>(attr)?;
-    if !meta.path.is_ident("budget_ms") {
+    let wrap: fn(u64) -> Budget = if meta.path.is_ident("budget_ms") {
+        Budget::Wall
+    } else if meta.path.is_ident("cpu_budget_ms") {
+        Budget::Cpu
+    } else {
         return Err(Error::new_spanned(
             meta.path,
-            "expected `budget_ms = <int>`",
+            "expected `budget_ms = <int>` or `cpu_budget_ms = <int>`",
         ));
-    }
+    };
     match meta.value {
         Expr::Lit(ExprLit {
             lit: Lit::Int(lit), ..
-        }) => lit.base10_parse::<u64>(),
+        }) => lit.base10_parse::<u64>().map(wrap),
         value => Err(Error::new_spanned(value, "expected integer literal")),
     }
 }

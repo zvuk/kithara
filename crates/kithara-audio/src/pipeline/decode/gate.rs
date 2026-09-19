@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use kithara_decode::DecoderFactory;
 use kithara_platform::sync::Arc;
-use kithara_stream::{DeferredWake, ReaderInput, SeekControl, SourcePhase, StreamType};
+use kithara_stream::{ByteMap, DeferredWake, ReaderInput, SeekControl, SourcePhase, StreamType};
 use kithara_test_utils::kithara;
 use tracing::trace;
 
@@ -287,16 +287,31 @@ fn chunk_lookahead_range<T: StreamType>(stream: &SharedStream<T>, byte: u64) -> 
 }
 
 /// Playback wait phase for the decoder's forward read-ahead window.
-///
-/// Unlike the next-chunk gate, this is not segment-clamped: container parsing
-/// crosses the boundary, so a single-byte or current-segment wait would report
-/// ready while the decoder is blocked on the withheld next segment and would
-/// hot-spin the worker.
 fn source_phase_forward<T: StreamType>(stream: &SharedStream<T>) -> SourcePhase {
-    let pos = stream.position();
-    let end = pos.saturating_add(DEFAULT_READ_AHEAD_BYTES);
-    let end = stream.len().map_or(end, |len| end.min(len));
-    demand_phase(stream, pos..end)
+    let byte_map = stream.byte_map();
+    let window = forward_window(stream.position(), byte_map.as_deref(), stream.len());
+    demand_phase(stream, window)
+}
+
+/// Byte range whose readiness resumes a parked playback decode.
+///
+/// A segmented source delivers whole segments, so the window ends where the
+/// first segment starting at or after `pos` does: mid-segment that is the rest
+/// of the current segment plus the whole next one, and on a boundary it is the
+/// segment that starts there. Both shapes keep the property a fixed byte count
+/// was chosen for - a decode blocked across the boundary waits for the withheld
+/// next segment rather than hot-spinning the worker - without the fixed count's
+/// other half, a demand for segments the decode never reads, which held startup
+/// until four of them had landed. A source with no byte map has no delivery
+/// unit, and the read-ahead window is the only statement left to make.
+fn forward_window(pos: u64, byte_map: Option<&dyn ByteMap>, len: Option<u64>) -> Range<u64> {
+    let end = byte_map
+        .and_then(|map| map.segment_after_byte(pos))
+        .map_or_else(
+            || pos.saturating_add(DEFAULT_READ_AHEAD_BYTES),
+            |segment| segment.byte_range.end,
+        );
+    pos..len.map_or(end, |len| end.min(len))
 }
 
 fn boundary_end<T: StreamType>(stream: &SharedStream<T>, start: u64) -> u64 {
@@ -308,4 +323,97 @@ fn range_end<T: StreamType>(stream: &SharedStream<T>, start: u64, read_ahead_byt
         || start.saturating_add(read_ahead_bytes),
         |len| start.saturating_add(read_ahead_bytes).min(len),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ops::Range;
+
+    use kithara_platform::time::Duration;
+    use kithara_stream::{ByteMap, SegmentDescriptor};
+    use kithara_test_utils::kithara;
+
+    use super::{DEFAULT_READ_AHEAD_BYTES, forward_window};
+
+    /// Equal media segments behind an init range, as HLS delivers them.
+    struct SegmentedMap;
+
+    impl SegmentedMap {
+        const COUNT: u32 = 3;
+        const INIT_BYTES: u64 = 627;
+        const MID_SEGMENT_BYTE: u64 = Self::INIT_BYTES + Self::SEGMENT_BYTES / 2;
+        const SEGMENT_BYTES: u64 = 8_000;
+        const SEGMENT_SECS: u64 = 4;
+
+        fn descriptor(index: u32) -> SegmentDescriptor {
+            let start = Self::INIT_BYTES + u64::from(index) * Self::SEGMENT_BYTES;
+            SegmentDescriptor::new(
+                start..start + Self::SEGMENT_BYTES,
+                Duration::from_secs(u64::from(index) * Self::SEGMENT_SECS),
+                Duration::from_secs(Self::SEGMENT_SECS),
+                index,
+                0,
+            )
+        }
+
+        fn segment_start(index: u32) -> u64 {
+            Self::INIT_BYTES + u64::from(index) * Self::SEGMENT_BYTES
+        }
+    }
+
+    impl ByteMap for SegmentedMap {
+        fn init_segment_range(&self) -> Range<u64> {
+            0..Self::INIT_BYTES
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(Self::segment_start(Self::COUNT))
+        }
+
+        fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
+            (0..Self::COUNT)
+                .map(Self::descriptor)
+                .find(|segment| segment.byte_range.start >= byte_offset)
+        }
+
+        fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+            (0..Self::COUNT)
+                .map(Self::descriptor)
+                .find(|segment| segment.decode_time + segment.duration > t)
+        }
+
+        fn segment_count(&self) -> Option<u32> {
+            Some(Self::COUNT)
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_wait_on_a_segment_boundary_ends_at_that_segment() {
+        let map: &dyn ByteMap = &SegmentedMap;
+
+        let window = forward_window(SegmentedMap::segment_start(0), Some(map), map.len());
+
+        assert_eq!(
+            window,
+            SegmentedMap::segment_start(0)..SegmentedMap::segment_start(1)
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_wait_inside_a_segment_reaches_past_the_boundary_it_is_blocked_on() {
+        let map: &dyn ByteMap = &SegmentedMap;
+
+        let window = forward_window(SegmentedMap::MID_SEGMENT_BYTE, Some(map), map.len());
+
+        assert_eq!(window.end, SegmentedMap::segment_start(2));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_wait_on_a_source_with_no_segments_spans_the_read_ahead_window() {
+        let pos = SegmentedMap::segment_start(0);
+
+        let window = forward_window(pos, None, None);
+
+        assert_eq!(window, pos..pos + DEFAULT_READ_AHEAD_BYTES);
+    }
 }

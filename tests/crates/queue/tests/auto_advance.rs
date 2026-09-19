@@ -351,6 +351,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,

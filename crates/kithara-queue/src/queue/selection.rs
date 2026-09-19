@@ -72,7 +72,16 @@ where
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
 
-        if self.player.current_index() == index && self.player.is_playing() {
+        // WHY: `is_playing` is a session flag, not a verdict on this item. The render thread queues the natural end while rendering a block
+        // and clears the flag only at the top of the next `process`, so the item that just ended still reads as playing. Repeat-one answers
+        // that end by advancing onto that very entry, and the early return would drop the re-select. The reason alone decides, because the
+        // entry's status at that instant only says who won the race with the prefetch reload: `Loaded` restarts here, `Pending` leaves the
+        // stashed select for `apply_loaded`, `Consumed` respawns the load — every one of them needs this advance. `item_has_resource`
+        // cannot stand in for the flag either, because loading empties the slot for the whole of normal playback.
+        if !matches!(reason, AdvanceReason::NaturalEof)
+            && self.player.current_index() == index
+            && self.player.is_playing()
+        {
             self.cancel_stale_pending(id);
             return Ok(());
         }

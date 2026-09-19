@@ -50,9 +50,14 @@ where
 
 pin_project! {
     /// Races `future` against an engine-backed [`crate::flash::FlashSleep`] deadline
-    /// (see the `flash` [`timeout`]). The future is polled first, so a ready result
-    /// wins a tie with the deadline. `pub(crate)`: also constructed by the flash
-    /// control surface's `virtual_timeout`.
+    /// (see the `flash` [`timeout`]). The deadline is ARMED before `future` is
+    /// polled: the engine dates a deadline from the clock it reads at
+    /// registration, and the guarded work registers waits of its own, so arming
+    /// afterwards would date the deadline from a clock that work had already
+    /// moved - a longer inner wait would then outlive the shorter timeout. Once
+    /// armed, the future is polled first, so a ready result wins a tie with the
+    /// deadline. `pub(crate)`: also constructed by the flash control surface's
+    /// `virtual_timeout`.
     pub(crate) struct FlashTimeout<F> {
         #[pin]
         pub(crate) future: F,
@@ -65,7 +70,8 @@ impl<F: Future> Future for FlashTimeout<F> {
     type Output = Result<F::Output, TimeoutError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
+        let mut this = self.project();
+        this.sleep.as_mut().arm(cx);
         // WHY: The future is polled FIRST, so a ready result wins a tie with the
         if let Poll::Ready(out) = this.future.poll(cx) {
             return Poll::Ready(Ok(out));

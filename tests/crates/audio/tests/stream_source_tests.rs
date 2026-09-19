@@ -82,6 +82,16 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
     );
 }
 
+/// A route change resumes from admitted Warp progress, not the consumer head.
+///
+/// The head this is measured against is read immediately before the route is
+/// selected, because that is the moment the property is about. Read after the
+/// switch it also carries whatever the switch handed the reader, so the head
+/// climbs towards the resume point and the comparison ends up between a number
+/// and itself. The read that follows the switch stays and its chunk is now
+/// examined rather than dropped: an off-thread consumer wakes the worker by
+/// reading, so the rebuild needs that read to make progress at all, and it can
+/// be the chunk the rebuild lands in.
 #[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(

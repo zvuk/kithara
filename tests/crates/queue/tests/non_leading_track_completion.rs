@@ -18,8 +18,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     kithara,
     offline::{
-        OfflinePlayerHarness, OfflinePlayerOptions, mean_abs, offline_queue_fixture,
-        offline_queue_fixture_with_options,
+        OfflinePlayerHarness, OfflinePlayerOptions, mean_abs, offline_queue_fixture_with_options,
     },
 };
 use kithara_test_fixtures::assets;
@@ -59,7 +58,13 @@ struct NonLeadingFixture {
 }
 
 async fn non_leading_fixture() -> NonLeadingFixture {
-    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
+    let (harness, queue) = offline_queue_fixture_with_options(
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
     let files = [
         assets::constant_wav_quiet_30s(),
         assets::constant_wav_loud_30s(),

@@ -193,7 +193,7 @@ kithara = { workspace = true, default-features = false, optional = true }
 # `feature = "apple"` + matching `target_os`, so without these entries
 # the test crate cannot reference it.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, default-features = false, optional = true }
+kithara = { workspace = true, default-features = false, optional = true, features = ["apple"] }
 
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

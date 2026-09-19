@@ -36,10 +36,11 @@ pub struct OfflinePlayerOptions {
     #[builder(default)]
     gapless_mode: GaplessMode,
     /// Make audio-thread reads block on a producer-ring underrun instead of
-    /// zero-filling. Only suites that measure absolute rendered length
-    /// (gapless) opt in: blocking trades an underrun for waiting on decode,
-    /// so under a tight `hang_timeout_secs` a slow decode becomes a hang
-    /// panic instead of inserted silence.
+    /// zero-filling. Suites that read the rendered PCM itself opt in, because
+    /// a zero-filled range is indistinguishable from rendered silence:
+    /// blocking trades an underrun for waiting on decode, so under a tight
+    /// `hang_timeout_secs` a slow decode becomes a hang panic instead of
+    /// inserted silence.
     #[builder(default)]
     block_on_underrun: bool,
     warp: Option<WarpConfig>,

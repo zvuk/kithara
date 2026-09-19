@@ -80,3 +80,11 @@ pub fn watch_blanket_at<F: Future>(
 pub fn watch_budget<F: Future>(_name: &'static str, _budget_ms: u64, fut: F) -> Watched<F> {
     fut
 }
+
+#[doc(hidden)]
+#[inline]
+#[must_use]
+#[track_caller]
+pub fn watch_cpu_budget<F: Future>(_name: &'static str, _budget_ms: u64, fut: F) -> Watched<F> {
+    fut
+}

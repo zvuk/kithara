@@ -362,6 +362,10 @@ mod tests {
         ));
     }
 
+    /// The claim rests on the ordering, not on the wait: the operation
+    /// is released only after the drop has been observed, so a drop that
+    /// queued behind it could never be observed at all. The bound below
+    /// is a backstop that turns that deadlock into a named failure.
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
     fn drop_does_not_wait_for_an_admitted_operation() {
@@ -394,7 +398,7 @@ mod tests {
             dropped_tx.send(()).expect("report completed drop");
         });
         dropped_rx
-            .recv_timeout(Duration::from_millis(50))
+            .recv_timeout(Duration::from_secs(5))
             .expect("drop must not queue behind an admitted operation");
         assert!(closed.is_closed(), "drop must close the player at once");
         assert!(
