@@ -6,7 +6,7 @@ use kithara_platform::sync::Arc;
 use kithara_play::{GroupState, PlayError, SessionDispatcher, player::PlayerMember};
 use kithara_test_utils::{bufpool::TestPools, kithara};
 use kithara_warp::{
-    BeatGridId, SyncAdmission, SyncGroup, SyncMember, SyncOperation, TopologyOperation,
+    BeatGridId, MemberArm, SyncAdmission, SyncGroup, SyncMember, SyncOperation, TopologyOperation,
 };
 
 use super::{Host, Platform, Resident, SessionRuntime};
@@ -116,6 +116,7 @@ fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<
             operations: Box::new([TopologyOperation::Attach {
                 member: SyncMember::Group {
                     alignment: None,
+                    arm: MemberArm::Waiting,
                     group: Box::new(fixture_member(resident_id, sample_rate)),
                 },
             }]),

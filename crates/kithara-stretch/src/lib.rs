@@ -9,7 +9,7 @@ mod kind;
 pub use kind::StretchKind;
 
 mod factory;
-pub use factory::build_engine;
+pub use factory::{build_engine, build_varispeed_engine};
 
 mod backends;
 

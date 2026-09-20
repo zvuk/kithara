@@ -14,7 +14,7 @@ use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, Worker, WorkerCon
 
 use super::{
     DecoderNode, EngineLoad, PlayWorkerConfig, RegisteredAudio, TrackConfig, TrackLease,
-    WarpSource,
+    WarpSource, WarpSourceParts,
     scheduler::{PlaybackObserver, ServiceClass, Wake},
 };
 use crate::effects::EffectDrain;
@@ -117,20 +117,26 @@ where
         let prepared =
             Audio::<Stream<T>>::prepare(audio, Arc::new(wake), self.pools().clone()).await?;
         let drain = EffectDrain::new(effects.len(), self.pools())?;
+        let (free_adoption, adoption_worker) = super::free_adoption();
         let prepared = prepared.map(|audio, source| {
             let spec = audio.spec();
             let warp = Warp::new(audio, &warp);
+            let region_plan = Arc::clone(warp.region_plan());
             let source = WarpSource::new(
                 source,
-                warp.renderer(spec, self.pools().clone()),
-                effects,
-                drain,
-                spec,
-                self.pools().clone(),
+                WarpSourceParts {
+                    warp: warp.renderer(spec, self.pools().clone()),
+                    effects,
+                    drain,
+                    spec,
+                    pools: self.pools().clone(),
+                    free_adoption: Some(adoption_worker),
+                    region_plan,
+                },
             );
             (warp, source)
         });
-        self.register(prepared, engine_load, task_cancel)
+        self.register(prepared, engine_load, task_cancel, free_adoption)
     }
 
     fn register<T, P>(
@@ -138,6 +144,7 @@ where
         prepared: PreparedAudio<Warp<Audio<T>>, P>,
         engine_load: Option<Arc<EngineLoad>>,
         cancel: Option<CancelToken>,
+        free_adoption: super::FreeAdoptionControl,
     ) -> DecodeResult<RegisteredAudio<T, S>>
     where
         P: AudioSource<Chunk = kithara_signal::AudioChunk>,
@@ -155,6 +162,7 @@ where
         Ok(RegisteredAudio::new(
             audio,
             TrackLease::new(self.clone(), task),
+            free_adoption,
         ))
     }
 }

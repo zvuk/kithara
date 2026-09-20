@@ -4,6 +4,7 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_signal::{AudioSpec, SampleCount};
 use kithara_stretch::{
     ElasticBackendConfig, ElasticConfig, ElasticEngine, ElasticError, StretchKind, build_engine,
+    build_varispeed_engine,
 };
 use tracing::warn;
 
@@ -41,6 +42,7 @@ where
 
     pub(super) fn prepare_target(
         kind: StretchKind,
+        keylock: bool,
         backends: ElasticBackendConfig,
         source_block_frames: NonZeroUsize,
         spec: AudioSpec,
@@ -54,8 +56,13 @@ where
             scratch: reusable_scratch,
         } = reusable;
         drop(reusable_engine);
+        let build = if keylock {
+            build_engine::<S>
+        } else {
+            build_varispeed_engine::<S>
+        };
         let result = Self::config_for(kind, backends, source_block_frames, spec, pools)
-            .and_then(build_engine)
+            .and_then(build)
             .and_then(|engine| {
                 let channels = usize::from(spec.channels.max(1));
                 let pending_samples = SampleCount::new(
@@ -160,29 +167,31 @@ where
             self.service_scratch();
             return;
         }
-        self.sync_plan();
+        self.sync_plan(self.rendered_source_end.map_or(0, |(frame, _)| frame));
 
-        if spec.sample_rate != self.spec.sample_rate
-            && let Some(applied) = self.applied_speed.as_mut()
-        {
-            applied.update_sample_rate(spec.sample_rate);
-        }
+        self.select_context(self.rendered_source_end.map_or(0, |(frame, _)| frame));
 
         let kind = self.controls.backend();
+        let keylock = self.controls.keylock();
         let channels = usize::from(self.spec.channels.max(1));
         let entering_unity = spec == self.spec
             && (self.active || self.pending_frames(channels) > 0)
-            && self.unity_passthrough(self.controls.speed());
+            && self.unity_passthrough(self.rate.speed());
         if entering_unity {
             self.service_scratch();
             return;
         }
-        if kind != self.current_kind || spec != self.spec || self.rebuild_pending {
+        if kind != self.current_kind
+            || keylock != self.current_keylock
+            || spec != self.spec
+            || self.rebuild_pending
+        {
             self.rebuild_pending = false;
             drop(self.deferred_scratch.take());
             self.clear_render_state();
             let target = Self::prepare_target(
                 kind,
+                keylock,
                 self.backends,
                 self.source_block_frames,
                 spec,
@@ -200,6 +209,7 @@ where
             self.passthrough_history_head = self.engine.is_some().then_some(0);
             self.scratch = target.scratch;
             self.current_kind = kind;
+            self.current_keylock = keylock;
             self.spec = spec;
             self.reset_pending = false;
             return;

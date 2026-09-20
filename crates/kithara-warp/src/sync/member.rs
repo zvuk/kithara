@@ -5,6 +5,28 @@ use super::{
 };
 use crate::{BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridStamp, MapPoint};
 
+/// Whether a member is sounding or waiting to enter its group.
+///
+/// Orthogonal to synchronization: a waiting member is pre-aligned so its first
+/// downbeat falls on a downbeat of the owner grid, and enters silently until
+/// the group arms it. An armed member is audible and follows the owner's tempo
+/// and phase.
+///
+/// Three owners arm a member: the deck arms the track it starts playing, the
+/// group arms the member whose prepared entry the renderer locks, and the
+/// parent group arms a nested group through [`TopologyOperation::Arm`].
+///
+/// The state belongs to the edge between a group and one member, so a nested
+/// group carries its own arm in its parent independently of how its members
+/// are armed inside it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemberArm {
+    /// Pre-aligned and silent, waiting for its entry frame.
+    Waiting,
+    /// Sounding and actively synchronized.
+    Armed,
+}
+
 /// One exclusively owned live grid or statically typed nested synchronization group.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -15,6 +37,9 @@ pub enum SyncMember<G: SyncGroup> {
         /// expose usable geometry.
         #[field(get, copy)]
         alignment: Option<BeatAlignment>,
+        /// Whether this member sounds or waits for its entry frame.
+        #[field(get, copy, set)]
+        arm: MemberArm,
         /// Live grid handle owned by the parent group.
         grid: Box<dyn BeatGrid + Send + Sync>,
     },
@@ -23,6 +48,8 @@ pub enum SyncMember<G: SyncGroup> {
         /// Alignment from this member to its direct parent, once both grids
         /// expose usable geometry.
         alignment: Option<BeatAlignment>,
+        /// Whether this member sounds or waits for its entry frame.
+        arm: MemberArm,
         /// Live group owned by the parent group.
         group: Box<G>,
     },
@@ -31,14 +58,24 @@ pub enum SyncMember<G: SyncGroup> {
 impl<G: SyncGroup> fmt::Debug for SyncMember<G> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Grid { alignment, grid } => formatter
+            Self::Grid {
+                alignment,
+                arm,
+                grid,
+            } => formatter
                 .debug_struct("SyncMember::Grid")
                 .field("alignment", alignment)
+                .field("arm", arm)
                 .field("grid_id", &grid.id())
                 .finish(),
-            Self::Group { alignment, group } => formatter
+            Self::Group {
+                alignment,
+                arm,
+                group,
+            } => formatter
                 .debug_struct("SyncMember::Group")
                 .field("alignment", alignment)
+                .field("arm", arm)
                 .field("group_id", &group.id())
                 .finish(),
         }
@@ -69,7 +106,11 @@ impl<G: SyncGroup> SyncMember<G> {
     /// Returns [`SyncError`] for an identity or nested-topology violation.
     pub fn snapshot_for(&self, parent: &BeatGridSnapshot) -> Result<SyncMemberSnapshot, SyncError> {
         match self {
-            Self::Grid { alignment, grid } => {
+            Self::Grid {
+                alignment,
+                arm,
+                grid,
+            } => {
                 let expected = grid.id();
                 let grid = grid.snapshot();
                 if grid.id() != expected {
@@ -79,9 +120,13 @@ impl<G: SyncGroup> SyncMember<G> {
                     });
                 }
                 let alignment = restamp_alignment(*alignment, grid.stamp(), parent.stamp())?;
-                Ok(SyncMemberSnapshot::new_grid(grid, alignment))
+                Ok(SyncMemberSnapshot::new_grid(grid, alignment, *arm))
             }
-            Self::Group { alignment, group } => {
+            Self::Group {
+                alignment,
+                arm,
+                group,
+            } => {
                 let expected = group.id();
                 let group = group.topology()?;
                 if group.stamp().group_id() != expected {
@@ -92,7 +137,7 @@ impl<G: SyncGroup> SyncMember<G> {
                 }
                 let alignment =
                     restamp_alignment(*alignment, group.group_grid().stamp(), parent.stamp())?;
-                Ok(SyncMemberSnapshot::new_group(group, alignment))
+                Ok(SyncMemberSnapshot::new_group(group, alignment, *arm))
             }
         }
     }

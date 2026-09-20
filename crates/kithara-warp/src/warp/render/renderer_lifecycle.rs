@@ -3,6 +3,7 @@ use std::mem;
 use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SampleCount};
 use kithara_stretch::ElasticError;
+use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 use tracing::warn;
 
@@ -209,7 +210,6 @@ where
         self.source_frames_admitted = 0;
         self.primed_source_debt = 0;
         self.active = false;
-        self.region = None;
     }
 
     fn process_active(&mut self, chunk: AudioChunk, speed: f32) -> Option<AudioChunk> {
@@ -306,7 +306,6 @@ where
         self.primed_source_debt = 0;
         self.reset_pending = false;
         self.active = false;
-        self.region = None;
     }
 }
 
@@ -326,7 +325,16 @@ where
         self.output_start_meta = None;
         let channels = usize::from(self.spec.channels.max(1));
         if self.transition_pending() {
-            return self.advance_transition(channels, None);
+            let output = self.advance_transition(channels, None);
+            if let Some(output) = output.as_ref() {
+                let render_revision = output.meta.render_revision;
+                self.commit_render(
+                    Self::bind_output_identity(snapshot, render_revision),
+                    output.frames(),
+                    render_revision,
+                );
+            }
+            return output;
         }
         let result = self
             .render_terminal_pending(channels)
@@ -347,7 +355,12 @@ where
         };
         let output = self.emit(None, held_source_frames);
         if let Some(output) = output.as_ref() {
-            self.commit_render(snapshot, output.frames());
+            let render_revision = output.meta.render_revision;
+            self.commit_render(
+                Self::bind_output_identity(snapshot, render_revision),
+                output.frames(),
+                render_revision,
+            );
         }
         output
     }
@@ -359,27 +372,36 @@ where
 
     /// Render one complete decoded source chunk.
     pub fn render(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
-        let snapshot = self.context.load();
+        let snapshot = self.select_context(chunk.meta.frame_offset);
         self.prepared_quantum = None;
-        let rate = self.controls.rate_target();
-        let speed = match self.preview_speed(rate.speed(), chunk.frames().max(1)) {
-            Ok(speed) => speed,
-            Err(error) => {
-                warn!(%error, "time-stretch speed smoothing failed");
-                return None;
-            }
-        };
-        chunk.meta.render_revision = rate.revision();
-        self.render_at(chunk, speed, snapshot, None, rate.speed())
+        self.prepared_context = None;
+        let rate = self.rate;
+        let speed = rate.speed();
+        let rate_revision = rate.revision();
+        chunk.meta.render_revision = kithara_signal::pack_render_revision(
+            rate_revision,
+            self.applied_warp_map.map_or(0, u64::from),
+        )
+        .unwrap_or(rate_revision);
+        let output = self.render_at(chunk, speed, None, false);
+        if let Some(output) = output.as_ref() {
+            let render_revision = output.meta.render_revision;
+            self.commit_rate_render(
+                Self::bind_output_identity(snapshot, render_revision),
+                output.frames(),
+                render_revision,
+                speed,
+            );
+        }
+        output
     }
 
     fn render_at(
         &mut self,
         chunk: AudioChunk,
         speed: f32,
-        snapshot: Option<crate::RenderSnapshot>,
         prepared: Option<PreparedQuantum>,
-        target_speed: f32,
+        carrier_activation: bool,
     ) -> Option<AudioChunk> {
         if chunk.spec() != self.spec {
             warn!(
@@ -396,7 +418,10 @@ where
             return None;
         }
 
-        let output = if self.unity_passthrough(speed) {
+        let activates = prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.activation.is_some());
+        if !carrier_activation && !activates && self.unity_passthrough(speed) {
             self.process_unity(chunk)
         } else {
             let mut chunk = chunk;
@@ -408,21 +433,14 @@ where
                     self.defer_scratch(Some(chunk.samples));
                     return None;
                 }
+                if let Some(remainder) = prepared.output_rounding_remainder {
+                    self.output_remainder = remainder;
+                }
             } else if self.passthrough_history_head.is_some() {
                 self.clear_pending_source();
             }
             self.process_active(chunk, speed)
-        };
-        if let Some(output) = output.as_ref() {
-            self.commit_rate_render(
-                snapshot,
-                output.frames(),
-                output.meta.render_revision,
-                speed,
-                target_speed,
-            );
         }
-        output
     }
 
     /// Render the source span selected by [`Self::prepare_quantum`].
@@ -431,22 +449,53 @@ where
         if chunk.frames() != prepared.frames {
             return None;
         }
-        let snapshot = self.context.load();
-        chunk.meta.render_revision = prepared.rate.revision();
-        self.render_at(
-            chunk,
-            prepared.speed,
-            snapshot,
-            Some(prepared),
-            prepared.rate.speed(),
+        let snapshot = self.prepared_context.take();
+        let rate_revision = prepared.rate.revision();
+        let speed = prepared.speed;
+        let target_rate_bits = speed.to_bits();
+        chunk.meta.render_revision = kithara_signal::pack_render_revision(
+            rate_revision,
+            self.applied_warp_map.map_or(0, u64::from),
         )
+        .unwrap_or(rate_revision);
+        let revision = prepared.warp_map;
+        let carrier_activation =
+            prepared.disposition == super::renderer::PreparedDisposition::CarrierActivation;
+        let mut output = self.render_at(chunk, speed, Some(prepared), carrier_activation)?;
+        self.discontinuity_pending = false;
+        if let Some(revision) = revision {
+            self.applied_warp_map = Some(revision);
+            output.meta.render_revision =
+                kithara_signal::pack_render_revision(rate_revision, u64::from(revision))
+                    .unwrap_or(rate_revision);
+            if let Some(meta) = self.last_input_meta.as_mut() {
+                meta.render_revision = output.meta.render_revision;
+            }
+            kithara::probe_event!(
+                prepared_render_revision_selected,
+                rate_revision,
+                target_rate_bits,
+                warp_map_revision = u64::from(revision),
+                render_revision = output.meta.render_revision,
+                source_frame_offset = output.meta.frame_offset
+            );
+        }
+        let render_revision = output.meta.render_revision;
+        self.commit_rate_render(
+            Self::bind_output_identity(snapshot, render_revision),
+            output.frames(),
+            render_revision,
+            speed,
+        );
+        Some(output)
     }
 
     /// Discard renderer state after a source discontinuity.
     pub fn reset(&mut self) {
         self.reset_pending = true;
+        self.discontinuity_pending = true;
         self.clear_render_state();
         self.committed = None;
-        self.snap_speed();
+        self.applied_warp_map = None;
     }
 }

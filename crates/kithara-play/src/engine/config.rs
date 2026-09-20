@@ -5,8 +5,8 @@ use firewheel::{
     dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON, param::smoother::SmootherConfig,
 };
 use kithara_bufpool::PoolRegion;
-use kithara_platform::CancelToken;
-use kithara_warp::BeatGridId;
+use kithara_platform::{CancelToken, sync::Arc};
+use kithara_warp::{BeatGridId, DEFAULT_RATE_SMOOTHING, StretchControls};
 
 use crate::{
     effects::eq::{EqBandConfig, generate_log_spaced_bands},
@@ -25,6 +25,12 @@ pub const DEFAULT_GATE_SMOOTHING: SmootherConfig = SmootherConfig {
 #[derive_where::derive_where(Clone)]
 #[derive(derive_more::Debug)]
 pub struct EngineConfig<S> {
+    /// Player-owned live multiplier sampled by the RT render pass.
+    #[builder(default = StretchControls::new(1.0))]
+    pub(crate) stretch: Arc<StretchControls>,
+    /// Plain multiplier smoothing on the output clock.
+    #[builder(default = DEFAULT_RATE_SMOOTHING)]
+    pub(crate) rate_smoothing: SmootherConfig,
     /// Stable synchronization identity of the owning player.
     #[debug(skip)]
     pub(crate) grid_id: BeatGridId,

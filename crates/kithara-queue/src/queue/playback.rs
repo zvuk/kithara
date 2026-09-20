@@ -35,7 +35,7 @@ where
     /// so the two tracks actually overlap. `ItemDidPlayToEnd` alone
     /// fires after the first track is already silent — too late for a
     /// real crossfade.
-    fn maybe_arm_crossfade(&self) {
+    pub(super) fn maybe_arm_crossfade(&self) {
         if self.is_paused() {
             return;
         }
@@ -195,14 +195,19 @@ where
 
     fn tick_player_inner(&self) -> Result<(), PlayError> {
         self.player.tick()?;
+        self.observe_player_tick();
+        Ok(())
+    }
+
+    /// Folds what one player tick published into the queue's view.
+    pub(super) fn observe_player_tick(&self) {
         self.player.process_notifications();
         self.drain_player_events();
         self.update_cached_position();
         self.maybe_arm_crossfade();
-        Ok(())
     }
 
-    fn update_cached_position(&self) {
+    pub(super) fn update_cached_position(&self) {
         /// Minimum position threshold used to suppress spurious 0.0 reports
         /// on pause/resume. Values above this are considered a valid
         /// non-zero position.

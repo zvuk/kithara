@@ -3,14 +3,14 @@ use std::{marker::PhantomData, num::NonZeroU32};
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    GroupState, PlayError,
+    GroupState, PlayError, SeekOutcome,
     effects::LimiterConfig,
     player::{PlayerControlSource, PlayerMember},
 };
 use kithara_warp::{BeatGridId, SyncAdmission, SyncOperation, SyncRejected};
 
 use super::super::{Host, HostOwned, PlatformResult};
-use crate::session::{HostDispatcher, RootView};
+use crate::session::{HostCmd, HostDispatcher, HostReply, RootView};
 
 type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
 
@@ -77,6 +77,31 @@ impl<S> Host<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    /// Seek one Host-owned deck while retaining the Host session clock.
+    ///
+    /// # Errors
+    /// Returns an error when the handle is foreign, the deck is unavailable,
+    /// or its canonical owner rejects the request.
+    pub fn seek_deck<P>(&self, deck: &HostOwned<P>, seconds: f64) -> Result<SeekOutcome, PlayError>
+    where
+        P: PlayerControlSource<Schema = S>,
+    {
+        if !seconds.is_finite() {
+            return Err(PlayError::InvalidHostSeekPosition { seconds });
+        }
+        self.validate_removal(deck)?;
+        match self.dispatcher.exec_host(HostCmd::SeekDeck {
+            deck: deck.id(),
+            seconds,
+        })? {
+            HostReply::Seek(result) => result,
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for deck seek".into(),
+            )),
+        }
+    }
+
     /// Attaches and transfers one fully configured player or decorator into
     /// this Host, then prepares its graph and initial slot before returning.
     /// Audio-device setup may block; musical playback remains stopped.

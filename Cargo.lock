@@ -4511,6 +4511,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
+ "kithara-warp",
  "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
@@ -5515,6 +5516,7 @@ dependencies = [
  "kithara-play",
  "kithara-signal",
  "kithara-stream",
+ "kithara-sync",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-macros",
@@ -5531,6 +5533,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.18",
  "tracing",
+ "triple_buffer",
  "unimock",
  "url",
 ]
@@ -5761,6 +5764,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-derive",
  "kithara-platform",
+ "kithara-resampler",
  "kithara-signal",
  "kithara-test-dylib",
  "kithara-test-fixtures",
@@ -5772,6 +5776,14 @@ dependencies = [
  "signalsmith-stretch",
  "smallvec",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kithara-sync"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara-warp",
+ "kithara-workspace-hack",
 ]
 
 [[package]]

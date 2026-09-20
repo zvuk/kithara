@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use firewheel::dsp::filter::smoothing_filter::DEFAULT_SMOOTH_SECONDS;
 use kithara::{
@@ -8,16 +8,16 @@ use kithara::{
     host::HostConfig,
     platform::time::{self, Duration},
     play::{
-        EqBandConfig, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-        ResourceConfig, ResourceSrc, SessionError,
+        EqBandConfig, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
+        ResourceSrc,
         effects::eq::{FilterKind, GainDb},
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    warp::{SyncGroup, WarpConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper, kithara,
     offline::{OfflineHostHarness, OfflineQueue},
+    usdt_trace,
 };
 use kithara_test_fixtures::SignalAsset;
 
@@ -135,10 +135,13 @@ pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>,
 
 /// Render `blocks` at the block's own pace: a tight render loop outruns the
 /// decoder and the window fills with zeros, which every oracle here would pass.
+/// A window the feeder starved is refused for the same reason: its silence
+/// reads as a step no parameter made.
 async fn observe(harness: &OfflineQueue<TestPools>, blocks: usize) -> Vec<f32> {
     let block_budget =
         Duration::from_secs_f64(Consts::BLOCK_FRAMES as f64 / f64::from(Consts::SAMPLE_RATE));
     let mut pcm = Vec::with_capacity(blocks * Consts::BLOCK_FRAMES * Consts::CHANNELS);
+    let trace = usdt_trace::scope();
     for _ in 0..blocks {
         harness
             .run(|deck| deck.tick())
@@ -147,6 +150,15 @@ async fn observe(harness: &OfflineQueue<TestPools>, blocks: usize) -> Vec<f32> {
         pcm.extend(harness.render(Consts::BLOCK_FRAMES).await);
         time::sleep(block_budget).await;
     }
+    let underruns = trace.events_of("pcm_underrun");
+    assert!(
+        underruns.is_empty(),
+        "the feeder starved {} times while observing {blocks} blocks; first at output frame {:?}",
+        underruns.len(),
+        underruns
+            .first()
+            .and_then(|event| event.field("output_start"))
+    );
     pcm
 }
 
@@ -353,7 +365,7 @@ async fn prepared_deck_preserves_play_pause_order() {
 }
 
 #[kithara::test(tokio)]
-async fn failed_deck_preparation_releases_host_membership() {
+async fn inserting_an_idle_deck_keeps_the_output_stream_closed() {
     let region = pools();
     let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate");
     let config = HostConfig::offline(region.clone())
@@ -362,35 +374,6 @@ async fn failed_deck_preparation_releases_host_membership() {
         .build();
     let host = OfflineHostHarness::new(config).await.expect("offline host");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let invalid = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(sample_rate)
-            .worker(worker.clone())
-            .warp(
-                WarpConfig::builder()
-                    .render_quantum_frames(NonZeroUsize::new(32).expect("quantum"))
-                    .build(),
-            )
-            .response_budget_frames(NonZeroUsize::new(1).expect("budget"))
-            .build(),
-    );
-    assert!(matches!(
-        host.insert(invalid).await,
-        Err(PlayError::Session(
-            SessionError::ResponseBudgetExceeded { .. }
-        ))
-    ));
-    host.with(|host| {
-        assert!(host.topology().expect("host topology").members().is_empty());
-        assert!(
-            host.sample_rate()
-                .expect("host sample rate")
-                .measured
-                .is_none(),
-            "failed preparation must close an otherwise idle stream"
-        );
-    })
-    .await;
     let valid = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(sample_rate)

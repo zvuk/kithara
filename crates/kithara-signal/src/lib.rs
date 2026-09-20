@@ -14,7 +14,10 @@ pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod time;
 mod units;
 
-pub use chunk::{AudioChunk, AudioChunkInfo};
+pub use chunk::{
+    AudioChunk, AudioChunkInfo, pack_render_revision, render_rate_revision,
+    render_warp_map_revision,
+};
 pub use error::SignalError;
 pub use fader::FaderValue;
 pub use interleaved::InterleavedView;

@@ -13,7 +13,8 @@ enum Direction {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(super) struct TrackFade {
-    settings: CrossfadeSettings,
+    #[field(get, copy)]
+    current_settings: CrossfadeSettings,
     direction: Direction,
     frame: u64,
     frames: u64,
@@ -25,7 +26,7 @@ impl TrackFade {
     pub(super) fn new(settings: CrossfadeSettings, sample_rate: NonZeroU32) -> Self {
         let frames = Self::frames(settings.duration, sample_rate);
         Self {
-            settings,
+            current_settings: settings,
             direction: Direction::In,
             frame: 0,
             frames,
@@ -39,6 +40,10 @@ impl TrackFade {
 
     pub(super) fn fade_out(&mut self, settings: CrossfadeSettings, sample_rate: NonZeroU32) {
         self.start(Direction::Out, settings, sample_rate);
+    }
+
+    pub(super) fn stage_fade_in(&mut self, settings: CrossfadeSettings) {
+        self.current_settings = settings;
     }
 
     pub(super) fn mix_range(
@@ -69,7 +74,7 @@ impl TrackFade {
                 let frames = cast::<u64, f32>(self.frames - 1).unwrap_or(f32::MAX);
                 (frame / frames).min(1.0)
             };
-            let gains = self.settings.gains(progress);
+            let gains = self.current_settings.gains(progress);
             let gain = match self.direction {
                 Direction::In => gains.1,
                 Direction::Out => gains.0,
@@ -101,7 +106,7 @@ impl TrackFade {
     }
 
     pub(super) const fn duration(&self) -> f32 {
-        self.settings.duration
+        self.current_settings.duration
     }
 
     pub(super) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
@@ -112,7 +117,7 @@ impl TrackFade {
             let frames = cast::<u64, f64>(self.frames - 1).unwrap_or(f64::MAX);
             frame / frames
         };
-        self.frames = Self::frames(self.settings.duration, sample_rate);
+        self.frames = Self::frames(self.current_settings.duration, sample_rate);
         self.frame = if self.frames <= 1 {
             self.frames
         } else {
@@ -127,7 +132,7 @@ impl TrackFade {
         settings: CrossfadeSettings,
         sample_rate: NonZeroU32,
     ) {
-        self.settings = settings;
+        self.current_settings = settings;
         self.direction = direction;
         self.frame = 0;
         self.frames = Self::frames(settings.duration, sample_rate);

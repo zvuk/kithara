@@ -13,8 +13,8 @@ use kithara_play::{
 #[cfg(test)]
 use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::{
-    BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
-    TopologyOperation,
+    BeatGridId, MemberArm, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind,
+    SyncMode, SyncOperation, TopologyOperation,
 };
 
 use super::super::{
@@ -114,6 +114,7 @@ where
         sample_rate,
         SessionEpoch::new(0),
         SyncMemberKind::Group,
+        SyncMode::LocalSync,
     );
     let root_view = RootView::new(&root, sample_rate);
     SessionState::new(
@@ -165,6 +166,7 @@ fn attach_player_with_id<B, S>(
             operations: Box::new([TopologyOperation::Attach {
                 member: SyncMember::Group {
                     alignment: None,
+                    arm: MemberArm::Waiting,
                     group: Box::new(target_member(player)),
                 },
             }]),

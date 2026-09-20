@@ -3,11 +3,13 @@ use std::num::NonZeroUsize;
 use firewheel::{
     FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
     dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume::VolumeNode,
+    param::smoother::SmootherConfig,
 };
 use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
+use kithara_platform::sync::Arc;
 use kithara_signal::FaderValue;
-use kithara_warp::{BeatGrid, MapAxis};
+use kithara_warp::{BeatGrid, MapAxis, StretchControls};
 use tracing::{debug, warn};
 
 use super::{
@@ -142,7 +144,6 @@ pub(super) mod lifecycle {
         sample_rate: u32,
         master_volume: f32,
         render_quantum_frames: Option<NonZeroUsize>,
-        response_budget_frames: NonZeroUsize,
     ) -> Result<(), SessionError>
     where
         B: AudioBackend,
@@ -153,7 +154,7 @@ pub(super) mod lifecycle {
             sample_rate, master_volume, "[KITHARA-ROUTE] starting player"
         );
         ensure_ctx(state, sample_rate)?;
-        validate_response_geometry(state, render_quantum_frames, response_budget_frames)?;
+        validate_response_geometry(state, render_quantum_frames)?;
         let idx = player_index(state, player_id)?;
         let Some(session_output_id) = state.session_output_node_id else {
             return Err(graph_state("session output node is not initialised"));
@@ -206,7 +207,6 @@ pub(super) mod lifecycle {
     fn validate_response_geometry<B: AudioBackend, S>(
         state: &SessionState<B, S>,
         render_quantum_frames: Option<NonZeroUsize>,
-        response_budget_frames: NonZeroUsize,
     ) -> Result<(), SessionError> {
         let Some(render_quantum_frames) = render_quantum_frames else {
             return Ok(());
@@ -217,7 +217,7 @@ pub(super) mod lifecycle {
             .and_then(FirewheelCtx::stream_info)
             .ok_or(SessionError::NoContext)?;
         kithara_play::StreamShape::new(info.max_block_frames, info.sample_rate)
-            .playback_buffers(render_quantum_frames, response_budget_frames)?;
+            .playback_buffers(render_quantum_frames)?;
         Ok(())
     }
     pub(in crate::session) fn stop_player<B: AudioBackend, S>(
@@ -358,6 +358,8 @@ pub(super) mod slots {
     pub(in crate::session) fn allocate_slot<B, S>(
         state: &mut SessionState<B, S>,
         player_id: PlayerId,
+        stretch: Arc<StretchControls>,
+        rate_smoothing: SmootherConfig,
     ) -> Result<Reply, SessionError>
     where
         B: AudioBackend,
@@ -379,8 +381,12 @@ pub(super) mod slots {
         player.next_slot_id += 1;
         let shared_eq = player.shared_eq.clone();
         let (inputs, control) = slot_channels(shared_eq);
-        let player_node = PlayerNode::new(inputs, player.pools.clone(), player.gate_smoothing)
-            .with_session_context();
+        let player_node = PlayerNode::new(
+            inputs.with_rate(stretch, rate_smoothing),
+            player.pools.clone(),
+            player.gate_smoothing,
+        )
+        .with_session_context();
         let player_node_id = fw_ctx.add_node(player_node, None);
         let slot_volume = VolumeNode::from_linear(1.0);
         let slot_volume_memo = Memo::new(slot_volume);
@@ -410,7 +416,7 @@ pub(super) mod slots {
             slots = player.slots.len(),
             "[KITHARA-ROUTE] player slot allocated"
         );
-        let reply = Reply::SlotAllocated(AllocatedSlot::new(control, slot_id));
+        let reply = Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot_id)));
         Ok(reply)
     }
     pub(in crate::session) fn release_slot<B: AudioBackend, S>(
@@ -851,8 +857,6 @@ mod tests {
                 player_id,
                 sample_rate,
                 render_quantum_frames: None,
-                response_budget_frames: NonZeroUsize::new(448)
-                    .expect("fixture response budget is non-zero"),
                 master_volume: 1.0,
             },
         ) {
@@ -925,7 +929,14 @@ mod tests {
         let mut state = test_state(start_test_stream);
         let player_id = register(&mut state);
         start(&mut state, player_id);
-        let slot = match run_cmd(&mut state, Cmd::AllocateSlot { player_id }) {
+        let slot = match run_cmd(
+            &mut state,
+            Cmd::AllocateSlot {
+                player_id,
+                stretch: StretchControls::new(1.0),
+                rate_smoothing: SmootherConfig::default(),
+            },
+        ) {
             Reply::SlotAllocated(allocated) => allocated.slot,
             Reply::Err(err) => panic!("slot allocation failed: {err}"),
             _ => panic!("slot allocation returned unexpected reply"),
@@ -998,7 +1009,14 @@ mod tests {
         let second = register(&mut state);
         start(&mut state, second);
         assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id: second }),
+            run_cmd(
+                &mut state,
+                Cmd::AllocateSlot {
+                    player_id: second,
+                    stretch: StretchControls::new(1.0),
+                    rate_smoothing: SmootherConfig::default()
+                }
+            ),
             Reply::SlotAllocated(..)
         ));
 
@@ -1147,6 +1165,115 @@ mod tests {
             dev.retired_processors.clear();
             dev.defer_processor_drop = false;
         });
+    }
+
+    /// A tempo knob turned faster than the render graph commits must land on
+    /// the latest requested tempo instead of refusing the turn.
+    #[kithara::test]
+    fn tempo_requested_while_a_commit_is_pending_lands_as_the_latest_intent() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = test_state(start_test_stream);
+        let player_id = register(&mut state);
+        start(&mut state, player_id);
+        let _ = set_tempo_and_read_session_grid(&mut state);
+        for bpm in [121.0, 122.0] {
+            assert!(
+                matches!(
+                    run_cmd(
+                        &mut state,
+                        Cmd::SetSessionTempo {
+                            tempo: Tempo::new(bpm).expect("invariant: fixture tempo is valid"),
+                        },
+                    ),
+                    Reply::Ok
+                ),
+                "tempo {bpm} must be accepted while an earlier tempo is pending"
+            );
+        }
+        let latest = Tempo::new(122.0).expect("invariant: fixture tempo is valid");
+        let mut landed = None;
+        for _ in 0..16 {
+            assert!(deliver_one_block(), "transport commit must be rendered");
+            if let Reply::SessionTransport(snapshot) =
+                run_cmd(&mut state, Cmd::QuerySessionTransport)
+            {
+                landed = Some(snapshot.tempo());
+            }
+            if landed == Some(latest) {
+                break;
+            }
+        }
+        assert_eq!(landed, Some(latest));
+    }
+
+    /// A deck plans a tempo change against the frame the commit lands on, so
+    /// it takes the commit's anchor when the commit is scheduled, and the
+    /// graph later renders exactly that anchor.
+    #[kithara::test]
+    fn a_scheduled_tempo_commit_hands_decks_the_anchor_it_renders() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = test_state(start_test_stream);
+        let player_id = register(&mut state);
+        start(&mut state, player_id);
+        let _ = set_tempo_and_read_session_grid(&mut state);
+        let tempo = Tempo::new(90.0).expect("invariant: fixture tempo is valid");
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::SetSessionTempo { tempo }),
+            Reply::Ok
+        ));
+        let scheduled = state
+            .delivered_anchor
+            .expect("the decks hold a session anchor");
+        assert_eq!(scheduled.beats_per_second(), tempo.beats_per_second());
+        let mut rendered = None;
+        for _ in 0..16 {
+            assert!(deliver_one_block(), "transport commit must be rendered");
+            if let Reply::SessionTransport(snapshot) =
+                run_cmd(&mut state, Cmd::QuerySessionTransport)
+                && snapshot.tempo() == tempo
+            {
+                rendered = Some(snapshot.anchor());
+                break;
+            }
+        }
+        assert_eq!(rendered, Some(scheduled));
+    }
+
+    #[kithara::test]
+    fn tempo_requested_while_a_seek_is_pending_keeps_the_seek() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = test_state(start_test_stream);
+        let player_id = register(&mut state);
+        start(&mut state, player_id);
+        let _ = set_tempo_and_read_session_grid(&mut state);
+        let target =
+            kithara_warp::SessionBeat::new(64.0).expect("invariant: fixture beat is valid");
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::SeekSession { target }),
+            Reply::Ok
+        ));
+        let latest = Tempo::new(124.0).expect("invariant: fixture tempo is valid");
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::SetSessionTempo { tempo: latest }),
+            Reply::Ok
+        ));
+        let mut landed = None;
+        for _ in 0..16 {
+            assert!(deliver_one_block(), "transport commit must be rendered");
+            if let Reply::SessionTransport(snapshot) =
+                run_cmd(&mut state, Cmd::QuerySessionTransport)
+                && snapshot.tempo() == latest
+            {
+                landed = Some(snapshot);
+                break;
+            }
+        }
+        let landed = landed.expect("the latest tempo lands");
+        assert!(
+            f64::from(landed.position()) >= f64::from(target),
+            "the pending seek to {target:?} survives the tempo intent, position {:?}",
+            landed.position()
+        );
     }
 
     #[kithara::test]

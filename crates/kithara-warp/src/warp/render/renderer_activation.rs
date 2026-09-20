@@ -1,18 +1,64 @@
-use std::num::NonZeroUsize;
-
 use kithara_bufpool::HasPool;
+use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount};
 use kithara_stretch::{ElasticError, ElasticRequest};
 use kithara_test_macros as kithara;
-use num_traits::ToPrimitive;
+use num_traits::{ToPrimitive, cast::AsPrimitive};
 use tracing::warn;
 
-use super::renderer::{PreparedActivation, PreparedQuantum, WarpRenderer};
+use super::{
+    ScheduledActivationProgress,
+    renderer::{PreparedActivation, PreparedDisposition, PreparedQuantum, WarpRenderer},
+};
+use crate::{BeatGridQuery, RenderContext, RenderSnapshot, SessionFrame, WarpCursor};
 
 impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    /// Report whether producer output has reached the installed discontinuity.
+    pub fn scheduled_activation_progress(&mut self) -> ScheduledActivationProgress {
+        self.sync_plan(self.rendered_source_end.map_or(0, |(frame, _)| frame));
+        let Some(activation) = self.plan.as_ref().and_then(|plan| plan.activation()) else {
+            return ScheduledActivationProgress::AwaitingActivation;
+        };
+        if let Some(producer_output) = self
+            .committed
+            .as_ref()
+            .map(|snapshot| snapshot.frontier().output())
+            && producer_output >= activation.output()
+        {
+            kithara::probe_event!(
+                scheduled_seek_activation_ready,
+                producer_output = i64::from(producer_output),
+                activation_output = i64::from(activation.output())
+            );
+            ScheduledActivationProgress::Ready
+        } else {
+            ScheduledActivationProgress::ProducingOldPcm
+        }
+    }
+
+    /// Whether the source chunk that lands on the pending activation arrived
+    /// before the callback published a render context to prepare it against.
+    ///
+    /// Refreshes the live region plan first. That chunk is the only one that
+    /// can install the Warp map; rendering it without a context emits PCM of
+    /// the replaced map and consumes the discontinuity.
+    pub fn awaits_render_context(&mut self, frame: u64) -> bool {
+        if !self.discontinuity_pending {
+            return false;
+        }
+        self.sync_plan(frame);
+        self.plan
+            .as_ref()
+            .and_then(|plan| plan.activation())
+            .is_some_and(|activation| {
+                activation.source() == frame && self.applied_warp_map != Some(activation.revision())
+            })
+            && self.context.load_state().is_none()
+    }
+
     pub(super) fn activate_prepared_quantum(
         &mut self,
         chunk: &mut AudioChunk,
@@ -174,25 +220,295 @@ where
         }
         Some((history_frames, output_frames))
     }
+}
 
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
+    pub(super) fn select_context(&mut self, frame: u64) -> Option<RenderSnapshot> {
+        self.select_state(frame).and_then(|state| state.snapshot)
+    }
+
+    pub(super) fn select_state(&mut self, frame: u64) -> Option<crate::RenderState> {
+        let mut state = self.context.load_state()?;
+        if let Some(free) = self.plan.as_ref().and_then(|plan| plan.free_activation()) {
+            let handoff = (free.cursor(), free.rate());
+            if self.free_handoff_latch.is_none() && frame == free.cursor().source() {
+                self.free_handoff_latch = Some(handoff);
+            }
+            if self.free_handoff_latch == Some(handoff) {
+                if self.applied_warp_map == Some(free.cursor().revision())
+                    && state.context.rate() == free.rate()
+                {
+                    self.free_handoff_latch = None;
+                } else {
+                    state.context = state.context.clone().with_rate(free.rate());
+                    state.snapshot = state
+                        .snapshot
+                        .map(|snapshot| snapshot.with_context(state.context.clone()));
+                }
+            }
+        }
+        if !self.awaiting_activation_before(frame) {
+            self.rate = state
+                .context
+                .rate()
+                .with_speed(self.projected_speed(&state.context));
+        }
+        Some(state)
+    }
+
+    pub(super) fn map_at_exact_frontier(
+        &self,
+        snapshot: Option<&RenderSnapshot>,
+        source: u64,
+    ) -> Option<WarpCursor> {
+        let activation = self.plan.as_ref()?.activation()?;
+        if self.applied_warp_map == Some(activation.revision()) || source != activation.source() {
+            return None;
+        }
+        let snapshot = snapshot?;
+        let committed = self.committed.as_ref().filter(|committed| {
+            committed.context().session_epoch() == snapshot.context().session_epoch()
+        });
+        let output = committed.map_or_else(
+            || snapshot.frontier().output(),
+            |value| value.frontier().output(),
+        );
+        let selected = output == activation.output();
+        selected.then_some(activation)
+    }
+
+    pub(super) fn prepare_discontinuity_context(
+        &self,
+        snapshot: Option<RenderSnapshot>,
+        state: Option<crate::RenderState>,
+        source: u64,
+    ) -> Option<RenderSnapshot> {
+        let Some(activation) = self.plan.as_ref().and_then(|plan| plan.activation()) else {
+            return snapshot;
+        };
+        if self.discontinuity_pending && source == activation.source() {
+            return snapshot.map_or_else(
+                || {
+                    state.map(|state| {
+                        RenderSnapshot::preparation_at(
+                            state.context,
+                            source,
+                            activation.output(),
+                            activation.revision(),
+                        )
+                    })
+                },
+                |snapshot| {
+                    Some(snapshot.prepare_at(source, activation.output(), activation.revision()))
+                },
+            );
+        }
+        snapshot
+    }
+
+    /// Pull the live region plan handle; on a swap drop the region cursor.
+    pub(super) fn sync_plan(&mut self, current_source: u64) {
+        let want = self.plan_slot.load();
+        let same = match (&self.plan, &want) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        if !same {
+            let observed_revision = want
+                .as_ref()
+                .and_then(|plan| plan.activation())
+                .map_or(0, |activation| u64::from(activation.revision()));
+            kithara::probe_event!(
+                region_plan_reader_refreshed,
+                observed_revision,
+                current_source
+            );
+            self.plan = want;
+            self.prepared_context = None;
+            self.free_handoff_latch = None;
+            self.projected_rate_held = None;
+        }
+    }
+
+    /// Whether a live active-to-unity transition still owns queued samples.
+    #[must_use]
+    pub const fn transition_pending(&self) -> bool {
+        self.pending_unity_meta.is_some()
+    }
+
+    /// Whether the next block is heard untouched.
+    ///
+    /// A plan that does not place this item on the output axis sounds the same
+    /// as no plan at all. A gap inside a projection does not: the item still
+    /// follows that grid, and the renderer stays active across the gap.
+    pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
+        self.plan.as_ref().is_none_or(|plan| {
+            !plan.follows_output()
+                || plan
+                    .activation()
+                    .is_some_and(|activation| self.applied_warp_map != Some(activation.revision()))
+        }) && (speed - 1.0).abs() <= f32::EPSILON
+    }
+
+    fn awaiting_activation_before(&self, source: u64) -> bool {
+        self.plan
+            .as_ref()
+            .and_then(|plan| plan.activation())
+            .is_some_and(|activation| {
+                self.applied_warp_map != Some(activation.revision())
+                    && source != activation.source()
+            })
+    }
+
+    /// The output frame the next render continues from.
+    ///
+    /// Every projected answer is taken from this frame, so a block's rounding
+    /// error is absorbed by the block that follows rather than carried.
+    ///
+    /// The committed render answers once one exists; before the first commit
+    /// the frontier the callback published answers; and while a seek is being
+    /// prepared, where no presentation exists yet, the published window's own
+    /// start answers, because that is where the next render lands.
+    pub(super) fn output_frontier(&self) -> Option<SessionFrame> {
+        if let Some(committed) = self.committed.as_ref() {
+            return Some(committed.frontier().output());
+        }
+        let state = self.context.load_state()?;
+        Some(state.snapshot.map_or_else(
+            || state.context.output_frames().start,
+            |snapshot| snapshot.frontier().output(),
+        ))
+    }
+
+    /// Source frames the projection prescribes between `source` and the end of
+    /// the next `output` frames.
+    ///
+    /// The span is the distance from where the recording actually stands to
+    /// where the projection says it must stand, so a block that rounded short
+    /// is made whole by the next one instead of drifting.
+    ///
+    /// `None` where no projection prescribes a span: no plan is installed, no
+    /// frontier exists yet, the plan places the item on its own axis and
+    /// answers no output frame, or the recording already stands at or past the
+    /// point the projection names and the next chunk owes it nothing.
+    pub(super) fn projected_source_span(&self, output: usize, source: u64) -> Option<u64> {
+        let plan = self.plan.as_ref()?;
+        let start = self.output_frontier()?;
+        let end = SessionFrame::new(i64::from(start).checked_add(i64::try_from(output).ok()?)?);
+        let BeatGridQuery::Resolved(target) = plan.source_at(end) else {
+            return None;
+        };
+        f64::from(target)
+            .round()
+            .to_u64()
+            .and_then(|target| target.checked_sub(source))
+    }
+
+    /// Rate the projection prescribes at the output frontier.
+    pub(super) fn projected_rate(&self) -> Option<f64> {
+        let plan = self.plan.as_ref()?;
+        let output = self.output_frontier()?;
+        match plan.rate_at(output) {
+            BeatGridQuery::Resolved(rate) => Some(rate),
+            _ => None,
+        }
+    }
+
+    /// Speed published to the stretch backend for the next render.
+    ///
+    /// An item the projection does not place on the output axis is the bypass
+    /// case: the listener's own target owns the speed. Otherwise the projection
+    /// owns it, and nothing else may answer: past the end of the recording the
+    /// projection names no rate, and the item finishes on the rate it was
+    /// already running at rather than stepping to unity mid-item.
+    /// [`UNNAMED_SPEED`](Self::UNNAMED_SPEED) is the speed only while the
+    /// projection has never named one.
+    pub(super) fn projected_speed(&mut self, context: &RenderContext) -> f32 {
+        if self.plan.as_ref().is_none_or(|plan| !plan.follows_output()) {
+            return context.rate().speed();
+        }
+        if let Some(rate) = self.projected_rate() {
+            self.projected_rate_held = Some(rate);
+        }
+        self.projected_rate_held
+            .map_or(Self::UNNAMED_SPEED, AsPrimitive::as_)
+    }
+
+    pub(super) fn cap_before_activation(&self, source: u64, frames: usize) -> usize {
+        let Some(activation) = self.plan.as_ref().and_then(|plan| plan.activation()) else {
+            return frames;
+        };
+        if self.applied_warp_map == Some(activation.revision()) {
+            return frames;
+        }
+        let Some(distance) = activation.source().checked_sub(source) else {
+            return frames;
+        };
+        let Ok(distance) = usize::try_from(distance) else {
+            return frames;
+        };
+        if distance == 0 || distance >= frames {
+            frames
+        } else {
+            distance
+        }
+    }
+}
+
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     /// Select the next source span that fits the configured output quantum.
     pub fn prepare_quantum(
         &mut self,
         meta: AudioChunkInfo,
         remaining: usize,
     ) -> Option<FrameCount> {
-        self.sync_plan();
-        let rate = self.controls.rate_target();
-        let preview_frames = self
-            .render_quantum_frames
-            .map_or(remaining, NonZeroUsize::get)
-            .max(1);
-        let result = self
-            .preview_speed(rate.speed(), preview_frames)
-            .and_then(|speed| {
-                self.prepared_activation(speed)
-                    .map(|activation| (speed, activation))
+        self.sync_plan(meta.frame_offset);
+        if self
+            .rendered_source_end
+            .is_some_and(|(frame, sample_rate)| {
+                frame != meta.frame_offset || sample_rate != meta.spec.sample_rate
             })
+        {
+            self.clear_pending_source();
+        }
+        let state = self.select_state(meta.frame_offset);
+        self.prepared_context = state.as_ref().and_then(|state| state.snapshot.clone());
+        let presented = self.prepared_context.take();
+        if let Some(prepared) =
+            self.prepare_discontinuity_context(presented, state, meta.frame_offset)
+        {
+            self.prepared_context = Some(prepared);
+        }
+        let warp_map =
+            self.map_at_exact_frontier(self.prepared_context.as_ref(), meta.frame_offset);
+        if let Some(activation) = warp_map {
+            self.prepared_context = self.prepared_context.take().map(|snapshot| {
+                snapshot.prepare_at(
+                    meta.frame_offset,
+                    activation.output(),
+                    activation.revision(),
+                )
+            });
+        }
+        let output_rounding_remainder = warp_map.and_then(|activation| {
+            self.prepared_context.as_ref().and_then(|snapshot| {
+                snapshot
+                    .context()
+                    .output_rounding_remainder_at(activation.beat())
+            })
+        });
+        let rate = self.rate;
+        let speed = rate.speed();
+        let result = self
+            .prepared_activation(speed)
+            .map(|activation| (speed, activation))
             .and_then(|(speed, activation)| {
                 let prefix = activation.map_or(Ok(0), PreparedActivation::prefix_frames)?;
                 let frame_offset = meta
@@ -210,7 +526,14 @@ where
                     .checked_add(active_frames)
                     .ok_or(ElasticError::SampleCountOverflow)?;
                 Ok(PreparedQuantum {
+                    disposition: if warp_map.is_some() && activation.is_none() && self.active {
+                        PreparedDisposition::CarrierActivation
+                    } else {
+                        PreparedDisposition::Normal
+                    },
                     activation,
+                    warp_map: warp_map.map(|activation| activation.revision()),
+                    output_rounding_remainder,
                     rate,
                     speed,
                     active_frames,

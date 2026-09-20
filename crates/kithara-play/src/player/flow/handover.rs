@@ -10,7 +10,7 @@ use super::super::{
     state::{PendingNext, PendingNextState},
 };
 use crate::{
-    api::{EngineEvent, TrackId},
+    api::{CrossfadeSettings, EngineEvent, TrackId},
     bridge::PlayerCmd,
     error::PlayError,
 };
@@ -78,6 +78,14 @@ where
         };
         drop(phase);
         Ok(outcome)
+    }
+
+    fn restore_pending(&self, index: usize) {
+        if let Some(pending) = self.phase.lock().pending_mut().and_then(Option::as_mut)
+            && pending.index == index
+        {
+            pending.state = PendingNextState::Armed;
+        }
     }
 
     /// Load `items[index]` into the audio-thread arena in `Preloading`
@@ -158,23 +166,47 @@ where
     /// - [`PlayError::ArmIndexMismatch`] if `index` does not match
     ///   [`Self::armed_next`].
     fn commit_next(&self, index: usize) -> Result<(), PlayError> {
+        self.commit_next_with(
+            index,
+            CrossfadeSettings {
+                duration: self.crossfade_duration(),
+                ..CrossfadeSettings::default()
+            },
+        )
+    }
+
+    /// Commit the armed track with the profile captured by queue selection.
+    fn commit_next_with(&self, index: usize, settings: CrossfadeSettings) -> Result<(), PlayError> {
         // WHY: `None` ⇒ the slot was already activated (idempotent no-op).
         let Some(activated) = self.activate_pending(index)? else {
             return Ok(());
         };
 
-        self.start_playback(activated.item_id);
-        self.publish_crossfade_started();
+        if let Some(slot) = self.slot()
+            && let Err(error) =
+                self.core
+                    .engine
+                    .commit_track_transition(slot, activated.item_id, settings)
+        {
+            self.restore_pending(index);
+            return Err(error);
+        } else if self.slot().is_none() {
+            self.start_playback_with(activated.item_id, settings);
+        }
+        self.publish_crossfade_started(settings);
         self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.current_index();
         if index != current_index {
+            if let Some(outgoing) = self.core.items.current_item_id() {
+                self.core.items.cancel_outgoing_free_adoption(outgoing);
+            }
             self.core.items.set_current(index);
             self.announce_current_item(index);
         }
         Ok(())
     }
 
-    fn publish_crossfade_started(&self) {
+    fn publish_crossfade_started(&self, settings: CrossfadeSettings) {
         let Some(slot) = self.slot() else {
             return;
         };
@@ -184,7 +216,7 @@ where
             .publish(EngineEvent::CrossfadeStarted {
                 from: slot,
                 to: slot,
-                duration: Duration::from_secs_f32(self.crossfade_duration().max(0.0)),
+                duration: Duration::from_secs_f32(settings.duration.max(0.0)),
             });
     }
 
@@ -236,6 +268,14 @@ where
         Handover::new(self).commit_next(index)
     }
 
+    pub(crate) fn commit_next_with(
+        &self,
+        index: usize,
+        settings: CrossfadeSettings,
+    ) -> Result<(), PlayError> {
+        Handover::new(self).commit_next_with(index, settings)
+    }
+
     pub fn unarm_next(&self) {
         Handover::new(self).unarm_next();
     }
@@ -283,6 +323,43 @@ mod tests {
     }
 
     #[kithara::test]
+    fn failed_commit_restores_the_armed_selection() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(worker())
+                .session(mock::session())
+                .build(),
+        );
+        player
+            .ensure_engine_started()
+            .expect("engine start must succeed");
+        player.ensure_slot().expect("slot allocation must succeed");
+        if let Some(pending_slot) = player.phase.lock().pending_mut() {
+            *pending_slot = Some(PendingNext {
+                item_id: TrackId::allocate(),
+                src: Arc::from("next.mp3"),
+                state: PendingNextState::Armed,
+                index: 1,
+                duration_seconds: 162.0,
+            });
+        }
+        while player
+            .send_to_slot(PlayerCmd::SetPaused {
+                paused: true,
+                item_id: None,
+            })
+            .is_ok()
+        {}
+
+        assert!(matches!(
+            player.commit_next(1),
+            Err(PlayError::SlotChannelFull { .. })
+        ));
+        assert_eq!(player.armed_next(), Some(1));
+    }
+
+    #[kithara::test]
     fn commit_next_publishes_snapshot_before_current_item_changed() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
@@ -307,14 +384,22 @@ mod tests {
             });
         }
 
-        player.commit_next(1).expect("commit_next must succeed");
+        let settings = CrossfadeSettings {
+            duration: 0.25,
+            curve: crate::CrossfadeCurve::Linear,
+            depth: 0.75,
+            position: 0.25,
+        };
+        player
+            .commit_next_with(1, settings)
+            .expect("commit_next must succeed");
 
         assert!(matches!(
             rx.try_recv(),
             Ok(Envelope {
-                event: TestEvent::Engine(EngineEvent::CrossfadeStarted { .. }),
+                event: TestEvent::Engine(EngineEvent::CrossfadeStarted { duration, .. }),
                 ..
-            })
+            }) if duration == Duration::from_secs_f32(settings.duration)
         ));
         assert_eq!(player.duration_seconds(), Some(162.0));
         assert!(matches!(

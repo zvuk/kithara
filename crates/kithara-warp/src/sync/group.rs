@@ -3,8 +3,8 @@ use super::{
     SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, TopologyStamp, WarpMapRevision,
 };
 use crate::{
-    BeatGrid, BeatGridId, BeatGridSnapshotError, BeatGridStamp, BeatGridState, MapAxis, MapRegion,
-    SessionFrame,
+    BeatGrid, BeatGridId, BeatGridIdAllocationError, BeatGridSnapshotError, BeatGridStamp,
+    BeatGridState, MapAxis, MapRegion, SessionFrame,
 };
 
 /// Canonical synchronization state observed from one live group.
@@ -19,6 +19,12 @@ pub enum SyncStatusSnapshot {
         operation: SyncOperationId,
         topology: TopologyStamp,
         required: MapRegion,
+    },
+    /// A Free handoff awaits its worker-owned adoption boundary.
+    Preparing {
+        operation: SyncOperationId,
+        topology: TopologyStamp,
+        warp_map: WarpMapRevision,
     },
     /// A warp map is admitted but its activation has not been acknowledged.
     Prepared {
@@ -49,12 +55,25 @@ pub enum SyncStatusSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SyncError {
+    /// The real-time command queue cannot admit this transaction yet; retry it unchanged.
+    #[error("real-time command queue is full")]
+    SlotChannelFull,
+    /// The member's grid cannot be projected onto the grid it must follow.
+    #[error("member {member_id:?} cannot be projected onto group {group_id:?}: {reason}")]
+    GridNotProjectable {
+        group_id: BeatGridId,
+        member_id: BeatGridId,
+        reason: crate::GridProjectionError,
+    },
     /// The canonical group owner stopped before accepting an operation.
     #[error("canonical synchronization-group owner is unavailable")]
     OwnerUnavailable,
     /// This group does not implement the requested operation yet.
     #[error("synchronization capability {capability:?} is unavailable")]
     CapabilityUnavailable { capability: SyncCapability },
+    /// The group inherits its tempo from its parent; set it there.
+    #[error("tempo of group {owner:?} is inherited from its parent")]
+    TempoInherited { owner: BeatGridId },
     /// A topology transaction was based on another published revision.
     #[error("topology base is {given:?}, expected {expected:?}")]
     StaleTopology {
@@ -91,10 +110,32 @@ pub enum SyncError {
     /// A grid owner attempted an invalid immutable snapshot transition.
     #[error(transparent)]
     BeatGridSnapshot(#[from] BeatGridSnapshotError),
+    /// A grid owner cannot allocate another grid identity.
+    #[error(transparent)]
+    BeatGridIdAllocation(#[from] BeatGridIdAllocationError),
+    /// A grid owner cannot mint another revision of one grid.
+    #[error("beat grid revision space is exhausted for grid {grid_id}")]
+    BeatGridRevisionExhausted { grid_id: BeatGridId },
     /// No direct member with the requested identity exists in this group.
     #[error("member {member_id} was not found in group {group_id}")]
     MemberNotFound {
         group_id: BeatGridId,
+        member_id: BeatGridId,
+    },
+    /// The member already entered the group, so it cannot enter again.
+    #[error("member {member_id} in group {group_id} is already armed")]
+    MemberAlreadyArmed {
+        /// Group holding the member.
+        group_id: BeatGridId,
+        /// Member the operation named.
+        member_id: BeatGridId,
+    },
+    /// The member is still waiting to enter, so it has nothing to reconcile.
+    #[error("member {member_id} in group {group_id} is waiting to enter")]
+    MemberNotArmed {
+        /// Group holding the member.
+        group_id: BeatGridId,
+        /// Member the operation named.
         member_id: BeatGridId,
     },
     /// A group policy does not admit this category of direct member.
@@ -111,6 +152,9 @@ pub enum SyncError {
     /// A group owner cannot mint another operation identity.
     #[error("synchronization operation identity space is exhausted for group {group_id}")]
     OperationIdExhausted { group_id: BeatGridId },
+    /// A group owner cannot mint another warp-map revision.
+    #[error("warp map revision space is exhausted for group {group_id}")]
+    WarpMapRevisionExhausted { group_id: BeatGridId },
     /// No prepared renderer operation can accept an acknowledgement.
     #[error("synchronization group has no prepared operation")]
     NoPreparedOperation,

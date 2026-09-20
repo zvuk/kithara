@@ -93,3 +93,23 @@ pub enum BeatGridQuery<T> {
     /// The grid cannot answer the query for the stated reason.
     Unavailable(BeatGridUnavailable),
 }
+
+impl<T> BeatGridQuery<T> {
+    /// Carries a resolved value into a dependent query, keeping every refusal.
+    ///
+    /// A projection answers by asking two grids in turn, and the caller must
+    /// learn which of them refused and why, so a refusal travels out unchanged
+    /// rather than collapsing into one opaque failure.
+    pub(crate) fn and_then<U>(
+        self,
+        resolve: impl FnOnce(T) -> BeatGridQuery<U>,
+    ) -> BeatGridQuery<U> {
+        match self {
+            Self::Resolved(value) => resolve(value),
+            Self::Uncovered { required } => BeatGridQuery::Uncovered { required },
+            Self::OutsideDomain => BeatGridQuery::OutsideDomain,
+            Self::Stale { expected, given } => BeatGridQuery::Stale { expected, given },
+            Self::Unavailable(reason) => BeatGridQuery::Unavailable(reason),
+        }
+    }
+}

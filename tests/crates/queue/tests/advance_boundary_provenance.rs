@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::Path;
+use std::{num::NonZeroU32, path::Path};
 
 use kithara::{
     abr::AbrEvent,
@@ -193,7 +193,9 @@ enum CrossfadeFlavor {
 
 impl CrossfadeFlavor {
     fn player_config(self) -> OfflinePlayerOptions {
-        let builder = OfflinePlayerOptions::builder().crossfade_duration(CROSSFADE_SECS);
+        let builder = OfflinePlayerOptions::builder()
+            .output_block_frames(output_block_frames())
+            .crossfade_duration(CROSSFADE_SECS);
         match self {
             Self::Plain => builder.build(),
             Self::Eq => builder.eq_layout(generate_log_spaced_bands(10)).build(),
@@ -1117,6 +1119,7 @@ async fn run_crossfade_flac_case(
 
 fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> OfflinePlayerOptions {
     OfflinePlayerOptions::builder()
+        .output_block_frames(output_block_frames())
         .crossfade_duration(CROSSFADE_SECS)
         .eq_layout(generate_log_spaced_bands(10))
         .warp(
@@ -1139,6 +1142,7 @@ async fn setup_queue_with_sample_rate(
     let harness = with_provenance_headroom(
         OfflinePlayerHarness::with_sample_rate(
             OfflinePlayerOptions::builder()
+                .output_block_frames(output_block_frames())
                 .crossfade_duration(0.0)
                 .build(),
             render_sample_rate,
@@ -1174,6 +1178,7 @@ async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDi
     let harness = with_provenance_headroom(
         OfflinePlayerHarness::with_sample_rate(
             OfflinePlayerOptions::builder()
+                .output_block_frames(output_block_frames())
                 .crossfade_duration(0.0)
                 .build(),
             SAMPLE_RATE,
@@ -1240,6 +1245,7 @@ async fn setup_flac_queue_with_player_config(
 async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .output_block_frames(output_block_frames())
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -2343,6 +2349,15 @@ fn runs_with_frames(runs: &[ClassRun]) -> Vec<(FrameClass, usize, usize, usize)>
             (*class, *start_window, frame_for_window(*start_window), *len)
         })
         .collect()
+}
+
+/// The host block every render call here asks for, declared so the feeder
+/// ring is sized for the callback the test actually drives.
+fn output_block_frames() -> NonZeroU32 {
+    u32::try_from(BLOCK_FRAMES)
+        .ok()
+        .and_then(NonZeroU32::new)
+        .expect("render block fits a non-zero u32")
 }
 
 fn frame_for_window(window: usize) -> usize {

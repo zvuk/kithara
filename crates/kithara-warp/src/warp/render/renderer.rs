@@ -1,6 +1,5 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
-use firewheel_core::param::smoother::{SmoothedParam, SmootherConfig};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
@@ -8,13 +7,11 @@ use kithara_stretch::{
     ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest, StretchKind,
 };
 use kithara_test_macros as kithara;
-use num_traits::cast::AsPrimitive;
-use tracing::warn;
 
 use super::renderer_target::PreparedTarget;
 use crate::{
-    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
-    temporal::RateTarget,
+    RenderReader, RenderSnapshot, StretchControls, WarpConfig, WarpMapRevision, WarpPlan,
+    WarpPlanSlot, temporal::RateTarget,
 };
 
 #[cfg(test)]
@@ -22,11 +19,20 @@ mod tests;
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
+    pub(super) disposition: PreparedDisposition,
     pub(super) activation: Option<PreparedActivation>,
+    pub(super) warp_map: Option<WarpMapRevision>,
+    pub(super) output_rounding_remainder: Option<f64>,
     pub(super) rate: RateTarget,
     pub(super) speed: f32,
     pub(super) active_frames: usize,
     pub(super) frames: usize,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum PreparedDisposition {
+    Normal,
+    CarrierActivation,
 }
 
 #[derive(Clone, Copy)]
@@ -43,7 +49,7 @@ impl PreparedActivation {
     }
 }
 
-/// Source-timeline exact-span time-stretch driven by shared live controls.
+/// Source-timeline exact-span time-stretch driven by the published output rate.
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
@@ -54,8 +60,14 @@ pub struct WarpRenderer<S> {
     pub(super) source_block_frames: NonZeroUsize,
     /// Latency-sized pooled output discarded while priming an inactive engine.
     pub(super) activation_scratch: Option<SampleBuffer>,
-    /// Renderer-owned applied speed. Shared controls contain only the target.
-    pub(super) applied_speed: Option<SmoothedParam>,
+    /// Initial prefill rate, then the latest rate published by the output owner.
+    pub(super) rate: RateTarget,
+    /// Free context held from its exact map activation until live Off observes it.
+    ///
+    /// The latch belongs to the loaded immutable plan and its map cursor;
+    /// `sync_plan` clears it before another plan can be selected.
+    pub(super) free_handoff_latch: Option<(crate::WarpCursor, RateTarget)>,
+    pub(super) prepared_context: Option<RenderSnapshot>,
     pub(super) committed: Option<RenderSnapshot>,
     /// Consumed input retained until the scheduler shell can resize or recycle
     /// it outside the checked render core.
@@ -75,13 +87,15 @@ pub struct WarpRenderer<S> {
     /// Unity chunk retained while the active backend drains its tail.
     /// Its samples occupy `pending_source` without a copy.
     pub(super) pending_unity_meta: Option<AudioChunkInfo>,
-    /// Region plan cached from the controls; `Arc::ptr_eq` detects a live swap.
-    pub(super) plan: Option<Arc<RegionPlan>>,
+    /// Plan cached from `plan_slot`; `Arc::ptr_eq` detects a live swap.
+    pub(super) plan: Option<Arc<WarpPlan>>,
+    /// Live plan of the rendered item, shared with the deck that installs it.
+    pub(super) plan_slot: Arc<WarpPlanSlot>,
+    /// Last rate the installed projection named, held for the frames past the
+    /// end of the recording, where it names none. Cleared with the plan.
+    pub(super) projected_rate_held: Option<f64>,
     /// Source span and live speed selected by the scheduler for the next render.
     pub(super) prepared_quantum: Option<PreparedQuantum>,
-    /// Region covering the playhead - the lookup cursor. `None` forces a
-    /// fresh binary search (first chunk, plan swap, region exit, seek).
-    pub(super) region: Option<ActiveRegion>,
     /// Maximum output frames between samples of live temporal controls.
     pub(super) render_quantum_frames: Option<NonZeroUsize>,
     /// Exact decoded-source boundary represented by the latest emitted chunk.
@@ -96,6 +110,8 @@ pub struct WarpRenderer<S> {
     pub(super) context: RenderReader,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
+    /// Pitch mode represented by the currently prepared engine.
+    pub(super) current_keylock: bool,
     /// Whether previous input ran through the backend. Drives a clean backend
     /// reset when the renderer returns to unity passthrough.
     pub(super) active: bool,
@@ -105,6 +121,9 @@ pub struct WarpRenderer<S> {
     /// Reset requested by seek or a return to unity passthrough. The scheduler
     /// shell performs it outside the checked render core.
     pub(super) reset_pending: bool,
+    /// A source discontinuity may prepare its exact future activation without
+    /// advancing the callback-owned presentation frontier.
+    pub(super) discontinuity_pending: bool,
     /// Last pitch factor pushed to the backend; avoids redundant updates.
     pub(super) applied_pitch: f64,
     /// Fractional output frames retained across exact-span requests.
@@ -113,6 +132,8 @@ pub struct WarpRenderer<S> {
     pub(super) primed_source_debt: u64,
     /// Source frames admitted since the last renderer reset.
     pub(super) source_frames_admitted: u64,
+    /// Latest warp map whose exact source/output anchor was rendered.
+    pub(super) applied_warp_map: Option<WarpMapRevision>,
 }
 
 impl<S> WarpRenderer<S>
@@ -124,21 +145,35 @@ where
     /// Re-apply pitch to the backend only when it moves this much.
     pub(super) const RATIO_EPS: f64 = 1e-4;
 
+    /// Speed of an item whose projection owns the rate but has named none yet.
+    ///
+    /// The recording is heard as recorded until the projection answers. It is
+    /// not the listener's target: that target belongs to an item the
+    /// projection does not place, and reading it here would let a projected
+    /// item start at a rate the projection never prescribed.
+    pub(super) const UNNAMED_SPEED: f32 = 1.0;
+
     /// Build the slot at the source `spec`, driven by the shared `controls`.
     pub(crate) fn new(
         config: &WarpConfig,
         context: RenderReader,
         spec: AudioSpec,
         pools: PoolRegion<S>,
+        plan_slot: Arc<WarpPlanSlot>,
     ) -> Self {
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
-        let plan = controls.region_plan();
-        let speed = controls.speed();
-        let smooth_frames: f32 = config.rate_smooth_frames().get().as_();
-        let sample_rate: f32 = spec.sample_rate.get().as_();
+        let current_keylock = controls.keylock();
+        let plan = plan_slot.load();
+        let rate = controls.rate_target();
+        let rate = if plan.as_deref().is_some_and(WarpPlan::follows_output) {
+            rate.with_speed(Self::UNNAMED_SPEED)
+        } else {
+            rate
+        };
         let target = Self::prepare_target(
             current_kind,
+            current_keylock,
             config.backends(),
             config.source_block_frames(),
             spec,
@@ -153,22 +188,18 @@ where
             engine: target.engine,
             retired_engine: None,
             current_kind,
+            current_keylock,
             controls,
+            plan_slot,
+            projected_rate_held: None,
             pools,
             spec,
             source_block_frames: config.source_block_frames(),
             render_quantum_frames: config.render_quantum_frames(),
             prepared_quantum: None,
-            applied_speed: (config.rate_smooth_frames().get() > 1).then(|| {
-                SmoothedParam::new(
-                    speed,
-                    SmootherConfig {
-                        smooth_seconds: smooth_frames / sample_rate,
-                        ..SmootherConfig::default()
-                    },
-                    spec.sample_rate,
-                )
-            }),
+            rate,
+            free_handoff_latch: None,
+            prepared_context: None,
             applied_pitch: f64::NAN,
             active: false,
             output_remainder: 0.0,
@@ -178,8 +209,10 @@ where
             pending_unity_meta: None,
             rendered_source_end: None,
             source_frames_admitted: 0,
+            applied_warp_map: None,
             primed_source_debt: 0,
             reset_pending: false,
+            discontinuity_pending: false,
             rebuild_pending: false,
             last_input_meta: None,
             output_start_meta: None,
@@ -187,7 +220,6 @@ where
             activation_scratch: target.activation_scratch,
             deferred_scratch: None,
             plan,
-            region: None,
         }
     }
 
@@ -195,7 +227,7 @@ where
     #[must_use]
     pub fn accepts_input(&self) -> bool {
         !self.transition_pending()
-            && (self.unity_passthrough(self.controls.speed())
+            && (self.unity_passthrough(self.rate.speed())
                 || (self.engine.is_some()
                     && self.pending_source.is_some()
                     && self.scratch.is_some()))
@@ -237,24 +269,21 @@ where
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
         self.prepared_quantum = None;
+        self.prepared_context = None;
+        self.free_handoff_latch = None;
         self.rendered_source_end = None;
+        self.applied_warp_map = None;
         self.source_frames_admitted = 0;
         self.primed_source_debt = 0;
         self.active = false;
-        self.region = None;
     }
-
     pub(super) fn commit_rate_render(
         &mut self,
         snapshot: Option<RenderSnapshot>,
         output_frames: usize,
-        request_revision: u64,
+        render_revision: u64,
         applied_rate: f32,
-        target_rate: f32,
     ) {
-        if let Err(error) = self.advance_speed(target_rate, output_frames) {
-            warn!(%error, "time-stretch speed smoothing failed");
-        }
         let Some(snapshot) = snapshot else {
             return;
         };
@@ -265,16 +294,30 @@ where
         };
         kithara::probe_event!(
             rate_applied,
-            request_revision,
+            request_revision = kithara_signal::render_rate_revision(render_revision),
             applied_rate_bits = applied_rate.to_bits(),
             session_frame,
             source_start,
             source_end
         );
-        self.commit(committed, session_frame, source_start);
+        self.commit(committed, render_revision, session_frame, source_start);
     }
 
-    pub(super) fn commit_render(&mut self, snapshot: Option<RenderSnapshot>, output_frames: usize) {
+    pub(super) fn bind_output_identity(
+        snapshot: Option<RenderSnapshot>,
+        render_revision: u64,
+    ) -> Option<RenderSnapshot> {
+        let warp_map = NonZeroU64::new(kithara_signal::render_warp_map_revision(render_revision))
+            .map(WarpMapRevision::from_raw);
+        snapshot.map(|snapshot| crate::temporal::rebind_warp_map(snapshot, warp_map))
+    }
+
+    pub(super) fn commit_render(
+        &mut self,
+        snapshot: Option<RenderSnapshot>,
+        output_frames: usize,
+        render_revision: u64,
+    ) {
         let Some(snapshot) = snapshot else {
             return;
         };
@@ -283,7 +326,7 @@ where
         else {
             return;
         };
-        self.commit(committed, output_start, source_start);
+        self.commit(committed, render_revision, output_start, source_start);
     }
 
     /// The single place a render becomes the committed one, so every committed
@@ -292,17 +335,15 @@ where
     pub(super) fn commit(
         &mut self,
         committed: RenderSnapshot,
+        render_revision: u64,
         output_start: i64,
         source_start: u64,
     ) {
         kithara::probe_event!(
             render_committed,
-            session_epoch = u64::from(committed.context().session_epoch()),
-            transport_revision = committed
-                .context()
-                .transport_revision()
-                .map_or(0, u64::from),
+            render_revision,
             output_start,
+            output_end = i64::from(committed.frontier().output()),
             source_start,
             source_end = committed.frontier().source()
         );
@@ -398,26 +439,32 @@ where
         ));
     }
 
-    /// Region covering `frame`, plus whether the playhead just crossed out
-    /// of a previously resolved region (a plan boundary or a seek).
-    pub(super) fn region_for(&mut self, frame: u64) -> ActiveRegion {
-        if let Some(r) = self.region
-            && r.contains(frame)
-        {
-            return r;
-        }
-        let next = self
-            .plan
-            .as_ref()
-            .map_or(ActiveRegion::UNBOUNDED, |p| p.region_at(frame));
-        self.region = Some(next);
-        next
-    }
-
     /// Exact decoded-source boundary represented by the latest emitted samples.
     #[must_use]
     pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
         self.rendered_source_end
+    }
+
+    /// Returns the coherent same-epoch committed source/output/map frontier.
+    ///
+    /// A worker uses this cursor to install a map before accepting another
+    /// source quantum. Returns `None` before the first commit and after reset;
+    /// callback snapshots that have advanced beyond the committed frontier are
+    /// deliberately not merged into this cursor.
+    #[must_use]
+    pub fn adoption_frontier(&self) -> Option<crate::PresentationFrontier> {
+        let snapshot = self.context.load()?;
+        let source = self.rendered_source_end?.0;
+        let committed = self.committed.as_ref().filter(|committed| {
+            committed.context().session_epoch() == snapshot.context().session_epoch()
+        })?;
+        Some(
+            crate::PresentationFrontier::builder()
+                .source(source)
+                .output(committed.frontier().output())
+                .maybe_warp_map(committed.frontier().warp_map())
+                .build(),
+        )
     }
 
     /// Whether this target has elastic DSP and needs worker staging.
@@ -430,38 +477,5 @@ where
         debug_assert!(self.retired_engine.is_none());
         self.retired_engine = self.engine.take();
         self.rebuild_pending = true;
-    }
-
-    pub(super) fn snap_speed(&mut self) {
-        if let Some(applied) = self.applied_speed.as_mut() {
-            applied.set_value(self.controls.speed());
-            applied.reset_to_target();
-        }
-        self.prepared_quantum = None;
-    }
-
-    /// Pull the live region plan handle; on a swap drop the region cursor.
-    pub(super) fn sync_plan(&mut self) {
-        let want = self.controls.region_plan();
-        let same = match (&self.plan, &want) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        };
-        if !same {
-            self.plan = want;
-            self.region = None;
-            self.prepared_quantum = None;
-        }
-    }
-
-    /// Whether a live active-to-unity transition still owns queued samples.
-    #[must_use]
-    pub const fn transition_pending(&self) -> bool {
-        self.pending_unity_meta.is_some()
-    }
-
-    pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
-        self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON
     }
 }

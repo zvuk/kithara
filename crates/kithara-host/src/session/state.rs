@@ -216,6 +216,8 @@ pub(crate) struct SessionState<B: AudioBackend, S> {
     pub(super) mix_tap: Option<MixTap>,
     pub(super) requested_max_block_frames: Option<NonZeroU32>,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
+    /// The session anchor the decks last took.
+    pub(super) delivered_anchor: Option<kithara_warp::SessionAnchor>,
     pub(super) limiter: LimiterConfig,
     pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) session_ducking: SessionDuckingMode,
@@ -268,6 +270,7 @@ impl<B: AudioBackend, S> SessionState<B, S> {
             stream_needs_restart: false,
             transport: SessionTransportState::default(),
             reserved_session_grid: Some(generation),
+            delivered_anchor: None,
             graph: GraphRegistry::default(),
         };
         state.publish_root();

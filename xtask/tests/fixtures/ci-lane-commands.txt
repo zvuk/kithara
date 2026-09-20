@@ -1216,6 +1216,110 @@
   <require os> linux
   <require tools> cargo just
   just test ui
+# deep-warp / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# deep-warp / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# deep-warp / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# deep-warp / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# deep-warp / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# deep-warp / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# deep-warp / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# deep-warp / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --flash=off --net-backend=none -p kithara-warp --features stretch-signalsmith
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --net-backend=none -p kithara-play-tests --test play -E test(~sync_) - test(~no_sync_)
+    CARGO_BUILD_FINGERPRINT=content
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deps-deny / branch
   <require os> linux
   <require tools> cargo just
@@ -1623,14 +1727,12 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / platforms
@@ -1640,14 +1742,12 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / merge-request
@@ -1657,14 +1757,12 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / quarantine
@@ -1674,14 +1772,12 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / main
@@ -1691,14 +1787,12 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / nightly
@@ -1708,14 +1802,12 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / weekly
@@ -1725,14 +1817,12 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / release
@@ -1742,14 +1832,12 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    KITHARA_REMOTE_FIXTURES=1
     RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / branch

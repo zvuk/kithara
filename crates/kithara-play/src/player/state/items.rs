@@ -4,9 +4,13 @@ use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::{Arc, Mutex};
+use kithara_warp::{AssetFrame, WarpPlan};
 use tracing::debug;
 
-use super::{QueuedResource, playlist::Playlist};
+use super::{
+    QueuedResource,
+    playlist::{Playlist, TrackGrid},
+};
 use crate::{api::PlayerEvent, resource::Resource, rt::track::PlayerResource};
 
 pub(crate) struct TakenItem {
@@ -60,6 +64,43 @@ impl ItemQueue {
         }
     }
 
+    pub(crate) fn current_item_id(&self) -> Option<TrackId> {
+        let playlist = self.playlist.lock();
+        playlist.item_id(playlist.current())
+    }
+
+    pub(crate) fn set_initial_source_cue(&self, item: TrackId, cue: Option<AssetFrame>) {
+        self.playlist.lock().set_initial_source_cue(item, cue);
+    }
+
+    pub(crate) fn initial_source_cue(&self, item: TrackId) -> Option<AssetFrame> {
+        self.playlist.lock().initial_source_cue(item)
+    }
+
+    pub(crate) fn clear_initial_source_cue(&self, item: TrackId) {
+        self.playlist.lock().clear_initial_source_cue(item);
+    }
+
+    pub(crate) fn await_initial_source_cue(&self, item: TrackId) -> bool {
+        self.playlist.lock().await_initial_source_cue(item)
+    }
+
+    pub(crate) fn await_initial_source_cue_if(&self, item: TrackId, resolved: bool) -> bool {
+        self.playlist
+            .lock()
+            .await_initial_source_cue_if(item, resolved)
+    }
+
+    pub(crate) fn holds_initial_source_cue(&self, item: TrackId) -> bool {
+        self.playlist.lock().holds_initial_source_cue(item)
+    }
+
+    pub(crate) fn consume_awaiting_initial_source_cue(&self, item: TrackId) -> bool {
+        self.playlist
+            .lock()
+            .consume_awaiting_initial_source_cue(item)
+    }
+
     pub(crate) fn insert(&self, resource: Resource, item_id: TrackId, at_position: Option<usize>) {
         let (count, pos) = {
             let mut playlist = self.playlist.lock();
@@ -111,6 +152,11 @@ impl ItemQueue {
             return Ok(None);
         };
         let (item_id, mut resource) = (queued.item_id, queued.resource);
+        playlist.track_loaded(
+            item_id,
+            resource.region_plan().cloned(),
+            resource.take_free_adoption(),
+        );
         let duration_seconds = resource
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64());
@@ -131,16 +177,38 @@ impl ItemQueue {
         }))
     }
 
+    pub(crate) fn commit_current_track_plan<R>(
+        &self,
+        item: TrackId,
+        stamp: kithara_warp::BeatGridStamp,
+        plan: Arc<WarpPlan>,
+        commit: impl FnOnce() -> Result<R, crate::PlayError>,
+    ) -> Result<R, crate::PlayError> {
+        self.playlist
+            .lock()
+            .commit_current_track_plan(item, stamp, plan, commit)
+    }
+
     delegate::delegate! {
         to self.playlist.lock() {
             #[call(clear)]
             pub(crate) fn clear_all(&self);
+            #[expr($.cloned())]
+            pub(crate) fn track_grid(&self, item: TrackId) -> Option<TrackGrid>;
+            pub(crate) fn publish_track_grid(&self, item: TrackId, grid: TrackGrid);
+            pub(crate) fn set_track_plan(&self, item: TrackId, plan: Option<Arc<WarpPlan>>);
+            pub(crate) fn publish_free_adoption(&self, item: TrackId, request: crate::worker::FreeAdoptionRequest) -> bool;
+            pub(crate) fn free_adoption_receipt(&self, item: TrackId) -> Option<crate::worker::FreeAdoptionReceipt>;
+            pub(crate) fn cancel_outgoing_free_adoption(&self, item: TrackId);
+            pub(crate) fn transition_free_adoption<R>(&self, item: TrackId, operation: kithara_warp::SyncOperationId, warp_map: kithara_warp::WarpMapRevision, mutate: impl FnOnce() -> (R, bool)) -> R;
+            pub(crate) fn free_adoption_transition(&self, item: TrackId) -> Option<crate::worker::FreeAdoptionTransition>;
             #[call(current)]
             pub(crate) fn current_index(&self) -> usize;
             pub(crate) fn has_resource(&self, index: usize) -> bool;
             pub(crate) fn is_announced(&self, index: usize) -> bool;
             #[call(len)]
             pub(crate) fn item_count(&self) -> usize;
+            pub(crate) fn item_id(&self, index: usize) -> Option<TrackId>;
             pub(crate) fn set_current(&self, index: usize);
         }
     }

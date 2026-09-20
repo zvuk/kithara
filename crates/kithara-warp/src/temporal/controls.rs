@@ -5,7 +5,6 @@ use std::sync::atomic::Ordering;
 ))]
 use std::sync::atomic::{AtomicBool, AtomicU8};
 
-use arc_swap::ArcSwapOption;
 use kithara_platform::sync::Arc;
 #[cfg(all(
     not(target_arch = "wasm32"),
@@ -14,7 +13,7 @@ use kithara_platform::sync::Arc;
 use kithara_stretch::StretchKind;
 use portable_atomic::AtomicU64;
 
-use super::{RateTarget, RegionPlan};
+use super::RateTarget;
 
 #[cfg(all(
     not(target_arch = "wasm32"),
@@ -34,7 +33,6 @@ struct EngineControls {
 #[non_exhaustive]
 pub struct StretchControls {
     target: AtomicU64,
-    region_plan: ArcSwapOption<RegionPlan>,
     #[cfg(all(
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
@@ -53,7 +51,6 @@ impl StretchControls {
     pub fn new(speed: f32) -> Arc<Self> {
         Arc::new(Self {
             target: AtomicU64::new(RateTarget::pack(speed.max(Self::MIN_SPEED), 0)),
-            region_plan: ArcSwapOption::const_empty(),
             #[cfg(all(
                 not(target_arch = "wasm32"),
                 any(feature = "stretch-signalsmith", feature = "stretch-bungee")
@@ -83,7 +80,8 @@ impl StretchControls {
         self.engine.keylock.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn rate_target(&self) -> RateTarget {
+    #[must_use]
+    pub fn rate_target(&self) -> RateTarget {
         RateTarget::unpack(self.target.load(Ordering::Acquire))
     }
 
@@ -123,18 +121,6 @@ impl StretchControls {
     #[must_use]
     pub fn speed(&self) -> f32 {
         self.rate_target().speed()
-    }
-
-    delegate::delegate! {
-        to self.region_plan {
-            /// The active region-stretch plan, if any.
-            #[must_use]
-            #[call(load_full)]
-            pub fn region_plan(&self) -> Option<Arc<RegionPlan>>;
-            /// Install or clear the region-stretch plan; picked up on the next chunk.
-            #[call(store)]
-            pub fn set_region_plan(&self, plan: Option<Arc<RegionPlan>>);
-        }
     }
 }
 

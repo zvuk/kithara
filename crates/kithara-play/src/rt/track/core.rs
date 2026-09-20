@@ -7,7 +7,11 @@ use kithara_warp::RenderReader;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
-use crate::{CrossfadeSettings, bridge::TrackState, worker::ServiceClass};
+use crate::{
+    CrossfadeSettings,
+    bridge::{ScheduledSeekEpoch, TrackState},
+    worker::ServiceClass,
+};
 
 /// Per-track state in the processor arena.
 ///
@@ -114,6 +118,18 @@ impl PlayerTrack {
         self.fade.fade_out(settings, sample_rate);
     }
 
+    pub(crate) fn crossfade_settings(&self) -> CrossfadeSettings {
+        self.fade.current_settings()
+    }
+
+    pub(crate) fn defer_fade_in(&mut self, settings: CrossfadeSettings) -> bool {
+        if !self.is_armed_prepared_launch() {
+            return false;
+        }
+        self.fade.stage_fade_in(settings);
+        true
+    }
+
     /// Re-base this track onto a slot seek epoch the processor has applied.
     ///
     /// Every loaded track observes the epoch, not just the ones a seek moves:
@@ -157,6 +173,30 @@ impl PlayerTrack {
         self.ended_at_eof = false;
     }
 
+    pub(crate) fn replace_prepared_launch(
+        &mut self,
+        scheduled_epoch: ScheduledSeekEpoch,
+        prepared_epoch: u64,
+        replacement_epoch: u64,
+        transport_epoch: u64,
+        target: f64,
+    ) -> bool {
+        if !self.resource.has_prepared_launch(scheduled_epoch) {
+            return false;
+        }
+        if !self.resource.present_replacement_prepared_launch(
+            scheduled_epoch,
+            prepared_epoch,
+            replacement_epoch,
+        ) {
+            return false;
+        }
+        self.resource.clear_prepared_launch(scheduled_epoch);
+        self.observe_seek_epoch(transport_epoch);
+        self.seek(target);
+        true
+    }
+
     /// Update the prefetch lead time used for the preload trigger.
     pub const fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
         self.prefetch_duration = prefetch_duration.max(0.0);
@@ -196,6 +236,11 @@ impl PlayerTrack {
 
     delegate::delegate! {
         to self.resource {
+            pub(crate) fn prepared_launch_readiness(
+                &mut self,
+                context: &kithara_warp::RenderContext,
+                frames: usize,
+            ) -> super::feeder_read::PreparedLaunchReadiness;
             /// Cached span in seconds: how much of the source is on disk.
             #[must_use]
             pub fn cached_span(&self) -> f64;
@@ -209,6 +254,23 @@ impl PlayerTrack {
             /// Control-plane handle used to begin this track's seeks off the audio thread.
             #[must_use]
             pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
+            pub fn schedule_seek(
+                &mut self,
+                scheduled_epoch: ScheduledSeekEpoch,
+                epoch: u64,
+                disposition: crate::bridge::ScheduledSeekDisposition,
+                armed: bool,
+            ) -> bool;
+            pub(crate) fn set_prepared_launch_armed(
+                &mut self,
+                scheduled_epoch: ScheduledSeekEpoch,
+            ) -> bool;
+            pub(crate) fn disarm_prepared_launch(&mut self) -> bool;
+            #[must_use]
+            pub(crate) fn scheduled_seek_disposition(
+                &self,
+            ) -> Option<crate::bridge::ScheduledSeekDisposition>;
+            pub(crate) fn is_armed_prepared_launch(&self) -> bool;
             pub(crate) fn render_reader(&self) -> Option<RenderReader>;
             /// Source identifier.
             #[must_use]

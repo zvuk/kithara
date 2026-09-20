@@ -132,8 +132,8 @@ mod tests {
 
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        BeatGridId, BeatGridRevision, BeatGridStamp, SessionAnchor, SessionBeat, SessionEpoch,
-        SessionFrame,
+        BeatGridId, BeatGridRevision, BeatGridStamp, SessionAnchor, SessionAxis, SessionBeat,
+        SessionEpoch, SessionFrame,
     };
 
     use super::{SessionTransportSnapshot, Tempo, TempoError, TransportRevision};
@@ -164,7 +164,10 @@ mod tests {
             SessionFrame::new(192_000),
             SessionBeat::new(8.0).expect("invariant: fixture beat is finite"),
             2.0,
-            NonZeroU32::new(48_000).expect("invariant: fixture rate is non-zero"),
+            SessionAxis::new(
+                NonZeroU32::new(48_000).expect("invariant: fixture rate is non-zero"),
+                SessionEpoch::new(0),
+            ),
         )
         .expect("invariant: fixture anchor is valid");
         let snapshot = SessionTransportSnapshot::new(

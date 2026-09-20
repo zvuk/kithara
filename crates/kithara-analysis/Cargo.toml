@@ -42,6 +42,7 @@ kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }
 kithara-test-utils = { workspace = true }
+kithara-warp = { workspace = true, default-features = false }
 kithara-worker = { workspace = true }
 
 bon = { workspace = true }

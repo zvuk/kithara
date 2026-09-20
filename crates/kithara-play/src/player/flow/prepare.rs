@@ -7,7 +7,7 @@ use kithara_platform::sync::Arc;
 #[cfg(test)]
 use super::super::core::PlayerImpl;
 use super::super::core::PlayerRuntime;
-use crate::{PlayError, resource::ResourceConfig, session::SessionError};
+use crate::{PlayError, resource::ResourceConfig, rt::StreamShape};
 
 struct ConfigPrep<'a, S> {
     player: &'a PlayerRuntime<S>,
@@ -37,9 +37,12 @@ where
         // pair overwrites whatever the document said under `audio:`.
         let mut audio = config.audio;
         if let Some(quantum) = warp.render_quantum_frames() {
-            let shape = stream_shape.ok_or(SessionError::NoContext)?;
-            let (preload, ring) =
-                shape.playback_buffers(quantum, self.player.core.response_budget_frames)?;
+            let budget = self.player.core.response_budget_frames;
+            let (preload, ring) = if let Some(shape) = stream_shape {
+                shape.playback_buffers(quantum)?
+            } else {
+                StreamShape::budget_buffers(quantum, budget)?
+            };
             audio.preload_chunks = Some(preload);
             audio.audio_buffer_chunks = Some(ring.get());
         }
@@ -116,10 +119,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        PlayError, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, mock,
+        PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, mock,
         player::PlayerConfig,
         resource::ResourceSrc,
-        rt::StreamShape,
         test_pools::{TestPools, pools},
     };
 
@@ -135,11 +137,7 @@ mod tests {
         PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
-    fn player_with_geometry(
-        quantum: usize,
-        output_buffer: u32,
-        response_budget: usize,
-    ) -> PlayerImpl<TestPools> {
+    fn player_with_geometry(quantum: usize, output_buffer: u32) -> PlayerImpl<TestPools> {
         let shape = StreamShape::new(
             NonZeroU32::new(output_buffer).expect("fixture output block is non-zero"),
             mock::SAMPLE_RATE,
@@ -153,14 +151,12 @@ mod tests {
                 .worker(worker())
                 .session(mock::session_with_shape(Some(shape)))
                 .warp(warp)
-                .response_budget_frames(
-                    NonZeroUsize::new(response_budget).expect("fixture budget is non-zero"),
-                )
                 .build(),
         )
     }
 
     #[kithara::test]
+
     fn prepare_config_sizes_default_resampling_work_to_the_output_block() {
         let shape = StreamShape::new(
             NonZeroU32::new(128).expect("test block is non-zero"),
@@ -190,18 +186,42 @@ mod tests {
     }
 
     #[kithara::test]
-    fn prepare_config_without_a_session_keeps_default_resampling_work() {
+    #[case::default(None, 32, 12, 13)]
+    #[case::explicit(Some(64), 64, 5, 6)]
+    fn prepare_config_bounds_unbound_buffering_by_the_response_budget(
+        #[case] configured: Option<usize>,
+        #[case] expected_quantum: usize,
+        #[case] expected_preload: usize,
+        #[case] expected_ring: usize,
+    ) {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
+                .warp(
+                    WarpConfig::builder()
+                        .maybe_render_quantum_frames(configured.and_then(NonZeroUsize::new))
+                        .build(),
+                )
                 .build(),
         );
 
         let prepared = player
             .prepare_config(resource_config("https://example.com/song.mp3"))
-            .expect("resources may be prepared before host insertion");
-
+            .expect("resources can be prepared before Host attachment");
+        let quantum = prepared
+            .warp
+            .render_quantum_frames()
+            .expect("default quantum");
+        let preload = prepared
+            .audio
+            .preload_chunks
+            .expect("bounded preload")
+            .get();
+        let ring = prepared.audio.audio_buffer_chunks.expect("bounded ring");
+        assert_eq!(quantum.get(), expected_quantum);
+        assert_eq!((preload, ring), (expected_preload, expected_ring));
+        assert!((ring + 1) * quantum.get() - 1 <= player.core.response_budget_frames.get());
         assert!(prepared.decoder.resampler().is_none());
     }
 
@@ -241,50 +261,24 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::industry_budget(32, 128, 441, 4, 5)]
-    #[case::large_continuity_buffer(64, 512, 639, 8, 9)]
+    #[case::small_block(32, 128, 4, 5)]
+    #[case::daw_default_block(64, 512, 8, 9)]
     fn prepare_config_derives_playback_buffering(
         #[case] quantum: usize,
         #[case] output_buffer: u32,
-        #[case] response_budget: usize,
         #[case] expected_preload: usize,
         #[case] expected_ring: usize,
     ) {
-        let player = player_with_geometry(quantum, output_buffer, response_budget);
+        let player = player_with_geometry(quantum, output_buffer);
 
         let prepared = player
             .prepare_config(resource_config("https://example.com/song.mp3"))
-            .expect("fixture geometry fits the response budget");
+            .expect("fixture geometry derives playback buffers");
 
         assert_eq!(
             prepared.audio.preload_chunks.map(NonZeroUsize::get),
             Some(expected_preload)
         );
         assert_eq!(prepared.audio.audio_buffer_chunks, Some(expected_ring));
-    }
-
-    #[kithara::test]
-    #[case::one_frame_over_budget(64, 128, 254, 255)]
-    #[case::large_buffer_over_industry_budget(64, 512, 441, 639)]
-    fn prepare_config_rejects_buffering_over_budget(
-        #[case] quantum: usize,
-        #[case] output_buffer: u32,
-        #[case] response_budget: usize,
-        #[case] required_frames: usize,
-    ) {
-        let player = player_with_geometry(quantum, output_buffer, response_budget);
-
-        assert!(matches!(
-            player.prepare_config(resource_config("https://example.com/song.mp3")),
-            Err(PlayError::Session(SessionError::ResponseBudgetExceeded {
-                max_block_frames,
-                render_quantum_frames,
-                required_frames: actual_required_frames,
-                budget_frames,
-            })) if max_block_frames == output_buffer
-                && render_quantum_frames == quantum
-                && actual_required_frames == required_frames
-                && budget_frames == response_budget
-        ));
     }
 }

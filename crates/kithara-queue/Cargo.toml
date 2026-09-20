@@ -43,6 +43,7 @@ kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
+kithara-warp = { workspace = true }
 
 bon = { workspace = true }
 delegate = { workspace = true }

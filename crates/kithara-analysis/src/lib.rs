@@ -12,6 +12,7 @@ mod coverage;
 mod model;
 pub(crate) mod producer;
 mod progress;
+mod segments;
 mod slots;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
@@ -34,6 +35,7 @@ pub use blob::frame::BlobError;
 pub use coverage::{Coverage, FrameRange};
 pub use producer::AnalysisProducer;
 pub use progress::AnalysisProgress;
+pub use segments::{BeatGridError, GridBeat};
 #[cfg(feature = "analysis-waveform")]
 pub use waveform::WaveformAnalyzer;
 pub use waveform::{AnalysisParams, Bucket, bucket::Waveform};

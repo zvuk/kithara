@@ -54,6 +54,13 @@ impl ChunkCursor {
         self.current_chunk_consumed_frames = 0;
     }
 
+    pub(super) fn remaining_frames(&self, chunk: &AudioChunk) -> usize {
+        usize::try_from(
+            u64::from(chunk.meta.frames).saturating_sub(self.current_chunk_consumed_frames),
+        )
+        .unwrap_or(usize::MAX)
+    }
+
     fn copy_into(
         &mut self,
         chunk: &AudioChunk,
@@ -337,9 +344,10 @@ fn source_subspan(
     }
     let source_frames = span.end().checked_sub(span.start())?;
     let source_at = |output_frame: u64| {
-        let offset = u128::from(source_frames)
+        let numerator = u128::from(source_frames)
             .checked_mul(u128::from(output_frame))?
-            .checked_div(u128::from(output_frames))?;
+            .checked_add(u128::from(output_frames / 2))?;
+        let offset = numerator.checked_div(u128::from(output_frames))?;
         span.start().checked_add(u64::try_from(offset).ok()?)
     };
     let start = source_at(output_start)?;
@@ -415,6 +423,51 @@ mod tests {
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
         test_pools::{Pools, pools, sample_buffer},
     };
+
+    #[kithara::test]
+    fn source_subspan_preserves_nearest_endpoint_across_rate_chunks() {
+        let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
+        let chunks = [
+            (0, 23, 31, 31),
+            (23, 46, 30, 30),
+            (46, 69, 31, 31),
+            (69, 92, 31, 28),
+        ];
+
+        let endpoint = chunks
+            .into_iter()
+            .try_fold(0, |_, (start, end, frames, taken)| {
+                source_subspan(
+                    SourceSpan::new(start, end, rate).expect("fixture source span is valid"),
+                    0,
+                    taken,
+                    frames,
+                )
+                .map(|span| span.end())
+            });
+        assert_eq!(endpoint, Some(90));
+
+        let span = SourceSpan::new(69, 92, rate).expect("fixture source span is valid");
+        let whole = source_subspan(span, 0, 28, 31).expect("whole prefix projects");
+        let prefix = source_subspan(span, 0, 13, 31).expect("prefix projects");
+        let suffix = source_subspan(span, 13, 28, 31).expect("suffix projects");
+        assert_eq!(
+            (prefix.end(), suffix.start(), suffix.end()),
+            (79, 79, whole.end())
+        );
+    }
+
+    #[kithara::test]
+    fn source_subspan_keeps_the_159_to_191_free_handoff_boundary_exact() {
+        let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
+        let span = SourceSpan::new(0, 159, rate).expect("fixture source span is valid");
+        let first = source_subspan(span, 0, 128, 191).expect("first callback projects");
+        let second = source_subspan(span, 128, 191, 191).expect("second callback projects");
+
+        assert_eq!((first.start(), first.end()), (0, 107));
+        assert_eq!((second.start(), second.end()), (107, 159));
+        assert_eq!(first.end(), second.start());
+    }
 
     #[kithara::test]
     fn partial_resampled_chunk_position_caps_at_duration(cursor_half: Vec<f32>) {
@@ -501,7 +554,8 @@ mod tests {
             Duration::from_millis(3),
         );
         first.meta.frame_offset = 100;
-        first.meta.render_revision = 7;
+        first.meta.render_revision = kithara_signal::pack_render_revision(7, 9)
+            .expect("fixture revisions fit the provenance word");
         let mut second = timed_chunk(
             &pools,
             &cursor_half,
@@ -511,7 +565,8 @@ mod tests {
             Duration::from_millis(5),
         );
         second.meta.frame_offset = 1_000;
-        second.meta.render_revision = 7;
+        second.meta.render_revision = kithara_signal::pack_render_revision(7, 9)
+            .expect("fixture revisions fit the provenance word");
         let mut changed = timed_chunk(
             &pools,
             &cursor_half,
@@ -521,7 +576,8 @@ mod tests {
             Duration::from_millis(7),
         );
         changed.meta.frame_offset = 2_000;
-        changed.meta.render_revision = 8;
+        changed.meta.render_revision = kithara_signal::pack_render_revision(8, 9)
+            .expect("fixture revisions fit the provenance word");
         data_tx
             .try_push(Fetch::rendered(first, 0, SourceEnd::new(106, rate)))
             .expect("first rendered chunk reaches ring");
@@ -562,7 +618,12 @@ mod tests {
         assert_eq!(count.get(), 5);
         assert_eq!(
             source_span,
-            SourceSpan::new(100, 110, rate).map(|span| span.with_render_revision(7))
+            SourceSpan::new(100, 110, rate).map(|span| {
+                span.with_render_revision(
+                    kithara_signal::pack_render_revision(7, 9)
+                        .expect("fixture revisions fit the provenance word"),
+                )
+            })
         );
 
         let second_read = cursor
@@ -583,7 +644,12 @@ mod tests {
         };
         assert_eq!(
             source_span,
-            SourceSpan::new(110, 112, rate).map(|span| span.with_render_revision(8))
+            SourceSpan::new(110, 112, rate).map(|span| {
+                span.with_render_revision(
+                    kithara_signal::pack_render_revision(8, 9)
+                        .expect("fixture revisions fit the provenance word"),
+                )
+            })
         );
 
         let final_read = cursor
@@ -604,7 +670,12 @@ mod tests {
         };
         assert_eq!(
             source_span,
-            SourceSpan::new(112, 114, rate).map(|span| span.with_render_revision(8))
+            SourceSpan::new(112, 114, rate).map(|span| {
+                span.with_render_revision(
+                    kithara_signal::pack_render_revision(8, 9)
+                        .expect("fixture revisions fit the provenance word"),
+                )
+            })
         );
     }
 

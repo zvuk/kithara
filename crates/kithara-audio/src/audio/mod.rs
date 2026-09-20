@@ -10,7 +10,9 @@ mod seek;
 pub use core::{Audio, PreparedAudio};
 
 pub(crate) use position::chunk_position;
-pub use seek::SeekHandle;
+#[cfg(test)]
+pub(crate) use seek::SeekHandleParts;
+pub use seek::{ScheduledSeekActivator, SeekHandle};
 
 pub(crate) use crate::{
     AudioConfig, AudioControl, AudioDecoderConfig, AudioLaneEvent, AudioRead, AudioSession,

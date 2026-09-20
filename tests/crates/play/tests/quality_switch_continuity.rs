@@ -42,7 +42,7 @@ use crate::bufpool_ext::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
-const BLOCK_FRAMES: usize = 512;
+const BLOCK_FRAMES: usize = 128;
 const SINE_HZ: f64 = 441.0;
 const SEGMENT_SECS: f64 = 0.5;
 const SEGMENTS_PER_VARIANT: usize = 16;
@@ -337,8 +337,9 @@ async fn prepare_player(
     let abr = resource
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
-    // WHY: The fixture sine peaks at full scale, so its inter-sample reconstruction
-    // can exceed a unity ceiling. Keep it below the limiter while measuring playback.
+    // WHY: The fixture sine peaks at full scale, and inter-sample reconstruction
+    // can exceed a unity ceiling. The unity ceiling keeps the limiter policy
+    // explicit while measuring playback at the scale the oracle was calibrated on.
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))

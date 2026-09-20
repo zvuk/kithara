@@ -1,7 +1,11 @@
 use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
+use kithara_warp::SyncError;
 
-use crate::{api::SlotId, session::SessionError};
+use crate::{
+    api::{SlotId, TrackId},
+    session::SessionError,
+};
 
 #[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -14,6 +18,27 @@ pub enum PlayError {
 
     #[error("no active slot")]
     NoActiveSlot,
+
+    #[error("no current item")]
+    NoCurrentItem,
+
+    #[error("host seek position {seconds} is not finite or cannot be represented")]
+    InvalidHostSeekPosition { seconds: f64 },
+
+    #[error("current item {item} has no published beat grid")]
+    MissingTrackGrid { item: TrackId },
+
+    #[error("current item {item} has an invalid region plan")]
+    InvalidTrackGrid { item: TrackId },
+
+    #[error("slot {slot:?} has no seek binding for current item {item}")]
+    MissingSeekBinding { slot: SlotId, item: TrackId },
+
+    #[error("slot {slot:?} has no fixed-capacity scheduled-seek entry available")]
+    ScheduledSeekCapacity { slot: SlotId },
+
+    #[error("host seek became stale for current item {item}")]
+    StaleHostSeek { item: TrackId },
 
     #[error("slot command channel full: {slot:?}")]
     SlotChannelFull { slot: SlotId },
@@ -116,6 +141,9 @@ pub enum PlayError {
 
     #[error(transparent)]
     Session(SessionError),
+
+    #[error(transparent)]
+    Sync(#[from] SyncError),
 
     #[error("{0}")]
     Internal(String),

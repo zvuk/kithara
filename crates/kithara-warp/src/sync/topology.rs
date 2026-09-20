@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use kithara_platform::sync::Arc;
 
-use super::{BeatAlignment, TopologyRevision, TopologyStamp};
+use super::{BeatAlignment, MemberArm, TopologyRevision, TopologyStamp};
 use crate::{BeatGridId, BeatGridSnapshot, BeatGridStamp};
 
 /// One immutable observation of a direct live member.
@@ -16,6 +16,9 @@ pub struct SyncMemberSnapshot {
     /// Returns the alignment edge from the direct parent.
     #[field(get, copy)]
     alignment: Option<BeatAlignment>,
+    /// Returns whether the member sounds or waits for its entry frame.
+    #[field(get, copy)]
+    arm: MemberArm,
     /// Returns the frozen nested topology when this member is a group.
     #[field(get = group_topology)]
     group: Option<SyncGroupSnapshot>,
@@ -24,9 +27,14 @@ pub struct SyncMemberSnapshot {
 impl SyncMemberSnapshot {
     /// Freezes one ordinary grid edge, including a pending edge without alignment.
     #[must_use]
-    pub const fn new_grid(grid: BeatGridSnapshot, alignment: Option<BeatAlignment>) -> Self {
+    pub const fn new_grid(
+        grid: BeatGridSnapshot,
+        alignment: Option<BeatAlignment>,
+        arm: MemberArm,
+    ) -> Self {
         Self {
             alignment,
+            arm,
             grid,
             group: None,
         }
@@ -34,12 +42,23 @@ impl SyncMemberSnapshot {
 
     /// Freezes one nested group edge, including a pending edge without alignment.
     #[must_use]
-    pub fn new_group(group: SyncGroupSnapshot, alignment: Option<BeatAlignment>) -> Self {
+    pub fn new_group(
+        group: SyncGroupSnapshot,
+        alignment: Option<BeatAlignment>,
+        arm: MemberArm,
+    ) -> Self {
         Self {
             alignment,
+            arm,
             grid: group.group_grid.clone(),
             group: Some(group),
         }
+    }
+
+    /// Returns this edge with the member marked sounding or waiting.
+    #[must_use]
+    pub fn with_arm(self, arm: MemberArm) -> Self {
+        Self { arm, ..self }
     }
 }
 

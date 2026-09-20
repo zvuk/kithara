@@ -8,13 +8,15 @@ use kithara_test_macros as kithara;
 use portable_atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 
 use crate::{
-    PresentationFrontier, RenderContext, SessionBeat, SessionEpoch, SessionFrame, TransportRevision,
+    PresentationFrontier, RateTarget, RenderContext, SessionBeat, SessionEpoch, SessionFrame,
+    TransportRevision, WarpMapRevision,
 };
 
 const SEQLOCK_PHASES: u64 = 2;
 
 #[derive(Debug, Default)]
 struct RenderCell {
+    rate: AtomicU64,
     frontier_output: AtomicI64,
     output_end: AtomicI64,
     output_start: AtomicI64,
@@ -23,6 +25,8 @@ struct RenderCell {
     beat_end: AtomicU64,
     beat_start: AtomicU64,
     frontier_source: AtomicU64,
+    frontier_warp_map: AtomicU64,
+    frontier_present: AtomicU32,
     session_epoch: AtomicU64,
     transport_revision: AtomicU64,
     version: AtomicU64,
@@ -30,10 +34,17 @@ struct RenderCell {
 
 impl RenderCell {
     fn clear(&self) {
-        self.write(|cell| cell.sample_rate.store(0, Ordering::Relaxed));
+        self.write(|cell| {
+            cell.frontier_present.store(0, Ordering::Relaxed);
+            cell.sample_rate.store(0, Ordering::Relaxed);
+        });
     }
 
     fn load(&self) -> Option<RenderSnapshot> {
+        self.load_state().and_then(|state| state.snapshot)
+    }
+
+    fn load_state(&self) -> Option<RenderState> {
         loop {
             let before = self.version.load(Ordering::Acquire);
             if before == 0 {
@@ -44,6 +55,7 @@ impl RenderCell {
                 continue;
             }
             let raw = RawSnapshot {
+                rate: self.rate.load(Ordering::Relaxed),
                 output_start: self.output_start.load(Ordering::Relaxed),
                 output_end: self.output_end.load(Ordering::Relaxed),
                 sample_rate: self.sample_rate.load(Ordering::Relaxed),
@@ -53,11 +65,13 @@ impl RenderCell {
                 session_epoch: self.session_epoch.load(Ordering::Relaxed),
                 transport_revision: self.transport_revision.load(Ordering::Relaxed),
                 frontier_source: self.frontier_source.load(Ordering::Relaxed),
+                frontier_warp_map: self.frontier_warp_map.load(Ordering::Relaxed),
                 frontier_output: self.frontier_output.load(Ordering::Relaxed),
+                frontier_present: self.frontier_present.load(Ordering::Relaxed) != 0,
             };
             fence(Ordering::Acquire);
             if self.version.load(Ordering::Acquire) == before {
-                return raw.build();
+                return raw.build_state();
             }
             spin_loop();
         }
@@ -65,6 +79,7 @@ impl RenderCell {
 
     fn publish(&self, context: &RenderContext, frontier: PresentationFrontier) {
         self.write(|cell| {
+            cell.rate.store(context.rate().packed(), Ordering::Relaxed);
             let output = context.output_frames();
             cell.output_start
                 .store(i64::from(output.start), Ordering::Relaxed);
@@ -88,8 +103,47 @@ impl RenderCell {
             );
             cell.frontier_source
                 .store(frontier.source(), Ordering::Relaxed);
+            cell.frontier_warp_map
+                .store(frontier.warp_map().map_or(0, u64::from), Ordering::Relaxed);
             cell.frontier_output
                 .store(i64::from(frontier.output()), Ordering::Relaxed);
+            cell.frontier_present.store(1, Ordering::Relaxed);
+            cell.sample_rate
+                .store(context.sample_rate().get(), Ordering::Relaxed);
+        });
+    }
+
+    fn publish_preparation(&self, context: &RenderContext) {
+        self.write(|cell| {
+            let same_epoch =
+                cell.session_epoch.load(Ordering::Relaxed) == u64::from(context.session_epoch());
+            let same_revision = cell.transport_revision.load(Ordering::Relaxed)
+                == context.transport_revision().map_or(0, u64::from);
+            if !same_epoch || !same_revision {
+                cell.frontier_present.store(0, Ordering::Relaxed);
+            }
+            cell.rate.store(context.rate().packed(), Ordering::Relaxed);
+            let output = context.output_frames();
+            cell.output_start
+                .store(i64::from(output.start), Ordering::Relaxed);
+            cell.output_end
+                .store(i64::from(output.end), Ordering::Relaxed);
+            match context.session_beats() {
+                Some(beats) => {
+                    cell.beat_start
+                        .store(f64::from(beats.start).to_bits(), Ordering::Relaxed);
+                    cell.beat_end
+                        .store(f64::from(beats.end).to_bits(), Ordering::Relaxed);
+                    cell.beats_present.store(1, Ordering::Relaxed);
+                }
+                None => cell.beats_present.store(0, Ordering::Relaxed),
+            }
+            cell.session_epoch
+                .store(u64::from(context.session_epoch()), Ordering::Relaxed);
+            cell.transport_revision.store(
+                context.transport_revision().map_or(0, u64::from),
+                Ordering::Relaxed,
+            );
             cell.sample_rate
                 .store(context.sample_rate().get(), Ordering::Relaxed);
         });
@@ -103,6 +157,7 @@ impl RenderCell {
 }
 
 struct RawSnapshot {
+    rate: u64,
     beats_present: bool,
     frontier_output: i64,
     output_end: i64,
@@ -111,12 +166,14 @@ struct RawSnapshot {
     beat_end: u64,
     beat_start: u64,
     frontier_source: u64,
+    frontier_warp_map: u64,
+    frontier_present: bool,
     session_epoch: u64,
     transport_revision: u64,
 }
 
 impl RawSnapshot {
-    fn build(self) -> Option<RenderSnapshot> {
+    fn build_context(&self) -> Option<RenderContext> {
         let sample_rate = NonZeroU32::new(self.sample_rate)?;
         let session_beats = if self.beats_present {
             Some(
@@ -134,12 +191,33 @@ impl RawSnapshot {
             session_beats,
             SessionEpoch::new(self.session_epoch),
             transport_revision,
-        )?;
-        let frontier = PresentationFrontier::builder()
-            .source(self.frontier_source)
-            .output(SessionFrame::new(self.frontier_output))
-            .build();
-        Some(RenderSnapshot { frontier, context })
+        )?
+        .with_rate(RateTarget::unpack(self.rate));
+        Some(context)
+    }
+
+    fn build_state(self) -> Option<RenderState> {
+        let context = self.build_context()?;
+        let snapshot = self
+            .frontier_present
+            .then(|| {
+                PresentationFrontier::builder()
+                    .source(self.frontier_source)
+                    .output(SessionFrame::new(self.frontier_output))
+                    .maybe_warp_map(
+                        NonZeroU64::new(self.frontier_warp_map).map(WarpMapRevision::from_raw),
+                    )
+                    .build()
+            })
+            .map(|frontier| RenderSnapshot {
+                frontier,
+                context: context.clone(),
+            });
+        Some(RenderState {
+            #[cfg(feature = "render")]
+            context,
+            snapshot,
+        })
     }
 }
 
@@ -170,6 +248,8 @@ impl RenderPublisher {
                 source = frontier.source()
             )]
             pub fn publish(&self, context: &RenderContext, frontier: PresentationFrontier);
+            /// Publishes the callback context for preparation without inventing presentation.
+            pub fn publish_preparation(&self, context: &RenderContext);
         }
     }
 }
@@ -194,10 +274,14 @@ impl RenderReader {
         })
     }
 
-    /// Loads one coherent immutable snapshot, or `None` before publication or after clear.
-    #[must_use]
-    pub fn load(&self) -> Option<RenderSnapshot> {
-        self.0.load()
+    delegate::delegate! {
+        to self.0 {
+            /// Loads one coherent immutable snapshot, or `None` before publication or after clear.
+            #[must_use]
+            pub fn load(&self) -> Option<RenderSnapshot>;
+            #[cfg(feature = "render")]
+            pub(crate) fn load_state(&self) -> Option<RenderState>;
+        }
     }
 }
 
@@ -211,7 +295,49 @@ pub struct RenderSnapshot {
     context: RenderContext,
 }
 
+/// One coherent callback context and optional actual presentation base.
+#[derive(Clone, Debug)]
+pub(crate) struct RenderState {
+    #[cfg(feature = "render")]
+    pub(crate) context: RenderContext,
+    pub(crate) snapshot: Option<RenderSnapshot>,
+}
+
 impl RenderSnapshot {
+    /// Rebind this presentation base to an immutable context selected by a plan activation.
+    #[cfg(feature = "render")]
+    pub(crate) fn with_context(mut self, context: RenderContext) -> Self {
+        self.context = context;
+        self
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn preparation_at(
+        context: RenderContext,
+        source: u64,
+        output: SessionFrame,
+        warp_map: WarpMapRevision,
+    ) -> Self {
+        Self {
+            frontier: PresentationFrontier::builder()
+                .source(source)
+                .output(output)
+                .warp_map(warp_map)
+                .build(),
+            context,
+        }
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn prepare_at(
+        &self,
+        source: u64,
+        output: SessionFrame,
+        warp_map: WarpMapRevision,
+    ) -> Self {
+        Self::preparation_at(self.context.clone(), source, output, warp_map)
+    }
+
     #[cfg(feature = "render")]
     pub(crate) fn advance(
         self,
@@ -240,12 +366,26 @@ impl RenderSnapshot {
         let frontier = PresentationFrontier::builder()
             .source(source)
             .output(SessionFrame::new(output))
+            .maybe_warp_map(self.frontier.warp_map())
             .build();
         Some(Self {
             frontier,
             context: self.context,
         })
     }
+}
+
+#[cfg(feature = "render")]
+pub(crate) fn rebind_warp_map(
+    mut snapshot: RenderSnapshot,
+    warp_map: Option<WarpMapRevision>,
+) -> RenderSnapshot {
+    snapshot.frontier = PresentationFrontier::builder()
+        .source(snapshot.frontier.source())
+        .output(snapshot.frontier.output())
+        .maybe_warp_map(warp_map)
+        .build();
+    snapshot
 }
 
 #[cfg(test)]
@@ -255,9 +395,11 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::RenderPublisher;
+    #[cfg(feature = "render")]
+    use super::RenderSnapshot;
     use crate::{
-        PresentationFrontier, RenderContext, SessionBeat, SessionEpoch, SessionFrame,
-        TransportRevision,
+        PresentationFrontier, RateTarget, RenderContext, SessionBeat, SessionEpoch, SessionFrame,
+        TransportRevision, WarpMapRevision,
     };
 
     fn context(epoch: u64, start: i64) -> RenderContext {
@@ -285,8 +427,12 @@ mod tests {
     fn publication_is_one_coherent_snapshot() {
         let publisher = RenderPublisher::default();
         let reader = publisher.reader();
-        let expected_context = context(3, 1_000);
-        let expected_frontier = frontier(8_000, 1_128);
+        let expected_context = context(3, 1_000).with_rate(RateTarget::default().with_speed(0.75));
+        let expected_frontier = PresentationFrontier::builder()
+            .source(8_000)
+            .output(SessionFrame::new(1_128))
+            .warp_map(WarpMapRevision::first())
+            .build();
 
         publisher.publish(&expected_context, expected_frontier);
 
@@ -304,5 +450,94 @@ mod tests {
         publisher.clear();
 
         assert!(reader.load().is_none());
+    }
+
+    #[kithara::test]
+    #[cfg(feature = "render")]
+    fn preparation_keeps_the_current_generation_frontier() {
+        let publisher = RenderPublisher::default();
+        let reader = publisher.reader();
+        let presented = frontier(8_000, 1_128);
+        publisher.publish(&context(3, 1_000), presented);
+
+        publisher.publish_preparation(&context(3, 1_128));
+
+        let actual = reader
+            .load()
+            .expect("matching preparation keeps presentation");
+        assert_eq!(actual.frontier(), presented);
+        assert_eq!(actual.context(), &context(3, 1_128));
+    }
+
+    #[kithara::test]
+    #[cfg(feature = "render")]
+    fn preparation_with_a_new_epoch_withdraws_the_old_frontier() {
+        let publisher = RenderPublisher::default();
+        let reader = publisher.reader();
+        publisher.publish(&context(3, 1_000), frontier(8_000, 1_128));
+
+        let expected = context(4, 2_000);
+        publisher.publish_preparation(&expected);
+
+        assert!(reader.load().is_none());
+        let state = reader
+            .load_state()
+            .expect("preparation context is readable");
+        assert_eq!(state.context, expected);
+        assert!(state.snapshot.is_none());
+    }
+
+    #[kithara::test]
+    #[cfg(feature = "render")]
+    fn preparation_with_a_new_transport_revision_withdraws_the_old_frontier() {
+        let publisher = RenderPublisher::default();
+        let reader = publisher.reader();
+        publisher.publish(&context(3, 1_000), frontier(8_000, 1_128));
+        let updated = RenderContext::new(
+            SessionFrame::new(2_000)..SessionFrame::new(2_128),
+            NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"),
+            None,
+            SessionEpoch::new(3),
+            Some(TransportRevision::from(
+                std::num::NonZeroU64::new(2).expect("fixture revision is non-zero"),
+            )),
+        )
+        .expect("fixture context is valid");
+
+        publisher.publish_preparation(&updated);
+
+        assert!(reader.load().is_none());
+        assert!(
+            reader
+                .load_state()
+                .expect("preparation context is readable")
+                .snapshot
+                .is_none()
+        );
+    }
+
+    #[kithara::test]
+    #[cfg(feature = "render")]
+    fn advancing_a_prepared_snapshot_keeps_its_warp_map() {
+        let previous_map = WarpMapRevision::first();
+        let warp_map = WarpMapRevision::from_raw(
+            std::num::NonZeroU64::new(2).expect("fixture revision is non-zero"),
+        );
+        let previous = RenderSnapshot::preparation_at(
+            context(3, 1_000),
+            7_900,
+            SessionFrame::new(1_000),
+            previous_map,
+        );
+        let advanced = RenderSnapshot::preparation_at(
+            context(3, 1_000),
+            8_000,
+            SessionFrame::new(1_128),
+            warp_map,
+        )
+        .advance(Some(&previous), 8_128, 128)
+        .expect("monotonic prepared frontier advances");
+
+        assert_eq!(advanced.frontier().warp_map(), Some(warp_map));
     }
 }

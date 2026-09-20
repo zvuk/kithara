@@ -331,6 +331,7 @@ pub enum RouteChangeReason {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct BpmInfo {
+    /// Where the beat the grid numbers zero sounds, from the track start.
     pub first_beat_offset: Duration,
     pub confidence: Option<f32>,
     pub bpm: f64,
@@ -481,7 +482,10 @@ pub enum DjEvent {
     },
     BeatTick {
         slot: SlotId,
-        beat_number: u64,
+        /// The ordinal the beat grid gives this beat. Zero is the first beat
+        /// the analysis marked, so beats the grid extends before it are
+        /// negative.
+        beat_number: i64,
         timestamp: MediaTime,
     },
     KeylockChanged {

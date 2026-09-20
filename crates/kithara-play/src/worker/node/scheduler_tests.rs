@@ -73,7 +73,7 @@ impl AudioSource for MockSource {
             return TrackStep::Eof;
         }
         self.cursor += 1;
-        TrackStep::Produced(Fetch::data(empty_chunk(&self.pools), 0))
+        TrackStep::Produced(Fetch::data(empty_chunk(&self.pools), self.seek_obs.epoch()))
     }
 }
 

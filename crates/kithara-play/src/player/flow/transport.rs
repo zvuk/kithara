@@ -3,9 +3,10 @@ use std::sync::atomic::Ordering;
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
+use kithara_warp::AssetFrame;
 use tracing::{debug, warn};
 
-use super::super::core::PlayerRuntime;
+use super::super::{core::PlayerRuntime, state::phase::PlayerPhaseKind};
 use crate::{
     api::{CrossfadeSettings, PlayerStatus, SelectionPlayback, TrackId},
     bridge::{PlayerCmd, TrackTransition},
@@ -23,13 +24,30 @@ impl<S> PlayerRuntime<S>
 where
     S: HasPool<f32>,
 {
-    fn apply_playback(&self, playback: SelectionPlayback) {
+    /// Starts or holds the selected item. A start from a stopped player plays at
+    /// the default rate; a transition while already playing keeps the live rate,
+    /// so a queue seam never resets the deck tempo.
+    fn apply_playback(&self, playback: SelectionPlayback, continuing: bool) {
         if playback == SelectionPlayback::Play {
-            let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
+            if !continuing {
+                self.set_rate(self.default_rate());
+            }
+            if !self.arm_prepared_launch_or_hold_source_cue() {
+                let _ = self.send_to_slot(PlayerCmd::SetPaused {
+                    paused: false,
+                    item_id: self.core.items.current_item_id(),
+                });
+            }
             self.enter_playing();
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
-            let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
+            if let Some(slot) = self.slot() {
+                self.core.engine.disarm_prepared_launches(slot);
+            }
+            let _ = self.send_to_slot(PlayerCmd::SetPaused {
+                paused: true,
+                item_id: None,
+            });
             self.enter_paused();
         }
     }
@@ -78,7 +96,13 @@ where
 
     /// Pause playback. The effective rate becomes `0.0` when RT applies the command.
     pub fn pause(&self) {
-        let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
+        if let Some(slot) = self.slot() {
+            self.core.engine.disarm_prepared_launches(slot);
+        }
+        let _ = self.send_to_slot(PlayerCmd::SetPaused {
+            paused: true,
+            item_id: self.core.items.current_item_id(),
+        });
         self.enter_paused();
         debug!(phase = ?self.phase_kind(), "pause");
     }
@@ -102,7 +126,12 @@ where
             warn!(%error, "failed to allocate track playback buffers");
             false
         });
-        let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
+        if !self.arm_prepared_launch_or_hold_source_cue() {
+            let _ = self.send_to_slot(PlayerCmd::SetPaused {
+                paused: false,
+                item_id: self.core.items.current_item_id(),
+            });
+        }
 
         self.enter_playing();
         self.set_status(PlayerStatus::ReadyToPlay);
@@ -113,6 +142,24 @@ where
             self.announce_current_item(self.current_index());
         }
         debug!(rate, phase = ?self.phase_kind(), "play");
+    }
+
+    /// Arm a scheduled launch when present. If a synchronized source cue is
+    /// awaiting its grid, retain the requested playing phase without releasing
+    /// ordinary PCM.
+    fn arm_prepared_launch_or_hold_source_cue(&self) -> bool {
+        let Some(item) = self.core.items.current_item_id() else {
+            return false;
+        };
+        let prepared = self
+            .slot()
+            .is_some_and(|slot| self.core.engine.set_prepared_launch_armed(slot, item, true));
+        if prepared {
+            self.core.items.consume_awaiting_initial_source_cue(item);
+            true
+        } else {
+            self.core.items.holds_initial_source_cue(item)
+        }
     }
 
     /// Seek active tracks to position in seconds.
@@ -136,6 +183,10 @@ where
     pub fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
         let target_secs = seconds.max(0.0);
         let target = Duration::from_secs_f64(target_secs);
+
+        if let Some(item) = self.core.items.current_item_id() {
+            self.core.items.clear_initial_source_cue(item);
+        }
 
         let Some(slot_id) = self.slot() else {
             // No slot means no processor to carry the re-base, and refusing
@@ -216,11 +267,22 @@ where
         index: usize,
         transition: SelectTransition,
     ) -> Result<(), PlayError> {
+        self.select_item_with_crossfade_from_source_cue(index, transition, None)
+    }
+
+    pub(crate) fn select_item_with_crossfade_from_source_cue(
+        &self,
+        index: usize,
+        transition: SelectTransition,
+        initial_source_cue: Option<AssetFrame>,
+    ) -> Result<(), PlayError> {
         let SelectTransition {
             playback,
             crossfade,
         } = transition;
         let crossfade = crossfade.validate()?;
+        let continuing =
+            playback == SelectionPlayback::Play && self.phase_kind() == PlayerPhaseKind::Playing;
         let items_len = self.item_count();
         if index >= items_len {
             return Err(PlayError::IndexOutOfRange {
@@ -252,15 +314,24 @@ where
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
 
         if armed_for_index {
-            self.commit_next(index)?;
+            self.commit_next_with(index, crossfade)?;
         } else if !reselecting_current {
             self.unarm_next_internal(Some(index));
+            if let Some(outgoing) = self.core.items.current_item_id() {
+                self.core.items.cancel_outgoing_free_adoption(outgoing);
+            }
             self.core.items.set_current(index);
             self.load_current_item_with(crossfade)?;
             self.announce_current_item(index);
         }
 
-        self.apply_playback(playback);
+        if let Some(item) = self.core.items.current_item_id() {
+            self.core
+                .items
+                .set_initial_source_cue(item, initial_source_cue);
+        }
+
+        self.apply_playback(playback, continuing);
         Ok(())
     }
 
@@ -285,7 +356,7 @@ where
         Ok(true)
     }
 
-    fn start_playback_with(&self, item_id: TrackId, settings: CrossfadeSettings) {
+    pub(crate) fn start_playback_with(&self, item_id: TrackId, settings: CrossfadeSettings) {
         let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id,
             settings,

@@ -1,3 +1,5 @@
+mod entries;
+mod grids;
 mod lifecycle;
 mod player;
 
@@ -627,6 +629,13 @@ mod tests {
     #[kithara::test]
     fn send_to_slot_without_a_slot_is_an_error() {
         let player = player();
-        assert!(player.send_to_slot(PlayerCmd::SetPaused(true)).is_err());
+        assert!(
+            player
+                .send_to_slot(PlayerCmd::SetPaused {
+                    paused: true,
+                    item_id: None,
+                })
+                .is_err()
+        );
     }
 }

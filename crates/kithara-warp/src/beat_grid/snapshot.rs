@@ -2,12 +2,14 @@ use kithara_platform::sync::Arc;
 
 use super::{
     BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridStamp,
-    BeatGridState, BeatGridUnavailable, BeatGridView, segment::SegmentGridView,
+    BeatGridState, BeatGridUnavailable, BeatGridView,
+    projection::{GridProjection, GridProjectionError},
+    segment::SegmentGridView,
     session::SessionGridView,
 };
 use crate::{
-    Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, Meter, MeterFacts, SegmentSet,
-    SessionAnchor, SessionEpoch,
+    AssetFrame, Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, Meter, MeterFacts,
+    SegmentSet, SessionAnchor, SessionEpoch, SessionFrame,
 };
 
 /// One immutable, revisioned beat-grid observation.
@@ -71,6 +73,30 @@ impl BeatGridSnapshot {
         Self::wrap(SessionGridView::new(id, revision, epoch, anchor, meter))
     }
 
+    /// Freezes one recording's geometry as it sounds on the grid it follows.
+    ///
+    /// The projection answers in the target's coordinates while keeping the
+    /// source's identity and revision, so a caller holding a source coordinate
+    /// is refused by the same stamp that would refuse the source itself.
+    ///
+    /// The projection freezes the exact target revision it was built against,
+    /// so its owner rebuilds it whenever the followed grid moves on; nothing
+    /// inside the projection can notice that, because it answers under the
+    /// source's stamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GridProjectionError`] when either grid describes the wrong
+    /// coordinate domain, or when the target places no beat at `activation`.
+    pub fn projection(
+        source: Self,
+        target: Self,
+        cue: Beat,
+        activation: SessionFrame,
+    ) -> Result<Self, GridProjectionError> {
+        GridProjection::new(source, target, cue, activation).map(Self::wrap)
+    }
+
     /// Freezes a grid revision without usable geometry.
     #[must_use]
     pub fn unavailable(id: BeatGridId, revision: BeatGridRevision, axis: MapAxis) -> Self {
@@ -125,10 +151,16 @@ impl BeatGridSnapshot {
             pub fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion>;
             /// Resolves a stamped native position to a stamped beat.
             pub fn beat_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
+            /// Resolves the beat at a position, or the next mapped beat after a gap.
+            pub fn beat_at_or_next(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
             /// Resolves a stamped beat to a stamped native position.
             pub fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
             /// Resolves local tempo at a stamped native position.
             pub fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+            /// Resolves the tempo ratio this snapshot applies to its source geometry.
+            pub fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
+            /// Resolves the recording frame sounding at a stamped native position.
+            pub fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame>;
             /// Resolves meter at a stamped beat.
             pub fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
         }
@@ -144,8 +176,11 @@ impl BeatGridView for BeatGridSnapshot {
             fn axis(&self) -> MapAxis;
             fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion>;
             fn beat_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
+            fn beat_at_or_next(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
             fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
             fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+            fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
+            fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame>;
             fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
         }
     }
@@ -213,6 +248,10 @@ impl BeatGridView for UnavailableGridView {
             fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
             #[call(unavailable_position)]
             fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+            #[call(unavailable_position)]
+            fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
+            #[call(unavailable_position)]
+            fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame>;
             #[call(unavailable_beat)]
             fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
         }
@@ -226,7 +265,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{AssetAxis, SessionFrame};
+    use crate::AssetAxis;
 
     #[derive(Debug)]
     struct StateOverride {
@@ -248,6 +287,8 @@ mod tests {
                 fn beat_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>>;
                 fn position_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>;
                 fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
+                fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64>;
+                fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame>;
                 fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
             }
         }

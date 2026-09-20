@@ -1,26 +1,118 @@
 use std::num::NonZeroU32;
 
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SessionEpoch, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, LoadGeneration, SegmentSet,
+    SessionAnchor, SessionEpoch, SessionFrame, SyncAdmission, SyncApplied, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    TransportRevision,
 };
 use portable_atomic::{AtomicF32, Ordering};
 
-use crate::sync::GroupState;
+use crate::{
+    api::TrackId,
+    sync::{
+        GroupState, PreparedSync,
+        prepare::{FreePreparing, PreparedSyncs},
+    },
+};
 
 pub(crate) struct PlayerSync {
     grid: BeatGridSnapshot,
     owned: Option<GroupState<PlayerMember>>,
     topology: Result<SyncGroupSnapshot, SyncError>,
     status: SyncStatusSnapshot,
+    generations: (LoadGeneration, TransportRevision),
+    prepared: PreparedSyncs,
 }
 
 impl PlayerSync {
+    pub(crate) fn with_tempo_smoothing_seconds(mut self, seconds: f64) -> Self {
+        self.owned = self
+            .owned
+            .map(|owned| owned.with_tempo_smoothing_seconds(seconds));
+        self
+    }
+
+    pub(crate) fn mode(&self) -> SyncMode {
+        self.owned.as_ref().map_or(SyncMode::Off, GroupState::mode)
+    }
+
+    pub(crate) fn generations(&self) -> (LoadGeneration, TransportRevision) {
+        self.owned
+            .as_ref()
+            .map_or(self.generations, GroupState::generations)
+    }
+
+    pub(crate) fn prepared(&self) -> &PreparedSyncs {
+        self.owned
+            .as_ref()
+            .map_or(&self.prepared, GroupState::prepared)
+    }
+
+    pub(crate) fn preparing(&self) -> Option<FreePreparing> {
+        self.owned
+            .as_ref()
+            .and_then(|owned| owned.preparing().cloned())
+    }
+
+    pub(crate) fn adopt_free(&mut self, receipt: kithara_sync::SyncExecutionReceipt) -> bool {
+        self.owned
+            .as_mut()
+            .is_some_and(|owned| owned.adopt_free(receipt))
+    }
+
+    delegate::delegate! {
+        to self.owned.as_mut().ok_or(SyncError::OwnerUnavailable)? {
+            pub(crate) fn publish_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError>;
+        }
+    }
+
+    pub(crate) fn reanchored_prepared(
+        &self,
+        target: BeatGridId,
+        anchor: SessionAnchor,
+    ) -> Result<Option<PreparedSync>, SyncError> {
+        self.owned
+            .as_ref()
+            .map_or(Ok(None), |owned| owned.reanchored_prepared(target, anchor))
+    }
+
+    pub(crate) fn crosses_axis_boundary(&self, anchor: SessionAnchor) -> bool {
+        self.owned
+            .as_ref()
+            .is_some_and(|owned| owned.crosses_axis_boundary(anchor))
+    }
+
+    pub(crate) fn retargets_tempo(&self, target: BeatGridId, anchor: SessionAnchor) -> bool {
+        self.owned
+            .as_ref()
+            .is_some_and(|owned| owned.retargets_tempo(target, anchor))
+    }
+
+    pub(crate) fn adopt_reanchored(&mut self, successor: PreparedSync) {
+        if let Some(owned) = self.owned.as_mut() {
+            owned.adopt_reanchored(successor);
+        }
+    }
+
+    pub(crate) fn transact_at(
+        &mut self,
+        operation: SyncOperation<PlayerMember>,
+        now: SessionFrame,
+    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
+        match self.owned.as_mut() {
+            Some(owned) => owned.transact_at(operation, now),
+            None => Err(SyncRejected::new(SyncError::OwnerUnavailable, operation)),
+        }
+    }
+
     pub(crate) fn take(&mut self) -> Option<GroupState<PlayerMember>> {
         let owned = self.owned.take()?;
         self.grid = owned.snapshot();
         self.topology = owned.topology();
         self.status = owned.status();
+        self.generations = owned.generations();
+        self.prepared = owned.prepared().clone();
         Some(owned)
     }
     pub(crate) fn unavailable(
@@ -28,12 +120,15 @@ impl PlayerSync {
         sample_rate: NonZeroU32,
         epoch: SessionEpoch,
         member_kind: SyncMemberKind,
+        mode: SyncMode,
     ) -> Self {
-        let owned = GroupState::unavailable(id, sample_rate, epoch, member_kind);
+        let owned = GroupState::unavailable(id, sample_rate, epoch, member_kind, mode);
         Self {
             grid: owned.snapshot(),
             topology: owned.topology(),
             status: owned.status(),
+            generations: owned.generations(),
+            prepared: PreparedSyncs::default(),
             owned: Some(owned),
         }
     }
@@ -106,6 +201,49 @@ impl PlayerMember {
     #[must_use]
     pub fn host_level(&self) -> f32 {
         self.level.load(Ordering::Relaxed)
+    }
+
+    /// Pushes the Host's committed session anchor into the member's group.
+    ///
+    /// # Errors
+    ///
+    /// Returns the group's grid publication error.
+    pub fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
+        self.sync.publish_session_anchor(anchor)
+    }
+
+    /// Track grids need the player runtime, which the Host-owned wasm member
+    /// does not reach.
+    ///
+    /// # Errors
+    ///
+    /// Always returns [`SyncError::OwnerUnavailable`].
+    pub fn publish_item_grid(
+        &mut self,
+        _item: TrackId,
+        _segments: SegmentSet,
+        _state: BeatGridState,
+    ) -> Result<SyncAdmission, SyncError> {
+        Err(SyncError::OwnerUnavailable)
+    }
+
+    /// Acknowledgement needs the player runtime, which the Host-owned wasm
+    /// member does not reach.
+    ///
+    /// # Errors
+    ///
+    /// Always returns [`SyncError::OwnerUnavailable`].
+    pub fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError> {
+        Err(SyncError::OwnerUnavailable)
+    }
+
+    /// Entry preparation needs the player runtime, which the Host-owned wasm
+    /// member does not reach.
+    pub const fn prepare_sync_launches(
+        &mut self,
+        _output_now: SessionFrame,
+    ) -> Result<(), crate::PlayError> {
+        Ok(())
     }
 }
 

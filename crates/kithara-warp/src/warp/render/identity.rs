@@ -1,10 +1,11 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_test_macros as kithara;
 
-use crate::{RenderReader, RenderSnapshot, WarpConfig};
+use crate::{RenderReader, RenderSnapshot, ScheduledActivationProgress, WarpConfig, WarpPlanSlot};
 
 /// Identity renderer for targets without elastic DSP.
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
@@ -26,6 +27,7 @@ where
         context: RenderReader,
         _spec: AudioSpec,
         _pools: PoolRegion<S>,
+        _plan_slot: Arc<WarpPlanSlot>,
     ) -> Self {
         Self {
             context,
@@ -49,6 +51,16 @@ where
 
     /// Prepare deferred renderer state for the current source format.
     pub const fn prepare(&mut self, _spec: AudioSpec) {}
+
+    /// Identity targets do not install elastic discontinuities.
+    pub const fn scheduled_activation_progress(&mut self) -> ScheduledActivationProgress {
+        ScheduledActivationProgress::AwaitingActivation
+    }
+
+    /// Identity targets install no Warp map, so no chunk waits for a context.
+    pub const fn awaits_render_context(&mut self, _frame: u64) -> bool {
+        false
+    }
 
     /// Select the next source span that fits the output quantum.
     pub fn prepare_quantum(
@@ -127,6 +139,25 @@ where
         self.rendered_source_end
     }
 
+    /// Returns the coherent same-epoch committed source/output/map frontier.
+    ///
+    /// Returns `None` before the first commit and after reset; an advanced
+    /// callback snapshot is not merged into the committed cursor.
+    #[must_use]
+    pub fn adoption_frontier(&self) -> Option<crate::PresentationFrontier> {
+        let snapshot = self.context.load()?;
+        let committed = self.committed.as_ref().filter(|committed| {
+            committed.context().session_epoch() == snapshot.context().session_epoch()
+        })?;
+        Some(
+            crate::PresentationFrontier::builder()
+                .source(self.rendered_source_end?.0)
+                .output(committed.frontier().output())
+                .maybe_warp_map(committed.frontier().warp_map())
+                .build(),
+        )
+    }
+
     /// Whether rendering needs worker-owned staging buffers.
     #[must_use]
     pub const fn requires_staging(&self) -> bool {
@@ -156,7 +187,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{pools, sample_buffer};
+    use crate::{
+        StretchControls,
+        test_pools::{pools, sample_buffer},
+    };
 
     #[kithara::test]
     fn renderer_preserves_samples_exactly(warp_pair: Vec<f32>) {
@@ -176,6 +210,7 @@ mod tests {
             crate::RenderPublisher::default().reader(),
             spec,
             pools,
+            Arc::default(),
         );
 
         assert_eq!(renderer.rendered_source_end(), None);

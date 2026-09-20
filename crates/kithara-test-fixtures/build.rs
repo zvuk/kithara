@@ -59,9 +59,6 @@ use registry::{AssetBuild, AssetDef};
 #[cfg(feature = "native-fixtures")]
 use self::context::BuildContext;
 
-#[cfg(feature = "native-fixtures")]
-const REMOTE_FIXTURES_ENV: &str = "KITHARA_REMOTE_FIXTURES";
-
 /// Rejects two cases that would produce one accessor, before either is written.
 #[cfg(feature = "native-fixtures")]
 fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef)> {
@@ -129,12 +126,6 @@ fn materialize_one(
     let (name, id, def) = &resolved[index];
     if store::has_entry(namespace, id, def.ext) {
         return None;
-    }
-    if def.optional && std::env::var_os(REMOTE_FIXTURES_ENV).is_none() {
-        return Some((
-            name.clone(),
-            format!("remote hydration disabled; set {REMOTE_FIXTURES_ENV}"),
-        ));
     }
     let _lock = store::lock_entry(namespace, id)
         .unwrap_or_else(|error| panic!("kithara-test-fixtures: lock for `{name}`: {error}"));
@@ -269,7 +260,6 @@ fn codegen(
 #[cfg(feature = "native-fixtures")]
 fn main() {
     println!("cargo:rerun-if-env-changed={}", store::STORE_ENV);
-    println!("cargo:rerun-if-env-changed={REMOTE_FIXTURES_ENV}");
 
     let defs: Vec<&AssetDef> = inventory::iter::<AssetDef>.into_iter().collect();
     assert!(

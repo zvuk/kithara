@@ -7,6 +7,7 @@ mod encode {
         queue::TrackId,
     };
     use num_traits::cast;
+    use tracing::warn;
     use wasm_bindgen::JsValue;
 
     use crate::analysis::seconds_at;
@@ -44,14 +45,33 @@ mod encode {
         );
         set(&message, "sourceFrames", &number(analysis.source_frames()));
         set(&message, "waveform", &waveform(analysis).into());
-        let beats = artifact.map_or(&[][..], |beat| beat.beats());
-        let downbeats = artifact.map_or(&[][..], |beat| beat.downbeats());
-        set(&message, "beats", &markers(beats, rate).into());
-        set(&message, "downbeats", &markers(downbeats, rate).into());
+        let grid = match analysis.beats() {
+            Some(Ok(beats)) => Some(beats),
+            Some(Err(error)) => {
+                warn!(%error, "the analysis states beats that form no grid");
+                None
+            }
+            None => None,
+        };
+        let frames = grid.as_ref().map_or(&[][..], Vec::as_slice);
+        let downbeats = grid
+            .as_ref()
+            .and(artifact)
+            .map_or(&[][..], |beat| beat.downbeats());
+        set(
+            &message,
+            "beats",
+            &markers(frames.len(), frames.iter().map(|beat| beat.frame), rate).into(),
+        );
+        set(
+            &message,
+            "downbeats",
+            &markers(downbeats.len(), downbeats.iter().copied(), rate).into(),
+        );
         set(
             &message,
             "bpm",
-            &JsValue::from_f64(artifact.map_or(0.0, BeatArtifact::bpm)),
+            &JsValue::from_f64(grid.as_ref().and(artifact).map_or(0.0, BeatArtifact::bpm)),
         );
         set(
             &message,
@@ -82,17 +102,24 @@ mod encode {
         out
     }
 
-    fn markers(frames: &[u64], rate: NonZeroU32) -> Float64Array {
-        let out = Float64Array::new_with_length(length_of(frames.len()));
+    fn markers(count: usize, frames: impl Iterator<Item = u64>, rate: NonZeroU32) -> Float64Array {
+        let out = Float64Array::new_with_length(length_of(count));
         let mut staged = [0.0_f64; Consts::STAGE];
         let mut written: u32 = 0;
-        for group in frames.chunks(Consts::STAGE) {
-            for (slot, frame) in staged.iter_mut().zip(group) {
-                *slot = seconds_at(*frame, rate);
+        let mut filled = 0_usize;
+        for frame in frames {
+            staged[filled] = seconds_at(frame, rate);
+            filled += 1;
+            if filled == Consts::STAGE {
+                let end = written.saturating_add(length_of(filled));
+                out.subarray(written, end).copy_from(&staged[..filled]);
+                written = end;
+                filled = 0;
             }
-            let end = written.saturating_add(length_of(group.len()));
-            out.subarray(written, end).copy_from(&staged[..group.len()]);
-            written = end;
+        }
+        if filled > 0 {
+            let end = written.saturating_add(length_of(filled));
+            out.subarray(written, end).copy_from(&staged[..filled]);
         }
         out
     }

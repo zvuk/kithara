@@ -5,7 +5,8 @@ use super::{
 use crate::BeatGridStamp;
 
 /// An audible acknowledgement tied to every admission axis.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, bon::Builder, fieldwork::Fieldwork)]
+#[builder(state_mod(vis = "pub"))]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SyncApplied {

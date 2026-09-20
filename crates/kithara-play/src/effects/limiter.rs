@@ -171,8 +171,10 @@ impl PeakLimiter {
     }
 
     /// Apply the limiter in place to a planar block, linking channels by frame peak. Each sample is
-    /// guarded before the peak is taken, so the envelope only ever sees a finite peak. Allocates
-    /// nothing, locks nothing, performs no I/O.
+    /// guarded before the peak is taken, so the envelope only ever sees a finite peak. The interval
+    /// behind frame 0 was last judged against a held tail, so it is judged again against the
+    /// samples that actually followed rather than taken from the cache. Allocates nothing, locks
+    /// nothing, performs no I/O.
     pub fn process_planar(&mut self, channels: &mut [&mut [f32]]) {
         debug_assert_eq!(channels.len(), self.channels);
         debug_assert!(self.channels <= Self::DETECTOR_CHANNELS);

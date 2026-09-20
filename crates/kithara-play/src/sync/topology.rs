@@ -1,7 +1,7 @@
 use kithara_warp::{
-    BeatGridId, BeatGridSnapshot, SyncError, SyncGroup, SyncGroupSnapshot, SyncGroupTopologyError,
-    SyncMember, SyncMemberKind, SyncMemberSnapshot, TopologyOperation, TopologyRevision,
-    TopologyStamp,
+    BeatGridId, BeatGridSnapshot, MemberArm, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncGroupTopologyError, SyncMember, SyncMemberKind, SyncMemberSnapshot, TopologyOperation,
+    TopologyRevision, TopologyStamp,
 };
 
 pub(super) fn materialize_topology<G: SyncGroup<NestedGroup = G>>(
@@ -97,12 +97,22 @@ fn apply_snapshot_operations<G: SyncGroup<NestedGroup = G>>(
                 let index = member_index(parent.id(), members, *member)?;
                 members.remove(index);
             }
+            TopologyOperation::Arm { member } => {
+                let index = member_index(parent.id(), members, *member)?;
+                members[index] = members[index].clone().with_arm(MemberArm::Armed);
+            }
+            TopologyOperation::Disarm { member } => {
+                let index = member_index(parent.id(), members, *member)?;
+                members[index] = members[index].clone().with_arm(MemberArm::Waiting);
+            }
             TopologyOperation::Replace {
                 member,
                 replacement,
             } => {
                 let index = member_index(parent.id(), members, *member)?;
-                members[index] = validate_incoming_member(parent, replacement, member_kind)?;
+                let arm = members[index].arm();
+                members[index] =
+                    validate_incoming_member(parent, replacement, member_kind)?.with_arm(arm);
             }
         }
     }
@@ -119,6 +129,12 @@ pub(super) fn apply_topology_operations<G: SyncGroup<NestedGroup = G>>(
             TopologyOperation::Detach { member } => {
                 members.retain(|candidate| candidate.id() != member);
             }
+            TopologyOperation::Arm { member } => {
+                set_member_arm(members, member, MemberArm::Armed);
+            }
+            TopologyOperation::Disarm { member } => {
+                set_member_arm(members, member, MemberArm::Waiting);
+            }
             TopologyOperation::Replace {
                 member,
                 replacement,
@@ -126,13 +142,28 @@ pub(super) fn apply_topology_operations<G: SyncGroup<NestedGroup = G>>(
                 let mut replacement = Some(replacement);
                 for candidate in members.iter_mut() {
                     if candidate.id() == member
-                        && let Some(replacement) = replacement.take()
+                        && let Some(mut replacement) = replacement.take()
                     {
+                        replacement.set_arm(candidate.arm());
                         *candidate = replacement;
                     }
                 }
             }
         }
+    }
+}
+
+/// Marks one live member sounding or waiting.
+///
+/// The snapshot preview rejects an operation naming an absent member before
+/// this runs, so a missing target here cannot reach a committed transaction.
+fn set_member_arm<G: SyncGroup<NestedGroup = G>>(
+    members: &mut [SyncMember<G>],
+    target: BeatGridId,
+    arm: MemberArm,
+) {
+    if let Some(member) = members.iter_mut().find(|member| member.id() == target) {
+        member.set_arm(arm);
     }
 }
 
@@ -183,7 +214,7 @@ pub(super) fn preview_topology<G: SyncGroup<NestedGroup = G>>(
     let revision =
         next_topology_revision(topology.stamp().group_id(), topology.stamp().revision())?;
     let mut members = topology.members().to_vec();
-    members[index] = SyncMemberSnapshot::new_group(child, member.alignment());
+    members[index] = SyncMemberSnapshot::new_group(child, member.alignment(), member.arm());
     let candidate = SyncGroupSnapshot::try_new(topology.group_grid().clone(), revision, members)?;
     Ok((candidate, true))
 }

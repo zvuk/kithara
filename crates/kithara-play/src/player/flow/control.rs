@@ -1,5 +1,6 @@
 use kithara_test_macros as kithara;
-use kithara_warp::StretchControls;
+use kithara_warp::{PresentationFrontier, SessionFrame, StretchControls};
+use num_traits::ToPrimitive;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -96,6 +97,52 @@ impl<S> PlayerRuntime<S> {
         self.core
             .params
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
+    }
+
+    /// Spends the track's initial source cue once its own rendered frontier
+    /// has moved past the cue, so a later synchronized launch never rewinds
+    /// to it.
+    pub(crate) fn retire_presented_source_cue(&self, item: crate::api::TrackId) {
+        let Some(cue) = self.core.items.initial_source_cue(item) else {
+            return;
+        };
+        let presented = self
+            .presentation_frontier_for(item, None)
+            .and_then(|frontier| frontier.source().to_f64())
+            .is_some_and(|source| source > f64::from(cue));
+        if presented {
+            self.core.items.clear_initial_source_cue(item);
+        }
+    }
+
+    /// The frontier the active slot renders next, or the session origin when
+    /// nothing renders.
+    pub(crate) fn presentation_frontier(&self) -> PresentationFrontier {
+        self.slot()
+            .and_then(|slot| self.core.engine.slot_render_snapshot(slot))
+            .map_or_else(
+                || {
+                    PresentationFrontier::builder()
+                        .output(SessionFrame::new(0))
+                        .source(0)
+                        .build()
+                },
+                |snapshot| snapshot.frontier(),
+            )
+    }
+
+    pub(crate) fn presentation_frontier_for(
+        &self,
+        item: crate::api::TrackId,
+        warp_map: Option<kithara_warp::WarpMapRevision>,
+    ) -> Option<PresentationFrontier> {
+        self.slot()
+            .and_then(|slot| {
+                self.core
+                    .engine
+                    .slot_render_snapshot_for(slot, item, warp_map)
+            })
+            .map(|snapshot| snapshot.frontier())
     }
 
     /// Set the requested rate target, clamped to

@@ -4,6 +4,7 @@ use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::Arc;
+use kithara_warp::AssetFrame;
 
 use super::{PlayerRuntime, SelectTransition};
 use crate::{
@@ -161,6 +162,18 @@ where
     ) -> Result<(), PlayError> {
         self.runtime
             .with_open_result(|runtime| runtime.select_item_with_crossfade(index, transition))
+    }
+
+    /// Select an item and atomically install its first synchronized source cue.
+    pub fn select_item_with_crossfade_from_source_cue(
+        &self,
+        index: usize,
+        transition: SelectTransition,
+        source_cue: Option<AssetFrame>,
+    ) -> Result<(), PlayError> {
+        self.runtime.with_open_result(|runtime| {
+            runtime.select_item_with_crossfade_from_source_cue(index, transition, source_cue)
+        })
     }
 
     /// Update crossfade duration unless the owning player is closed.

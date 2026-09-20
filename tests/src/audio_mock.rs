@@ -17,7 +17,7 @@ use std::{
 use kithara::{
     audio::{
         AudioControl, AudioRead, AudioSession, ConsumerWakeMode, PendingReason, ReadOutcome,
-        SeekBegin, SeekOutcome,
+        ScheduledSeek, SeekBegin, SeekOutcome,
     },
     decode::{DecodeError, TrackMetadata},
     events::EventBus,
@@ -610,6 +610,20 @@ impl SeekBegin for SeekSpy {
         SeekOutcome::Landed {
             target: position,
             landed_at: position,
+        }
+    }
+
+    fn begin_prepared(&self, position: Duration) -> ScheduledSeek {
+        ScheduledSeek {
+            epoch: 1,
+            outcome: self.begin(position),
+        }
+    }
+
+    fn begin_scheduled(&self, position: Duration) -> ScheduledSeek {
+        ScheduledSeek {
+            epoch: 1,
+            outcome: self.begin(position),
         }
     }
 }

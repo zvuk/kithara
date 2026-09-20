@@ -40,7 +40,9 @@ pub(crate) fn tick_and_poll_remote<S>(
     };
 
     drain_host_channel(state, rx, |reply| {
-        if let HostReply::Play(Reply::SlotAllocated(allocated)) = reply {
+        if let HostReply::Play(reply) = reply
+            && let Reply::SlotAllocated(allocated) = reply.as_ref()
+        {
             BRIDGE_PLAYBACK.with(|playback| {
                 *playback.borrow_mut() = Some(Arc::clone(&allocated.control.playback));
             });

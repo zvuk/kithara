@@ -112,7 +112,13 @@ fn load_tracks(
             },
         );
     }
-    send(control, PlayerCmd::SetPaused(false));
+    send(
+        control,
+        PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        },
+    );
     processor.drain_commands();
 
     for (item_id, src) in &tracks {

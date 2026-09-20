@@ -138,7 +138,13 @@ fn across(before: &[f32], after: &[f32]) -> Vec<f32> {
 fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
-    push(&mut control, PlayerCmd::SetPaused(false));
+    push(
+        &mut control,
+        PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        },
+    );
     processor.drain_commands();
     start(&mut processor, item_id);
 
@@ -149,7 +155,13 @@ fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
         last(&playing)
     );
 
-    push(&mut control, PlayerCmd::SetPaused(true));
+    push(
+        &mut control,
+        PlayerCmd::SetPaused {
+            paused: true,
+            item_id: None,
+        },
+    );
     let paused = pump(&mut processor, SETTLE_BLOCKS);
 
     let step = max_step(&across(&playing, &paused));
@@ -174,16 +186,34 @@ fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
 fn resuming_fades_the_output_in(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
-    push(&mut control, PlayerCmd::SetPaused(false));
+    push(
+        &mut control,
+        PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        },
+    );
     processor.drain_commands();
     start(&mut processor, item_id);
     pump(&mut processor, WARMUP_BLOCKS);
 
-    push(&mut control, PlayerCmd::SetPaused(true));
+    push(
+        &mut control,
+        PlayerCmd::SetPaused {
+            paused: true,
+            item_id: None,
+        },
+    );
     let paused = pump(&mut processor, SETTLE_BLOCKS);
     assert!(last(&paused) == 0.0, "the pause settled at silence");
 
-    push(&mut control, PlayerCmd::SetPaused(false));
+    push(
+        &mut control,
+        PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        },
+    );
     let resumed = pump(&mut processor, SETTLE_BLOCKS);
 
     let step = max_step(&across(&paused, &resumed));
@@ -202,7 +232,13 @@ fn fading_in(constant_half: &'static [u8]) -> (PlayerNodeProcessor, SlotControl,
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
     push(&mut control, PlayerCmd::SetFadeDuration(FADE_SECONDS));
-    push(&mut control, PlayerCmd::SetPaused(false));
+    push(
+        &mut control,
+        PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        },
+    );
     push(
         &mut control,
         PlayerCmd::Transition(TrackTransition::FadeIn {
@@ -321,7 +357,13 @@ fn a_track_started_without_a_crossfade_is_instant(
     let (mut processor, mut control) = processor();
     let first_id = load(&mut control, "a.mp3", constant_half);
     push(&mut control, PlayerCmd::SetFadeDuration(0.0));
-    push(&mut control, PlayerCmd::SetPaused(false));
+    push(
+        &mut control,
+        PlayerCmd::SetPaused {
+            paused: false,
+            item_id: None,
+        },
+    );
     processor.drain_commands();
     start(&mut processor, first_id);
 

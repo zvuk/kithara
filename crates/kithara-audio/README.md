@@ -85,7 +85,7 @@ let mut audio = worker.open(audio_config).await?;
 
 <tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
 
-<tr><td><code>probe</code></td><td>no</td><td>USDT probes for tracing</td></tr>
+<tr><td><code>usdt</code></td><td>no</td><td>USDT probes for tracing</td></tr>
 
 <tr><td><code>mock</code></td><td>no</td><td>Generated mocks for tests</td></tr>
 

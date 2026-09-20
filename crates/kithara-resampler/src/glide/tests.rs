@@ -167,6 +167,64 @@ fn linear_mode_can_be_selected_by_config() {
 }
 
 #[kithara::test(native, flash(false))]
+fn exact_span_keeps_a_constant_signal_at_the_right_boundary() {
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: None,
+    };
+    let mut resampler = GlideResampler::new("glide", GlideConfig::default(), &settings(mode))
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = [0.75; 15];
+    let mut output = [0.0; 16];
+
+    resampler
+        .process_exact_span(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("exact span should render: {err}"));
+
+    assert!(
+        output.iter().all(|sample| (*sample - 0.75).abs() < 1.0e-6),
+        "constant input changed at an exact-span boundary: {output:?}"
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn near_unity_exact_span_preserves_the_first_mapped_attack() {
+    const SOURCE_FRAMES: usize = 10_001;
+    const OUTPUT_FRAMES: usize = 10_000;
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: None,
+    };
+    let settings = ResamplerSettings::builder()
+        .channels(channels(1))
+        .mode(mode)
+        .options(
+            ResamplerOptions::builder()
+                .chunk_size(SOURCE_FRAMES)
+                .build(),
+        )
+        .pools(pools())
+        .build();
+    let mut resampler = GlideResampler::new("glide", GlideConfig::default(), &settings)
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let mut input = vec![0.0; SOURCE_FRAMES];
+    input[0] = 1.0;
+    let mut output = vec![0.0; OUTPUT_FRAMES];
+
+    resampler
+        .process_exact_span(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("near-unity exact span should render: {err}"));
+
+    assert!(
+        (output[0] - 1.0).abs() < 1.0e-6,
+        "the source attack mapped to output frame zero moved: {:?}",
+        &output[..8]
+    );
+}
+
+#[kithara::test(native, flash(false))]
 fn anti_alias_smooths_fast_glide(glide_alias: Vec<f32>) {
     let input = glide_alias;
     let mut plain = GlideResampler::new(

@@ -2097,13 +2097,13 @@ steps = [
     "test",
     "run",
     "--lane=fixtures",
-  ], label = "Linux fixtures lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux fixtures lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "-E",
     "package(kithara-test-fixtures) | test(sync_fixture_census)",
-  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["weekly"]
@@ -2144,6 +2144,43 @@ steps = [
 role = "deep"
 kinds = ["weekly"]
 kinds_github = ["nightly"]
+timeout_minutes = 180
+
+# Warp is a required gate: every push runs its owner and product tests, so the
+# remaining red contract stays visible until the pull request is green.
+[ext.ci.lanes.deep-warp]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--flash=off",
+    "--net-backend=none",
+    "-p",
+    "kithara-warp",
+    "--features",
+    "stretch-signalsmith",
+  ], label = "Warp owner tests", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  { args = [
+    "test",
+    "run",
+    "--flash=off",
+    "--net-backend=none",
+    "-p",
+    "kithara-play-tests",
+    "--test",
+    "play",
+    "-E",
+    "test(~sync_) - test(~no_sync_)",
+  ], label = "Warp product tests", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+]
+role = "gate"
+kinds = ["branch", "merge-request", "main"]
+kinds_github = ["main", "branch"]
 timeout_minutes = 180
 
 # The lane name is the only place the browser is decided; the harness lane it

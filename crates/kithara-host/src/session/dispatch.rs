@@ -2,12 +2,14 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 use kithara_bufpool::HasPool;
+use kithara_events::TrackId;
 use kithara_output::OutputGroup;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
-use kithara_play::{PlayError, StreamShape, player::PlayerMember};
+use kithara_play::{PlayError, StreamShape, Tempo, player::PlayerMember};
 use kithara_warp::{
-    SyncCapability, SyncError, SyncGroup, SyncOperation, SyncRejected, TopologyOperation,
+    BeatGrid, BeatGridId, BeatGridState, BeatsPerMinute, SegmentSet, SyncAdmission, SyncCapability,
+    SyncError, SyncGroup, SyncOperation, SyncRejected, TopologyOperation,
 };
 use tracing::{debug, trace, warn};
 
@@ -31,15 +33,62 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     match cmd {
-        HostCmd::Play(cmd) => HostReply::Play(run_cmd(state, cmd)),
+        HostCmd::Play(cmd) => HostReply::Play(Box::new(run_cmd(state, cmd))),
         HostCmd::Sync(cmd) => run_sync_cmd(state, cmd),
         HostCmd::ApplyMix { levels } => {
             apply_mix(state, &levels).map_or_else(HostReply::Err, |()| HostReply::Ok)
         }
         HostCmd::EnableOutput { outputs } => tap::enable(state, outputs)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
+        HostCmd::DeckSyncStatus { deck } => {
+            HostReply::DeckSyncStatus(deck_sync_status(state, deck))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        HostCmd::SeekDeck { deck, seconds } => HostReply::Seek(seek_deck(state, deck, seconds)),
         HostCmd::Shutdown => HostReply::Ok,
     }
+}
+
+fn deck_sync_status<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    deck: BeatGridId,
+) -> Result<kithara_warp::SyncStatusSnapshot, PlayError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let host = state.root.id();
+    state
+        .root
+        .nested_groups_mut()
+        .find(|member| member.id() == deck)
+        .map(|member| member.status())
+        .ok_or_else(|| {
+            PlayError::from(SessionError::from(SyncError::MemberNotFound {
+                group_id: host,
+                member_id: deck,
+            }))
+        })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn seek_deck<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    deck: BeatGridId,
+    seconds: f64,
+) -> Result<kithara_play::SeekOutcome, PlayError> {
+    let transport = transport::snapshot(state)?.revision();
+    let host = state.root.id();
+    let member = state
+        .root
+        .nested_groups_mut()
+        .find(|member| member.id() == deck)
+        .ok_or_else(|| {
+            PlayError::from(SessionError::from(SyncError::MemberNotFound {
+                group_id: host,
+                member_id: deck,
+            }))
+        })?;
+    member.seek_from_host(seconds, transport)
 }
 
 fn run_sync_cmd<B: AudioBackend, S>(state: &mut SessionState<B, S>, cmd: SyncCmd) -> HostReply {
@@ -73,7 +122,7 @@ fn run_sync_cmd<B: AudioBackend, S>(state: &mut SessionState<B, S>, cmd: SyncCmd
 fn transact_root<B: AudioBackend, S>(
     state: &mut SessionState<B, S>,
     operation: SyncOperation<PlayerMember>,
-) -> Result<kithara_warp::SyncAdmission, SyncRejected<PlayerMember>> {
+) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
     if topology_conflicts_with_graph(state, &operation) {
         return Err(SyncRejected::new(
             SyncError::CapabilityUnavailable {
@@ -83,6 +132,36 @@ fn transact_root<B: AudioBackend, S>(
         ));
     }
     state.root.transact(operation)
+}
+
+fn set_root_tempo<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    tempo: Tempo,
+) -> Result<(), SessionError> {
+    let tempo = BeatsPerMinute::try_from(tempo.beats_per_minute())
+        .map_err(|error| SessionError::TransportSync(error.to_string()))?;
+    let target = state.root.id();
+    let _ = state
+        .root
+        .transact(SyncOperation::Tempo { target, tempo })
+        .map_err(|rejected| SessionError::TransportSync(rejected.error().to_string()))?;
+    state.publish_root();
+    Ok(())
+}
+
+fn publish_track_grid<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    deck: BeatGridId,
+    item: TrackId,
+    segments: SegmentSet,
+    grid_state: BeatGridState,
+) -> Result<SyncAdmission, SessionError> {
+    let member = state
+        .root
+        .nested_groups_mut()
+        .find(|member| member.id() == deck)
+        .ok_or(SyncError::GroupNotFound { group_id: deck })?;
+    Ok(member.publish_item_grid(item, segments, grid_state)?)
 }
 
 fn topology_conflicts_with_graph<B: AudioBackend, S>(
@@ -95,6 +174,7 @@ fn topology_conflicts_with_graph<B: AudioBackend, S>(
     operations.iter().any(|operation| match operation {
         TopologyOperation::Attach { member } => state.graph.index_by_grid(member.id()).is_some(),
         TopologyOperation::Detach { member } => state.graph.index_by_grid(*member).is_some(),
+        TopologyOperation::Arm { .. } | TopologyOperation::Disarm { .. } => false,
         TopologyOperation::Replace {
             member,
             replacement,
@@ -138,7 +218,6 @@ where
             master_volume,
             player_id,
             render_quantum_frames,
-            response_budget_frames,
             sample_rate,
         } => match lifecycle::start_player(
             state,
@@ -146,7 +225,6 @@ where
             sample_rate,
             master_volume,
             render_quantum_frames,
-            response_budget_frames,
         ) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
@@ -155,9 +233,12 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        Cmd::AllocateSlot { player_id } => {
-            slots::allocate_slot(state, player_id).unwrap_or_else(Reply::Err)
-        }
+        Cmd::AllocateSlot {
+            player_id,
+            stretch,
+            rate_smoothing,
+        } => slots::allocate_slot(state, player_id, stretch, rate_smoothing)
+            .unwrap_or_else(Reply::Err),
         Cmd::ReleaseSlot { player_id, slot } => match slots::release_slot(state, player_id, slot) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
@@ -207,8 +288,19 @@ where
             controls::set_session_ducking(state, mode);
             Reply::Ok
         }
-        Cmd::SetSessionTempo { tempo } => match transport::set_tempo(state, tempo) {
-            Ok(()) => Reply::Ok,
+        Cmd::SetSessionTempo { tempo } => {
+            match transport::set_tempo(state, tempo).and_then(|()| set_root_tempo(state, tempo)) {
+                Ok(()) => Reply::Ok,
+                Err(err) => Reply::Err(err),
+            }
+        }
+        Cmd::PublishTrackGrid {
+            deck,
+            item,
+            segments,
+            state: grid_state,
+        } => match publish_track_grid(state, deck, item, segments, grid_state) {
+            Ok(admission) => Reply::SyncAdmission(admission),
             Err(err) => Reply::Err(err),
         },
         Cmd::SetSessionPlaying { playing } => match transport::set_playing(state, playing) {
@@ -277,6 +369,10 @@ pub(super) fn tick_session<B: AudioBackend, S>(state: &mut SessionState<B, S>) -
     if let Some(Err(err)) = update {
         return handle_update_error(state, err);
     }
+    if let Err(err) = transport::publish_rendered_session(state) {
+        return Reply::Err(err);
+    }
+    transport::advance_prepared_decks(state);
     Reply::Ok
 }
 
@@ -487,12 +583,11 @@ pub(super) fn trace_stream_info<B: AudioBackend, S>(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::{NonZeroU32, NonZeroUsize},
-        sync::atomic::AtomicBool,
-    };
+    use std::{num::NonZeroU32, sync::atomic::AtomicBool};
 
-    use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
+    use firewheel::{
+        FirewheelCtx, StreamInfo, param::smoother::SmootherConfig, processor::FirewheelProcessor,
+    };
     use kithara_events::EventBus;
     use kithara_output::OutputGroup;
     use kithara_platform::sync::{
@@ -504,7 +599,9 @@ mod tests {
         bufpool::{TestPools, pools},
         kithara,
     };
-    use kithara_warp::{BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis};
+    use kithara_warp::{
+        BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis, StretchControls,
+    };
     use ringbuf::{HeapRb, traits::Split};
 
     use super::*;
@@ -629,7 +726,7 @@ mod tests {
             .map_err(|err| err.to_string())
     }
 
-    fn register_command(grid_id: kithara_warp::BeatGridId, sample_rate: u32) -> Cmd<TestPools> {
+    fn register_command(grid_id: BeatGridId, sample_rate: u32) -> Cmd<TestPools> {
         Cmd::RegisterPlayer {
             grid_id,
             sample_rate,
@@ -658,8 +755,6 @@ mod tests {
             sample_rate,
             master_volume: 1.0,
             render_quantum_frames: None,
-            response_budget_frames: NonZeroUsize::new(448)
-                .expect("fixture response budget is non-zero"),
         }
     }
 
@@ -759,7 +854,7 @@ mod tests {
     #[kithara::test]
     fn registration_rejects_a_player_before_canonical_attachment() {
         let mut state = test_state(start_route_loss_stream);
-        let grid_id = kithara_warp::BeatGridId::allocate().expect("fixture player grid id");
+        let grid_id = BeatGridId::allocate().expect("fixture player grid id");
 
         let reply = run_cmd(
             &mut state,
@@ -788,6 +883,31 @@ mod tests {
         ));
 
         assert_eq!(state.next_player_id, next_player_id);
+        assert_eq!(member_count(&state), 1);
+        assert_eq!(deck_count(&state), 1);
+    }
+
+    #[kithara::test]
+    fn arming_a_deck_is_admitted_while_the_graph_projection_is_live() {
+        let mut state = test_state(start_route_loss_stream);
+        let grid_id = attach_player(&mut state);
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
+            ),
+            Reply::PlayerRegistered(_)
+        ));
+        let arm = |state: &TestState| SyncOperation::Topology {
+            base: state.root.topology().expect("fixture topology").stamp(),
+            operations: Box::new([TopologyOperation::Arm { member: grid_id }]),
+        };
+
+        let operation = arm(&state);
+        assert!(matches!(
+            run_host_cmd(&mut state, HostCmd::Sync(SyncCmd::Transact(operation))),
+            HostReply::Admission(Ok(SyncAdmission::TopologyChanged { .. }))
+        ));
         assert_eq!(member_count(&state), 1);
         assert_eq!(deck_count(&state), 1);
     }
@@ -831,7 +951,7 @@ mod tests {
         let operation = detach(&state);
         assert!(matches!(
             run_host_cmd(&mut state, HostCmd::Sync(SyncCmd::Transact(operation))),
-            HostReply::Admission(Ok(kithara_warp::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(SyncAdmission::TopologyChanged { .. }))
         ));
         assert_eq!(member_count(&state), 0);
         assert_eq!(deck_count(&state), 0);
@@ -851,13 +971,13 @@ mod tests {
 
         assert!(matches!(
             run_host_cmd(&mut state, detach(first)),
-            HostReply::Admission(Ok(kithara_warp::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(SyncAdmission::TopologyChanged { .. }))
         ));
         let after_first = state.root.topology().expect("updated topology").stamp();
         assert_ne!(after_first, before);
         assert!(matches!(
             run_host_cmd(&mut state, detach(second)),
-            HostReply::Admission(Ok(kithara_warp::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(SyncAdmission::TopologyChanged { .. }))
         ));
 
         let after_second = state.root.topology().expect("updated topology");
@@ -1012,29 +1132,20 @@ mod tests {
     }
 
     #[kithara::test]
-    fn measured_output_block_rejects_player_before_graph_start() {
+    fn failed_stream_restart_rejects_player_before_graph_start() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        state.requested_max_block_frames = NonZeroU32::new(128);
         let player_id = register_player(&mut state);
-        let command = Cmd::StartPlayer {
-            player_id,
-            master_volume: 1.0,
-            render_quantum_frames: NonZeroUsize::new(64),
-            response_budget_frames: NonZeroUsize::new(441)
-                .expect("fixture response budget is non-zero"),
-            sample_rate: TestState::DEFAULT_SAMPLE_RATE,
-        };
+        state.stream_needs_restart = true;
+        route_loss(|probe| probe.fail_next_start.store(true, Ordering::SeqCst));
 
         assert!(matches!(
-            run_cmd(&mut state, command),
-            Reply::Err(SessionError::ResponseBudgetExceeded {
-                max_block_frames: 512,
-                render_quantum_frames: 64,
-                required_frames: 639,
-                budget_frames: 441,
-            })
+            run_cmd(
+                &mut state,
+                start_command(player_id, TestState::DEFAULT_SAMPLE_RATE)
+            ),
+            Reply::Err(SessionError::StreamStart(_))
         ));
         assert!(!deck_by_player_id(&state, player_id).started);
     }
@@ -1059,7 +1170,14 @@ mod tests {
             })
         ));
         assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            run_cmd(
+                &mut state,
+                Cmd::AllocateSlot {
+                    player_id,
+                    stretch: StretchControls::new(1.0),
+                    rate_smoothing: SmootherConfig::default()
+                }
+            ),
             Reply::SlotAllocated(..)
         ));
         assert_eq!(
@@ -1114,7 +1232,14 @@ mod tests {
             "route invalidation must not drop active slots"
         );
         assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            run_cmd(
+                &mut state,
+                Cmd::AllocateSlot {
+                    player_id,
+                    stretch: StretchControls::new(1.0),
+                    rate_smoothing: SmootherConfig::default()
+                }
+            ),
             Reply::SlotAllocated(..)
         ));
         assert_eq!(
@@ -1143,7 +1268,14 @@ mod tests {
             1
         );
         assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            run_cmd(
+                &mut state,
+                Cmd::AllocateSlot {
+                    player_id,
+                    stretch: StretchControls::new(1.0),
+                    rate_smoothing: SmootherConfig::default()
+                }
+            ),
             Reply::SlotAllocated(..)
         ));
         assert_eq!(deck(&state, 0).slots.len(), 1);
@@ -1176,7 +1308,14 @@ mod tests {
             "active slot graph must survive stream restart"
         );
         assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            run_cmd(
+                &mut state,
+                Cmd::AllocateSlot {
+                    player_id,
+                    stretch: StretchControls::new(1.0),
+                    rate_smoothing: SmootherConfig::default()
+                }
+            ),
             Reply::SlotAllocated(..)
         ));
         assert_eq!(
@@ -1416,7 +1555,7 @@ mod tests {
         let known = register_player(&mut state);
         start_player_cmd(&mut state, known);
         let known_grid = deck_by_player_id(&state, known).grid_id;
-        let unknown_grid = kithara_warp::BeatGridId::allocate().expect("foreign fixture grid id");
+        let unknown_grid = BeatGridId::allocate().expect("foreign fixture grid id");
 
         assert!(matches!(
             run_host_cmd(

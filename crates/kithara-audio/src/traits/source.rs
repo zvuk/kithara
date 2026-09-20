@@ -6,6 +6,14 @@ use kithara_stream::SeekObserve;
 
 use crate::{SourceEnd, TrackStep};
 
+/// Progress of producing old-map PCM before a scheduled decoder seek.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScheduledSeekPreparation {
+    AwaitingActivation,
+    ProducingOldPcm,
+    Ready,
+}
+
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }
@@ -39,6 +47,11 @@ pub trait AudioSource: Send + 'static {
     /// Sources without a split shell keep the default no-op phases.
     fn prepare_deferred(&mut self) -> Option<AudioSpec> {
         None
+    }
+
+    /// Report whether old-map PCM has reached the scheduled Warp activation.
+    fn prepare_scheduled_seek(&mut self) -> ScheduledSeekPreparation {
+        ScheduledSeekPreparation::Ready
     }
 
     /// Reclaim a discarded chunk from scheduler `recycle`, outside the checked

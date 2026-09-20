@@ -45,9 +45,9 @@ pub(super) fn beat(wav: &[u8]) -> BeatArtifact {
 }
 
 #[cfg(feature = "library")]
-pub(in crate::defs) fn beat_flac(flac: &[u8]) -> (BeatArtifact, u64) {
+pub(in crate::defs) fn beat_encoded(bytes: &[u8], hint: &str) -> (BeatArtifact, u64) {
     let reader =
-        PcmReader::decode_flac(flac).unwrap_or_else(|error| panic!("library FLAC: {error}"));
+        PcmReader::decode(bytes, hint).unwrap_or_else(|error| panic!("library {hint}: {error}"));
     analyze(reader)
 }
 
@@ -152,12 +152,12 @@ impl PcmReader {
     }
 
     #[cfg(feature = "library")]
-    fn decode_flac(bytes: &[u8]) -> Result<Self, String> {
+    fn decode(bytes: &[u8], hint: &str) -> Result<Self, String> {
         let config = DecoderConfig::<NoResamplerBackend, TestPools>::builder()
             .pools(pools())
             .build();
         let mut decoder =
-            DecoderFactory::create_with_probe(Cursor::new(bytes.to_vec()), Some("flac"), config)
+            DecoderFactory::create_with_probe(Cursor::new(bytes.to_vec()), Some(hint), config)
                 .map_err(|error| format!("open: {error}"))?;
         let spec = decoder.spec();
         let metadata = decoder.metadata();

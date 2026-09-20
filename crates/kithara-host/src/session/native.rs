@@ -67,7 +67,7 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
 
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
-            HostReply::Play(reply) => Ok(reply),
+            HostReply::Play(reply) => Ok(*reply),
             HostReply::Err(error) => Err(error),
             _ => Err(PlayError::Internal(
                 "unexpected host reply for player session command".into(),

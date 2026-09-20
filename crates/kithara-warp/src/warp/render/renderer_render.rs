@@ -1,64 +1,9 @@
-use firewheel_core::param::smoother::SmoothedParam;
 use kithara_bufpool::HasPool;
 use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount};
 use kithara_stretch::{ElasticCapabilities, ElasticError, ElasticRequest};
 use num_traits::ToPrimitive;
 
 use super::renderer::WarpRenderer;
-
-impl<S> WarpRenderer<S>
-where
-    S: HasPool<f32>,
-{
-    pub(super) fn advance_speed(
-        &mut self,
-        target: f32,
-        output_frames: usize,
-    ) -> Result<(), ElasticError> {
-        let Some(applied) = self.applied_speed else {
-            return Ok(());
-        };
-        let (_, next) = Self::smoothed_speed(applied, target, output_frames)?;
-        self.applied_speed = Some(next);
-        Ok(())
-    }
-
-    pub(super) fn preview_speed(
-        &self,
-        target: f32,
-        output_frames: usize,
-    ) -> Result<f32, ElasticError> {
-        let Some(applied) = self.applied_speed else {
-            return Ok(target);
-        };
-        let (speed, _) = Self::smoothed_speed(applied, target, output_frames)?;
-        Ok(speed)
-    }
-
-    fn smoothed_speed(
-        mut applied: SmoothedParam,
-        target: f32,
-        output_frames: usize,
-    ) -> Result<(f32, SmoothedParam), ElasticError> {
-        if output_frames == 0 {
-            return Err(ElasticError::EmptyOutput);
-        }
-        applied.set_value(target);
-        let mut total = 0.0_f64;
-        for _ in 0..output_frames {
-            total += f64::from(applied.next_smoothed());
-        }
-        applied.settle();
-        let frames = output_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let speed = (total / frames)
-            .to_f32()
-            .filter(|speed| speed.is_finite() && *speed > 0.0)
-            .ok_or(ElasticError::InvalidRate(total / frames))?;
-        Ok((speed, applied))
-    }
-}
 
 impl<S> WarpRenderer<S>
 where
@@ -224,25 +169,15 @@ where
             && self.pending_frames(usize::from(self.spec.channels.max(1))) == 0
             && self.unity_passthrough(speed)
         {
-            return Ok(self
-                .render_quantum_frames
-                .map_or(remaining, |frames| remaining.min(frames.get())));
+            let limit = match self.render_quantum_frames {
+                Some(frames) => frames.get().min(self.source_block_frames.get()),
+                None => self.source_block_frames.get(),
+            };
+            return Ok(self.cap_before_activation(meta.frame_offset, remaining.min(limit)));
         }
 
         let channels = usize::from(self.spec.channels.max(1));
-        let region = self.region_for(meta.frame_offset);
-        let region_frames = usize::try_from(
-            region
-                .end()
-                .checked_sub(meta.frame_offset)
-                .ok_or(ElasticError::SampleCountOverflow)?
-                .min(u64::try_from(remaining).map_err(|_| ElasticError::SampleCountOverflow)?),
-        )
-        .map_err(|_| ElasticError::SampleCountOverflow)?;
-        if region_frames == 0 {
-            return Err(ElasticError::StationarySourceSpan);
-        }
-        let stretch = (1.0 / f64::from(speed)) * region.correction();
+        let stretch = 1.0 / f64::from(speed);
         let capabilities = self
             .engine
             .as_ref()
@@ -264,7 +199,14 @@ where
         if available == 0 {
             return Err(ElasticError::InvalidRate(stretch.recip()));
         }
-        Ok(region_frames.min(available))
+        let projected = match self.projected_source_span(output_limit, meta.frame_offset) {
+            Some(span) => usize::try_from(span).map_err(|_| ElasticError::SampleCountOverflow)?,
+            None => remaining,
+        };
+        if projected == 0 {
+            return Err(ElasticError::StationarySourceSpan);
+        }
+        Ok(self.cap_before_activation(meta.frame_offset, projected.min(available).min(remaining)))
     }
 }
 
@@ -272,6 +214,13 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    /// Stretches one source chunk at the rate the caller settled on.
+    ///
+    /// `speed` is the one rate this render runs at: a projected item takes it
+    /// from the projection at the output frontier, and an item the projection
+    /// does not place takes it from the listener's own target. The frontier
+    /// does not move while a chunk is consumed, so the rate is read once and
+    /// every block of the chunk is stretched by it.
     pub(super) fn render_active(
         &mut self,
         meta: AudioChunkInfo,
@@ -280,23 +229,16 @@ where
         channels: usize,
         frames: usize,
     ) -> Result<(), ElasticError> {
-        let base = 1.0 / f64::from(speed);
-        let pitch = if self.controls.keylock() {
-            1.0
-        } else {
-            f64::from(speed)
-        };
         let mut consumed = 0usize;
         let mut frame = meta.frame_offset;
-        self.apply_pitch(pitch)?;
+        let rate = f64::from(speed);
+        let stretch = 1.0 / rate;
         for _ in 0..frames {
             if consumed == frames {
                 return Ok(());
             }
-            let region = self.region_for(frame);
-            let left = u64::try_from(frames - consumed).unwrap_or(u64::MAX);
-            let span = region.end().saturating_sub(frame).min(left).max(1);
-            let stretch = base * region.correction();
+            let span = u64::try_from(frames - consumed).unwrap_or(u64::MAX).max(1);
+            self.apply_pitch(if self.controls.keylock() { 1.0 } else { rate })?;
             let capabilities = self
                 .engine
                 .as_ref()

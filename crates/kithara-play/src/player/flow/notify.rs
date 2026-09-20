@@ -94,6 +94,9 @@ where
         }
         let index = pending.index;
         self.publish_current_track_snapshot(pending.duration_seconds);
+        if let Some(outgoing) = self.core.items.current_item_id() {
+            self.core.items.cancel_outgoing_free_adoption(outgoing);
+        }
         self.core.items.set_current(index);
         self.announce_current_item(index);
     }

@@ -1,9 +1,14 @@
-use kithara_audio::{AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackStep};
+use kithara_audio::{
+    AudioSource, Fetch, ScheduledSeekPreparation, SourceDiscontinuity, SourceEnd, TrackStep,
+    WaitingReason,
+};
 use kithara_bufpool::{BufferRing, HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::SeekObserve;
+use kithara_warp::{WarpMap, WarpPlanSlot};
 
+use super::{FreeAdoptionCommit, FreeAdoptionInstalled, FreeAdoptionWorker};
 use crate::effects::{
     AudioEffect, EffectDrain, EffectDrainStep, apply_effects, held_source_frames, reset_effects,
 };
@@ -35,6 +40,17 @@ struct PendingInput {
     consumed_frames: usize,
 }
 
+/// Owned collaborators for one Warp source stage.
+pub(crate) struct WarpSourceParts<S> {
+    pub(crate) warp: kithara_warp::WarpRenderer<S>,
+    pub(crate) effects: Vec<Box<dyn AudioEffect>>,
+    pub(crate) drain: EffectDrain,
+    pub(crate) spec: AudioSpec,
+    pub(crate) pools: PoolRegion<S>,
+    pub(crate) free_adoption: Option<FreeAdoptionWorker>,
+    pub(crate) region_plan: Arc<WarpPlanSlot>,
+}
+
 /// The sole producer-side Warp/effect stage before the play output ring.
 pub(crate) struct WarpSource<T, S> {
     seek: Arc<dyn SeekObserve>,
@@ -54,7 +70,13 @@ pub(crate) struct WarpSource<T, S> {
     source: T,
     effects: Vec<Box<dyn AudioEffect>>,
     warp: kithara_warp::WarpRenderer<S>,
+    free_adoption: Option<FreeAdoptionWorker>,
+    free_adoption_generation: u64,
+    region_plan: Arc<WarpPlanSlot>,
     quantum_failed: bool,
+    /// Whether the staged span waits for the callback to publish a render
+    /// context before Warp can install its activation map.
+    awaits_render_context: bool,
 }
 
 impl<T, S> WarpSource<T, S>
@@ -62,14 +84,16 @@ where
     T: AudioSource<Chunk = AudioChunk>,
     S: HasPool<f32>,
 {
-    pub(crate) fn new(
-        source: T,
-        warp: kithara_warp::WarpRenderer<S>,
-        effects: Vec<Box<dyn AudioEffect>>,
-        drain: EffectDrain,
-        spec: AudioSpec,
-        pools: PoolRegion<S>,
-    ) -> Self {
+    pub(crate) fn new(source: T, parts: WarpSourceParts<S>) -> Self {
+        let WarpSourceParts {
+            warp,
+            effects,
+            drain,
+            spec,
+            pools,
+            free_adoption,
+            region_plan,
+        } = parts;
         let discontinuity = source.discontinuity();
         let seek = source.seek_observe();
         Self {
@@ -91,6 +115,10 @@ where
             render_input: None,
             retired_input: None,
             quantum_failed: false,
+            awaits_render_context: false,
+            free_adoption,
+            free_adoption_generation: 0,
+            region_plan,
         }
     }
 
@@ -112,6 +140,7 @@ where
         self.retire_pending_input();
         self.clear_staging();
         self.quantum_failed = false;
+        self.awaits_render_context = false;
     }
 
     fn prepare_staging(&mut self) {
@@ -133,6 +162,10 @@ where
         }) else {
             return;
         };
+        self.awaits_render_context = self.warp.awaits_render_context(meta.frame_offset);
+        if self.awaits_render_context {
+            return;
+        }
         let Some(frames) = self.warp.prepare_quantum(meta, remaining) else {
             self.quantum_failed = true;
             return;
@@ -148,6 +181,12 @@ where
             .as_ref()
             .is_none_or(|staging| staging.capacity() != required);
         if needs_staging {
+            let staged_frames = self.staged_frames();
+            kithara_test_macros::probe_event!(
+                warp_staging_resized,
+                staged_frames,
+                required_frames = frames
+            );
             let mut buffer = self
                 .staging
                 .take()
@@ -268,6 +307,12 @@ where
         let channels = usize::from(self.spec.channels.max(1));
         self.staging.as_ref().map_or(0, BufferRing::len) / channels
     }
+
+    /// A Free map can only anchor at the source frame that [`WarpRenderer`] will
+    /// consume next. Pending or staged PCM is already owned by the old map.
+    fn free_adoption_boundary_is_quiescent(&self) -> bool {
+        self.pending_input.is_none() && self.prepared_frames.is_none() && self.staged_frames() == 0
+    }
 }
 
 impl<T, S> WarpSource<T, S>
@@ -276,6 +321,14 @@ where
     S: HasPool<f32>,
 {
     fn begin_drain(&mut self, epoch: u64) {
+        kithara_test_macros::probe_event!(
+            warp_source_input_exhausted,
+            seek_epoch = epoch,
+            source_end = self
+                .warp
+                .rendered_source_end()
+                .map_or(0, |(frame, _)| frame)
+        );
         self.drain_state = DrainState::Warp(epoch);
     }
 
@@ -363,6 +416,85 @@ where
         match source_end {
             Some(source_end) => Fetch::rendered(data, epoch, source_end),
             None => Fetch::data(data, epoch),
+        }
+    }
+
+    /// Adopt only at the next source boundary, before this stage accepts input.
+    fn adopt_free_request(&mut self) {
+        if !self.free_adoption_boundary_is_quiescent() {
+            return;
+        }
+        let Some(adoption) = &self.free_adoption else {
+            return;
+        };
+        let decode_epoch = self.source.decode_epoch();
+        adoption.publish_epoch(decode_epoch);
+        let generation = adoption.pending_generation();
+        if generation == 0 || generation == self.free_adoption_generation {
+            return;
+        }
+        let Some(request) = adoption.snapshot(generation, decode_epoch) else {
+            return;
+        };
+        let Some(frontier) = self.warp.adoption_frontier() else {
+            return;
+        };
+        match request.readiness(frontier) {
+            crate::worker::FreeAdoptionReadiness::Pending => return,
+            crate::worker::FreeAdoptionReadiness::Rejected => {
+                if adoption.reject_geometry(generation, &request) {
+                    self.free_adoption_generation = generation;
+                }
+                return;
+            }
+            crate::worker::FreeAdoptionReadiness::Ready => {}
+        }
+        let alignment = request.alignment;
+        let plan = Arc::new(request.plan.as_ref().clone().with_free_activation(
+            kithara_warp::FreeActivation::new(
+                WarpMap::identity(request.stamp.successor).reanchor(
+                    alignment.source,
+                    alignment.activation,
+                    alignment.activation_beat,
+                ),
+                request.manual_rate,
+            ),
+        ));
+        let seek_epoch = self.seek.epoch();
+        let installed = FreeAdoptionInstalled {
+            stamp: request.stamp,
+            item: request.item,
+            decode_epoch,
+            alignment,
+        };
+        if matches!(
+            adoption.commit(
+                generation,
+                &request,
+                decode_epoch,
+                || self.seek.epoch() == seek_epoch && self.source.decode_epoch() == decode_epoch,
+                || self.region_plan.install(Some(plan)),
+                installed,
+            ),
+            FreeAdoptionCommit::Installed
+        ) {
+            kithara_test_macros::probe_event!(
+                free_adoption_installed,
+                operation = u64::from(installed.stamp.operation),
+                warp_map = u64::from(installed.stamp.successor),
+                track = installed.item.as_u64(),
+                load = u64::from(installed.stamp.load),
+                transport = u64::from(installed.stamp.transport)
+            );
+            kithara_test_macros::probe_event!(
+                free_adoption_activation,
+                operation = u64::from(installed.stamp.operation),
+                warp_map = u64::from(installed.stamp.successor),
+                source = installed.alignment.source,
+                output = i64::from(installed.alignment.activation),
+                activation_beat_bits = f64::from(installed.alignment.activation_beat).to_bits()
+            );
+            self.free_adoption_generation = generation;
         }
     }
 
@@ -532,6 +664,18 @@ where
         spec
     }
 
+    fn prepare_scheduled_seek(&mut self) -> ScheduledSeekPreparation {
+        match self.warp.scheduled_activation_progress() {
+            kithara_warp::ScheduledActivationProgress::AwaitingActivation => {
+                ScheduledSeekPreparation::AwaitingActivation
+            }
+            kithara_warp::ScheduledActivationProgress::ProducingOldPcm => {
+                ScheduledSeekPreparation::ProducingOldPcm
+            }
+            kithara_warp::ScheduledActivationProgress::Ready => ScheduledSeekPreparation::Ready,
+        }
+    }
+
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {
         Arc::clone(&self.seek)
     }
@@ -544,6 +688,7 @@ where
         if self.cancel_stale_drain() {
             return TrackStep::StateChanged;
         }
+        self.adopt_free_request();
         if self.quantum_failed {
             return TrackStep::Failed;
         }
@@ -565,6 +710,9 @@ where
         }
         if self.pending_input.is_some() {
             if self.prepared_frames.is_none() {
+                if self.awaits_render_context {
+                    return TrackStep::Blocked(WaitingReason::Waiting);
+                }
                 return TrackStep::StateChanged;
             }
             self.stage_pending();
@@ -580,6 +728,7 @@ where
             TrackStep::Produced(Fetch::Data { data, epoch, .. }) => {
                 if data.spec() == self.spec
                     && self.prepared_frames.is_none()
+                    && !self.warp.awaits_render_context(data.meta.frame_offset)
                     && self
                         .warp
                         .prepare_quantum(data.meta, data.frames())
@@ -644,6 +793,7 @@ mod tests {
 
     use kithara_audio::{Fetch, TrackStep, WaitingReason};
     use kithara_bufpool::PoolRegion;
+    use kithara_events::TrackId;
     use kithara_platform::sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -654,10 +804,70 @@ mod tests {
         half, negative_half, negative_quarter, quarter, three_quarter,
     };
     use kithara_test_utils::kithara;
-    use kithara_warp::{StretchControls, StretchKind};
+    use kithara_warp::{
+        AssetAxis, Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot,
+        LoadGeneration, MapAxis, MapPoint, PresentationFrontier, RateTarget, RenderContext,
+        SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame, StretchControls,
+        StretchKind, SyncOperationId, TopologyRevision, TopologyStamp, TransportRevision, Warp,
+        WarpMapRevision, WarpPlan,
+    };
 
     use super::*;
     use crate::test_pools::{TestPools, pools, pools_with_budget};
+
+    /// The rate the fixture plans count asset frames of.
+    fn fixture_rate() -> NonZeroU32 {
+        NonZeroU32::new(48_000).expect("invariant: fixture rate is non-zero")
+    }
+
+    /// A grid the fixture plans carry when the plan's geometry is not under test.
+    fn fixture_grid() -> BeatGridSnapshot {
+        BeatGridSnapshot::unavailable(
+            BeatGridId::allocate().expect("fixture identity"),
+            BeatGridRevision::first(),
+            MapAxis::Asset(AssetAxis::new(fixture_rate(), u64::MAX)),
+        )
+    }
+
+    fn free_request(
+        owner: BeatGridSnapshot,
+        target: BeatGridSnapshot,
+        warp_map: WarpMapRevision,
+        item: TrackId,
+        manual_rate: RateTarget,
+        source: u64,
+        output: SessionFrame,
+    ) -> crate::worker::FreeAdoptionRequest {
+        let stamp = kithara_sync::SyncExecutionStamp {
+            operation: SyncOperationId::first(),
+            predecessor: WarpMapRevision::first(),
+            successor: warp_map,
+            target: target.id(),
+            load: LoadGeneration::first(),
+            transport: TransportRevision::first(),
+            topology: TopologyStamp::new(owner.id(), TopologyRevision::first()),
+            owner_grid: owner.stamp(),
+            target_grid: target.stamp(),
+            owner_axis: owner.axis(),
+            target_axis: target.axis(),
+        };
+        crate::worker::FreeAdoptionRequest {
+            stamp,
+            alignment: kithara_sync::MemberAlignment {
+                alignment: BeatAlignment::new(
+                    MapPoint::new(target.stamp(), Beat::default()),
+                    MapPoint::new(owner.stamp(), Beat::default()),
+                ),
+                activation: output,
+                activation_beat: SessionBeat::default(),
+                source,
+            },
+            item,
+            decode_epoch: 0,
+            manual_rate,
+            plan: Arc::new(WarpPlan::new(target)),
+        }
+    }
 
     fn flush_deferred<S>(source: &mut S)
     where
@@ -694,11 +904,22 @@ mod tests {
                 NonZeroUsize::new(quantum_frames).expect("test quantum is non-zero"),
             )
             .build();
-        let warp = kithara_warp::Warp::new((), &config);
+        let warp = Warp::new((), &config);
         let renderer = warp.renderer(spec, pools.clone());
         let drain = EffectDrain::new(effects.len(), pools)
             .unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        WarpSource::new(source, renderer, effects, drain, spec, pools.clone())
+        WarpSource::new(
+            source,
+            WarpSourceParts {
+                warp: renderer,
+                effects,
+                drain,
+                spec,
+                pools: pools.clone(),
+                free_adoption: None,
+                region_plan: Arc::default(),
+            },
+        )
     }
 
     struct RawSource {
@@ -1032,6 +1253,183 @@ mod tests {
         )
     }
 
+    #[kithara::test]
+    fn free_adoption_waits_for_owned_pending_and_staged_pcm() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("fixture sample rate"));
+        let pools = pools();
+        let raw = RawSource {
+            chunks: VecDeque::new(),
+            head: Arc::new(AtomicU64::new(0)),
+            seek: Arc::new(SeekState::new()),
+        };
+        let mut source = source_stage(&pools, raw, Vec::new(), spec);
+        let pending = chunk_with_frames(&pools, spec, 24_064, 128, &vec![0.0; 256]);
+        source.pending_input = Some(PendingInput {
+            chunk: pending,
+            epoch: 0,
+            consumed_frames: 0,
+        });
+        assert!(!source.free_adoption_boundary_is_quiescent());
+
+        source.pending_input = None;
+        source.prepared_frames = Some(128);
+        assert!(!source.free_adoption_boundary_is_quiescent());
+
+        source.prepared_frames = None;
+        assert!(source.free_adoption_boundary_is_quiescent());
+    }
+
+    #[kithara::test]
+    fn free_adoption_commits_at_a_quiescent_or_one_quantum_boundary() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("fixture sample rate"));
+        let pools = pools();
+        let controls = StretchControls::new(1.0);
+        let config = kithara_warp::WarpConfig::builder()
+            .stretch(Arc::clone(&controls))
+            .render_quantum_frames(NonZeroUsize::new(32).expect("fixture quantum"))
+            .build();
+        let raw = RawSource {
+            chunks: VecDeque::from([
+                chunk_with_frames(&pools, spec, 0, 64, &[0.25; 128]),
+                chunk_with_frames(&pools, spec, 64, 64, &[0.5; 128]),
+            ]),
+            head: Arc::new(AtomicU64::new(0)),
+            seek: Arc::new(SeekState::new()),
+        };
+        let mut warp = Warp::new((), &config);
+        let publisher = warp.take_publisher().expect("fixture publisher");
+        let region_plan = Arc::clone(warp.region_plan());
+        let old_warp_map = WarpMapRevision::first();
+        region_plan.install(Some(Arc::new(
+            WarpPlan::new(fixture_grid()).with_activation(
+                WarpMap::identity(old_warp_map).reanchor(
+                    0,
+                    SessionFrame::new(0),
+                    SessionBeat::default(),
+                ),
+            ),
+        )));
+        let renderer = warp.renderer(spec, pools.clone());
+        let drain = EffectDrain::new(0, &pools).expect("fixture drain");
+        let (control, worker) = crate::worker::free_adoption();
+        let mut source = WarpSource::new(
+            raw,
+            WarpSourceParts {
+                warp: renderer,
+                effects: Vec::new(),
+                drain,
+                spec,
+                pools,
+                free_adoption: Some(worker),
+                region_plan,
+            },
+        );
+        let context = RenderContext::new(
+            SessionFrame::new(0)..SessionFrame::new(128),
+            spec.sample_rate,
+            None,
+            SessionEpoch::new(0),
+            None,
+        )
+        .expect("fixture context");
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(0)
+                .output(SessionFrame::new(0))
+                .warp_map(old_warp_map)
+                .build(),
+        );
+        flush_deferred(&mut source);
+
+        assert!(matches!(source.step_track(), TrackStep::StateChanged));
+        flush_deferred(&mut source);
+        let old_step = source.step_track();
+        let old = match old_step {
+            TrackStep::Produced(Fetch::Data { data, .. }) => data,
+            TrackStep::StateChanged => panic!("old quantum needs one more staging step"),
+            TrackStep::Blocked(_) => panic!("old quantum unexpectedly blocks"),
+            TrackStep::Eof => panic!("old quantum unexpectedly reaches eof"),
+            TrackStep::Failed => panic!("old quantum unexpectedly fails"),
+            TrackStep::Produced(_) => panic!("old quantum unexpectedly produces a terminal fetch"),
+        };
+        assert_eq!(old.frames(), 32);
+        assert_eq!(
+            kithara_signal::render_warp_map_revision(old.meta.render_revision),
+            u64::from(old_warp_map)
+        );
+        assert!(
+            !source.free_adoption_boundary_is_quiescent(),
+            "one old 32-frame quantum remains owned by the source stage"
+        );
+
+        let owner = BeatGridSnapshot::session(
+            BeatGridId::allocate().expect("fixture grid id"),
+            BeatGridRevision::first(),
+            SessionEpoch::new(0),
+            SessionAnchor::new(
+                SessionFrame::new(0),
+                SessionBeat::default(),
+                2.0,
+                SessionAxis::new(spec.sample_rate, SessionEpoch::new(0)),
+            )
+            .expect("fixture anchor"),
+            None,
+        );
+        controls.set_speed(0.75);
+        let manual_rate = controls.rate_target();
+        let warp_map = old_warp_map
+            .checked_next()
+            .expect("fixture map revision advances");
+        let item = TrackId::allocate();
+        control.publish(free_request(
+            owner,
+            fixture_grid(),
+            warp_map,
+            item,
+            manual_rate,
+            64,
+            SessionFrame::new(64),
+        ));
+
+        assert!(matches!(source.step_track(), TrackStep::StateChanged));
+        flush_deferred(&mut source);
+        let TrackStep::Produced(Fetch::Data { data: last_old, .. }) = source.step_track() else {
+            panic!("the one staged old quantum is produced");
+        };
+        assert_eq!(last_old.frames(), 32);
+        assert_eq!(
+            kithara_signal::render_warp_map_revision(last_old.meta.render_revision),
+            u64::from(old_warp_map)
+        );
+        assert!(source.free_adoption_boundary_is_quiescent());
+        assert!(control.receipt().is_none(), "staged PCM blocks adoption");
+
+        assert!(matches!(source.step_track(), TrackStep::StateChanged));
+        flush_deferred(&mut source);
+        let TrackStep::Produced(Fetch::Data { data: target, .. }) = source.step_track() else {
+            panic!("the first post-boundary quantum is produced");
+        };
+        assert_eq!(
+            kithara_signal::render_warp_map_revision(target.meta.render_revision),
+            u64::from(warp_map)
+        );
+        assert_eq!(
+            kithara_signal::render_rate_revision(target.meta.render_revision),
+            manual_rate.revision()
+        );
+        assert!(matches!(
+            control.receipt(),
+            Some(crate::worker::FreeAdoptionReceipt::Installed(receipt))
+                if receipt.item == item
+                    && receipt.stamp.successor == warp_map
+                    && receipt.alignment.activation == SessionFrame::new(64)
+        ));
+
+        // The request saw exactly one 32-frame staged quantum; no earlier
+        // post-request output may retain the old map.
+    }
+
     #[kithara::test(native)]
     #[case::q16(16)]
     #[case::q32(32)]
@@ -1082,6 +1480,67 @@ mod tests {
             input_frames.iter().copied().sum::<usize>()
         );
         assert_eq!(output_samples, expected_samples);
+    }
+
+    #[kithara::test]
+    #[case::unity(1.0, 1_387)]
+    #[case::stretched(1.5, 925)]
+    fn decoder_timestamp_gap_does_not_discard_pcm(
+        #[case] rate: f32,
+        #[case] minimum_frames: usize,
+    ) {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let pools = pools();
+        let input = vec![0.25; 2_048];
+        let source = RawSource {
+            chunks: VecDeque::from([
+                chunk_with_frames(&pools, spec, 1_024, 363, &input),
+                chunk_with_frames(&pools, spec, 2_048, 1_024, &input),
+            ]),
+            head: Arc::new(AtomicU64::new(0)),
+            seek: Arc::new(SeekState::new()),
+        };
+        let config = kithara_warp::WarpConfig::builder()
+            .stretch(StretchControls::new(rate))
+            .render_quantum_frames(NonZeroUsize::new(32).expect("test quantum"))
+            .build();
+        let warp = Warp::new((), &config);
+        let renderer = warp.renderer(spec, pools.clone());
+        let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
+        let mut source = WarpSource::new(
+            source,
+            WarpSourceParts {
+                warp: renderer,
+                effects: Vec::new(),
+                drain,
+                spec,
+                pools,
+                free_adoption: None,
+                region_plan: Arc::default(),
+            },
+        );
+        let mut output_frames = 0;
+        let mut eof = false;
+
+        for _ in 0..512 {
+            flush_deferred(&mut source);
+            match source.step_track() {
+                TrackStep::Produced(Fetch::Data { data, .. }) => output_frames += data.frames(),
+                TrackStep::StateChanged => {}
+                TrackStep::Eof => {
+                    eof = true;
+                    break;
+                }
+                _ => panic!("timestamp gaps must not fail decoded PCM delivery"),
+            }
+        }
+
+        assert!(eof, "both decoded ranges must reach EOF");
+        assert!(
+            output_frames >= minimum_frames,
+            "both decoded ranges must be rendered: {output_frames} < {minimum_frames}"
+        );
+        assert_eq!(source.source.chunks.len(), 0, "both source chunks consumed");
     }
 
     #[kithara::test]
@@ -1214,6 +1673,132 @@ mod tests {
     }
 
     #[kithara::test]
+    fn free_adoption_keeps_the_resident_renderer_and_effect_chain() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
+        let pools = pools();
+        let resets = Arc::new(AtomicU64::new(0));
+        let seek = Arc::new(SeekState::new());
+        let raw = RawSource {
+            chunks: VecDeque::from([
+                chunk_with_frames(&pools, spec, 0, 128, &[0.25; 256]),
+                chunk_with_frames(&pools, spec, 128, 128, &[0.5; 256]),
+            ]),
+            head: Arc::new(AtomicU64::new(0)),
+            seek,
+        };
+        let controls = StretchControls::new(1.0);
+        let config = kithara_warp::WarpConfig::builder()
+            .stretch(Arc::clone(&controls))
+            .build();
+        let mut warp = Warp::new((), &config);
+        let publisher = warp.take_publisher().expect("fixture publisher");
+        let region_plan = Arc::clone(warp.region_plan());
+        let old_warp_map = WarpMapRevision::first();
+        region_plan.install(Some(Arc::new(
+            WarpPlan::new(fixture_grid()).with_activation(
+                WarpMap::identity(old_warp_map).reanchor(
+                    0,
+                    SessionFrame::new(0),
+                    SessionBeat::default(),
+                ),
+            ),
+        )));
+        let renderer = warp.renderer(spec, pools.clone());
+        let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResetCounter {
+            resets: Arc::clone(&resets),
+        })];
+        let drain = EffectDrain::new(effects.len(), &pools).expect("fixture drain");
+        let (control, worker) = crate::worker::free_adoption();
+        let mut source = WarpSource::new(
+            raw,
+            WarpSourceParts {
+                warp: renderer,
+                effects,
+                drain,
+                spec,
+                pools,
+                free_adoption: Some(worker),
+                region_plan,
+            },
+        );
+        let context = RenderContext::new(
+            SessionFrame::new(0)..SessionFrame::new(256),
+            spec.sample_rate,
+            None,
+            SessionEpoch::new(0),
+            None,
+        )
+        .expect("fixture context");
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(0)
+                .output(SessionFrame::new(0))
+                .warp_map(old_warp_map)
+                .build(),
+        );
+        let TrackStep::Produced(Fetch::Data { data: old, .. }) = source.step_track() else {
+            panic!("the initial quiescent span is produced");
+        };
+        assert_eq!(
+            kithara_signal::render_warp_map_revision(old.meta.render_revision),
+            u64::from(old_warp_map)
+        );
+        assert!(source.free_adoption_boundary_is_quiescent());
+
+        let owner = BeatGridSnapshot::session(
+            BeatGridId::allocate().expect("fixture grid id"),
+            BeatGridRevision::first(),
+            SessionEpoch::new(0),
+            SessionAnchor::new(
+                SessionFrame::new(0),
+                SessionBeat::default(),
+                2.0,
+                SessionAxis::new(spec.sample_rate, SessionEpoch::new(0)),
+            )
+            .expect("fixture anchor"),
+            None,
+        );
+        controls.set_speed(0.75);
+        let manual_rate = controls.rate_target();
+        let warp_map = old_warp_map
+            .checked_next()
+            .expect("fixture map revision advances");
+        control.publish(free_request(
+            owner,
+            fixture_grid(),
+            warp_map,
+            TrackId::allocate(),
+            manual_rate,
+            128,
+            SessionFrame::new(128),
+        ));
+        let TrackStep::Produced(Fetch::Data { data: target, .. }) = source.step_track() else {
+            panic!("the next source step adopts Free before it produces PCM");
+        };
+        assert_eq!(
+            kithara_signal::render_warp_map_revision(target.meta.render_revision),
+            u64::from(warp_map),
+            "a quiescent request permits no old-map PCM"
+        );
+        assert_eq!(
+            kithara_signal::render_rate_revision(target.meta.render_revision),
+            manual_rate.revision()
+        );
+        assert_eq!(resets.load(Ordering::Acquire), 0);
+        assert_eq!(source.source.head.load(Ordering::Acquire), 256);
+        assert_eq!(
+            source.warp.rendered_source_end(),
+            Some((256, spec.sample_rate)),
+            "Free keeps the resident source frontier contiguous"
+        );
+        assert!(matches!(
+            control.receipt(),
+            Some(crate::worker::FreeAdoptionReceipt::Installed(_))
+        ));
+    }
+
+    #[kithara::test]
     fn unity_warp_preserves_samples_and_meta_across_discontinuity(
         quarter: Vec<f32>,
         negative_quarter: Vec<f32>,
@@ -1310,11 +1895,24 @@ mod tests {
                 NonZeroUsize::new(render_quantum_frames).expect("test quantum is non-zero"),
             )
             .build();
-        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
+        let mut warp = Warp::new((), &config);
+        let publisher = warp.take_publisher().expect("fixture owns publisher");
+        let renderer = warp.renderer(spec, pools.clone());
         let effects = Vec::new();
         let drain = EffectDrain::new(effects.len(), &pools)
             .unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        let mut source = WarpSource::new(raw, renderer, effects, drain, spec, pools.clone());
+        let mut source = WarpSource::new(
+            raw,
+            WarpSourceParts {
+                warp: renderer,
+                effects,
+                drain,
+                spec,
+                pools: pools.clone(),
+                free_adoption: None,
+                region_plan: Arc::default(),
+            },
+        );
 
         let initial = source.step_track();
         assert!(matches!(
@@ -1331,6 +1929,23 @@ mod tests {
         }
 
         controls.set_speed(1.0);
+        let frame = SessionFrame::new(i64::from(ACTIVE_FRAMES));
+        let context = RenderContext::new(
+            frame..frame,
+            spec.sample_rate,
+            None,
+            SessionEpoch::new(0),
+            None,
+        )
+        .expect("fixture context")
+        .with_rate(controls.rate_target());
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(first_active_end)
+                .output(frame)
+                .build(),
+        );
         let transition = source.step_track();
         assert!(matches!(
             &transition,
@@ -1400,11 +2015,22 @@ mod tests {
             .stretch(controls)
             .build();
         let target_pools = pools_with_budget(0);
-        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, target_pools.clone());
+        let renderer = Warp::new((), &config).renderer(spec, target_pools.clone());
         let effects = Vec::new();
         let drain = EffectDrain::new(effects.len(), &target_pools)
             .unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        let mut source = WarpSource::new(raw, renderer, effects, drain, spec, target_pools.clone());
+        let mut source = WarpSource::new(
+            raw,
+            WarpSourceParts {
+                warp: renderer,
+                effects,
+                drain,
+                spec,
+                pools: target_pools.clone(),
+                free_adoption: None,
+                region_plan: Arc::default(),
+            },
+        );
 
         for _ in 0..3 {
             flush_deferred(&mut source);

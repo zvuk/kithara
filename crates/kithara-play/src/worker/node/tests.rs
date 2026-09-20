@@ -24,7 +24,7 @@ use super::*;
 use crate::{
     effects::EffectDrain,
     test_pools::{Pools, pools, sample_buffer},
-    worker::{EngineLoad, WarpSource},
+    worker::{EngineLoad, WarpSource, WarpSourceParts},
 };
 
 pub(super) async fn prepared_node<S>(
@@ -184,7 +184,18 @@ async fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
     let config = kithara_warp::WarpConfig::builder().build();
     let warp = kithara_warp::Warp::new((), &config);
     let renderer = warp.renderer(spec, pools.clone());
-    let source = WarpSource::new(source, renderer, effects, drain, spec, pools);
+    let source = WarpSource::new(
+        source,
+        WarpSourceParts {
+            warp: renderer,
+            effects,
+            drain,
+            spec,
+            pools,
+            free_adoption: None,
+            region_plan: Arc::default(),
+        },
+    );
     let bus = EventBus::new(8);
     let mut events = bus.subscribe();
     let (mut node, mut audio) = prepared_node(source, 1, 1).await;
@@ -454,19 +465,13 @@ async fn decoder_node_seek_rearms_preload_gate() {
 
     let epoch = SeekControl::begin(&*seek_state, Duration::from_secs(1));
 
-    assert_eq!(node.tick(), TickResult::Backpressured);
+    assert_eq!(node.tick(), TickResult::Progress);
     assert!(!node.runtime.preloaded, "seek resets the preload runtime");
     assert!(!gate.is_ready(), "sync_seek_epoch closes the gate");
 
     assert!(
         matches!(audio.next_chunk(), Ok(ChunkOutcome::Chunk(_))),
         "consumer discards the stale pre-seek chunk"
-    );
-
-    assert_eq!(node.tick(), TickResult::Progress);
-    assert!(
-        !node.runtime.preloaded,
-        "source first applies the seek epoch"
     );
 
     assert_eq!(node.tick(), TickResult::Progress);

@@ -74,6 +74,11 @@ impl AudioNodeProcessor for LimiterProcessor {
         self.limiter = Self::build_limiter(stream_info.sample_rate, self.config);
     }
 
+    /// Limits one block of the session mix.
+    ///
+    /// A silent block never reaches the limiter, so its detector is reset:
+    /// otherwise the history from before the silence would judge whatever
+    /// starts after it, and the next onset would not be judged as an onset.
     #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,

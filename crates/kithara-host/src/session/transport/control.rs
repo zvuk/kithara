@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
-use kithara_warp::{BeatGrid, BeatGridState, MapAxis, SessionFrame};
+use kithara_warp::{BeatGrid, BeatGridId, BeatGridState, MapAxis, SessionAnchor, SessionFrame};
 
 use super::{
     commit::{
@@ -9,7 +9,7 @@ use super::{
         TransportCommitStamp, TransportObservation,
     },
     event::TransportEvent,
-    process::converge_transport_restart,
+    process::{commit_anchor, converge_transport_restart},
 };
 use crate::{
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
@@ -49,6 +49,7 @@ enum TransportPhase {
     Applying {
         next: SessionTransportCommit,
         previous: Option<SessionTransportCommit>,
+        target_frame: SessionFrame,
     },
     Aborting {
         delivery: AbortDelivery,
@@ -96,14 +97,18 @@ pub(crate) fn set_tempo<B: AudioBackend, S>(
     if accepted.is_some_and(|commit| commit.tempo() == tempo) {
         return Ok(());
     }
-    ensure_no_pending_commit(state)?;
     let revision = next_revision(state)?;
-    let (target_frame, sample_rate) = commit_boundary(state)?;
-    let next = SessionTransportCommit::new(
-        tempo,
-        accepted.is_none_or(|commit| commit.is_playing()),
-        revision,
-    );
+    let (target_frame, sample_rate) = superseding_boundary(state)?;
+    let playing = accepted.is_none_or(|commit| commit.is_playing());
+    let next = match (
+        state.transport.pending_revision(),
+        accepted.map(|commit| commit.boundary()),
+    ) {
+        (Some(_), Some(TransportBoundary::Relocate(target))) => {
+            SessionTransportCommit::relocate(tempo, playing, revision, target)
+        }
+        _ => SessionTransportCommit::new(tempo, playing, revision),
+    };
     let stamp =
         TransportCommitStamp::new(state.transport.observed(), next, target_frame, sample_rate);
     schedule_commit(state, next, stamp)
@@ -326,8 +331,27 @@ fn schedule_commit<B: AudioBackend, S>(
         return Err(error);
     }
     let previous = state.transport.observed();
-    state.transport.phase = TransportPhase::Applying { next, previous };
+    state.transport.phase = TransportPhase::Applying {
+        next,
+        previous,
+        target_frame: stamp.target_frame(),
+    };
+    announce_scheduled_anchor(state, stamp);
     Ok(())
+}
+
+/// The boundary a tempo intent lands on: the frame a pending commit already
+/// reserved, so a stream of intents cannot push it away, while that frame is
+/// still at least one block ahead of the clock the render thread may reach.
+fn superseding_boundary<B: AudioBackend, S>(
+    state: &SessionState<B, S>,
+) -> Result<(SessionFrame, NonZeroU32), SessionError> {
+    let (boundary, sample_rate) = commit_boundary(state)?;
+    let reserved = match state.transport.phase {
+        TransportPhase::Applying { target_frame, .. } if target_frame >= boundary => target_frame,
+        _ => boundary,
+    };
+    Ok((reserved, sample_rate))
 }
 
 fn commit_boundary<B: AudioBackend, S>(
@@ -428,6 +452,37 @@ where
     }
 }
 
+/// Publishes the session grid and anchor the rendered transport last observed.
+///
+/// A session tick runs this so the Host grid follows the rendered transport
+/// without waiting for the next transport command.
+pub(crate) fn publish_rendered_session<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+) -> Result<(), SessionError> {
+    if state.reserved_session_grid.is_some() {
+        return Ok(());
+    }
+    let Some(control) = state.transport_control.as_mut() else {
+        return Ok(());
+    };
+    let observation = control.observation();
+    publish_observed_session(state, observation)
+}
+
+fn publish_observed_session<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    observation: TransportObservation,
+) -> Result<(), SessionError> {
+    if let Some(snapshot) = observation.snapshot() {
+        if state.root.snapshot().stamp() != snapshot.session_grid_stamp() {
+            state.root.publish_grid(snapshot.session_grid())?;
+            state.publish_root();
+        }
+        deliver_session_anchor(state, snapshot.anchor());
+    }
+    Ok(())
+}
+
 fn refresh_observation<B: AudioBackend, S>(
     state: &mut SessionState<B, S>,
 ) -> Result<TransportObservation, SessionError> {
@@ -439,12 +494,8 @@ fn refresh_observation<B: AudioBackend, S>(
         .as_mut()
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
-    if let Some(snapshot) = observation.snapshot()
-        && state.root.snapshot().stamp() != snapshot.session_grid_stamp()
-    {
-        state.root.publish_grid(snapshot.session_grid())?;
-        state.publish_root();
-    }
+    publish_observed_session(state, observation)?;
+    advance_prepared_decks(state);
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);
     }
@@ -461,6 +512,87 @@ fn refresh_observation<B: AudioBackend, S>(
         return Err(SessionError::TransportCommitRejected);
     }
     Ok(observation)
+}
+
+/// Hands the decks the anchor a scheduled `stamp` lands on, so a deck plans the
+/// change against the commit frame instead of a block after the graph rendered
+/// it. An observation that does not show the commit the stamp builds on leaves
+/// delivery to the rendered observation.
+fn announce_scheduled_anchor<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    stamp: TransportCommitStamp,
+) {
+    let Some(control) = state.transport_control.as_mut() else {
+        return;
+    };
+    let observation = control.observation();
+    let snapshot = observation.snapshot();
+    if snapshot.map(|snapshot| snapshot.revision())
+        != stamp.previous().map(|commit| commit.revision())
+    {
+        return;
+    }
+    match commit_anchor(
+        stamp,
+        stamp.previous(),
+        snapshot.map(SessionTransportSnapshot::anchor),
+        observation.session_grid().epoch(),
+    ) {
+        Ok(anchor) => deliver_session_anchor(state, anchor),
+        Err(error) => {
+            tracing::warn!(
+                error = error.message(),
+                "scheduled transport commit has no anchor"
+            );
+        }
+    }
+}
+
+fn deliver_session_anchor<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    anchor: SessionAnchor,
+) {
+    if state.delivered_anchor == Some(anchor) {
+        return;
+    }
+    for deck in state.root.nested_groups_mut() {
+        if let Err(error) = deck.commit_session_anchor(anchor) {
+            tracing::warn!(%error, deck = %deck.id(), "deck did not take the session anchor");
+        }
+    }
+    state.delivered_anchor = Some(anchor);
+}
+
+/// Advances the synchronization of every deck the Host owns.
+///
+/// A deck acknowledges the map it has rendered up to and plans the entry of
+/// the tracks it holds but does not play, both against the session axis this
+/// pass leaves behind.
+pub(crate) fn advance_prepared_decks<B: AudioBackend, S>(state: &mut SessionState<B, S>) {
+    let Some(ctx) = state.ctx.as_ref() else {
+        return;
+    };
+    let output_now = SessionFrame::new(ctx.audio_clock().samples.0);
+    let mut freed: Vec<BeatGridId> = Vec::new();
+    for deck in state.root.nested_groups_mut() {
+        if let Err(error) = deck.prepare_sync_launches(output_now) {
+            tracing::warn!(%error, deck = %deck.id(), "deck did not prepare its sync launches");
+        }
+        match deck.acknowledge_prepared() {
+            Ok(Some(kithara_warp::SyncStatusSnapshot::Off { .. })) => freed.push(deck.id()),
+            Ok(Some(_)) | Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, deck = %deck.id(), "deck did not acknowledge its warp map");
+            }
+        }
+    }
+    for deck in freed {
+        if let Err(error) = state.root.release_nested_alignment(deck) {
+            tracing::warn!(%error, %deck, "Host did not release freed deck alignment");
+        } else {
+            state.publish_root();
+        }
+    }
 }
 
 fn apply_completion<B: AudioBackend, S>(

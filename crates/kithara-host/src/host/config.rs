@@ -22,7 +22,7 @@ pub enum HostConfig<S> {
     Realtime {
         /// Initial device-rate hint; `Host::set_sample_rate` moves it later.
         sample_rate_hint: NonZeroU32,
-        /// Optional native output callback-size override. `None` preserves the backend default.
+        /// Requested native callback size; defaults to 128 frames. `None` uses the backend default.
         output_block_frames: Option<NonZeroU32>,
         /// Session output limiter policy.
         limiter: LimiterConfig,
@@ -63,6 +63,7 @@ impl<S> HostConfig<S> {
     )]
     fn new(
         #[builder(default = DEFAULT_SAMPLE_RATE)] sample_rate_hint: NonZeroU32,
+        #[builder(required, with = Some, default = NonZeroU32::new(128))]
         output_block_frames: Option<NonZeroU32>,
         #[builder(default)] limiter: LimiterConfig,
     ) -> Self {

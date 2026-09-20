@@ -1,8 +1,9 @@
 use std::{cmp::Ordering, ops::RangeInclusive};
 
 use kithara_platform::sync::Arc;
+use num_traits::ToPrimitive;
 
-use super::{BeatEvidence, BeatMarker, BeatsPerMinute, Meter, SegmentFacts};
+use super::{BeatEvidence, BeatMarker, BeatsPerMinute, Meter, MeterFacts, SegmentFacts};
 use crate::{AssetFrame, AxisKind, Beat, FrameUncertainty, MapAxis, MapPosition, SessionFrame};
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
@@ -126,6 +127,42 @@ impl MapSegment {
         })
     }
 
+    /// Extends a neighbouring relation over a span no marker describes.
+    ///
+    /// The beats are computed from the neighbour's own spacing rather than
+    /// read off a marker, so they are continuous where a marker ordinal is
+    /// integral: an unmarked head rarely begins a whole beat before the first
+    /// observed one.
+    fn extrapolated(
+        start: (MapPosition, Beat),
+        end: (MapPosition, Beat),
+        uncertainty: FrameUncertainty,
+        meter: Option<MeterFacts>,
+    ) -> Option<Self> {
+        let (start_position, start_beat) = start;
+        let (end_position, end_beat) = end;
+        if start_position.partial_cmp(&end_position) != Some(Ordering::Less)
+            || start_beat >= end_beat
+        {
+            return None;
+        }
+        let meter = meter.map(|meter| {
+            let (meter, _, uncertainty) = meter.into_parts();
+            MeterFacts::new(meter, BeatEvidence::Extrapolated, uncertainty)
+        });
+        Some(Self {
+            start_beat,
+            end_beat,
+            facts: SegmentFacts::new(BeatEvidence::Extrapolated, uncertainty, meter),
+            start_position,
+            end_position,
+            start_evidence: BeatEvidence::Extrapolated,
+            end_evidence: BeatEvidence::Extrapolated,
+            start_uncertainty: uncertainty,
+            end_uncertainty: uncertainty,
+        })
+    }
+
     pub(crate) fn beat_at(
         &self,
         position: MapPosition,
@@ -207,11 +244,20 @@ impl MapSegment {
         }
     }
 
-    fn tempo(&self, axis: MapAxis) -> Option<BeatsPerMinute> {
+    fn frames_per_beat(&self) -> Option<f64> {
         let frames =
             f64::try_from(self.end_position).ok()? - f64::try_from(self.start_position).ok()?;
         let beats = f64::from(self.end_beat) - f64::from(self.start_beat);
-        let bpm = beats * f64::from(axis.sample_rate().get()) * SECONDS_PER_MINUTE / frames;
+        (beats > 0.0 && frames > 0.0).then_some(frames / beats)
+    }
+
+    fn meter_facts(&self) -> Option<MeterFacts> {
+        self.facts.meter
+    }
+
+    pub(super) fn tempo(&self, axis: MapAxis) -> Option<BeatsPerMinute> {
+        let bpm =
+            f64::from(axis.sample_rate().get()) * SECONDS_PER_MINUTE / self.frames_per_beat()?;
         BeatsPerMinute::try_from(bpm).ok()
     }
 
@@ -301,14 +347,21 @@ pub struct SegmentSet {
 }
 
 impl SegmentSet {
-    /// Validates ordered, non-overlapping segments for `axis`.
+    /// Covers `axis` with the given segments and validates the result.
+    ///
+    /// Every span no segment describes is extrapolated from its neighbour
+    /// before validation, so the set the caller receives answers over the whole
+    /// axis and every segment in it — given or synthesised — has passed the
+    /// same checks.
     ///
     /// # Errors
     ///
     /// Returns [`SegmentError`] for an axis or extent mismatch, unrepresentable
-    /// tempo, ordering error, overlap, reversed musical coordinates, or a seam
-    /// that touches in only one coordinate space.
+    /// tempo, ordering error, overlap, reversed musical coordinates, a seam
+    /// that touches in only one coordinate space, or a span whose neighbour
+    /// carries no spacing to extrapolate from.
     pub fn new(axis: MapAxis, segments: Vec<MapSegment>) -> Result<Self, SegmentError> {
+        let segments = extended(axis, segments)?;
         for (index, segment) in segments.iter().enumerate() {
             if segment.kind() != axis.kind() {
                 return Err(SegmentError::AxisMismatch { index });
@@ -373,6 +426,54 @@ impl SegmentSet {
             .filter(|segment| segment.contains_position(position))
     }
 
+    pub(crate) fn beat_at_or_next(
+        &self,
+        position: MapPosition,
+    ) -> Option<(Beat, BeatEvidence, FrameUncertainty)> {
+        let segment = self.segments.get(
+            self.segments
+                .partition_point(|segment| segment.end_position() < position),
+        )?;
+        if position <= segment.start_position() {
+            return Some((
+                segment.start_beat(),
+                segment.start_evidence,
+                segment.start_uncertainty,
+            ));
+        }
+        segment.beat_at(position)
+    }
+
+    /// Every whole beat this set states, in coordinate order, with its position.
+    ///
+    /// A grid is consumed as the sequence of beats it asserts — drawn on a
+    /// waveform, counted into ticks — and each beat travels with the ordinal
+    /// the set gives it, so one beat has one number wherever it is read. A
+    /// beat landing on a seam belongs to the segment that follows it, so it is
+    /// answered once; the final beat of the set is answered by its last
+    /// segment.
+    pub fn beats(&self) -> impl Iterator<Item = (Beat, MapPosition)> + '_ {
+        let last = self.segments.last();
+        let spans = self.segments.iter().flat_map(|segment| {
+            let first = f64::from(segment.start_beat()).ceil();
+            let count = (f64::from(segment.end_beat()) - first)
+                .ceil()
+                .max(0.0)
+                .to_usize()
+                .unwrap_or(0);
+            (0..count)
+                .filter_map(move |step| Beat::new(step.to_f64()? + first).ok())
+                .filter_map(|beat| Some((beat, segment.position_at(beat)?.0)))
+        });
+        let tail = last
+            .filter(|segment| f64::from(segment.end_beat()).fract() == 0.0)
+            .and_then(|segment| {
+                let beat = segment.end_beat();
+                Some((beat, segment.position_at(beat)?.0))
+            });
+        spans.chain(tail)
+    }
+
     pub(crate) fn uncovered_region(&self, position: MapPosition) -> MapRegion {
         let upper = self
             .segments
@@ -413,4 +514,106 @@ impl SegmentSet {
             MapAxis::Session(_) => MapPosition::Session(SessionFrame::new(0)),
         }
     }
+}
+
+/// Covers every unmarked span of `axis` with extrapolated segments.
+///
+/// A grid the analysis marked only in part still has to answer, so the spans
+/// no marker describes are cut into beats of their neighbour's own spacing:
+/// the head before the first marked beat, every interior gap, and the tail to
+/// the end of a bounded axis. The session axis is unbounded, so it has no head
+/// and no tail to reach — only its interior gaps are covered.
+///
+/// # Errors
+///
+/// Returns [`SegmentError::InvalidTempo`] when a neighbour carries no spacing
+/// to extend, or when the beat the span reaches is unrepresentable. An unmarked
+/// span is not a hole to route around: a grid that cannot describe one is a
+/// broken grid.
+fn extended(axis: MapAxis, segments: Vec<MapSegment>) -> Result<Vec<MapSegment>, SegmentError> {
+    let (Some(first), Some(last)) = (segments.first(), segments.last()) else {
+        return Ok(segments);
+    };
+    let mut extended: Vec<MapSegment> = Vec::with_capacity(segments.len() * 2 + 1);
+    extended.extend(head_segment(first)?);
+    for (index, pair) in segments.windows(2).enumerate() {
+        extended.push(pair[0].clone());
+        extended.extend(gap_segment(index + 1, &pair[0], &pair[1])?);
+    }
+    let tail = tail_segment(segments.len() - 1, axis, last)?;
+    extended.push(last.clone());
+    extended.extend(tail);
+    Ok(extended)
+}
+
+/// The span from the start of the axis to the first marked beat.
+fn head_segment(first: &MapSegment) -> Result<Option<MapSegment>, SegmentError> {
+    let start = match first.start_position() {
+        MapPosition::Asset(frame) if f64::from(frame) > 0.0 => MapPosition::Asset(AssetFrame::ZERO),
+        MapPosition::Asset(_) | MapPosition::Session(_) => return Ok(None),
+    };
+    let spacing = spacing_of(0, first)?;
+    let frames = f64::try_from(first.start_position()).map_err(|_| unrepresentable(0))?;
+    let start_beat = Beat::new(f64::from(first.start_beat()) - frames / spacing)
+        .map_err(|_| unrepresentable(0))?;
+    Ok(MapSegment::extrapolated(
+        (start, start_beat),
+        (first.start_position(), first.start_beat()),
+        first.start_uncertainty,
+        first.meter_facts(),
+    ))
+}
+
+/// The span between two marked segments that do not touch.
+fn gap_segment(
+    index: usize,
+    previous: &MapSegment,
+    next: &MapSegment,
+) -> Result<Option<MapSegment>, SegmentError> {
+    spacing_of(index, previous)?;
+    Ok(MapSegment::extrapolated(
+        (previous.end_position(), previous.end_beat()),
+        (next.start_position(), next.start_beat()),
+        previous.end_uncertainty,
+        previous.meter_facts(),
+    ))
+}
+
+/// The span from the last marked beat to the end of a bounded axis.
+fn tail_segment(
+    index: usize,
+    axis: MapAxis,
+    last: &MapSegment,
+) -> Result<Option<MapSegment>, SegmentError> {
+    let MapAxis::Asset(asset) = axis else {
+        return Ok(None);
+    };
+    let frame_count = asset
+        .frame_count()
+        .to_f64()
+        .ok_or_else(|| unrepresentable(index))?;
+    let end = AssetFrame::new(frame_count).map_err(|_| unrepresentable(index))?;
+    let spacing = spacing_of(index, last)?;
+    let frames =
+        f64::from(end) - f64::try_from(last.end_position()).map_err(|_| unrepresentable(index))?;
+    let end_beat = Beat::new(f64::from(last.end_beat()) + frames / spacing)
+        .map_err(|_| unrepresentable(index))?;
+    Ok(MapSegment::extrapolated(
+        (last.end_position(), last.end_beat()),
+        (MapPosition::Asset(end), end_beat),
+        last.end_uncertainty,
+        last.meter_facts(),
+    ))
+}
+
+/// The frames one beat of `neighbour` occupies, which an unmarked span reuses.
+fn spacing_of(index: usize, neighbour: &MapSegment) -> Result<f64, SegmentError> {
+    neighbour
+        .frames_per_beat()
+        .ok_or_else(|| unrepresentable(index))
+}
+
+/// Names the segment whose spacing an unmarked span could not be cut from.
+const fn unrepresentable(index: usize) -> SegmentError {
+    SegmentError::InvalidTempo { index }
 }

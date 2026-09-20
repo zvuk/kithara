@@ -325,15 +325,12 @@ async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
     }
 }
 
-/// Pace each block so the decode worker runs between them; without the yield
-/// the worker never refills the ring and the queue starves mid-track.
+/// Pace each block by its own duration so the decode worker runs between
+/// them; without the yield the worker never refills the ring and the queue
+/// starves mid-track.
 fn render_block_duration() -> Duration {
-    if cfg!(feature = "flash") {
-        let frames = u32::try_from(BLOCK_FRAMES).expect("render block size fits u32");
-        Duration::from_secs_f64(f64::from(frames) / f64::from(SAMPLE_RATE))
-    } else {
-        Duration::from_millis(1)
-    }
+    let frames = u32::try_from(BLOCK_FRAMES).expect("render block size fits u32");
+    Duration::from_secs_f64(f64::from(frames) / f64::from(SAMPLE_RATE))
 }
 
 #[derive(Default)]
@@ -385,17 +382,18 @@ async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
     (rendered, log)
 }
 
-/// One firing of the render probe: which track was asked for which block, and
-/// how much of that track had been served when it was asked.
+/// One firing of the render probe: which output frames a track wrote in one
+/// call, and how much of that track had been served once it returned.
 #[derive(Clone, Copy, Debug)]
 struct Firing {
     track: u64,
-    block: i64,
+    start: i64,
+    frames: i64,
     served: u64,
 }
 
 fn firings(records: &[ProbeEvent]) -> Vec<Firing> {
-    let mut firings: Vec<Firing> = records
+    records
         .iter()
         .filter_map(|record| {
             let base = record.field("output_base")?;
@@ -405,42 +403,40 @@ fn firings(records: &[ProbeEvent]) -> Vec<Firing> {
             let range_start: i64 = i64::from_probe_arg(record.field("range_start")?);
             Some(Firing {
                 track: record.field("track_id")?,
-                block: i64::from_probe_arg(base) + range_start,
+                start: i64::from_probe_arg(base) + range_start,
+                frames: i64::from_probe_arg(record.field("rendered_frames")?),
                 served: record.field("served_media_frames")?,
             })
         })
-        .collect();
-    firings.sort_by_key(|firing| (firing.track, firing.block));
-    firings
+        .collect()
 }
 
-/// The session-axis span over which one track actually produced audio.
+/// The session-axis span `first..end` over which one track actually wrote
+/// audio.
 #[derive(Clone, Copy, Debug)]
 struct Active {
     first: i64,
-    last: i64,
+    end: i64,
     served: u64,
 }
 
-/// A track is active across a block when its media clock advanced over it, so
-/// a block it was asked for but answered with EOF never enters the window.
+/// A track is active over the frames it wrote, so a call it answered with EOF
+/// never enters the window.
 fn active_windows(firings: &[Firing]) -> BTreeMap<u64, Active> {
     let mut windows: BTreeMap<u64, Active> = BTreeMap::new();
-    for pair in firings.windows(2) {
-        let (before, after) = (pair[0], pair[1]);
-        if before.track != after.track || after.served <= before.served {
-            continue;
-        }
+    for firing in firings.iter().filter(|firing| firing.frames > 0) {
+        let end = firing.start + firing.frames;
         windows
-            .entry(before.track)
+            .entry(firing.track)
             .and_modify(|window| {
-                window.last = after.block;
-                window.served = after.served;
+                window.first = window.first.min(firing.start);
+                window.end = window.end.max(end);
+                window.served = window.served.max(firing.served);
             })
             .or_insert(Active {
-                first: before.block,
-                last: after.block,
-                served: after.served,
+                first: firing.start,
+                end,
+                served: firing.served,
             });
     }
     windows
@@ -478,15 +474,15 @@ fn class_runs(rendered: &[f32]) -> Vec<(FrameClass, usize)> {
     runs
 }
 
-/// The take the census can speak for: everything up to the last block the last
-/// track was active over. The render loop runs a couple of blocks past
+/// The take the census can speak for: everything up to the last frame the last
+/// track wrote. The render loop runs a couple of blocks past
 /// `QueueEnded`, and that tail belongs to the loop, not to the queue.
 fn played_samples(ordered: &[(u64, Active)]) -> usize {
     let last = ordered
         .last()
         .expect("the census names at least one track")
         .1
-        .last;
+        .end;
     usize::try_from(last).expect("the session axis stays positive") * usize::from(CHANNELS)
 }
 
@@ -569,7 +565,7 @@ async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &Tes
             "track {id} must serve its whole length: served={served} frames, \
              expected {track_frames} +/- {slack}"
         );
-        let span = window.last - window.first;
+        let span = window.end - window.first;
         assert!(
             (span - track_frames).abs() <= slack,
             "track {id} must stay active for its whole length: span={span} frames, \
@@ -580,7 +576,7 @@ async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &Tes
     let expected_overlap = frames_from_secs(f64::from(seam.crossfade_seconds()));
     for pair in ordered.windows(2) {
         let ((left_id, left), (right_id, right)) = (pair[0], pair[1]);
-        let overlap = left.last - right.first;
+        let overlap = left.end - right.first;
         assert!(
             (overlap - expected_overlap).abs() <= slack,
             "tracks {left_id} and {right_id} must overlap by exactly the \
@@ -588,11 +584,11 @@ async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &Tes
              {expected_overlap} +/- {slack}"
         );
         assert!(
-            right.first - left.last <= block,
+            right.first - left.end <= block,
             "no output frame may go unclaimed between tracks {left_id} and \
              {right_id}: the handover lands on the render-block grid, so one \
              block is the whole budget; gap={} frames",
-            right.first - left.last
+            right.first - left.end
         );
     }
 

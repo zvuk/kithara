@@ -1,9 +1,9 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use delegate::delegate;
 use kithara_audio::{
     AudioObserver, AudioReader, ChunkOutcome, ConsumerWakeMode, ReadOutcome, ResamplerBackend,
-    SeekOutcome,
+    RevisionFloorStatus, SeekOutcome,
 };
 use kithara_bufpool::HasPool;
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
@@ -11,8 +11,10 @@ use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
+use kithara_test_macros as kithara;
 use kithara_warp::{
-    PresentationFrontier, RenderContext, RenderPublisher, RenderReader, StretchControls,
+    PresentationFrontier, RenderContext, RenderPublisher, RenderReader, SessionFrame,
+    StretchControls, WarpPlanSlot,
 };
 use tracing::warn;
 
@@ -74,6 +76,12 @@ pub struct Resource {
     render_publisher: Option<RenderPublisher>,
     #[field(with)]
     playback_rate: PlaybackRate,
+    /// Region plan slot of the resident Warp lane; `None` for a plain reader.
+    #[field(get, deref = false)]
+    region_plan: Option<Arc<WarpPlanSlot>>,
+    #[field(get, copy)]
+    activation_blend_frames: Option<NonZeroUsize>,
+    free_adoption: Option<crate::worker::FreeAdoptionControl>,
     reader: ReaderOwner,
 }
 
@@ -135,6 +143,36 @@ impl Drop for CancelGuard {
 }
 
 impl Resource {
+    pub(crate) fn render_activation(&self) -> Option<RenderActivation> {
+        let plan = self.region_plan.as_deref()?.load()?;
+        let activation = plan.activation()?;
+        let rate = plan
+            .free_activation()
+            .map_or(0, |activation| activation.rate().revision());
+        let revision =
+            kithara_signal::pack_render_revision(rate, u64::from(activation.revision()))?;
+        Some(RenderActivation {
+            output: activation.output(),
+            revision,
+        })
+    }
+
+    pub(crate) fn sync_render_revision(
+        &mut self,
+        revision: u64,
+        required_frames: NonZeroUsize,
+        presented_source: Option<kithara_audio::SourceEnd>,
+    ) -> RevisionFloorStatus {
+        kithara::probe_event!(render_revision_floor, revision);
+        self.reader
+            .1
+            .set_render_revision_floor(revision, required_frames, presented_source)
+    }
+
+    pub(crate) fn present_seek(&mut self, epoch: u64) -> kithara_audio::SeekPresentation {
+        self.reader.1.present_seek(epoch)
+    }
+
     /// Create a resource from a `ResourceConfig`.
     ///
     /// Auto-detects the stream type from the URL:
@@ -186,6 +224,9 @@ impl Resource {
             playback_rate: PlaybackRate::Fixed,
             reader: ReaderOwner(CancelGuard(None), inner),
             render_publisher: None,
+            region_plan: None,
+            activation_blend_frames: None,
+            free_adoption: None,
         };
         if preload && let Err(error) = resource.reader.1.preload() {
             warn!(src = %resource.src, %error, "resource preload failed");
@@ -210,8 +251,11 @@ impl Resource {
         crate::RegisteredAudio<Stream<T>, S>: AudioReader + 'static,
     {
         let warp_controls = Arc::clone(config.warp().stretch());
+        let activation_blend_frames = config.warp().activation_blend_frames();
         let mut audio = worker.open(config).await?;
         let priority = audio.priority();
+        let region_plan = audio.region_plan();
+        let free_adoption = audio.take_free_adoption();
         let render_publisher = audio.take_publisher().ok_or(DecodeError::InvalidData {
             detail: "registered Warp publisher was already taken",
         })?;
@@ -222,7 +266,14 @@ impl Resource {
         }
         resource.priority = Some(priority);
         resource.render_publisher = Some(render_publisher);
+        resource.region_plan = Some(region_plan);
+        resource.free_adoption = free_adoption;
+        resource.activation_blend_frames = Some(activation_blend_frames);
         Ok(resource)
+    }
+
+    pub(crate) fn take_free_adoption(&mut self) -> Option<crate::worker::FreeAdoptionControl> {
+        self.free_adoption.take()
     }
 
     /// Create a resource with a bounded observer of decoded audio attached.
@@ -307,6 +358,12 @@ impl Resource {
         }
     }
 
+    pub(crate) fn publish_render_preparation(&self, context: &RenderContext) {
+        if let Some(publisher) = &self.render_publisher {
+            publisher.publish_preparation(context);
+        }
+    }
+
     pub(crate) fn render_reader(&self) -> Option<RenderReader> {
         self.render_publisher.as_ref().map(RenderPublisher::reader)
     }
@@ -368,6 +425,8 @@ impl Resource {
             pub fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode);
             /// Adopt a seek epoch begun through `seek_handle`. Lock-free.
             pub fn sync_seek(&mut self);
+            /// Keep current PCM until replacement seek output is ready.
+            pub fn defer_seek_until_pcm(&mut self);
             /// Set the target sample rate of the audio host.
             pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
             /// Get the current decoded-audio specification.
@@ -375,6 +434,12 @@ impl Resource {
             pub fn spec(&self) -> AudioSpec;
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RenderActivation {
+    pub(crate) output: SessionFrame,
+    pub(crate) revision: u64,
 }
 
 /// Unwrap a `Resource` into its underlying reader, e.g. to hand the opened

@@ -31,6 +31,7 @@ use super::{
         decoder_resampler_event, playback_resampler_event,
     },
     ring::{RingConsumer, RingParts, create_channels, create_trash_channel},
+    seek::{ScheduledSeekActivator, SeekHandleParts},
 };
 use crate::{DecoderChangeCause, FrameDomain};
 
@@ -266,6 +267,7 @@ where
         let preload_gate = Arc::new(super::PreloadGate::default());
         let (port, ring) = prepare_pcm_ring(
             audio_buffer_chunks.max(preload_chunks.get()),
+            preload_chunks.get(),
             &emit,
             &epoch,
             block_on_underrun,
@@ -289,6 +291,17 @@ where
             variant_control,
         );
         let source = StreamAudioSource::new(shared_stream, parts).with_emit(Arc::clone(&emit));
+        let scheduled_seek = ScheduledSeekActivator::new(&SeekHandleParts {
+            bus: bus.clone(),
+            peer_wake: peer_wake.clone(),
+            seek_prepare: seek_prepare.clone(),
+            playhead: Arc::clone(&playhead),
+            preload_gate: Arc::clone(&preload_gate),
+            seek: Arc::clone(&seek),
+            wake: Arc::clone(&wake),
+        });
+        let mut port = port;
+        port.install_scheduled_seek(scheduled_seek);
         let lane = PreparedAudioLane {
             source,
             port,
@@ -332,16 +345,21 @@ fn current_runtime_handle() -> Result<RuntimeHandle, DecodeError> {
 
 /// The output ring is never shallower than the preload gate wants: a ring that
 /// cannot hold the chunks preload waits for never signals readiness.
+///
+/// Settled playback fills `audio_buffer_chunks`; one more preload of capacity
+/// stays free for a replacement epoch staged behind that queued PCM.
 fn prepare_pcm_ring(
     audio_buffer_chunks: usize,
+    preload_chunks: usize,
     emit: &Arc<kithara_events::DeferredBus<AudioLaneEvent>>,
     epoch: &Arc<AtomicU64>,
     block_on_underrun: bool,
     consumer_wake_mode: ConsumerWakeMode,
 ) -> (ProducerPort, RingParts) {
     let reader_wake = Arc::new(ThreadWake::default());
-    let (data_tx, data_rx) = create_channels(audio_buffer_chunks, Arc::clone(emit), &reader_wake);
-    let (trash_tx, trash_inlet) = create_trash_channel(audio_buffer_chunks);
+    let capacity = audio_buffer_chunks.saturating_add(preload_chunks);
+    let (data_tx, data_rx) = create_channels(capacity, Arc::clone(emit), &reader_wake);
+    let (trash_tx, trash_inlet) = create_trash_channel(capacity);
     let ring = RingParts {
         block_on_underrun,
         consumer_wake_mode,
@@ -350,7 +368,10 @@ fn prepare_pcm_ring(
         audio_rx: data_rx,
         epoch: Arc::clone(epoch),
     };
-    (ProducerPort::new(data_tx, trash_inlet), ring)
+    (
+        ProducerPort::new(data_tx, trash_inlet, audio_buffer_chunks),
+        ring,
+    )
 }
 
 fn prepare_stream_source_registration<S>(
@@ -574,9 +595,16 @@ mod tests {
     fn prepares_source_registration_without_worker_activity() {
         let emit = Arc::new(DeferredBus::new(EventBus::new(8), 8));
         let epoch = Arc::new(AtomicU64::new(0));
-        let (port, ring) =
-            prepare_pcm_ring(1, &emit, &epoch, false, ConsumerWakeMode::RealtimeDeferred);
+        let (port, ring) = prepare_pcm_ring(
+            1,
+            1,
+            &emit,
+            &epoch,
+            false,
+            ConsumerWakeMode::RealtimeDeferred,
+        );
         let preload_gate = Arc::new(super::super::PreloadGate::default());
+        let playhead = Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>;
         let source: Box<dyn AudioSource<Chunk = AudioChunk>> = Box::new(Unimock::new(()));
         let lane = PreparedAudioLane {
             source,
@@ -584,12 +612,38 @@ mod tests {
             emit,
             preload_gate: Arc::clone(&preload_gate),
             preload_chunks: 1,
-            playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
+            playhead,
         };
 
         let registration =
             prepare_stream_source_registration(lane, ring, Arc::clone(&preload_gate));
 
         assert!(Arc::ptr_eq(&registration.preload_gate, &preload_gate));
+    }
+
+    #[kithara::test]
+    fn a_settled_ring_reserves_a_preload_for_a_replacement_epoch() {
+        let emit = Arc::new(DeferredBus::new(EventBus::new(8), 8));
+        let epoch = Arc::new(AtomicU64::new(0));
+        let (mut port, _ring) = prepare_pcm_ring(
+            2,
+            1,
+            &emit,
+            &epoch,
+            false,
+            ConsumerWakeMode::RealtimeDeferred,
+        );
+        for _ in 0..2 {
+            assert!(!port.holds_settled_depth());
+            port.push_direct(crate::Fetch::eof(0));
+        }
+
+        assert!(port.holds_settled_depth());
+        assert!(
+            port.can_push_direct(),
+            "a replacement epoch stages its preload past the settled depth"
+        );
+        port.push_direct(crate::Fetch::eof(0));
+        assert!(!port.can_push_direct());
     }
 }
