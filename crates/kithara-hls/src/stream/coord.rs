@@ -292,12 +292,6 @@ where
         Arc::clone(&self.seek) as Arc<dyn SeekObserve>
     }
 
-    pub(crate) fn selected_variant_for_seek(&self) -> usize {
-        self.abr
-            .selected_variant_for_seek()
-            .expect("invariant: HlsCoord always owns a stateful ABR handle")
-    }
-
     /// Install the peer's `reader_advanced` wake so the `on_slow` hook can
     /// re-poll the peer when an in-flight fetch stalls past `soft_timeout`.
     /// Called once by `HlsPeer::activate`.
@@ -540,10 +534,6 @@ where
         Self::promote_planned_variant(self, transition)
     }
 
-    fn selected_variant_for_seek(&self) -> usize {
-        Self::selected_variant_for_seek(self)
-    }
-
     fn take_prepared_variant_reader(
         &self,
         transition: VariantTransition,
@@ -618,8 +608,7 @@ pub(super) mod tests {
     };
 
     use kithara_abr::{
-        Abr, AbrController, AbrMock, AbrMode, AbrReason, AbrSettings, AbrState, PendingAbrClaim,
-        VariantIndex,
+        Abr, AbrController, AbrMock, AbrMode, AbrReason, AbrSettings, AbrState, VariantIndex,
     };
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_download::RequestPriority;
@@ -1542,7 +1531,7 @@ pub(super) mod tests {
 
     #[kithara::test]
     fn locked_plan_drops_an_incoming_from_an_old_seek_epoch() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
         let plan = coord
             .plan_variant_reader(None)
             .expect("plan incoming")
@@ -1560,7 +1549,7 @@ pub(super) mod tests {
             None
         );
         assert_eq!(coord.sessions.resident_count(), 1);
-        assert_eq!(coord.selected_variant_for_seek(), 1);
+        assert_eq!(abr_state.pending_target(), Some(VariantIndex::new(1)));
     }
 
     #[kithara::test]
@@ -1620,7 +1609,6 @@ pub(super) mod tests {
         );
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        assert_eq!(coord.selected_variant_for_seek(), 1);
     }
 
     #[kithara::test]
@@ -1732,20 +1720,6 @@ pub(super) mod tests {
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
         assert_eq!(replacement.id().seek_epoch(), next_epoch);
         assert_ne!(replacement, stale);
-    }
-
-    #[kithara::test]
-    fn seek_selection_reads_the_pending_target_while_abr_is_locked() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
-        abr_state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
-        coord.abr.lock();
-
-        assert_eq!(coord.selected_variant_for_seek(), 1);
-        assert!(matches!(
-            coord.abr.pending_claim(),
-            PendingAbrClaim::Locked(_)
-        ));
     }
 
     #[kithara::test(tokio)]
@@ -2052,26 +2026,6 @@ pub(super) mod tests {
 
         assert_ne!(epoch, 0, "a begun seek mints a non-zero epoch");
         assert_eq!(handle.load(Ordering::Acquire), epoch);
-    }
-
-    #[kithara::test]
-    fn variant_control_seek_selection_names_the_pending_target() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-
-        assert_eq!(VariantControl::selected_variant_for_seek(coord.as_ref()), 1);
-    }
-
-    #[kithara::test]
-    fn seek_selection_falls_back_to_the_committed_variant() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        let claim = coord
-            .abr
-            .claim_pending_decision()
-            .expect("fixture selection claim");
-        assert!(abr_state.abort_pending(claim.ticket()));
-
-        assert_eq!(coord.selected_variant_for_seek(), 0);
-        assert_eq!(VariantControl::selected_variant_for_seek(coord.as_ref()), 0);
     }
 
     #[kithara::test]

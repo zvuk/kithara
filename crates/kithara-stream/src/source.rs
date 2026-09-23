@@ -448,10 +448,6 @@ pub trait VariantControl: Send + Sync + 'static {
     /// the exact pending ABR intent in the same seek epoch.
     fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion;
 
-    /// Variant that a seek replacement must open. A pending manual or
-    /// automatic selection wins even while transition publication is locked.
-    fn selected_variant_for_seek(&self) -> usize;
-
     /// Transfer the prepared reader exactly once. The typed result keeps
     /// readiness, prior transfer, and stale identity distinct.
     ///

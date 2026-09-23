@@ -134,10 +134,6 @@ impl VariantControl for SpliceState {
         VariantPromotion::Stale
     }
 
-    fn selected_variant_for_seek(&self) -> usize {
-        0
-    }
-
     fn take_prepared_variant_reader(
         &self,
         _transition: VariantTransition,

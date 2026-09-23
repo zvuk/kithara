@@ -471,17 +471,6 @@ impl AbrState {
         }
     }
 
-    /// Variant a seek replacement must open. A pending selection intent wins
-    /// even while ABR publication is locked.
-    #[must_use]
-    pub fn selected_variant_for_seek(&self) -> VariantIndex {
-        self.pending
-            .lock()
-            .pending
-            .as_ref()
-            .map_or_else(|| self.current_variant_index(), |pending| pending.target)
-    }
-
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {
         self.max_bandwidth_bps
             .store(cap.unwrap_or(Self::NO_BANDWIDTH_CAP), Ordering::Release);

@@ -143,16 +143,6 @@ impl AbrHandle {
         self.inner.controller.tick(self.inner.peer_id);
     }
 
-    /// Variant selected for a seek replacement, including a locked pending
-    /// intent. Stateless handles return `None`.
-    #[must_use]
-    pub fn selected_variant_for_seek(&self) -> Option<usize> {
-        self.inner
-            .state
-            .as_ref()
-            .map(|state| state.selected_variant_for_seek().get())
-    }
-
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {
         if let Some(state) = self.inner.state.as_ref() {
             state.set_max_bandwidth_bps(cap);

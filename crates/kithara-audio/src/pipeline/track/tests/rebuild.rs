@@ -481,10 +481,6 @@ impl VariantControl for TestControl {
         promotion
     }
 
-    fn selected_variant_for_seek(&self) -> usize {
-        0
-    }
-
     fn take_prepared_variant_reader(
         &self,
         transition: VariantTransition,
