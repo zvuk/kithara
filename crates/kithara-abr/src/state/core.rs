@@ -95,9 +95,8 @@ struct PendingApply {
 }
 
 /// `true` for `AbrReason` variants that originate from a throughput
-/// estimate — the ones that go stale across a position jump and must
-/// not survive a seek into the post-unlock boundary commit. Manual or
-/// first-pick reasons stay valid through a seek and are preserved.
+/// estimate, and so go stale when a fresher estimate disagrees. Manual and
+/// first-pick reasons make no throughput claim.
 const fn is_throughput_driven(reason: AbrReason) -> bool {
     matches!(
         reason,
@@ -268,36 +267,6 @@ impl AbrState {
         nanos.max(1)
     }
 
-    /// Drop a throughput-driven pending boundary-commit. Called when a
-    /// new seek epoch arrives (`HlsPeer::apply_seek_change`): a pending
-    /// up-switch chosen against pre-seek throughput becomes stale once
-    /// the reader jumps, and would otherwise commit on the first
-    /// boundary cross after the seek lands — forcing a decoder recreate
-    /// while the new-variant cache is still empty (the prod `app.log`
-    /// `HangDetector` signature). After the seek, `decide()`
-    /// re-evaluates against post-seek throughput before any new auto
-    /// switch is requested.
-    ///
-    /// `AbrReason::ManualOverride` and `AbrReason::Initial` are
-    /// preserved — they encode user-driven or first-pick intent that
-    /// is not invalidated by a position jump.
-    ///
-    /// Distinct from [`Self::lock`]: locking gates *publish* but
-    /// preserves the pending intent so it can resume on unlock (the
-    /// blender-fence contract codified in
-    /// `peek_pending_decision_returns_none_during_seek`). Invalidating
-    /// is destructive and happens only at semantic seek boundaries.
-    pub fn invalidate_pending(&self) {
-        let mut state = self.pending.lock();
-        if state
-            .pending
-            .as_ref()
-            .is_some_and(|p| is_throughput_driven(p.reason))
-        {
-            state.pending = None;
-        }
-    }
-
     /// `true` while the active variant is flagged non-delivering. Read by
     /// `evaluate()` to exclude the variant and skip the buffer up-switch gate.
     #[must_use]
@@ -313,10 +282,7 @@ impl AbrState {
     /// Gate publication of pending decisions: while `lock_count > 0`,
     /// [`peek_pending_decision`](Self::peek_pending_decision) returns
     /// `None` so the boundary commit defers until unlock. The pending
-    /// intent itself is preserved across lock/unlock — destructive
-    /// invalidation of stale pre-seek intents is the job of
-    /// [`invalidate_pending`](Self::invalidate_pending), called from
-    /// `coord::reset_for_seek` on a semantic seek boundary.
+    /// intent itself is preserved across lock/unlock.
     pub fn lock(&self) {
         let state = self.pending.lock();
         self.lock_count.fetch_add(1, Ordering::AcqRel);
@@ -457,11 +423,9 @@ impl AbrState {
     /// latched on the initial throughput seed outlives the estimate that
     /// justified it and commits a quality drop at the next boundary.
     ///
-    /// Narrower than [`invalidate_pending`](Self::invalidate_pending), which
-    /// drops every throughput-driven pending across a position jump: manual and
-    /// first-pick intents are not throughput claims, and a rescue is not one
-    /// either — see [`is_rescue`]. A pending that already targets `current`
-    /// describes no divergence and is left untouched.
+    /// Manual and first-pick intents are not throughput claims, and a rescue
+    /// is not one either (see [`is_rescue`]). A pending that already targets
+    /// `current` describes no divergence and is left untouched.
     pub(crate) fn retract_throughput_pending(&self, current: VariantIndex) {
         let mut state = self.pending.lock();
         if state.pending.as_ref().is_some_and(|p| {
