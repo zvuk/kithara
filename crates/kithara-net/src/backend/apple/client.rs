@@ -1,5 +1,3 @@
-use std::{fmt::Write, num::NonZeroU16};
-
 use async_trait::async_trait;
 use bytes::Bytes;
 use kithara_bufpool::{HasPool, PoolRegion};
@@ -17,6 +15,7 @@ use super::{
 };
 use crate::{
     ByteStream,
+    backend::common::{normalize_head_headers, status_error},
     error::{NetError, NetResult},
     metrics::ConnectionMetrics,
     observe::Observer,
@@ -371,55 +370,4 @@ fn check_status(
         return Ok(status);
     }
     Err(status_error(url, status, body))
-}
-
-fn status_error(url: Url, status: u16, body: &Bytes) -> NetError {
-    let body = if body.is_empty() {
-        None
-    } else {
-        Some(truncate_error_body(
-            String::from_utf8_lossy(body).into_owned(),
-        ))
-    };
-    match NonZeroU16::new(status) {
-        Some(status) => NetError::Status {
-            status,
-            body,
-            url: Some(url),
-        },
-        None => NetError::Network(format!("unexpected zero HTTP status for {url}")),
-    }
-}
-
-fn normalize_head_headers(mut headers: Headers) -> Headers {
-    if headers.get("content-length").is_none()
-        && let Some(total) = content_length_from_range(&headers)
-    {
-        headers.insert("content-length", total);
-    }
-    headers
-}
-
-fn content_length_from_range(headers: &Headers) -> Option<String> {
-    headers
-        .get("content-range")
-        .and_then(|header| header.split('/').nth(1))
-        .filter(|total| *total != "*")
-        .map(str::to_owned)
-}
-
-fn truncate_error_body(mut body: String) -> String {
-    const MAX_ERROR_BODY_CHARS: usize = 200;
-
-    let total = body.chars().count();
-    if total <= MAX_ERROR_BODY_CHARS {
-        return body;
-    }
-    let cut_at = body
-        .char_indices()
-        .nth(MAX_ERROR_BODY_CHARS)
-        .map_or(body.len(), |(index, _)| index);
-    body.truncate(cut_at);
-    let _ = write!(body, "...(truncated, {total} chars total)");
-    body
 }

@@ -6,6 +6,7 @@ plugins {
 android {
     namespace = "com.kithara.example"
     compileSdk = libs.versions.compileSdk.get().toInt()
+    ndkVersion = rootProject.extra["kitharaNdkVersion"] as String
 
     defaultConfig {
         applicationId = "com.kithara.example"
@@ -14,6 +15,15 @@ android {
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     buildFeatures {
@@ -38,6 +48,8 @@ android {
 
 dependencies {
     implementation(project(":lib"))
+    implementation(project(":okhttp"))
+    implementation(libs.okhttp)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material.icons.extended)

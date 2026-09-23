@@ -20,6 +20,7 @@ import com.kithara.example.drm.ZvukKeyProcessor
 import com.kithara.example.drm.readZvukAuthToken
 import com.kithara.example.drm.readZvukCipherKey
 import com.kithara.ffi.FfiAbrMode
+import com.kithara.okhttp.OkHttpTransport
 import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
 
 internal class PlayerViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(PlayerUiState())
@@ -217,7 +219,11 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
     }
 
     private fun createPlayer(application: Application): KitharaPlayer {
-        Kithara.initialize(application, logLevel = LogLevel.Debug)
+        Kithara.initialize(
+            application,
+            OkHttpTransport(OkHttpClient()),
+            logLevel = LogLevel.Debug,
+        )
 
         // `filesDir` rather than `cacheDir` because kithara runs its own
         // eviction — the OS-managed `cacheDir` can be cleared under storage
@@ -348,7 +354,10 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
                 it.copy(isPlaying = false, errorMessage = "Playlist ended")
             }
 
-            is KitharaPlayerEvent.QueueItemRemoved -> Unit
+            is KitharaPlayerEvent.QueueItemRemoved,
+            is KitharaPlayerEvent.CrossfadeSettingsChanged,
+            is KitharaPlayerEvent.PlaybackOrderChanged,
+            is KitharaPlayerEvent.ActionAtItemEndChanged -> Unit
         }
     }
 

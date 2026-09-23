@@ -16,11 +16,13 @@
 
 Android platform ABI and safe wrappers shared by Kithara crates.
 
-This crate owns the raw NDK media binding surface and access to the host
-runtime handle. Higher-level crates use its typed wrappers instead of declaring
-local Android FFI structs, externs, or binding dependencies, and they reach the
-Java runtime through it instead of the platform global. Codec policy remains in
-`kithara-decode`; the `Java_*` entry points remain in `kithara-ffi`.
+This crate owns the raw NDK media binding surface, access to the host
+runtime handle, and the host application's HTTP transport. Higher-level crates
+use its typed wrappers instead of declaring local Android FFI structs, externs,
+or binding dependencies, and they reach the Java runtime through it instead of
+the platform global. The transport the application installs through
+`com.kithara.net` becomes the process's `kithara-net` `HostTransport`. Codec policy remains in `kithara-decode`; the
+player's `Java_*` entry points remain in `kithara-ffi`.
 
 ## Integration
 

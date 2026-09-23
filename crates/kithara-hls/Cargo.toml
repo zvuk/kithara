@@ -105,5 +105,10 @@ kithara-net = { workspace = true, default-features = false, features = [
     "tls-rustls",
 ] }
 
+# On a device the tests reach their servers through the host transport the
+# harness installs; `kithara-android` exports its install entry point.
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-android = { workspace = true }
+
 [lints]
 workspace = true

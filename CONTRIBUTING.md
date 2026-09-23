@@ -77,13 +77,10 @@ just platform android aar
 ```
 
 This builds the Rust JNI libraries in release, generates Kotlin UniFFI
-bindings, packages the Android library, and exports both release AARs:
-
-- `android/lib/build/outputs/aar/kithara.aar` — the main library
-- `android/lib/build/outputs/aar/rust-tls.aar` — must be distributed alongside it
-
-Keep both files in the same local artifacts directory when consuming the AARs
-directly, and add any remaining app-level dependencies your integration needs.
+bindings, packages the Android library, and exports the release AARs to
+`android/lib/build/outputs/aar/`: `kithara.aar` and `kithara-okhttp.aar`, the
+HTTP transport over OkHttp. When consuming the AARs directly, add the
+app-level dependencies your integration needs.
 
 ### Apple XCFramework
 

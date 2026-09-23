@@ -19,12 +19,13 @@ use url::Url;
 use super::{
     delegate::{AppleSessionEvents, StreamState, make_delegate},
     request::AppleRequest,
-    response::{AppleDataResponse, ByteBuffers, completion_result, send_once},
+    response::{AppleDataResponse, completion_result, send_once},
     stream::{
         AppleBodyQueue, AppleStreamResponse, StartedStream, wait_for_data, wait_for_stream_head,
     },
 };
 use crate::{
+    backend::pooled::ByteBuffers,
     error::{NetError, NetResult},
     metrics::ConnectionMetrics,
     types::{AcceptEncodingPolicy, NetOptions, accept_encoding_value},

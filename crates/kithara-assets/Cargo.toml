@@ -16,7 +16,8 @@ usdt = ["kithara-test-utils/usdt"]
 # package only through kithara-storage -> kithara-test-utils -> kithara-events
 # (network event types). These forwards give kithara-net a backend in
 # standalone builds; workspace-level default-features = false keeps the
-# default off when kithara-assets is a transitive dep (apple/android wreq-only).
+# default off when kithara-assets is a transitive dep (device builds keep their
+# own backend).
 client-reqwest = ["kithara-storage/client-reqwest"]
 client-wreq = ["kithara-storage/client-wreq"]
 tls-rustls = ["kithara-storage/tls-rustls"]

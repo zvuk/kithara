@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
 mod backend;
-#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
+#[cfg(reqwest_backend)]
 mod client;
 mod error;
+#[cfg(not(feature = "client-host"))]
 mod metrics;
 mod observe;
 mod range_response;
@@ -19,6 +20,16 @@ mod types;
 pub mod mock {
     #[cfg(not(target_arch = "wasm32"))]
     pub use crate::traits::NetMock;
+}
+
+/// The protocol between the `client-host` backend and the transport a host
+/// application installs once per process.
+#[cfg(feature = "client-host")]
+pub mod host {
+    pub use crate::backend::host::{
+        AlreadyInstalled, HostBuffer, HostCall, HostEvents, HostFailure, HostMethod, HostRequest,
+        HostRequestBody, HostTransport, install,
+    };
 }
 
 use humantime_serde as _;

@@ -1,35 +1,26 @@
-#[cfg(any(
-    not(any(
-        feature = "client-reqwest",
-        feature = "client-wreq",
-        feature = "client-apple"
-    )),
-    all(target_arch = "wasm32", not(feature = "client-reqwest"))
-))]
-compile_error!(
-    "kithara-net: enable at least one HTTP client backend; wasm32 requires `client-reqwest`"
-);
+mod guards;
 
-// WHY: The reqwest backend reaches for TLS through reqwest, so a build without one fails deep inside that crate rather than here.
-#[cfg(all(
-    feature = "client-reqwest",
-    not(target_arch = "wasm32"),
-    not(any(feature = "tls-rustls", feature = "tls-native"))
-))]
-compile_error!("kithara-net: `client-reqwest` needs `tls-rustls` or `tls-native`");
+#[cfg(not(reqwest_backend))]
+mod common;
+#[cfg(not(reqwest_backend))]
+mod pooled;
 
-#[cfg(all(feature = "client-apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(feature = "client-host")]
+pub(crate) mod host;
+#[cfg(feature = "client-host")]
+pub use self::host::HttpClient;
+
+#[cfg(apple_backend)]
 #[path = "apple/mod.rs"]
 mod selected;
-#[cfg(all(feature = "client-apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(apple_backend)]
 pub use self::selected::HttpClient;
 
-#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
+#[cfg(reqwest_backend)]
 mod selected;
-#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
+#[cfg(reqwest_backend)]
 pub use self::selected::HttpClient;
-#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
+#[cfg(reqwest_backend)]
 pub(crate) use self::selected::{
-    BackendError, Client, RequestBuilder, Response, StatusCode, build_client, head_request,
-    post_request,
+    Client, RequestBuilder, Response, StatusCode, build_client, head_request, post_request,
 };

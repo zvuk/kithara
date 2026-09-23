@@ -68,7 +68,7 @@ pub(crate) enum AcceptEncodingPolicy {
     Identity,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", feature = "client-host")))]
 pub(crate) fn accept_encoding_value(compression: Compression) -> String {
     let mut codings: Vec<&'static str> = Vec::new();
     if compression.contains(Compression::GZIP) {
@@ -93,9 +93,8 @@ pub(crate) fn accept_encoding_value(compression: Compression) -> String {
 /// DRM keyserver sits behind an anti-bot WAF that fingerprints the TLS
 /// `ClientHello` (JA3) and 418-rejects non-browser stacks; presenting a real
 /// browser fingerprint via `wreq` is what gets a 200. Default `Safari` matches
-/// iOS `URLSession`; Android selects a different preset. Inert under the
-/// `client-reqwest` backend and on wasm32 (no emulation; the browser fetch
-/// already carries a real fingerprint).
+/// iOS `URLSession`. Inert under the `client-reqwest` backend and on wasm32
+/// (the browser fetch already carries a real fingerprint).
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]

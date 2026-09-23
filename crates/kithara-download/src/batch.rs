@@ -7,7 +7,7 @@ use kithara_platform::{
     CancelGroup, CancelToken,
     flash::virtual_now,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, WallInstant},
     tokio,
     tokio::task,
 };
@@ -168,8 +168,8 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let downloader_cancel = inner.cancel.clone();
     let peer_id = internal.peer_id;
     let request_id = internal.request_id;
-    let started = Instant::now();
-    let wait_in_queue = started.saturating_duration_since(internal.enqueued_at);
+    let wait_in_queue = Instant::now().saturating_duration_since(internal.enqueued_at);
+    let started = FetchStart::now();
     let mut cmd = internal.cmd;
     let writer = cmd.take_writer();
     let on_complete_cb = cmd.take_on_complete();
@@ -225,23 +225,26 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     });
 }
 
-/// Measured duration of a fetch, robust to the flash clock split.
-///
-/// `started` is captured in the `#[kithara::flash(true)]` dispatch (`process`),
-/// so under `flash` it reads the VIRTUAL clock; this delivery runs in a
-/// non-flash fetch task (its real-socket I/O and timeouts must stay on real
-/// time), where `started.elapsed()` reads the REAL clock. A virtual `started`
-/// minus a real `now` would saturate to ZERO (and silently drop the bandwidth
-/// sample). Take the larger of the real elapsed and the virtual-clock delta: a
-/// real server delay (off-feature / `flash(false)`) is captured by the real
-/// elapsed, a virtual server delay (a flash test's withhold gate) is captured by
-/// the virtual delta, and an instant fetch yields zero on both. Off the
-/// `flash` feature `virtual_now` is real `Instant::now`, so both terms
-/// collapse to the same real elapsed.
-fn fetch_elapsed(started: Instant) -> Duration {
-    started
-        .elapsed()
-        .max(virtual_now().saturating_duration_since(started))
+// Stamped in the flash dispatch, read in the real-time fetch task.
+#[derive(Clone, Copy)]
+struct FetchStart {
+    virtual_clock: Instant,
+    wall: WallInstant,
+}
+
+impl FetchStart {
+    fn elapsed(self) -> Duration {
+        self.wall
+            .elapsed()
+            .max(virtual_now().saturating_duration_since(self.virtual_clock))
+    }
+
+    fn now() -> Self {
+        Self {
+            virtual_clock: virtual_now(),
+            wall: WallInstant::now(),
+        }
+    }
 }
 
 /// Race `fut` against a `soft_timeout` timer. When the timer wins, publish
@@ -382,7 +385,7 @@ fn classify_cancel(
 }
 
 /// All the per-fetch context `deliver` needs: identity (request id, peer id,
-/// abr controller), wall-clock anchor (`started`), the body sinks (writer +
+/// abr controller), the fetch start (`started`), the body sinks (writer +
 /// completion callback), the `bus` for telemetry, and the three nested cancel
 /// tokens (peer, epoch, downloader) used to classify cancellation reasons.
 struct DeliveryContext<'a> {
@@ -390,7 +393,7 @@ struct DeliveryContext<'a> {
     peer_cancel: &'a CancelToken,
     peer_id: AbrPeerId,
     abr: Arc<AbrController>,
-    started: Instant,
+    started: FetchStart,
     bus: Option<EventBus>,
     epoch_cancel: Option<&'a CancelToken>,
     on_complete_cb: Option<super::cmd::OnCompleteFn>,
@@ -444,7 +447,7 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
                     cb(&headers);
                 }
                 let write_result = resp.body.write_all(|chunk| w(chunk)).await;
-                let elapsed = fetch_elapsed(started);
+                let elapsed = started.elapsed();
                 match write_result {
                     Ok(total) => {
                         kithara::probe_event!(

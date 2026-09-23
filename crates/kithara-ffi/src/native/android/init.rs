@@ -1,31 +1,17 @@
 use jni::{Env, objects::JObject, sys::jint};
-use rustls_platform_verifier::android as rustls_android;
-use thiserror::Error;
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
-
-#[derive(Debug, Error)]
-pub(super) enum InitError {
-    #[error(transparent)]
-    Jni(#[from] jni::errors::Error),
-
-    #[error("failed to initialize the rustls platform verifier: {details}")]
-    RustlsVerifier { details: String },
-}
 
 pub(super) fn run(
     env: &mut Env<'_>,
     context: JObject<'_>,
     log_level: jint,
-) -> Result<(), InitError> {
+) -> jni::errors::Result<()> {
     install_logging(log_level);
 
     let vm = env.get_java_vm()?;
-    let context_ref = env.new_global_ref(&context)?;
+    let context_ref = env.new_global_ref(context)?;
     kithara_android::initialize(&vm, context_ref);
-
-    rustls_android::init_with_env(env, context).map_err(|err| InitError::RustlsVerifier {
-        details: err.to_string(),
-    })
+    Ok(())
 }
 
 fn install_logging(log_level: jint) {

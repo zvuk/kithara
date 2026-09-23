@@ -617,6 +617,8 @@ mod tests {
         routing::get,
     };
     use bytes::Bytes;
+    #[cfg(target_os = "android")]
+    use kithara_android as _;
     use kithara_assets::{
         AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, StorageBackend,
         WriteSide,
@@ -631,6 +633,7 @@ mod tests {
     use kithara_platform::{
         CancelToken,
         sync::{Arc, Notify},
+        time::{Duration, timeout},
         tokio::{join, net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
     };
     use kithara_test_utils::kithara;
@@ -809,6 +812,14 @@ mod tests {
         (original, wire, requests)
     }
 
+    /// The request crosses a real socket, so the bound is real time.
+    #[kithara::flash(false)]
+    async fn wait_for_key_request(seen: &Notify) {
+        timeout(Duration::from_secs(2), seen.notified())
+            .await
+            .expect("the key server never received the key request");
+    }
+
     async fn spawn_gated_key_server() -> (Url, Arc<AtomicUsize>, Arc<Notify>, Arc<Notify>) {
         let requests = Arc::new(AtomicUsize::new(0));
         let seen = Arc::new(Notify::default());
@@ -932,7 +943,7 @@ mod tests {
                 .prefetch_aes128_keys(std::slice::from_ref(&task_playlist))
                 .await
         });
-        seen.notified().await;
+        wait_for_key_request(&seen).await;
         store_cancel.cancel();
         release.notify_one();
 

@@ -15,10 +15,10 @@ use kithara_platform::{
 
 use super::{
     delegate::AppleSessionEvents,
-    response::{AppleDataResponse, ByteBuffers, HTTP_PARTIAL_CONTENT, StreamHead, copy_data},
+    response::{AppleDataResponse, HTTP_PARTIAL_CONTENT, StreamHead, copy_data},
     session::{AppleTask, TaskId},
 };
-use crate::{ByteStream, error::NetError, types::Headers};
+use crate::{ByteStream, backend::pooled::ByteBuffers, error::NetError, types::Headers};
 
 pub(crate) struct AppleStreamResponse {
     pub(crate) headers: Headers,

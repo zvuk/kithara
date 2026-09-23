@@ -84,8 +84,8 @@ release:android:
     paths:
       - kithara.aar
       - kithara.aar.sha256
-      - rust-tls.aar
-      - rust-tls.aar.sha256
+      - kithara-okhttp.aar
+      - kithara-okhttp.aar.sha256
       - kithara-android-docs.zip
       - kithara-android-docs.zip.sha256
 

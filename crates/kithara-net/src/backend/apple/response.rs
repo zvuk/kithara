@@ -3,14 +3,12 @@ use kithara_apple::foundation::{
     ns::{NSData, NSError, NSInteger, NSURLResponse},
     urlsession::{self, DataCompletion, ResponseParts},
 };
-use kithara_bufpool::{ByteBuffer, HasPool, PoolError, PoolRegion};
-use kithara_platform::{
-    sync::{Arc, Mutex},
-    tokio::sync::oneshot,
-};
+use kithara_bufpool::PoolError;
+use kithara_platform::{sync::Mutex, tokio::sync::oneshot};
 use url::Url;
 
 use crate::{
+    backend::pooled::{ByteBuffers, pooled_bytes},
     error::NetError,
     types::{AcceptEncodingPolicy, Headers},
 };
@@ -27,36 +25,6 @@ pub(crate) struct AppleDataResponse {
 pub(super) struct StreamHead {
     pub(super) headers: Headers,
     pub(super) status: Option<u16>,
-}
-
-struct PooledBytes {
-    bytes: ByteBuffer,
-}
-
-impl AsRef<[u8]> for PooledBytes {
-    fn as_ref(&self) -> &[u8] {
-        &self.bytes
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct ByteBuffers {
-    get_with_len: Arc<dyn Fn(usize) -> Result<ByteBuffer, PoolError> + Send + Sync>,
-}
-
-impl ByteBuffers {
-    pub(super) fn new<S>(pools: PoolRegion<S>) -> Self
-    where
-        S: HasPool<u8> + Send + Sync + 'static,
-    {
-        Self {
-            get_with_len: Arc::new(move |len| pools.get_with_len::<u8>(len)),
-        }
-    }
-
-    fn get_with_len(&self, len: usize) -> Result<ByteBuffer, PoolError> {
-        (self.get_with_len)(len)
-    }
 }
 
 pub(super) fn completion_result(
@@ -101,7 +69,7 @@ pub(super) fn copy_data(data: &NSData, buffers: &ByteBuffers) -> Result<Bytes, N
 
     let mut bytes = buffers.get_with_len(len).map_err(pool_error)?;
     bytes.copy_from_slice(urlsession::data_bytes(data));
-    Ok(Bytes::from_owner(PooledBytes { bytes }))
+    Ok(pooled_bytes(bytes))
 }
 
 fn pool_error(error: PoolError) -> NetError {

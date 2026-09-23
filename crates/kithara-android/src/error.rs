@@ -19,6 +19,9 @@ pub enum AndroidBackendError {
         operation: &'static str,
         details: String,
     },
+
+    #[error(transparent)]
+    Jni(#[from] jni::errors::Error),
 }
 
 impl AndroidBackendError {
@@ -33,5 +36,10 @@ impl AndroidBackendError {
             operation,
             details: details.into(),
         }
+    }
+
+    /// The failure of the JNI call made for `operation`.
+    pub(crate) fn jni(operation: &'static str) -> impl FnOnce(jni::errors::Error) -> Self {
+        move |error| Self::operation(operation, error.to_string())
     }
 }

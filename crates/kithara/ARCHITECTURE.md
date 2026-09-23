@@ -75,7 +75,7 @@ compatible native software stack.
 
 <tr><td><code>apple-net</code></td><td>no</td><td>Apple HTTP backend forwarding (<code>kithara-net?/client-apple</code>, <code>kithara-stream/client-apple</code>)</td></tr>
 
-<tr><td><code>android</code></td><td>no</td><td>Android <code>MediaCodec</code> hardware decoder (<code>kithara-audio/android</code>, <code>kithara-decode/android</code>) plus <code>kithara-net?/client-wreq</code></td></tr>
+<tr><td><code>android</code></td><td>no</td><td>Android <code>MediaCodec</code> hardware decoder (<code>kithara-audio/android</code>, <code>kithara-decode/android</code>) plus <code>kithara-net?/client-host</code>, the host application's HTTP transport</td></tr>
 
 <tr><td><code>client-reqwest</code> / <code>client-wreq</code></td><td>reqwest yes</td><td>HTTP backend selection forwarded to all public facade crates that can reach the network</td></tr>
 

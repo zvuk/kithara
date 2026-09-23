@@ -68,8 +68,9 @@ mock = ["dep:unimock", "kithara/mock"]
 # HTTP backend forwarding to every kithara-net-reaching dep. `kithara`
 # (native) and the wasm-only `kithara-hls`/`kithara-abr` are target-gated;
 # their edges are inert on the other target. The framework `apple` feature
-# selects NSURLSession through `kithara/apple-net`; Android still resolves
-# wreq through the facade `android` feature.
+# selects NSURLSession through `kithara/apple-net`; the `android` feature
+# selects the host application's HTTP transport through the facade `android`
+# feature.
 client-reqwest = ["kithara/client-reqwest"]
 client-wreq = ["kithara/client-wreq"]
 tls-rustls = ["kithara/tls-rustls"]
@@ -173,7 +174,6 @@ web-sys = { workspace = true }
 kithara-android = { workspace = true }
 
 jni = { workspace = true }
-rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
 [target.'cfg(target_os = "ios")'.dependencies]

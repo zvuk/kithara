@@ -1,12 +1,7 @@
-#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
-use std::fmt::Write;
 use std::num::NonZeroU16;
 
 use thiserror::Error;
 use url::Url;
-
-#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
-use crate::backend::BackendError as ReqwestError;
 
 pub type NetResult<T> = Result<T, NetError>;
 
@@ -34,6 +29,12 @@ pub enum NetError {
     Cancelled,
     #[error("Invalid content-type: {0}")]
     InvalidContentType(String),
+    #[error("HTTP transport protocol violated: {0}")]
+    Protocol(String),
+    #[error("no HTTP transport installed in this process")]
+    NoTransport,
+    #[error("request refused: {0}")]
+    Refused(String),
 }
 
 /// Whether a failed request is worth retrying. Decided from the typed
@@ -125,58 +126,12 @@ impl From<&NetError> for Retryability {
             | NetError::RetryExhausted { .. }
             | NetError::Unimplemented
             | NetError::Cancelled
-            | NetError::InvalidContentType(_) => Self::Fatal,
+            | NetError::InvalidContentType(_)
+            | NetError::Protocol(_)
+            | NetError::NoTransport
+            | NetError::Refused(_) => Self::Fatal,
         }
     }
-}
-
-#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
-impl From<ReqwestError> for NetError {
-    fn from(e: ReqwestError) -> Self {
-        if e.is_timeout() {
-            return Self::Timeout;
-        }
-        // WHY: non-status reqwest errors (connect, body-EOF, decode) stay retryable so an early stream close can resume; fatal Decode is for a local sink write (dl/response.rs).
-        e.status()
-            .and_then(|s| NonZeroU16::new(s.as_u16()))
-            .map_or_else(
-                || Self::Network(error_chain(&e)),
-                |status| Self::Status {
-                    status,
-                    url: backend_error_url(&e),
-                    body: None,
-                },
-            )
-    }
-}
-
-#[cfg(all(
-    not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))),
-    feature = "client-wreq",
-    not(target_arch = "wasm32")
-))]
-fn backend_error_url(error: &ReqwestError) -> Option<Url> {
-    let uri = error.uri()?.to_string();
-    Url::parse(&uri).ok()
-}
-
-#[cfg(all(
-    not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))),
-    any(not(feature = "client-wreq"), target_arch = "wasm32")
-))]
-fn backend_error_url(error: &ReqwestError) -> Option<Url> {
-    error.url().cloned()
-}
-
-#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
-fn error_chain(e: &ReqwestError) -> String {
-    let mut msg = e.to_string();
-    let mut current: &dyn std::error::Error = e;
-    while let Some(source) = current.source() {
-        let _ = write!(msg, ": {source}");
-        current = source;
-    }
-    msg
 }
 
 #[cfg(test)]
@@ -218,6 +173,9 @@ mod tests {
     #[case::unimplemented(NetError::Unimplemented, Retryability::Fatal)]
     #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) }, Retryability::Fatal)]
     #[case::invalid_content_type(NetError::InvalidContentType("text/html".to_string()), Retryability::Fatal)]
+    #[case::protocol(NetError::Protocol("a second response".to_string()), Retryability::Fatal)]
+    #[case::no_transport(NetError::NoTransport, Retryability::Fatal)]
+    #[case::refused(NetError::Refused("cleartext not permitted".to_string()), Retryability::Fatal)]
     async fn test_retryability(#[case] error: NetError, #[case] expected: Retryability) {
         assert_eq!(error.retryability(), expected);
     }

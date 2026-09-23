@@ -252,9 +252,7 @@ homepage = "https://github.com/zvuk/kithara"
 # symphonia (decode backend) or reqwest (HTTP backend) through the
 # default feature set. Consumers that need the software decode backend
 # opt in via `features = ["symphonia"]`; the HTTP backend is selected by
-# `client-reqwest` (default) / `client-wreq` (apple/android device) which
-# are global toggles on the single kithara-net package, re-forwarded by
-# each crate's own `client-reqwest`/`client-wreq`/`tls-*` features. Cargo
+# the `client-*` toggles on kithara-net, re-forwarded by each crate. Cargo
 # refuses default-features overrides through `workspace = true`
 # inheritance, so the disable has to live here on the workspace
 # declaration. kithara-events keeps its defaults because it never puts
@@ -459,7 +457,6 @@ rten-tensor = "0.24"
 rtsan-standalone = "0.3.0"
 rubato = "5.0"
 rustdoc-types = "0.60.0"
-rustls-platform-verifier = "0.7.0"
 send_wrapper = "0.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

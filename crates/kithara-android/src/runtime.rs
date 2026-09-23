@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use jni::{
-    JavaVM,
+    Env, JavaVM,
     errors::Error,
     objects::{Global, JObject},
 };
@@ -41,13 +41,19 @@ pub fn initialize(vm: &JavaVM, context: Global<JObject<'static>>) {
 /// runtime handle, and [`AndroidBackendError::Operation`] when the attach
 /// itself fails.
 pub fn attach_current_thread() -> Result<(), AndroidBackendError> {
+    with_attached_env(|_env| Ok(()))
+}
+
+/// Run `call` with an [`Env`], leaving the calling thread attached to the host runtime.
+pub(crate) fn with_attached_env<T, F>(call: F) -> Result<T, AndroidBackendError>
+where
+    F: FnOnce(&mut Env<'_>) -> Result<T, AndroidBackendError>,
+{
     let context = std::panic::catch_unwind(ndk_context::android_context)
         .map_err(|_| AndroidBackendError::NotInitialized)?;
 
     // SAFETY: `context.vm()` is the process JavaVM, valid for the process lifetime.
     let vm = unsafe { JavaVM::from_raw(context.vm().cast()) };
-    vm.attach_current_thread(|_env| Ok::<(), Error>(()))
-        .map_err(|error| {
-            AndroidBackendError::operation("jni-attach-current-thread", error.to_string())
-        })
+    vm.attach_current_thread(|env| Ok::<_, Error>(call(env)))
+        .map_err(AndroidBackendError::jni("jni-attach-current-thread"))?
 }

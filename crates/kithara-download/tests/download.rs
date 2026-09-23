@@ -17,6 +17,8 @@ use kithara_abr::{
     Abr, AbrEvent, AbrMode, AbrReason, AbrSettings, AbrState, VariantDuration, VariantIndex,
     VariantInfo,
 };
+#[cfg(target_os = "android")]
+use kithara_android as _;
 use kithara_events::{Envelope, EventBus};
 use kithara_net::{Headers as ResponseHeaders, HttpClient, NetError as FetchError, NetOptions};
 use kithara_platform::{
@@ -457,6 +459,63 @@ async fn streaming_without_writer_still_completes() {
     drop(handle);
 }
 
+#[kithara::flash(false)]
+async fn run_real_time_ahead(by: Duration) {
+    // The first real read anchors the engine's real clock.
+    let _anchor = Instant::now();
+    time::sleep(by).await;
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn completed_request_duration_excludes_real_time_spent_before_it() {
+    const RUN_AHEAD: Duration = Duration::from_millis(500);
+    const EVENT_BUS_CAPACITY: usize = 16;
+
+    let app = Router::new().route("/data", get(|| async { "body" }));
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+    let url = Url::parse(&format!("http://{addr}/data")).expect("url");
+
+    run_real_time_ahead(RUN_AHEAD).await;
+
+    let gate = CompletionGate::new(1);
+    let gate_cb = Arc::clone(&gate);
+    let cmd = FetchCmd::get(url)
+        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+        .on_complete(Box::new(move |_bytes, _headers, _error| {
+            gate_cb.complete();
+        }))
+        .build();
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cmd])),
+        yielded: Notify::default(),
+    });
+    let bus = EventBus::new(EVENT_BUS_CAPACITY);
+    let mut events = bus.subscribe();
+    let dl = Downloader::new(test_config());
+    let handle = dl.register(peer).with_bus(bus);
+
+    gate.wait().await;
+
+    let duration = std::iter::from_fn(|| events.try_recv().ok())
+        .find_map(|envelope| match envelope.event {
+            TestEvent::Downloader(DownloaderEvent::RequestCompleted { duration, .. }) => {
+                Some(duration)
+            }
+            _ => None,
+        })
+        .expect("a streamed request publishes RequestCompleted");
+    assert!(
+        duration < RUN_AHEAD,
+        "a loopback request reported {duration:?}: the {RUN_AHEAD:?} of real time before it leaked into its duration"
+    );
+    drop(handle);
+}
+
 #[kithara::test(tokio)]
 async fn peer_handle_cancel_scoped_to_peer() {
     let dl = Downloader::new(test_config());
@@ -854,6 +913,7 @@ async fn poll_next_respects_max_concurrent() {
 ///
 /// A regression that reverts to a per-Downloader client multiplies the opened
 /// connection count by `WAVES`, immediately tripping the assertion.
+#[cfg(not(target_os = "android"))]
 #[kithara::test(tokio, timeout(Duration::from_secs(PORT_STRESS_TIMEOUT_SECS)))]
 async fn shared_client_keepalive_bounds_connection_count() {
     const PARALLEL_DLS: usize = 8;

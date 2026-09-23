@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - App (`kithara-app`): the terminal frontend. The `kithara` binary is the desktop
   studio alone — no `--mode` flag, no `tui` feature, no ratatui/crossterm.
+- Android (`android/lib`): `rust-tls.aar`, the rustls platform verifier and the
+  library's network security configuration.
 
 ### Added
 
@@ -19,6 +21,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   the deck's quality menu opens flush with the right edge of its cell.
 - Host (`kithara-host`): `HostConfig` carries a `LimiterConfig` (ceiling and
   release) for the session output limiter instead of fixed constants.
+
+### Changed
+
+- Android (`android/lib`): every request runs through the application's HTTP
+  client. `Kithara.initialize` requires a `com.kithara.net.HttpTransport`, one
+  per process, and the release ships `kithara-okhttp.aar`, a transport over
+  OkHttp, beside `kithara.aar`.
 
 ## [0.0.1-alpha1](https://github.com/zvuk/kithara/releases/tag/v0.0.1-alpha1) - 2026-05-19
 

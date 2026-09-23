@@ -4471,13 +4471,17 @@ dependencies = [
 name = "kithara-android"
 version = "0.0.1-alpha4"
 dependencies = [
+ "dashmap",
  "derive_more",
  "fieldwork",
  "jni",
+ "kithara-net",
+ "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "ndk-context",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -4901,6 +4905,7 @@ dependencies = [
  "futures",
  "humantime-serde",
  "kithara-abr",
+ "kithara-android",
  "kithara-derive",
  "kithara-download",
  "kithara-events",
@@ -5017,7 +5022,6 @@ dependencies = [
  "kithara-test-utils",
  "num-traits",
  "rand 0.10.2",
- "rustls-platform-verifier",
  "send_wrapper",
  "tempfile",
  "thiserror 2.0.18",
@@ -5173,6 +5177,7 @@ dependencies = [
  "hls_m3u8",
  "hotpath",
  "kithara-abr",
+ "kithara-android",
  "kithara-assets",
  "kithara-bufpool",
  "kithara-derive",
@@ -5854,6 +5859,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "tracing-wasm",

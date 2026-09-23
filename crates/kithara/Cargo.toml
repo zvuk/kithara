@@ -112,8 +112,8 @@ worker = ["dep:kithara-worker"]
 workspace-hack = ["dep:kithara-workspace-hack"]
 # HTTP backend forwarding to every kithara-net-reaching dep. Optional deps
 # (kithara-net / kithara-file / kithara-hls / kithara-abr) use the weak `?`
-# form so a backend choice never force-enables them. Android forwards
-# `kithara-net?/client-wreq` below; Apple HTTP is a separate opt-in feature.
+# form so a backend choice never force-enables them. `android` forwards
+# `kithara-net?/client-host` below; Apple HTTP is a separate opt-in feature.
 client-reqwest = [
     "kithara-analysis?/client-reqwest",
     "kithara-net?/client-reqwest",
@@ -343,12 +343,13 @@ apple-fused-src = [
 # BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
 apple-net = ["kithara-net?/client-apple", "kithara-download?/client-apple", "kithara-stream?/client-apple"]
+# Android: MediaCodec decode and the host application's HTTP transport.
 android = [
     "audio",
     "kithara-analysis?/android",
     "kithara-audio?/android",
     "kithara-decode?/android",
-    "kithara-net?/client-wreq",
+    "kithara-net?/client-host",
     "resample-rubato",
 ]
 full = [

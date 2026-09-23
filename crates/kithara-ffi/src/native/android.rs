@@ -13,8 +13,7 @@ use jni::{
 #[cfg(feature = "test")]
 use jni::{objects::JString, sys::jlong};
 
-/// Publish the host runtime, install logging, and initialize the platform
-/// certificate verifier.
+/// Publish the host runtime and install logging.
 #[unsafe(no_mangle)]
 extern "system" fn Java_com_kithara_Kithara_nativeInit(
     mut env: EnvUnowned<'_>,

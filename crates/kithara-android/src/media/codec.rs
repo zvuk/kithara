@@ -391,22 +391,3 @@ impl OutputFormat {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn pcm_encoding_variants_are_distinct() {
-        assert!(matches!(
-            AndroidPcmEncoding::Pcm16,
-            AndroidPcmEncoding::Pcm16
-        ));
-        assert!(matches!(
-            AndroidPcmEncoding::Float,
-            AndroidPcmEncoding::Float
-        ));
-    }
-}

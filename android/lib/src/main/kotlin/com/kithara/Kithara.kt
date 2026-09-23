@@ -1,6 +1,8 @@
 package com.kithara
 
 import android.content.Context
+import com.kithara.net.HttpTransport
+import com.kithara.net.NativeHttpTransport
 
 /**
  * Minimum log level forwarded from the Rust layer to logcat.
@@ -23,8 +25,8 @@ enum class LogLevel {
  * `Application.onCreate`. After that, create players and items directly:
  *
  * ```kotlin
- * // In Application.onCreate:
- * Kithara.initialize(applicationContext, logLevel = LogLevel.Debug)
+ * // In Application.onCreate, with the adapter from `kithara-okhttp`:
+ * Kithara.initialize(applicationContext, OkHttpTransport(okHttpClient), logLevel = LogLevel.Debug)
  *
  * // Anywhere in the app:
  * val player = KitharaPlayer()
@@ -45,6 +47,8 @@ object Kithara {
     @Volatile
     private var initializedStore: AssetStore? = null
 
+    private var installedTransport: HttpTransport? = null
+
     val defaultStore: AssetStore
         get() = checkNotNull(initializedStore) {
             "Kithara.initialize must be called before accessing the default asset store"
@@ -53,18 +57,29 @@ object Kithara {
     /**
      * Initialize the native Kithara library.
      *
-     * Must be called once before creating any [KitharaPlayer] or [KitharaPlayerItem].
-     * Safe to call multiple times — subsequent calls are no-ops.
+     * Must be called before creating any [KitharaPlayer] or [KitharaPlayerItem].
+     * The process keeps the transport of the first call: a later call with the
+     * same transport changes nothing, and a later call with another transport
+     * throws.
      *
      * @param context Any [Context]; the application context is used internally.
+     * @param transport The HTTP transport every request runs through; `kithara-okhttp` provides one.
      * @param logLevel Minimum log level forwarded from Rust to logcat. Defaults to [LogLevel.Warn].
+     * @throws IllegalStateException when an earlier call installed another transport.
      */
-    fun initialize(context: Context, logLevel: LogLevel = LogLevel.Warn) {
-        if (initializedStore != null) return
+    fun initialize(context: Context, transport: HttpTransport, logLevel: LogLevel = LogLevel.Warn) {
         synchronized(this) {
-            if (initializedStore != null) return
+            val installed = installedTransport
+            if (installed != null) {
+                check(installed === transport) {
+                    "Kithara is already initialized with another HttpTransport"
+                }
+                return
+            }
             System.loadLibrary("kithara_ffi")
             nativeInit(context.applicationContext, logLevel.ordinal)
+            NativeHttpTransport.install(transport)
+            installedTransport = transport
             initializedStore = AssetStore(
                 root = context.applicationContext.cacheDir
                     .resolve("kithara")

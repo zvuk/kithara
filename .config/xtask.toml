@@ -532,6 +532,9 @@ features = ["client-wreq"]
 [test.net_backends.apple]
 features = ["kithara/apple-net"]
 
+[test.net_backends.host]
+features = ["kithara-net/client-host"]
+
 # The default product suite is one Cargo graph. Domain tests remain separate
 # packages, so Cargo can reuse every unchanged test binary while compiling the
 # shared product closure only once. Browser-only packages have their own lane.
@@ -564,7 +567,7 @@ prefix_args = [
 
 [test.lanes.android]
 program = "cargo"
-default_backend = "wreq"
+default_backend = "none"
 default_flash = true
 default_no_block = false
 prefix_args = [
@@ -843,6 +846,23 @@ prefix_args = [
   "kithara-net",
   "-p",
   "kithara-net-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+# kithara-net's own tests with the `client-host` backend, which run against the
+# fake transport in the crate. The other packages reach real servers and have
+# no transport on the host.
+[test.lanes.net-host]
+program = "cargo"
+default_backend = "host"
+undeclared_toggles = ["flash", "no-block"]
+owns = ["crates/kithara-net/src/backend/host/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-net",
   "--cargo-profile",
   "test-release",
 ]
@@ -2941,7 +2961,7 @@ gitlab_package = "kithara"
 nightly_tag = "nightly"
 core_asset = "KitharaFFIInternal.xcframework.zip"
 merged_asset = "Kithara.xcframework.zip"
-platform_assets = ["kithara.aar", "rust-tls.aar"]
+platform_assets = ["kithara.aar", "kithara-okhttp.aar"]
 http_timeout_secs = 60
 upload_timeout_secs = 600
 # WebAssembly channel: trunk dist (`just platform wasm build`) zipped + deployed
@@ -3007,7 +3027,7 @@ test_lane = "android"
 # Cargo package compiled into the Android JNI libraries.
 ffi_crate = "kithara-ffi"
 # AAR artifacts the Gradle export is expected to produce.
-aars = ["kithara.aar", "rust-tls.aar"]
+aars = ["kithara.aar", "kithara-okhttp.aar"]
 # Demo app launched by `just tooling xtask android run`.
 default_avd = "Pixel_6"
 demo_package = "com.kithara.example"

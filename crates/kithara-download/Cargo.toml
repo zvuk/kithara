@@ -60,5 +60,10 @@ kithara-platform = { workspace = true, features = ["tokio-net"] }
 
 axum = { workspace = true }
 
+# On a device the tests reach their server through the host transport the
+# harness installs; `kithara-android` exports its install entry point.
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-android = { workspace = true }
+
 [lints]
 workspace = true

@@ -17,6 +17,9 @@ default = ["client-reqwest", "tls-rustls"]
 client-reqwest = ["dep:reqwest", "dep:tower-layer", "dep:tower-service"]
 client-wreq = ["dep:tower-layer", "dep:tower-service", "dep:wreq", "dep:wreq-util"]
 client-apple = ["dep:dashmap", "dep:kithara-apple", "kithara-apple/foundation"]
+# `client-host` runs every request through the `host::HostTransport` a host
+# application installs once per process with `host::install`.
+client-host = []
 # TLS backend for the `client-reqwest` path. No effect on `client-wreq` (always
 # BoringSSL) or `client-apple` (URLSession owns TLS). `tls-rustls` is the
 # default; `tls-native` uses the platform TLS (Apple Secure Transport /
@@ -96,7 +99,7 @@ unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara-platform = { workspace = true, features = ["tokio-net"] }
+kithara-platform = { workspace = true, features = ["tokio-net", "tokio-rt-multi-thread"] }
 
 axum = { workspace = true }
 serde_yaml_ng = { workspace = true }
