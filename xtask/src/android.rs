@@ -258,7 +258,12 @@ fn cargo_ndk(api_level: &str) -> Result<Command> {
 /// Clippy over the Android backends. The host lint chain compiles for the
 /// host, where every `target_os = "android"` item is configured out and unseen.
 fn run_clippy(root: &Path, android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
-    const CLIPPY_PACKAGES: &[&str] = &["kithara-ffi", "kithara-decode", "kithara-audio"];
+    const CLIPPY_PACKAGES: &[&str] = &[
+        "kithara-ffi",
+        "kithara-android",
+        "kithara-decode",
+        "kithara-audio",
+    ];
 
     check_ndk_toolchain(tools)?;
     let api_level = require_android_str(&android.api_level, "api_level")?;
@@ -630,6 +635,8 @@ fn run_tests(
         )?);
         let selected = device.as_ref().context("selected device")?;
         device_lease = Some(record.stage("device_lease", selected.lease())?);
+        let demo = require_android_str(&android.demo_package, "demo_package")?;
+        record.stage("demo_stopped", selected.force_stop(demo, Some(&cancel)))?;
         record.device(&layout.workspace_root, selected, &cancel);
         let process = ambient_process(&layout.workspace_root);
         server = Some(record.stage(

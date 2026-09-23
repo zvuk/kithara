@@ -24,7 +24,16 @@ pub(super) struct Session {
     pub(super) directory: String,
     pub(super) evidence: PathBuf,
     pub(super) environment: BTreeMap<String, String>,
-    pub(super) binaries: BTreeMap<PathBuf, String>,
+    pub(super) binaries: BTreeMap<PathBuf, Image>,
+}
+
+/// A test image as the instrumentation loads it.
+#[derive(Clone, Deserialize, Serialize)]
+pub(super) struct Image {
+    /// The name `System.loadLibrary` takes.
+    pub(super) library: String,
+    /// Loading the library binds the host transport's install entry point.
+    pub(super) transport: bool,
 }
 
 impl Session {
@@ -71,7 +80,7 @@ impl Session {
 
 pub(crate) fn run(session_path: &Path, binary: &Path, args: &[String]) -> Result<i32> {
     let session: Session = serde_json::from_slice(&fs::read(session_path)?)?;
-    let library = session.binaries.get(binary).with_context(|| {
+    let image = session.binaries.get(binary).with_context(|| {
         format!(
             "{} is absent from Android binary inventory",
             binary.display()
@@ -90,7 +99,7 @@ pub(crate) fn run(session_path: &Path, binary: &Path, args: &[String]) -> Result
     let Some(test) = exact_test(args) else {
         if let Some(path) = list_path(&session.evidence, binary, args) {
             let output = listed(&path, &mut || {
-                let invocation = invoke(&session, &cancel, binary, library, args)?;
+                let invocation = invoke(&session, &cancel, binary, image, args)?;
                 if invocation.code != 0 {
                     std::io::stderr().lock().write_all(&invocation.response)?;
                     bail!("listing {} on device failed", binary.display());
@@ -102,7 +111,7 @@ pub(crate) fn run(session_path: &Path, binary: &Path, args: &[String]) -> Result
             std::io::stdout().lock().write_all(&output)?;
             return Ok(0);
         }
-        let invocation = invoke(&session, &cancel, binary, library, args)?;
+        let invocation = invoke(&session, &cancel, binary, image, args)?;
         if let Some(libtest) = &invocation.libtest {
             std::io::stdout().lock().write_all(libtest)?;
         }
@@ -115,7 +124,7 @@ pub(crate) fn run(session_path: &Path, binary: &Path, args: &[String]) -> Result
         &report_path(&session.evidence, binary),
         test,
         &mut |args: &[String]| {
-            let invocation = invoke(&session, &cancel, binary, library, args)?;
+            let invocation = invoke(&session, &cancel, binary, image, args)?;
             let Some(libtest) = invocation.libtest else {
                 bail!("{} produced no libtest report on device", binary.display());
             };
@@ -321,7 +330,7 @@ fn invoke(
     session: &Session,
     cancel: &child::Cancel,
     binary: &Path,
-    library: &str,
+    image: &Image,
     args: &[String],
 ) -> Result<Invocation> {
     let id = format!(
@@ -348,7 +357,7 @@ fn invoke(
             .iter()
             .flat_map(|(name, value)| [name.as_str(), value.as_str()])
             .collect();
-        let request = json!({"library": library, "args": arguments, "log": remote, "directory": session.directory, "environment": environment});
+        let request = json!({"library": image.library, "transport": image.transport, "args": arguments, "log": remote, "directory": session.directory, "environment": environment});
         fs::write(
             evidence.join("request.json"),
             serde_json::to_vec_pretty(&request)?,

@@ -56,7 +56,7 @@ jobs:
       - name: Check the workspace
         run: just check
 
-      # The default backend is `wreq`, which Apple and Android devices ship and
+      # The default backend is `wreq`, which the Apple desktop app ships and
       # Windows does not. Asking for it here builds BoringSSL through cmake,
       # which the guest has no more than it has the product that would use it,
       # so the lane names the backend the platform actually carries.

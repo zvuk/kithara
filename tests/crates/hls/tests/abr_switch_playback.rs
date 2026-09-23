@@ -16,18 +16,18 @@ use kithara::{
         thread::paced_backoff,
         time,
         time::{Duration, Instant},
-        tokio::task::spawn_blocking,
+        tokio::{sync::broadcast::error::TryRecvError, task::spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{AudioCodec, Stream},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, abr_fast, auto,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, abr_fast, abr_switch_trigger, auto,
     bufpool_ext::{Pools, TestPools, pools},
     event::TestEvent,
     fixture_protocol::{DelayRule, PcmPattern},
     flash_pace::virtual_pace,
-    mixed_encrypted, mixed_plain,
+    mixed_codec_ladder, mixed_encrypted, mixed_plain,
     offline::{OfflinePlayer, resource_from_reader},
     served_mp3, temp_dir,
 };
@@ -50,7 +50,7 @@ fn packaged_identical_content_abr_builder(codec: AudioCodec) -> HlsFixtureBuilde
         .variant_bandwidths(vec![10_000, 50_000])
         .delay_rules(vec![DelayRule {
             variant: Some(0),
-            segment_gte: Some(2),
+            segment_eq: Some(2),
             delay_ms: 500,
             ..Default::default()
         }]);
@@ -871,12 +871,21 @@ async fn mp3_stream_continues_after_seek(
     .expect("read phase join");
 }
 
-/// ABR must be frozen during seek and resume afterwards.
-///
-/// Invariant: variant must not change between `seek()` and the first post-seek
-/// chunk. After playback resumes, ABR must still work (variant changes again).
-/// Uses chunk metadata (`variant_index`) instead of broadcast events to avoid
-/// broadcast lag issues.
+fn lowest_pending_estimate(events: &mut EventReceiver<TestEvent>) -> Option<u64> {
+    let mut lowest: Option<u64> = None;
+    loop {
+        match events.try_recv() {
+            Ok(envelope) => {
+                if let TestEvent::Abr(AbrEvent::BandwidthEstimate { bps }) = envelope.event {
+                    lowest = Some(lowest.map_or(bps, |low| low.min(bps)));
+                }
+            }
+            Err(TryRecvError::Lagged(_)) => {}
+            Err(TryRecvError::Empty | TryRecvError::Closed) => return lowest,
+        }
+    }
+}
+
 #[kithara::test(
     tokio,
     native,
@@ -885,17 +894,80 @@ async fn mp3_stream_continues_after_seek(
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
-async fn abr_frozen_during_seek_resumes_after(
-    temp_dir: TestTempDir,
-    #[future(awt)] mixed_plain: (TestServerHelper, Url),
-) {
+async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     use kithara::{audio::AudioRead, signal::AudioChunk};
 
-    let (_server, url) = mixed_plain;
+    const INITIAL_VARIANT: usize = 0;
+    const TOP_VARIANT: usize = 3;
+    const PREFETCH_SEGMENTS: usize = 3;
+    // Segments fetched while the seek was held play on the top variant before
+    // a switch can land.
+    const MOVE_WITHIN_BOUNDARIES: usize = PREFETCH_SEGMENTS + 2;
+    const SEEK_SEGMENT: usize = 25;
+    const SLOW_FROM_SEGMENT: usize = SEEK_SEGMENT + 1;
+    const SEEK_TARGET: Duration = Duration::from_secs(153);
+    const SOFT_TIMEOUT: Duration = Duration::from_secs(10);
+    const EVENT_BUS_CAPACITY: usize = 4096;
 
+    let server = TestServerHelper::new().await;
     let pools = pools();
+    let cancel = CancelToken::never();
+    let net = HttpClient::new(NetOptions::default(), pools.clone(), cancel.child());
+    let plain = server
+        .create_hls(mixed_codec_ladder())
+        .await
+        .expect("create the ladder");
+    let master = net
+        .get_bytes(plain.master_url(), None)
+        .await
+        .expect("fetch the master playlist");
+    let top_bandwidth: u64 = String::from_utf8_lossy(&master)
+        .split("BANDWIDTH=")
+        .skip(1)
+        .filter_map(|rest| {
+            rest.split(|c: char| !c.is_ascii_digit())
+                .next()?
+                .parse()
+                .ok()
+        })
+        .max()
+        .expect("the master playlist advertises bandwidths");
+    let slow_segment_bytes = net
+        .get_bytes(plain.segment_url(TOP_VARIANT, SLOW_FROM_SEGMENT), None)
+        .await
+        .expect("fetch a top-variant segment")
+        .len() as u64;
+    // Each slow segment then measures half the top bandwidth.
+    let slow_segment_delay_ms = slow_segment_bytes * 8 * 2 * 1000 / top_bandwidth;
+    let created = server
+        .create_hls(mixed_codec_ladder().delay_rules(vec![DelayRule {
+            variant: Some(TOP_VARIANT),
+            segment_gte: Some(SLOW_FROM_SEGMENT),
+            delay_ms: slow_segment_delay_ms,
+            ..Default::default()
+        }]))
+        .await
+        .expect("create the ladder with slow top segments after the seek target");
+    // Holds the seek target open, so the seek stays pending while the slow
+    // segments after it lower the estimate.
+    let seek_segment = server.register_segment_gate(created.token(), TOP_VARIANT, SEEK_SEGMENT);
+
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let hls_config = HlsConfig::for_url(url)
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            cancel.child(),
+        ))
+        .abr_settings(abr_switch_trigger())
+        .soft_timeout(SOFT_TIMEOUT)
+        .cancel(cancel.child())
+        .build(),
+    );
+    let bus = EventBus::new(EVENT_BUS_CAPACITY);
+    let mut events = bus.subscribe();
+    let hls_config = HlsConfig::for_url(created.master_url())
+        .download_batch_size(PREFETCH_SEGMENTS)
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -904,7 +976,10 @@ async fn abr_frozen_during_seek_resumes_after(
                 .build(),
         )
         .pools(pools.clone())
-        .initial_abr_mode(auto(0))
+        .initial_abr_mode(auto(INITIAL_VARIANT))
+        .cancel(cancel)
+        .downloader(downloader)
+        .events(bus)
         .build();
 
     let mut audio = worker
@@ -931,65 +1006,73 @@ async fn abr_frozen_during_seek_resumes_after(
         }
     }
 
-    info!("Phase 1: warmup until ABR switches from variant 0");
-    let mut initial_variant = None;
-    let mut current_variant = None;
-    // Consume chunks until ABR actually switches off the initial variant (the
-    // fact we need) or the track ends — no wall-clock warmup window. Under
-    // flash the whole track decodes far faster than real time, so a timed
-    // window would either skip the switch or wedge; `next_chunk` parks on each
-    // chunk and the hang watchdog bounds a genuine stall.
-    while let Some(chunk) = next_chunk(&mut audio).await {
-        let v = chunk.meta.variant_index;
-        if initial_variant.is_none() {
-            initial_variant = v;
-        }
-        if v.is_some() && v != initial_variant {
-            current_variant = v;
-            info!(?initial_variant, switched_to = ?v, "ABR switched");
-            break;
-        }
-    }
-    if current_variant.is_none() || current_variant == initial_variant {
-        info!(
-            ?initial_variant,
-            ?current_variant,
-            "ABR did not switch during warmup; skipping seek-freeze test"
+    while next_chunk(&mut audio)
+        .await
+        .expect("ABR must reach the top variant before the track ends")
+        .meta
+        .variant_index
+        != Some(TOP_VARIANT)
+    {}
+
+    let _ = lowest_pending_estimate(&mut events);
+    audio.seek(SEEK_TARGET).expect("seek must not fail");
+    let pressure_deadline = Instant::now() + Duration::from_millis(slow_segment_delay_ms * 4);
+    let mut lowest_while_pending: Option<u64> = None;
+    while seek_segment.requested() == 0
+        || lowest_while_pending.is_none_or(|bps| bps >= top_bandwidth)
+    {
+        assert!(
+            Instant::now() <= pressure_deadline,
+            "the estimate did not fall below the top bandwidth {top_bandwidth} while the seek \
+             was pending: lowest {lowest_while_pending:?}, seek target requested {} times",
+            seek_segment.requested()
         );
-        return;
-    }
-    info!(?current_variant, "Pre-seek variant established");
-
-    let variant_before_seek = current_variant;
-    audio
-        .seek(Duration::from_secs(50))
-        .expect("seek must not fail");
-    let _ = audio.preload();
-
-    let post_seek_chunk = next_chunk(&mut audio).await;
-    assert!(
-        post_seek_chunk.is_some(),
-        "seek must produce a chunk (stream ended before resuming)"
-    );
-    let variant_after_seek = post_seek_chunk.unwrap().meta.variant_index;
-    assert_eq!(
-        variant_before_seek, variant_after_seek,
-        "ABR must NOT switch variant during seek"
-    );
-
-    info!("Phase 3: verify ABR still works post-seek");
-    let mut resume_chunks = 0u32;
-    while resume_chunks < 4 {
-        if next_chunk(&mut audio).await.is_some() {
-            resume_chunks += 1;
-        } else {
-            break; // natural EOF
+        let _ = audio.preload();
+        if let Some(bps) = lowest_pending_estimate(&mut events) {
+            lowest_while_pending = Some(lowest_while_pending.map_or(bps, |low| low.min(bps)));
         }
+        time::sleep(Duration::from_millis(2)).await;
     }
-    assert!(
-        resume_chunks >= 4,
-        "playback must continue after seek (got {resume_chunks} chunks)"
+    seek_segment.release();
+
+    let landing = next_chunk(&mut audio)
+        .await
+        .expect("playback must resume after the seek");
+    assert_eq!(
+        landing.meta.segment_index,
+        Some(SEEK_SEGMENT as u32),
+        "the seek must land on its target segment"
     );
+    let mut previous_segment = SEEK_SEGMENT as u32;
+    let mut boundaries_after_seek = 0;
+    let mut chunk = landing;
+    loop {
+        let segment = chunk.meta.segment_index.expect("HLS chunk has a segment");
+        let variant = chunk.meta.variant_index.expect("HLS chunk has a variant");
+        if segment == SEEK_SEGMENT as u32 {
+            assert_eq!(
+                variant, TOP_VARIANT,
+                "the landing segment must play on the variant that played before the seek, \
+                 although the estimate fell below it while the seek was pending"
+            );
+        } else {
+            if segment != previous_segment {
+                boundaries_after_seek += 1;
+                previous_segment = segment;
+            }
+            assert!(
+                boundaries_after_seek <= MOVE_WITHIN_BOUNDARIES,
+                "ABR stayed on the top variant for {boundaries_after_seek} boundaries after the seek; limit is {MOVE_WITHIN_BOUNDARIES}"
+            );
+            if variant != TOP_VARIANT {
+                assert!(variant < TOP_VARIANT, "ABR must switch down");
+                break;
+            }
+        }
+        chunk = next_chunk(&mut audio)
+            .await
+            .expect("ABR must move off the top variant before the track ends");
+    }
 }
 
 #[derive(Debug)]

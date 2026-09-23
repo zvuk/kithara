@@ -267,7 +267,7 @@ web-sys = { workspace = true }
 
 # --- Android hardware backend (android only) ---
 [target.'cfg(target_os = "android")'.dependencies]
-kithara = { workspace = true, features = ["download", "android", "client-wreq"] }
+kithara = { workspace = true, features = ["download", "android"] }
 
 [dev-dependencies]
 toml = { workspace = true }

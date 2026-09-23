@@ -135,6 +135,42 @@ pub fn init_tracing(filter: EnvFilter) {
 mod tests {
     use super::merged_directives;
 
+    #[cfg(not(target_arch = "wasm32"))]
+    mod native {
+        use std::{
+            io::{Read as _, Seek as _},
+            sync::Arc,
+        };
+
+        use tracing_subscriber::{Layer as _, layer::SubscriberExt};
+
+        #[test]
+        fn recorder_filters_do_not_silence_formatted_events() {
+            let file = Arc::new(tempfile::tempfile().expect("trace output"));
+            let fmt = tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .without_time()
+                .with_writer(Arc::clone(&file))
+                .with_filter(tracing_subscriber::EnvFilter::new("trace"));
+            let subscriber = tracing_subscriber::registry()
+                .with(fmt)
+                .with(crate::flight::layer())
+                .with(crate::test::usdt::layer());
+
+            tracing::subscriber::with_default(subscriber, || {
+                tracing::debug!(target: "kithara_abr", "abr diagnostic");
+                tracing::trace!(target: "transport", "transport diagnostic");
+            });
+
+            let mut reader = file.try_clone().expect("trace reader");
+            reader.rewind().expect("rewind trace");
+            let mut output = String::new();
+            reader.read_to_string(&mut output).expect("read trace");
+            assert!(output.contains("abr diagnostic"), "{output}");
+            assert!(output.contains("transport diagnostic"), "{output}");
+        }
+    }
+
     #[test]
     fn a_target_the_environment_never_names_survives() {
         let merged = merged_directives(Some("warn,kithara_hls=debug"), "kithara_abr=debug");

@@ -1,6 +1,10 @@
 //! Memory contract of the tracing USDT backend: probes fired without pause
 //! keep the heap bounded whether nothing observes them or a scope records
 //! them far past its history cap.
+//!
+//! Android test images link the standard library dynamically, and it
+//! allocates outside the counting allocator, so the count bounds nothing there.
+#![cfg(not(target_os = "android"))]
 
 use std::{
     mem::size_of,

@@ -5,19 +5,14 @@ use std::num::NonZeroU32;
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        time::{Duration, Instant, sleep},
-    },
+    platform::time::{Duration, Instant, sleep},
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule,
-    offline::OfflinePlayer,
+    hls_fixture::create_test_downloader, offline::OfflinePlayer,
 };
 use tracing::{info, warn};
 use url::Url;
@@ -123,14 +118,7 @@ async fn run_case(
 
     let temp = TestTempDir::new();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools(),
-            CancelToken::never(),
-        ))
-        .build(),
-    );
+    let downloader = create_test_downloader();
 
     let initial_mode = match scenario {
         Scenario::SustainedFlac => AbrMode::manual(TOP_VARIANT),

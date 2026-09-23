@@ -56,13 +56,24 @@ object TestServerFixture {
 
     /** @throws FixtureException when the server rejects the specification. */
     fun createHls(spec: String): String {
-        val token = post(url("token"), "{\"hls_spec\":$spec}")
+        val token = token(post(url("token"), "{\"hls_spec\":$spec}"), "token")
+        return url("stream/$token.m3u8")
+    }
+
+    /** @throws FixtureException when the server rejects the specification. */
+    fun createBehavior(spec: String): String {
+        val token = token(post(url("control/behavior"), spec), "control/behavior")
+        return url("behavior/$token")
+    }
+
+    private fun token(answer: String, endpoint: String): String {
+        val token = answer
             .substringAfter("\"token\":\"", "")
             .substringBefore('"', "")
         if (token.isEmpty()) {
-            throw FixtureException("token endpoint returned no token")
+            throw FixtureException("$endpoint endpoint returned no token")
         }
-        return url("stream/$token.m3u8")
+        return token
     }
 
     private fun get(endpoint: String): String = request(endpoint) { }

@@ -663,10 +663,7 @@ fn real_io_paces_deadline_to_real_time_not_pin() {
         thread::spawn(move || bracketed_on(&flash, || flash.park_for(Duration::from_millis(20))))
     };
 
-    // The deadline must fire WHILE the op is still in flight, once enough REAL
-    // time has passed (pace, not pin): a virtually-delayed peer (the fixture
-    // server's DelayGate) must make progress even though the client holds a
-    // real-I/O scope across the whole request await — a pin would deadlock it.
+    // Pace, not pin: a virtually delayed peer progresses while the client holds real I/O.
     waiter.join().expect("waiter thread panicked");
     let waited = real_start.elapsed();
     flash.real_io_exit();

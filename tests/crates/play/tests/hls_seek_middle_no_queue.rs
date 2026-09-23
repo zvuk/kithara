@@ -4,19 +4,16 @@ use std::num::NonZeroU32;
 
 use kithara::{
     abr::AbrMode,
-    download::{Downloader, DownloaderConfig},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
         time::{Duration, sleep},
         tokio::task::yield_now,
     },
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, SegmentGateHandle, fixture_protocol::DelayRule, offline::OfflinePlayer,
-    temp_dir,
+    PackagedTestServer, SegmentGateHandle, fixture_protocol::DelayRule,
+    hls_fixture::create_test_downloader, offline::OfflinePlayer, temp_dir,
 };
 
 use crate::{
@@ -190,14 +187,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools(),
-            CancelToken::never(),
-        ))
-        .build(),
-    );
+    let downloader = create_test_downloader();
 
     let cfg: ResourceConfig<TestPools> = {
         let builder =

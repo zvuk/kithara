@@ -13,6 +13,7 @@ mod parity;
 mod publish;
 mod release;
 mod self_cache;
+mod sysroot;
 mod test_server;
 mod wasm;
 

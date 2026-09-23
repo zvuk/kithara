@@ -7,8 +7,10 @@ use std::{
 };
 
 use kithara::platform::{
-    sync::{Arc, Notify},
-    tokio::sync::watch,
+    flash,
+    sync::Arc,
+    time::{Duration, sleep},
+    tokio::{sync::watch, task::spawn},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -80,40 +82,15 @@ struct BehaviorEntry {
     hits: AtomicU64,
 }
 
-pub(crate) trait RequestMode: Default {
-    fn requested(&self);
-}
-
-#[derive(Default)]
-pub(crate) struct SilentRequest;
-
-impl RequestMode for SilentRequest {
-    fn requested(&self) {}
-}
-
-#[derive(Default)]
-pub(crate) struct NotifyRequest(Notify);
-
-impl RequestMode for NotifyRequest {
-    fn requested(&self) {
-        self.0.notify_one();
-    }
-}
-
-pub(crate) struct Gate<M> {
-    mode: M,
+pub(crate) struct Gate {
     released: watch::Sender<bool>,
     requested: AtomicU64,
 }
 
-impl<M> Gate<M>
-where
-    M: RequestMode,
-{
+impl Gate {
     fn new() -> Self {
         let (released, _rx) = watch::channel(false);
         Self {
-            mode: M::default(),
             released,
             requested: AtomicU64::new(0),
         }
@@ -121,7 +98,6 @@ where
 
     pub(crate) fn mark_requested(&self) {
         self.requested.fetch_add(1, Ordering::Relaxed);
-        self.mode.requested();
     }
 
     pub(crate) async fn wait_until_released(&self) {
@@ -159,7 +135,7 @@ where
 #[derive(derive_more::Deref)]
 pub(crate) struct SegmentGate {
     #[deref]
-    body: Gate<SilentRequest>,
+    body: Gate,
     head_withheld: AtomicBool,
     head_requested: AtomicU64,
 }
@@ -229,46 +205,20 @@ fn size_probe_key(hls_token: &str, variant: usize, segment: usize) -> String {
 /// The `requested` counter lets a test observe the gated init GET reached the
 /// server. Lives in `TestServerState` (mutable, per-token) — never in the
 /// immutable Arc-cached `GeneratedHls`.
-pub(crate) type InitGate = Gate<SilentRequest>;
+pub(crate) type InitGate = Gate;
 
 fn init_gate_key(hls_token: &str, variant: usize) -> String {
     format!("{hls_token}|v{variant}|init")
 }
 
-/// A virtual-time withhold gate for one `(hls token, variant, segment)` whose
-/// body delay is driven by a FLASH PARTICIPANT, not the server thread.
-///
-/// The shared test-server thread is a real-time island (no flash ambient), so a
-/// `sleep(delay_ms)` there would burn real wall-clock and stay invisible to the
-/// client's virtual clock — under flash the engine would jump past the client's
-/// fetch without the slow variant ever registering on ABR's throughput estimate.
-///
-/// Instead the segment GET parks on `released` (like [`SegmentGate`]); the delay
-/// is timed by a releaser task spawned from the test's flash-ambient context. The
-/// releaser awaits the GET's arrival (`wait_requested`), then `sleep`s `delay_ms`
-/// of VIRTUAL time (its flash region makes the platform `sleep` engine-backed),
-/// then [`Self::release`]s the body. So the client's fetch-duration spans
-/// `delay_ms` of virtual time — ABR sees the slow variant — while the server
-/// thread consumes zero real wall-clock holding the socket open.
-///
-/// Lives in `TestServerState` (mutable, per-token) — never in the immutable
-/// Arc-cached `GeneratedHls`.
-pub(crate) type DelayGate = Gate<NotifyRequest>;
-
-impl Gate<NotifyRequest> {
-    /// Park until the gated segment GET has reached the server at least once.
-    /// Returns immediately if a request already arrived before the releaser
-    /// began waiting (the permit from `notify_one` is stored).
-    pub(crate) async fn wait_requested(&self) {
-        if self.requested() > 0 {
-            return;
-        }
-        self.mode.0.notified().await;
-    }
+struct RegisteredHls {
+    fixture: Arc<GeneratedHls>,
+    flash: bool,
 }
 
-fn delay_gate_key(hls_token: &str, variant: usize, segment: usize) -> String {
-    format!("{hls_token}|v{variant}|s{segment}|delay")
+#[kithara::flash(true)]
+async fn response_delay(duration: Duration) {
+    sleep(duration).await;
 }
 
 type GateMap<T> = RwLock<HashMap<String, Arc<T>>>;
@@ -291,11 +241,10 @@ fn get_gate<T>(map: &GateMap<T>, key: &str) -> Option<Arc<T>> {
 pub(crate) struct TestServerState {
     hls_cache: GeneratedHlsCache,
     hls_blobs: RwLock<HashMap<String, Arc<Vec<u8>>>>,
-    tokens: RwLock<HashMap<String, Arc<GeneratedHls>>>,
+    tokens: RwLock<HashMap<String, RegisteredHls>>,
     behaviors: RwLock<HashMap<String, Arc<BehaviorEntry>>>,
     segment_gates: GateMap<SegmentGate>,
     init_gates: GateMap<InitGate>,
-    delay_gates: GateMap<DelayGate>,
     /// Per-`(hls token, variant, segment)` count of size-probe requests the
     /// server has served: every `HEAD` and every single-byte ranged
     /// `GET` (`Range: bytes=0-0`). Unlike the withhold gates this counter is
@@ -320,7 +269,6 @@ impl TestServerState {
             behaviors: RwLock::new(HashMap::new()),
             segment_gates: GateMap::default(),
             init_gates: GateMap::default(),
-            delay_gates: GateMap::default(),
             size_probes: RwLock::new(HashMap::new()),
             network_mode: RwLock::new(NetworkMode::Online),
         })
@@ -403,28 +351,19 @@ impl TestServerState {
         get_gate(&self.init_gates, &init_gate_key(hls_token, variant))
     }
 
-    /// Register a virtual-time delay gate for one `(hls token, variant, segment)`
-    /// and return its handle. The matching segment GET parks on the gate until a
-    /// flash-participant releaser fires `delay_ms` of virtual time after the GET
-    /// arrives (see [`DelayGate`]).
-    pub(crate) fn register_delay_gate(
-        &self,
-        hls_token: &str,
-        variant: usize,
-        segment: usize,
-    ) -> Arc<DelayGate> {
-        let key = delay_gate_key(hls_token, variant, segment);
-        register_gate(&self.delay_gates, key, DelayGate::new())
-    }
-
-    pub(crate) fn delay_gate(
-        &self,
-        hls_token: &str,
-        variant: usize,
-        segment: usize,
-    ) -> Option<Arc<DelayGate>> {
-        let key = delay_gate_key(hls_token, variant, segment);
-        get_gate(&self.delay_gates, &key)
+    pub(crate) async fn delay_response(&self, hls_token: &str, duration: Duration) {
+        let ambient = self
+            .tokens
+            .read()
+            .expect("token store poisoned")
+            .get(hls_token)
+            .is_some_and(|hls| hls.flash);
+        flash::with_ambient(ambient, async {
+            spawn(response_delay(duration))
+                .await
+                .expect("response delay task must complete");
+        })
+        .await;
     }
 
     /// Record one size-probe (`HEAD` or single-byte ranged `GET`) served for
@@ -453,17 +392,20 @@ impl TestServerState {
 
     pub(crate) fn get_hls(&self, token: &str) -> Option<Arc<GeneratedHls>> {
         let store = self.tokens.read().expect("token store poisoned");
-        store.get(token).map(Arc::clone)
+        store.get(token).map(|hls| Arc::clone(&hls.fixture))
     }
 
     pub(crate) fn insert_hls_spec(&self, spec: HlsSpec) -> Result<String, HlsSpecError> {
         let resolved = self.resolve_hls_spec(spec)?;
         let hls = self.load_hls(resolved)?;
         let token = Uuid::new_v4().to_string();
-        self.tokens
-            .write()
-            .expect("token store poisoned")
-            .insert(token.clone(), hls);
+        self.tokens.write().expect("token store poisoned").insert(
+            token.clone(),
+            RegisteredHls {
+                fixture: hls,
+                flash: flash::ambient_snapshot(),
+            },
+        );
         Ok(token)
     }
 

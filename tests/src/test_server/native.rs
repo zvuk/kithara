@@ -1,25 +1,18 @@
 use std::env;
 
 use axum::{Router, middleware, routing::get};
-use kithara::platform::{
-    sync::Arc,
-    time::{Duration, sleep},
-    tokio::task::spawn,
-};
+use kithara::platform::sync::Arc;
 use kithara_test_fixtures::{Mp3Shape, SignalAsset, assets::by_name};
 use tower_http::cors::CorsLayer;
-use tracing::trace;
 use url::Url;
 
 use crate::{
-    fixture_protocol::DelayRule,
     hls_url::HlsSpec,
     http_server::TestHttpServer,
     routes::{assets, behavior, control, signal, store, stream},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
     test_server_state::{
-        Content, DelayGate, Delivery, FixtureBehavior, InitGate, NetworkMode, SegmentGate,
-        TestServerState,
+        Content, Delivery, FixtureBehavior, InitGate, NetworkMode, SegmentGate, TestServerState,
     },
 };
 
@@ -83,11 +76,7 @@ impl TestServerHelper {
         &self,
         spec: HlsSpec,
     ) -> Result<CreatedHls, CreateHlsError> {
-        let variant_count = spec.variant_count;
-        let segments_per_variant = spec.segments_per_variant;
-        let delay_rules = spec.delay_rules.clone();
         let token = self.state.insert_hls_spec(spec)?;
-        self.arm_delay_gates(&token, variant_count, segments_per_variant, &delay_rules);
         Ok(CreatedHls::new(self.base_url().clone(), token))
     }
 
@@ -180,32 +169,6 @@ impl TestServerHelper {
         let gate = self.state.register_init_gate(hls_token, variant);
         InitGateHandle { gate }
     }
-
-    /// Arm the delay gates declared by an HLS fixture at token registration.
-    fn arm_delay_gates(
-        &self,
-        hls_token: &str,
-        variant_count: usize,
-        segments_per_variant: usize,
-        delay_rules: &[DelayRule],
-    ) {
-        if delay_rules.is_empty() {
-            return;
-        }
-        for variant in 0..variant_count {
-            for segment in 0..segments_per_variant {
-                let Some(delay_ms) = delay_rules
-                    .iter()
-                    .find_map(|rule| rule.matches(variant, segment))
-                    .filter(|&ms| ms > 0)
-                else {
-                    continue;
-                };
-                let gate = self.state.register_delay_gate(hls_token, variant, segment);
-                spawn_delay_releaser(gate, delay_ms, variant, segment);
-            }
-        }
-    }
 }
 
 /// A test server private to one test: its own port, its own [`TestServerState`].
@@ -245,36 +208,6 @@ impl PrivateTestServer {
     pub fn set_network_mode(&self, mode: NetworkMode) {
         self.state.set_network_mode(mode);
     }
-}
-
-/// Release one delay gate after `delay_ms` of (virtual under flash) time.
-///
-/// The `#[kithara::flash]` guard makes the body's `sleep` engine-backed inside an
-/// ambient flash test — it awaits the segment GET's arrival, burns `delay_ms` of
-/// VIRTUAL time, then frees the parked body. Off the `flash` feature or under
-/// `flash(false)` (ambient off) the guard is inert and the `sleep` is a real
-/// `tokio` timer, matching the legacy real-delay behaviour.
-#[kithara::flash(true)]
-async fn release_after_delay(gate: Arc<DelayGate>, delay_ms: u64, variant: usize, segment: usize) {
-    gate.wait_requested().await;
-    trace!(
-        variant,
-        segment, delay_ms, "delay gate: request arrived, starting virtual countdown"
-    );
-    sleep(Duration::from_millis(delay_ms)).await;
-    gate.release();
-    trace!(
-        variant,
-        segment, delay_ms, "delay gate: released after virtual delay"
-    );
-}
-
-/// Spawn the releaser for one delay gate. The test's flash-ambient mode
-/// propagates into the spawned task via the platform async [`spawn`], and the
-/// `#[kithara::flash]` guard on [`release_after_delay`] makes its `sleep`
-/// engine-backed under an ambient flash test (a real `tokio` timer otherwise).
-fn spawn_delay_releaser(gate: Arc<DelayGate>, delay_ms: u64, variant: usize, segment: usize) {
-    drop(spawn(release_after_delay(gate, delay_ms, variant, segment)));
 }
 
 /// Handle to a registered init-segment withhold gate on the shared server.
@@ -408,12 +341,10 @@ pub(crate) fn router(state: Arc<TestServerState>) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use kithara::platform::time::{self, Duration};
+    use kithara::platform::time::{Duration, Instant};
 
-    use super::{
-        Content, DelayRule, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper,
-    };
-    use crate::kithara;
+    use super::{Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper};
+    use crate::{fixture_protocol::DelayRule, kithara};
 
     #[kithara::test(tokio)]
     async fn two_helpers_share_one_base_url() {
@@ -438,10 +369,19 @@ mod tests {
         assert_eq!(handle.request_count(), 1);
     }
 
-    #[kithara::test(tokio)]
-    async fn raw_hls_helper_arms_matching_delay_gate_on_creation() {
-        const DELAY_MS: u64 = 250;
+    #[kithara::test(tokio, flash(false))]
+    async fn repeated_segment_gets_each_observe_configured_delay() {
+        check_repeated_segment_delay().await;
+    }
 
+    #[kithara::test(tokio, flash(true))]
+    async fn repeated_segment_gets_each_observe_virtual_delay() {
+        check_repeated_segment_delay().await;
+    }
+
+    #[kithara::flash(true)]
+    async fn check_repeated_segment_delay() {
+        const DELAY_MS: u64 = 250;
         let helper = TestServerHelper::new().await;
         let created = helper
             .create_hls(
@@ -456,34 +396,18 @@ mod tests {
                     }),
             )
             .await
-            .expect("invariant: delayed HLS fixture is valid");
-
-        assert!(
-            helper.state.delay_gate(created.token(), 0, 1).is_none(),
-            "non-matching segment must not get a delay gate"
-        );
-        let gate = helper
-            .state
-            .delay_gate(created.token(), 1, 1)
-            .expect("invariant: matching segment has a delay gate");
-
+            .unwrap();
         let delay = Duration::from_millis(DELAY_MS);
-        time::sleep(delay * 2).await;
-        assert!(
-            time::timeout(Duration::ZERO, gate.wait_until_released())
-                .await
-                .is_err(),
-            "delay gate must remain held before the matching GET"
-        );
-        gate.mark_requested();
-        time::timeout(delay * 2, gate.wait_until_released())
-            .await
-            .expect("delay gate must release after the matching GET");
-        assert!(
-            time::timeout(Duration::ZERO, gate.wait_until_released())
-                .await
-                .is_ok(),
-            "matching delay gate must release after its request marker"
-        );
+        let client = reqwest::Client::new();
+        for request in 0..2 {
+            let started = Instant::now();
+            let response = client.get(created.segment_url(1, 1)).send().await.unwrap();
+            assert!(response.status().is_success());
+            assert!(!response.bytes().await.unwrap().is_empty());
+            assert!(
+                started.elapsed() >= delay,
+                "GET {request} bypassed the configured response delay"
+            );
+        }
     }
 }

@@ -1,6 +1,11 @@
-use std::{collections::HashMap, num::NonZeroUsize, sync::Mutex, task::Poll};
-#[cfg(not(target_arch = "wasm32"))]
-use std::{fs, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    num::NonZeroUsize,
+    path::Path,
+    sync::Mutex,
+    task::Poll,
+};
 
 #[cfg(target_arch = "wasm32")]
 use gloo_timers::future::TimeoutFuture;
@@ -13,9 +18,12 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     decode::DecoderBackend,
-    download::{DownloaderEvent, RequestId},
-    hls::{Hls, HlsConfig, HlsEvent},
+    download::{Downloader, DownloaderConfig},
+    events::EventBus,
+    hls::{Hls, HlsConfig},
+    net::{HttpClient, NetOptions},
     platform::{
+        CancelToken,
         sync::Arc,
         time::Duration,
         tokio,
@@ -25,8 +33,12 @@ use kithara::{
     signal::AudioChunk,
     stream::Stream,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, Xorshift64, abr_fast, auto,
+    SegmentGateHandle, mixed_codec_ladder, mixed_codec_ladder_encrypted,
+};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, Xorshift64, abr_switch_trigger, auto,
     bufpool_ext::{Pools, TestPools, pools},
     event::TestEvent,
     mixed_encrypted, mixed_plain, temp_dir,
@@ -38,9 +50,6 @@ struct Consts;
 impl Consts {
     const WARMUP_CHUNK_BUDGET: usize = 2048;
     const RANDOM_SEEK_OPS: usize = 100;
-    const RANDOM_SEEK_OPS_MAX: usize = 400;
-    const MIN_RANDOM_SEEKS: usize = 50;
-    const WASM_MIN_RANDOM_SEEKS: usize = 40;
     const CHUNKS_PER_RANDOM_SEEK: usize = 2;
     const FAST_SEEK_BURST: usize = 60;
     const WASM_FAST_SEEK_BURST: usize = 48;
@@ -92,41 +101,7 @@ type LiveAudio = RegisteredAudio<Stream<Hls<TestPools>>, TestPools>;
 
 #[derive(Default)]
 struct LiveStats {
-    cache_hits: HashMap<(usize, usize), usize>,
-    current_variant: Option<usize>,
-    initial_variant: Option<usize>,
-    network_hits: HashMap<(usize, usize), usize>,
     variant_switches: usize,
-    /// Maps in-flight `RequestId` → parsed (variant, `seg_idx`) so we can
-    /// classify completions without looking at the URL again.
-    pending_requests: HashMap<RequestId, (usize, usize)>,
-}
-
-fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
-    let segs_marker = "/seg/v";
-    let after = url.split(segs_marker).nth(1)?;
-    let stem = after.split(".m4s").next()?;
-    let mut parts = stem.split('_');
-    let variant = parts.next()?.parse().ok()?;
-    let segment = parts.next()?.parse().ok()?;
-    Some((variant, segment))
-}
-
-#[derive(Clone, Default)]
-struct LiveSnapshot {
-    cache_hits: HashMap<(usize, usize), usize>,
-    network_hits: HashMap<(usize, usize), usize>,
-    variant_switches: usize,
-}
-
-impl LiveStats {
-    fn snapshot(&self) -> LiveSnapshot {
-        LiveSnapshot {
-            cache_hits: self.cache_hits.clone(),
-            network_hits: self.network_hits.clone(),
-            variant_switches: self.variant_switches,
-        }
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -155,44 +130,21 @@ fn file_count_and_size(path: &Path) -> (u64, u64) {
     (files, bytes)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn total_hits(map: &HashMap<(usize, usize), usize>) -> usize {
-    map.values().copied().sum::<usize>()
+fn variant_switches(stats: &Arc<Mutex<LiveStats>>) -> usize {
+    stats.lock().expect("stats lock poisoned").variant_switches
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn has_refetched_network_segment(before: &LiveSnapshot, after: &LiveSnapshot) -> bool {
-    before.network_hits.iter().any(|(key, before_count)| {
-        let after_count = after.network_hits.get(key).copied().unwrap_or(0);
-        after_count > *before_count
-    })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn has_revisited_loaded_segment(before: &LiveSnapshot, after: &LiveSnapshot) -> bool {
-    let mut keys: Vec<(usize, usize)> = before.network_hits.keys().copied().collect();
-    for key in before.cache_hits.keys().copied() {
-        if !keys.contains(&key) {
-            keys.push(key);
-        }
-    }
-
-    keys.into_iter().any(|key| {
-        let before_network = before.network_hits.get(&key).copied().unwrap_or(0);
-        let before_cached = before.cache_hits.get(&key).copied().unwrap_or(0);
-        let after_network = after.network_hits.get(&key).copied().unwrap_or(0);
-        let after_cached = after.cache_hits.get(&key).copied().unwrap_or(0);
-        after_network.saturating_add(after_cached) > before_network.saturating_add(before_cached)
-    })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn current_variant(stats: &Arc<Mutex<LiveStats>>) -> Option<usize> {
-    stats.lock().expect("stats lock poisoned").current_variant
-}
-
-fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveSnapshot {
-    stats.lock().expect("stats lock poisoned").snapshot()
+fn switch_trigger_downloader(pools: &Pools, cancel: &CancelToken) -> Downloader {
+    Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            cancel.child(),
+        ))
+        .abr_settings(abr_switch_trigger())
+        .cancel(cancel.child())
+        .build(),
+    )
 }
 
 async fn build_live_audio(
@@ -205,10 +157,14 @@ async fn build_live_audio(
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"))
         .build();
+    let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
         .store(store)
         .pools(pools.clone())
         .initial_abr_mode(auto(0))
+        .downloader(switch_trigger_downloader(pools, &cancel))
+        .cancel(cancel)
+        .events(EventBus::default())
         .build();
     worker
         .open(
@@ -233,46 +189,9 @@ fn spawn_live_stats_task(
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
-            let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match event {
-                TestEvent::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
-                    if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial.get());
-                    }
-                    if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial.get());
-                    }
-                }
-                TestEvent::Abr(AbrEvent::VariantApplied { to, .. }) => {
-                    locked.current_variant = Some(to.get());
-                    locked.variant_switches = locked.variant_switches.saturating_add(1);
-                }
-                TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
-                    request_id, url, ..
-                }) => {
-                    if let Some(key) = parse_segment_url(url.as_str()) {
-                        locked.pending_requests.insert(request_id, key);
-                    }
-                }
-                TestEvent::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
-                    if let Some(key) = locked.pending_requests.remove(&request_id) {
-                        let entry = locked.network_hits.entry(key).or_insert(0);
-                        *entry = entry.saturating_add(1);
-                    }
-                }
-                TestEvent::Hls(HlsEvent::SegmentReadStart {
-                    variant,
-                    segment_index,
-                    ..
-                }) => {
-                    let key = (variant, segment_index);
-                    if !locked.network_hits.contains_key(&key) {
-                        let entry = locked.cache_hits.entry(key).or_insert(0);
-                        *entry = entry.saturating_add(1);
-                    }
-                    drop(locked);
-                }
-                _ => {}
+            if let TestEvent::Abr(AbrEvent::VariantApplied { .. }) = event {
+                let mut locked = stats_bg.lock().expect("stats lock poisoned");
+                locked.variant_switches = locked.variant_switches.saturating_add(1);
             }
         }
     });
@@ -290,10 +209,14 @@ fn warmup_until_variant_switch(
         if next_chunk(audio, &stage).is_none() {
             break;
         }
-        if snapshot(stats).variant_switches > 0 {
+        if variant_switches(stats) > 0 {
             break;
         }
     }
+    assert!(
+        variant_switches(stats) > 0,
+        "ABR must switch off the initial variant during the {stage_prefix} warmup"
+    );
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -428,7 +351,6 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
 async fn live_ephemeral_revisit_sequence_regression(
     #[case] label: &str,
     #[case] backend: DecoderBackend,
-    _abr_fast: kithara::abr::AbrSettings,
     #[case] prepared: (TestServerHelper, Url),
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -442,10 +364,14 @@ async fn live_ephemeral_revisit_sequence_regression(
         .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
         .build();
 
+    let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
         .store(store)
         .pools(pools.clone())
         .initial_abr_mode(auto(0))
+        .downloader(switch_trigger_downloader(&pools, &cancel))
+        .cancel(cancel)
+        .events(EventBus::default())
         .build();
 
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
@@ -460,71 +386,12 @@ async fn live_ephemeral_revisit_sequence_regression(
     #[cfg(target_arch = "wasm32")]
     let _ = audio.preload();
 
-    let stats = Arc::new(Mutex::new(LiveStats::default()));
-    let stats_bg = Arc::clone(&stats);
-    let mut events = audio.event_bus().subscribe();
-    let events_task = spawn(async move {
-        loop {
-            let event = match events.recv().await {
-                Ok(env) => env.event,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
-            };
-            let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match event {
-                TestEvent::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
-                    if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial.get());
-                    }
-                    if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial.get());
-                    }
-                }
-                TestEvent::Abr(AbrEvent::VariantApplied { to, .. }) => {
-                    locked.current_variant = Some(to.get());
-                    locked.variant_switches = locked.variant_switches.saturating_add(1);
-                }
-                TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
-                    request_id, url, ..
-                }) => {
-                    if let Some(key) = parse_segment_url(url.as_str()) {
-                        locked.pending_requests.insert(request_id, key);
-                    }
-                }
-                TestEvent::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
-                    if let Some(key) = locked.pending_requests.remove(&request_id) {
-                        let entry = locked.network_hits.entry(key).or_insert(0);
-                        *entry = entry.saturating_add(1);
-                    }
-                }
-                TestEvent::Hls(HlsEvent::SegmentReadStart {
-                    variant,
-                    segment_index,
-                    ..
-                }) => {
-                    let key = (variant, segment_index);
-                    if !locked.network_hits.contains_key(&key) {
-                        let entry = locked.cache_hits.entry(key).or_insert(0);
-                        *entry = entry.saturating_add(1);
-                    }
-                    drop(locked);
-                }
-                _ => {}
-            }
-        }
-    });
+    let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
     #[cfg(not(target_arch = "wasm32"))]
     spawn_blocking(move || {
         let _ = audio.preload();
-        for _ in 0..Consts::WARMUP_CHUNK_BUDGET {
-            if next_chunk(&mut audio, "repro_warmup").is_none() {
-                break;
-            }
-            if snapshot(&stats).variant_switches > 0 {
-                break;
-            }
-        }
+        warmup_until_variant_switch(&mut audio, &stats, label);
 
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs =
@@ -586,10 +453,14 @@ async fn live_ephemeral_revisit_sequence_regression(
             if next_chunk(&mut audio, "repro_warmup").await.is_none() {
                 break;
             }
-            if snapshot(&stats).variant_switches > 0 {
+            if variant_switches(&stats) > 0 {
                 break;
             }
         }
+        assert!(
+            variant_switches(&stats) > 0,
+            "{label} ABR must switch off the initial variant during the warmup"
+        );
 
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs =
@@ -666,7 +537,6 @@ async fn live_ephemeral_revisit_sequence_regression(
 async fn live_real_stream_seek_regression(
     #[case] label: &str,
     #[case] regression: SeekRegression,
-    _abr_fast: kithara::abr::AbrSettings,
     #[case] prepared: (TestServerHelper, Url),
 ) {
     let (_server, url) = prepared;
@@ -813,333 +683,248 @@ async fn live_real_stream_seek_resume_native(
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
-#[case::hls_ephemeral(false, "HLS", true, mixed_plain().await)]
-#[case::drm_ephemeral(true, "DRM", true, mixed_encrypted().await)]
-#[cfg_attr(not(target_arch = "wasm32"), case::hls_mmap(false, "HLS", false, mixed_plain().await))]
-#[cfg_attr(not(target_arch = "wasm32"), case::drm_mmap(true, "DRM", false, mixed_encrypted().await))]
+#[case::hls_ephemeral(false, "HLS", true)]
+#[case::drm_ephemeral(true, "DRM", true)]
+#[case::hls_mmap(false, "HLS", false)]
+#[case::drm_mmap(true, "DRM", false)]
 async fn live_stress_real_stream_seek_read_cache(
     #[case] encrypted: bool,
     #[case] label: &str,
     #[case] ephemeral: bool,
-    #[case] prepared: (TestServerHelper, Url),
     temp_dir: TestTempDir,
-    _abr_fast: kithara::abr::AbrSettings,
 ) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let (_server, url) = prepared;
-        let _ = encrypted;
-        let pools = pools();
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-        let store = if ephemeral {
-            AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Memory)
-                .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
-                .build()
-        } else {
-            AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Disk {
-                    root: temp_dir.path().to_path_buf(),
-                })
-                .build()
+    const VARIANTS: usize = 4;
+    const SEGMENTS: usize = 37;
+    const TOP_VARIANT: usize = VARIANTS - 1;
+
+    let server = TestServerHelper::new().await;
+    let ladder = if encrypted {
+        mixed_codec_ladder_encrypted()
+    } else {
+        mixed_codec_ladder()
+    };
+    let created = server
+        .create_hls(
+            ladder
+                .variant_count(VARIANTS)
+                .segments_per_variant(SEGMENTS),
+        )
+        .await
+        .expect("create the mixed-codec ladder");
+    // Released gates count every segment GET the server answers.
+    let gets: HashMap<(usize, usize), SegmentGateHandle> = (0..VARIANTS)
+        .flat_map(|variant| (0..SEGMENTS).map(move |segment| (variant, segment)))
+        .map(|(variant, segment)| {
+            let gate = server.register_segment_gate(created.token(), variant, segment);
+            gate.release();
+            ((variant, segment), gate)
+        })
+        .collect();
+
+    let pools = pools();
+    let cancel = CancelToken::never();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = if ephemeral {
+        AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Memory)
+            .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
+            .build()
+    } else {
+        AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .build()
+    };
+
+    let hls_config = HlsConfig::for_url(created.master_url())
+        .store(store)
+        .pools(pools.clone())
+        .initial_abr_mode(auto(0))
+        .downloader(switch_trigger_downloader(&pools, &cancel))
+        .cancel(cancel)
+        .events(EventBus::default())
+        .build();
+
+    let mut audio = worker
+        .open(
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+                .block_on_underrun(true)
+                .build(),
+        )
+        .await
+        .expect("audio creation");
+
+    info!(
+        ephemeral,
+        label, "Phase 1: warmup until the top variant plays"
+    );
+    let (audio, revisited, refetched) = spawn_blocking(move || {
+        let _ = audio.preload();
+        let key = |chunk: &AudioChunk| {
+            let variant = chunk.meta.variant_index.expect("HLS chunk has a variant");
+            let segment = chunk.meta.segment_index.expect("HLS chunk has a segment");
+            (variant, segment as usize)
         };
+        let mut playing = None;
+        for _ in 0..Consts::WARMUP_CHUNK_BUDGET {
+            let Some(chunk) = next_chunk(&mut audio, "warmup") else {
+                break;
+            };
+            playing = chunk.meta.variant_index;
+            if playing == Some(TOP_VARIANT) {
+                break;
+            }
+        }
+        assert_eq!(
+            playing,
+            Some(TOP_VARIANT),
+            "{label} ABR must reach the top variant during the warmup"
+        );
 
-        let hls_config = HlsConfig::for_url(url)
-            .store(store)
-            .pools(pools.clone())
-            .initial_abr_mode(auto(0))
-            .build();
+        let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
+        let max_seek_secs = Consts::capped_seek_secs(
+            (duration_secs - 2.0).max(20.0),
+            Consts::WASM_MAX_SEEK_SECS,
+        );
+        let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+        let seek_positions: Vec<f64> = (0..Consts::RANDOM_SEEK_OPS)
+            .map(|_| rng.range_f64(1.0, max_seek_secs))
+            .collect();
 
-        let mut audio = worker
-            .open(
-                AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                    .block_on_underrun(true)
-                    .build(),
-            )
-            .await
-            .expect("audio creation");
-        #[cfg(target_arch = "wasm32")]
+        info!(
+            operations = Consts::RANDOM_SEEK_OPS,
+            chunks_per_seek = Consts::CHUNKS_PER_RANDOM_SEEK,
+            "Phase 2: random seek/read stress"
+        );
+        let mut random_reads = HashSet::new();
+        let mut chunks_read = 0usize;
+        for (idx, pos_secs) in seek_positions.iter().copied().enumerate() {
+            audio
+                .seek(Duration::from_secs_f64(pos_secs))
+                .expect("seek must not fail");
+            let _ = audio.preload();
+            for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
+                let stage = format!("random_seek_{idx}_chunk_{read_idx}");
+                let Some(chunk) = next_chunk(&mut audio, &stage) else {
+                    break;
+                };
+                chunks_read = chunks_read.saturating_add(1);
+                random_reads.insert(key(&chunk));
+            }
+        }
+        let min_chunks_by_ops = Consts::RANDOM_SEEK_OPS
+            .saturating_mul(Consts::CHUNKS_PER_RANDOM_SEEK)
+            .saturating_mul(85)
+            / 100;
+        assert!(
+            chunks_read >= min_chunks_by_ops,
+            "stress read underflow: expected at least {min_chunks_by_ops} chunks (85% of seeks), got {chunks_read}"
+        );
+
+        let fast_seek_burst =
+            Consts::browser_usize(Consts::FAST_SEEK_BURST, Consts::WASM_FAST_SEEK_BURST);
+        info!(seeks = fast_seek_burst, "Phase 3: fast seek burst");
+        for _ in 0..fast_seek_burst {
+            let pos_secs = rng.range_f64(1.0, max_seek_secs);
+            audio
+                .seek(Duration::from_secs_f64(pos_secs))
+                .expect("fast seek must not fail");
+        }
         let _ = audio.preload();
 
-        let stats = Arc::new(Mutex::new(LiveStats::default()));
-        let stats_bg = Arc::clone(&stats);
-        let mut events = audio.event_bus().subscribe();
-        let events_task = spawn(async move {
-            loop {
-                let event = match events.recv().await {
-                    Ok(env) => env.event,
-                    Err(RecvError::Lagged(_)) => continue,
-                    Err(RecvError::Closed) => break,
-                };
-                let mut locked = stats_bg.lock().expect("stats lock poisoned");
-                match event {
-                    TestEvent::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
-                        if locked.initial_variant.is_none() {
-                            locked.initial_variant = Some(initial.get());
-                        }
-                        if locked.current_variant.is_none() {
-                            locked.current_variant = Some(initial.get());
-                        }
-                    }
-                    TestEvent::Abr(AbrEvent::VariantApplied { to, .. }) => {
-                        locked.current_variant = Some(to.get());
-                        locked.variant_switches = locked.variant_switches.saturating_add(1);
-                    }
-                    TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
-                        request_id,
-                        url,
-                        ..
-                    }) => {
-                        if let Some(key) = parse_segment_url(url.as_str()) {
-                            locked.pending_requests.insert(request_id, key);
-                        }
-                    }
-                    TestEvent::Downloader(DownloaderEvent::RequestCompleted {
-                        request_id, ..
-                    }) => {
-                        if let Some(key) = locked.pending_requests.remove(&request_id) {
-                            let entry = locked.network_hits.entry(key).or_insert(0);
-                            *entry = entry.saturating_add(1);
-                        }
-                    }
-                    TestEvent::Hls(HlsEvent::SegmentReadStart {
-                        variant,
-                        segment_index,
-                        ..
-                    }) => {
-                        let key = (variant, segment_index);
-                        if !locked.network_hits.contains_key(&key) {
-                            let entry = locked.cache_hits.entry(key).or_insert(0);
-                            *entry = entry.saturating_add(1);
-                        }
-                        drop(locked);
-                    }
-                    _ => {}
-                }
-            }
-        });
+        let sequential_seek_max = (max_seek_secs - 20.0).max(5.0);
+        let final_seek = rng.range_f64(1.0, sequential_seek_max);
+        audio
+            .seek(Duration::from_secs_f64(final_seek))
+            .expect("final seek before sequential read must not fail");
+        let _ = audio.preload();
 
-        info!(ephemeral, label, "Phase 1: warmup until ABR switch");
-        let stats_read = Arc::clone(&stats);
-        let (audio, before_revisit, after_revisit, variant_match_checks, variant_match_hits) =
-            spawn_blocking(move || {
-                let _ = audio.preload();
-                let stats = stats_read;
-                for _ in 0..Consts::WARMUP_CHUNK_BUDGET {
-                    if next_chunk(&mut audio, "warmup").is_none() {
-                        break;
-                    }
-                    if snapshot(&stats).variant_switches > 0 {
-                        break;
-                    }
-                }
-                let warmup_snapshot = snapshot(&stats);
-                info!(
-                    warmup_switches = warmup_snapshot.variant_switches,
-                    "Warmup completed"
-                );
-
-                let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-                let max_seek_secs = Consts::capped_seek_secs(
-                    (duration_secs - 2.0).max(20.0),
-                    Consts::WASM_MAX_SEEK_SECS,
-                );
-                let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
-                let mut seek_positions = Vec::with_capacity(Consts::RANDOM_SEEK_OPS_MAX);
-                for _ in 0..Consts::RANDOM_SEEK_OPS_MAX {
-                    seek_positions.push(rng.range_f64(1.0, max_seek_secs));
-                }
-
-                info!(
-                    operations = Consts::RANDOM_SEEK_OPS,
-                    chunks_per_seek = Consts::CHUNKS_PER_RANDOM_SEEK,
-                    "Phase 2: random seek/read stress"
-                );
-                let mut random_ops_done = 0usize;
-                let mut chunks_read = 0usize;
-                let mut variant_match_checks = 0usize;
-                let mut variant_match_hits = 0usize;
-                for (idx, pos_secs) in seek_positions
-                    .iter()
-                    .copied()
-                    .take(Consts::RANDOM_SEEK_OPS)
-                    .enumerate()
-                {
-                    audio
-                        .seek(Duration::from_secs_f64(pos_secs))
-                        .expect("seek must not fail");
-                    let _ = audio.preload();
-                    random_ops_done = random_ops_done.saturating_add(1);
-
-                    let expected_variant = current_variant(&stats);
-                    for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
-                        let stage = format!("random_seek_{idx}_chunk_{read_idx}");
-                        let Some(chunk) = next_chunk(&mut audio, &stage) else {
-                            break;
-                        };
-                        chunks_read = chunks_read.saturating_add(1);
-                        if read_idx == 0
-                            && let (Some(expected), Some(actual)) =
-                                (expected_variant, chunk.meta.variant_index)
-                        {
-                            variant_match_checks = variant_match_checks.saturating_add(1);
-                            if expected == actual {
-                                variant_match_hits = variant_match_hits.saturating_add(1);
-                            }
-                        }
-                    }
-                }
-                assert!(
-                    random_ops_done
-                        >= Consts::browser_usize(
-                            Consts::MIN_RANDOM_SEEKS,
-                            Consts::WASM_MIN_RANDOM_SEEKS
-                        ),
-                    "stress seek underflow: expected at least {} seek ops, got {}",
-                    Consts::browser_usize(Consts::MIN_RANDOM_SEEKS, Consts::WASM_MIN_RANDOM_SEEKS),
-                    random_ops_done
-                );
-                let min_chunks_by_ops = random_ops_done
-                    .saturating_mul(Consts::CHUNKS_PER_RANDOM_SEEK)
-                    .saturating_mul(85)
-                    / 100;
-                assert!(
-                    chunks_read >= min_chunks_by_ops,
-                    "stress read underflow: expected at least {} chunks (85% of seeks), got {} \
-                     (random_ops_done={})",
-                    min_chunks_by_ops,
-                    chunks_read,
-                    random_ops_done
-                );
-
-                let fast_seek_burst =
-                    Consts::browser_usize(Consts::FAST_SEEK_BURST, Consts::WASM_FAST_SEEK_BURST);
-                info!(seeks = fast_seek_burst, "Phase 3: fast seek burst");
-                for _ in 0..fast_seek_burst {
-                    let pos_secs = rng.range_f64(1.0, max_seek_secs);
-                    audio
-                        .seek(Duration::from_secs_f64(pos_secs))
-                        .expect("fast seek must not fail");
-                }
-                let _ = audio.preload();
-
-                let sequential_seek_max = (max_seek_secs - 20.0).max(5.0);
-                let final_seek = rng.range_f64(1.0, sequential_seek_max);
-                audio
-                    .seek(Duration::from_secs_f64(final_seek))
-                    .expect("final seek before sequential read must not fail");
-                let _ = audio.preload();
-
-                info!(
-                    sequential_chunks = Consts::browser_usize(
-                        Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
-                        Consts::WASM_SEQUENTIAL_CHUNKS_AFTER_BURST
-                    ),
-                    "Phase 4: sequential read after fast seeks"
-                );
-                let mut seq_epoch = None;
-                let mut seq_end_frame = None;
-                for idx in 0..Consts::browser_usize(
-                    Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
-                    Consts::WASM_SEQUENTIAL_CHUNKS_AFTER_BURST,
-                ) {
-                    let stage = format!("sequential_after_burst_{idx}");
-                    let chunk = next_chunk(&mut audio, &stage)
-                        .unwrap_or_else(|| panic!("sequential read stopped early at chunk {idx}"));
-                    if let Some(epoch) = seq_epoch {
-                        assert_eq!(
-                            chunk.meta.epoch, epoch,
-                            "sequential read changed epoch unexpectedly after final seek"
-                        );
-                    } else {
-                        seq_epoch = Some(chunk.meta.epoch);
-                    }
-                    if let Some(prev_end) = seq_end_frame {
-                        assert!(
-                            chunk.meta.frame_offset >= prev_end,
-                            "frame_offset regressed after burst seek (prev_end={}, current={})",
-                            prev_end,
-                            chunk.meta.frame_offset
-                        );
-                    }
-                    seq_end_frame = Some(chunk.meta.frame_offset + chunk.frames() as u64);
-                }
-
-                let before_revisit = snapshot(&stats);
-                let revisit_limit =
-                    Consts::browser_usize(Consts::REVISIT_SEEKS, Consts::WASM_REVISIT_SEEKS)
-                        .min(random_ops_done);
-                info!(seeks = revisit_limit, "Phase 5: revisit same positions");
-                assert!(
-                    revisit_limit > 0,
-                    "random phase completed without seek operations"
-                );
-                for (idx, pos_secs) in seek_positions.iter().take(revisit_limit).enumerate() {
-                    audio
-                        .seek(Duration::from_secs_f64(*pos_secs))
-                        .expect("revisit seek must not fail");
-                    let _ = audio.preload();
-                    let stage = format!("revisit_{idx}");
-                    let _ = next_chunk(&mut audio, &stage);
-                }
-                let after_revisit = snapshot(&stats);
-
-                (
-                    audio,
-                    before_revisit,
-                    after_revisit,
-                    variant_match_checks,
-                    variant_match_hits,
-                )
-            })
-            .await
-            .expect("read phase join");
-
-        if ephemeral {
-            let revisit_activity = has_revisited_loaded_segment(&before_revisit, &after_revisit);
-            let cache_growth =
-                total_hits(&after_revisit.cache_hits) > total_hits(&before_revisit.cache_hits);
-            let network_refetch = has_refetched_network_segment(&before_revisit, &after_revisit);
-            if !revisit_activity && !cache_growth && !network_refetch {
-                info!(
-                    network_before = total_hits(&before_revisit.network_hits),
-                    network_after = total_hits(&after_revisit.network_hits),
-                    cache_before = total_hits(&before_revisit.cache_hits),
-                    cache_after = total_hits(&after_revisit.cache_hits),
-                    "ephemeral revisit produced no additional segment completion events"
-                );
-            }
-        } else {
-            let (files, bytes) = file_count_and_size(temp_dir.path());
-            assert!(files > 0, "expected cache files on disk, found none");
-            assert!(bytes > 0, "expected non-empty cache files");
-            for (key, before_count) in &before_revisit.network_hits {
-                let after_count = after_revisit.network_hits.get(key).copied().unwrap_or(0);
+        let sequential_chunks = Consts::browser_usize(
+            Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
+            Consts::WASM_SEQUENTIAL_CHUNKS_AFTER_BURST,
+        );
+        info!(sequential_chunks, "Phase 4: sequential read after fast seeks");
+        let mut seq_epoch = None;
+        let mut seq_end_frame = None;
+        for idx in 0..sequential_chunks {
+            let stage = format!("sequential_after_burst_{idx}");
+            let chunk = next_chunk(&mut audio, &stage)
+                .unwrap_or_else(|| panic!("sequential read stopped early at chunk {idx}"));
+            if let Some(epoch) = seq_epoch {
                 assert_eq!(
-                    after_count, *before_count,
-                    "unexpected repeated network fetch for {label} segment {:?}",
-                    key
+                    chunk.meta.epoch, epoch,
+                    "sequential read changed epoch unexpectedly after final seek"
+                );
+            } else {
+                seq_epoch = Some(chunk.meta.epoch);
+            }
+            if let Some(prev_end) = seq_end_frame {
+                assert!(
+                    chunk.meta.frame_offset >= prev_end,
+                    "frame_offset regressed after burst seek (prev_end={}, current={})",
+                    prev_end,
+                    chunk.meta.frame_offset
                 );
             }
+            seq_end_frame = Some(chunk.meta.frame_offset + chunk.frames() as u64);
         }
 
-        let final_stats = snapshot(&stats);
-        if final_stats.variant_switches == 0 {
-            info!("ABR switch was not observed during this run");
-        } else if variant_match_checks > 0 {
-            let ratio = variant_match_hits as f64 / variant_match_checks as f64;
-            assert!(
-                ratio >= 0.55,
-                "seek/read variant consistency too low: {:.1}% ({}/{})",
-                ratio * 100.0,
-                variant_match_hits,
-                variant_match_checks
-            );
+        let revisit_limit =
+            Consts::browser_usize(Consts::REVISIT_SEEKS, Consts::WASM_REVISIT_SEEKS);
+        info!(seeks = revisit_limit, "Phase 5: revisit same positions");
+        let gets_before: HashMap<(usize, usize), u64> = gets
+            .iter()
+            .map(|(segment, gate)| (*segment, gate.requested()))
+            .collect();
+        assert!(
+            gets_before.values().any(|&count| count > 0),
+            "the server counted no segment GET for this fixture"
+        );
+        let mut revisited = HashSet::new();
+        for (idx, pos_secs) in seek_positions.iter().take(revisit_limit).enumerate() {
+            audio
+                .seek(Duration::from_secs_f64(*pos_secs))
+                .expect("revisit seek must not fail");
+            let _ = audio.preload();
+            let stage = format!("revisit_{idx}");
+            for _ in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
+                let Some(chunk) = next_chunk(&mut audio, &stage) else {
+                    break;
+                };
+                let segment = key(&chunk);
+                if random_reads.contains(&segment) {
+                    revisited.insert(segment);
+                }
+            }
         }
+        let refetched: Vec<_> = revisited
+            .iter()
+            .filter(|segment| gets[*segment].requested() != gets_before[*segment])
+            .copied()
+            .collect();
+        (audio, revisited, refetched)
+    })
+    .await
+    .expect("read phase join");
 
-        drop(audio);
-        let _ = events_task.await;
+    assert!(
+        !revisited.is_empty(),
+        "{label} revisit seeks must read back segments the random seeks read"
+    );
+    // A memory store of 24 resources evicts during the stress, so only
+    // the disk store keeps every segment it read.
+    if !ephemeral {
+        let (files, bytes) = file_count_and_size(temp_dir.path());
+        assert!(files > 0, "expected cache files on disk, found none");
+        assert!(bytes > 0, "expected non-empty cache files");
+        assert!(
+            refetched.is_empty(),
+            "{label} revisits fetched segments the random seeks had already read: {refetched:?}"
+        );
     }
+
+    drop(audio);
 }
 
 /// Ephemeral playback with small LRU cache on a real HLS stream.

@@ -15,7 +15,13 @@ use kithara_devtools::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use super::{Prepared, link, logged, runner::Session, sha256};
+use super::{
+    Prepared,
+    exports::Binding,
+    link, logged,
+    runner::{Image, Session},
+    sha256,
+};
 use crate::{
     android::{android_sdk_root, device::Selected, ndk_prebuilt, ndk_root},
     child,
@@ -99,6 +105,7 @@ pub(super) fn prepare(
     )?;
     stage_shared(&binaries, target, &libraries, &toolchain, cancel)?;
     refuse_oversized_jni_libs(&libraries)?;
+    let binaries = loaded_images(binaries, &toolchain.join("bin"), &libraries, cancel)?;
     let home = install(root, &evidence, &ndk, device, cancel)?;
     let directory = format!(
         "{}/files/{}",
@@ -325,7 +332,7 @@ fn package_libraries(
     for image in device_test_images(inventory)? {
         let hash = hex::encode(Sha256::digest(image.as_os_str().as_encoded_bytes()));
         let name = format!("kithara_test_{hash}");
-        let staged = libraries.join(format!("lib{name}.so"));
+        let staged = staged_library(libraries, &name);
         fs::copy(&image, &staged)?;
         strip_unneeded(toolchain, &staged, cancel)?;
         sizes.push(serde_json::json!({"binary": image, "original_bytes": fs::metadata(&image)?.len(), "staged_bytes": fs::metadata(&staged)?.len(), "staged_sha256": sha256(&staged)?, "original_sha256": sha256(&image)?}));
@@ -339,6 +346,28 @@ fn package_libraries(
         serde_json::to_vec_pretty(&sizes)?,
     )?;
     Ok(binaries)
+}
+
+fn staged_library(libraries: &Path, name: &str) -> PathBuf {
+    libraries.join(format!("lib{name}.so"))
+}
+
+/// The instrumentation installs the host transport only into an image whose
+/// staged library graph binds the install entry point.
+fn loaded_images(
+    binaries: BTreeMap<PathBuf, String>,
+    tools: &Path,
+    libraries: &Path,
+    cancel: &child::Cancel,
+) -> Result<BTreeMap<PathBuf, Image>> {
+    let mut binding = Binding::new(tools, libraries, Some(cancel));
+    binaries
+        .into_iter()
+        .map(|(binary, library)| {
+            let transport = binding.binds(&staged_library(libraries, &library))?;
+            Ok((binary, Image { library, transport }))
+        })
+        .collect()
 }
 
 struct Configured {

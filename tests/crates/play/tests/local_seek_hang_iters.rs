@@ -7,12 +7,11 @@ use kithara::{
     abr::AbrMode,
     audio::AudioEvent,
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig},
+    download::Downloader,
     events::EventReceiver,
     host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken, time,
+        time,
         time::{Duration, Instant, timeout},
         tokio::sync::broadcast::error::TryRecvError,
     },
@@ -21,6 +20,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
+    hls_fixture::create_test_downloader,
     offline::{OfflinePlayer, WindowStats, rms},
     temp_dir,
 };
@@ -279,14 +279,7 @@ async fn local_seek_middle_hang_iters(
         let iter_label = format!("iter-{iter}");
         let temp = temp_dir();
         let store = kithara_integration_tests::disk_asset_store(temp.path());
-        let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(
-                NetOptions::default(),
-                pools(),
-                CancelToken::never(),
-            ))
-            .build(),
-        );
+        let downloader = create_test_downloader();
 
         let mut player = OfflinePlayer::new(
             HostConfig::offline(pools())

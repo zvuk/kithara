@@ -5,11 +5,8 @@ use std::num::NonZeroU32;
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
         flash::real_io,
         time,
         time::{Duration, Instant},
@@ -20,6 +17,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
+    hls_fixture::create_test_downloader,
     offline::OfflinePlayer,
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
     usdt_trace,
@@ -133,14 +131,7 @@ async fn flac_swallow_fixture(
     let (_helper, master) = flac_source;
 
     let temp = TestTempDir::new();
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools(),
-            CancelToken::never(),
-        ))
-        .build(),
-    );
+    let downloader = create_test_downloader();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
 
     let cfg: ResourceConfig<TestPools> =

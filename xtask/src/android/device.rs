@@ -96,6 +96,23 @@ impl Selected {
         command
     }
 
+    pub(crate) fn force_stop(&self, package: &str, cancel: Option<&child::Cancel>) -> Result<()> {
+        println!("==> Stopping {package}");
+        let output = control(
+            self.adb().args(["shell", "am", "force-stop", package]),
+            cancel,
+        )?;
+        if !output.status.success() {
+            bail!(
+                "adb force-stop {package} failed ({}): stdout `{}`, stderr `{}`",
+                output.status,
+                String::from_utf8_lossy(&output.stdout).trim(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(())
+    }
+
     /// Keep the emulator this run booted running, and stop owning it.
     pub(crate) fn leave_running(&mut self) {
         if self.emulator.take().is_some() {

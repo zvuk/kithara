@@ -11,10 +11,14 @@ use kithara_platform::{
     time::timeout,
 };
 use tracing::{
-    Event, Metadata, Subscriber,
+    Event, Subscriber,
     field::{Field, Visit},
 };
-use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::{
+    filter::filter_fn,
+    layer::{Context, Layer},
+    registry::LookupSpan,
+};
 
 /// Payload fields one probe firing can carry: the USDT provider's six `u64`
 /// arguments minus the operation id.
@@ -332,17 +336,18 @@ impl Drop for Scope {
 }
 
 #[must_use]
-pub fn layer() -> UsdtLayer {
-    UsdtLayer
+pub fn layer<S>() -> impl Layer<S>
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    UsdtLayer.with_filter(filter_fn(|meta| {
+        meta.is_event() && meta.target().ends_with("_probe")
+    }))
 }
 
-pub struct UsdtLayer;
+struct UsdtLayer;
 
 impl<S: Subscriber> Layer<S> for UsdtLayer {
-    fn enabled(&self, meta: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
-        meta.is_event() && meta.target().ends_with("_probe")
-    }
-
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         if !ARMED.load(Ordering::Acquire) {
             return;

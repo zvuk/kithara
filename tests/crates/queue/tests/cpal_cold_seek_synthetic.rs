@@ -3,10 +3,8 @@
 use kithara::{
     audio::AudioEvent,
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration},
+    platform::time::Duration,
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
@@ -14,6 +12,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     fixture_protocol::DelayRule,
+    hls_fixture::create_test_downloader,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
@@ -43,14 +42,7 @@ async fn cold_seek_far_segment_hls_offline(
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools(),
-            CancelToken::never(),
-        ))
-        .build(),
-    );
+    let downloader = create_test_downloader();
 
     let player = PlayerImpl::new(
         PlayerConfig::builder()

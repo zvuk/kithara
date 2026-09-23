@@ -4,15 +4,13 @@ use std::num::NonZeroU32;
 
 use kithara::{
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration},
+    platform::time::Duration,
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
-    waits::render_until_position,
+    PackagedTestServer, fixture_protocol::DelayRule, hls_fixture::create_test_downloader,
+    offline::OfflinePlayer, temp_dir, waits::render_until_position,
 };
 
 use crate::{
@@ -69,14 +67,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools(),
-            CancelToken::never(),
-        ))
-        .build(),
-    );
+    let downloader = create_test_downloader();
 
     let cfg: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))

@@ -7,9 +7,12 @@ use std::{
 use tracing::{
     Event, Level, Metadata, Subscriber,
     field::{Field, Visit},
-    subscriber::Interest,
 };
-use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::{
+    filter::filter_fn,
+    layer::{Context, Layer},
+    registry::LookupSpan,
+};
 
 /// In-memory flight recorder: the last kithara events, whatever the fmt
 /// layer's filter admits to stdout. A red test's dump (panic or hang)
@@ -64,8 +67,11 @@ fn lock(ring: &Mutex<VecDeque<Entry>>) -> MutexGuard<'_, VecDeque<Entry>> {
 }
 
 #[must_use]
-pub fn layer() -> RingLayer {
-    RingLayer
+pub fn layer<S>() -> impl Layer<S>
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    RingLayer.with_filter(filter_fn(|meta| classify(meta).is_some()))
 }
 
 /// Snapshot of the recorded DEBUG-event tail, oldest first.
@@ -97,7 +103,7 @@ fn snapshot(ring: &Mutex<VecDeque<Entry>>) -> Vec<String> {
         .collect()
 }
 
-pub struct RingLayer;
+struct RingLayer;
 
 enum Lane {
     Event,
@@ -119,14 +125,8 @@ fn classify(meta: &Metadata<'_>) -> Option<Lane> {
 }
 
 impl<S: Subscriber> Layer<S> for RingLayer {
-    fn enabled(&self, meta: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
-        classify(meta).is_some()
-    }
-
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let meta = event.metadata();
-        // Sibling layers may enable events this one does not want; `on_event`
-        // is delivered for every globally enabled event.
         let Some(lane) = classify(meta) else {
             return;
         };
@@ -149,14 +149,6 @@ impl<S: Subscriber> Layer<S> for RingLayer {
             Lane::Probe => &PROBES,
         };
         record(ring, line, key);
-    }
-
-    fn register_callsite(&self, meta: &'static Metadata<'static>) -> Interest {
-        if classify(meta).is_some() {
-            Interest::always()
-        } else {
-            Interest::never()
-        }
     }
 }
 

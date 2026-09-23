@@ -378,26 +378,7 @@ fn audit_symbols(xcframework_dir: &FsPath, apple: &AppleConfig, tools: &ToolsCon
 /// the same audit, so the fallback resolves too — half a configurable
 /// operation sends a machine that redirected one tool to the wrong other one.
 fn symbol_tool(tools: &ToolsConfig) -> PathBuf {
-    rust_tool("llvm-nm").unwrap_or_else(|| PathBuf::from(tools.program("nm")))
-}
-
-fn rust_tool(name: &str) -> Option<PathBuf> {
-    let output = Command::new("rustc")
-        .args(["--print", "sysroot"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let sysroot = String::from_utf8(output.stdout).ok()?;
-    let rustlib = PathBuf::from(sysroot.trim()).join("lib/rustlib");
-    for entry in fs::read_dir(rustlib).ok()? {
-        let path = entry.ok()?.path().join("bin").join(name);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    None
+    crate::sysroot::tool("llvm-nm").unwrap_or_else(|| PathBuf::from(tools.program("nm")))
 }
 
 fn archive_strings(lib: &FsPath, tools: &ToolsConfig) -> Result<String> {

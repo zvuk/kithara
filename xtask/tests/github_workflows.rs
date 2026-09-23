@@ -2213,7 +2213,7 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
     }
 }
 
-/// `wreq` is the backend Apple and Android devices ship, and asking for it
+/// `wreq` is the backend the Apple desktop app ships, and asking for it
 /// builds BoringSSL through cmake. The Windows guest carries neither that
 /// toolchain nor the product that would use the backend, so the lane names the
 /// one the platform actually carries; without that the suite stops in a build

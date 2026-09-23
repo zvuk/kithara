@@ -2,15 +2,15 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    download::{Downloader, DownloaderConfig},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration},
+    platform::time::Duration,
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource},
 };
 use kithara_integration_tests::{
-    TestServerHelper, kithara,
+    TestServerHelper,
+    hls_fixture::create_test_downloader,
+    kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     served_mp3, temp_dir,
     waits::wait_for_position_event,
@@ -65,14 +65,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track(
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
     let mut tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools(),
-            CancelToken::never(),
-        ))
-        .build(),
-    );
+    let downloader = create_test_downloader();
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader)
         .store(store)

@@ -595,18 +595,6 @@ mod default_priming_tests {
         ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test())
     }
 
-    fn prepared_chunk(decoder: &mut dyn Decoder) -> AudioChunk {
-        for _ in 0..ZERO_FRAME_BUDGET {
-            decoder.prepare_next_chunk();
-            match decoder.next_chunk_prepared().expect("prepared decode") {
-                DecoderChunkOutcome::Chunk(chunk) => return chunk,
-                DecoderChunkOutcome::Pending(PendingReason::Retry) => {}
-                _ => panic!("expected PCM or another prepared packet during warmup"),
-            }
-        }
-        panic!("prepared decode exhausted the codec warmup budget");
-    }
-
     #[kithara::test]
     fn prefilled_mp3_preserves_first_pcm_and_seek(tone_mp3: &'static [u8]) {
         let mut decoder = build_mp3_decoder(tone_mp3);
@@ -617,13 +605,13 @@ mod default_priming_tests {
                 decoder.seek(position).expect("seek");
                 reference.seek(position).expect("reference seek");
             }
-            for _ in 0..4 {
+            let actual = pcm_prefix(|| {
                 decoder.prepare_next_chunk();
                 decoder.prepare_next_chunk();
-                let actual = decoder.next_chunk().expect("prefilled decode");
-                let expected = reference.next_chunk().expect("reference decode");
-                assert_same_mp3_output(&actual, &expected);
-            }
+                decoder.next_chunk().expect("prefilled decode")
+            });
+            let expected = pcm_prefix(|| reference.next_chunk().expect("reference decode"));
+            assert_eq!(actual, expected);
         }
     }
 
@@ -631,101 +619,50 @@ mod default_priming_tests {
     fn initialized_mp3_reuses_decoder_storage_after_seek(tone_mp3: &'static [u8]) {
         let mut decoder = build_mp3_decoder(tone_mp3);
         let mut reference = build_mp3_decoder(tone_mp3);
-        let first = decoder.next_chunk().expect("initial decode");
-        assert!(matches!(first, DecoderChunkOutcome::Chunk(_)));
-        let expected_first = reference.next_chunk().expect("reference initial decode");
-        assert_same_mp3_output(&first, &expected_first);
+        let mut initial = Some(decoder.next_chunk().expect("initial decode"));
         for position in [None, Some(Duration::ZERO), Some(Duration::from_millis(250))] {
             if let Some(position) = position {
                 decoder.seek(position).expect("seek");
                 reference.seek(position).expect("reference seek");
             }
-            let produced = assert_same_mp3_stream(&mut decoder, &mut reference, 4);
-            assert!(produced > 0, "checked calls must produce PCM");
+            let actual = pcm_prefix(|| {
+                initial.take().unwrap_or_else(|| {
+                    decoder.prepare_next_chunk();
+                    checked_mp3_chunk(&mut decoder).expect("checked decode")
+                })
+            });
+            let expected = pcm_prefix(|| reference.next_chunk().expect("reference decode"));
+            assert_eq!(actual, expected);
         }
     }
 
-    /// Pull `chunks` prepared chunks from each decoder and compare them as one
-    /// PCM stream, returning how many the decoder under test produced.
-    ///
-    /// Only the stream is a contract. Where a window opens is not: a chunk
-    /// carries whatever the codec's output buffers hold — the Android
-    /// `MediaCodec` backend hands back one or several frames as it pleases — so
-    /// one decoder can already stand a frame further along than the other when
-    /// the window starts. The frame offset each side reports says where its
-    /// samples sit on the track, and the streams are compared where they meet.
-    fn assert_same_mp3_stream(
-        decoder: &mut dyn Decoder,
-        reference: &mut dyn Decoder,
-        chunks: usize,
-    ) -> usize {
-        let mut produced = 0;
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        let mut start = None;
-        let mut expected_start = None;
-        let mut channels = None;
-        for _ in 0..chunks {
-            decoder.prepare_next_chunk();
-            if let DecoderChunkOutcome::Chunk(chunk) =
-                checked_mp3_chunk(decoder).expect("checked decode")
-            {
-                start.get_or_insert(chunk.meta.frame_offset);
-                channels.get_or_insert(chunk.meta.spec.channels);
-                actual.extend_from_slice(&chunk.samples);
-                produced += 1;
-            }
-            reference.prepare_next_chunk();
-            if let DecoderChunkOutcome::Chunk(chunk) =
-                reference.next_chunk_prepared().expect("reference decode")
-            {
-                expected_start.get_or_insert(chunk.meta.frame_offset);
-                channels.get_or_insert(chunk.meta.spec.channels);
-                expected.extend_from_slice(&chunk.samples);
-            }
-        }
-        let (Some(start), Some(expected_start)) = (start, expected_start) else {
-            assert_eq!(start, expected_start, "both decoders reach the same stream");
-            return produced;
+    #[derive(Debug, PartialEq)]
+    struct Pcm {
+        timestamp: Duration,
+        frame_offset: u64,
+        samples: Vec<f32>,
+    }
+
+    fn pcm_prefix(mut next: impl FnMut() -> DecoderChunkOutcome) -> Pcm {
+        const FRAMES: usize = 4096;
+        let mut chunks = (0..ZERO_FRAME_BUDGET).filter_map(|_| match next() {
+            DecoderChunkOutcome::Chunk(chunk) => Some(chunk),
+            DecoderChunkOutcome::Pending(PendingReason::Retry) => None,
+            _ => panic!("expected PCM"),
+        });
+        let first = chunks.next().expect("PCM within the call budget");
+        let wanted = FRAMES * usize::from(first.meta.spec.channels);
+        let mut pcm = Pcm {
+            timestamp: first.meta.timestamp,
+            frame_offset: first.meta.frame_offset,
+            samples: first.samples.to_vec(),
         };
-        let channels = usize::from(channels.expect("a chunk carries its format")).max(1);
-        let meeting = start.max(expected_start);
-        let actual = &actual[usize::try_from(meeting - start).expect("frame index") * channels..];
-        let expected =
-            &expected[usize::try_from(meeting - expected_start).expect("frame index") * channels..];
-        let shared = actual.len().min(expected.len());
-        assert!(
-            shared > 0,
-            "the two decoders cover a common stretch of track"
-        );
-        assert_eq!(
-            actual[..shared],
-            expected[..shared],
-            "the two decoders carry the same PCM"
-        );
-        produced
-    }
-
-    /// Two decoders over the same MP3 agree on where a chunk sits on the media
-    /// timeline and on the PCM it carries, as far as both of them reach.
-    ///
-    /// How many frames a chunk carries is the codec's own bookkeeping, not a
-    /// property of the source: the Android `MediaCodec` backend hands back
-    /// whatever its output buffers hold at the moment it is asked.
-    fn assert_same_mp3_output(actual: &DecoderChunkOutcome, expected: &DecoderChunkOutcome) {
-        match (actual, expected) {
-            (DecoderChunkOutcome::Chunk(actual), DecoderChunkOutcome::Chunk(expected)) => {
-                assert_eq!(actual.meta.timestamp, expected.meta.timestamp);
-                assert_eq!(actual.meta.frame_offset, expected.meta.frame_offset);
-                let shared = actual.samples.len().min(expected.samples.len());
-                assert_eq!(actual.samples[..shared], expected.samples[..shared]);
-            }
-            (
-                DecoderChunkOutcome::Pending(PendingReason::Retry),
-                DecoderChunkOutcome::Pending(PendingReason::Retry),
-            ) => {}
-            _ => panic!("expected matching PCM or packet progress"),
+        while pcm.samples.len() < wanted {
+            let chunk = chunks.next().expect("PCM within the call budget");
+            pcm.samples.extend_from_slice(&chunk.samples);
         }
+        pcm.samples.truncate(wanted);
+        pcm
     }
 
     #[kithara::rtsan_forbid_blocking]
@@ -755,17 +692,12 @@ mod default_priming_tests {
                 prepared.seek(position).expect("prepared seek");
                 regular.seek(position).expect("regular seek");
             }
-            for _ in 0..4 {
-                let actual = prepared_chunk(&mut prepared);
-                let DecoderChunkOutcome::Chunk(expected) =
-                    regular.next_chunk().expect("regular decode")
-                else {
-                    panic!("expected PCM chunk");
-                };
-                assert_eq!(actual.meta.timestamp, expected.meta.timestamp);
-                assert_eq!(actual.meta.frames, expected.meta.frames);
-                assert_eq!(&*actual.samples, &*expected.samples);
-            }
+            let actual = pcm_prefix(|| {
+                prepared.prepare_next_chunk();
+                prepared.next_chunk_prepared().expect("prepared decode")
+            });
+            let expected = pcm_prefix(|| regular.next_chunk().expect("regular decode"));
+            assert_eq!(actual, expected);
         }
     }
 

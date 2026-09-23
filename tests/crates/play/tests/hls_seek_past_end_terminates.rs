@@ -3,17 +3,13 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    download::{Downloader, DownloaderConfig},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        time::{Duration, sleep},
-    },
+    platform::time::{Duration, sleep},
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     PackagedTestServer,
+    hls_fixture::create_test_downloader,
     offline::{NotificationKind, OfflinePlayer},
     temp_dir,
     waits::render_until_position,
@@ -61,14 +57,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools(),
-            CancelToken::never(),
-        ))
-        .build(),
-    );
+    let downloader = create_test_downloader();
 
     let cfg: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))

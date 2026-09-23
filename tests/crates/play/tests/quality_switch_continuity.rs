@@ -415,7 +415,7 @@ async fn prepare_player(
 ///
 /// The guard is what puts that advance on the same clock as everything else
 /// this test observes. Fixture delays already burn virtual time
-/// (`release_after_delay`), and the decode worker is a registered pacer, so the
+/// (`TestServerState::delay_response`), and the decode worker is a registered pacer, so the
 /// clock only moves once the worker has parked. Without the guard this `sleep`
 /// is a real `tokio` timer — the test macro rewrites time calls in the test
 /// body, not in the helpers it calls — and the consumer then advances at host

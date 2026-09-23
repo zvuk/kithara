@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Context;
 import android.os.Bundle;
+import com.kithara.net.NativeHttpTransport;
+import com.kithara.okhttp.OkHttpTransport;
+import okhttp3.OkHttpClient;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -31,6 +34,8 @@ public final class NativeInstrumentation extends Instrumentation {
             if (!library.matches("kithara_test_[0-9a-f]+"))
                 throw new IllegalArgumentException("Invalid test library name");
             System.loadLibrary(library);
+            if (input.getBoolean("transport"))
+                NativeHttpTransport.install(new OkHttpTransport(new OkHttpClient()));
             int code = runNative(context, strings(input.getJSONArray("args")),
                 input.getString("log"), input.getString("directory"),
                 strings(input.getJSONArray("environment")));

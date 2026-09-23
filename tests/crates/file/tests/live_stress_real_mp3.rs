@@ -4,6 +4,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     download::DownloaderEvent,
+    events::EventBus,
     file::{File, FileConfig, FileEvent},
     platform::{
         sync::Arc,
@@ -254,6 +255,7 @@ async fn live_stress_real_mp3_seek_read_cache(
     let file_config = FileConfig::for_src(url.into())
         .store(store)
         .pools(pools.clone())
+        .events(EventBus::default())
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = worker
@@ -334,9 +336,10 @@ async fn live_stress_real_mp3_seek_read_cache(
         .read_progress_events
         .saturating_add(final_stats.request_started_events)
         .saturating_add(final_stats.request_completed_events);
-    if transfer_events == 0 {
-        info!("MP3 stress: no transfer events observed");
-    }
+    assert!(
+        transfer_events > 0,
+        "the stats task must observe the file's transfer events"
+    );
 
     if !ephemeral {
         let (files, bytes) = file_count_and_size(temp_dir.path());

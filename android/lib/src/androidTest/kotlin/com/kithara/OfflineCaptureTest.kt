@@ -52,7 +52,7 @@ class OfflineCaptureTest {
         @BeforeClass
         fun setUpClass() {
             val context = ApplicationProvider.getApplicationContext<Context>()
-            Kithara.initialize(context, logLevel = LogLevel.Debug)
+            Kithara.initialize(context, TestTransport.okHttp, logLevel = LogLevel.Debug)
         }
     }
 

@@ -1813,7 +1813,7 @@ mod tests {
             nightly_tag: "nightly".into(),
             core_asset: "KitharaFFIInternal.xcframework.zip".into(),
             merged_asset: "Kithara.xcframework.zip".into(),
-            platform_assets: vec!["kithara.aar".into(), "rust-tls.aar".into()],
+            platform_assets: vec!["kithara.aar".into(), "kithara-okhttp.aar".into()],
             docs: docs_fixture(),
             wasm_asset: "kithara-wasm-pages.zip".into(),
             wasm_dist: "crates/kithara-ffi/dist".into(),
@@ -1858,7 +1858,7 @@ mod tests {
             nightly_tag: "nightly".into(),
             core_asset: "KitharaFFIInternal.xcframework.zip".into(),
             merged_asset: "Kithara.xcframework.zip".into(),
-            platform_assets: vec!["kithara.aar".into(), "rust-tls.aar".into()],
+            platform_assets: vec!["kithara.aar".into(), "kithara-okhttp.aar".into()],
             docs: docs_fixture(),
             wasm_asset: "kithara-wasm-pages.zip".into(),
             wasm_dist: "crates/kithara-ffi/dist".into(),
@@ -1877,7 +1877,7 @@ mod tests {
                 "KitharaFFIInternal.xcframework.zip",
                 "Kithara.xcframework.zip",
                 "kithara.aar",
-                "rust-tls.aar",
+                "kithara-okhttp.aar",
             ]
         );
         assert!(
