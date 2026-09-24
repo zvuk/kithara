@@ -103,7 +103,7 @@ bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }
 derive_more = { workspace = true }
-iced = { workspace = true, optional = true }
+iced = { workspace = true, optional = true, features = ["tiny-skia"] }
 num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }
