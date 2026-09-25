@@ -212,4 +212,3 @@ First public alpha. Pre-release: public APIs may shift between alpha tags.
 - `kithara-ui` and `kithara-tui` crates (collapsed into `kithara-app::gui` / `kithara-app::tui` modules behind feature flags).
 - `DownloadState`, `HlsSegmentView`, `commit_variant_layout`, the file-side demand machinery, and `ResourceConfig` chain shims; semantic mapping is now owned by `HlsCoord`, byte availability by `AssetStore`.
 - White-box `test_helpers`; tests now use only the public API.
-

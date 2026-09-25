@@ -110,6 +110,35 @@ impl Drop for RefillStorage {
 }
 
 #[kithara::test]
+fn retained_pool_config_controls_returned_buffer_trimming() {
+    let budget = RegionBudget::new(32);
+    let core = Core::<1, OverallocStorage, true>::new(
+        PoolConfig::builder()
+            .max_buffers(1)
+            .max_retained_capacity(16)
+            .trim_capacity(4)
+            .build(),
+        budget.clone(),
+        32,
+    )
+    .unwrap_or_else(|error| panic!("test core: {error}"));
+    let values = kithara_config::Config::values(&core.config);
+    assert_eq!(values.max_retained_capacity, 16);
+    assert_eq!(values.trim_capacity, 4);
+
+    let value = core
+        .allocate(8, 0)
+        .unwrap_or_else(|error| panic!("test buffer: {error}"));
+    assert_eq!(value.capacity(), 16);
+    core.put(value, 0);
+
+    assert_eq!(core.shards[0].len(), 1);
+    assert_eq!(budget.current(), 4);
+    drop(core);
+    assert_eq!(budget.current(), 0);
+}
+
+#[kithara::test]
 fn failed_growth_reuses_suitable_buffer_beyond_fast_probe() {
     const CAPACITY: usize = 8;
     const CURRENT_CAPACITY: usize = 4;

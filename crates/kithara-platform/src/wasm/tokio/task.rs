@@ -58,9 +58,10 @@ where
     JoinHandle { rx, abort_handle }
 }
 
-/// Spawn a future using the browser executor represented by the runtime handle.
+/// Spawn a future through the current thread's executor.
 ///
-/// The wasm handle is a compatibility token, so this delegates to [`spawn`].
+/// The wasm runtime handle is a compatibility token, so this delegates to
+/// [`spawn`], preserving worker lifecycle tracking.
 pub fn spawn_on<F, T>(_handle: &Handle, future: F) -> JoinHandle<T>
 where
     F: Future<Output = T> + 'static,
@@ -159,10 +160,28 @@ mod tests {
 
     use kithara_test_utils::kithara;
 
-    use super::{Handle, spawn, spawn_on};
-    use crate::time::{Duration, sleep};
+    use super::{spawn, spawn_on};
+    use crate::{
+        time::{Duration, sleep},
+        tokio::runtime::Handle,
+    };
 
     const TICK: Duration = Duration::from_millis(10);
+
+    #[kithara::test(wasm, flash(false))]
+    async fn explicit_handle_preserves_local_future_and_output() {
+        let runtime = Handle::try_current().expect("browser executor is available");
+        let value = Rc::new(Cell::new(3));
+        let input = Rc::clone(&value);
+        let joined = spawn_on(&runtime, async move {
+            input.set(7);
+            input
+        })
+        .await
+        .expect("task completes");
+        assert!(Rc::ptr_eq(&value, &joined));
+        assert_eq!(value.get(), 7);
+    }
 
     #[kithara::test(wasm, flash(false))]
     async fn abort_stops_the_task_and_the_join_reports_cancelled() {

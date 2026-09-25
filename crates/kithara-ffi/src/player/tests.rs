@@ -1,8 +1,40 @@
-use crate::{config::FfiPlayerConfig, player::AudioPlayer};
+use crate::{
+    FfiEqBandConfig, FfiEqFilterKind, FfiQueueSettings, config::FfiPlayerConfig,
+    player::AudioPlayer, types::FfiPlaybackOrder,
+};
 
 #[kithara::test]
 fn create_player() {
     let _player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
+}
+
+#[kithara::test]
+fn queue_settings_reach_the_native_owner() {
+    let player = AudioPlayer::new_with_queue_settings(
+        FfiPlayerConfig::for_test(),
+        FfiQueueSettings {
+            playback_order: Some(FfiPlaybackOrder::Shuffle),
+            max_concurrent_loads: Some(4),
+            ..FfiQueueSettings::default()
+        },
+    )
+    .expect("create player with queue settings");
+    assert_eq!(player.playback_order(), FfiPlaybackOrder::Shuffle);
+}
+
+#[kithara::test]
+fn invalid_queue_settings_reject_player_construction() {
+    let result = AudioPlayer::new_with_queue_settings(
+        FfiPlayerConfig::for_test(),
+        FfiQueueSettings {
+            max_concurrent_loads: Some(0),
+            ..FfiQueueSettings::default()
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(crate::types::FfiError::InvalidArgument { .. })
+    ));
 }
 
 #[kithara::test]
@@ -11,6 +43,17 @@ fn playing_rate_roundtrip() {
     assert!((player.playing_rate() - 1.0).abs() < f32::EPSILON);
     player.set_playing_rate(0.5);
     assert!((player.playing_rate() - 0.5).abs() < f32::EPSILON);
+}
+
+#[kithara::test]
+fn initial_playing_rate_reaches_player_config() {
+    let player = AudioPlayer::new(FfiPlayerConfig {
+        playing_rate: 0.75,
+        ..FfiPlayerConfig::for_test()
+    })
+    .expect("create player");
+
+    assert_eq!(player.playing_rate(), 0.75);
 }
 
 #[kithara::test]
@@ -50,6 +93,75 @@ fn eq_band_count_from_config() {
     })
     .expect("create player");
     assert_eq!(player.eq_band_count(), 3);
+}
+
+#[kithara::test]
+fn native_eq_count_above_web_limit_remains_usable() {
+    let player = AudioPlayer::new(FfiPlayerConfig {
+        eq_band_count: 65,
+        ..FfiPlayerConfig::for_test()
+    })
+    .expect("native EQ layout accepted");
+    assert_eq!(player.eq_band_count(), 65);
+    player.set_eq_gain(64, 3.0).expect("set last band gain");
+    assert_eq!(player.eq_gain(64), 3.0);
+    player.reset_eq().expect("reset EQ");
+    assert_eq!(player.eq_gain(64), 0.0);
+}
+
+#[kithara::test]
+fn oversized_eq_config_is_rejected_before_player_construction() {
+    let result = AudioPlayer::new(FfiPlayerConfig {
+        eq_band_count: u32::MAX,
+        ..FfiPlayerConfig::for_test()
+    });
+    assert!(matches!(
+        result,
+        Err(crate::types::FfiError::InvalidArgument { .. })
+    ));
+}
+
+#[kithara::test]
+fn native_eq_count_above_resource_budget_is_typed_error() {
+    let result = AudioPlayer::new(FfiPlayerConfig {
+        eq_band_count: 129,
+        ..FfiPlayerConfig::for_test()
+    });
+    assert!(matches!(
+        result,
+        Err(crate::types::FfiError::InvalidArgument { .. })
+    ));
+}
+
+#[kithara::test]
+fn generated_eq_layout_reaches_the_player_owner() {
+    let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
+    player
+        .set_eq_layout(vec![FfiEqBandConfig {
+            kind: FfiEqFilterKind::Peaking,
+            gain_db: 3.0,
+            frequency: 440.0,
+            q_factor: 0.8,
+        }])
+        .expect("replace EQ layout");
+    assert_eq!(player.eq_band_count(), 1);
+    assert_eq!(player.eq_gain(0), 3.0);
+}
+
+#[kithara::test]
+fn oversized_eq_layout_does_not_replace_the_owner_layout() {
+    let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
+    let band = FfiEqBandConfig {
+        kind: FfiEqFilterKind::Peaking,
+        gain_db: 3.0,
+        frequency: 440.0,
+        q_factor: 0.8,
+    };
+    assert!(matches!(
+        player.set_eq_layout(vec![band; 129]),
+        Err(crate::types::FfiError::InvalidArgument { .. })
+    ));
+    assert_eq!(player.eq_band_count(), 10);
 }
 
 #[kithara::test]

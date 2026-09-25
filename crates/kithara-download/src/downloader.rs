@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use futures::task::AtomicWaker;
 use kithara_abr::{Abr, AbrController, AbrPeerId};
 use kithara_events::EventBus;
-use kithara_net::HttpClient;
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{keep_worker_alive, spawn};
 use kithara_platform::{
@@ -57,6 +56,7 @@ pub(super) struct RegisteredPeerEntry {
 /// Both [`Downloader`] and [`PeerHandle`] hold an `Arc` to this; cloning
 /// either is just an Arc bump.
 pub(super) struct DownloaderInner {
+    pub(super) config: super::DownloaderConfig,
     /// Shared ABR controller. One per Downloader — peers register through
     /// `register()` and fetch-completion hooks call
     /// `controller.record_bandwidth(...)` automatically.
@@ -72,17 +72,10 @@ pub(super) struct DownloaderInner {
     /// connections across all peers and command types.
     pub(super) inflight: Arc<AtomicUsize>,
     pub(super) cancel: CancelToken,
-    pub(super) demand_throttle: Duration,
-    pub(super) soft_timeout: Duration,
-    pub(super) client: HttpClient,
     /// Receiver — taken once by [`ensure_spawned`](Downloader::ensure_spawned).
     pub(super) register_rx: Mutex<Option<mpsc::UnboundedReceiver<RegisteredPeerEntry>>>,
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) runtime: Option<tokio::runtime::Handle>,
     /// Sender for registering new peers (cold path).
     pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
-    pub(super) max_concurrent: usize,
-    pub(super) peer_cmd_channel_capacity: usize,
     /// Monotonic source of [`crate::RequestId`]s assigned to
     /// every command this Downloader accepts. Starts at 1 (`NonZero`
     /// invariant); never wraps in practice (`u64`).
@@ -107,32 +100,23 @@ impl Downloader {
 
     /// Create a new downloader from configuration.
     ///
-    /// Adopts `config.client` (a clone of the caller's [`HttpClient`])
+    /// Adopts `config.client` (a clone of the caller's [`kithara_net::HttpClient`])
     /// and the shared [`AbrController`] from `config.abr_settings`.
-    ///
-    /// Composed/standalone seam: a `Some` parent makes this token its child; `None` makes it its
-    /// own root. The loop, peer scopes, and the shared ABR controller all derive from this token.
     #[must_use]
-    pub fn new(config: super::DownloaderConfig) -> Self {
+    pub fn new(mut config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let soft_timeout = config.soft_timeout;
-        #[cfg(not(target_arch = "wasm32"))]
-        let runtime = config.runtime;
-        let cancel = CancelScope::new(config.cancel).token();
-        let mut abr_settings = config.abr_settings;
+        // WHY: Composed/standalone seam: `Some` parent -> child of it; `None` -> own root. The loop, peer scopes, and the shared ABR
+        // controller derive from this token.
+        let cancel = CancelScope::new(config.cancel.take()).token();
+        let mut abr_settings = config.abr_settings.clone();
         abr_settings.cancel = Some(cancel.clone());
+        config.abr_settings.cancel = None;
         let abr = AbrController::new(abr_settings);
         Self {
             inner: Arc::new(DownloaderInner {
-                soft_timeout,
-                #[cfg(not(target_arch = "wasm32"))]
-                runtime,
+                config,
                 abr,
                 cancel,
-                client: config.client,
-                max_concurrent: config.max_concurrent,
-                peer_cmd_channel_capacity: config.peer_cmd_channel_capacity,
-                demand_throttle: config.demand_throttle,
                 inflight: Arc::new(AtomicUsize::new(0)),
                 fetch_waker: Arc::new(AtomicWaker::new()),
                 capacity_notify: Arc::new(Notify::default()),
@@ -141,6 +125,13 @@ impl Downloader {
                 next_request_id: AtomicU64::new(1),
             }),
         }
+    }
+
+    /// Configuration retained by this downloader. Parent cancellation inputs
+    /// are consumed during construction and excluded from value snapshots.
+    #[must_use]
+    pub fn config(&self) -> &super::DownloaderConfig {
+        &self.inner.config
     }
 
     /// Ensure the download loop is running (lazy spawn on first register
@@ -162,7 +153,7 @@ impl Downloader {
         self.ensure_spawned();
         let cancel = CancelScope::new(Some(self.inner.cancel.clone()));
         let cancel_token = cancel.token();
-        let (cmd_tx, cmd_rx) = mpsc::channel(self.inner.peer_cmd_channel_capacity);
+        let (cmd_tx, cmd_rx) = mpsc::channel(self.inner.config.peer_cmd_channel_capacity);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
@@ -240,6 +231,7 @@ impl Downloader {
         rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
     ) {
         let Some(handle) = inner
+            .config
             .runtime
             .clone()
             .or_else(|| tokio::runtime::Handle::try_current().ok())
@@ -249,15 +241,15 @@ impl Downloader {
         task::spawn_on(&handle, async move { this.run(rx).await });
     }
 
-    /// Runs the download loop on a dedicated Web Worker: the decoder blocks the engine worker in
-    /// `wait_range` via `Atomics.wait`, so a `spawn_local` loop on that same worker would never be
-    /// polled and its fetches would never complete the bytes the blocking read waits for.
     #[cfg(target_arch = "wasm32")]
     fn spawn_run(
         _inner: &DownloaderInner,
         this: Self,
         rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
     ) {
+        // WHY: Run the download loop on a dedicated Web Worker (mirrors the pre-`unified-Downloader` `Backend` model). The decoder blocks
+        // the engine worker in `wait_range` (`Atomics.wait`); a `spawn_local` loop on that same worker would never be polled, so its fetches
+        // would never complete the bytes the blocking read waits for.
         spawn(move || {
             keep_worker_alive();
             drop(task::spawn(async move {

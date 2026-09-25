@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
 use kithara::{
-    play::{CrossfadeSettings, SessionDuckingMode},
+    play::{CrossfadeSettings, EqBandConfig, SessionDuckingMode},
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId, Transition},
 };
+
+use crate::item::ItemBuildConfig;
 
 /// Commands sent from the main-thread bridge to the engine Worker.
 ///
@@ -21,6 +23,8 @@ pub(crate) enum WorkerCmd {
     Stop,
     Seek(f64),
     SetVolume(f32),
+    SetMuted(bool),
+    SetPlayingRate(f32),
     SetCrossfade(CrossfadeSettings),
     Next,
     Previous,
@@ -28,19 +32,20 @@ pub(crate) enum WorkerCmd {
         band: u32,
         gain_db: f32,
     },
+    SetEqLayout(Vec<EqBandConfig>),
     ResetEq,
     /// Append a track to the tail of the queue. Loading starts in the
     /// background; playback does not begin until a matching `SelectQueue`.
     Append {
         id: TrackId,
-        url: String,
+        config: ItemBuildConfig,
     },
     /// Insert a track after `after` (or at the head when `after` is
     /// `None`). Replies via `request_id` so the caller can observe the
     /// `UnknownTrackId` rejection.
     Insert {
         id: TrackId,
-        url: String,
+        config: ItemBuildConfig,
         after: Option<TrackId>,
         request_id: u32,
     },
@@ -53,7 +58,7 @@ pub(crate) enum WorkerCmd {
     Replace {
         index: u32,
         id: TrackId,
-        url: String,
+        config: ItemBuildConfig,
         request_id: u32,
     },
     /// Select (start playing) a queued track. Replies via `request_id`.

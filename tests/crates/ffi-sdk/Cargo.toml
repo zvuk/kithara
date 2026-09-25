@@ -1,0 +1,29 @@
+[package]
+name = "kithara-config-uniffi-probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+single-threaded = ["uniffi/wasm-unstable-single-threaded"]
+
+[dependencies]
+futures = { workspace = true }
+thiserror = { workspace = true }
+uniffi = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+thiserror = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+
+[dev-dependencies]
+kithara-config = { workspace = true }
+kithara-test-utils = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true

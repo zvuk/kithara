@@ -82,6 +82,66 @@ val store = AssetStore(root = application.filesDir.resolve("kithara-cache").abso
 val cached = KitharaPlayer(config = KitharaPlayer.Config(store = store))
 ```
 
+### Cache location and layout
+
+`Kithara.initialize` creates one process-wide `AssetStore` rooted at
+`<application cacheDir>/kithara`, shared by every default-configured player. A
+different root or custom path layout means constructing another store:
+
+```kotlin
+val layouts = AssetLayoutRegistry().apply {
+    register(MyFileAssetLayout(), AssetLayoutTarget.File)
+    register(MyHlsAssetLayout(), AssetLayoutTarget.Hls)
+}
+val store = AssetStore(
+    root = application.filesDir.resolve("kithara-cache").absolutePath,
+    layouts = layouts,
+)
+val player = KitharaPlayer(config = KitharaPlayer.Config(store = store))
+```
+
+Ownership: `AssetLayoutRegistry` is the native Rust registry, so `register`
+routes the layout into Rust immediately and Kotlin keeps no second copy. A store
+captures a registry snapshot at construction — later registrations reach only
+later stores — and one store can then be shared by any number of players. An
+empty registry uses Kithara's defaults. `MyFileAssetLayout` and
+`MyHlsAssetLayout` implement `AssetLayout`; their `root(source)` and
+`path(resource)` callbacks choose paths below the outer cache directory, and
+invalid callback output is rejected rather than rewritten or replaced with a
+default. The `AssetLayout` API contract owns the portable component rules.
+
+For signed media URLs whose path is shared by several tracks or variants, use
+the built-in query-identity layout, registered once per protocol that serves
+those URLs:
+
+```kotlin
+val queryIdentity = AssetLayouts.queryIdentity(
+    rules = listOf(
+        CacheIdentityRule(
+            domains = listOf("media.example.com", "*.cdn.example.com"),
+            queryParameters = listOf("track_id", "variant"),
+        ),
+    ),
+)
+```
+
+Rules are checked in order. Domain patterns are exact hosts, `*.example.com`
+for subdomains only, or `*` for every host. Only the named parameters
+contribute to cache identity, so rotating signatures and expiry timestamps do
+not split the cache; selected values are hashed into safe path components and
+the raw query is never written to disk.
+
+## Architecture
+
+| Layer | Contract |
+|-------|----------|
+| `com.kithara` | Public Kotlin API, `StateFlow`-based reactive state |
+| `com.kithara.ffi` | Generated UniFFI types and low-level bindings, including host configuration |
+| `libkithara_ffi.so` | Rust core (kithara-play, kithara-ffi) |
+
+The release AAR decodes the AAC family, MP3, and FLAC through the Android
+`MediaCodec` backend over `MediaExtractor`.
+
 ## Demo App
 
 [`example`](example) is a minimal player; `just platform android run` launches

@@ -6,6 +6,40 @@ use kithara_test_dylib as _;
 const CHANNELS: u16 = 2;
 const SAMPLE_RATE: u32 = 48_000;
 
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn sessions_retain_their_validated_configuration() {
+    let config = EncodeConfig::builder()
+        .sample_rate(44_100)
+        .channels(1)
+        .packet_frames(3)
+        .build();
+    let mut encoder = EncoderSession::new(&config).expect("portable PCM encoder");
+    let mut container = ContainerSession::new(&config).expect("portable WAV container");
+
+    assert_eq!(encoder.config().sample_rate, 44_100);
+    assert_eq!(encoder.config().channels, 1);
+    assert_eq!(encoder.config().packet_frames, 3);
+    assert_eq!(container.config().sample_rate, 44_100);
+    assert_eq!(container.config().channels, 1);
+
+    let units = encoder.push(&[0.0, 0.5, 1.0]).expect("one packet");
+    assert_eq!(units.len(), 1);
+    assert_eq!(units[0].duration, 3);
+    container
+        .push(units.into_iter().next().expect("packet"))
+        .expect("container accepts packet");
+    let header = container.finish().expect("finish WAV container").writes;
+    assert_eq!(
+        u16::from_le_bytes(header[0].bytes[22..24].try_into().unwrap()),
+        1
+    );
+    assert_eq!(
+        u32::from_le_bytes(header[0].bytes[24..28].try_into().unwrap()),
+        44_100
+    );
+}
+
 /// Generated fixtures live in the host store, which the browser cannot reach.
 #[cfg(not(target_arch = "wasm32"))]
 mod chunked {

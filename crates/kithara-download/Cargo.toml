@@ -29,6 +29,7 @@ tls-native = ["kithara-net/tls-native", "kithara-abr/tls-native"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
+kithara-config.workspace = true
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-events = { workspace = true }
 kithara-net = { workspace = true, default-features = false }

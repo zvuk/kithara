@@ -122,7 +122,7 @@ async fn progressive_download_fills_the_buffer_bar(tone_mp3: &'static [u8], temp
     .await
     .expect("create product offline queue");
     let mut file = FileConfigPatch::default();
-    file.look_ahead_bytes = Some(LOOK_AHEAD_BYTES);
+    file.look_ahead_bytes = Some(Some(LOOK_AHEAD_BYTES));
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader)
         .file(file)

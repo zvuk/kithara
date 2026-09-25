@@ -1,5 +1,5 @@
 use super::{ElasticError, ElasticLatency, ElasticRateEnvelope, ElasticRequest};
-use crate::elastic::config::ElasticShape;
+use crate::{BackendCapabilities, elastic::config::ElasticShape};
 
 /// Immutable limits, latency and rate window of a prepared elastic engine.
 /// Every value is declared by the engine that reports it, so a caller plans
@@ -11,13 +11,23 @@ pub struct ElasticCapabilities {
     /// Unity-rate algorithmic latency in both coordinate spaces.
     #[field(get, copy)]
     latency: ElasticLatency,
+    #[field(get, copy)]
+    functions: BackendCapabilities,
     #[field(skip)]
     shape: ElasticShape,
 }
 
 impl ElasticCapabilities {
-    pub(crate) fn new(shape: ElasticShape, latency: ElasticLatency) -> Self {
-        Self { latency, shape }
+    pub(crate) fn new(
+        shape: ElasticShape,
+        latency: ElasticLatency,
+        functions: BackendCapabilities,
+    ) -> Self {
+        Self {
+            latency,
+            functions,
+            shape,
+        }
     }
 
     /// Validate caller-owned interleaved storage and return its frame capacity.
@@ -196,7 +206,11 @@ mod tests {
             .max_output_frames(64)
             .build()
             .expect("valid elastic config");
-        let capabilities = ElasticCapabilities::new(config.shape(), ElasticLatency::new(1, 1));
+        let capabilities = ElasticCapabilities::new(
+            config.shape(),
+            ElasticLatency::new(1, 1),
+            BackendCapabilities::RATE,
+        );
         let request = ElasticRequest::new(32, 1).expect("non-empty request");
 
         let result = capabilities.validate(request, 64, 2);
@@ -219,7 +233,11 @@ mod tests {
             .max_output_frames(64)
             .build()
             .expect("valid elastic config");
-        let capabilities = ElasticCapabilities::new(config.shape(), ElasticLatency::new(1, 1));
+        let capabilities = ElasticCapabilities::new(
+            config.shape(),
+            ElasticLatency::new(1, 1),
+            BackendCapabilities::RATE,
+        );
         let physical = ElasticRequest::new(32, 16).expect("physical span");
         assert_eq!(physical.output_source_frames(), physical.source_frames());
         let request = physical
@@ -247,7 +265,11 @@ mod tests {
             physical.with_output_source_frames(0),
             Err(ElasticError::EmptySource)
         );
-        let immediate = ElasticCapabilities::new(config.shape(), ElasticLatency::new(0, 0));
+        let immediate = ElasticCapabilities::new(
+            config.shape(),
+            ElasticLatency::new(0, 0),
+            BackendCapabilities::RATE,
+        );
         assert_eq!(immediate.validate(physical, 64, 32), Ok(()));
         assert_eq!(
             immediate.validate(request, 64, 32),
@@ -274,7 +296,11 @@ mod tests {
             .max_output_frames(64)
             .build()
             .expect("valid preparation");
-        let capabilities = ElasticCapabilities::new(config.shape(), ElasticLatency::new(8, 16));
+        let capabilities = ElasticCapabilities::new(
+            config.shape(),
+            ElasticLatency::new(8, 16),
+            BackendCapabilities::RATE,
+        );
         let ordinary = ElasticRequest::new(32, 16).expect("warmup span");
         assert_eq!(
             capabilities.validate_prime(ordinary, 16, 16, 64, 32),

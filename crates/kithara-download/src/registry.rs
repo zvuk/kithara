@@ -397,7 +397,7 @@ impl Registry {
             let result = urgent_batch.process(inner);
             dispatched += result.dispatched;
             let capacity_blocked = !result.pending.is_empty()
-                && inner.inflight.load(Ordering::Relaxed) >= inner.max_concurrent;
+                && inner.inflight.load(Ordering::Relaxed) >= inner.config.max_concurrent;
             self.requeue_pending(result.pending);
             if capacity_blocked {
                 inner.capacity_notify.notified().await;
@@ -410,9 +410,9 @@ impl Registry {
             );
         }
 
-        if !inner.demand_throttle.is_zero() {
+        if !inner.config.demand_throttle.is_zero() {
             let preempted_by_urgent = tokio::select! {
-                () = sleep(inner.demand_throttle) => false,
+                () = sleep(inner.config.demand_throttle) => false,
                 () = self.urgent_notify.notified() => true,
             };
             if preempted_by_urgent {
@@ -433,7 +433,7 @@ impl Registry {
             let result = demand_batch.process(inner);
             dispatched += result.dispatched;
             let capacity_blocked = !result.pending.is_empty()
-                && inner.inflight.load(Ordering::Relaxed) >= inner.max_concurrent;
+                && inner.inflight.load(Ordering::Relaxed) >= inner.config.max_concurrent;
             self.requeue_pending(result.pending);
             if capacity_blocked {
                 inner.capacity_notify.notified().await;

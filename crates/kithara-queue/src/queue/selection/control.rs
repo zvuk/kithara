@@ -90,10 +90,7 @@ where
         ) {
             self.autoplay_target.store(CrossfadeArm::Disarmed);
         }
-        let default = *self
-            .crossfade_settings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let default = self.config.crossfade_settings();
         let settings = transition.settings(default).validate()?;
         let _apply = self.lock_select_apply();
         self.select_with_reason_locked(id, settings, reason, playback)

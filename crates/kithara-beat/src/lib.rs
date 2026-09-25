@@ -15,10 +15,13 @@ pub use grid::{
     BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid,
     SCHEMA_VERSION,
 };
-#[cfg(test)]
+#[cfg(all(test, any(feature = "dsp", feature = "nn")))]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 pub use mark::{BeatMark, RawBeats};
 #[cfg(feature = "embed-model")]
 pub use nn::{BEAT_MODEL_BYTES, BEAT_MODEL_TAG, MEL_MODEL_BYTES};
 #[cfg(feature = "nn")]
-pub use nn::{BeatConfig, BeatConfigPatch, BeatError, BeatThis};
+pub use nn::{
+    BeatConfig, BeatConfigDedupWidthUpdate, BeatConfigPatch, BeatConfigPeakHalfWidthUpdate,
+    BeatConfigPeakThresholdUpdate, BeatConfigUpdate, BeatConfigValues, BeatError, BeatThis,
+};

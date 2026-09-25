@@ -3,9 +3,15 @@ package com.kithara
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.kithara.ffi.FfiFileSourceSettings
+import com.kithara.ffi.FfiHlsSourceSettings
+import com.kithara.ffi.FfiSourceSettings
+import com.kithara.ffi.FfiException
+import com.kithara.ffi.FfiSizeProbeMethod
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
 import org.junit.Test
@@ -29,6 +35,42 @@ class KitharaPlayerItemTest {
 
         assertTrue(item.id.isNotEmpty())
         assertEquals("https://example.com/song.mp3", item.url)
+    }
+
+    @Test
+    fun sourceSettingsReachItemConstructor() {
+        val item = KitharaPlayerItem(
+            url = "https://example.com/song.mp3",
+            audioId = 42u,
+            preferredPeakBitrate = 128_000.0,
+            sourceSettings = FfiSourceSettings(
+                file = FfiFileSourceSettings(readerEventCapacity = 512u),
+                hls = null,
+            ),
+        )
+        assertEquals("https://example.com/song.mp3", item.url)
+        assertEquals("42", item.audioId)
+        assertEquals(128_000.0, item.preferredPeakBitrate, 0.0)
+        val hls = KitharaPlayerItem(
+            url = "https://example.com/live.m3u8",
+            sourceSettings = FfiSourceSettings(
+                file = null,
+                hls = FfiHlsSourceSettings(
+                    sizeProbeMethod = FfiSizeProbeMethod.RANGE_GET,
+                    downloadBatchSize = 6u,
+                ),
+            ),
+        )
+        assertEquals("https://example.com/live.m3u8", hls.url)
+        assertThrows(FfiException.InvalidArgument::class.java) {
+            KitharaPlayerItem(
+                url = "https://example.com/song.mp3",
+                sourceSettings = FfiSourceSettings(
+                    file = FfiFileSourceSettings(readerEventCapacity = 4097u),
+                    hls = null,
+                ),
+            )
+        }
     }
 
     @Test

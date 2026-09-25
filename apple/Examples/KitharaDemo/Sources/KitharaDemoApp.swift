@@ -40,7 +40,7 @@ struct KitharaDemoApp: App {
                 }
                 #else
                 PlayerView()
-                .onAppear {
+                    .onAppear {
                     // CLI-launched executables (not .app bundles) don't
                     // automatically become the active app on macOS,
                     // so keyboard events (including Cmd+V) are not delivered.

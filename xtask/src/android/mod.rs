@@ -5,5 +5,7 @@ mod evidence;
 mod native;
 mod results;
 
-pub(crate) use command::{AndroidCommand, render_docs, run, run_native_shim};
-use command::{android_sdk_root, device_features, ndk_prebuilt, ndk_root, require_android_str};
+pub(crate) use command::{
+    AndroidCommand, android_sdk_root, device_features, ndk_prebuilt, ndk_root, render_docs,
+    require_android_str, run, run_native_shim,
+};

@@ -3,18 +3,21 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use js_sys::Function;
 use kithara::{
     platform::sync::{Arc, Mutex},
-    play::{CrossfadeSettings, DEFAULT_CROSSFADE_DURATION, InterruptionKind},
+    play::{EqBandConfig, GainDb},
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId},
 };
 
 use crate::{
-    item::AudioPlayerItem,
+    FfiEqBandConfig, FfiQueueSettings,
+    item::{AudioPlayerItem, ItemBuildConfig},
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
     types::{
         FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiDuckingMode, FfiError, FfiKeyRule,
         FfiPlaybackOrder, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode,
     },
-    web::{bridge::WorkerBridge, commands::WorkerCmd, observer::router::Routes},
+    web::{
+        bridge::WorkerBridge, commands::WorkerCmd, observer::router::Routes, worker::DEFAULT_VOLUME,
+    },
 };
 
 /// Number of EQ bands surfaced through the wasm facade. Module-level
@@ -45,38 +48,47 @@ type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
 /// answer synchronously without a worker round-trip.
 pub(crate) struct WasmInner {
     queue_view: Arc<Mutex<QueueView>>,
+    crossfade_settings: Mutex<FfiCrossfadeSettings>,
     playing_rate: AtomicU32,
     volume: AtomicU32,
-    action_at_item_end: Mutex<FfiActionAtItemEnd>,
-    crossfade_settings: Mutex<FfiCrossfadeSettings>,
     muted: Mutex<bool>,
-    playback_order: Mutex<FfiPlaybackOrder>,
-    repeat_mode: Mutex<FfiRepeatMode>,
     routes: Routes,
+    repeat_mode: Mutex<FfiRepeatMode>,
+    playback_order: Mutex<FfiPlaybackOrder>,
+    action_at_item_end: Mutex<FfiActionAtItemEnd>,
     bridge: WorkerBridge,
-    eq_gains: [AtomicU32; EQ_BANDS],
+    eq_gains: Mutex<Box<[f32]>>,
 }
 
 impl Default for WasmInner {
     fn default() -> Self {
+        Self::new(FfiQueueSettings::default())
+    }
+}
+
+impl WasmInner {
+    pub(crate) fn new(queue_settings: FfiQueueSettings) -> Self {
         let queue_view: Arc<Mutex<QueueView>> = Arc::new(Mutex::default());
         Self {
-            bridge: WorkerBridge::default(),
+            bridge: WorkerBridge::new(queue_settings),
             routes: Routes::new(Arc::clone(&queue_view)),
             queue_view,
-            volume: AtomicU32::new(Self::DEFAULT_VOLUME.to_bits()),
-            crossfade_settings: Mutex::new(FfiCrossfadeSettings {
-                duration: Self::DEFAULT_CROSSFADE_SECONDS,
-                curve: crate::types::FfiCrossfadeCurve::EqualPower,
-                depth: 1.0,
-                position: 0.5,
-            }),
+            volume: AtomicU32::new(DEFAULT_VOLUME.to_bits()),
+            crossfade_settings: Mutex::new(queue_settings.crossfade_settings.unwrap_or_default()),
             playing_rate: AtomicU32::new(Self::DEFAULT_PLAYING_RATE.to_bits()),
             repeat_mode: Mutex::new(FfiRepeatMode::Off),
-            playback_order: Mutex::new(FfiPlaybackOrder::Sequential),
-            action_at_item_end: Mutex::new(FfiActionAtItemEnd::Advance),
+            playback_order: Mutex::new(
+                queue_settings
+                    .playback_order
+                    .unwrap_or(FfiPlaybackOrder::Sequential),
+            ),
+            action_at_item_end: Mutex::new(
+                queue_settings
+                    .action_at_item_end
+                    .unwrap_or(FfiActionAtItemEnd::Advance),
+            ),
             muted: Mutex::default(),
-            eq_gains: [const { AtomicU32::new(0) }; EQ_BANDS],
+            eq_gains: Mutex::new(Box::new([0.0; EQ_BANDS])),
         }
     }
 }
@@ -90,21 +102,17 @@ fn store_f32(a: &AtomicU32, v: f32) {
 }
 
 impl WasmInner {
-    /// Default crossfade window in seconds, matching the worker default.
-    const DEFAULT_CROSSFADE_SECONDS: f32 = DEFAULT_CROSSFADE_DURATION;
     /// Default target playback rate.
-    const DEFAULT_PLAYING_RATE: f32 = 1.0;
-    /// Default output volume, matching the legacy wasm player.
-    const DEFAULT_VOLUME: f32 = 0.5;
+    const DEFAULT_PLAYING_RATE: f32 = kithara::play::DEFAULT_PLAYING_RATE;
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
-    pub(crate) fn action_at_item_end(&self) -> FfiActionAtItemEnd {
-        *self.action_at_item_end.lock()
-    }
-
     pub(crate) fn advance_to_next_item(&self) -> Result<(), FfiError> {
         self.try_send(WorkerCmd::Next)
+    }
+
+    pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
+        self.try_send(WorkerCmd::Previous)
     }
 
     /// Start (or restart) the analysis pass for a queued track.
@@ -117,7 +125,7 @@ impl WasmInner {
         let id = item.track_id();
         self.try_send(WorkerCmd::Append {
             id,
-            url: item.url(),
+            config: ItemBuildConfig::from(item.as_ref()),
         })?;
         *item.inserted.lock() = true;
         self.queue_view.lock().push((id, Arc::clone(item)));
@@ -128,6 +136,13 @@ impl WasmInner {
     pub(crate) fn crossfade_settings(&self) -> FfiCrossfadeSettings {
         *self.crossfade_settings.lock()
     }
+    pub(crate) fn playback_order(&self) -> FfiPlaybackOrder {
+        *self.playback_order.lock()
+    }
+    pub(crate) fn action_at_item_end(&self) -> FfiActionAtItemEnd {
+        *self.action_at_item_end.lock()
+    }
+
     pub(crate) fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
         let current = self.bridge.current_track_id()?;
         self.queue_view
@@ -136,8 +151,9 @@ impl WasmInner {
             .find(|(id, _)| *id == current)
             .map(|(_, item)| Arc::clone(item))
     }
+
     pub(crate) fn eq_band_count(&self) -> u32 {
-        let n = self.eq_gains.len();
+        let n = self.eq_gains.lock().len();
         u32::try_from(n).unwrap_or_else(|_| {
             tracing::error!(eq_band_count = n, "BUG: EQ band count exceeds u32::MAX");
             0
@@ -145,7 +161,11 @@ impl WasmInner {
     }
 
     pub(crate) fn eq_gain(&self, band: u32) -> f32 {
-        self.eq_gains.get(band as usize).map_or(0.0, load_f32)
+        self.eq_gains
+            .lock()
+            .get(band as usize)
+            .copied()
+            .unwrap_or(0.0)
     }
 
     pub(crate) fn insert(
@@ -159,7 +179,7 @@ impl WasmInner {
         self.send(WorkerCmd::Insert {
             id,
             request_id,
-            url: item.url(),
+            config: ItemBuildConfig::from(item.as_ref()),
             after: after_id,
         });
 
@@ -206,11 +226,11 @@ impl WasmInner {
         crate::web::interop::next_request_id()
     }
 
+    pub(crate) fn notify_interruption(&self, _kind: kithara::play::InterruptionKind) {}
+
     pub(crate) fn notify_audio_route_changed(&self, _reason: &str) -> Result<(), FfiError> {
         Ok(())
     }
-
-    pub(crate) fn notify_interruption(&self, _kind: InterruptionKind) {}
 
     pub(crate) fn pause(&self) {
         self.send(WorkerCmd::Pause);
@@ -218,10 +238,6 @@ impl WasmInner {
 
     pub(crate) fn play(&self) {
         self.send(WorkerCmd::Play);
-    }
-
-    pub(crate) fn playback_order(&self) -> FfiPlaybackOrder {
-        *self.playback_order.lock()
     }
 
     pub(crate) fn playing_rate(&self) -> f32 {
@@ -283,7 +299,7 @@ impl WasmInner {
             index,
             request_id,
             id: new_id,
-            url: item.url(),
+            config: ItemBuildConfig::from(item.as_ref()),
         });
         if let Some((_, old)) = view.get(idx) {
             *old.inserted.lock() = false;
@@ -297,14 +313,11 @@ impl WasmInner {
     }
 
     pub(crate) fn reset_eq(&self) -> Result<(), FfiError> {
-        for g in &self.eq_gains {
-            store_f32(g, 0.0);
+        self.try_send(WorkerCmd::ResetEq)?;
+        for gain in self.eq_gains.lock().iter_mut() {
+            *gain = 0.0;
         }
-        self.try_send(WorkerCmd::ResetEq)
-    }
-
-    pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
-        self.try_send(WorkerCmd::Previous)
+        Ok(())
     }
 
     pub(crate) fn seek(
@@ -337,8 +350,8 @@ impl WasmInner {
         }
         let request_id = Self::next_request_id();
         self.send(WorkerCmd::SelectQueue {
-            request_id,
             id: item.track_id(),
+            request_id,
             transition: transition.try_into()?,
         });
         Ok(())
@@ -361,52 +374,58 @@ impl WasmInner {
         self.send(WorkerCmd::SetAbrMode { variant_index });
     }
 
-    pub(crate) fn set_action_at_item_end(
-        &self,
-        action: FfiActionAtItemEnd,
-    ) -> Result<(), FfiError> {
-        let typed: ActionAtItemEnd = action.try_into()?;
-        self.try_send(WorkerCmd::SetActionAtItemEnd(typed))?;
-        *self.action_at_item_end.lock() = action;
-        Ok(())
-    }
-
     pub(crate) fn set_crossfade_settings(
         &self,
         settings: FfiCrossfadeSettings,
     ) -> Result<(), FfiError> {
-        let typed: CrossfadeSettings = settings.try_into()?;
+        let typed: kithara::play::CrossfadeSettings = settings.try_into()?;
         self.try_send(WorkerCmd::SetCrossfade(typed))?;
         *self.crossfade_settings.lock() = settings;
         Ok(())
     }
 
-    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
-        self.try_send(WorkerCmd::SetDucking(mode.into()))
-    }
-
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
-        if let Some(slot) = self.eq_gains.get(band as usize) {
-            store_f32(slot, gain_db);
-        }
-        self.try_send(WorkerCmd::SetEqGain { band, gain_db })
-    }
-
-    pub(crate) fn set_muted(&self, muted: bool) {
-        *self.muted.lock() = muted;
-        let volume = if muted { 0.0 } else { load_f32(&self.volume) };
-        self.send(WorkerCmd::SetVolume(volume));
-    }
-
-    pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
-        let typed: PlaybackOrder = order.try_into()?;
-        self.try_send(WorkerCmd::SetPlaybackOrder(typed))?;
-        *self.playback_order.lock() = order;
+        let gain_db = f32::from(GainDb::from(gain_db));
+        let mut gains = self.eq_gains.lock();
+        let slot = gains
+            .get_mut(band as usize)
+            .ok_or_else(|| FfiError::InvalidArgument {
+                reason: format!("EQ band {band} is out of range"),
+            })?;
+        self.try_send(WorkerCmd::SetEqGain { band, gain_db })?;
+        *slot = gain_db;
         Ok(())
     }
 
-    pub(crate) fn set_playing_rate(&self, rate: f32) {
+    pub(crate) fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {
+        let layout: Vec<EqBandConfig> = layout.into_iter().map(Into::into).collect();
+        let gains = layout
+            .iter()
+            .map(|band| f32::from(band.gain_db()))
+            .collect::<Box<[_]>>();
+        self.try_send(WorkerCmd::SetEqLayout(layout))?;
+        *self.eq_gains.lock() = gains;
+        Ok(())
+    }
+
+    pub(crate) fn set_muted(&self, muted: bool) {
+        let mut requested = self.muted.lock();
+        if let Err(error) = self.try_send(WorkerCmd::SetMuted(muted)) {
+            tracing::warn!(?error, muted, "wasm mute update rejected");
+            return;
+        }
+        *requested = muted;
+    }
+
+    pub(crate) fn try_set_playing_rate(&self, rate: f32) -> Result<(), FfiError> {
+        let rate = rate.max(kithara::play::StretchControls::MIN_SPEED);
+        self.try_send(WorkerCmd::SetPlayingRate(rate))?;
         store_f32(&self.playing_rate, rate);
+        Ok(())
+    }
+
+    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
+        self.try_send(WorkerCmd::SetDucking(mode.into()))
     }
 
     pub(crate) fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {
@@ -418,11 +437,30 @@ impl WasmInner {
         Ok(())
     }
 
+    pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
+        let typed: PlaybackOrder = order.try_into()?;
+        self.try_send(WorkerCmd::SetPlaybackOrder(typed))?;
+        *self.playback_order.lock() = order;
+        Ok(())
+    }
+
+    pub(crate) fn set_action_at_item_end(
+        &self,
+        action: FfiActionAtItemEnd,
+    ) -> Result<(), FfiError> {
+        let typed: ActionAtItemEnd = action.try_into()?;
+        self.try_send(WorkerCmd::SetActionAtItemEnd(typed))?;
+        *self.action_at_item_end.lock() = action;
+        Ok(())
+    }
+
     pub(crate) fn set_volume(&self, volume: f32) {
-        store_f32(&self.volume, volume);
-        if !*self.muted.lock() {
-            self.send(WorkerCmd::SetVolume(volume));
+        let volume = volume.clamp(0.0, 1.0);
+        if let Err(error) = self.try_send(WorkerCmd::SetVolume(volume)) {
+            tracing::warn!(?error, volume, "wasm volume update rejected");
+            return;
         }
+        store_f32(&self.volume, volume);
     }
 
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {

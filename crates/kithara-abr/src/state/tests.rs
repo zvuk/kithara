@@ -5,6 +5,7 @@ use std::{
     task::Poll,
 };
 
+use kithara_config::Config as _;
 use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, Envelope, EventBus};
 use kithara_platform::{
     CancelToken,
@@ -1046,6 +1047,44 @@ fn audio_variants_4tier() -> Vec<VariantInfo> {
             container: None,
         })
         .collect()
+}
+
+#[kithara::test(tokio)]
+async fn cap_downswitches_a_current_variant_filtered_from_candidates() {
+    let settings = AbrSettings::builder()
+        .max_bandwidth_bps(270_000)
+        .min_switch_interval(Duration::ZERO)
+        .build();
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(3)))));
+    let peer = abr_peer(&state, audio_variants_4tier());
+    let handle = controller.register(&peer);
+
+    controller.run_tick(handle.peer_id(), Instant::now());
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+}
+
+#[kithara::test(tokio)]
+async fn controller_settings_seed_the_peer_cap_until_the_handle_changes_it() {
+    let settings = AbrSettings::builder()
+        .max_bandwidth_bps(270_000)
+        .min_switch_interval(Duration::ZERO)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    assert_eq!(settings.values().max_bandwidth_bps, Some(270_000));
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
+    let peer = abr_peer(&state, audio_variants_4tier());
+    let handle = controller.register(&peer);
+
+    assert_eq!(state.max_bandwidth_bps(), Some(270_000));
+    controller.run_tick(handle.peer_id(), Instant::now());
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+
+    handle.set_max_bandwidth_bps(None);
+    controller.run_tick(handle.peer_id(), Instant::now());
+    assert_eq!(state.max_bandwidth_bps(), None);
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(3)));
 }
 
 /// Cold-start with the default `initial_throughput_bps = Some(2 Mbps)`

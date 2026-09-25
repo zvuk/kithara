@@ -59,7 +59,7 @@ class PlayerViewModelBase: ObservableObject {
 
     /// Engine instance. Subclasses install event subscriptions during
     /// `bindEvents()` (invoked from `init`).
-    let player = PlayerViewModelBase.makePlayer()
+    let player: KitharaPlayer
 
     /// Build the demo player with all initial policy and DRM state applied
     /// atomically at construction.
@@ -147,6 +147,7 @@ class PlayerViewModelBase: ObservableObject {
     ]
 
     init() {
+        player = Self.makePlayer()
         volume = player.volume
         isMuted = player.isMuted
         eqGains = Array(repeating: 0, count: player.eqBandCount)

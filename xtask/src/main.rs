@@ -8,6 +8,7 @@ mod apple_docgen;
 mod child;
 mod ci;
 mod config;
+mod config_inventory;
 mod mutants;
 mod parity;
 mod publish;
@@ -44,6 +45,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Discover configuration declarations independently of SDK exports.
+    Config {
+        #[command(subcommand)]
+        command: config_inventory::ConfigCommand,
+    },
     /// Android build tasks.
     Android {
         #[command(subcommand)]
@@ -119,6 +125,7 @@ fn work() -> anyhow::Result<()> {
     let ctx = Ctx::load()?;
 
     match cli.command {
+        Command::Config { command } => config_inventory::run(command, &ctx),
         Command::Android { command } => android::run(command, &ctx),
         Command::Apple { command } => apple::run(command, &ctx),
         Command::Wasm { command } => wasm::run(command, &ctx),

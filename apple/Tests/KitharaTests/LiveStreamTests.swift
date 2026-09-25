@@ -10,10 +10,12 @@ import Testing
     )
 )
 struct LiveStreamTests {
+    init() throws {
+        try TestHost.initialize()
+    }
 
     @Test("zvuk MP3 loads and reports duration")
     func zvukLoadsWithDuration() async throws {
-        let player = KitharaPlayer()
         let item = KitharaPlayerItem(url: "https://cdn-edge.zvq.me/track/streamhq?id=151585912")
         _ = await item.load()
 
@@ -40,7 +42,6 @@ struct LiveStreamTests {
 
     @Test("silvercomet MP3 loads and reports duration")
     func silvercometLoadsWithDuration() async throws {
-        let player = KitharaPlayer()
         let item = KitharaPlayerItem(url: "https://stream.silvercomet.top/track.mp3")
         _ = await item.load()
 

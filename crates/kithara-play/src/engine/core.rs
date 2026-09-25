@@ -34,13 +34,44 @@ pub struct EngineImpl<S> {
     pub(super) config: EngineConfig<S>,
     #[field(get, vis = "pub(crate)")]
     pub(super) bus: EventBus,
-    pub(super) eq_layout: Mutex<Vec<EqBandConfig>>,
     pub(super) registration: Mutex<Option<RegisteredPlayer>>,
     slots: Mutex<SlotTable>,
     #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
     #[field(get, vis = "pub(super)")]
     pub(super) session: SessionHandle<S>,
+}
+
+#[cfg(test)]
+mod config_tests {
+    use std::num::{NonZeroU32, NonZeroUsize};
+
+    use kithara_config::Config as _;
+    use kithara_test_utils::kithara;
+    use kithara_warp::BeatGridId;
+
+    use super::*;
+    use crate::test_pools::{TestPools, pools};
+
+    #[kithara::test]
+    fn engine_config_remains_the_live_eq_layout_owner() {
+        let config: EngineConfig<TestPools> = EngineConfig::builder()
+            .grid_id(BeatGridId::allocate().expect("a grid identity"))
+            .pools(pools())
+            .sample_rate(NonZeroU32::new(48_000).expect("48000 is not zero"))
+            .response_budget_frames(NonZeroUsize::new(448).expect("448 is not zero"))
+            .max_slots(3)
+            .build();
+        let engine = EngineImpl::new(config, EventBus::new(32));
+
+        assert_eq!(engine.config.values().sample_rate.get(), 48_000);
+        assert_eq!(engine.config.values().max_slots, 3);
+        assert_eq!(engine.config.values().eq_layout.len(), 10);
+        engine
+            .set_master_eq_layout(kithara_effects::eq::generate_log_spaced_bands(4))
+            .expect("unregistered engine accepts its next layout");
+        assert_eq!(engine.config.values().eq_layout.len(), 4);
+    }
 }
 
 impl<S> EngineImpl<S> {
@@ -52,10 +83,8 @@ impl<S> EngineImpl<S> {
             .take()
             .map_or_else(SessionHandle::pending, SessionHandle::new);
         let max_slots = config.max_slots;
-        let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
         Self {
             config,
-            eq_layout,
             bus,
             session,
             master_volume: AtomicF32::new(1.0),
@@ -176,7 +205,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn eq_band_count(&self) -> usize {
-        self.eq_layout.lock().len()
+        self.config.eq_layout.lock().len()
     }
 
     pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
@@ -298,7 +327,7 @@ impl<S> EngineImpl<S> {
             self.session
                 .set_player_eq_layout(player_id, eq_layout.clone())?;
         }
-        *self.eq_layout.lock() = eq_layout;
+        *self.config.eq_layout.lock() = eq_layout;
         Ok(())
     }
 

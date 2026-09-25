@@ -19,9 +19,14 @@ use crate::{
 };
 
 /// Eviction configuration for an assets store decorator.
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct EvictConfig {
+    /// Soft cap on total assets; pinned assets are never eviction candidates.
+    #[config(value)]
     pub(crate) max_assets: Option<usize>,
+    /// Soft cap on total bytes, using best-effort accounting.
+    #[config(value)]
     pub(crate) max_bytes: Option<u64>,
 }
 
@@ -360,6 +365,9 @@ mod tests {
             max_assets: Some(1),
             max_bytes: None,
         };
+        let values = kithara_config::Config::values(&cfg);
+        assert_eq!(values.max_assets, Some(1));
+        assert_eq!(values.max_bytes, None);
         let candidates = lru.eviction_candidates(&cfg, &HashSet::new());
         assert_eq!(
             candidates,

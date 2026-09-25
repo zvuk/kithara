@@ -27,10 +27,9 @@ pub struct ContainerFinish {
 /// Continuous container writer for encoded access units.
 #[derive(Debug)]
 pub struct ContainerSession {
+    config: EncodeConfig,
     block_align: u16,
-    channels: u16,
     byte_rate: u32,
-    sample_rate: u32,
     data_bytes: u64,
     next_frame: u64,
 }
@@ -64,13 +63,18 @@ impl ContainerSession {
             .ok_or_else(|| EncodeError::InvalidInput("WAV byte rate overflow".to_owned()))?;
 
         Ok(Self {
+            config: config.clone(),
             block_align,
             byte_rate,
-            channels: config.channels,
             data_bytes: 0,
             next_frame: 0,
-            sample_rate: config.sample_rate,
         })
+    }
+
+    /// Configuration retained by this container session.
+    #[must_use]
+    pub const fn config(&self) -> &EncodeConfig {
+        &self.config
     }
 
     /// Finish the WAV header and return the complete byte length.
@@ -99,8 +103,16 @@ impl ContainerSession {
             &mut offset,
             &Self::PCM_FLOAT_FORMAT.to_le_bytes(),
         );
-        Self::write_header(&mut header, &mut offset, &self.channels.to_le_bytes());
-        Self::write_header(&mut header, &mut offset, &self.sample_rate.to_le_bytes());
+        Self::write_header(
+            &mut header,
+            &mut offset,
+            &self.config.channels.to_le_bytes(),
+        );
+        Self::write_header(
+            &mut header,
+            &mut offset,
+            &self.config.sample_rate.to_le_bytes(),
+        );
         Self::write_header(&mut header, &mut offset, &self.byte_rate.to_le_bytes());
         Self::write_header(&mut header, &mut offset, &self.block_align.to_le_bytes());
         Self::write_header(

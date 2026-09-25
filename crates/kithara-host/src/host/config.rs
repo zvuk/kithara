@@ -14,18 +14,24 @@ const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
 };
 
 /// Configuration for the shared output session owned by `Host`.
+#[kithara_config::config(construction, builder = false)]
 #[cfg_attr(not(feature = "offline"), derive_where::derive_where(Clone, Copy))]
 #[non_exhaustive]
 pub enum HostConfig<S> {
     /// Device-backed platform session.
+    #[config(sdk)]
     #[non_exhaustive]
     Realtime {
-        /// Initial device-rate hint; `Host::set_sample_rate` moves it later.
+        /// Initial device sample-rate hint in hertz; `Host::set_sample_rate` moves it later.
+        #[config(value)]
         sample_rate_hint: NonZeroU32,
-        /// Optional native output callback-size override. `None` preserves the backend default.
+        /// Optional native output callback size in frames. `None` preserves the backend default.
+        #[config(value)]
         output_block_frames: Option<NonZeroU32>,
-        /// Session output limiter policy.
+        /// Session output limiter policy prepared when the host starts.
+        #[config(nested)]
         limiter: LimiterConfig,
+        #[config(skip = "type marker")]
         marker: PhantomData<fn() -> S>,
     },
     /// Device-free finite renderer.
@@ -33,22 +39,31 @@ pub enum HostConfig<S> {
     #[non_exhaustive]
     Offline {
         /// Typed output pool shared with the Host's players.
+        #[config(skip = "injected output pool")]
         pools: PoolRegion<S>,
         /// Initial offline output rate; `Host::set_sample_rate` moves it later.
+        #[config(value)]
         sample_rate: NonZeroU32,
         /// Maximum frames processed by one backend/task quantum.
+        #[config(value)]
         max_block_frames: NonZeroU32,
         /// Firewheel smoothing window for graph changes.
+        #[config(value)]
         declick_frames: NonZeroU32,
         /// Declared device-equivalent latency used by transport calculations.
+        #[config(value)]
         declared_latency: Duration,
         /// Session output limiter policy.
+        #[config(nested)]
         limiter: LimiterConfig,
         /// Shared worker configuration for the session scheduler.
+        #[config(nested)]
         worker: WorkerConfig,
         /// Dispatcher budgets for the single offline session task.
+        #[config(nested)]
         dispatcher: Box<DispatcherConfig>,
         /// Admission, priority, and cancellation configuration for the session task.
+        #[config(nested)]
         task: TaskConfig,
     },
 }

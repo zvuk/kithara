@@ -47,73 +47,67 @@ pub enum ConsumerWakeMode {
 /// and the optional PCM observer.
 ///
 /// [`AudioConfigPatch`] is what a configuration document may say about it.
+#[kithara_config::config(construction, builder = false)]
 #[derive(Builder, fieldwork::Fieldwork, Patch)]
 #[builder(start_fn = for_stream)]
 #[non_exhaustive]
 #[fieldwork(opt_in, get)]
 pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
-    #[builder(start_fn)]
-    #[field(get)]
-    #[patch(skip)]
+    #[config(nested, builder(start_fn), field(get), patch(skip))]
     pub(crate) stream: T::Config,
     /// Consumer wake capability for ring pops and reader-event delivery. Not
     /// a document key: a player-managed resource has this value overwritten
     /// with its session's wake policy, and declaring `ImmediateOffRt` here
     /// would make a player-bound resource publish reads inline on the render
     /// callback.
-    #[field(get, copy)]
-    #[builder(default)]
-    #[patch(skip)]
+    #[config(value, field(get, copy), builder(default), patch(skip))]
     pub consumer_wake_mode: ConsumerWakeMode,
     /// Number of chunks to buffer before signaling preload readiness.
-    #[field(get, copy)]
-    #[builder(default = NonZeroUsize::new(Consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero"))]
+    #[config(value, field(get, copy), builder(default = NonZeroUsize::new(Consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero")))]
     pub preload_chunks: NonZeroUsize,
     /// Target sample rate of the audio host (for resampling). Not a document
     /// key: this is the rate the audio host actually opened, and the
     /// resource-preparation step that shares a player's engine always
     /// overwrites it with the engine's master or configured rate. A document
     /// value would be overwritten by the first host that disagrees with it.
-    #[field(get, copy)]
-    #[patch(skip)]
+    #[config(value, field(get, copy), patch(skip))]
     pub host_sample_rate: Option<NonZeroU32>,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling. Not a document key: the shipped binary is a real-time
     /// host whose audio callback can never block; only an offline harness or
     /// a player's own session policy sets this explicitly.
-    #[field(get, copy)]
-    #[builder(default)]
-    #[patch(skip)]
+    #[config(
+        skip = "offline-only blocking policy",
+        field(get, copy),
+        builder(default),
+        patch(skip)
+    )]
     pub block_on_underrun: bool,
     /// Output-ring depth in producer chunks. Default: 10 on native, 32 on
     /// wasm32.
-    #[field(get, copy)]
-    #[builder(default = Consts::AUDIO_BUFFER_CHUNKS)]
+    #[config(value, field(get, copy), builder(default = Consts::AUDIO_BUFFER_CHUNKS))]
     pub audio_buffer_chunks: usize,
     /// Decoder construction settings, including decoder-side resampling. A
     /// document names it under `audio.decoder`.
-    #[builder(default)]
-    #[field(get)]
-    #[patch(nested)]
+    #[config(nested, builder(default), field(get), patch(nested))]
     pub(crate) decoder: AudioDecoderConfig<B>,
     /// Unified event bus (optional — if not provided, one is created internally).
-    #[builder(name = events)]
-    #[patch(skip)]
+    #[config(skip = "injected event bus", builder(name = events), patch(skip))]
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for the audio pipeline.
-    #[patch(skip)]
+    #[config(skip = "injected cancellation resource", patch(skip))]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional format hint (file extension like "mp3", "wav")
-    #[patch(skip)]
+    #[config(value, patch(skip))]
     pub(crate) hint: Option<String>,
     /// Media info hint for format detection
-    #[patch(skip)]
+    #[config(value, patch(skip))]
     pub(crate) media_info: Option<MediaInfo>,
     /// Optional bounded, nonblocking observer of decoder-output PCM.
     /// [`kithara_signal::AudioChunk::meta`] describes its post-conversion format;
     /// it runs before playback effects and owns any asynchronous copy.
-    #[patch(skip)]
+    #[config(skip = "injected PCM observer", patch(skip))]
     pub(crate) observer: Option<Box<dyn AudioObserver>>,
 }
 

@@ -19,15 +19,18 @@ use crate::{
 };
 
 /// Options for opening a [`MmapResource`].
+#[kithara_config::config(builder = false)]
 #[derive(Debug, Clone, Builder)]
 #[builder(start_fn = for_path)]
 #[non_exhaustive]
 pub struct MmapOptions {
     /// Path to the backing file.
     #[builder(start_fn)]
+    #[config(value)]
     pub path: PathBuf,
     /// Open mode controlling read/write behavior for existing files.
     #[builder(default)]
+    #[config(value)]
     pub mode: OpenMode,
     /// Multiplier applied to the current mapping length when a write runs
     /// past its end. The mapping grows to the larger of the write's end and
@@ -35,12 +38,14 @@ pub struct MmapOptions {
     /// write needs and re-maps on every one. The default doubles, which keeps
     /// the number of re-maps logarithmic in the final size.
     #[builder(default = 2)]
+    #[config(value)]
     pub growth_factor: u64,
     /// Size a new file is created at. Ignored for existing files. The default
     /// is one page-aligned block: enough that a small resource is written
     /// without a single re-map, small enough that a resource that turns out to
     /// be empty costs one sparse block.
     #[builder(default = 64 * 1024)]
+    #[config(value)]
     pub initial_len: u64,
 }
 
@@ -83,21 +88,10 @@ pub struct MmapDriver {
     pub(super) committed: ArcSwapOption<MemoryMappedFile>,
     #[debug(skip)]
     pub(super) mmap: Mutex<MmapState>,
-    pub(super) mode: OpenMode,
-    pub(super) path: PathBuf,
+    pub(super) config: MmapOptions,
     /// Lock-free queue for fast-path range notifications.
     #[debug(skip)]
     pub(super) ready_ranges: SegQueue<Range<u64>>,
-    /// Multiplier a write past the mapping's end grows it by, from
-    /// `MmapOptions::growth_factor`.
-    #[debug(skip)]
-    pub(super) growth_factor: u64,
-    /// Size a fresh mapping starts at, from `MmapOptions::initial_len`. A
-    /// re-download reuses it so the rewrite generation is reserved exactly
-    /// like the first one instead of restarting from the default and
-    /// re-mapping its way back up.
-    #[debug(skip)]
-    pub(super) initial_len: u64,
 }
 
 impl Driver for MmapDriver {
@@ -151,12 +145,9 @@ impl Driver for MmapDriver {
             };
 
         let driver = Self {
-            mode,
+            config: opts,
             committed,
             mmap: Mutex::new(mmap_state),
-            path: opts.path,
-            initial_len: opts.initial_len,
-            growth_factor: opts.growth_factor,
             ready_ranges: SegQueue::new(),
         };
 
@@ -381,7 +372,7 @@ mod tests {
         driver.write_at(0, b"data", false).unwrap();
         driver.commit(Some(4)).unwrap();
 
-        driver.path = dir.path().join("missing").join("resource.dat");
+        driver.config.path = dir.path().join("missing").join("resource.dat");
         assert!(driver.write_at(0, b"lost", true).is_err());
 
         let mut buf = [0; 4];
@@ -398,6 +389,27 @@ mod tests {
                 .build(),
         )
         .expect("BUG: open test resource with hard-coded params must succeed")
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn mmap_driver_keeps_its_open_policy_as_the_value_source() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("retained.dat");
+        let options = MmapOptions::for_path(path.clone())
+            .mode(OpenMode::ReadWrite)
+            .initial_len(64)
+            .growth_factor(1)
+            .build();
+        let (driver, _) = MmapDriver::open(options).unwrap();
+
+        let values = kithara_config::Config::values(&driver.config);
+        assert_eq!(values.path, path);
+        assert_eq!(values.mode, OpenMode::ReadWrite);
+        assert_eq!(values.initial_len, 64);
+        assert_eq!(values.growth_factor, 1);
+
+        driver.write_at(0, &[7; 100], false).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().len(), 100);
     }
 
     /// The growth factor is the caller's: at 1 a write past the mapping's end

@@ -5,8 +5,8 @@ use std::{fs::File, io::Write, num::NonZeroU32};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{
-        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, DecoderBackend,
-        DecoderChangeCause, DecoderEvent, ReadOutcome, SeekLifecycleStage,
+        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, ChunkOutcome,
+        DecoderBackend, DecoderChangeCause, DecoderEvent, ReadOutcome, SeekLifecycleStage,
     },
     decode::{GaplessMode, SilenceTrimParams},
     events::{EventBus, EventReceiver},
@@ -381,7 +381,12 @@ async fn test_seek_emits_matching_playback_progress(wav_176400: NamedTempFile) {
 }
 
 #[kithara::test(tokio)]
-async fn test_seek_complete_emitted_only_after_output_commit(wav_176400: NamedTempFile) {
+#[case::read(false)]
+#[case::chunk(true)]
+async fn test_seek_complete_emitted_only_after_output_commit(
+    wav_176400: NamedTempFile,
+    #[case] next_chunk: bool,
+) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_176400, &worker);
@@ -405,15 +410,23 @@ async fn test_seek_complete_emitted_only_after_output_commit(wav_176400: NamedTe
         "SeekComplete must not be emitted before output commit"
     );
 
-    let (_audio, read_result) = blocking_audio(audio, |audio| {
-        let mut buf = [0.0f32; 512];
-        audio.read(&mut buf)
+    let (_audio, committed) = blocking_audio(audio, move |audio| {
+        if next_chunk {
+            loop {
+                match audio.next_chunk() {
+                    Ok(ChunkOutcome::Chunk(chunk)) => break chunk.frames() > 0,
+                    Ok(ChunkOutcome::Pending { .. }) => std::thread::yield_now(),
+                    Ok(ChunkOutcome::Eof { .. }) => break false,
+                    Err(error) => panic!("decode error while waiting for post-seek chunk: {error}"),
+                }
+            }
+        } else {
+            let mut buf = [0.0f32; 512];
+            matches!(audio.read(&mut buf), Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0)
+        }
     })
     .await;
-    assert!(
-        matches!(read_result, Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0),
-        "read must commit PCM output",
-    );
+    assert!(committed, "read must commit PCM output");
 
     let deadline = Instant::now() + Duration::from_millis(400);
     let mut saw_seek_complete = false;

@@ -26,6 +26,7 @@ tls-rustls = ["kithara-encode/tls-rustls"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-encode = { workspace = true }
 kithara-platform = { workspace = true }

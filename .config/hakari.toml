@@ -59,8 +59,9 @@ third-party = [
 # (rustls -> aws-lc-sys). `client-reqwest` sits in the `default` of ten library
 # crates, so hakari sees it resolve for every workspace member taken as its own
 # root and lands reqwest in the hack's base `[dependencies]` — pulling a second
-# C crypto library into Apple builds that never use it. Excluding reqwest from
-# the generated manifest keeps it in traversal (so its own feature union is
-# still computed) while leaving it out of the shared surface.
+# C crypto library into Apple builds that never use it. `winit` likewise
+# requires an Android activity backend, but the shared hack reaches Android
+# packages that do not use a window. Keep both out of the generated manifest;
+# their owning crates still resolve them when needed.
 [final-excludes]
-third-party = [{ name = "reqwest" }]
+third-party = [{ name = "reqwest" }, { name = "winit" }]

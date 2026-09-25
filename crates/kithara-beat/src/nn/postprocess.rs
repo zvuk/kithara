@@ -2,16 +2,27 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     mark::BeatMark,
-    nn::{api::BeatError, config::BeatConfig, consts::Consts},
+    nn::{
+        api::BeatError,
+        config::{BeatConfig, BeatConfigUpdate},
+        consts::Consts,
+    },
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct PeakPicker {
+    #[field(get, vis = "pub(crate)")]
     config: BeatConfig,
 }
 
 impl PeakPicker {
     pub(crate) fn new(config: BeatConfig) -> Self {
         Self { config }
+    }
+
+    pub(crate) fn apply_config_update(&mut self, update: BeatConfigUpdate) {
+        self.config.apply_update(update);
     }
 
     pub(crate) fn decode(
@@ -63,7 +74,10 @@ fn candidates<'a>(
 ) -> impl Iterator<Item = (usize, f32)> + 'a {
     (0..logits.len()).filter_map(|index| {
         let start = index.saturating_sub(config.peak_half_width);
-        let end = (index + config.peak_half_width + 1).min(logits.len());
+        let end = index
+            .saturating_add(config.peak_half_width)
+            .saturating_add(1)
+            .min(logits.len());
         (logits[index] > config.peak_threshold
             && !logits[start..end]
                 .iter()
@@ -166,6 +180,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::nn::config::{BeatConfigPeakThresholdUpdate, BeatConfigUpdate};
 
     fn at(peaks: &[Peak]) -> Vec<f64> {
         peaks.iter().map(|peak| peak.at).collect()
@@ -213,6 +228,22 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
+    fn retained_config_update_changes_the_next_decode() {
+        let mut logits = flat(100);
+        logits[50] = 0.5;
+        let mut picker = PeakPicker::new(BeatConfig::default());
+        assert_eq!(picker.decode(&logits, &logits).unwrap().0.len(), 1);
+
+        picker.apply_config_update(BeatConfigUpdate {
+            peak_threshold: BeatConfigPeakThresholdUpdate::Set { value: 1.0 },
+            ..Default::default()
+        });
+
+        assert_eq!(picker.config().peak_threshold, 1.0);
+        assert!(picker.decode(&logits, &logits).unwrap().0.is_empty());
+    }
+
+    #[kithara::test(native, flash(false))]
     fn the_default_threshold_is_an_even_chance() {
         assert!((sigmoid(0.0) - 0.5).abs() < 1e-6);
         assert!(sigmoid(-4.0) < 0.02);
@@ -249,6 +280,12 @@ mod tests {
             vec![2.0, 6.0]
         );
         assert_eq!(at(&find_peaks(&logits, &wide)), vec![2.0]);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn maximum_window_width_uses_the_available_logits() {
+        let config = BeatConfig::builder().peak_half_width(usize::MAX).build();
+        assert_eq!(at(&find_peaks(&[1.0, 2.0, 1.0], &config)), vec![1.0]);
     }
 
     #[kithara::test(native, flash(false))]

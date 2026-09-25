@@ -1,6 +1,7 @@
 use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_test_macros as kithara;
 use kithara_warp::StretchControls;
+use tracing::warn;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -73,14 +74,24 @@ impl<S> PlayerRuntime<S> {
 
     /// Enable or disable the built-in linear auto-advance handler.
     pub fn set_auto_advance_enabled(&self, enabled: bool) {
-        self.core.params.set_auto_advance_enabled(enabled);
+        self.core.config.set_auto_advance_enabled(enabled);
     }
 
     /// Set crossfade duration in seconds.
     pub fn set_crossfade_duration(&self, seconds: f32) {
+        if let Err(error) = self.try_set_crossfade_duration(seconds) {
+            warn!(?error, seconds, "crossfade duration update rejected");
+        }
+    }
+
+    /// Submit a crossfade duration to the active slot, or retain it for the next slot.
+    ///
+    /// # Errors
+    /// Returns a slot command admission error without changing the retained value.
+    pub(crate) fn try_set_crossfade_duration(&self, seconds: f32) -> Result<(), PlayError> {
         self.core
-            .params
-            .set_crossfade_duration(seconds, |cmd| self.send_to_slot(cmd));
+            .config
+            .set_crossfade_duration(seconds, |cmd| self.send_to_slot(cmd))
     }
 
     /// Set the playback rate used by `play()` and `select_item()`, and apply it
@@ -89,8 +100,8 @@ impl<S> PlayerRuntime<S> {
     /// While paused the live rate is 0.0 and must stay there — a rate change is
     /// not a resume. The new value takes effect on the next `play()`.
     pub fn set_default_rate(&self, rate: f32) {
-        let target = self.core.params.set_default_rate(rate);
-        self.core.warp.stretch().set_speed(target);
+        let target = self.core.config.set_default_rate(rate);
+        self.core.config.warp.stretch().set_speed(target);
         if self.phase_kind() == PlayerPhaseKind::Playing {
             self.set_rate(target);
         }
@@ -107,12 +118,14 @@ impl<S> PlayerRuntime<S> {
     /// Set muted state.
     pub fn set_muted(&self, muted: bool) {
         let slot = self.slot();
-        self.core.params.set_muted(
+        if let Err(error) = self.core.config.set_muted(
             muted,
             slot,
             |slot, volume| self.core.engine.set_slot_volume(slot, volume),
             self.core.engine.bus(),
-        );
+        ) {
+            warn!(?error, muted, "mute update rejected");
+        }
     }
 
     /// Set prefetch lead time in seconds.
@@ -122,16 +135,26 @@ impl<S> PlayerRuntime<S> {
     /// Controls how early the next queued item is loaded into the processor
     /// before EOF. Independent of crossfade activation.
     pub fn set_prefetch_duration(&self, seconds: f32) {
+        if let Err(error) = self.try_set_prefetch_duration(seconds) {
+            warn!(?error, seconds, "prefetch duration update rejected");
+        }
+    }
+
+    /// Submit a prefetch duration to the active slot, or retain it for the next slot.
+    ///
+    /// # Errors
+    /// Returns a slot command admission error without changing the retained value.
+    pub(crate) fn try_set_prefetch_duration(&self, seconds: f32) -> Result<(), PlayError> {
         self.core
-            .params
-            .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
+            .config
+            .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd))
     }
 
     /// Set the requested rate target, clamped to
     /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
         let target = rate.max(StretchControls::MIN_SPEED);
-        let revision = self.core.warp.stretch().set_speed(target);
+        let revision = self.core.config.warp.stretch().set_speed(target);
         let snapshot = self
             .slot()
             .and_then(|slot| self.core.engine.slot_render_snapshot(slot));
@@ -149,18 +172,20 @@ impl<S> PlayerRuntime<S> {
                 session_frame = i64::from(snapshot.context().output().output_frames().end)
             );
         }
-        self.core.worker.wake();
+        self.core.config.worker.wake();
     }
 
     /// Set volume, clamped to `0.0..=1.0`.
     pub fn set_volume(&self, volume: f32) {
         let slot = self.slot();
-        self.core.params.set_volume(
+        if let Err(error) = self.core.config.set_volume(
             volume,
             slot,
             |slot, volume| self.core.engine.set_slot_volume(slot, volume),
             self.core.engine.bus(),
-        );
+        ) {
+            warn!(?error, volume, "volume update rejected");
+        }
     }
 
     delegate::delegate! {

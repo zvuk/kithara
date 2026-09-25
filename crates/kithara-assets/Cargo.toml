@@ -25,6 +25,7 @@ tls-native = ["kithara-storage/tls-native"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }

@@ -14,3 +14,5 @@ pub(crate) mod key_processor_bridge;
 pub(crate) mod observer;
 pub mod surface;
 pub(crate) mod worker;
+
+pub use bridge::initialize_host;

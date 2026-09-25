@@ -4,8 +4,8 @@ use kithara::{
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
-        CrossfadeCurve, CrossfadeSettings, InterruptionKind, ItemStatus, PlayError, PlayerStatus,
-        RouteChangeReason, SessionDuckingMode, StretchBackendKind, TimeControlStatus, TimeRange,
+        InterruptionKind, ItemStatus, PlayError, PlayerStatus, RouteChangeReason,
+        SessionDuckingMode, StretchBackendKind, TimeControlStatus, TimeRange,
     },
     queue::{
         ActionAtItemEnd, AdvanceReason, PlaybackOrder, QueueRepeatMode, RepeatMode, Transition,
@@ -21,8 +21,17 @@ use kithara_hls::{KeyFailureStage, KeySource};
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), derive(uniffi::Error))]
 pub enum FfiError {
+    #[error("Kithara host is not initialized")]
+    NotInitialized,
+
+    #[error("Kithara host initialization is already in progress")]
+    InitializationInProgress,
+
+    #[error("Kithara host is already initialized")]
+    AlreadyInitialized,
+
     #[error("player not ready")]
     NotReady,
 
@@ -116,7 +125,10 @@ pub struct FfiKeyRule {
 /// FFI-friendly per-item configuration. All fields immutable after
 /// [`crate::item::AudioPlayerItem::new`].
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Record)
+)]
 pub struct FfiItemConfig {
     pub abr_mode: Option<FfiAbrMode>,
     /// Optional caller-facing content id. When absent, the item exposes
@@ -259,7 +271,7 @@ pub enum FfiRepeatMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), derive(uniffi::Enum))]
 pub enum FfiPlaybackOrder {
     Sequential,
     Shuffle,
@@ -267,7 +279,7 @@ pub enum FfiPlaybackOrder {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), derive(uniffi::Enum))]
 pub enum FfiActionAtItemEnd {
     Advance,
     Pause,
@@ -276,52 +288,14 @@ pub enum FfiActionAtItemEnd {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), derive(uniffi::Enum))]
 pub enum FfiCrossfadeCurve {
     Linear,
     EqualPower,
     Unknown,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct FfiCrossfadeSettings {
-    pub duration: f32,
-    pub curve: FfiCrossfadeCurve,
-    pub depth: f32,
-    pub position: f32,
-}
-
-impl From<CrossfadeSettings> for FfiCrossfadeSettings {
-    fn from(value: CrossfadeSettings) -> Self {
-        Self {
-            duration: value.duration,
-            curve: match value.curve {
-                CrossfadeCurve::Linear => FfiCrossfadeCurve::Linear,
-                CrossfadeCurve::EqualPower => FfiCrossfadeCurve::EqualPower,
-                _ => FfiCrossfadeCurve::Unknown,
-            },
-            depth: value.depth,
-            position: value.position,
-        }
-    }
-}
-
-impl TryFrom<FfiCrossfadeSettings> for CrossfadeSettings {
-    type Error = FfiError;
-    fn try_from(value: FfiCrossfadeSettings) -> Result<Self, Self::Error> {
-        let curve = match value.curve {
-            FfiCrossfadeCurve::Linear => CrossfadeCurve::Linear,
-            FfiCrossfadeCurve::EqualPower => CrossfadeCurve::EqualPower,
-            FfiCrossfadeCurve::Unknown => {
-                return Err(FfiError::InvalidArgument {
-                    reason: "unknown crossfade curve".into(),
-                });
-            }
-        };
-        Self::new(value.duration, curve, value.depth, value.position).map_err(FfiError::from)
-    }
-}
+pub use super::config::FfiCrossfadeSettings;
 
 impl TryFrom<FfiPlaybackOrder> for PlaybackOrder {
     type Error = FfiError;
@@ -985,7 +959,7 @@ pub struct FfiItemLoadResult {
 
 /// FFI-friendly ABR mode.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), derive(uniffi::Enum))]
 pub enum FfiAbrMode {
     Auto,
     Manual { variant_index: u32 },
@@ -1011,6 +985,8 @@ pub struct FfiPlayerSnapshot {
 
 #[cfg(test)]
 mod tests {
+    use ::kithara::play::CrossfadeSettings;
+
     use super::*;
 
     #[kithara::test]
@@ -1250,6 +1226,14 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[kithara::test]
+    fn ffi_crossfade_default_matches_domain_and_round_trips() {
+        let domain = CrossfadeSettings::default();
+        let wire = FfiCrossfadeSettings::default();
+        assert_eq!(wire, FfiCrossfadeSettings::from(domain));
+        assert_eq!(CrossfadeSettings::try_from(wire).unwrap(), domain);
     }
 
     #[kithara::test]

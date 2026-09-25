@@ -24,6 +24,7 @@ use crate::{
 };
 
 #[cfg(test)]
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[path = "tests/mod.rs"]
 mod tests;
 
@@ -143,6 +144,22 @@ where
     /// Re-apply pitch to the backend only when it moves this much.
     pub(super) const RATIO_EPS: f64 = 1e-4;
 
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    fn backend_config(config: &WarpConfig) -> ElasticBackendConfig {
+        config.backends()
+    }
+
+    #[cfg(not(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    )))]
+    fn backend_config(_config: &WarpConfig) -> ElasticBackendConfig {
+        ElasticBackendConfig::default()
+    }
+
     /// Build the slot at the source `spec`, driven by the shared `controls`.
     pub(crate) fn new(
         config: &WarpConfig,
@@ -159,7 +176,7 @@ where
         let sample_rate: f32 = spec.sample_rate.get().as_();
         let target = Self::prepare_target(
             (current_kind, current_keylock),
-            config.backends(),
+            Self::backend_config(config),
             config.source_block_frames(),
             spec,
             &pools,
@@ -176,7 +193,7 @@ where
             projection: ProjectionState::new(config),
             residency: target.residency,
             committed: None,
-            backends: config.backends(),
+            backends: Self::backend_config(config),
             engine: target.engine,
             retired_engine: None,
             current_kind,

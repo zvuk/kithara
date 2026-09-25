@@ -29,11 +29,17 @@ wasm MODE="check" *ARGS:
       build)
         just _xtask wasm build "$@"
         ;;
+      sdk-build)
+        just _xtask wasm sdk-build "$@"
+        ;;
+      sdk-product-build)
+        just _xtask wasm sdk-product-build "$@"
+        ;;
       size-check)
         just _xtask wasm size-check "$@"
         ;;
       *)
-        echo "unknown wasm mode: $mode (use check|build|size-check); tests are `just test wasm`"
+        echo "unknown wasm mode: $mode (use check|build|size-check|sdk-build|sdk-product-build); tests are `just test wasm`"
         exit 2
         ;;
     esac
@@ -205,11 +211,11 @@ apple MODE="xcframework" *ARGS:
         fi
         ;;
       doc)
-        just _xtask apple docgen
+        just _xtask apple docgen || exit $?
         mkdir -p docs-build
         KITHARA_LOCAL_DEV=1 swift package --allow-writing-to-directory ./docs-build \
             generate-documentation \
-            --target Kithara --target KitharaRx \
+            --target Kithara --target KitharaRx --target KitharaFFI \
             --enable-experimental-combined-documentation \
             --output-path ./docs-build/Kithara.doccarchive
         ;;

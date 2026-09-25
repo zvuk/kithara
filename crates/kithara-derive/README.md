@@ -19,7 +19,7 @@ bounded-value, event, model-conversion, typestate, vocabulary, and UI trait
 implementations while their product types remain in the owning crates.
 
 The crate has no default features. Enable each derive explicitly with its
-matching feature. The available features are `built-default`, `control`,
+matching feature. The available features are `built-default`, `config`, `control`,
 `control-painter`, `enum-str`, `event`, `mirror`, `node-control`, `patch`,
 `phase`, `ranged`, `retained`, `skin-walk`, `variants`, and `view-control`.
 The `event` feature exports both `Event` and `EventSet` because they form one
@@ -44,6 +44,12 @@ pub struct HlsConfig<S> {
 let patch: HlsConfigPatch = serde_yaml_ng::from_str("download_batch_size: 5\n")?;
 config.apply(patch);
 ```
+
+Missing document keys leave the current value unchanged. A present value sets
+it; explicit `null` clears an `Option` and is rejected for a required field.
+Optional patch fields therefore carry `Option<Option<T>>`: `None` is unchanged,
+`Some(None)` clears, and `Some(Some(value))` sets. Validation still runs before
+committing the staged configuration. A null value never means reset to defaults.
 
 ### Bounded Scalars
 
@@ -130,6 +136,7 @@ Field attributes:
   name rather than dropped silently.
 - `#[patch(nested)]` — the field's own type has a patch; the document names it
   under a key of the same name and the merge recurses.
+- `#[patch(humantime)]` — parses duration/time values, including optional values.
 - `#[patch(attribute(...))]` — one attribute added to the generated patch field
   alone, for example `serde(with = "humantime_serde::option")` on a `Duration`.
 

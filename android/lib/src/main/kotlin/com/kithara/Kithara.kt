@@ -1,6 +1,9 @@
 package com.kithara
 
 import android.content.Context
+import com.kithara.ffi.FfiHostConfig
+import com.kithara.ffi.defaultHostConfig
+import com.kithara.ffi.initializeHost
 import com.kithara.net.HttpTransport
 import com.kithara.net.NativeHttpTransport
 
@@ -42,17 +45,16 @@ object Kithara {
      * Process-wide asset store created by [initialize].
      *
      * The same native store is shared by every default-configured player.
-     * Access before [initialize] throws [IllegalStateException].
+     * Access before [initialize] throws [KitharaError.NotInitialized].
      */
     @Volatile
     private var initializedStore: AssetStore? = null
+    private var platformInitialized = false
 
     private var installedTransport: HttpTransport? = null
 
     val defaultStore: AssetStore
-        get() = checkNotNull(initializedStore) {
-            "Kithara.initialize must be called before accessing the default asset store"
-        }
+        get() = initializedStore ?: throw KitharaError.NotInitialized
 
     /**
      * Initialize the native Kithara library.
@@ -65,26 +67,52 @@ object Kithara {
      * @param context Any [Context]; the application context is used internally.
      * @param transport The HTTP transport every request runs through; `kithara-okhttp` provides one.
      * @param logLevel Minimum log level forwarded from Rust to logcat. Defaults to [LogLevel.Warn].
+     * @param hostConfig Host settings fixed for the process lifetime. `null` uses Rust defaults.
      * @throws IllegalStateException when an earlier call installed another transport.
      */
-    fun initialize(context: Context, transport: HttpTransport, logLevel: LogLevel = LogLevel.Warn) {
+    @Throws(KitharaError::class)
+    fun initialize(
+        context: Context,
+        transport: HttpTransport,
+        logLevel: LogLevel = LogLevel.Warn,
+        hostConfig: FfiHostConfig? = null,
+    ) {
         synchronized(this) {
             val installed = installedTransport
             if (installed != null) {
                 check(installed === transport) {
                     "Kithara is already initialized with another HttpTransport"
                 }
-                return
+                if (initializedStore != null) {
+                    if (hostConfig != null) {
+                        try {
+                            initializeHost(hostConfig)
+                        } catch (error: com.kithara.ffi.FfiException) {
+                            throw KitharaError.fromFfi(error)
+                        }
+                    }
+                    return
+                }
+            } else {
+                if (!platformInitialized) {
+                    System.loadLibrary("kithara_ffi")
+                    nativeInit(context.applicationContext, logLevel.ordinal)
+                    platformInitialized = true
+                }
+                NativeHttpTransport.install(transport)
+                installedTransport = transport
             }
-            System.loadLibrary("kithara_ffi")
-            nativeInit(context.applicationContext, logLevel.ordinal)
-            NativeHttpTransport.install(transport)
-            installedTransport = transport
-            initializedStore = AssetStore(
+            val store = AssetStore(
                 root = context.applicationContext.cacheDir
                     .resolve("kithara")
                     .absolutePath,
             )
+            try {
+                initializeHost(hostConfig ?: defaultHostConfig())
+            } catch (error: com.kithara.ffi.FfiException) {
+                throw KitharaError.fromFfi(error)
+            }
+            initializedStore = store
         }
     }
 

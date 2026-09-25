@@ -227,21 +227,14 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
         preferredPeakBitrateForExpensiveNetworks: Double = 0,
         abrMode: AbrMode? = nil
     ) {
-        let ffiAbrMode: FfiAbrMode? = abrMode.map {
-            switch $0 {
-            case .auto: return .auto
-            case .manual(let variantIndex): return .manual(variantIndex: UInt32(variantIndex))
-            }
-        }
-        let config = FfiItemConfig(
-            abrMode: ffiAbrMode,
-            audioId: audioId.map { Self.ffiTrackId(from: $0) },
-            headers: additionalHeaders,
-            uuidI64: uuid,
+        let config = Self.makeConfig(
             url: url,
-            isLiveStream: false,
+            audioId: audioId,
+            uuid: uuid,
+            additionalHeaders: additionalHeaders,
             preferredPeakBitrate: preferredPeakBitrate,
-            preferredPeakBitrateExpensive: preferredPeakBitrateForExpensiveNetworks
+            preferredPeakBitrateForExpensiveNetworks: preferredPeakBitrateForExpensiveNetworks,
+            abrMode: abrMode
         )
         self._inner = AudioPlayerItem(config: config)
         self.ffiTrackId = _inner.queueId()
@@ -250,6 +243,31 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
 
         let observer = ItemObserverBridge(subject: _eventSubject)
         self._observerId = _inner.addObserver(observer: observer)
+    }
+
+    /// Create an item with generated source settings validated before loading.
+    /// The existing initializer remains available for default source behavior.
+    public convenience init(
+        url: String,
+        audioId: TrackId? = nil,
+        uuid: Int64? = nil,
+        additionalHeaders: [String: String]? = nil,
+        preferredPeakBitrate: Double = 0,
+        preferredPeakBitrateForExpensiveNetworks: Double = 0,
+        abrMode: AbrMode? = nil,
+        sourceSettings: FfiSourceSettings
+    ) throws {
+        let config = Self.makeConfig(
+            url: url,
+            audioId: audioId,
+            uuid: uuid,
+            additionalHeaders: additionalHeaders,
+            preferredPeakBitrate: preferredPeakBitrate,
+            preferredPeakBitrateForExpensiveNetworks: preferredPeakBitrateForExpensiveNetworks,
+            abrMode: abrMode
+        )
+        let inner = try AudioPlayerItem.newWithSourceSettings(config: config, settings: sourceSettings)
+        self.init(inner: inner)
     }
 
     /// Internal init wrapping an existing FFI item (used by ``KitharaPlayer/items``).
@@ -273,6 +291,33 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
             preconditionFailure("Kithara TrackId \(id) cannot be represented as KitharaFFI.TrackId")
         }
         return converted
+    }
+
+    private static func makeConfig(
+        url: String,
+        audioId: TrackId?,
+        uuid: Int64?,
+        additionalHeaders: [String: String]?,
+        preferredPeakBitrate: Double,
+        preferredPeakBitrateForExpensiveNetworks: Double,
+        abrMode: AbrMode?
+    ) -> FfiItemConfig {
+        let ffiAbrMode: FfiAbrMode? = abrMode.map {
+            switch $0 {
+            case .auto: return .auto
+            case .manual(let variantIndex): return .manual(variantIndex: UInt32(variantIndex))
+            }
+        }
+        return FfiItemConfig(
+            abrMode: ffiAbrMode,
+            audioId: audioId.map { Self.ffiTrackId(from: $0) },
+            headers: additionalHeaders,
+            uuidI64: uuid,
+            url: url,
+            isLiveStream: false,
+            preferredPeakBitrate: preferredPeakBitrate,
+            preferredPeakBitrateExpensive: preferredPeakBitrateForExpensiveNetworks
+        )
     }
 
     // MARK: - Load / playability
@@ -300,7 +345,7 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
     }
 
     /// `and:`-labelled overload for call sites that prefer that spelling.
-    /// Delegates to ``isPlayable(progress:ranges:)``.
+    /// Delegates to `isPlayable(progress:ranges:)`.
     public func isPlayable(progress: Double, and ranges: [ItemLoadedRange]) -> Bool {
         isPlayable(progress: progress, ranges: ranges)
     }

@@ -46,6 +46,7 @@ tls-native = [
 kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "phase"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-drm = { workspace = true }

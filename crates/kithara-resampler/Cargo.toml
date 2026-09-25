@@ -17,6 +17,7 @@ resample-rubato = ["dep:rubato"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default"] }
 
 bitflags = { workspace = true }

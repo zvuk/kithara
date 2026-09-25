@@ -6,6 +6,7 @@ import com.kithara.ffi.FfiItemConfig
 import com.kithara.ffi.FfiItemEvent
 import com.kithara.ffi.FfiItemLoadResult
 import com.kithara.ffi.FfiItemStatus
+import com.kithara.ffi.FfiSourceSettings
 import com.kithara.ffi.FfiTimeRange
 import com.kithara.ffi.FfiVariant
 import com.kithara.ffi.ItemLoadCallback
@@ -22,6 +23,26 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onStart
+
+private fun itemConfig(
+    url: String,
+    additionalHeaders: Map<String, String>?,
+    preferredPeakBitrate: Double,
+    preferredPeakBitrateForExpensiveNetworks: Double,
+    abrMode: FfiAbrMode?,
+    isLiveStream: Boolean,
+    audioId: ULong?,
+    uuid: Long?,
+): FfiItemConfig = FfiItemConfig(
+    abrMode = abrMode,
+    audioId = audioId,
+    headers = additionalHeaders,
+    uuidI64 = uuid,
+    url = url,
+    preferredPeakBitrate = preferredPeakBitrate,
+    preferredPeakBitrateExpensive = preferredPeakBitrateForExpensiveNetworks,
+    isLiveStream = isLiveStream,
+)
 
 /**
  * A single audio item that can be queued in [KitharaPlayer].
@@ -50,16 +71,43 @@ class KitharaPlayerItem internal constructor(
         uuid: Long? = null,
     ) : this(
         FfiAudioPlayerItem(
-            FfiItemConfig(
+            itemConfig(
                 abrMode = abrMode,
                 audioId = audioId,
-                headers = additionalHeaders,
-                uuidI64 = uuid,
+                additionalHeaders = additionalHeaders,
+                uuid = uuid,
                 url = url,
                 preferredPeakBitrate = preferredPeakBitrate,
-                preferredPeakBitrateExpensive = preferredPeakBitrateForExpensiveNetworks,
+                preferredPeakBitrateForExpensiveNetworks = preferredPeakBitrateForExpensiveNetworks,
                 isLiveStream = isLiveStream,
             )
+        )
+    )
+
+    /** Create an item with generated source settings validated before loading. */
+    constructor(
+        url: String,
+        additionalHeaders: Map<String, String>? = null,
+        preferredPeakBitrate: Double = 0.0,
+        preferredPeakBitrateForExpensiveNetworks: Double = 0.0,
+        abrMode: FfiAbrMode? = null,
+        isLiveStream: Boolean = false,
+        audioId: ULong? = null,
+        uuid: Long? = null,
+        sourceSettings: FfiSourceSettings,
+    ) : this(
+        FfiAudioPlayerItem.newWithSourceSettings(
+            config = itemConfig(
+                abrMode = abrMode,
+                audioId = audioId,
+                additionalHeaders = additionalHeaders,
+                uuid = uuid,
+                url = url,
+                preferredPeakBitrate = preferredPeakBitrate,
+                preferredPeakBitrateForExpensiveNetworks = preferredPeakBitrateForExpensiveNetworks,
+                isLiveStream = isLiveStream,
+            ),
+            settings = sourceSettings,
         )
     )
 

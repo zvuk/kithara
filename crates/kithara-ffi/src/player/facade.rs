@@ -1,9 +1,12 @@
 use kithara::platform::sync::Arc;
 
+use super::eq::validate_eq_band_count;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::FfiQueueSettings;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::config::FfiPlayerConfig;
 use crate::{
-    Inner,
+    FfiEqBandConfig, Inner,
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
     types::{
@@ -18,7 +21,10 @@ use crate::{
 /// facade only owns the object identity and (on native) the `Drop`
 /// shutdown pulse. The JS control surface lives in
 /// `crate::web::surface`.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Object)
+)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct AudioPlayer {
     pub(crate) inner: Inner,
@@ -37,32 +43,21 @@ impl AudioPlayer {
         }))
     }
 
-    pub fn action_at_item_end(&self) -> FfiActionAtItemEnd {
-        self.inner.action_at_item_end()
-    }
-
-    /// Append an item to the tail of the queue. AVQueuePlayer-style
-    /// counterpart of [`Self::insert`], which follows the iOS protocol
-    /// shape (`after == nil` ⇒ head).
+    /// Create a native player with optional queue settings.
     ///
     /// # Errors
-    ///
-    /// Returns [`FfiError`] when the source URL cannot be resolved into
-    /// a queue-owned `kithara::play::Source` — same failure surface as
-    /// [`Self::insert`].
-    #[cfg_attr(
-        all(),
-        expect(
-            clippy::needless_pass_by_value,
-            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
-        )
-    )]
-    pub fn append(self: &Arc<Self>, item: Arc<AudioPlayerItem>) -> Result<(), FfiError> {
-        self.inner.append(&item)
+    /// Returns an error when the player or queue settings are invalid.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    pub fn new_with_queue_settings(
+        config: FfiPlayerConfig,
+        queue_settings: FfiQueueSettings,
+    ) -> Result<Arc<Self>, FfiError> {
+        Ok(Arc::new(Self {
+            inner: Inner::new_with_queue_settings(config, queue_settings)?,
+        }))
     }
-    pub fn crossfade_settings(&self) -> FfiCrossfadeSettings {
-        self.inner.crossfade_settings()
-    }
+
     /// Currently playing item (if any). Resolves the queue's current
     /// track id against the player's Swift-owned item registry so
     /// callers get back the same `AudioPlayerItem` instance they passed
@@ -78,14 +73,6 @@ impl AudioPlayer {
     #[must_use]
     pub fn current_time(&self) -> f64 {
         self.inner.current_time()
-    }
-
-    pub fn eq_band_count(&self) -> u32 {
-        self.inner.eq_band_count()
-    }
-
-    pub fn eq_gain(&self, band: u32) -> f32 {
-        self.inner.eq_gain(band)
     }
 
     /// Insert an item into the queue.
@@ -117,40 +104,12 @@ impl AudioPlayer {
         self.inner.insert(&item, after.as_ref())
     }
 
-    pub fn is_muted(&self) -> bool {
-        self.inner.is_muted()
-    }
-
     pub fn item_count(&self) -> u32 {
         self.inner.item_count()
     }
 
     pub fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
         self.inner.items()
-    }
-
-    pub fn pause(&self) {
-        self.inner.pause();
-    }
-
-    pub fn play(&self) {
-        self.inner.play();
-    }
-
-    pub fn playback_order(&self) -> FfiPlaybackOrder {
-        self.inner.playback_order()
-    }
-
-    /// Target playback speed used by `play()`. When the player is
-    /// playing, the live `rate()` equals this value; on pause it falls
-    /// to `0.0`. Mirrors the iOS/Android `AVPlayer.playingRate`
-    /// terminology.
-    pub fn playing_rate(&self) -> f32 {
-        self.inner.playing_rate()
-    }
-
-    pub fn rate(&self) -> f32 {
-        self.inner.rate()
     }
 
     /// Remove an item from the queue.
@@ -233,14 +192,11 @@ impl AudioPlayer {
         self.inner.set_eq_gain(band, gain_db)
     }
 
-    pub fn set_muted(&self, muted: bool) {
-        self.inner.set_muted(muted);
-    }
-
     pub fn set_observer(self: &Arc<Self>, observer: Arc<dyn PlayerObserver>) {
         self.inner.set_observer(observer);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_playing_rate(&self, rate: f32) {
         self.inner.set_playing_rate(rate);
     }
@@ -253,10 +209,6 @@ impl AudioPlayer {
     /// meaning.
     pub fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {
         self.inner.set_repeat_mode(mode)
-    }
-
-    pub fn set_volume(&self, volume: f32) {
-        self.inner.set_volume(volume);
     }
 
     /// Register a runtime DRM key processor for every host (`"*"`).
@@ -314,9 +266,105 @@ impl AudioPlayer {
     pub fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {
         self.inner.update_peak_bitrate(wifi_bps, cellular_bps);
     }
+}
 
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
+impl AudioPlayer {
+    /// Current requested queue traversal order.
+    pub fn playback_order(&self) -> FfiPlaybackOrder {
+        self.inner.playback_order()
+    }
+
+    /// Current requested action when an item ends.
+    pub fn action_at_item_end(&self) -> FfiActionAtItemEnd {
+        self.inner.action_at_item_end()
+    }
+
+    /// Current requested mute state.
+    pub fn is_muted(&self) -> bool {
+        self.inner.is_muted()
+    }
+
+    /// Current requested output volume.
     pub fn volume(&self) -> f32 {
         self.inner.volume()
+    }
+
+    /// Submit a mute change to the owning player.
+    pub fn set_muted(&self, muted: bool) {
+        self.inner.set_muted(muted);
+    }
+
+    /// Submit a volume change to the owning player.
+    pub fn set_volume(&self, volume: f32) {
+        self.inner.set_volume(volume);
+    }
+
+    /// Append an item to the tail of the queue. AVQueuePlayer-style
+    /// counterpart of [`Self::insert`], which follows the iOS protocol
+    /// shape (`after == nil` ⇒ head).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError`] when the source URL cannot be resolved into
+    /// a queue-owned `kithara::play::Source` — same failure surface as
+    /// [`Self::insert`].
+    #[cfg_attr(
+        all(),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
+        )
+    )]
+    pub fn append(self: &Arc<Self>, item: Arc<AudioPlayerItem>) -> Result<(), FfiError> {
+        self.inner.append(&item)
+    }
+
+    pub fn pause(&self) {
+        self.inner.pause();
+    }
+
+    pub fn play(&self) {
+        self.inner.play();
+    }
+
+    pub fn rate(&self) -> f32 {
+        self.inner.rate()
+    }
+
+    /// Target playback speed used by `play()`. When the player is
+    /// playing, the live `rate()` equals this value; on pause it falls
+    /// to `0.0`. Mirrors the iOS/Android `AVPlayer.playingRate`
+    /// terminology.
+    pub fn playing_rate(&self) -> f32 {
+        self.inner.playing_rate()
+    }
+
+    /// Crossfade profile currently submitted to the owning queue.
+    pub fn crossfade_settings(&self) -> FfiCrossfadeSettings {
+        self.inner.crossfade_settings()
+    }
+
+    /// Number of bands in the current equalizer layout.
+    #[must_use]
+    pub fn eq_band_count(&self) -> u32 {
+        self.inner.eq_band_count()
+    }
+
+    /// Gain in decibels for one band, or zero for an unknown index.
+    #[must_use]
+    pub fn eq_gain(&self, band: u32) -> f32 {
+        self.inner.eq_gain(band)
+    }
+
+    /// Replace the complete live equalizer layout through the owning player.
+    ///
+    /// # Errors
+    /// Returns an error when the layout exceeds the platform's band budget or the player cannot
+    /// prepare or publish it.
+    pub fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {
+        validate_eq_band_count(layout.len())?;
+        self.inner.set_eq_layout(layout)
     }
 }
 

@@ -34,6 +34,7 @@ pub(crate) struct CiPins {
     /// to the ABI it declares rather than to whatever the unversioned formula
     /// became overnight.
     pub(crate) brew_formulae: Vec<String>,
+    pub(crate) bun_version: String,
     pub(crate) cmake_linux_amd64_sha256: String,
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
@@ -112,6 +113,7 @@ impl CiPins {
                 self.android_commandline_tools_version.as_str(),
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
+            ("bun_version", self.bun_version.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
             (
                 "expected_xcode_version",

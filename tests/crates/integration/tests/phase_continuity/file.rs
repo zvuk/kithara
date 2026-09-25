@@ -65,9 +65,10 @@ fn local_signal(asset: SignalAsset) -> (SignalAsset, TestTempDir, PathBuf) {
 }
 
 async fn open_audio(
-    config: AudioConfig<File<TestPools>>,
+    mut config: AudioConfig<File<TestPools>>,
     pools: &Pools,
 ) -> DecodeResult<RegisteredAudio<Stream<File<TestPools>>, TestPools>> {
+    config.consumer_wake_mode = kithara::audio::ConsumerWakeMode::ImmediateOffRt;
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     worker.open(config).await
 }

@@ -293,6 +293,8 @@
                 addEventListener('TrunkApplicationStarted', resolve, { once: true }));
         }
 
+        wasm.initializeHost(wasm.defaultHostConfig());
+
         // One AudioPlayer instance owns the engine worker + queue.
         const player = new wasm.AudioPlayer();
         window.__player = player;

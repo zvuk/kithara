@@ -6,20 +6,28 @@ use kithara_derive::Patch;
 #[cfg(any(feature = "render", feature = "vello"))]
 use crate::draw::DrawBuffers;
 
+#[kithara_config::config(builder = false)]
 #[derive(Builder, Clone, Debug, PartialEq, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 #[derive(kithara_derive::BuiltDefault)]
 pub struct Limits {
+    /// Maximum serialized document size in bytes.
     #[builder(default = 256 * 1024)]
+    #[config(value)]
     pub max_bytes: usize,
+    /// Maximum nesting depth accepted by the document parser.
     #[builder(default = 8)]
+    #[config(value)]
     pub max_depth: usize,
+    /// Maximum number of nodes accepted in one document.
     #[builder(default = 10_000)]
+    #[config(value)]
     pub max_nodes: usize,
 }
 
 /// Memory retained by the draw pools between frames.
+#[kithara_config::config(builder = false)]
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Eq, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
@@ -27,18 +35,23 @@ pub struct Limits {
 pub struct DrawPoolLimits {
     /// Command slots retained by one returned draw-list buffer.
     #[builder(default = 512)]
+    #[config(value)]
     pub command_capacity: usize,
     /// Maximum reusable buffers kept by each pool. Zero is treated as one.
     #[builder(default = 64)]
+    #[config(value)]
     pub max_buffers: usize,
     /// Hard byte limit shared by every draw buffer kind.
     #[builder(default = 64 * 1024 * 1024)]
+    #[config(value)]
     pub max_bytes: usize,
     /// Vector verbs retained by one returned path buffer.
     #[builder(default = 128)]
+    #[config(value)]
     pub path_capacity: usize,
     /// UTF-8 bytes retained by one returned text buffer.
     #[builder(default = 128)]
+    #[config(value)]
     pub text_capacity: usize,
 }
 
@@ -53,6 +66,7 @@ pub struct DrawPoolLimits {
 pub const SCREEN_CACHE: usize = 8;
 
 /// Canonical compile configuration and its resource limits.
+#[kithara_config::config(builder = false)]
 #[derive(Builder, Clone, Debug, PartialEq, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
@@ -69,12 +83,15 @@ pub struct UiConfig {
     /// build that registers no matching kind -- a document-shaped failure for
     /// a code-owned fact.
     #[builder(default)]
-    #[patch(skip)]
+    #[config(value, patch(skip))]
     pub custom_kinds: BTreeSet<String>,
     #[builder(default)]
     #[patch(nested)]
+    #[config(nested)]
     pub limits: Limits,
+    /// Maximum byte size of the compiled UI arena.
     #[builder(default = 64 * 1024)]
+    #[config(value)]
     pub max_arena_bytes: usize,
     /// Compiled screens a host keeps while a document turns between its pages.
     ///
@@ -87,6 +104,7 @@ pub struct UiConfig {
     /// eagerly at startup and keeps no screen cache, so it never consults
     /// this field.
     #[builder(default = SCREEN_CACHE)]
+    #[config(value)]
     pub screen_cache: usize,
     /// The pools every document compiled against this configuration draws
     /// from.
@@ -106,6 +124,7 @@ pub struct UiConfig {
     #[cfg(any(feature = "render", feature = "vello"))]
     #[builder(default)]
     #[patch(skip)]
+    #[config(skip = "host-owned draw-buffer pools are built resources")]
     pub draw_buffers: DrawBuffers,
 }
 
@@ -116,6 +135,19 @@ mod document_tests {
     use super::{DrawPoolLimits, DrawPoolLimitsPatch, LimitsPatch, UiConfig, UiConfigPatch};
     #[cfg(any(feature = "render", feature = "vello"))]
     use crate::draw::DrawBuffers;
+
+    #[kithara::test(native, flash(false))]
+    fn compiled_ui_settings_keep_their_readable_values() {
+        let config = UiConfig::builder()
+            .limits(super::Limits::builder().max_depth(12).build())
+            .screen_cache(3)
+            .build();
+        let values = kithara_config::Config::values(&config);
+
+        assert_eq!(values.limits.max_depth, 12);
+        assert_eq!(values.screen_cache, 3);
+        assert_eq!(values.max_arena_bytes, 64 * 1024);
+    }
 
     /// `deny_unknown_fields` arrives through `#[patch(attribute(...))]`,
     /// which emits its token stream verbatim -- only a bogus key proves the

@@ -19,14 +19,17 @@ default = ["stretch-signalsmith"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 stretch-signalsmith = ["dep:signalsmith-stretch"]
 stretch-bungee = ["dep:bungee-sys"]
+stretch-glide = []
 
 [dependencies]
+kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
 kithara-resampler = { workspace = true, features = ["resample-glide"] }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }
 
-bon = { workspace = true }
+bitflags = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
@@ -48,7 +51,6 @@ bungee-sys = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true }
 
 # `kithara::measure_block!` resolves `hotpath` in this crate; `hotpath` is native-only.
@@ -59,6 +61,7 @@ signalsmith-stretch = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "hang", "tls-rustls"] }
+serde_yaml_ng = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }

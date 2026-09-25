@@ -7,10 +7,14 @@ use crate::interact::{
     recognizers::{DragEvent, Scalar, Track, WheelStep},
 };
 
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ScrollConfig {
+    #[config(value)]
     items: Option<ScrollItems>,
+    #[config(value)]
     axis: ScrollAxis,
+    #[config(value)]
     content_extent: f32,
 }
 
@@ -57,7 +61,7 @@ impl ScrollConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct ScrollItems {
+pub(crate) struct ScrollItems {
     pub(super) cross_inset: f32,
     pub(super) extent: f32,
     pub(super) size: f32,

@@ -28,6 +28,7 @@ tls-rustls = ["kithara-stream/tls-rustls"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-stream = { workspace = true }
 
 bon = { workspace = true }

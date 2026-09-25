@@ -23,6 +23,9 @@ where
         StretchKind::Bungee => {
             BungeeElastic::prepare(config).map(|engine| Box::new(engine) as Box<dyn ElasticEngine>)
         }
+        #[cfg(feature = "stretch-glide")]
+        StretchKind::Glide => VarispeedElastic::prepare(config)
+            .map(|engine| Box::new(engine) as Box<dyn ElasticEngine>),
     }
 }
 

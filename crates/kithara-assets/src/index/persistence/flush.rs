@@ -47,18 +47,20 @@ pub(crate) trait Flushable: Send + Sync {
 }
 
 /// Tunables for [`FlushHub`].
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Debug, Patch)]
 pub struct FlushPolicy {
     /// Coalesce window: when the worker sees a signal, it sleeps this
     /// long before draining dirty sources, so a burst of mutations
     /// produces a single flush. Ignored when `force_every_n_ops` is
     /// reached.
-    #[patch(humantime)]
+    #[config(value, patch(humantime))]
     pub debounce: Duration,
     /// Cap on coalescing: if `signal()` is called this many times
     /// without a flush, the worker bypasses `debounce` and flushes
     /// immediately. Protects against sustained bursts that would
     /// otherwise grow the in-memory backlog without bound.
+    #[config(value)]
     pub force_every_n_ops: NonZeroUsize,
 }
 
@@ -121,6 +123,12 @@ pub struct FlushHub {
 }
 
 impl FlushHub {
+    /// Policy captured when this hub and its background worker were created.
+    #[must_use]
+    pub const fn config(&self) -> &FlushPolicy {
+        &self.policy
+    }
+
     /// Create a hub without a background worker. Mutators flush
     /// synchronously through [`Self::flush_now`].
     ///
@@ -299,6 +307,19 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    #[kithara::test]
+    fn hub_exposes_its_retained_flush_policy() {
+        let policy = FlushPolicy {
+            debounce: Duration::from_millis(125),
+            force_every_n_ops: NonZeroUsize::new(7).expect("nonzero literal"),
+        };
+        let hub = FlushHub::new(CancelToken::never(), policy);
+        let values = kithara_config::Config::values(hub.config());
+
+        assert_eq!(values.debounce, Duration::from_millis(125));
+        assert_eq!(values.force_every_n_ops.get(), 7);
+    }
 
     #[kithara::test(timeout(Duration::from_secs(2)))]
     fn a_patch_writes_only_the_field_it_names() {

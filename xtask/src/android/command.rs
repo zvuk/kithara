@@ -15,10 +15,10 @@ use kithara_devtools::{
     lock::FileLock,
     util::{check_rust_target, check_tool},
 };
+use regex::Regex;
 
 use super::{
-    device,
-    device::{Request, Reverse, Screen, Selected},
+    device::{self, Request, Reverse, Screen, Selected},
     evidence, native, results,
 };
 use crate::{
@@ -190,6 +190,38 @@ fn has_kotlin_source(path: &Path) -> Result<bool> {
     Ok(false)
 }
 
+/// `UniFFI` copies Rust intra-doc links verbatim, but Dokka cannot resolve them.
+/// Keep the label as inline code in generated `KDoc`; the Rust source retains its link.
+fn normalize_kotlin_docs(path: &Path, links: &Regex) -> Result<()> {
+    for entry in fs::read_dir(path).with_context(|| format!("read_dir {}", path.display()))? {
+        let path = entry
+            .with_context(|| format!("read_dir {}", path.display()))?
+            .path();
+        if path.is_dir() {
+            normalize_kotlin_docs(&path, links)?;
+        } else if path.extension().is_some_and(|kind| kind == "kt") {
+            let source = fs::read_to_string(&path)
+                .with_context(|| format!("reading generated Kotlin {}", path.display()))?;
+            let rendered = source
+                .lines()
+                .map(|line| {
+                    if line.trim_start().starts_with('*') || line.trim_start().starts_with("/**") {
+                        links.replace_all(line, "`$1`").into_owned()
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if rendered != source.trim_end_matches('\n') {
+                fs::write(&path, format!("{rendered}\n"))
+                    .with_context(|| format!("writing generated Kotlin {}", path.display()))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn recreate_dir(path: &Path) -> Result<()> {
     if path.exists() {
         fs::remove_dir_all(path).with_context(|| format!("remove {}", path.display()))?;
@@ -206,7 +238,7 @@ const RUST_TARGETS: &[(&str, &str)] = &[
 
 /// Features the FFI crate is compiled with on-device. Defaults stay off so
 /// `symphonia` is absent: `MediaCodec` is the sole decoder there.
-pub(super) fn device_features(profile: BuildProfile) -> String {
+pub(crate) fn device_features(profile: BuildProfile) -> String {
     let mut features = match profile {
         BuildProfile::Release => "kithara-ffi/uniffi,kithara-ffi/android".to_owned(),
         BuildProfile::Debug => {
@@ -286,11 +318,7 @@ fn run_clippy(root: &Path, android: &AndroidConfig, tools: &ToolsConfig) -> Resu
     Ok(())
 }
 
-pub(crate) fn run_build(
-    profile: BuildProfile,
-    android: &AndroidConfig,
-    tools: &ToolsConfig,
-) -> Result<()> {
+fn run_build(profile: BuildProfile, android: &AndroidConfig, tools: &ToolsConfig) -> Result<()> {
     check_ndk_toolchain(tools)?;
 
     let metadata = MetadataCommand::new()
@@ -394,6 +422,7 @@ pub(crate) fn run_build(
             lib_path.display()
         );
     }
+    normalize_kotlin_docs(&kotlin_dir, &Regex::new(r"\[`([^`]+)`\]")?)?;
 
     println!("==> Done!");
     println!("==> JNI libs: {}", jni_dir.display());
@@ -886,7 +915,7 @@ fn copy_cxx_runtime(jni_dir: &Path, targets: &[(&str, &str)]) -> Result<()> {
 /// architecture it builds for — Apple silicon reads `darwin-x86_64` as Intel
 /// does. Reading the directory rather than naming it keeps the answer right on
 /// a machine nobody had in mind.
-pub(super) fn ndk_prebuilt() -> Result<PathBuf> {
+pub(crate) fn ndk_prebuilt() -> Result<PathBuf> {
     let prebuilt = ndk_root()?.join("toolchains/llvm/prebuilt");
     let mut hosts = fs::read_dir(&prebuilt)
         .with_context(|| format!("reading the NDK toolchains in {}", prebuilt.display()))?
@@ -906,7 +935,7 @@ pub(super) fn ndk_prebuilt() -> Result<PathBuf> {
     Ok(host)
 }
 
-pub(super) fn ndk_root() -> Result<PathBuf> {
+pub(crate) fn ndk_root() -> Result<PathBuf> {
     for name in ["ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "NDK_HOME"] {
         if let Ok(value) = env::var(name) {
             return Ok(PathBuf::from(value));
@@ -924,7 +953,7 @@ pub(super) fn ndk_root() -> Result<PathBuf> {
         .with_context(|| format!("no NDK installed under {}", ndk.display()))
 }
 
-pub(super) fn android_sdk_root() -> Result<PathBuf> {
+pub(crate) fn android_sdk_root() -> Result<PathBuf> {
     if let Ok(value) = env::var("ANDROID_HOME") {
         return Ok(PathBuf::from(value));
     }
@@ -940,7 +969,7 @@ pub(super) fn android_sdk_root() -> Result<PathBuf> {
     bail!("ANDROID_HOME / ANDROID_SDK_ROOT not set and ~/Library/Android/sdk does not exist")
 }
 
-pub(super) fn require_android_str<'a>(value: &'a str, key: &str) -> Result<&'a str> {
+pub(crate) fn require_android_str<'a>(value: &'a str, key: &str) -> Result<&'a str> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         bail!(
@@ -971,4 +1000,27 @@ fn print_jdwp_attach_hint(device: &Selected) {
         println!("    Forward the JDWP socket:    adb forward tcp:8700 jdwp:<pid>");
     }
     println!("    Then attach your debugger to localhost:8700.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_kdoc_does_not_keep_rust_intra_doc_links() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("bindings.kt");
+        fs::write(
+            &file,
+            "/** [`FfiError`] */\n * Calls [`Self::insert`].\nval raw = \"[`unchanged`]\"\n",
+        )?;
+
+        normalize_kotlin_docs(dir.path(), &Regex::new(r"\[`([^`]+)`\]")?)?;
+
+        assert_eq!(
+            fs::read_to_string(&file)?,
+            "/** `FfiError` */\n * Calls `Self::insert`.\nval raw = \"[`unchanged`]\"\n"
+        );
+        Ok(())
+    }
 }

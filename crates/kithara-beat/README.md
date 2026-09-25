@@ -39,7 +39,8 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
 - `BeatThis::analyze(&mono_22050)` — run the mel, inference and peak-pick pipeline.
 - `BeatConfig` — peak threshold, max-pool half-width, dedup width. The defaults
   are the values the golden fixtures are held to; see [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-beat) before moving
-  them.
+  them. `BeatThis::config()` reads the retained policy, and
+  `BeatThis::apply_config_update(&mut self, update)` changes subsequent analyses.
 - `RawBeats { beats, downbeats }` — pooled output positions in seconds, sorted
   and deduplicated.
 - `BeatDetector` — the detector contract: one window of mono audio in, marks

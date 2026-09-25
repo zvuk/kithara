@@ -193,11 +193,11 @@ impl AudioPlayer {
     /// single-threaded keeps the handle in the main thread's own grown
     /// region, always addressable.
     #[wasm_bindgen(constructor)]
-    #[must_use]
-    pub fn new_js() -> Self {
-        Self {
+    pub fn new_js() -> Result<Self, JsValue> {
+        crate::web::bridge::require_initialized()?;
+        Ok(Self {
             inner: crate::Inner::default(),
-        }
+        })
     }
 
     #[wasm_bindgen(js_name = next)]

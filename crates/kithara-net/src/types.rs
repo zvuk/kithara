@@ -149,17 +149,24 @@ impl fmt::Display for RangeSpec {
     }
 }
 
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Copy, Debug, Builder, Eq, PartialEq, Patch)]
 #[non_exhaustive]
 #[derive(kithara_derive::BuiltDefault)]
 pub struct RetryPolicy {
+    /// Delay before the first retry; later attempts use exponential backoff.
     #[builder(default = Duration::from_millis(100))]
     #[patch(humantime)]
+    #[config(value)]
     pub base_delay: Duration,
+    /// Upper bound for the delay between retries.
     #[builder(default = Duration::from_secs(5))]
     #[patch(humantime)]
+    #[config(value)]
     pub max_delay: Duration,
+    /// Maximum number of retries after the initial request.
     #[builder(default = 3)]
+    #[config(value)]
     pub max_retries: u32,
 }
 
@@ -186,6 +193,7 @@ impl RetryPolicy {
     }
 }
 
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Debug, Builder, Patch)]
 #[non_exhaustive]
 #[derive(kithara_derive::BuiltDefault)]
@@ -194,6 +202,7 @@ pub struct NetOptions {
     /// Defaults to all four; byte-addressed requests always use `identity`.
     #[builder(default = Compression::all())]
     #[patch(attribute(serde(default)))]
+    #[config(value)]
     pub compression: Compression,
     /// Maximum allowed inactivity between consecutive read operations.
     /// Maps to [`reqwest::ClientBuilder::read_timeout`] (documented as
@@ -213,6 +222,7 @@ pub struct NetOptions {
     /// speed", and a 10s cap raced real fixtures.
     #[builder(default = Duration::from_secs(30))]
     #[patch(humantime)]
+    #[config(value)]
     pub inactivity_timeout: Duration,
     /// How long a pooled connection may sit idle before it is dropped.
     /// Governs the same pool as [`Self::pool_max_idle_per_host`]: the count
@@ -223,35 +233,44 @@ pub struct NetOptions {
     /// configuration exposes no idle-pool timeout.
     #[builder(default = Duration::from_secs(5))]
     #[patch(humantime)]
+    #[config(value)]
     pub pool_idle_timeout: Duration,
     /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
     /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
     /// backend and on wasm32 (no emulation there).
     #[builder(default)]
+    #[config(value)]
     pub impersonate: ImpersonatePreset,
+    /// Request observer retained by the client; not a readable setting.
     #[patch(skip)]
+    #[config(skip = "injected request observer resource")]
     pub observer: Option<Observer>,
     #[builder(default)]
     #[patch(nested)]
+    #[config(nested)]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
     /// **Security risk** — use only for local development and test servers.
     #[builder(default)]
+    #[config(value)]
     pub is_insecure: bool,
     /// Apple `NSURLSession` streaming body queue capacity, measured in
     /// delivered data chunks waiting for Rust consumption. Set to 0 to disable
     /// `URLSession` task suspension for queued body chunks.
     #[builder(default = 32)]
+    #[config(value)]
     pub body_queue_capacity: usize,
     /// Queue length at or below which a suspended Apple streaming task resumes.
     /// Values greater than or equal to [`Self::body_queue_capacity`] are valid:
     /// they resume as soon as the consumer drains one chunk.
     #[builder(default = 16)]
+    #[config(value)]
     pub body_queue_resume_at: usize,
     /// Max idle connections per host. Enables HTTP keep-alive connection
     /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
+    #[config(value)]
     pub pool_max_idle_per_host: usize,
 }
 
@@ -300,6 +319,19 @@ mod tests {
     }
 
     use super::*;
+
+    #[kithara::test]
+    fn net_options_snapshot_preserves_nested_retry_policy() {
+        let options = NetOptions::builder()
+            .retry_policy(RetryPolicy::builder().max_retries(7).build())
+            .body_queue_capacity(48)
+            .build();
+        let values = kithara_config::Config::values(&options);
+
+        assert_eq!(values.retry_policy.max_retries, 7);
+        assert_eq!(values.body_queue_capacity, 48);
+        assert_eq!(values.inactivity_timeout, Duration::from_secs(30));
+    }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::empty_headers(Headers::default(), true)]

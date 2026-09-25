@@ -1,4 +1,5 @@
 import Foundation
+import KitharaFFI
 import Testing
 @testable import Kithara
 
@@ -43,6 +44,40 @@ struct KitharaPlayerItemTests {
         )
         #expect(item.preferredPeakBitrate == 128_000)
         #expect(item.preferredPeakBitrateForExpensiveNetworks == 96_000)
+    }
+
+    @Test("source settings reach the item constructor")
+    func sourceSettingsReachItem() throws {
+        let settings = FfiSourceSettings(
+            file: FfiFileSourceSettings(readerEventCapacity: 512),
+            hls: nil
+        )
+        let item = try KitharaPlayerItem(
+            url: "https://example.com/song.mp3",
+            audioId: 42,
+            preferredPeakBitrate: 128_000,
+            sourceSettings: settings
+        )
+        #expect(item.url == URL(string: "https://example.com/song.mp3"))
+        #expect(item.audioId == 42)
+        #expect(item.preferredPeakBitrate == 128_000)
+        let hls = try KitharaPlayerItem(
+            url: "https://example.com/live.m3u8",
+            sourceSettings: FfiSourceSettings(
+                file: nil,
+                hls: FfiHlsSourceSettings(sizeProbeMethod: .rangeGet, downloadBatchSize: 6)
+            )
+        )
+        #expect(hls.url == URL(string: "https://example.com/live.m3u8"))
+        #expect(throws: FfiError.self) {
+            try KitharaPlayerItem(
+                url: "https://example.com/song.mp3",
+                sourceSettings: FfiSourceSettings(
+                    file: FfiFileSourceSettings(readerEventCapacity: 4097),
+                    hls: nil
+                )
+            )
+        }
     }
 
     @Test("default audioId stays monotonic")

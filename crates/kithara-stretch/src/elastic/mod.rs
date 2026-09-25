@@ -3,8 +3,10 @@ pub use capabilities::ElasticCapabilities;
 
 mod config;
 pub use config::{
-    BungeeConfig, BungeeConfigPatch, ElasticBackendConfig, ElasticBackendConfigPatch,
-    ElasticConfig, ElasticSpanConfig, SignalsmithConfig, SignalsmithConfigPatch,
+    BungeeConfig, BungeeConfigPatch, BungeeConfigValues, ElasticBackendConfig,
+    ElasticBackendConfigPatch, ElasticBackendConfigValues, ElasticConfig, ElasticConfigValues,
+    ElasticShapeValues, ElasticSpanConfig, ElasticSpanConfigValues, SignalsmithConfig,
+    SignalsmithConfigPatch, SignalsmithConfigValues,
 };
 
 mod drain;

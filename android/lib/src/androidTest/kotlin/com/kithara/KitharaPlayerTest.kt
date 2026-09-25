@@ -3,6 +3,12 @@ package com.kithara
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.kithara.ffi.FfiActionAtItemEnd
+import com.kithara.ffi.FfiCrossfadeCurve
+import com.kithara.ffi.FfiCrossfadeSettings
+import com.kithara.ffi.FfiException
+import com.kithara.ffi.FfiPlaybackOrder
+import com.kithara.ffi.FfiQueueSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -69,6 +75,34 @@ class KitharaPlayerTest {
         val player = KitharaPlayer(KitharaPlayer.Config(crossfadeSettings = settings))
 
         assertEquals(settings, player.crossfadeSettings)
+    }
+
+    @Test
+    fun generatedQueueSettingsReachPlayerOwner() {
+        val settings = FfiQueueSettings(
+            maxConcurrentLoads = 4u,
+            prefetchDuration = 2f,
+            shouldAutoplay = false,
+            maxHistorySize = 25u,
+            playbackOrder = FfiPlaybackOrder.SHUFFLE,
+            actionAtItemEnd = FfiActionAtItemEnd.PAUSE,
+            crossfadeSettings = FfiCrossfadeSettings(
+                duration = 1.5f,
+                curve = FfiCrossfadeCurve.LINEAR,
+                depth = 0.5f,
+                position = 0.3f,
+            ),
+        )
+        val player = KitharaPlayer(KitharaPlayer.Config(), settings)
+        assertEquals(PlaybackOrder.Shuffle, player.playbackOrder)
+        assertEquals(ActionAtItemEnd.Pause, player.actionAtItemEnd)
+        assertEquals(1.5f, player.crossfadeSettings.duration, 0f)
+        org.junit.Assert.assertThrows(FfiException.InvalidArgument::class.java) {
+            KitharaPlayer(
+                KitharaPlayer.Config(),
+                settings.copy(maxConcurrentLoads = 0u),
+            )
+        }
     }
 
     @Test

@@ -13,7 +13,7 @@ pub struct FfiPlayerConfig {
     pub store: Arc<FfiAssetStore>,
     /// DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
     pub key_options: FfiKeyOptions,
-    /// Number of EQ bands (log-spaced). Default: 10.
+    /// Number of EQ bands (log-spaced), at most 128. Default: 10.
     pub eq_band_count: u32,
     /// Player-wide auth token merged into item HTTP headers. Empty means no token.
     pub auth_token: String,
@@ -27,6 +27,7 @@ pub struct FfiPlayerConfig {
 #[cfg(test)]
 impl FfiPlayerConfig {
     pub(crate) fn for_test() -> Self {
+        super::session::initialize_test_host();
         Self {
             eq_band_count: 10,
             auth_token: String::new(),
@@ -35,12 +36,7 @@ impl FfiPlayerConfig {
             store: Arc::new(FfiAssetStore::for_test()),
             playback_order: FfiPlaybackOrder::Sequential,
             action_at_item_end: FfiActionAtItemEnd::Advance,
-            crossfade_settings: FfiCrossfadeSettings {
-                duration: 1.0,
-                curve: crate::types::FfiCrossfadeCurve::EqualPower,
-                depth: 1.0,
-                position: 0.5,
-            },
+            crossfade_settings: FfiCrossfadeSettings::default(),
         }
     }
 }

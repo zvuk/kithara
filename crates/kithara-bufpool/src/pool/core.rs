@@ -24,6 +24,7 @@ where
     stat_steal_hits: AtomicU64,
     budgets: BudgetPair,
     cold: Option<ArrayQueue<B>>,
+    config: PoolConfig,
     shards: [PoolShard<B>; SHARDS],
 }
 
@@ -74,14 +75,9 @@ where
         let cold = (config.initial_buffers > 0).then(|| ArrayQueue::new(config.initial_buffers));
         let core = Self {
             cold,
+            config,
             budgets: BudgetPair::new(region_budget, pool_limit),
-            shards: array::from_fn(|_| {
-                PoolShard::new(
-                    buffers_per_shard,
-                    config.max_retained_capacity,
-                    config.trim_capacity,
-                )
-            }),
+            shards: array::from_fn(|_| PoolShard::new(buffers_per_shard)),
             stat_alloc_misses: AtomicU64::new(0),
             stat_home_hits: AtomicU64::new(0),
             stat_put_drops: AtomicU64::new(0),
@@ -255,9 +251,9 @@ where
         }
     }
 
-    pub(crate) fn normalize(&self, current: &mut B, shard_idx: usize) {
+    pub(crate) fn normalize(&self, current: &mut B) {
         let before = Self::byte_size(current).unwrap_or(usize::MAX);
-        if let Some(kept) = self.shards[shard_idx].normalize(current) {
+        if let Some(kept) = PoolShard::<B>::normalize(current, &self.config) {
             self.budgets.release(before.saturating_sub(kept));
         } else {
             drop(std::mem::take(current));
@@ -268,7 +264,7 @@ where
 
     pub(crate) fn put(&self, value: B, shard_idx: usize) {
         let before = Self::byte_size(&value).unwrap_or(usize::MAX);
-        match self.shards[shard_idx].try_put(value) {
+        match self.shards[shard_idx].try_put(value, &self.config) {
             Ok(kept) => self.budgets.release(before.saturating_sub(kept)),
             Err(value) => {
                 drop(value);

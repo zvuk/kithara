@@ -199,7 +199,11 @@ impl ElasticEngine for BungeeElastic {
             .checked_add(retained)
             .ok_or(ElasticError::SampleCountOverflow)?;
         core.prepare_input_capacity(input_capacity)?;
-        let capabilities = ElasticCapabilities::new(config.shape(), latency);
+        let capabilities = ElasticCapabilities::new(
+            config.shape(),
+            latency,
+            crate::BackendCapabilities::RATE.union(crate::BackendCapabilities::KEYLOCK),
+        );
         Ok(Self {
             core,
             capabilities,

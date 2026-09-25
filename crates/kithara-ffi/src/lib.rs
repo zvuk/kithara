@@ -2,18 +2,19 @@
 //!
 //! Wraps `kithara-play` types behind an FFI-friendly API. Native targets
 //! (Apple / Android) use `UniFFI` to generate Swift / Kotlin bindings; wasm32
-//! uses wasm-bindgen under `web`. `src/lib.rs` is the single
+//! uses the generated `UniFFI` configuration surface alongside the existing
+//! wasm-bindgen player adapter under `web`. `src/lib.rs` is the single
 //! structural boundary where target-conditional `cfg` gates live: shared
 //! FFI data types live in `core`, native-only bridges/runtime in `native`,
 //! and the wasm surface in `web`.
 
-#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
+#[cfg(any(feature = "uniffi", feature = "uniffi-web"))]
 uniffi::setup_scaffolding!();
 
-#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
+#[cfg(any(feature = "uniffi", feature = "uniffi-web"))]
 use kithara::events::TrackId;
 
-#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
+#[cfg(any(feature = "uniffi", feature = "uniffi-web"))]
 uniffi::custom_type!(TrackId, u64, { remote });
 
 mod core;
@@ -25,8 +26,16 @@ pub mod pools;
 pub mod web;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub use core::host::ensure_default_host;
+#[cfg(all(target_arch = "wasm32", feature = "uniffi-web"))]
+pub use core::host::tick_host;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use core::registry;
-pub use core::{analysis, item, layout, observer, types};
+pub use core::{
+    FfiEqBandConfig, FfiEqFilterKind, FfiFileSourceSettings, FfiHlsSourceSettings, FfiHostConfig,
+    FfiLimiterConfig, FfiQueueSettings, FfiSizeProbeMethod, FfiSourceSettings, analysis,
+    default_host_config, host::initialize_host, item, layout, observer, types,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native::{FFI_RUNTIME, Inner, event_bridge};

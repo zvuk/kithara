@@ -1,9 +1,9 @@
 import KitharaFFI
 
-/// Asset identity passed to ``AssetLayout/root(source:)``.
+/// Asset identity passed to an asset layout's root-path callback.
 public typealias AssetSource = FfiAssetSource
 
-/// Resource identity passed to ``AssetLayout/path(resource:)``.
+/// Resource identity passed to an asset layout's resource-path callback.
 /// `.source` is direct-file media, `.url` covers HLS playlists, init segments,
 /// media segments, and keys, and `.named` covers analysis and other derived
 /// artifacts.
@@ -31,9 +31,12 @@ public typealias AssetLayout = FfiAssetLayout
 /// Query parameters included in cache identity for exact, `*.domain`, or `*`
 /// domain matches.
 public struct CacheIdentityRule: Sendable {
+    /// Hostnames or wildcard domain patterns matched by this rule.
     public let domains: [String]
+    /// Query parameter names that contribute to the cache key.
     public let queryParameters: [String]
 
+    /// Create a cache-identity rule for the selected domains and query parameters.
     public init(domains: [String], queryParameters: [String]) {
         self.domains = domains
         self.queryParameters = queryParameters

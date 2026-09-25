@@ -829,7 +829,16 @@ mod native {
 
     #[kithara::test(native, flash(false))]
     fn configured_slow_threshold_and_fairness_interval_are_load_bearing() {
-        let mut slots = vec![slot(1, Priority::default(), FixedTask(TickResult::Done))];
+        struct MeasurableTask;
+
+        impl Task for MeasurableTask {
+            fn tick(&mut self) -> TickResult {
+                thread::sleep(Duration::from_millis(1));
+                TickResult::Done
+            }
+        }
+
+        let mut slots = vec![slot(1, Priority::default(), MeasurableTask)];
         let mut observer = Events::default();
         let mut configured = budgets();
         configured.slow_tick_threshold = Duration::ZERO;

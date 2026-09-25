@@ -6,7 +6,10 @@ use crate::{
     detector::{BeatDetectError, BeatDetector},
     mark::RawBeats,
     nn::{
-        config::BeatConfig, inference::BeatPredictor, mel::MelExtractor, postprocess::PeakPicker,
+        config::{BeatConfig, BeatConfigUpdate},
+        inference::BeatPredictor,
+        mel::MelExtractor,
+        postprocess::PeakPicker,
     },
 };
 
@@ -66,6 +69,20 @@ where
         let (beat_logits, downbeat_logits) = self.predictor.predict(&mel, &self.pools)?;
         let (beats, downbeats) = self.picker.decode(&beat_logits, &downbeat_logits)?;
         Ok(RawBeats { beats, downbeats })
+    }
+
+    delegate::delegate! {
+        to self.picker {
+            /// Configuration currently used to turn model logits into beat marks.
+            #[must_use]
+            pub fn config(&self) -> &BeatConfig;
+
+            /// Change peak-picking policy for subsequent analyses.
+            ///
+            /// This requires exclusive access to the detector; it does not mutate an
+            /// analysis already in progress or run in an audio callback.
+            pub fn apply_config_update(&mut self, update: BeatConfigUpdate);
+        }
     }
 }
 

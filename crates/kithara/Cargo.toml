@@ -258,6 +258,14 @@ stretch-bungee = [
     "kithara-stretch/stretch-bungee",
     "kithara-warp?/stretch-bungee",
 ]
+stretch-glide = [
+    "stretch",
+    "kithara-host?/stretch-glide",
+    "kithara-play?/stretch-glide",
+    "kithara-queue?/stretch-glide",
+    "kithara-stretch/stretch-glide",
+    "kithara-warp?/stretch-glide",
+]
 # NN beat/downbeat detector (kithara-beat, embedded small model) in the
 # analysis registry.
 beat-nn = ["analysis", "beat", "kithara-analysis/beat-nn"]

@@ -6,7 +6,10 @@ use kithara::{events::EventBus, platform::CancelToken};
 use kithara::{
     events::TrackId,
     platform::sync::{Arc, Mutex},
+    play::{ResourceSrc, SourceType},
 };
+use kithara_file::FileConfigPatch;
+use kithara_hls::HlsConfigPatch;
 use uuid::Uuid;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -14,6 +17,7 @@ use crate::native::item_bridge::ItemEventBridge;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::FfiAbrMode;
 use crate::{
+    FfiSourceSettings,
     core::observer_set::ObserverSet,
     observer::{ItemLoadCallback, ItemObserver},
     types::{
@@ -21,6 +25,30 @@ use crate::{
         FfiTrackStatus,
     },
 };
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+pub(crate) struct ItemBuildConfig {
+    pub(crate) config: FfiItemConfig,
+    pub(crate) source: Option<SourcePatches>,
+}
+
+#[derive(Clone)]
+pub(crate) struct SourcePatches {
+    pub(crate) file: FileConfigPatch,
+    pub(crate) hls: HlsConfigPatch,
+}
+
+impl TryFrom<FfiSourceSettings> for SourcePatches {
+    type Error = crate::types::FfiError;
+
+    fn try_from(value: FfiSourceSettings) -> Result<Self, Self::Error> {
+        Ok(Self {
+            file: value.file.unwrap_or_default().try_into()?,
+            hls: value.hls.unwrap_or_default().try_into()?,
+        })
+    }
+}
 
 /// Loading lifecycle of an item. A sum type so the contradictory
 /// boolean combinations the old packed struct allowed
@@ -165,7 +193,10 @@ pub(crate) fn settle_failed(state: &Mutex<ItemView>, observer: &dyn ItemObserver
 /// - [`Self::uuid_i64`] — caller-facing queue-item id. When
 ///   [`FfiItemConfig::uuid_i64`] is absent it falls back to the
 ///   legacy UUIDv5-derived handle.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+#[cfg_attr(
+    any(feature = "uniffi", feature = "uniffi-web"),
+    derive(uniffi::Object)
+)]
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct AudioPlayerItem {
@@ -180,7 +211,8 @@ pub struct AudioPlayerItem {
     /// [`Self::load`] can tell "still detached" from "loaded enough to
     /// answer playable". Pre-insert / post-remove value is `false`.
     pub(crate) inserted: Mutex<bool>,
-    config: FfiItemConfig,
+    pub(crate) config: FfiItemConfig,
+    pub(crate) source: Option<SourcePatches>,
     /// Per-item event bridge translating resource events into
     /// [`ItemObserver`] callbacks. Native-only: the wasm worker routes
     /// item events through the main-thread event router instead (Wave 5).
@@ -204,7 +236,7 @@ pub struct AudioPlayerItem {
 }
 
 /// Methods exported across the FFI boundary.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
 impl AudioPlayerItem {
     /// Create a new item with frozen preferences. Reserves a fresh
     /// private queue id from the process-wide counter. Caller-supplied
@@ -213,38 +245,79 @@ impl AudioPlayerItem {
     /// Loading starts automatically when the item is inserted into an
     /// [`crate::player::AudioPlayer`].
     #[must_use]
-    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    #[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::constructor)]
     pub fn new(config: FfiItemConfig) -> Arc<Self> {
-        let live = config.is_live_stream;
-        let queue_id = TrackId::allocate();
-        let audio_id = config.audio_id.unwrap_or(queue_id);
-        let uuid_i64 = config
-            .uuid_i64
-            .unwrap_or_else(|| derived_uuid_i64(&config.url, queue_id));
-        Arc::new(Self {
-            config,
-            queue_id,
-            audio_id,
-            uuid_i64,
-            #[cfg(not(target_arch = "wasm32"))]
-            event_bridge: Mutex::default(),
-            observers: Arc::default(),
-            #[cfg(not(target_arch = "wasm32"))]
-            bus: Mutex::default(),
-            inserted: Mutex::default(),
-            state: Arc::new(Mutex::new(ItemView::new(live))),
-        })
+        construct_item(config, None)
     }
 
-    /// Subscribes `observer` to this item's events and returns the handle
-    /// that [`Self::remove_observer`] unsubscribes it with. Every registered
-    /// observer receives every event.
-    pub fn add_observer(&self, observer: Arc<dyn ItemObserver>) -> u64 {
-        #[cfg(target_arch = "wasm32")]
-        self.prime(&observer);
-        self.observers.add(observer)
+    /// Create an item with source settings applied before the stream opens.
+    /// Invalid limits reject construction without changing any player state.
+    ///
+    /// # Errors
+    /// Returns `InvalidArgument` when a setting is outside its documented range.
+    #[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::constructor)]
+    pub fn new_with_source_settings(
+        config: FfiItemConfig,
+        settings: FfiSourceSettings,
+    ) -> Result<Arc<Self>, crate::types::FfiError> {
+        let source = ResourceSrc::parse(&config.url).map_err(|error| {
+            crate::types::FfiError::InvalidArgument {
+                reason: error.to_string(),
+            }
+        })?;
+        let kind = SourceType::detect(&source).map_err(|error| {
+            crate::types::FfiError::InvalidArgument {
+                reason: error.to_string(),
+            }
+        })?;
+        let incompatible = match kind {
+            SourceType::HlsStream(_) => settings.file.is_some(),
+            SourceType::RemoteFile(_) | SourceType::LocalFile(_) => settings.hls.is_some(),
+        };
+        if incompatible {
+            return Err(crate::types::FfiError::InvalidArgument {
+                reason: "source settings do not match the item source type".into(),
+            });
+        }
+        Ok(construct_item(config, Some(settings.try_into()?)))
     }
+}
 
+fn construct_item(config: FfiItemConfig, source: Option<SourcePatches>) -> Arc<AudioPlayerItem> {
+    let live = config.is_live_stream;
+    let queue_id = TrackId::allocate();
+    let audio_id = config.audio_id.unwrap_or(queue_id);
+    let uuid_i64 = config
+        .uuid_i64
+        .unwrap_or_else(|| derived_uuid_i64(&config.url, queue_id));
+    Arc::new(AudioPlayerItem {
+        config,
+        source,
+        queue_id,
+        audio_id,
+        uuid_i64,
+        #[cfg(not(target_arch = "wasm32"))]
+        event_bridge: Mutex::default(),
+        observers: Arc::default(),
+        #[cfg(not(target_arch = "wasm32"))]
+        bus: Mutex::default(),
+        inserted: Mutex::default(),
+        state: Arc::new(Mutex::new(ItemView::new(live))),
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+impl From<&AudioPlayerItem> for ItemBuildConfig {
+    fn from(item: &AudioPlayerItem) -> Self {
+        Self {
+            config: item.config.clone(),
+            source: item.source.clone(),
+        }
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+impl AudioPlayerItem {
     /// Caller-facing content id. Mirrors the iOS
     /// `AudioPlayerItemProtocol.audioId: TrackId`.
     pub const fn audio_id(&self) -> TrackId {
@@ -255,6 +328,18 @@ impl AudioPlayerItem {
     /// underlying resource emits a duration update.
     pub fn duration_sec(&self) -> f64 {
         self.state.lock().duration_sec()
+    }
+
+    /// Consistent snapshot of status, duration, failure reason and
+    /// buffered ranges.
+    pub fn state(&self) -> FfiItemState {
+        let view = self.state.lock();
+        FfiItemState {
+            status: view.status(),
+            duration_seconds: view.duration(),
+            error: view.error.clone(),
+            loaded_ranges: view.loaded_ranges.clone(),
+        }
     }
 
     /// Whether this item represents a live HLS feed. The flag is set
@@ -332,21 +417,18 @@ impl AudioPlayerItem {
         self.queue_id
     }
 
+    /// Subscribes `observer` to this item's events and returns the handle
+    /// that [`Self::remove_observer`] unsubscribes it with. Every registered
+    /// observer receives every event.
+    pub fn add_observer(&self, observer: Arc<dyn ItemObserver>) -> u64 {
+        #[cfg(target_arch = "wasm32")]
+        self.prime(&observer);
+        self.observers.add(observer)
+    }
+
     /// Unsubscribes the observer registered under `id`.
     pub fn remove_observer(&self, id: u64) {
         self.observers.remove(id);
-    }
-
-    /// Consistent snapshot of status, duration, failure reason and
-    /// buffered ranges.
-    pub fn state(&self) -> FfiItemState {
-        let view = self.state.lock();
-        FfiItemState {
-            status: view.status(),
-            duration_seconds: view.duration(),
-            error: view.error.clone(),
-            loaded_ranges: view.loaded_ranges.clone(),
-        }
     }
 
     /// Audio source string — either a network URL or an absolute local
@@ -643,6 +725,141 @@ mod tests {
     fn url_preserved() {
         let item = item_for("https://example.com/song.mp3");
         assert_eq!(item.url(), "https://example.com/song.mp3");
+    }
+
+    #[kithara::test]
+    fn source_settings_validate_and_retain_owner_patches() {
+        let file = AudioPlayerItem::new_with_source_settings(
+            FfiItemConfig::for_test("https://example.com/song.mp3"),
+            FfiSourceSettings {
+                file: Some(crate::FfiFileSourceSettings {
+                    look_ahead_bytes: Some(0),
+                    reader_event_capacity: Some(512),
+                }),
+                hls: None,
+            },
+        )
+        .expect("valid file settings");
+        assert_eq!(
+            file.source.as_ref().unwrap().file.reader_event_capacity,
+            Some(512)
+        );
+        assert_eq!(
+            file.source.as_ref().unwrap().file.look_ahead_bytes,
+            Some(Some(0))
+        );
+
+        let hls = AudioPlayerItem::new_with_source_settings(
+            FfiItemConfig::for_test("https://example.com/live.m3u8"),
+            FfiSourceSettings {
+                file: None,
+                hls: Some(crate::FfiHlsSourceSettings {
+                    look_ahead_bytes: Some(0),
+                    acquire_attempt_budget: Some(1),
+                    download_batch_size: Some(6),
+                    size_probe_method: Some(crate::FfiSizeProbeMethod::RangeGet),
+                }),
+            },
+        )
+        .expect("valid HLS settings");
+        assert_eq!(
+            hls.source.as_ref().unwrap().hls.download_batch_size,
+            Some(6)
+        );
+        assert_eq!(
+            hls.source.as_ref().unwrap().hls.size_probe_method,
+            Some(kithara_hls::SizeProbeMethod::RangeGet)
+        );
+        assert_eq!(
+            hls.source.as_ref().unwrap().hls.look_ahead_bytes,
+            Some(Some(0))
+        );
+        assert_eq!(
+            hls.source.as_ref().unwrap().hls.acquire_attempt_budget,
+            Some(1)
+        );
+
+        for settings in [
+            FfiSourceSettings {
+                file: Some(crate::FfiFileSourceSettings {
+                    look_ahead_bytes: None,
+                    reader_event_capacity: Some(4097),
+                }),
+                hls: None,
+            },
+            FfiSourceSettings {
+                file: None,
+                hls: Some(crate::FfiHlsSourceSettings {
+                    look_ahead_bytes: None,
+                    acquire_attempt_budget: None,
+                    download_batch_size: Some(6),
+                    size_probe_method: None,
+                }),
+            },
+        ] {
+            assert!(matches!(
+                AudioPlayerItem::new_with_source_settings(
+                    FfiItemConfig::for_test("https://example.com/song.mp3"),
+                    settings,
+                ),
+                Err(crate::types::FfiError::InvalidArgument { .. })
+            ));
+        }
+        assert!(matches!(
+            AudioPlayerItem::new_with_source_settings(
+                FfiItemConfig::for_test("https://example.com/song.mp3"),
+                FfiSourceSettings {
+                    file: Some(crate::FfiFileSourceSettings {
+                        look_ahead_bytes: Some(8_388_609),
+                        ..Default::default()
+                    }),
+                    hls: None,
+                },
+            ),
+            Err(crate::types::FfiError::InvalidArgument { .. })
+        ));
+        assert!(matches!(
+            AudioPlayerItem::new_with_source_settings(
+                FfiItemConfig::for_test("https://example.com/live.m3u8"),
+                FfiSourceSettings {
+                    file: None,
+                    hls: Some(crate::FfiHlsSourceSettings {
+                        look_ahead_bytes: None,
+                        acquire_attempt_budget: None,
+                        download_batch_size: None,
+                        size_probe_method: Some(crate::FfiSizeProbeMethod::Unknown),
+                    }),
+                },
+            ),
+            Err(crate::types::FfiError::InvalidArgument { .. })
+        ));
+        assert!(matches!(
+            AudioPlayerItem::new_with_source_settings(
+                FfiItemConfig::for_test("https://example.com/live.m3u8"),
+                FfiSourceSettings {
+                    file: None,
+                    hls: Some(crate::FfiHlsSourceSettings {
+                        look_ahead_bytes: Some(8_388_609),
+                        ..Default::default()
+                    }),
+                },
+            ),
+            Err(crate::types::FfiError::InvalidArgument { .. })
+        ));
+        assert!(matches!(
+            AudioPlayerItem::new_with_source_settings(
+                FfiItemConfig::for_test("https://example.com/live.m3u8"),
+                FfiSourceSettings {
+                    file: None,
+                    hls: Some(crate::FfiHlsSourceSettings {
+                        acquire_attempt_budget: Some(256),
+                        ..Default::default()
+                    }),
+                },
+            ),
+            Err(crate::types::FfiError::InvalidArgument { .. })
+        ));
+        assert!(item_for("https://example.com/song.mp3").source.is_none());
     }
 
     #[kithara::test]

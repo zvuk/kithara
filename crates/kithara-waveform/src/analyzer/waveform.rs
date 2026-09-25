@@ -54,6 +54,12 @@ pub struct WaveformAnalyzer {
 }
 
 impl WaveformAnalyzer {
+    /// Construction and processing policy retained by this analyzer.
+    #[must_use]
+    pub const fn config(&self) -> &AnalysisParams {
+        &self.params
+    }
+
     /// Create a waveform analyzer using the registered sample pool.
     ///
     /// # Errors
@@ -419,6 +425,25 @@ mod tests {
         () => {
             AnalysisParams::builder().band_gain([1.0; 3]).build()
         };
+    }
+
+    #[kithara::test]
+    fn analyzer_retains_the_construction_and_processing_policy() {
+        let config = AnalysisParams::builder()
+            .band_gain([1.0, 2.0, 3.0])
+            .energy_floor(0.005)
+            .low_mid_hz(300.0)
+            .mid_high_hz(3000.0)
+            .fft_size(512)
+            .build();
+        let pass = Pass::new(config);
+        let values = kithara_config::Config::values(pass.analyzer.config());
+
+        assert_eq!(values.band_gain, [1.0, 2.0, 3.0]);
+        assert_eq!(values.energy_floor, 0.005);
+        assert_eq!(values.low_mid_hz, 300.0);
+        assert_eq!(values.mid_high_hz, 3000.0);
+        assert_eq!(values.fft_size, 512);
     }
 
     impl Pass {

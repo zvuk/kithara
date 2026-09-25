@@ -203,7 +203,14 @@ fn lane_command(
         passthrough => {
             let mut cmd = Command::new(&lane.program);
             cmd.envs(&lane.env);
-            cmd.args(&lane.prefix_args);
+            if lane.program == "cargo" {
+                cmd.args(selected_package_args(
+                    &lane.prefix_args,
+                    &request.passthrough,
+                ));
+            } else {
+                cmd.args(&lane.prefix_args);
+            }
             let features = features_for(test, lane, request)?;
             if !features.is_empty() {
                 cmd.arg(&test.feature_arg)
@@ -669,21 +676,7 @@ fn nextest_command(
     )
 }
 
-fn build_nextest_command(
-    spec: NextestSpec<'_>,
-    features: BTreeSet<String>,
-    extra: &[String],
-    action: NextestAction,
-) -> Result<(Vec<String>, Command)> {
-    let NextestSpec {
-        program,
-        prefix_args,
-        suffix_args,
-        feature_arg,
-        env,
-    } = spec;
-    let mut cmd = Command::new(program);
-    cmd.envs(env);
+fn selected_package_args(prefix_args: &[String], extra: &[String]) -> Vec<String> {
     let mut prefix_args = prefix_args.to_vec();
     if extra
         .iter()
@@ -702,6 +695,25 @@ fn build_nextest_command(
             arg != "--workspace" && !arg.starts_with("--exclude=")
         });
     }
+    prefix_args
+}
+
+fn build_nextest_command(
+    spec: NextestSpec<'_>,
+    features: BTreeSet<String>,
+    extra: &[String],
+    action: NextestAction,
+) -> Result<(Vec<String>, Command)> {
+    let NextestSpec {
+        program,
+        prefix_args,
+        suffix_args,
+        feature_arg,
+        env,
+    } = spec;
+    let mut cmd = Command::new(program);
+    cmd.envs(env);
+    let mut prefix_args = selected_package_args(prefix_args, extra);
     match action {
         NextestAction::Run => {
             cmd.args(&prefix_args);
@@ -781,6 +793,47 @@ mod tests {
                 })
             })
             .collect()
+    }
+
+    #[test]
+    fn doc_lane_package_selection_does_not_expand_to_the_workspace() {
+        let mut project = synthetic_project();
+        project.test.lanes.insert(
+            "doc".to_owned(),
+            TestLaneConfig {
+                program: "cargo".to_owned(),
+                prefix_args: [
+                    "test",
+                    "--doc",
+                    "--workspace",
+                    "--exclude",
+                    "ui",
+                    "--exclude=fuzz",
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                ..TestLaneConfig::default()
+            },
+        );
+        let lane = &project.test.lanes["doc"];
+        for selection in [vec!["-p", "settings"], vec!["--package=settings"]] {
+            let request =
+                TestRequest::parse(&selection.into_iter().map(str::to_owned).collect::<Vec<_>>())
+                    .expect("valid package selection");
+            let cmd = lane_command(&project, "doc", lane, &request).expect("doc command");
+            let args = args_of(&cmd);
+            assert!(args.starts_with(&["test".to_owned(), "--doc".to_owned()]));
+            assert!(
+                !args
+                    .iter()
+                    .any(|arg| arg == "--workspace" || arg.starts_with("--exclude"))
+            );
+            assert!(!args.contains(&"ui".to_owned()));
+            assert!(args.ends_with(&request.passthrough));
+        }
+        let request = TestRequest::parse(&[]).expect("whole workspace request");
+        let cmd = lane_command(&project, "doc", lane, &request).expect("doc command");
+        assert!(args_of(&cmd).starts_with(&lane.prefix_args));
     }
 
     fn synthetic_project() -> ProjectConfig {

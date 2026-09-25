@@ -31,15 +31,16 @@ pub use segment::{
     MapSegment, Meter, MeterError, MeterFacts, SegmentEndpoint, SegmentError, SegmentFacts,
     SegmentSet,
 };
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
-pub use temporal::StretchKind;
 pub use temporal::{
     ActiveRegion, GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
     RenderPublisher, RenderReader, RenderSnapshot, StretchControls,
 };
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+pub use temporal::{StretchKind, WarpCapabilities};
 pub use warp::{
     Warp, WarpConfig, WarpConfigPatch, WarpCursor, WarpMap, WarpMapRevision, WarpPlan,
     WarpPlanError, WarpPlanSlot, supports_playback_rate,

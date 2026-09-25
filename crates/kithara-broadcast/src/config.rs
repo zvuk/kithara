@@ -16,6 +16,7 @@ use crate::{BroadcastError, BroadcastResult};
 /// Audio, segmentation, retention, and origin settings for a live broadcast.
 ///
 /// [`BroadcastConfigPatch`] is what a configuration document may say about it.
+#[kithara_config::config(builder = false)]
 #[derive(Builder, Patch)]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone)]
@@ -23,92 +24,116 @@ pub struct BroadcastConfig<S> {
     /// Shared worker used to schedule the packager task.
     #[builder(start_fn)]
     #[patch(skip)]
+    #[config(skip = "injected packager worker")]
     pub worker: Worker,
     /// Typed pool facade used for bounded packager scratch.
     #[builder(start_fn)]
     #[patch(skip)]
+    #[config(skip = "injected scratch pools")]
     pub pools: PoolRegion<S>,
     /// Codec emitted into HLS media segments. Not a document key:
     /// [`BroadcastConfig::validate`] admits one profile, so every value a
     /// document could name but the default is refused at startup.
     #[builder(default = AudioCodec::AacLc)]
     #[patch(skip)]
+    #[config(skip = "validated fixed AAC-LC profile")]
     pub codec: AudioCodec,
     /// Container carried by HLS media segments. Not a document key for the
     /// same reason [`Self::codec`] is not.
     #[builder(default = ContainerFormat::Adts)]
     #[patch(skip)]
+    #[config(skip = "validated fixed ADTS profile")]
     pub container: ContainerFormat,
     /// Dispatcher park duration when the broadcast has no work.
     #[builder(default = Duration::from_millis(100))]
     #[patch(humantime)]
+    #[config(value)]
     pub idle_timeout: Duration,
     /// Media duration a segment is cut at.
     #[builder(default = Duration::from_secs(4))]
     #[patch(humantime)]
+    #[config(value)]
     pub segment_target: Duration,
     /// Threshold for reporting a slow packager tick.
     #[builder(default = Duration::from_millis(10))]
     #[patch(humantime)]
+    #[config(value)]
     pub slow_tick_threshold: Duration,
     /// Maximum time a graceful stop waits for the bounded PCM tail.
     #[builder(default = Duration::from_secs(10))]
     #[patch(humantime)]
+    #[config(value)]
     pub stop_timeout: Duration,
     /// Dispatcher wait duration between deferred RT wakes.
     #[builder(default = Duration::from_millis(2))]
     #[patch(humantime)]
+    #[config(value)]
     pub wait_timeout: Duration,
     /// Consecutive progress passes before the dispatcher yields.
     #[builder(default = Defaults::FAIRNESS_YIELD_INTERVAL)]
+    #[config(value)]
     pub fairness_yield_interval: NonZeroU32,
     /// Maximum consecutive packager ticks in one dispatcher visit.
     #[builder(default = NonZeroU32::MIN)]
+    #[config(value)]
     pub task_burst: NonZeroU32,
     /// Maximum stereo PCM frames waiting between RT and the packager worker.
     #[builder(default = Defaults::BUFFER_FRAMES)]
+    #[config(value)]
     pub buffer_frames: NonZeroUsize,
     /// Maximum tasks admitted to the broadcast dispatcher.
     #[builder(default = NonZeroUsize::MIN)]
+    #[config(value)]
     pub dispatcher_capacity: NonZeroUsize,
     /// Maximum queued master-format generations waiting for the packager.
     #[builder(default = Defaults::GENERATION_CAPACITY)]
+    #[config(value)]
     pub generation_capacity: NonZeroUsize,
     /// Maximum compute jobs admitted for the packager task.
     #[builder(default = NonZeroUsize::MIN)]
+    #[config(value)]
     pub max_compute_tasks: NonZeroUsize,
     /// Maximum stereo PCM frames packaged during one worker tick.
     #[builder(default = Defaults::TICK_FRAMES)]
+    #[config(value)]
     pub tick_frames: NonZeroUsize,
     /// Optional cancellation parent for the broadcast lifetime.
     #[patch(skip)]
+    #[config(skip = "injected cancellation parent")]
     pub cancel: Option<CancelToken>,
     /// Packager task priority. Not a document key: `Priority` carries no
     /// `Deserialize`, and giving `kithara-worker` one for a knob nobody has
     /// asked to tune widens that crate's surface for nothing.
     #[builder(default = Priority::new(0))]
     #[patch(skip)]
+    #[config(skip = "internal packager scheduling priority")]
     pub priority: Priority,
     /// Loopback on an ephemeral port.
     #[builder(default = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))]
+    #[config(value)]
     pub bind: SocketAddr,
     /// Channel count of the mix.
     #[builder(default = 2)]
+    #[config(value)]
     pub channels: u16,
     /// Sample rate of the mix. Not a document key: the packager overwrites it
     /// with the master format it measured, so a named value would not survive
     /// the first format change.
     #[builder(default = 48_000)]
     #[patch(skip)]
+    #[config(skip = "derived from the measured master format")]
     pub sample_rate: u32,
     /// AAC-LC bit rate the encoder targets.
     #[builder(default = 128_000)]
+    #[config(value)]
     pub bit_rate: u64,
     /// Segments kept fetchable past the playlist window.
     #[builder(default = 3)]
+    #[config(value)]
     pub grace: usize,
     /// Segments a client sees in the playlist.
     #[builder(default = 6)]
+    #[config(value)]
     pub window: usize,
 }
 
@@ -249,6 +274,18 @@ mod tests {
 
     fn config() -> BroadcastConfig<TestPools> {
         BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools()).build()
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn retained_values_reflect_broadcast_policy() {
+        let configured = BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools())
+            .segment_target(Duration::from_secs(5))
+            .window(7)
+            .build();
+        let values = kithara_config::Config::values(&configured);
+        assert_eq!(values.segment_target, Duration::from_secs(5));
+        assert_eq!(values.window, 7);
+        assert_eq!(values.bit_rate, configured.bit_rate);
     }
 
     #[kithara::test(native, flash(false))]

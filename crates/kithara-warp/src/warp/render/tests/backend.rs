@@ -7,8 +7,13 @@ use super::{
 };
 
 #[kithara::test]
-#[cfg(feature = "stretch-signalsmith")]
-fn vinyl_varispeed_preserves_periodic_attack_positions() {
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide))]
+fn vinyl_varispeed_preserves_periodic_attack_positions(#[case] backend: StretchKind) {
     const SPEED: f32 = 1.25;
     const SPEED_NUMERATOR: usize = 5;
     const SPEED_DENOMINATOR: usize = 4;
@@ -21,7 +26,7 @@ fn vinyl_varispeed_preserves_periodic_attack_positions() {
         input[frame * usize::from(Consts::CH) + 1] = 1.0;
     }
 
-    let output = render(&mut vinyl(StretchKind::Signalsmith, SPEED), &input);
+    let output = render(&mut vinyl(backend, SPEED), &input);
     let mono: Vec<f32> = output
         .iter()
         .step_by(usize::from(Consts::CH))

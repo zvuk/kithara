@@ -1,6 +1,5 @@
 use std::num::NonZeroUsize;
 
-use bon::Builder;
 use kithara_derive::Patch;
 use kithara_platform::sync::Arc;
 #[cfg(all(
@@ -19,7 +18,8 @@ const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) 
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
 /// [`WarpConfigPatch`] is what a configuration document may say about it.
-#[derive(Clone, Debug, Builder, Patch, fieldwork::Fieldwork)]
+#[kithara_config::config]
+#[derive(Clone, Debug, Patch, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
@@ -28,6 +28,7 @@ pub struct WarpConfig {
     #[builder(default = Arc::new(WarpPlanSlot::default()))]
     #[field(get, deref = false)]
     #[patch(skip)]
+    #[config(skip = "shared projected warp plan handle")]
     plan: Arc<WarpPlanSlot>,
     /// Live temporal controls consumed by the resident Warp lane. Not a
     /// document key: this is the handle the UI and the deck already share, so
@@ -36,6 +37,7 @@ pub struct WarpConfig {
     #[builder(default = StretchControls::new(1.0))]
     #[field(get, deref = false)]
     #[patch(skip)]
+    #[config(skip = "shared live temporal control handle")]
     stretch: Arc<StretchControls>,
     /// Preparation geometry each compiled stretch backend is built with. Not
     /// the backend selection: which engine runs is a live control on
@@ -50,18 +52,22 @@ pub struct WarpConfig {
     #[builder(default)]
     #[field(get, copy)]
     #[patch(nested)]
+    #[config(nested)]
     backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
     #[builder(default = DEFAULT_SOURCE_BLOCK_FRAMES)]
     #[field(get, copy)]
+    #[config(value)]
     source_block_frames: NonZeroUsize,
     /// Output-frame window used to smooth live rate changes.
     #[builder(default = NonZeroUsize::MIN)]
     #[field(get, copy)]
+    #[config(value)]
     rate_smooth_frames: NonZeroUsize,
     /// Optional output-frame cap between samples of live temporal controls.
     /// Without a cap, Warp consumes the complete source span accepted by its backend.
     #[field(get, copy)]
+    #[config(value)]
     render_quantum_frames: Option<NonZeroUsize>,
 }
 
@@ -78,6 +84,8 @@ mod tests {
         #[case] configured: Option<usize>,
         #[case] expected: Option<usize>,
     ) {
+        use kithara_config::Config as _;
+
         let config = WarpConfig::builder()
             .maybe_render_quantum_frames(
                 configured
@@ -89,6 +97,13 @@ mod tests {
             config.render_quantum_frames().map(NonZeroUsize::get),
             expected
         );
+        let values = config.values();
+        assert_eq!(
+            values.render_quantum_frames.map(NonZeroUsize::get),
+            expected
+        );
+        assert_eq!(values.source_block_frames, DEFAULT_SOURCE_BLOCK_FRAMES);
+        assert_eq!(values.rate_smooth_frames, NonZeroUsize::MIN);
     }
 
     /// Backend geometry merges one engine at a time: a patch naming only
@@ -100,6 +115,7 @@ mod tests {
     ))]
     #[kithara::test]
     fn a_patch_naming_one_backend_leaves_the_other_standing() {
+        use kithara_config::Config as _;
         use kithara_stretch::{BungeeConfig, ElasticBackendConfig, SignalsmithConfig};
 
         let mut config = WarpConfig::builder()
@@ -114,8 +130,8 @@ mod tests {
             )
             .build();
         let mut patch = WarpConfigPatch::default();
-        patch.backends.signalsmith.block_frames = NonZeroUsize::new(512);
-        patch.backends.signalsmith.interval_frames = NonZeroUsize::new(16);
+        patch.backends.signalsmith.block_frames = Some(NonZeroUsize::new(512));
+        patch.backends.signalsmith.interval_frames = Some(NonZeroUsize::new(16));
 
         config.apply(patch);
 
@@ -132,5 +148,11 @@ mod tests {
             -2,
             "a patch that never names Bungee must not reset its geometry"
         );
+        let values = config.values();
+        assert_eq!(
+            values.backends.signalsmith.block_frames,
+            NonZeroUsize::new(512)
+        );
+        assert_eq!(values.backends.bungee.log2_synthesis_hop_adjust, -2);
     }
 }

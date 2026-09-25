@@ -1,4 +1,3 @@
-use bon::Builder;
 use num_traits::cast::AsPrimitive;
 
 use crate::GainDb;
@@ -38,20 +37,28 @@ impl From<u8> for FilterKind {
 }
 
 /// Configuration for a single EQ band.
-#[derive(Debug, Clone, Copy, PartialEq, Builder, fieldwork::Fieldwork)]
+#[kithara_config::config(default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 #[fieldwork(get)]
-#[derive(kithara_derive::BuiltDefault)]
 pub struct EqBandConfig {
+    /// Filter response applied by this band.
+    #[config(value)]
     #[builder(default)]
     #[field(get(copy))]
     kind: FilterKind,
+    /// Signed band gain in decibels.
+    #[config(value)]
     #[builder(default)]
     #[field(get(copy))]
     gain_db: GainDb,
+    /// Center or cutoff frequency in hertz.
+    #[config(value)]
     #[builder(default = Consts::DEFAULT_FREQ)]
     frequency: f32,
+    /// Dimensionless quality factor controlling filter bandwidth.
+    #[config(value)]
     #[builder(default = std::f32::consts::FRAC_1_SQRT_2)]
     q_factor: f32,
 }
@@ -107,6 +114,7 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_config::Config as _;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -179,5 +187,18 @@ mod tests {
         assert_eq!(band.gain_db(), GainDb::MAX);
         band.set_gain_db(GainDb::from(-100.0));
         assert_eq!(band.gain_db(), GainDb::MIN);
+    }
+
+    #[kithara::test]
+    fn retained_values_follow_the_builder_recipe() {
+        let band = EqBandConfig::builder()
+            .frequency(440.0)
+            .q_factor(0.9)
+            .build();
+        let values = band.values();
+        assert_eq!(values.frequency, 440.0);
+        assert_eq!(values.q_factor, 0.9);
+        assert_eq!(values.kind, FilterKind::Peaking);
+        assert_eq!(values.gain_db, GainDb::default());
     }
 }

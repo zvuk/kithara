@@ -13,6 +13,18 @@ mod ranged;
 mod ui;
 mod vocabulary;
 
+/// Declares retained configuration values or a construction builder.
+#[cfg(feature = "config")]
+#[proc_macro_attribute]
+pub fn config(
+    attributes: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    config::retained::expand(attributes.into(), input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 /// Implements `Default` by calling the type's existing no-input builder.
 #[cfg(feature = "built-default")]
 #[proc_macro_derive(BuiltDefault)]

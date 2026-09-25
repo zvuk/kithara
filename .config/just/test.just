@@ -482,3 +482,15 @@ rtsan FILTER="offline_harness rt_metrics mix_tap analysis_offer_is_realtime_safe
 rtsan-file FILTER="phase_continuity::file": (_rtsan "-p kithara-integration-tests --test suite_stress" "apple-fused-src" FILTER)
 
 rtsan-hls FILTER="phase_continuity::hls": (_rtsan "-p kithara-integration-tests --test suite_stress" "apple-fused-src" FILTER)
+
+# Generated UniFFI SDK contract; browser and workers share a 1 GiB RSS budget.
+[positional-arguments]
+sdk-web BACKEND BROWSER:
+    just _xtask wasm sdk-build --backend "$1"
+    just _xtask wasm sdk-test --directory target/config-protocol/sdk --browser "$2"
+
+# Product host configuration through generated UniFFI Web bindings.
+[positional-arguments]
+sdk-product-web BACKEND BROWSER:
+    just _xtask wasm sdk-product-build --backend "$1"
+    just _xtask wasm sdk-test --directory target/config-protocol/product-sdk --browser "$2" --expect-prefix "PASS product-host" --expect-suffix ""

@@ -131,34 +131,46 @@ public enum AbrMode: Sendable {
     case manual(variantIndex: Int)
 }
 
+/// Order used when selecting the next item in the queue.
 public enum PlaybackOrder: Sendable, Equatable {
+    /// Play items in queue order.
     case sequential
+    /// Select items in shuffled order.
     case shuffle
 }
 
+/// Action taken when the current track reaches its end.
 public enum ActionAtItemEnd: Sendable, Equatable {
     case advance
     case pause
     case none
 }
 
+/// Gain curve applied during a crossfade.
 public enum CrossfadeCurve: Sendable, Equatable {
     case linear
     case equalPower
 }
 
+/// Crossfade duration and gain-shaping controls.
 public struct CrossfadeSettings: Sendable, Equatable {
+    /// Standard crossfade settings used by a new player.
     public static let `default` = CrossfadeSettings(
         validatedDuration: 1,
         curve: .equalPower,
         depth: 1,
         position: 0.5
     )
+    /// Duration of the overlap in seconds.
     public let duration: Float
+    /// Gain curve used during the overlap.
     public let curve: CrossfadeCurve
+    /// Fraction of the full crossfade applied, from zero to one.
     public let depth: Float
+    /// Center of the overlap, strictly between zero and one.
     public let position: Float
 
+    /// Create settings after checking finite values and supported ranges.
     public init(
         duration: Float = 1,
         curve: CrossfadeCurve = .equalPower,
@@ -393,6 +405,12 @@ extension KitharaError {
     /// importing `KitharaFFI`.
     public init(ffi: FfiError) {
         switch ffi {
+        case .NotInitialized:
+            self = .internal("process audio host is not initialized")
+        case .InitializationInProgress:
+            self = .internal("process audio host initialization is in progress")
+        case .AlreadyInitialized:
+            self = .internal("process audio host is already initialized")
         case .NotReady:
             self = .notReady
         case let .ItemFailed(reason):

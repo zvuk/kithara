@@ -13,18 +13,21 @@ use kithara::{
         tokio::task::spawn as task_spawn,
     },
     play::{
-        CrossfadeSettings, PlayError, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
+        PlayError, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
     queue::{QueueConfig, TrackId, Transition},
 };
 
 use crate::{
+    FfiQueueSettings,
+    item::{ItemBuildConfig, SourcePatches},
     observer::{AUTH_TOKEN_HEADER, SALT_HEADER},
     pools::{
         FfiPools, FfiQueue, FfiQueueControl, FfiResourceConfig, FfiStore, FfiTrackSource,
         FfiWorker, Pools,
     },
+    types::FfiAbrMode,
     web::{analysis::AnalysisRuns, commands::WorkerCmd, key_processor_bridge},
 };
 
@@ -38,6 +41,9 @@ impl Consts {
     const ASSET_CACHE_MAX_BYTES: u64 = 128 * 1024 * 1024;
 }
 
+/// Web's established initial volume, retained by the worker's PlayerConfig.
+pub(crate) const DEFAULT_VOLUME: f32 = 0.5;
+
 /// Player-wide DRM + network state owned by the engine Worker, parallel to
 /// the `key_options` + `player_headers` fields on
 /// [`NativeInner`](crate::native::inner::NativeInner). Held in a
@@ -45,10 +51,10 @@ impl Consts {
 /// and each track build snapshots it into a [`FfiResourceConfig`].
 struct BuildState {
     store: FfiStore,
-    worker: FfiWorker,
     headers: HashMap<String, String>,
     keys: KeyOptions,
     pools: Pools,
+    worker: FfiWorker,
 }
 
 impl BuildState {
@@ -62,9 +68,9 @@ impl BuildState {
         Self {
             pools,
             store,
-            worker,
             headers: HashMap::new(),
             keys: KeyOptions::default(),
+            worker,
         }
     }
 }
@@ -88,10 +94,8 @@ pub(crate) fn worker_main(
     cmd_rx: mpsc::Receiver<WorkerCmd>,
     host_sender: wasm::HostSender<FfiPools>,
     pools: Pools,
+    queue_settings: FfiQueueSettings,
 ) {
-    /// Default crossfade window, in seconds. Mirrors the legacy worker.
-    const CROSSFADE_SECONDS: f32 = 5.0;
-
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
     keep_worker_alive();
 
@@ -105,12 +109,16 @@ pub(crate) fn worker_main(
                 .worker(state.worker.clone())
                 .build(),
         );
-        let queue = FfiQueue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(queue_store)
-                .build(),
-        );
+        player.set_volume(DEFAULT_VOLUME);
+        let mut queue_config = QueueConfig::builder()
+            .player(player)
+            .store(queue_store)
+            .build();
+        if let Err(error) = queue_settings.apply_to(&mut queue_config) {
+            clog!("[WORKER] invalid queue settings: {error}");
+            return;
+        }
+        let queue = FfiQueue::new(queue_config);
         let owner = match host.insert(queue) {
             Ok(owner) => owner,
             Err(error) => {
@@ -119,11 +127,6 @@ pub(crate) fn worker_main(
             }
         };
         let queue = owner.control().clone();
-        let _ = queue.set_crossfade_settings(CrossfadeSettings {
-            duration: CROSSFADE_SECONDS,
-            ..Default::default()
-        });
-
         let analysis = Rc::new(RefCell::new(AnalysisRuns::new(state.pools.clone())));
         let build_state = Rc::new(RefCell::new(state));
         spawn_tick_loop(queue.clone());
@@ -186,6 +189,8 @@ fn dispatch_cmd(
             let _ = queue.seek(ms.max(0.0) / MS_PER_SECOND);
         }
         WorkerCmd::SetVolume(vol) => queue.set_volume(vol),
+        WorkerCmd::SetMuted(muted) => queue.set_muted(muted),
+        WorkerCmd::SetPlayingRate(rate) => queue.set_default_rate(rate),
         WorkerCmd::SetCrossfade(settings) => {
             let _ = queue.set_crossfade_settings(settings);
         }
@@ -199,22 +204,25 @@ fn dispatch_cmd(
             let band_idx: usize = num_traits::cast(band).unwrap_or(0);
             let _ = queue.set_eq_gain(band_idx, gain_db);
         }
+        WorkerCmd::SetEqLayout(layout) => {
+            let _ = queue.set_eq_layout(layout);
+        }
         WorkerCmd::ResetEq => {
             let _ = queue.reset_eq();
         }
-        WorkerCmd::Append { id, url } => {
-            let source = build_source(&build_state.borrow(), url);
+        WorkerCmd::Append { id, config } => {
+            let source = build_source(&build_state.borrow(), config);
             if let Err(error) = queue.append_with_id(id, source) {
                 clog!("[WORKER] append rejected for {id:?}: {error}");
             }
         }
         WorkerCmd::Insert {
             id,
-            url,
+            config,
             after,
             request_id,
         } => {
-            let source = build_source(&build_state.borrow(), url);
+            let source = build_source(&build_state.borrow(), config);
             let result = queue
                 .insert_with_id(id, source, after)
                 .map(|_| ())
@@ -225,7 +233,9 @@ fn dispatch_cmd(
             let state = build_state.borrow();
             if let Err(error) = analysis
                 .borrow_mut()
-                .start_queued(queue, id, request_id, |url| build_config(&state, url))
+                .start_queued(queue, id, request_id, |url| {
+                    build_config(&state, url, None, None, 0.0, None)
+                })
             {
                 crate::web::interop::send_reply(request_id, Err(error));
             }
@@ -238,13 +248,13 @@ fn dispatch_cmd(
         WorkerCmd::Replace {
             index,
             id,
-            url,
+            config,
             request_id,
         } => {
             let result = replace_track(
                 queue,
                 &build_state.borrow(),
-                ReplaceTrackArgs { url, id, index },
+                ReplaceTrackArgs { config, id, index },
             )
             .map(|dropped| analysis.borrow_mut().cancel(dropped));
             crate::web::interop::send_reply(request_id, result);
@@ -391,30 +401,71 @@ fn register_key_rule(state: &mut BuildState, args: SetupHlsAesArgs) {
     state.keys = KeyOptions::builder().key_registry(registry).build();
 }
 
-/// Build an [`FfiTrackSource`] for `url`, snapshotting the player-wide DRM keys
-/// and headers from `state` (mirrors native `build_source_for_item`). Falls
-/// back to a bare [`FfiTrackSource::Uri`] when no keys or headers are set so
-/// the common non-DRM path stays allocation-light.
-fn build_source(state: &BuildState, url: String) -> FfiTrackSource {
-    if state.keys.key_registry.is_none() && state.headers.is_empty() {
+/// Build a worker source from the item's immutable configuration. Keep the
+/// common no-policy URI path allocation-light.
+fn build_source(state: &BuildState, item: ItemBuildConfig) -> FfiTrackSource {
+    let ItemBuildConfig {
+        config: item,
+        source,
+    } = item;
+    let url = item.url.clone();
+    if state.keys.key_registry.is_none()
+        && state.headers.is_empty()
+        && item.headers.as_ref().is_none_or(HashMap::is_empty)
+        && item.abr_mode.is_none()
+        && !(item.preferred_peak_bitrate.is_finite() && item.preferred_peak_bitrate > 0.0)
+        && source.is_none()
+    {
         return FfiTrackSource::Uri(url);
     }
-    build_config(state, &url).map_or(FfiTrackSource::Uri(url), |config| {
+    build_config(
+        state,
+        &url,
+        item.headers,
+        item.abr_mode,
+        item.preferred_peak_bitrate,
+        source,
+    )
+    .map_or(FfiTrackSource::Uri(url), |config| {
         FfiTrackSource::Config(Box::new(config))
     })
 }
 
-fn build_config(state: &BuildState, url: &str) -> Option<FfiResourceConfig> {
+fn build_config(
+    state: &BuildState,
+    url: &str,
+    item_headers: Option<HashMap<String, String>>,
+    abr_mode: Option<FfiAbrMode>,
+    preferred_peak_bitrate: f64,
+    source: Option<SourcePatches>,
+) -> Option<FfiResourceConfig> {
     let src = ResourceSrc::parse(url)
         .inspect_err(|err| {
             clog!("[WORKER] build_config: invalid url {url}: {err}");
         })
         .ok()?;
-    let headers = (!state.headers.is_empty()).then(|| state.headers.clone());
+    let mut headers = state.headers.clone();
+    headers.extend(item_headers.unwrap_or_default());
+    let abr_mode = abr_mode.map(|mode| match mode {
+        FfiAbrMode::Auto => AbrMode::Auto(None),
+        FfiAbrMode::Manual { variant_index } => AbrMode::manual(variant_index as usize),
+    });
     Some(
         FfiResourceConfig::for_src(src)
             .keys(state.keys.clone())
-            .maybe_headers(headers.map(Into::into))
+            .maybe_headers((!headers.is_empty()).then(|| headers.into()))
+            .initial_abr_mode(abr_mode.unwrap_or_default())
+            .preferred_peak_bitrate(preferred_peak_bitrate)
+            .file(
+                source
+                    .as_ref()
+                    .map_or_else(Default::default, |source| source.file.clone()),
+            )
+            .hls(
+                source
+                    .as_ref()
+                    .map_or_else(Default::default, |source| source.hls.clone()),
+            )
             .store(state.store.clone())
             .worker(state.worker.clone())
             .build(),
@@ -422,7 +473,7 @@ fn build_config(state: &BuildState, url: &str) -> Option<FfiResourceConfig> {
 }
 
 struct ReplaceTrackArgs {
-    url: String,
+    config: ItemBuildConfig,
     id: TrackId,
     index: u32,
 }
@@ -435,7 +486,7 @@ fn replace_track(
     state: &BuildState,
     args: ReplaceTrackArgs,
 ) -> Result<TrackId, String> {
-    let ReplaceTrackArgs { index, id, url } = args;
+    let ReplaceTrackArgs { index, id, config } = args;
 
     let idx = index as usize;
     let tracks = queue.tracks();
@@ -449,7 +500,7 @@ fn replace_track(
         tracks.get(idx - 1).map(|e| e.id)
     };
     queue
-        .insert_with_id(id, build_source(state, url), after)
+        .insert_with_id(id, build_source(state, config), after)
         .map_err(|e| e.to_string())?;
     queue.remove(old_id).map_err(|e| e.to_string())?;
     Ok(old_id)

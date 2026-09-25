@@ -5,6 +5,7 @@ use kithara_net::HttpClient;
 use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle};
 
 /// Configuration for [`Downloader`](super::Downloader).
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Builder, Patch)]
 #[builder(start_fn = for_client)]
 #[non_exhaustive]
@@ -15,15 +16,18 @@ pub struct DownloaderConfig {
     /// Downloaders to share keep-alive sockets across them.
     #[builder(start_fn)]
     #[patch(skip)]
+    #[config(skip = "shared HTTP client resource")]
     pub(crate) client: HttpClient,
     /// Settings for the shared ABR controller owned by the Downloader.
     #[builder(default)]
     #[patch(nested)]
+    #[config(nested)]
     pub(crate) abr_settings: AbrSettings,
     /// Throttle delay for demand (low-priority) processing.
     /// Gives urgent work a chance to preempt before demand batch runs.
     #[builder(default = Duration::ZERO)]
     #[patch(humantime)]
+    #[config(value)]
     pub(crate) demand_throttle: Duration,
     /// Soft timeout. When a fetch has not produced a response within
     /// this duration, the Downloader publishes
@@ -32,20 +36,24 @@ pub struct DownloaderConfig {
     /// — it keeps running until hard timeout fires.
     #[builder(default = Duration::from_secs(2))]
     #[patch(humantime)]
+    #[config(value)]
     pub(crate) soft_timeout: Duration,
     /// Optional parent cancel. `Some` → the download loop's scope is a child
     /// of it (composed); `None` → the Downloader owns a standalone scope. The
     /// `CancelScope` seam lives in [`Downloader::new`](super::Downloader::new).
     #[patch(skip)]
+    #[config(skip = "parent cancellation scope input")]
     pub(crate) cancel: Option<CancelToken>,
     /// Tokio runtime handle for the download loop.
     ///
     /// - `Some(handle)` — the loop runs as a task on this runtime.
     /// - `None` — spawns as a task on the current runtime via `task::spawn`.
     #[patch(skip)]
+    #[config(skip = "task runtime resource")]
     pub(crate) runtime: Option<Handle>,
     /// Maximum number of concurrent in-flight fetch commands.
     #[builder(default = 5)]
+    #[config(value)]
     pub(crate) max_concurrent: usize,
     /// Capacity of the per-peer bounded command channel. A peer that fills
     /// it backpressures its own producer instead of the download loop, so
@@ -54,6 +62,7 @@ pub struct DownloaderConfig {
     /// the download loop, shallow enough that a stalled fetcher stops the
     /// producer rather than growing an unbounded backlog.
     #[builder(default = 32)]
+    #[config(value)]
     pub(crate) peer_cmd_channel_capacity: usize,
 }
 
@@ -68,6 +77,33 @@ mod tests {
     use kithara_test_utils::{bufpool::pools as test_pools, kithara};
 
     use super::{DownloaderConfig, DownloaderConfigPatch};
+    use crate::Downloader;
+
+    #[kithara::test(native, flash(false))]
+    fn a_snapshot_keeps_policy_and_excludes_resources() {
+        let config = DownloaderConfig::for_client(client())
+            .max_concurrent(7)
+            .cancel(CancelToken::never())
+            .abr_settings(
+                AbrSettings::builder()
+                    .max_bandwidth_bps(500_000)
+                    .cancel(CancelToken::never())
+                    .build(),
+            )
+            .build();
+
+        let values = kithara_config::Config::values(&config);
+        assert_eq!(values.max_concurrent, 7);
+        assert_eq!(values.abr_settings.max_bandwidth_bps, Some(500_000));
+        assert_eq!(values.soft_timeout, Duration::from_secs(2));
+
+        let downloader = Downloader::new(config);
+        let retained = kithara_config::Config::values(downloader.config());
+        assert_eq!(retained.max_concurrent, 7);
+        assert_eq!(retained.abr_settings.max_bandwidth_bps, Some(500_000));
+        assert!(downloader.config().cancel.is_none());
+        assert!(downloader.config().abr_settings.cancel.is_none());
+    }
 
     fn client() -> HttpClient {
         HttpClient::new(NetOptions::default(), test_pools(), CancelToken::never())

@@ -86,9 +86,6 @@ struct HeuristicState {
     /// (with leading frames trimmed) and never refilled.
     leading_buffer: TailBuffer,
     leading_enabled: bool,
-    /// Same `params.trim_trailing`, copied for fast access in the flush
-    /// path so we don't keep matching against the parent enum.
-    trim_trailing: bool,
     /// Pre-computed linear amplitude floor — recomputing on every
     /// frame would be wasteful and `params` is immutable for the
     /// lifetime of the trimmer.
@@ -99,11 +96,9 @@ struct HeuristicState {
 impl HeuristicState {
     fn new(params: SilenceTrimParams) -> Self {
         let silence_threshold_amp = params.threshold_amplitude();
-        let trim_trailing = params.trim_trailing;
         Self {
             params,
             silence_threshold_amp,
-            trim_trailing,
             leading_buffer: TailBuffer::new(),
             leading_buffered_frames: 0,
             leading_enabled: true,
@@ -416,7 +411,7 @@ fn flush_heuristic(ctx: &mut TrimCtx) -> GaplessOutput {
         ready.extend(drain_leading_buffer(ctx, trim_frames));
     }
 
-    if ctx.state.trim_trailing {
+    if ctx.state.params.trim_trailing {
         let silent_suffix =
             trailing_silent_frames(ctx.tail_buffer, ctx.state.silence_threshold_amp);
         if silent_suffix > 0

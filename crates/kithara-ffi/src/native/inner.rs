@@ -24,18 +24,8 @@ use kithara::{
 };
 
 use super::salt;
-fn player_timestretch() -> Arc<StretchControls> {
-    let controls = StretchControls::new(1.0);
-    #[cfg(all(
-        feature = "apple",
-        target_vendor = "apple",
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    controls.set_keylock(true);
-    controls
-}
-
 use crate::{
+    FfiEqBandConfig, FfiQueueSettings,
     asset::FfiAssetStore,
     config::FfiPlayerConfig,
     event_bridge::EventBridge,
@@ -48,6 +38,17 @@ use crate::{
         FfiPlaybackOrder, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode,
     },
 };
+
+fn player_timestretch() -> Arc<StretchControls> {
+    let controls = StretchControls::new(1.0);
+    #[cfg(all(
+        feature = "apple",
+        target_vendor = "apple",
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    controls.set_keylock(true);
+    controls
+}
 
 fn build_processor_closure(processor: Arc<dyn FfiKeyProcessor>, salt: String) -> KeyProcessor {
     Arc::new(move |key: Bytes| {
@@ -196,6 +197,14 @@ pub(crate) struct NativeInner {
 
 impl NativeInner {
     pub(crate) fn new(config: FfiPlayerConfig) -> Result<Self, FfiError> {
+        Self::new_with_queue_settings(config, FfiQueueSettings::default())
+    }
+
+    pub(crate) fn new_with_queue_settings(
+        config: FfiPlayerConfig,
+        queue_settings: FfiQueueSettings,
+    ) -> Result<Self, FfiError> {
+        crate::player::validate_eq_band_count(config.eq_band_count as usize)?;
         let FfiPlayerConfig {
             key_options,
             store,
@@ -217,13 +226,14 @@ impl NativeInner {
         let queue_store = store.handle().clone();
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
+            .default_rate(playing_rate)
             .warp(WarpConfig::builder().stretch(player_timestretch()).build())
             .cancel(player_cancel.child())
-            .sample_rate(super::session::requested_sample_rate())
+            .sample_rate(super::session::requested_sample_rate()?)
             .worker(worker)
             .build();
         let player = PlayerImpl::new(player_config);
-        let queue_config = QueueConfig::builder()
+        let mut queue_config = QueueConfig::builder()
             .player(player)
             .runtime(crate::FFI_RUNTIME.clone())
             .store(queue_store)
@@ -231,8 +241,8 @@ impl NativeInner {
             .action_at_item_end(action_at_item_end.try_into()?)
             .crossfade_settings(crossfade_settings.try_into()?)
             .build();
-        let queue_owner = super::session::insert(FfiQueue::new(queue_config))
-            .expect("INVARIANT: the process Host must accept a freshly allocated Queue");
+        queue_settings.apply_to(&mut queue_config)?;
+        let queue_owner = super::session::insert(FfiQueue::new(queue_config))?;
         let queue = queue_owner.control().clone();
         let net = default_net_options();
         let downloader = Downloader::new(
@@ -256,7 +266,6 @@ impl NativeInner {
             items: Arc::new(Mutex::default()),
         };
         inner.setup_network(auth_token);
-        inner.set_playing_rate(playing_rate);
         Ok(inner)
     }
 
@@ -510,6 +519,12 @@ impl NativeInner {
             .map_err(FfiError::from)
     }
 
+    pub(crate) fn set_eq_layout(&self, layout: Vec<FfiEqBandConfig>) -> Result<(), FfiError> {
+        self.queue
+            .set_eq_layout(layout.into_iter().map(Into::into).collect())
+            .map_err(FfiError::from)
+    }
+
     pub(crate) fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {
         let rx = self.queue.subscribe();
 
@@ -670,6 +685,16 @@ fn build_source_for_item(
         .store(inner.store.handle().clone())
         .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
+        .file(
+            item.source
+                .as_ref()
+                .map_or_else(Default::default, |source| source.file.clone()),
+        )
+        .hls(
+            item.source
+                .as_ref()
+                .map_or_else(Default::default, |source| source.hls.clone()),
+        )
         .build();
     *item.bus.lock() = Some(scoped);
 

@@ -9,20 +9,32 @@ use crate::{
     ResamplerMode, ResamplerOptions, ResamplerQuality, ResamplerSettings, create_resampler,
 };
 
+/// Inputs consumed when preparing a pooled mono resampling stream.
+#[kithara_config::config(construction, builder = false)]
 #[derive(Clone, Builder, derive_more::Debug)]
 #[debug(bound(B: ResamplerBackend))]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct MonoStreamConfig<B, S> {
+    /// Concrete standalone backend supplied by the caller.
+    #[config(skip = "injected backend implementation")]
     #[debug("{:?}", self.backend.name())]
     pub backend: B,
+    /// Source sample rate in hertz.
+    #[config(value)]
     pub source_sample_rate: NonZeroU32,
+    /// Output sample rate in hertz.
+    #[config(value)]
     pub target_sample_rate: NonZeroU32,
+    /// Caller-owned region for the stream's scratch buffers.
+    #[config(skip = "injected pool region")]
     #[debug("<injected>")]
     pub pools: PoolRegion<S>,
-    #[builder(default)]
+    /// Resampler tuning values.
+    #[config(value, builder(default))]
     pub options: ResamplerOptions,
-    #[builder(default)]
+    /// Backend quality preference.
+    #[config(value, builder(default))]
     pub quality: ResamplerQuality,
 }
 

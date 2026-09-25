@@ -1,6 +1,5 @@
 use std::{num::NonZeroUsize, ops::RangeInclusive};
 
-use bon::{Builder, bon};
 use kithara_bufpool::PoolRegion;
 use kithara_derive::Patch;
 use num_traits::ToPrimitive;
@@ -21,14 +20,17 @@ impl Consts {
 /// Signalsmith preparation geometry.
 ///
 /// [`SignalsmithConfigPatch`] is what a configuration document may say about it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
+#[kithara_config::config]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
 pub struct SignalsmithConfig {
     /// Custom analysis block size in source frames; absent selects the native preset.
+    #[config(value)]
     block_frames: Option<NonZeroUsize>,
     /// Custom analysis interval in source frames; absent selects the native preset.
+    #[config(value)]
     interval_frames: Option<NonZeroUsize>,
 }
 
@@ -49,14 +51,15 @@ impl SignalsmithConfig {
 /// Bungee native synthesis geometry.
 ///
 /// [`BungeeConfigPatch`] is what a configuration document may say about it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
+#[kithara_config::config(default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
-#[derive(kithara_derive::BuiltDefault)]
 pub struct BungeeConfig {
     /// Base-two synthesis-hop adjustment passed to the native stretcher.
     #[builder(default)]
+    #[config(value)]
     log2_synthesis_hop_adjust: i32,
 }
 
@@ -64,33 +67,40 @@ pub struct BungeeConfig {
 ///
 /// [`ElasticBackendConfigPatch`] is what a configuration document may say
 /// about it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
+#[kithara_config::config]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
 pub struct ElasticBackendConfig {
     #[builder(default)]
     #[patch(nested)]
+    #[config(nested)]
     bungee: BungeeConfig,
     #[builder(default)]
     #[patch(nested)]
+    #[config(nested)]
     signalsmith: SignalsmithConfig,
 }
 
 /// Numeric continuity policy for exact-span planning.
-#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[kithara_config::config(builder = false)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
 pub struct ElasticSpanConfig {
     /// Source-frame tolerance for adjacent spans; defaults to `1e-6`.
+    #[config(value)]
     continuity_tolerance: f64,
     /// Per-block source-frame correction limit; defaults to one frame.
+    #[config(value)]
     max_correction_per_block: f64,
     /// Accepted boundary phase error; defaults to one source frame.
+    #[config(value)]
     max_phase_error: f64,
 }
 
-#[bon]
+#[kithara_config::config]
 impl ElasticSpanConfig {
     #[builder(
         builder_type(vis = "pub"),
@@ -121,23 +131,30 @@ impl ElasticSpanConfig {
 }
 
 /// Engine preparation resources and fixed frame limits.
-#[derive(Clone, Debug, fieldwork::Fieldwork)]
+#[kithara_config::config(builder = false)]
+#[derive(Clone, Debug)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct ElasticConfig<S> {
+    /// Backend preparation settings retained by the engine configuration.
     #[field(get(copy), vis = "pub(crate)")]
+    #[config(nested)]
     backends: ElasticBackendConfig,
+    /// Effective geometry after validating and narrowing construction inputs.
     #[field(get(copy), vis = "pub(crate)")]
+    #[config(nested)]
     shape: ElasticShape,
     /// Shared pool region used by engines that need planar scratch.
     #[field(get)]
+    #[config(skip = "injected pool resource")]
     pools: PoolRegion<S>,
     /// Selected compiled implementation.
     #[field(get(copy))]
+    #[config(value)]
     backend: StretchKind,
 }
 
-#[bon]
+#[kithara_config::config]
 impl<S> ElasticConfig<S> {
     /// Builds a validated preparation config with its shared pool region.
     ///
@@ -215,14 +232,25 @@ impl<S> ElasticConfig<S> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[kithara_config::config(builder = false, values_vis = "pub")]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[fieldwork(get, copy, vis = "pub(crate)")]
 pub(crate) struct ElasticShape {
     #[field(get(copy))]
+    /// Effective source-frame advance per output frame.
+    #[config(value)]
     rate_envelope: ElasticRateEnvelope,
+    /// Prepared source sample rate in Hz.
+    #[config(value)]
     sample_rate: u32,
+    /// Prepared interleaved channel count.
+    #[config(value)]
     channels: usize,
+    /// Largest accepted output block in frames.
+    #[config(value)]
     max_output_frames: usize,
+    /// Largest accepted source block in frames.
+    #[config(value)]
     max_source_frames: usize,
 }
 
@@ -291,10 +319,80 @@ fn frame_count(
 
 #[cfg(test)]
 mod tests {
+    use kithara_config::Config as _;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::test_pools::pools;
+
+    #[kithara::test]
+    fn document_clear_preserves_backend_preparation_validation() {
+        for (document, valid) in [
+            (
+                "signalsmith:\n  block_frames: null\n  interval_frames: null",
+                true,
+            ),
+            ("signalsmith:\n  block_frames: null", false),
+        ] {
+            let signalsmith = SignalsmithConfig::builder()
+                .block_frames(NonZeroUsize::new(512).unwrap())
+                .interval_frames(NonZeroUsize::new(16).unwrap())
+                .build();
+            let mut backends = ElasticBackendConfig::builder()
+                .signalsmith(signalsmith)
+                .build();
+            backends.apply(serde_yaml_ng::from_str(document).unwrap());
+            assert_eq!(backends.signalsmith().block_frames(), None);
+            let result = ElasticConfig::builder()
+                .backends(backends)
+                .pools(pools())
+                .sample_rate(48_000)
+                .channels(2)
+                .max_source_frames(960)
+                .max_output_frames(480)
+                .build();
+            if valid {
+                let config = result.unwrap();
+                assert_eq!(config.values().backends.signalsmith.interval_frames, None);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ElasticError::EnginePreparation(
+                        "Signalsmith block and interval must be configured together"
+                    ))
+                ));
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn retained_values_report_effective_preparation_without_pool_ownership() {
+        let config = ElasticConfig::builder()
+            .pools(pools())
+            .sample_rate(48_000)
+            .channels(2)
+            .max_source_frames(2)
+            .max_output_frames(40)
+            .rate_envelope(0.01..=8.0)
+            .build()
+            .unwrap();
+        let values = config.values();
+        drop(config);
+        assert_eq!(values.shape.sample_rate, 48_000);
+        assert_eq!(values.shape.channels, 2);
+        assert_eq!(values.shape.max_source_frames, 2);
+        assert_eq!(values.shape.max_output_frames, 40);
+        assert_eq!(
+            values.shape.rate_envelope.min_source_frames_per_output(),
+            0.05
+        );
+        assert_eq!(
+            values.shape.rate_envelope.max_source_frames_per_output(),
+            2.0
+        );
+        assert_eq!(values.backends.bungee.log2_synthesis_hop_adjust, 0);
+        assert_eq!(values.backends.signalsmith.block_frames, None);
+    }
 
     #[kithara::test]
     fn span_config_requires_finite_positive_values() {

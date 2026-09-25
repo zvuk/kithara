@@ -1,12 +1,13 @@
 #![cfg(target_arch = "wasm32")]
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Once};
 
 use js_sys::{Float32Array, Float64Array, Reflect};
 use kithara::platform::time::{Duration, sleep};
-use kithara_ffi::player::AudioPlayer;
+use kithara_ffi::{default_host_config, player::AudioPlayer, web::initialize_host};
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+use web_sys::{BroadcastChannel, MessageEvent};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -17,6 +18,12 @@ const DEADLINE_MS: u64 = 30_000;
 const RESTART_SAMPLE: usize = 3;
 
 type Events = Rc<RefCell<Vec<JsValue>>>;
+type Replies = Rc<RefCell<Vec<JsValue>>>;
+
+struct ReplyObserver {
+    _channel: BroadcastChannel,
+    _callback: Closure<dyn FnMut(MessageEvent)>,
+}
 
 fn get(value: &JsValue, key: &str) -> JsValue {
     Reflect::get(value, &JsValue::from_str(key)).expect("analysis field")
@@ -32,13 +39,24 @@ fn boolean(value: &JsValue, key: &str) -> bool {
 
 /// What a pass that never reached its end managed to publish, so a deadline
 /// says whether the analysis stalled at the start or merely ran out of budget.
-fn progress_report(events: &Events) -> String {
+fn progress_report(events: &Events, replies: &Replies) -> String {
     let received = events.borrow();
+    let replies = replies.borrow();
+    let reply = replies.last().map_or_else(
+        || "no worker reply".to_string(),
+        |reply| {
+            format!(
+                "worker reply ok={}, error={:?}",
+                boolean(reply, "ok"),
+                get(reply, "error").as_string()
+            )
+        },
+    );
     let Some(last) = received.last() else {
-        return "no publication at all".to_string();
+        return format!("no publication at all; {reply}");
     };
     format!(
-        "{} publication(s), last revision {} over {} source frame(s), settled={}, beatFinal={}",
+        "{} publication(s), last revision {} over {} source frame(s), settled={}, beatFinal={}; {reply}",
         received.len(),
         number(last, "revision"),
         number(last, "sourceFrames"),
@@ -55,9 +73,12 @@ fn revisions(events: &Events) -> Vec<f64> {
         .collect()
 }
 
-fn observed_player() -> (AudioPlayer, Events) {
+fn observed_player() -> (AudioPlayer, Events, Replies, ReplyObserver) {
+    static HOST: Once = Once::new();
+    HOST.call_once(|| initialize_host(default_host_config()).expect("host initialization"));
+
     let events: Events = Rc::new(RefCell::new(Vec::new()));
-    let player = AudioPlayer::new_js();
+    let player = AudioPlayer::new_js().expect("player after host initialization");
 
     let sink = Rc::clone(&events);
     let observer = Closure::wrap(Box::new(move |event: JsValue| {
@@ -67,7 +88,19 @@ fn observed_player() -> (AudioPlayer, Events) {
         .set_analysis_observer_js(observer.as_ref().clone())
         .expect("analysis observer accepted");
     observer.forget();
-    (player, events)
+
+    let replies: Replies = Rc::new(RefCell::new(Vec::new()));
+    let channel = BroadcastChannel::new("kithara-reply").expect("worker reply channel");
+    let sink = Rc::clone(&replies);
+    let reply_observer = Closure::wrap(Box::new(move |event: MessageEvent| {
+        sink.borrow_mut().push(event.data());
+    }) as Box<dyn FnMut(MessageEvent)>);
+    channel.set_onmessage(Some(reply_observer.as_ref().unchecked_ref()));
+    let observer = ReplyObserver {
+        _channel: channel,
+        _callback: reply_observer,
+    };
+    (player, events, replies, observer)
 }
 
 fn clicks_url() -> String {
@@ -76,7 +109,7 @@ fn clicks_url() -> String {
 
 #[wasm_bindgen_test]
 async fn a_queued_track_publishes_analysis_until_the_pass_settles() {
-    let (player, events) = observed_player();
+    let (player, events, replies, _reply_observer) = observed_player();
     let track_id = player.append_js(clicks_url()).expect("append");
     player.analyze_js(track_id).expect("analyze accepted");
 
@@ -90,7 +123,7 @@ async fn a_queued_track_publishes_analysis_until_the_pass_settles() {
     let Some(waited) = settled else {
         panic!(
             "no publication carries a final grid; {}",
-            progress_report(&events)
+            progress_report(&events, &replies)
         );
     };
 
@@ -155,7 +188,7 @@ async fn a_queued_track_publishes_analysis_until_the_pass_settles() {
 
 #[wasm_bindgen_test]
 async fn analyzing_again_starts_a_new_revision_sequence_and_silences_the_old_pass() {
-    let (player, events) = observed_player();
+    let (player, events, replies, _reply_observer) = observed_player();
     let track_id = player.append_js(clicks_url()).expect("append");
     player.analyze_js(track_id).expect("analyze accepted");
 
@@ -166,7 +199,7 @@ async fn analyzing_again_starts_a_new_revision_sequence_and_silences_the_old_pas
     assert!(
         settled.is_some(),
         "the first pass never settled after {DEADLINE_MS} ms; {}",
-        progress_report(&events)
+        progress_report(&events, &replies)
     );
 
     let before = events.borrow().len();

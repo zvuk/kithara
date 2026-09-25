@@ -50,6 +50,7 @@ webcodecs = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default"] }
 kithara-mp4 = { workspace = true }
 kithara-mpa = { workspace = true, optional = true }

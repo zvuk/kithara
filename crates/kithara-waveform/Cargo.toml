@@ -17,6 +17,7 @@ dsp = ["dep:realfft"]
 [dependencies]
 kithara-blob = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default"] }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }

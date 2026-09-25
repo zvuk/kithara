@@ -3,6 +3,7 @@ package com.kithara
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.kithara.ffi.FfiHostConfig
 import com.kithara.okhttp.OkHttpTransport
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
@@ -26,11 +27,22 @@ class KitharaInitTest {
     }
 
     @Test
-    fun initializePublishesOneDefaultStore() {
+    fun repeatedInitializationKeepsStoreAndRejectsNewHostConfig() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         Kithara.initialize(context, TestTransport.okHttp)
         val store = Kithara.defaultStore
 
+        assertThrows(KitharaError.AlreadyInitialized::class.java) {
+            Kithara.initialize(
+                context,
+                TestTransport.okHttp,
+                hostConfig = FfiHostConfig(
+                    sampleRateHint = 0u,
+                    outputBlockFrames = null,
+                    limiter = com.kithara.ffi.defaultHostConfig().limiter,
+                ),
+            )
+        }
         Kithara.initialize(context, TestTransport.okHttp)
 
         assertSame(store, Kithara.defaultStore)

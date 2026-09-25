@@ -208,7 +208,11 @@ impl ElasticEngine for SignalsmithElastic {
             *config.backends().signalsmith(),
         )?;
         inner.set_transpose_factor(1.0, None);
-        let capabilities = ElasticCapabilities::new(config.shape(), latency);
+        let capabilities = ElasticCapabilities::new(
+            config.shape(),
+            latency,
+            crate::BackendCapabilities::RATE.union(crate::BackendCapabilities::KEYLOCK),
+        );
         let prime_window_samples = capabilities.samples(latency.source_frames())?;
         let prime_samples = prime_window_samples
             .checked_add(prime_window_samples)

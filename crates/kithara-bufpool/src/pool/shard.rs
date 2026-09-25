@@ -1,11 +1,10 @@
 use crossbeam_queue::ArrayQueue;
 
 use super::storage::Storage;
+use crate::PoolConfig;
 
 pub(super) struct PoolShard<B> {
     free: ArrayQueue<B>,
-    max_retained_capacity: usize,
-    trim_capacity: usize,
 }
 
 impl<B> PoolShard<B>
@@ -14,14 +13,8 @@ where
 {
     pub(super) const MAX_SLOTS: usize = 1024;
 
-    pub(super) fn new(
-        max_buffers: usize,
-        max_retained_capacity: usize,
-        trim_capacity: usize,
-    ) -> Self {
+    pub(super) fn new(max_buffers: usize) -> Self {
         Self {
-            max_retained_capacity,
-            trim_capacity,
             free: ArrayQueue::new(max_buffers.min(Self::MAX_SLOTS)),
         }
     }
@@ -32,17 +25,17 @@ where
         }
     }
 
-    pub(super) fn normalize(&self, value: &mut B) -> Option<usize> {
+    pub(super) fn normalize(value: &mut B, config: &PoolConfig) -> Option<usize> {
         const TRIM_HYSTERESIS: usize = 2;
 
         value.clear();
-        if self.max_retained_capacity > 0 && value.capacity() > self.max_retained_capacity {
+        if config.max_retained_capacity > 0 && value.capacity() > config.max_retained_capacity {
             return None;
         }
-        if self.trim_capacity > 0
-            && value.capacity() > self.trim_capacity.saturating_mul(TRIM_HYSTERESIS)
+        if config.trim_capacity > 0
+            && value.capacity() > config.trim_capacity.saturating_mul(TRIM_HYSTERESIS)
         {
-            value.shrink_to(self.trim_capacity);
+            value.shrink_to(config.trim_capacity);
         }
         if value.capacity() == 0 {
             return None;
@@ -50,8 +43,8 @@ where
         Some(B::bytes_for_capacity(value.capacity()).unwrap_or(usize::MAX))
     }
 
-    pub(super) fn try_put(&self, mut value: B) -> Result<usize, B> {
-        let Some(kept) = self.normalize(&mut value) else {
+    pub(super) fn try_put(&self, mut value: B, config: &PoolConfig) -> Result<usize, B> {
+        let Some(kept) = Self::normalize(&mut value, config) else {
             return Err(value);
         };
         self.free.push(value).map(|()| kept)

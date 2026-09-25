@@ -433,8 +433,15 @@ mod probed {
 
         receive_chunks(&trace, &handle, &mut pop, 2).await;
         let seen = trace.events().len();
+        pass_after(&trace, &handle, seen, |pass| {
+            pass_field(pass, "backpressured") >= 1
+        })
+        .await;
+        let seen = trace.events().len();
         let epoch = seek.begin(Duration::from_secs(10));
         handle.wake_handle().wake();
+        // The consumer must observe the seek and retire the full pre-seek ring.
+        let _ = pop();
         trace
             .wait_for(|events| {
                 events[seen..]

@@ -26,42 +26,42 @@ impl Consts {
 /// it, and [`BeatAnalysisConfigPatchError`] what the merge refuses with. The
 /// refusal is declared here rather than read off the fields, so the merge
 /// keeps one signature whichever detector the build selects.
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Builder, fieldwork::Fieldwork, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[patch(fallible)]
 #[non_exhaustive]
 #[fieldwork(get)]
 pub struct BeatAnalysisConfig<B> {
-    #[patch(skip)]
+    #[config(skip = "injected resampler backend", patch(skip))]
     resampler_backend: B,
-    #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
-    #[field(get(copy))]
+    #[config(
+        value,
+        builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY),
+        field(get(copy))
+    )]
     pub resampler_quality: ResamplerQuality,
-    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS)]
+    #[config(value, builder(default = Consts::DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS))]
     pub detector_min_window_seconds: u32,
-    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
+    #[config(value, builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS))]
     pub detector_overlap_seconds: u32,
-    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
+    #[config(value, builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS))]
     pub detector_window_seconds: u32,
-    #[builder(default = Consts::DEFAULT_BEAT_TARGET_RATE)]
+    #[config(value, builder(default = Consts::DEFAULT_BEAT_TARGET_RATE))]
     pub target_rate: u32,
-    #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
+    #[config(value, builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES))]
     pub block_frames: usize,
     /// Reaches the detector's peak-picking policy. Nested rather than
     /// flattened so a document can patch `beat:` on its own.
     #[cfg(feature = "beat-nn")]
-    #[builder(default)]
-    #[field(get(copy))]
-    #[patch(nested)]
+    #[config(nested, builder(default), field(get(copy)), patch(nested))]
     pub beat: BeatConfig,
     /// The tempo the signal detector searches. A document patches it key by
     /// key under `tempo:`, and [`Tempo`] judges the merged policy as a whole
     /// before it is committed, so a band the comb never scores is refused by
     /// name instead of searched.
     #[cfg(feature = "beat-dsp")]
-    #[builder(default)]
-    #[field(get(copy))]
-    #[patch(nested, fallible)]
+    #[config(value, builder(default), field(get(copy)), patch(nested, fallible))]
     tempo: Tempo,
 }
 
@@ -152,6 +152,21 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::BeatAnalysisConfig;
+
+    #[kithara::test(native, flash(false))]
+    fn retained_analysis_values_exclude_the_backend_and_follow_policy() {
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(48_000)
+            .block_frames(2_048)
+            .build();
+        let values = kithara_config::Config::values(&config);
+
+        assert_eq!(values.target_rate, 48_000);
+        assert_eq!(values.block_frames, 2_048);
+        #[cfg(feature = "beat-nn")]
+        assert_eq!(values.beat.peak_threshold, config.beat.peak_threshold);
+    }
 
     #[kithara::test(native, flash(false))]
     fn default_beat_config_reports_configured_backend() {

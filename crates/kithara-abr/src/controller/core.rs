@@ -54,6 +54,7 @@ impl AbrPeerId {
 }
 
 /// ABR controller settings.
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Debug, Builder, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
@@ -62,55 +63,69 @@ pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
     #[builder(default = Defaults::BANDWIDTH_EMIT_MIN_INTERVAL)]
     #[patch(humantime)]
+    #[config(value)]
     pub bandwidth_emit_min_interval: Duration,
     /// Minimum absolute delta between `BufferAhead` emits.
     #[builder(default = Defaults::BUFFER_EMIT_MIN_DELTA)]
     #[patch(humantime)]
+    #[config(value)]
     pub buffer_emit_min_delta: Duration,
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
     #[builder(default = Defaults::BUFFER_EMIT_MIN_INTERVAL)]
     #[patch(humantime)]
+    #[config(value)]
     pub buffer_emit_min_interval: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
     #[builder(default = Defaults::MIN_BUFFER_FOR_UP_SWITCH)]
     #[patch(humantime)]
+    #[config(value)]
     pub min_buffer_for_up_switch: Duration,
     /// Minimum interval between variant switches.
     #[builder(default = Defaults::MIN_SWITCH_INTERVAL)]
     #[patch(humantime)]
+    #[config(value)]
     pub min_switch_interval: Duration,
     /// Minimum interval between `AbrEvent::ThroughputSample` emits. Every
     /// sample still reaches the estimator; this bounds only how often the
     /// raw per-fetch rate is published to the bus.
     #[builder(default = Defaults::THROUGHPUT_SAMPLE_MIN_INTERVAL)]
     #[patch(humantime)]
+    #[config(value)]
     pub throughput_sample_min_interval: Duration,
     /// Buffer-ahead at or below this threshold forces an urgent down-switch.
     #[builder(default = Defaults::URGENT_DOWNSWITCH_BUFFER)]
     #[patch(humantime)]
+    #[config(value)]
     pub urgent_downswitch_buffer: Duration,
     /// Optional parent cancellation token for the controller scope.
     ///
     /// `Some` derives a child scope from the supplied parent; `None` gives the
     /// controller a standalone scope.
     #[patch(skip)]
+    #[config(skip = "injected cancellation resource")]
     pub cancel: Option<CancelToken>,
     /// Seed throughput estimate (bps) applied at controller construction.
     #[builder(required, default = Some(Defaults::INITIAL_THROUGHPUT_BPS))]
+    #[config(value)]
     pub initial_throughput_bps: Option<u64>,
-    /// Global data-saver cap.
+    /// Initial per-peer data-saver cap; each handle can change it at runtime.
+    #[config(value)]
     pub max_bandwidth_bps: Option<u64>,
     /// Minimum relative delta (0.0–1.0) between `BandwidthEstimate` emits.
     #[builder(default = Defaults::BANDWIDTH_EMIT_MIN_DELTA_RATIO)]
+    #[config(value)]
     pub bandwidth_emit_min_delta_ratio: f64,
     /// Hysteresis ratio for down-switch.
     #[builder(default = Defaults::DOWN_HYSTERESIS_RATIO)]
+    #[config(value)]
     pub down_hysteresis_ratio: f64,
     /// Safety factor applied to the throughput estimate before comparing.
     #[builder(default = Defaults::THROUGHPUT_SAFETY_FACTOR)]
+    #[config(value)]
     pub throughput_safety_factor: f64,
     /// Hysteresis ratio for up-switch.
     #[builder(default = Defaults::UP_HYSTERESIS_RATIO)]
+    #[config(value)]
     pub up_hysteresis_ratio: f64,
 }
 
@@ -209,6 +224,9 @@ impl AbrController {
     pub fn register(self: &Arc<Self>, peer: &Arc<dyn Abr>) -> AbrHandle {
         let id = self.allocate_peer_id();
         let state = peer.state();
+        if let Some(state) = state.as_ref() {
+            state.set_max_bandwidth_bps(self.settings.max_bandwidth_bps);
+        }
         let peer_weak = Arc::downgrade(peer);
         let registration_cancel = self.scope.token().child();
         let cancel = CancelGroup::new(vec![registration_cancel.clone(), peer.cancel()]);

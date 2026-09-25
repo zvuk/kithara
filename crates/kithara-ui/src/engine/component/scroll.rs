@@ -176,3 +176,26 @@ impl Component for ScrollComponent {
         &self.path
     }
 }
+
+#[cfg(test)]
+mod config_tests {
+    use kithara_config::Config as _;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn reconciliation_keeps_scroll_config_as_the_layout_source() {
+        let mut state = ScrollState::new(ScrollConfig::plain(ScrollAxis::Vertical, 300.0));
+        state.set_viewport(100.0);
+        state.sync_offset(150.0);
+
+        state.reconcile(ScrollConfig::plain(ScrollAxis::Vertical, 120.0));
+
+        let values = state.config.values();
+        assert_eq!(values.axis, ScrollAxis::Vertical);
+        assert_eq!(values.content_extent, 120.0);
+        assert!(values.items.is_none());
+        assert_eq!(state.offset(), 20.0);
+    }
+}

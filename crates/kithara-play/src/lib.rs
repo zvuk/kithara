@@ -42,7 +42,10 @@ pub use error::PlayError;
 use humantime_serde as _;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
-pub use kithara_effects::eq::EqBandConfig;
+pub use kithara_effects::{
+    GainDb,
+    eq::{EqBandConfig, FilterKind},
+};
 pub use kithara_net::Headers;
 pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, StretchControls};
 pub use player::{

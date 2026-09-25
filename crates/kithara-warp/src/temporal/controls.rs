@@ -1,24 +1,27 @@
 use std::sync::atomic::Ordering;
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
 ))]
 use std::sync::atomic::{AtomicBool, AtomicU8};
 
 use arc_swap::ArcSwapOption;
 use kithara_platform::sync::Arc;
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
 ))]
-use kithara_stretch::StretchKind;
+use kithara_stretch::{BackendCapabilities, StretchKind};
 use portable_atomic::AtomicU64;
 
 use super::{RateTarget, RegionPlan};
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
 ))]
 #[derive(Debug)]
 struct EngineControls {
@@ -35,9 +38,10 @@ struct EngineControls {
 pub struct StretchControls {
     target: AtomicU64,
     region_plan: ArcSwapOption<RegionPlan>,
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
     ))]
     engine: EngineControls,
 }
@@ -54,9 +58,10 @@ impl StretchControls {
         Arc::new(Self {
             target: AtomicU64::new(RateTarget::pack(speed.max(Self::MIN_SPEED), 0)),
             region_plan: ArcSwapOption::const_empty(),
-            #[cfg(all(
-                not(target_arch = "wasm32"),
-                any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+            #[cfg(any(
+                feature = "stretch-signalsmith",
+                feature = "stretch-bungee",
+                feature = "stretch-glide"
             ))]
             engine: EngineControls {
                 keylock: AtomicBool::new(false),
@@ -65,44 +70,8 @@ impl StretchControls {
         })
     }
 
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    #[must_use]
-    pub fn backend(&self) -> StretchKind {
-        StretchKind::from(self.engine.backend.load(Ordering::Relaxed))
-    }
-
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    #[must_use]
-    pub fn keylock(&self) -> bool {
-        self.engine.keylock.load(Ordering::Relaxed)
-    }
-
     pub(crate) fn rate_target(&self) -> RateTarget {
         RateTarget::unpack(self.target.load(Ordering::Acquire))
-    }
-
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    pub fn set_backend(&self, backend: StretchKind) {
-        self.engine
-            .backend
-            .store(u8::from(backend), Ordering::Relaxed);
-    }
-
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    pub fn set_keylock(&self, on: bool) {
-        self.engine.keylock.store(on, Ordering::Relaxed);
     }
 
     pub fn set_speed(&self, speed: f32) -> u64 {
@@ -138,6 +107,52 @@ impl StretchControls {
     }
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+mod backend {
+    use super::*;
+
+    impl StretchControls {
+        #[must_use]
+        pub fn backend(&self) -> StretchKind {
+            StretchKind::from(self.engine.backend.load(Ordering::Relaxed))
+        }
+
+        #[must_use]
+        pub fn keylock(&self) -> bool {
+            self.engine.keylock.load(Ordering::Relaxed)
+                && self.capabilities().contains(BackendCapabilities::KEYLOCK)
+        }
+
+        #[must_use]
+        pub fn capabilities(&self) -> BackendCapabilities {
+            self.backend().capabilities()
+        }
+
+        pub fn set_backend(&self, backend: StretchKind) {
+            self.engine
+                .backend
+                .store(u8::from(backend), Ordering::Relaxed);
+            if !backend
+                .capabilities()
+                .contains(BackendCapabilities::KEYLOCK)
+            {
+                self.engine.keylock.store(false, Ordering::Relaxed);
+            }
+        }
+
+        pub fn set_keylock(&self, on: bool) {
+            self.engine.keylock.store(
+                on && self.capabilities().contains(BackendCapabilities::KEYLOCK),
+                Ordering::Relaxed,
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -145,6 +160,29 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    #[kithara::test]
+    #[cfg(feature = "stretch-glide")]
+    fn glide_drops_keylock_intent() {
+        let controls = StretchControls::new(1.0);
+        let native = StretchKind::all()
+            .iter()
+            .copied()
+            .find(|kind| kind.capabilities().contains(BackendCapabilities::KEYLOCK));
+        if let Some(native) = native {
+            controls.set_backend(native);
+            controls.set_keylock(true);
+            assert!(controls.keylock());
+        }
+        controls.set_backend(StretchKind::Glide);
+        assert!(!controls.keylock());
+        controls.set_keylock(true);
+        assert!(!controls.keylock());
+        if let Some(native) = native {
+            controls.set_backend(native);
+            assert!(!controls.keylock());
+        }
+    }
 
     #[kithara::test]
     #[case(0.0)]

@@ -18,6 +18,17 @@ impl AudioPlayer {
     pub fn return_to_previous_item(&self) -> Result<(), FfiError> {
         self.inner.return_to_previous_item()
     }
+}
+
+#[cfg_attr(any(feature = "uniffi", feature = "uniffi-web"), uniffi::export)]
+impl AudioPlayer {
+    /// Set the queue traversal order.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown external enum value.
+    pub fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
+        self.inner.set_playback_order(order)
+    }
 
     /// Set the automatic terminal action.
     ///
@@ -33,13 +44,5 @@ impl AudioPlayer {
     /// Returns an error when the profile contains an invalid value.
     pub fn set_crossfade_settings(&self, settings: FfiCrossfadeSettings) -> Result<(), FfiError> {
         self.inner.set_crossfade_settings(settings)
-    }
-
-    /// Set the queue traversal order.
-    ///
-    /// # Errors
-    /// Returns an error for an unknown external enum value.
-    pub fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
-        self.inner.set_playback_order(order)
     }
 }

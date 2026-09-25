@@ -30,6 +30,7 @@ apple = ["kithara-play/apple"]
 apple-fused-src = ["kithara-play/apple-fused-src"]
 stretch-signalsmith = ["kithara-play/stretch-signalsmith"]
 stretch-bungee = ["kithara-play/stretch-bungee"]
+stretch-glide = ["kithara-play/stretch-glide"]
 usdt = ["kithara-play/usdt", "kithara-sync/usdt", "kithara-test-utils/usdt"]
 
 [dependencies]
@@ -37,6 +38,7 @@ kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true, default-features = false }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-events = { workspace = true }

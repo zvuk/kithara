@@ -47,6 +47,7 @@ vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:parley", "dep:trac
 
 [dependencies]
 kithara-bufpool = { workspace = true, optional = true }
+kithara-config.workspace = true
 kithara-derive = { workspace = true, features = ["built-default", "control", "control-painter", "enum-str", "mirror", "node-control", "patch", "ranged", "retained", "skin-walk", "variants", "view-control"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }

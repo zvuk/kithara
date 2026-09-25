@@ -9,6 +9,9 @@ mod postprocess;
 mod runtime;
 
 pub use api::{BeatError, BeatThis};
-pub use config::{BeatConfig, BeatConfigPatch};
+pub use config::{
+    BeatConfig, BeatConfigDedupWidthUpdate, BeatConfigPatch, BeatConfigPeakHalfWidthUpdate,
+    BeatConfigPeakThresholdUpdate, BeatConfigUpdate, BeatConfigValues,
+};
 #[cfg(feature = "embed-model")]
 pub use models::{BEAT_MODEL_BYTES, BEAT_MODEL_TAG, MEL_MODEL_BYTES};

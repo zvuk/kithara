@@ -30,7 +30,7 @@ use kithara_test_fixtures::hls::long_plain;
 
 fn hls_look_ahead(bytes: u64) -> HlsConfigPatch {
     let mut patch = HlsConfigPatch::default();
-    patch.look_ahead_bytes = Some(bytes);
+    patch.look_ahead_bytes = Some(Some(bytes));
     patch
 }
 

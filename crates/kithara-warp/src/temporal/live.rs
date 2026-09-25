@@ -10,26 +10,28 @@ use portable_atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 
 use crate::{PresentationFrontier, RenderContext, SessionAnchor, SessionBeat, WarpMapRevision};
 
+const SEQLOCK_PHASES: u64 = 2;
+
 #[derive(Debug, Default)]
 struct RenderCell {
     anchor_frame: AtomicI64,
+    anchor_beat: AtomicU64,
+    anchor_tempo: AtomicU64,
+    anchor_target: AtomicU64,
+    anchor_smoothing: AtomicU64,
+    trajectory_present: AtomicU32,
     frontier_output: AtomicI64,
     output_end: AtomicI64,
     output_start: AtomicI64,
     beats_present: AtomicU32,
     sample_rate: AtomicU32,
-    trajectory_present: AtomicU32,
-    anchor_beat: AtomicU64,
-    anchor_smoothing: AtomicU64,
-    anchor_target: AtomicU64,
-    anchor_tempo: AtomicU64,
     beat_end: AtomicU64,
     beat_start: AtomicU64,
     frontier_source: AtomicU64,
+    warp_map: AtomicU64,
     session_epoch: AtomicU64,
     transport_revision: AtomicU64,
     version: AtomicU64,
-    warp_map: AtomicU64,
 }
 
 impl RenderCell {
@@ -38,8 +40,6 @@ impl RenderCell {
     }
 
     fn load(&self) -> Option<RenderSnapshot> {
-        const SEQLOCK_PHASES: u64 = 2;
-
         loop {
             let before = self.version.load(Ordering::Acquire);
             if before == 0 {
@@ -137,23 +137,23 @@ impl RenderCell {
 }
 
 struct RawSnapshot {
-    beats_present: bool,
-    trajectory_present: bool,
     anchor_frame: i64,
+    anchor_beat: u64,
+    anchor_tempo: u64,
+    anchor_target: u64,
+    anchor_smoothing: u64,
+    trajectory_present: bool,
+    beats_present: bool,
     frontier_output: i64,
     output_end: i64,
     output_start: i64,
     sample_rate: u32,
-    anchor_beat: u64,
-    anchor_smoothing: u64,
-    anchor_target: u64,
-    anchor_tempo: u64,
     beat_end: u64,
     beat_start: u64,
     frontier_source: u64,
+    warp_map: u64,
     session_epoch: u64,
     transport_revision: u64,
-    warp_map: u64,
 }
 
 impl RawSnapshot {
@@ -272,6 +272,32 @@ pub struct RenderSnapshot {
 }
 
 impl RenderSnapshot {
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    pub(crate) fn bind_output_identity(mut self, revision: Option<WarpMapRevision>) -> Self {
+        self.frontier = self.frontier.with_warp_map(revision);
+        self
+    }
+
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    pub(crate) fn mapped(self, cursor: crate::WarpCursor) -> Self {
+        Self {
+            context: self.context,
+            frontier: PresentationFrontier::builder()
+                .source(cursor.source())
+                .output(cursor.output())
+                .warp_map(cursor.revision())
+                .build(),
+        }
+    }
+
     #[cfg(feature = "render")]
     pub(crate) fn advance(
         self,
@@ -307,30 +333,6 @@ impl RenderSnapshot {
             frontier,
             context: self.context,
         })
-    }
-
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    pub(crate) fn bind_output_identity(mut self, revision: Option<WarpMapRevision>) -> Self {
-        self.frontier = self.frontier.with_warp_map(revision);
-        self
-    }
-
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    pub(crate) fn mapped(self, cursor: crate::WarpCursor) -> Self {
-        Self {
-            context: self.context,
-            frontier: PresentationFrontier::builder()
-                .source(cursor.source())
-                .output(cursor.output())
-                .warp_map(cursor.revision())
-                .build(),
-        }
     }
 }
 

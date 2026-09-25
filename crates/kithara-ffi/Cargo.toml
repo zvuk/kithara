@@ -16,11 +16,8 @@ name = "uniffi-bindgen"
 path = "src/uniffi_bindgen.rs"
 required-features = ["uniffi-bindgen-cli"]
 
-# Native-only deps for the UniFFI surface (`src/{cipher,config,item,…}.rs`).
-# Moved to `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` so
-# wasm32 builds don't pull `uniffi` (Future + Send incompatible with wasm)
-# or `rand`/`uuid` which need explicit getrandom wasm_js wiring.
-# `src/web/*` doesn't use any of these directly.
+# Native-only helpers remain target-gated. The opt-in `uniffi-web` profile
+# enables UniFFI's single-threaded Wasm runtime for shared config exports.
 
 [features]
 # `symphonia` is in the default set so a bare `cargo check -p kithara-ffi`
@@ -32,6 +29,7 @@ required-features = ["uniffi-bindgen-cli"]
 # hardware backend is the sole decoder there.
 default = ["uniffi", "symphonia", "standard", "client-reqwest", "tls-rustls"]
 uniffi = ["dep:uniffi"]
+uniffi-web = ["dep:uniffi"]
 uniffi-bindgen-cli = ["uniffi", "uniffi/cli", "uniffi/cargo-metadata"]
 standard = ["stretch-signalsmith"]
 apple = ["kithara/apple-fused-src", "kithara/apple-net", "stretch-signalsmith"]
@@ -56,13 +54,14 @@ ui-masonry = ["kithara/ui-masonry"]
 symphonia = ["kithara/symphonia"]
 stretch-signalsmith = ["kithara/stretch-signalsmith"]
 stretch-bungee = ["kithara/stretch-bungee"]
+stretch-glide = ["kithara/stretch-glide"]
 # Marker feature for wasm32 build matrix (parallel to apple/android).
 # Actual wasm-only deps live under [target.'cfg(target_arch = "wasm32")'].
 # Forwards the reqwest stack so the wasm build (which runs with
 # `--no-default-features --features wasm`) still selects a single HTTP backend
 # (reqwest; wreq has no wasm target). The refs chain through the crate-local
 # client-reqwest/tls-rustls forwarding below.
-wasm = ["client-reqwest", "tls-rustls"]
+wasm = ["client-reqwest", "tls-rustls", "stretch-glide"]
 usdt = ["kithara/usdt"]
 mock = ["dep:unimock", "kithara/mock"]
 # HTTP backend forwarding to every kithara-net-reaching dep. `kithara`
@@ -97,6 +96,7 @@ kithara = { workspace = true, default-features = false, features = [
     "stream",
 ] }
 kithara-audio = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["mirror"] }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
@@ -115,6 +115,7 @@ num-traits = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+uniffi = { workspace = true, optional = true, default-features = false, features = ["wasm-unstable-single-threaded"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # `default-features = false` on kithara/kithara-queue: their defaults pull
@@ -130,7 +131,6 @@ bytes = { workspace = true }
 cpal = { workspace = true, optional = true }
 dashmap = { workspace = true }
 rand = { workspace = true }
-uniffi = { workspace = true, optional = true, default-features = false }
 unimock = { workspace = true, optional = true }
 url = { workspace = true }
 uuid = { workspace = true }

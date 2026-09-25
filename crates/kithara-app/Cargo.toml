@@ -80,6 +80,7 @@ kithara = { workspace = true, default-features = false, features = [
     "worker",
 ] }
 kithara-assets = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-events = { workspace = true }
 kithara-record = { workspace = true }

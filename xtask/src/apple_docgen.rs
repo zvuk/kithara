@@ -10,7 +10,7 @@ use cargo_metadata::MetadataCommand;
 use regex::Regex;
 use rustdoc_types::{Crate, ItemEnum};
 
-use crate::config::DocgenConfig;
+use crate::{ci::CiPins, config::DocgenConfig};
 
 pub(crate) fn run(check: bool, docgen: &DocgenConfig) -> Result<()> {
     let root = workspace_root()?;
@@ -93,7 +93,9 @@ fn workspace_root() -> Result<PathBuf> {
 }
 
 fn build_rustdoc_json(root: &FsPath, docgen: &DocgenConfig) -> Result<()> {
+    let pins = CiPins::load(&root.join(".config/ci-pins.toml"))?;
     let mut args = vec![
+        format!("+{}", pins.nightly_toolchain),
         "rustdoc".to_string(),
         "-p".to_string(),
         docgen.package.clone(),
@@ -111,7 +113,6 @@ fn build_rustdoc_json(root: &FsPath, docgen: &DocgenConfig) -> Result<()> {
 
     let status = Command::new("cargo")
         .args(&args)
-        .env("RUSTC_BOOTSTRAP", "1")
         .current_dir(root)
         .status()
         .with_context(|| format!("failed to run cargo rustdoc for {}", docgen.package))?;

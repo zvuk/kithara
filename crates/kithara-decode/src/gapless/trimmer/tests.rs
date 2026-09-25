@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::SampleBuffer;
+use kithara_config::Config as _;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_fixtures::unit_fixtures::{
@@ -18,7 +19,7 @@ use kithara_test_fixtures::unit_fixtures::{
 };
 use kithara_test_utils::kithara;
 
-use super::{Consts, GaplessTrimmer};
+use super::{Consts, GaplessMode, GaplessTrimmer};
 use crate::{
     DropChunks, GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams,
     test_pools::pools,
@@ -88,6 +89,27 @@ fn silence_params(threshold_db: f32, min_trim_frames: u64) -> SilenceTrimParams 
         scan_window_frames: 4096,
         trim_trailing: false,
     }
+}
+
+#[kithara::test]
+fn silence_trim_retains_its_policy_and_prepared_threshold() {
+    let params = SilenceTrimParams::builder()
+        .trim_trailing(true)
+        .threshold_db(60.0)
+        .min_trim_frames(32)
+        .scan_window_frames(512)
+        .build();
+    let trimmer = GaplessTrimmer::silence_trim(params);
+    let GaplessMode::Heuristic(state) = &trimmer.mode else {
+        panic!("silence trim must retain the heuristic policy");
+    };
+    let values = state.params.values();
+    assert!(values.trim_trailing);
+    assert_eq!(values.threshold_db, 60.0);
+    assert_eq!(values.min_trim_frames, 32);
+    assert_eq!(values.scan_window_frames, 512);
+    assert_eq!(state.silence_threshold_amp, params.threshold_amplitude());
+    assert_eq!(trimmer.trailing_frames, values.scan_window_frames);
 }
 
 fn collect_pcm(out: &[AudioChunk]) -> Vec<f32> {

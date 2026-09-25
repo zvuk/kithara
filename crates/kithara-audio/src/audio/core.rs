@@ -306,6 +306,12 @@ impl<S> AudioRead for Audio<S> {
         self.cursor.begin_chunk(&chunk);
         self.ring.promote_playing();
         self.session.playhead.advance(&chunk_position(&chunk.meta));
+        self.events.post_seek_output(
+            self.session.seek_obs.as_ref(),
+            self.ring.validator.epoch,
+            Some(chunk.meta),
+        );
+        self.wake_for_events();
         Ok(ChunkOutcome::Chunk(chunk))
     }
 

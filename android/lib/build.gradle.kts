@@ -144,12 +144,8 @@ dokka {
     moduleName.set("kithara-android")
 
     dokkaSourceSets.configureEach {
-        // The UniFFI bindings are generated from the Rust FFI surface and are
-        // not part of the documented facade.
-        perPackageOption {
-            matchingRegex.set("com\\.kithara\\.ffi.*")
-            suppress.set(true)
-        }
+        sourceRoots.from(generatedKotlinDir)
+        suppressGeneratedFiles.set(false)
     }
 
     dokkaPublications.html {

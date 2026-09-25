@@ -22,6 +22,7 @@ pub enum FileSrc {
 /// Configuration for file streaming.
 ///
 /// Used with `Stream::<File<S>>::new(config)`.
+#[kithara_config::config(construction, builder = false)]
 #[derive(Builder, Patch)]
 #[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
@@ -34,9 +35,11 @@ where
     /// File source (remote URL or local path).
     #[builder(start_fn)]
     #[patch(skip)]
+    #[config(value)]
     pub src: FileSrc,
     /// Shared asset store used by local and remote sources.
     #[patch(skip)]
+    #[config(skip = "injected asset store")]
     pub store: AssetStore<S>,
     /// Poll interval while a sibling `AssetStore` instance holds the
     /// atomic-chunked tmp for this file's canonical path. The default is short
@@ -45,39 +48,52 @@ where
     /// enough not to busy-spin a tokio worker.
     #[builder(default = Duration::from_millis(10))]
     #[patch(humantime)]
+    #[config(value)]
     pub tmp_claim_poll_interval: Duration,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     #[patch(skip)]
+    #[config(skip = "injected event bus")]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
     #[patch(skip)]
+    #[config(skip = "injected cancellation token")]
     pub cancel: Option<CancelToken>,
     /// Optional cache discriminator.
     #[patch(skip)]
+    #[config(value)]
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
     #[patch(skip)]
     #[debug(skip)]
+    #[config(skip = "injected downloader")]
     pub downloader: Option<Downloader>,
     /// Explicit source-extension hint used before the URL-path extension.
+    #[config(value)]
     pub extension: Option<String>,
     /// Additional HTTP headers to include in all requests.
     #[patch(skip)]
+    #[config(value)]
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
+    /// `None` permits fetching the whole file. `Some(0)` fetches only through
+    /// the current read request.
+    #[config(value, sdk(max = 8388608))]
     pub look_ahead_bytes: Option<u64>,
     /// Buffer-pool facade shared with storage and fallback transport.
     #[patch(skip)]
+    #[config(skip = "injected buffer pools")]
     pub pools: PoolRegion<S>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
+    #[config(value)]
     pub event_channel_capacity: usize,
     /// Ring depth for the decode-core to shell reader-event hand-off. A decode
     /// pass emits at most one progress event per decoded chunk, so the default
     /// bounds the worst-case post-seek skip burst without blocking the decode
     /// core.
     #[builder(default = 256)]
+    #[config(value, sdk(max = 4096))]
     pub reader_event_capacity: usize,
 }
 

@@ -105,6 +105,12 @@ where
             bus.clone(),
             scope,
         );
+        if let Some(cap) = config.initial_max_bandwidth_bps {
+            stream_peer
+                .peer_handle()
+                .abr()
+                .set_max_bandwidth_bps(Some(cap));
+        }
 
         let (master, media_playlists) = load_playlists(&stream_peer, &bus, &config).await?;
 

@@ -91,7 +91,7 @@ async fn first_sound_arrives_after_an_outage_before_playback(
     .await
     .expect("create product offline queue");
     let mut hls = HlsConfigPatch::default();
-    hls.look_ahead_bytes = Some(LOOK_AHEAD_BYTES);
+    hls.look_ahead_bytes = Some(Some(LOOK_AHEAD_BYTES));
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid HLS URL"))
         .downloader(downloader)
         .initial_abr_mode(AbrMode::manual(0))

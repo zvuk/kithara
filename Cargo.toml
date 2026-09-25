@@ -13,6 +13,7 @@ members = [
     "crates/kithara-blob",
     "crates/kithara-broadcast",
     "crates/kithara-bufpool",
+    "crates/kithara-config",
     "crates/kithara-decode",
     "crates/kithara-derive",
     "crates/kithara-devtools",
@@ -61,6 +62,7 @@ members = [
     "tests/crates/effects",
     "tests/crates/encode",
     "tests/crates/events",
+    "tests/crates/ffi-sdk",
     "tests/crates/ffi-web",
     "tests/crates/ffi-web-analysis",
     "tests/crates/file",
@@ -88,6 +90,7 @@ default-members = [
     "crates/kithara-broadcast",
     "crates/kithara-blob",
     "crates/kithara-bufpool",
+    "crates/kithara-config",
     "crates/kithara-decode",
     "crates/kithara-drm",
     "crates/kithara-effects",
@@ -227,6 +230,12 @@ deny = "deny.toml"
 rustfmt = "rustfmt.toml"
 typos = ".config/typos.toml"
 
+# The UniFFI Web generator is a separate Cargo workspace and TypeScript package.
+# `just test sdk-web` and `sdk-product-web` require a clean checkout at this commit.
+[workspace.metadata.uniffi-javascript]
+git = "https://github.com/gerasim13/uniffi-bindgen-react-native"
+rev = "6bb6406d9df2f140071823c7614824d03ff4373c"
+
 # Drives `cargo xtask apple single` (one self-contained xcframework for the
 # CocoaPods / manual drag-in channels). Project-agnostic: point these at a
 # different module/bundle to reuse the packaging tooling in another
@@ -278,6 +287,7 @@ kithara-beat = { path = "crates/kithara-beat", version = "0.0.1-alpha4" }
 kithara-blob = { path = "crates/kithara-blob", version = "0.0.1-alpha4" }
 kithara-broadcast = { path = "crates/kithara-broadcast", version = "0.0.1-alpha4", default-features = false }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha4" }
+kithara-config = { path = "crates/kithara-config", version = "0.0.1-alpha4" }
 kithara-core-test-fixtures = { path = "tests/crates/core" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha4", default-features = false }
 kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha4", default-features = false }
@@ -465,6 +475,7 @@ rten-tensor = "0.24"
 rtsan-standalone = "0.3.0"
 rubato = "5.0"
 rustdoc-types = "0.60.0"
+rustls-platform-verifier = "0.7.0"
 send_wrapper = "0.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -646,6 +657,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-bufpool-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-config-uniffi-probe]
 opt-level = 1
 
 [profile.test-release.package.kithara-core-test-fixtures]

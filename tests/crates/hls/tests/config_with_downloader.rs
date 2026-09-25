@@ -1,6 +1,7 @@
 use std::io::Read;
 
 use kithara::{
+    abr::VariantIndex,
     assets::{AssetStore, StorageBackend},
     download::{Downloader, DownloaderConfig},
     hls::{AbrMode, Hls, HlsConfig},
@@ -14,6 +15,35 @@ use kithara_integration_tests::{
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
+
+#[kithara::test(tokio, native, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
+async fn initial_bandwidth_cap_constrains_hls_abr_choice(temp_dir: TestTempDir) {
+    let server = AbrTestServer::new(
+        master_playlist(256_000, 512_000, 1_024_000),
+        false,
+        Duration::from_millis(10),
+    )
+    .await;
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
+    let config = HlsConfig::for_url(server.url("/master.m3u8"))
+        .store(store)
+        .pools(pools)
+        .initial_abr_mode(AbrMode::Auto(Some(VariantIndex::new(2))))
+        .initial_max_bandwidth_bps(300_000)
+        .build();
+
+    let mut stream = Stream::<Hls<TestPools>>::new(config).await.unwrap();
+    let abr = stream.abr_handle().expect("HLS has ABR");
+    assert_eq!(abr.variants().len(), 3);
+    assert_eq!(abr.current_variant_index(), Some(0));
+    spawn_blocking(move || read_all(&mut stream)).await.unwrap();
+    assert_eq!(abr.current_variant_index(), Some(0));
+}
 
 #[kithara::test(tokio, native, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_dir: TestTempDir) {

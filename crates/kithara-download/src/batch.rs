@@ -136,6 +136,7 @@ impl BatchGroup {
     )]
     pub(super) fn process(self, inner: &DownloaderInner) -> BatchResult {
         let capacity = inner
+            .config
             .max_concurrent
             .saturating_sub(inner.inflight.load(Ordering::Relaxed));
         let mut dispatched = 0;
@@ -159,8 +160,8 @@ impl BatchGroup {
 
 /// Spawn an HTTP fetch task for one command.
 fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: CancelToken) {
-    let client = inner.client.clone();
-    let soft_timeout = inner.soft_timeout;
+    let client = inner.config.client.clone();
+    let soft_timeout = inner.config.soft_timeout;
     let inflight = inner.inflight.clone();
     let fetch_waker = inner.fetch_waker.clone();
     let capacity_notify = Arc::clone(&inner.capacity_notify);

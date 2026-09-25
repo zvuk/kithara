@@ -22,6 +22,7 @@ usdt = ["kithara-test-utils/usdt"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default", "ranged"] }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }

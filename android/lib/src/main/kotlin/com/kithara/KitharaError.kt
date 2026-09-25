@@ -6,6 +6,15 @@ import com.kithara.ffi.FfiException
  * Public Android error type mapped from the Rust FFI layer.
  */
 sealed class KitharaError(message: String) : Exception(message) {
+    /** Process audio host has not been initialized. */
+    data object NotInitialized : KitharaError("audio host not initialized")
+
+    /** Process audio host initialization is already running. */
+    data object InitializationInProgress : KitharaError("audio host initialization in progress")
+
+    /** Process audio host was already initialized. */
+    data object AlreadyInitialized : KitharaError("audio host already initialized")
+
     /**
      * Operation requires a prepared item or ready player state.
      */
@@ -46,6 +55,9 @@ sealed class KitharaError(message: String) : Exception(message) {
 
     companion object {
         internal fun fromFfi(error: FfiException): KitharaError = when (error) {
+            is FfiException.NotInitialized -> NotInitialized
+            is FfiException.InitializationInProgress -> InitializationInProgress
+            is FfiException.AlreadyInitialized -> AlreadyInitialized
             is FfiException.NotReady -> NotReady
             is FfiException.ItemFailed -> ItemFailed(error.reason)
             is FfiException.SeekFailed -> SeekFailed(error.reason)

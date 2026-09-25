@@ -4392,6 +4392,7 @@ dependencies = [
  "fieldwork",
  "humantime-serde",
  "kithara-abr",
+ "kithara-config",
  "kithara-derive",
  "kithara-events",
  "kithara-platform",
@@ -4433,6 +4434,7 @@ dependencies = [
  "kithara-beat",
  "kithara-blob",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-events",
@@ -4501,6 +4503,7 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-assets",
+ "kithara-config",
  "kithara-derive",
  "kithara-encode",
  "kithara-events",
@@ -4571,6 +4574,7 @@ dependencies = [
  "humantime-serde",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-drm",
  "kithara-events",
@@ -4629,6 +4633,7 @@ dependencies = [
  "kithara-assets",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-events",
@@ -4678,8 +4683,11 @@ name = "kithara-beat"
 version = "0.0.1-alpha4"
 dependencies = [
  "bon",
+ "delegate",
+ "fieldwork",
  "hex",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-test-dylib",
@@ -4723,6 +4731,7 @@ dependencies = [
  "hls_m3u8",
  "humantime-serde",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-encode",
  "kithara-output",
@@ -4764,6 +4773,7 @@ dependencies = [
  "derive-where",
  "derive_more",
  "hotpath",
+ "kithara-config",
  "kithara-core-test-fixtures",
  "kithara-derive",
  "kithara-platform",
@@ -4790,6 +4800,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-config"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bon",
+ "fieldwork",
+ "kithara-derive",
+ "portable-atomic",
+]
+
+[[package]]
+name = "kithara-config-uniffi-probe"
+version = "0.0.1-alpha4"
+dependencies = [
+ "futures",
+ "kithara-config",
+ "kithara-test-utils",
+ "serde",
+ "thiserror 2.0.18",
+ "uniffi",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "kithara-core-test-fixtures"
 version = "0.0.1-alpha4"
 
@@ -4809,6 +4842,7 @@ dependencies = [
  "kithara-android",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-mp4",
@@ -4861,6 +4895,7 @@ dependencies = [
 name = "kithara-derive"
 version = "0.0.1-alpha4"
 dependencies = [
+ "humantime-serde",
  "kithara-test-dylib",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -4908,6 +4943,7 @@ dependencies = [
  "humantime-serde",
  "kithara-abr",
  "kithara-android",
+ "kithara-config",
  "kithara-derive",
  "kithara-download",
  "kithara-events",
@@ -4953,6 +4989,7 @@ dependencies = [
  "firewheel",
  "firewheel-core",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-effects",
  "kithara-resampler",
@@ -4986,6 +5023,7 @@ dependencies = [
  "fdk-aac-sys",
  "ffmpeg-next",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-stream",
  "kithara-test-dylib",
  "kithara-test-fixtures",
@@ -5052,6 +5090,7 @@ dependencies = [
  "kithara-android",
  "kithara-apple",
  "kithara-audio",
+ "kithara-config",
  "kithara-derive",
  "kithara-events",
  "kithara-file",
@@ -5128,6 +5167,7 @@ dependencies = [
  "kithara-abr",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-download",
  "kithara-events",
@@ -5218,6 +5258,7 @@ dependencies = [
  "kithara-android",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-download",
  "kithara-drm",
@@ -5274,6 +5315,7 @@ dependencies = [
  "firewheel-web-audio",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-effects",
  "kithara-events",
  "kithara-output",
@@ -5394,6 +5436,7 @@ dependencies = [
  "humantime-serde",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-net",
  "kithara-platform",
@@ -5506,6 +5549,7 @@ dependencies = [
  "kithara-audio",
  "kithara-beat",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-download",
@@ -5580,6 +5624,7 @@ dependencies = [
  "kithara-assets",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-download",
  "kithara-events",
@@ -5629,6 +5674,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-encode",
  "kithara-output",
  "kithara-platform",
@@ -5654,6 +5700,7 @@ dependencies = [
  "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-test-fixtures",
  "kithara-test-utils",
@@ -5709,6 +5756,7 @@ dependencies = [
  "fs4",
  "hotpath",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-storage",
@@ -5772,13 +5820,14 @@ dependencies = [
 name = "kithara-stretch"
 version = "0.0.1-alpha4"
 dependencies = [
- "bon",
+ "bitflags 2.13.0",
  "bungee-sys",
  "delegate",
  "derive_more",
  "fieldwork",
  "hotpath",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-resampler",
@@ -5790,6 +5839,7 @@ dependencies = [
  "kithara-workspace-hack",
  "num-traits",
  "serde",
+ "serde_yaml_ng",
  "signalsmith-stretch",
  "smallvec",
  "thiserror 2.0.18",
@@ -5938,6 +5988,7 @@ dependencies = [
  "iced_wgpu",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-test-macros",
@@ -5977,6 +6028,7 @@ dependencies = [
  "firewheel-core",
  "kithara-beat",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-signal",
@@ -6021,6 +6073,7 @@ dependencies = [
  "fieldwork",
  "kithara-blob",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-signal",
@@ -6108,6 +6161,7 @@ dependencies = [
  "indexmap",
  "itertools 0.13.0",
  "jni",
+ "js-sys",
  "libc",
  "linux-raw-sys 0.12.1",
  "log",
@@ -6156,7 +6210,11 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-subscriber",
+ "uniffi",
+ "uniffi_core",
+ "uniffi_macros",
  "url",
+ "wasm-bindgen",
  "web-sys",
  "winnow 1.0.3",
  "zerocopy",
@@ -12531,6 +12589,7 @@ dependencies = [
  "nix",
  "plist",
  "proc-macro2",
+ "quote",
  "regex",
  "reqwest",
  "roxmltree",

@@ -316,7 +316,7 @@ where
         self.signal.clone()
     }
 
-    /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
+    /// Keep ABR locked until the first post-seek output is committed.
     ///
     /// `plan_variant_reader` reconciles before it reads the claim, because it
     /// is the site that mints a switch: a plan refused against a mirror that
@@ -326,7 +326,7 @@ where
     /// it only on an edge, so it never releases a level it did not take.
     pub(crate) fn sync_abr_lock(&self) {
         let mut held = self.abr_seek_lock.lock();
-        let pending = self.seek_obs.is_pending();
+        let pending = self.seek_obs.is_pending() || self.seek_obs.pending_epoch().is_some();
         if pending && !*held {
             self.abr.lock();
             *held = true;
@@ -2070,6 +2070,23 @@ pub(super) mod tests {
 
         coord.sync_abr_lock();
 
+        assert!(!coord.abr.is_locked());
+    }
+
+    #[kithara::test]
+    fn sync_abr_lock_waits_for_first_post_seek_output() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.seek_control().mark_pending(epoch);
+        coord.sync_abr_lock();
+
+        coord.seek_control().clear_pending(epoch);
+        coord.seek_control().complete(epoch);
+        coord.sync_abr_lock();
+        assert!(coord.abr.is_locked());
+
+        assert!(coord.seek_observe().clear_pending_epoch(epoch));
+        coord.sync_abr_lock();
         assert!(!coord.abr.is_locked());
     }
 

@@ -6,6 +6,7 @@ use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::CancelScope;
+use num_traits::ToPrimitive;
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};
@@ -106,6 +107,10 @@ where
             .keys(self.keys)
             .maybe_downloader(self.downloader)
             .initial_abr_mode(self.initial_abr_mode)
+            .maybe_initial_max_bandwidth_bps(
+                (self.preferred_peak_bitrate.is_finite() && self.preferred_peak_bitrate > 0.0)
+                    .then(|| self.preferred_peak_bitrate.to_u64().unwrap_or(u64::MAX)),
+            )
             .maybe_headers(self.headers)
             .maybe_discriminator(self.discriminator)
             .maybe_base_url(self.hls_base_url)
@@ -161,12 +166,34 @@ mod tests {
     fn an_hls_knob_the_resource_never_declared_reaches_the_built_config() {
         let mut config = config("https://example.com/live.m3u8");
         config.hls.download_batch_size = Some(6);
+        config.hls.look_ahead_bytes = Some(Some(0));
 
         let built = config
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
 
         assert_eq!(built.stream().download_batch_size, 6);
+        assert_eq!(built.stream().look_ahead_bytes, Some(0));
+    }
+
+    #[kithara::test]
+    fn item_bitrate_limit_reaches_hls_policy() {
+        for (input, expected) in [
+            (256_000.0, Some(256_000)),
+            (0.0, None),
+            (-1.0, None),
+            (f64::NAN, None),
+            (f64::INFINITY, None),
+            (f64::MAX, Some(u64::MAX)),
+        ] {
+            let mut item = config("https://example.com/live.m3u8");
+            item.preferred_peak_bitrate = input;
+            let built = item
+                .build_hls_config(&worker(), None)
+                .expect("valid HLS config");
+
+            assert_eq!(built.stream().initial_max_bandwidth_bps, expected);
+        }
     }
 
     /// The same for the file branch: `reader_event_capacity` is a
@@ -175,10 +202,12 @@ mod tests {
     fn a_file_knob_the_resource_never_declared_reaches_the_built_config() {
         let mut config = config("https://example.com/song.mp3");
         config.file.reader_event_capacity = Some(512);
+        config.file.look_ahead_bytes = Some(Some(0));
 
         let built = config.build_file_config(&worker(), None);
 
         assert_eq!(built.stream().reader_event_capacity, 512);
+        assert_eq!(built.stream().look_ahead_bytes, Some(0));
     }
 
     /// The per-call `hint` still lands as the file source's extension: it is
@@ -201,7 +230,7 @@ mod tests {
     #[kithara::test]
     fn a_document_extension_stands_when_nothing_more_specific_names_one() {
         let mut config = config("https://example.com/track/stream");
-        config.file.extension = Some("wav".to_owned());
+        config.file.extension = Some(Some("wav".to_owned()));
 
         let built = config.build_file_config(&worker(), None);
 
@@ -216,7 +245,7 @@ mod tests {
     fn the_per_call_hint_outranks_a_document_extension() {
         let mut config = config("https://example.com/track/stream");
         config.hint = Some("flac".to_owned());
-        config.file.extension = Some("wav".to_owned());
+        config.file.extension = Some(Some("wav".to_owned()));
 
         let built = config.build_file_config(&worker(), None);
 

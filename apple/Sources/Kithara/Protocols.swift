@@ -70,7 +70,7 @@ public protocol KitharaPlayerItemProtocol: AnyObject, Identifiable, Sendable {
         startTolerance: TimeInterval
     ) -> Bool
 
-    /// `and:`-labeled variant of ``isPlayable(progress:ranges:)``.
+    /// `and:`-labeled variant of `isPlayable(progress:ranges:)`.
     func isPlayable(progress: Double, and ranges: [ItemLoadedRange]) -> Bool
 }
 

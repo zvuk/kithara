@@ -7,7 +7,11 @@ impl RateTarget {
         (u64::from(revision) << u32::BITS) | u64::from(speed.to_bits())
     }
 
-    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     pub(crate) fn revision(self) -> u64 {
         u64::from(Self::revision_from(self.0))
     }

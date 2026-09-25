@@ -5,11 +5,10 @@ use crate::{EncodeConfig, EncodeError, EncodeResult, EncodedAccessUnit};
 /// Continuous encoder from interleaved `f32` PCM to access units.
 #[derive(derive_more::Debug)]
 pub struct EncoderSession {
+    config: EncodeConfig,
     #[debug("{:?}", self.pending_samples.len())]
     pending_samples: Vec<f32>,
-    packet_frames: u32,
     next_frame: u64,
-    channels: usize,
     packet_samples: usize,
 }
 
@@ -25,7 +24,7 @@ impl EncoderSession {
     pub fn new(config: &EncodeConfig) -> EncodeResult<Self> {
         config.validate_pcm_wav()?;
         let channels = usize::from(config.channels);
-        let packet_frames = u32::try_from(config.packet_frames).map_err(|_| {
+        u32::try_from(config.packet_frames).map_err(|_| {
             EncodeError::InvalidInput("packet_frames does not fit into u32".to_owned())
         })?;
         let packet_samples = config
@@ -35,12 +34,17 @@ impl EncoderSession {
             .ok_or_else(|| EncodeError::InvalidInput("PCM packet size overflow".to_owned()))?;
 
         Ok(Self {
-            channels,
+            config: config.clone(),
             next_frame: 0,
-            packet_frames,
             packet_samples,
             pending_samples: Vec::with_capacity(packet_samples),
         })
+    }
+
+    /// Configuration retained by this encoding session.
+    #[must_use]
+    pub const fn config(&self) -> &EncodeConfig {
+        &self.config
     }
 
     /// Finish the stream and return its final partial access unit.
@@ -53,7 +57,7 @@ impl EncoderSession {
         if self.pending_samples.is_empty() {
             return Ok(Vec::new());
         }
-        let frames = self.pending_samples.len() / self.channels;
+        let frames = self.pending_samples.len() / usize::from(self.config.channels);
         let duration = u32::try_from(frames).map_err(|_| {
             EncodeError::InvalidInput("final PCM packet duration does not fit into u32".to_owned())
         })?;
@@ -70,13 +74,17 @@ impl EncoderSession {
     ///
     /// Returns invalid input when `samples` ends in a partial frame.
     pub fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        if !samples.len().is_multiple_of(self.channels) {
+        let channels = usize::from(self.config.channels);
+        if !samples.len().is_multiple_of(channels) {
             return Err(EncodeError::InvalidInput(format!(
                 "interleaved sample count {} is not a multiple of {} channels",
                 samples.len(),
-                self.channels
+                channels
             )));
         }
+        let packet_frames = u32::try_from(self.config.packet_frames).map_err(|_| {
+            EncodeError::InvalidInput("packet_frames does not fit into u32".to_owned())
+        })?;
         let total_samples = self
             .pending_samples
             .len()
@@ -85,7 +93,7 @@ impl EncoderSession {
         let ready_packets = total_samples / self.packet_samples;
         let ready_frames = u64::try_from(ready_packets)
             .ok()
-            .and_then(|packets| packets.checked_mul(u64::from(self.packet_frames)))
+            .and_then(|packets| packets.checked_mul(u64::from(packet_frames)))
             .ok_or_else(|| EncodeError::InvalidInput("PCM frame count overflow".to_owned()))?;
         let end_frame = self
             .next_frame
@@ -96,14 +104,14 @@ impl EncoderSession {
         let mut emit = |packet: &[f32]| -> EncodeResult<()> {
             let offset = u64::try_from(packet_index)
                 .ok()
-                .and_then(|index| index.checked_mul(u64::from(self.packet_frames)))
+                .and_then(|index| index.checked_mul(u64::from(packet_frames)))
                 .ok_or_else(|| {
                     EncodeError::InvalidInput("PCM packet offset overflow".to_owned())
                 })?;
             let pts = self.next_frame.checked_add(offset).ok_or_else(|| {
                 EncodeError::InvalidInput("PCM packet timestamp overflow".to_owned())
             })?;
-            units.push(Self::unit(packet, pts, self.packet_frames));
+            units.push(Self::unit(packet, pts, packet_frames));
             packet_index += 1;
             Ok(())
         };

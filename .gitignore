@@ -119,6 +119,7 @@ package-lock.json
 docs-build/
 .planning/
 *.lock
+!tests/crates/ffi-sdk/wasm.lock
 /build/
 .baseline/
 .target

@@ -9,6 +9,7 @@ import com.kithara.ffi.FfiKeyOptions
 import com.kithara.ffi.FfiKeyProcessor
 import com.kithara.ffi.FfiKeyRule
 import com.kithara.ffi.FfiPlayerConfig
+import com.kithara.ffi.FfiQueueSettings
 import com.kithara.ffi.FfiPlayerEvent
 import com.kithara.ffi.FfiPlaybackOrder
 import com.kithara.ffi.FfiPlayerStatus
@@ -38,7 +39,7 @@ import kotlinx.coroutines.flow.update
  * player.play()
  * ```
  */
-class KitharaPlayer(config: Config = Config()) {
+class KitharaPlayer private constructor(private val inner: FfiAudioPlayer) {
     /**
      * A single DRM rule: a key processor bound to one or more domain
      * patterns (exact `"example.com"`, wildcard subdomain
@@ -74,8 +75,11 @@ class KitharaPlayer(config: Config = Config()) {
         val crossfadeSettings: CrossfadeSettings = CrossfadeSettings(),
     )
 
-    private val inner: FfiAudioPlayer = FfiAudioPlayer(
-        config.toFfi()
+    constructor(config: Config = Config()) : this(FfiAudioPlayer(config.toFfi()))
+
+    /** Create a player with generated queue settings validated by Rust. */
+    constructor(config: Config, queueSettings: FfiQueueSettings) : this(
+        FfiAudioPlayer.newWithQueueSettings(config.toFfi(), queueSettings)
     )
     private val observer = PlayerObserverBridge(this)
     private val eventsFlow = MutableSharedFlow<KitharaPlayerEvent>(extraBufferCapacity = 16)

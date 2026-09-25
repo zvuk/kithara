@@ -21,6 +21,7 @@ idioms *ARGS:
 
 _shared:
     just fmt check
+    just _xtask config project --check
     just check clippy
     just lint ast-grep
     just lint typos

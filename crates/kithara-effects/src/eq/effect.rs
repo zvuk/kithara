@@ -147,9 +147,15 @@ mod tests {
     }
 
     #[kithara::test]
-    fn eq_flat_gain_preserves_magnitude(eq_sine_1000: Vec<f32>, eq_silence: Vec<f32>) {
+    #[case::ten(10)]
+    #[case::sixty_five(65)]
+    fn eq_flat_gain_preserves_magnitude(
+        #[case] band_count: usize,
+        eq_sine_1000: Vec<f32>,
+        eq_silence: Vec<f32>,
+    ) {
         let pools = pools();
-        let bands = generate_log_spaced_bands(10);
+        let bands = generate_log_spaced_bands(band_count);
         let spec = EqFixture::spec(1, 44100);
         let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
 
@@ -372,9 +378,15 @@ mod tests {
     }
 
     #[kithara::test]
-    fn eq_smooth_no_discontinuity(eq_sine_1000: Vec<f32>, eq_transition: Vec<f32>) {
+    #[case::three(3)]
+    #[case::sixty_five(65)]
+    fn eq_smooth_no_discontinuity(
+        #[case] band_count: usize,
+        eq_sine_1000: Vec<f32>,
+        eq_transition: Vec<f32>,
+    ) {
         let pools = pools();
-        let bands = generate_log_spaced_bands(3);
+        let bands = generate_log_spaced_bands(band_count);
         let spec = EqFixture::spec(1, 44100);
         let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
 

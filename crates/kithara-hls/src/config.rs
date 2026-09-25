@@ -29,12 +29,14 @@ pub(crate) const DEFAULT_LOOK_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
 /// DRM key processing is routed through [`KeyProcessorRegistry`]. Concrete
 /// resolvers decide which URLs they handle and return prepared requests without
 /// exposing provider policy to HLS.
+#[kithara_config::config(construction, builder = false)]
 #[derive(Clone, Debug, Default, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct KeyOptions {
     /// Ordered processor resolver registry. A URL not handled by any resolver
     /// uses the raw key as plain AES-128.
+    #[config(skip = "injected key processor registry")]
     pub key_registry: Option<KeyProcessorRegistry>,
 }
 
@@ -64,6 +66,7 @@ pub enum SizeProbeMethod {
 /// Configuration for HLS streaming.
 ///
 /// Used with `Stream::<Hls<S>>::new(config)`.
+#[kithara_config::config(construction, builder = false)]
 #[derive(Builder, Patch)]
 #[builder(start_fn = for_url)]
 #[non_exhaustive]
@@ -76,17 +79,26 @@ where
     /// Master playlist URL.
     #[builder(start_fn)]
     #[patch(skip)]
+    #[config(value)]
     pub url: Url,
     /// Initial ABR mode.
     #[builder(default)]
     #[patch(skip)]
+    #[config(value)]
     pub initial_abr_mode: AbrMode,
+    /// Initial per-stream ABR ceiling. A later update through the stream's
+    /// `AbrHandle` takes precedence. `None` keeps the downloader default.
+    #[patch(skip)]
+    #[config(value)]
+    pub initial_max_bandwidth_bps: Option<u64>,
     /// Shared asset store.
     #[patch(skip)]
+    #[config(skip = "injected asset store")]
     pub store: AssetStore<S>,
     /// Encryption key handling configuration.
     #[builder(default)]
     #[patch(skip)]
+    #[config(nested)]
     pub keys: KeyOptions,
     /// Net options (idle/stall `inactivity_timeout`, `retry_policy`,
     /// compression) for the HTTP client built when no [`downloader`] is
@@ -104,13 +116,16 @@ where
     #[builder(default)]
     #[patch(skip)]
     #[debug(skip)]
+    #[config(nested)]
     pub net_options: NetOptions,
     /// Base URL for resolving relative playlist/segment URLs.
     #[patch(skip)]
+    #[config(value)]
     pub base_url: Option<Url>,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     #[patch(skip)]
+    #[config(skip = "injected event bus")]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown. The master `CancelToken` whose
     /// shared atomic mirror reaches [`HlsCoord`](crate::stream::HlsCoord)'s
@@ -118,29 +133,36 @@ where
     /// downloader / net / asset paths derive children from its inner
     /// [`CancelToken`](kithara_platform::CancelToken).
     #[patch(skip)]
+    #[config(skip = "injected cancellation token")]
     pub cancel: Option<CancelToken>,
     /// Optional cache discriminator.
     #[patch(skip)]
+    #[config(value)]
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
     #[patch(skip)]
     #[debug(skip)]
+    #[config(skip = "injected downloader")]
     pub downloader: Option<Downloader>,
     /// Additional HTTP headers to include in all requests.
     #[patch(skip)]
+    #[config(value)]
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     /// `None` falls back to a ~2 `MiB` cap at the consumer site —
-    /// production HLS streams need a downloader
-    /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
+    /// production HLS streams need a downloader backpressure cap.
+    /// `Some(0)` prevents prefetch beyond the reader position.
+    #[config(value, sdk(max = 8388608))]
     pub look_ahead_bytes: Option<u64>,
     /// Buffer-pool facade shared across all components.
     #[patch(skip)]
+    #[config(skip = "injected buffer pools")]
     pub pools: PoolRegion<S>,
     /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
     /// never issues these probes; file-like paths use them after a seek needs
     /// exact prefix offsets.
     #[builder(default)]
+    #[config(value, sdk)]
     pub size_probe_method: SizeProbeMethod,
     /// Acquire attempts a planned segment slot gets before the dispatch
     /// settles it terminally. A requeue is re-dispatched on the peer's next
@@ -148,11 +170,13 @@ where
     /// by a live sibling writer is exempt — that holder always settles and
     /// releases, so its retry resolves on its own.
     #[builder(default = DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
+    #[config(value, sdk(max = 255))]
     pub acquire_attempt_budget: u8,
     /// Max segments to download per step. Three keep the fetcher busy across
     /// one round-trip without planning further ahead than a look-ahead cap
     /// would allow anyway.
     #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
+    #[config(value, sdk(max = 64))]
     pub download_batch_size: usize,
     /// Maximum media-segment prefetch window for ephemeral HLS stores.
     /// The effective maximum is never lower than
@@ -161,19 +185,23 @@ where
     /// non-media entries.
     #[builder(default = DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW)]
     #[debug(skip)]
+    #[config(value)]
     pub ephemeral_cache_max_media_window: usize,
     /// Minimum media-segment prefetch window for ephemeral HLS stores after
     /// applying [`Self::ephemeral_cache_non_media_reserve`].
     #[builder(default = DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
     #[debug(skip)]
+    #[config(value)]
     pub ephemeral_cache_min_media_window: usize,
     /// Number of non-media HLS cache entries reserved when deriving the
     /// ephemeral media prefetch window from the store cache capacity.
     #[builder(default = DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
     #[debug(skip)]
+    #[config(value)]
     pub ephemeral_cache_non_media_reserve: usize,
     /// Capacity of the event bus channel (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
+    #[config(value)]
     pub event_channel_capacity: usize,
 }
 

@@ -16,10 +16,11 @@ final class PlaygroundModel: ObservableObject {
     @Published var rate: Float = 1.0
     @Published var log = "Ready"
 
-    private let player = KitharaPlayer()
+    private let player: KitharaPlayer
     private var cancellables = Set<AnyCancellable>()
 
     init() {
+        player = KitharaPlayer()
         player.eventPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
@@ -99,7 +100,11 @@ final class PlaygroundModel: ObservableObject {
 }
 
 struct PlaygroundView: View {
-    @StateObject private var model = PlaygroundModel()
+    @StateObject private var model: PlaygroundModel
+
+    init() {
+        _model = StateObject(wrappedValue: PlaygroundModel())
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

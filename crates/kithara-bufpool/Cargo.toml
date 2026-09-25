@@ -13,6 +13,7 @@ categories = ["memory-management", "concurrency"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-platform = { workspace = true }
 kithara-ring = { workspace = true }

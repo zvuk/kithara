@@ -31,6 +31,7 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-config.workspace = true
 kithara-derive = { workspace = true, features = ["built-default", "mirror", "patch"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }

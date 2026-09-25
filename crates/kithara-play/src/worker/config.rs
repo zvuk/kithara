@@ -26,54 +26,47 @@ impl Consts {
 }
 
 /// Configuration for one shared playback worker.
+#[kithara_config::config(construction, builder = false)]
 #[derive(Builder, fieldwork::Fieldwork, Patch)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PlayWorkerConfig<S> {
     /// Typed pool facade shared by every Player and resource registered with the worker.
-    #[builder(start_fn)]
-    #[field(get)]
-    #[patch(skip)]
+    #[config(
+        skip = "injected pool facade",
+        builder(start_fn),
+        field(get),
+        patch(skip)
+    )]
     pub(crate) pools: PoolRegion<S>,
     /// Poll interval for RT-safe deferred wakes while the final ring is full.
-    #[builder(default = Consts::BACKPRESSURE_POLL_INTERVAL)]
-    #[field(get, copy)]
-    #[patch(humantime)]
+    #[config(value, builder(default = Consts::BACKPRESSURE_POLL_INTERVAL), field(get, copy), patch(humantime))]
     pub(crate) backpressure_poll_interval: Duration,
     /// Park duration when no playback task expects progress.
-    #[builder(default = Duration::from_millis(100))]
-    #[field(get, copy)]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(100)), field(get, copy), patch(humantime))]
     pub(crate) idle_timeout: Duration,
     /// Threshold for reporting a slow playback tick.
-    #[builder(default = Duration::from_millis(10))]
-    #[field(get, copy)]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(10)), field(get, copy), patch(humantime))]
     pub(crate) slow_tick_threshold: Duration,
     /// Park duration while live playback tasks are waiting.
-    #[builder(default = Consts::ACTIVE_WAIT_TIMEOUT)]
-    #[field(get, copy)]
-    #[patch(humantime)]
+    #[config(value, builder(default = Consts::ACTIVE_WAIT_TIMEOUT), field(get, copy), patch(humantime))]
     pub(crate) wait_timeout: Duration,
     /// Consecutive progress passes between cooperative thread yields.
-    #[builder(default = Consts::FAIRNESS_YIELD_INTERVAL)]
-    #[field(get, copy)]
+    #[config(value, builder(default = Consts::FAIRNESS_YIELD_INTERVAL), field(get, copy))]
     pub(crate) fairness_yield_interval: NonZeroU32,
     /// Maximum consecutive ticks for one track visit.
-    #[builder(default = Consts::TASK_BURST)]
-    #[field(get, copy)]
+    #[config(value, builder(default = Consts::TASK_BURST), field(get, copy))]
     pub(crate) task_burst: NonZeroU32,
     /// Maximum number of simultaneously registered track render chains.
-    #[builder(default = Consts::CAPACITY)]
-    #[field(get, copy)]
+    #[config(value, builder(default = Consts::CAPACITY), field(get, copy))]
     pub(crate) capacity: NonZeroUsize,
     /// Parent cancellation token for this playback dispatcher lifetime. Not a
     /// document key: the caller owns the token tree.
-    #[patch(skip)]
+    #[config(skip = "injected cancellation resource", patch(skip))]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional base worker shared with other domain workers. Not a document
     /// key: a live worker is an object only code can hand over.
-    #[patch(skip)]
+    #[config(skip = "injected base worker", patch(skip))]
     pub(crate) worker: Option<Worker>,
 }
 

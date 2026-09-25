@@ -78,14 +78,11 @@ impl CrossoverFilters {
             .iter()
             .map(|&freq| Lr4::new(biquad_coeffs(Type::HighPass, freq, sample_rate)))
             .collect();
-        let mut allpass: Vec<Section> = Vec::new();
-        for start in 1..crossover_freqs.len() {
-            allpass.extend(
-                crossover_freqs[start..]
-                    .iter()
-                    .map(|&freq| Section::new(biquad_coeffs(Type::AllPass, freq, sample_rate))),
-            );
-        }
+        let allpass = crossover_freqs
+            .iter()
+            .skip(1)
+            .map(|&freq| Section::new(biquad_coeffs(Type::AllPass, freq, sample_rate)))
+            .collect();
         let lowpass_scratch = pools.get_with_len::<f32>(crossover_freqs.len())?;
         Ok(Self {
             crossover_freqs,
@@ -103,17 +100,16 @@ impl CrossoverFilters {
             self.lowpass_scratch[index] = self.lowpass[index].process(high);
             high = self.highpass[index].process(high);
         }
-        let mut output = 0.0;
-        let mut allpass_start = 0;
-        for index in 0..self.lowpass.len() {
-            let mut band = self.lowpass_scratch[index];
-            let allpass_count = self.lowpass.len().saturating_sub(index + 1);
-            let allpass_end = allpass_start + allpass_count;
-            for filter in &mut self.allpass[allpass_start..allpass_end] {
-                band = filter.run(band);
-            }
-            allpass_start = allpass_end;
-            output = band.mul_add(gains(index), output);
+        // Constant gains commute with each allpass. Sharing one section per
+        // crossover also filters a moving gain, whose ramp is kept smooth by
+        // GainBank instead of retaining quadratic per-band filter histories.
+        let mut output = self
+            .lowpass_scratch
+            .first()
+            .map_or(0.0, |&low| low * gains(0));
+        for index in 1..self.lowpass.len() {
+            output =
+                self.allpass[index - 1].run(output) + self.lowpass_scratch[index] * gains(index);
         }
         high.mul_add(gains(self.lowpass.len()), output)
     }
@@ -123,18 +119,12 @@ impl CrossoverFilters {
             self.lowpass[index] = Lr4::new(biquad_coeffs(Type::LowPass, freq, self.sample_rate));
             self.highpass[index] = Lr4::new(biquad_coeffs(Type::HighPass, freq, self.sample_rate));
         }
-        let mut allpass_start = 0;
-        for band in 0..self.lowpass.len() {
-            let allpass_count = self.lowpass.len().saturating_sub(band + 1);
-            let allpass_end = allpass_start + allpass_count;
-            for (offset, filter) in self.allpass[allpass_start..allpass_end]
-                .iter_mut()
-                .enumerate()
-            {
-                let freq = self.crossover_freqs[band + 1 + offset];
-                *filter = Section::new(biquad_coeffs(Type::AllPass, freq, self.sample_rate));
-            }
-            allpass_start = allpass_end;
+        for (filter, &freq) in self
+            .allpass
+            .iter_mut()
+            .zip(self.crossover_freqs.iter().skip(1))
+        {
+            *filter = Section::new(biquad_coeffs(Type::AllPass, freq, self.sample_rate));
         }
     }
 

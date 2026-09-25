@@ -99,6 +99,7 @@ impl<'de> Deserialize<'de> for StorageBackend {
 /// document may name and the wiring a caller hands over.
 ///
 /// [`AssetStoreConfigPatch`] is what a document may say about it.
+#[kithara_config::config(construction, builder = false)]
 #[derive(Builder, Patch)]
 #[builder(
     start_fn = for_pools,
@@ -112,45 +113,51 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Buffer-pool facade every layer of the store shares.
-    #[builder(start_fn)]
-    #[patch(skip)]
+    #[config(skip = "injected pool resource", builder(start_fn), patch(skip))]
     pub pools: PoolRegion<S>,
     /// Where resources live. Unset resolves to a disk root under a fresh
     /// temp directory, which is a different place on every launch.
+    #[config(value)]
     pub backend: Option<StorageBackend>,
     /// Resources the in-memory cache retains before it evicts the
     /// least-recently-used one. Applies to both backends.
+    #[config(value)]
     pub cache_capacity: Option<NonZeroUsize>,
     /// Master cancel token for the store subtree.
-    #[patch(skip)]
+    #[config(skip = "injected cancellation resource", patch(skip))]
     pub cancel: Option<CancelToken>,
     /// Event bus the eviction and lease layers publish on.
-    #[patch(skip)]
+    #[config(skip = "injected event bus", patch(skip))]
     pub event_bus: Option<EventBus>,
     /// Shared index-flush hub. Created per store when absent.
-    #[patch(skip)]
+    #[config(skip = "injected flush hub", patch(skip))]
     pub flush_hub: Option<Arc<FlushHub>>,
     /// Resource-key layout registry. Empty when absent.
-    #[patch(skip)]
+    #[config(skip = "injected layout registry", patch(skip))]
     pub layouts: Option<AssetLayoutRegistry>,
     /// Assets the eviction policy keeps before it drops the coldest one.
+    #[config(value)]
     pub max_assets: Option<usize>,
     /// Bytes the eviction policy keeps before it drops the coldest asset.
+    #[config(value)]
     pub max_bytes: Option<u64>,
     /// Resources one in-memory asset holds. **Memory backend only** — the disk
     /// backend never reads it, so naming it beside `backend: disk` (or beside
     /// no backend at all, which resolves to disk) configures nothing.
+    #[config(value)]
     pub mem_resource_capacity: Option<usize>,
     /// Bytes read, transformed, and written per pass when a resource is
     /// processed on commit. Unset leaves the processing layer's own default.
+    #[config(value)]
     pub processing_chunk_size: Option<usize>,
     /// Recheck cadence for a reader blocked on the processing readiness gate.
     /// Unset leaves the processing layer's own default.
-    #[patch(humantime)]
+    #[config(value, patch(humantime))]
     pub processing_gate_poll_interval: Option<Duration>,
     /// Bytes a fresh segment's temp file is reserved at. **Disk backend
     /// only** — the memory backend has no temp file to reserve. Unset leaves
     /// the disk backend's own default.
+    #[config(value)]
     pub segment_reservation: Option<u64>,
 }
 
@@ -1045,7 +1052,7 @@ mod tests {
 
         assert_eq!(
             settings.cache_capacity,
-            Some(NonZeroUsize::new(32).expect("nonzero"))
+            Some(Some(NonZeroUsize::new(32).expect("nonzero")))
         );
         assert_eq!(settings.max_bytes, None, "a silent knob stays unset");
     }
@@ -1059,7 +1066,7 @@ mod tests {
 
         assert_eq!(
             settings.processing_gate_poll_interval,
-            Some(Duration::from_millis(250))
+            Some(Some(Duration::from_millis(250)))
         );
     }
 
@@ -1069,7 +1076,7 @@ mod tests {
         let settings: AssetStoreConfigPatch =
             serde_yaml_ng::from_str("backend:\n  kind: memory\n").expect("the document types");
 
-        assert_eq!(settings.backend, Some(StorageBackend::Memory));
+        assert_eq!(settings.backend, Some(Some(StorageBackend::Memory)));
     }
 
     /// Pins ruling 108: `StorageBackend::Memory` is a unit variant, so
@@ -1109,7 +1116,7 @@ mod tests {
 
         let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
-            .maybe_cache_capacity(settings.cache_capacity)
+            .maybe_cache_capacity(settings.cache_capacity.flatten())
             .build();
 
         let keys: Vec<ResourceKey> = (0..2)

@@ -15,9 +15,9 @@ pub(crate) const ID: &str = "split_module";
 
 /// A module whose declaring file sits beside its own directory: `foo.rs` next
 /// to `foo/`. The module is read from two places, which is the shape a split
-/// left half done. The directory takes the whole module instead: `foo.rs`
-/// moves to `foo/mod.rs`, or to `foo/main.rs` for a crate root such as
-/// `tests/foo.rs`.
+/// left half done. The directory takes the module instead: `foo/mod.rs`
+/// declares and re-exports its named implementation files. A crate root such
+/// as `tests/foo.rs` moves to `tests/foo/main.rs`.
 pub(crate) struct SplitModule;
 
 impl Check for SplitModule {
@@ -71,10 +71,17 @@ fn split_modules<'a>(
         } else {
             "mod.rs"
         };
+        let remedy = if target == "mod.rs" {
+            format!(
+                "put declarations and re-exports in `{dir_key}/{target}`, and implementation in a named file"
+            )
+        } else {
+            format!("move the crate root to `{dir_key}/{target}`")
+        };
         violations.push(Violation::deny(
             ID,
             key.clone(),
-            format!("`{key}` sits beside its own directory; move it to `{dir_key}/{target}`"),
+            format!("`{key}` sits beside its own directory; {remedy}"),
         ));
     }
     Ok(violations)
@@ -121,6 +128,11 @@ mod tests {
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].key, "crates/a/src/pool.rs");
         assert!(violations[0].message.contains("`crates/a/src/pool/mod.rs`"));
+        assert!(
+            violations[0]
+                .message
+                .contains("implementation in a named file")
+        );
     }
 
     #[test]

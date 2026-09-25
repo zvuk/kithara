@@ -21,8 +21,6 @@ pub fn setup() -> Result<(), JsValue> {
         return Ok(());
     }
 
-    crate::web::bridge::initialize()?;
-
     let _ = LogTracer::init();
     let config = WASMLayerConfigBuilder::new()
         .set_report_logs_in_timings(false)

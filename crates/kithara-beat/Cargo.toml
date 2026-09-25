@@ -27,11 +27,14 @@ mock = ["dep:unimock"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
-kithara-derive = { workspace = true, features = ["built-default", "patch"] }
+kithara-config = { workspace = true }
+kithara-derive = { workspace = true, features = ["patch"] }
 kithara-platform = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true }
 
 bon = { workspace = true }
+delegate = { workspace = true }
+fieldwork = { workspace = true }
 num-traits = { workspace = true }
 realfft = { workspace = true, optional = true }
 rten = { workspace = true, optional = true }

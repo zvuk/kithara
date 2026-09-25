@@ -123,7 +123,7 @@ where
             self.override_pending_select(PendingSelect {
                 id,
                 settings: Transition::None.settings(self.crossfade_settings()),
-                playback: if self.should_autoplay {
+                playback: if self.config.should_autoplay {
                     SelectionPlayback::Play
                 } else {
                     SelectionPlayback::Pause

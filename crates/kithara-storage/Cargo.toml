@@ -29,6 +29,7 @@ tls-native = ["kithara-test-utils/tls-native"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["phase"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }

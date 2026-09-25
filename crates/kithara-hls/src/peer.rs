@@ -6,7 +6,8 @@ use std::{
 };
 
 use kithara_abr::{
-    Abr, AbrMode, AbrProgressSnapshot, AbrPublisher, AbrState, VariantDuration, VariantInfo,
+    Abr, AbrMode, AbrProgressSnapshot, AbrPublisher, AbrReason, AbrState, VariantDuration,
+    VariantInfo,
 };
 use kithara_assets::ResourceKey;
 use kithara_bufpool::HasPool;
@@ -14,7 +15,7 @@ use kithara_download::{FetchCmd, Peer, RequestPriority};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Weak},
-    time::Duration,
+    time::{Duration, Instant},
     tokio::{
         self,
         sync::mpsc,
@@ -290,6 +291,33 @@ where
     }
 
     pub(crate) fn set_abr_variants(&self, variants: Vec<VariantInfo>) {
+        if let AbrMode::Auto(_) = self.abr.mode()
+            && let Some(cap) = self.abr.max_bandwidth_bps()
+        {
+            let current = self.abr.current_variant_index();
+            let current_over_cap = variants
+                .iter()
+                .find(|variant| variant.variant_index == current)
+                .is_none_or(|variant| variant.bandwidth_bps.is_none_or(|bps| bps > cap));
+            if current_over_cap {
+                let target = variants
+                    .iter()
+                    .filter(|variant| variant.bandwidth_bps.is_some_and(|bps| bps <= cap))
+                    .max_by_key(|variant| variant.bandwidth_bps)
+                    .or_else(|| {
+                        variants
+                            .iter()
+                            .min_by_key(|variant| variant.bandwidth_bps.unwrap_or(u64::MAX))
+                    });
+                if let Some(target) = target {
+                    self.abr
+                        .request_target(target.variant_index, AbrReason::DownSwitch);
+                    if let Some(claim) = self.abr.claim_pending_decision(current) {
+                        let _ = self.abr.commit_pending(claim, Instant::now());
+                    }
+                }
+            }
+        }
         *self.variants.lock() = variants;
     }
 

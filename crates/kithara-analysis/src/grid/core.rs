@@ -39,28 +39,40 @@ impl Consts {
     const STABLE_WINDOW_BARS: usize = 16;
 }
 
+/// Construction-retained policy used by the beat-grid fitting pass.
+#[kithara_config::config(builder = false)]
 #[derive(Builder, Debug, Clone, PartialEq, kithara_derive::BuiltDefault)]
 pub(crate) struct GridParams {
-    #[builder(default = Consts::MAX_BAR_RATIO)]
+    #[config(value, builder(default = Consts::MAX_BAR_RATIO))]
     pub(crate) max_bar_ratio: f64,
+    #[config(value)]
     #[builder(default = Consts::MEDIAN_TRUST_RATIO)]
     pub(crate) median_trust_ratio: f64,
+    #[config(value)]
     #[builder(default = Consts::MERGE_RATIO_EPS)]
     pub(crate) merge_ratio_eps: f64,
+    #[config(value)]
     #[builder(default = Consts::MIN_BAR_RATIO)]
     pub(crate) min_bar_ratio: f64,
+    #[config(value)]
     #[builder(default = Consts::MIN_GAP_RATIO)]
     pub(crate) min_gap_ratio: f64,
+    #[config(value)]
     #[builder(default = Consts::OUTLIER_RATIO)]
     pub(crate) outlier_ratio: f64,
+    #[config(value)]
     #[builder(default = Consts::RESIDUAL_MS)]
     pub(crate) residual_ms: f64,
+    #[config(value)]
     #[builder(default = Consts::ALIGN_BARS)]
     pub(crate) align_bars: usize,
+    #[config(value)]
     #[builder(default = Consts::MIN_LEAF_BARS)]
     pub(crate) min_leaf_bars: usize,
+    #[config(value)]
     #[builder(default = Consts::OUTLIER_WINDOW)]
     pub(crate) outlier_window: usize,
+    #[config(value)]
     #[builder(default = Consts::STABLE_WINDOW_BARS)]
     pub(crate) stable_window_bars: usize,
 }
@@ -262,6 +274,7 @@ fn bar_to_bpm(bar_seconds: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use kithara_config::Config as _;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -273,6 +286,18 @@ mod tests {
         const SR: u32 = 44_100;
         const TOL_100MS: u64 = 4_410;
         const TOL_20MS: u64 = 882;
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn grid_policy_values_reflect_the_retained_builder_input() {
+        let params = GridParams::builder()
+            .median_trust_ratio(0.2)
+            .align_bars(8)
+            .build();
+        let values = params.values();
+        assert_eq!(values.median_trust_ratio, 0.2);
+        assert_eq!(values.align_bars, 8);
+        assert_eq!(values.max_bar_ratio, params.max_bar_ratio);
     }
 
     fn marks(times: Vec<f32>) -> Vec<BeatMark> {

@@ -170,7 +170,7 @@ fn decide(state: &AbrState, view: &AbrView<'_>) -> AbrDecision {
         };
     }
 
-    let current_bw = current_bandwidth(&sorted, current);
+    let current_bw = current_bandwidth(view.variants, current);
     let adjusted_bps = adjusted_throughput(estimate_bps, view.settings.throughput_safety_factor);
 
     let Some((candidate_idx, candidate_bw)) = candidate_variant(&sorted, adjusted_bps) else {
@@ -248,11 +248,12 @@ fn sorted_candidates(variants: &[VariantInfo], max_bw: Option<u64>) -> Vec<(Vari
     out
 }
 
-fn current_bandwidth(sorted: &[(VariantIndex, u64)], current: VariantIndex) -> u64 {
-    sorted
+fn current_bandwidth(variants: &[VariantInfo], current: VariantIndex) -> u64 {
+    variants
         .iter()
-        .find(|(idx, _)| *idx == current)
-        .map_or(0, |(_, bw)| *bw)
+        .find(|variant| variant.variant_index == current)
+        .and_then(|variant| variant.bandwidth_bps)
+        .unwrap_or(0)
 }
 
 fn adjusted_throughput(estimate_bps: u64, safety_factor: f64) -> f64 {

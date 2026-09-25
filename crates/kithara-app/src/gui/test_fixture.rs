@@ -85,3 +85,16 @@ fn config() -> AppConfig {
         .store(store)
         .build()
 }
+
+#[kithara::test(native, flash(false))]
+fn app_config_snapshot_keeps_owned_values_and_nested_analysis_policy() {
+    let mut config = config();
+    config.waveform_max_buckets = 256;
+    config.beat_analysis.target_rate = 48_000;
+
+    let values = kithara_config::Config::values(&config);
+
+    assert_eq!(values.waveform_max_buckets, 256);
+    assert_eq!(values.beat_analysis.target_rate, 48_000);
+    assert_eq!(values.ui.max_arena_bytes, config.ui.max_arena_bytes);
+}

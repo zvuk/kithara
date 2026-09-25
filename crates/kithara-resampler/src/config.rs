@@ -26,31 +26,46 @@ pub struct RatioGlide {
     pub target_ratio: f64,
 }
 
+/// Tuning values retained by a resampler backend after construction.
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Copy, Debug, PartialEq, Builder, Deserialize)]
 #[builder(const, state_mod(vis = "pub"))]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 #[derive(kithara_derive::BuiltDefault)]
 pub struct ResamplerOptions {
-    #[builder(default = 8.0)]
+    /// Largest ratio adjustment accepted by a backend.
+    #[config(value, builder(default = 8.0))]
     pub max_ratio_adjustment: f64,
-    #[builder(default = 0.0001)]
+    /// Ratio difference below which passthrough is allowed.
+    #[config(value, builder(default = 0.0001))]
     pub passthrough_tolerance: f64,
-    #[builder(default = 4_096)]
+    /// Number of input frames processed per chunk.
+    #[config(value, builder(default = 4_096))]
     pub chunk_size: usize,
 }
 
+/// Per-instance inputs used to prepare a resampler backend.
+#[kithara_config::config(construction, builder = false)]
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone)]
 pub struct ResamplerSettings<S> {
+    /// Channel count of the input and output stream.
+    #[config(value)]
     pub channels: NonZeroUsize,
+    /// Pool region provided by the caller for backend scratch buffers.
+    #[config(skip = "injected pool region")]
     pub pools: PoolRegion<S>,
+    /// Fixed or variable sample-rate conversion mode.
+    #[config(value)]
     pub mode: ResamplerMode,
-    #[builder(default)]
+    /// Backend tuning values.
+    #[config(value, builder(default))]
     pub options: ResamplerOptions,
-    #[builder(default)]
+    /// Backend quality preference.
+    #[config(value, builder(default))]
     pub quality: ResamplerQuality,
 }
 
@@ -82,12 +97,18 @@ impl<S> ResamplerSettings<S> {
     }
 }
 
+/// Backend and settings consumed together when a resampler is created.
+#[kithara_config::config(construction, builder = false)]
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone; B: Clone)]
 pub struct ResamplerConfig<B, S> {
+    /// Concrete backend supplied by the caller.
+    #[config(skip = "injected backend implementation")]
     pub backend: B,
+    /// Per-instance inputs passed to the backend.
+    #[config(value)]
     pub settings: ResamplerSettings<S>,
 }
 
@@ -202,6 +223,7 @@ mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
     use kithara_bufpool::HasPool;
+    use kithara_config::Config as _;
     use kithara_test_utils::kithara;
 
     use crate::{
@@ -274,6 +296,7 @@ mod tests {
         assert_eq!(options.chunk_size, 1_024);
         assert_eq!(options.passthrough_tolerance, 0.0001);
         assert_eq!(options.max_ratio_adjustment, 8.0);
+        assert_eq!(options.values().chunk_size, 1_024);
     }
 
     #[kithara::test(native, flash(false))]

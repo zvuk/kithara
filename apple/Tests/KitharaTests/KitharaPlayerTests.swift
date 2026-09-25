@@ -8,8 +8,35 @@ import Testing
 struct KitharaPlayerTests {
     final class LegacyItem {}
 
+    @Test("HLS source settings preserve the batch-size initializer")
+    func hlsSourceSettingsInitializer() {
+        let legacy = FfiHlsSourceSettings(downloadBatchSize: 6)
+        let configured = FfiHlsSourceSettings(sizeProbeMethod: .rangeGet, downloadBatchSize: 6)
+        let bounded = FfiHlsSourceSettings(lookAheadBytes: 0, sizeProbeMethod: .rangeGet, downloadBatchSize: 6)
+        let attempts = FfiHlsSourceSettings(lookAheadBytes: 0, sizeProbeMethod: .rangeGet, acquireAttemptBudget: 1, downloadBatchSize: 6)
+        #expect(legacy.downloadBatchSize == 6)
+        #expect(legacy.sizeProbeMethod == nil)
+        #expect(configured.sizeProbeMethod == .rangeGet)
+        #expect(bounded.lookAheadBytes == 0)
+        #expect(bounded.acquireAttemptBudget == nil)
+        #expect(attempts.acquireAttemptBudget == 1)
+    }
+
+    @Test("File source settings preserve the reader-event initializer")
+    func fileSourceSettingsInitializer() {
+        let legacy = FfiFileSourceSettings(readerEventCapacity: 512)
+        let bounded = FfiFileSourceSettings(lookAheadBytes: 0, readerEventCapacity: 512)
+        #expect(legacy.readerEventCapacity == 512)
+        #expect(legacy.lookAheadBytes == nil)
+        #expect(bounded.lookAheadBytes == 0)
+    }
+
+    init() throws {
+        try TestHost.initialize()
+    }
+
     @Test("init creates player with unknown status")
-    func initCreatesPlayerWithUnknownStatus() {
+    func initCreatesPlayerWithUnknownStatus() throws {
         let player = KitharaPlayer()
         #expect(player.status == .unknown)
         #expect(player.currentTime == 0.0)
@@ -17,19 +44,19 @@ struct KitharaPlayerTests {
     }
 
     @Test("playing rate is 1.0")
-    func playingRateIsOne() {
+    func playingRateIsOne() throws {
         let player = KitharaPlayer()
         #expect(player.playingRate == 1.0)
     }
 
     @Test("items() starts empty")
-    func itemsStartsEmpty() {
+    func itemsStartsEmpty() throws {
         let player = KitharaPlayer()
         #expect(player.items().isEmpty)
     }
 
     @Test("removeAllItems on empty queue does not crash")
-    func removeAllItemsOnEmpty() {
+    func removeAllItemsOnEmpty() throws {
         let player = KitharaPlayer()
         player.removeAllItems()
         #expect(player.items().isEmpty)
@@ -54,7 +81,7 @@ struct KitharaPlayerTests {
     }
 
     @Test("snapshot returns consistent state")
-    func snapshotReturnsConsistentState() {
+    func snapshotReturnsConsistentState() throws {
         let player = KitharaPlayer()
         let snap = player.snapshot
         #expect(snap.rate == 0.0)
@@ -64,7 +91,7 @@ struct KitharaPlayerTests {
     }
 
     @Test("currentAudioItem nil when queue empty")
-    func currentAudioItemNilWhenEmpty() {
+    func currentAudioItemNilWhenEmpty() throws {
         let player = KitharaPlayer()
         #expect(player.currentAudioItem == nil)
     }
@@ -132,7 +159,7 @@ struct KitharaPlayerTests {
     }
 
     @Test("setupNetwork stores auth token")
-    func setupNetworkStoresAuthToken() {
+    func setupNetworkStoresAuthToken() throws {
         let player = KitharaPlayer()
         // setupNetwork is fire-and-forget; we just verify the call
         // path doesn't throw. Header-side asserts are covered by the
@@ -158,8 +185,44 @@ struct KitharaPlayerTests {
         #expect(player.actionAtItemEnd == .pause)
     }
 
+    @Test("generated queue settings reach the player owner")
+    func generatedQueueSettingsReachOwner() throws {
+        let settings = FfiQueueSettings(
+            maxConcurrentLoads: 4,
+            prefetchDuration: 2,
+            shouldAutoplay: false,
+            maxHistorySize: 25,
+            playbackOrder: .shuffle,
+            actionAtItemEnd: .pause,
+            crossfadeSettings: FfiCrossfadeSettings(
+                duration: 1.5,
+                curve: .linear,
+                depth: 0.5,
+                position: 0.3
+            )
+        )
+        let player = try KitharaPlayer(config: .init(), queueSettings: settings)
+        #expect(player.playbackOrder == .shuffle)
+        #expect(player.actionAtItemEnd == .pause)
+        #expect(player.crossfadeSettings.duration == 1.5)
+        #expect(throws: FfiError.self) {
+            try KitharaPlayer(
+                config: .init(),
+                queueSettings: FfiQueueSettings(
+                    maxConcurrentLoads: 0,
+                    prefetchDuration: nil,
+                    shouldAutoplay: nil,
+                    maxHistorySize: nil,
+                    playbackOrder: nil,
+                    actionAtItemEnd: nil,
+                    crossfadeSettings: nil
+                )
+            )
+        }
+    }
+
     @Test("crossfade settings reject invalid values")
-    func crossfadeSettingsRejectInvalidValues() {
+    func crossfadeSettingsRejectInvalidValues() throws {
         #expect(throws: KitharaError.self) {
             try CrossfadeSettings(duration: -.infinity)
         }
@@ -172,7 +235,7 @@ struct KitharaPlayerTests {
     }
 
     @Test("command errors are emitted with affected item id")
-    func commandErrorsAreEmittedWithAffectedItemId() {
+    func commandErrorsAreEmittedWithAffectedItemId() throws {
         let player = KitharaPlayer()
         var observed: [KitharaPlayerError] = []
         let cancellable = player.contextualError.sink { error in
