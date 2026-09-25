@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FfiAssetResource","FfiAssetSource"],"struct":["FfiCacheIdentityRule"],"trait":["FfiAssetLayout"]};

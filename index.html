@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kithara Play WASM</title>
+    <!-- Build the crate with the wasm feature set: the default features
+         (uniffi + symphonia) pull native-only deps that don't compile for
+         wasm32. -->
+    
+<script type="module">
+import init, * as bindings from './kithara-ffi.js';
+const wasm = await init({ module_or_path: './kithara-ffi_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    
+    
+    
+    <style>
+        :root {
+            --bg-dark: #1a1a2e;
+            --bg-panel: #222244;
+            --bg-panel-alt: #2a2a54;
+            --line: #3b3b67;
+            --text-main: #e6e6e6;
+            --text-muted: #888ca3;
+            --accent: #bb9442;
+            --accent-strong: #d6ad59;
+            --error: #e65b5b;
+            --ok: #58c27d;
+            --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html {
+            border-top: 2px solid var(--accent);
+            scrollbar-color: var(--line) var(--bg-dark);
+        }
+        body {
+            max-width: 1240px;
+            margin: 0 auto;
+            padding: 0 16px 20px;
+            background: var(--bg-dark);
+            color: var(--text-main);
+            font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        a, button, label, #playlist li { transition: background-color 120ms, border-color 120ms, color 120ms; }
+        .bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--line);
+        }
+        .logo { width: 28px; height: 28px; }
+        h1 { font-size: 16px; letter-spacing: -0.01em; }
+        h1 span { color: var(--accent); }
+        .subtitle { color: var(--text-muted); font-size: 12px; }
+        .layout { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+        .player { display: grid; flex: 1 1 460px; gap: 12px; min-width: 0; }
+        .panel { border: 1px solid var(--line); background: var(--bg-panel); }
+        .panel-head {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-height: 36px;
+            padding: 0 12px;
+            border-bottom: 1px solid var(--line);
+        }
+        .panel-head h2, .tabs > label {
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .panel-body { padding: 12px; }
+        .row { display: flex; align-items: center; gap: 8px; }
+        .row + .row, .settings { margin-top: 12px; }
+        input[type="text"] {
+            flex: 1;
+            min-width: 0;
+            padding: 7px 10px;
+            border: 1px solid var(--line);
+            border-radius: 0;
+            outline: none;
+            background: var(--bg-dark);
+            color: var(--text-main);
+            font: inherit;
+            font-size: 13px;
+        }
+        input[type="text"]:focus { border-color: var(--accent); }
+        button {
+            padding: 7px 14px;
+            border: 1px solid var(--accent);
+            border-radius: 0;
+            background: var(--accent);
+            color: var(--bg-dark);
+            font: inherit;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        button:hover { border-color: var(--accent-strong); background: var(--accent-strong); }
+        button.ghost { border-color: var(--line); background: transparent; color: var(--text-main); }
+        button.ghost:hover { border-color: var(--accent); color: var(--accent-strong); }
+        button:focus-visible, a:focus-visible { outline: 1px solid var(--accent-strong); outline-offset: 2px; }
+        button:disabled, button.ghost:disabled {
+            border-color: var(--line);
+            background: transparent;
+            color: var(--text-muted);
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        input[type="range"] {
+            flex: 1;
+            min-width: 0;
+            height: 16px;
+            background: transparent;
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+        }
+        input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--line); }
+        input[type="range"]::-webkit-slider-thumb {
+            width: 8px;
+            height: 14px;
+            margin-top: -6px;
+            border: 0;
+            border-radius: 0;
+            background: var(--accent);
+            -webkit-appearance: none;
+        }
+        input[type="range"]::-moz-range-track { height: 2px; background: var(--line); }
+        input[type="range"]::-moz-range-progress { height: 2px; background: var(--accent); }
+        input[type="range"]::-moz-range-thumb { width: 8px; height: 14px; border: 0; border-radius: 0; background: var(--accent); }
+        input[type="range"]:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+        input[type="range"]:disabled { cursor: not-allowed; opacity: 0.4; }
+        #status {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            color: var(--text-muted);
+            font: 12px var(--font-mono);
+            text-align: right;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .time, .setting-value {
+            color: var(--text-muted);
+            font: 12px var(--font-mono);
+            font-variant-numeric: tabular-nums;
+        }
+        .time { min-width: 40px; }
+        .time:last-child, .setting-value { text-align: right; }
+        .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 24px; }
+        .settings .row + .row { margin-top: 0; }
+        .setting-label { min-width: 64px; color: var(--text-muted); font-size: 12px; }
+        .setting-value { min-width: 44px; }
+        #playlist {
+            max-height: 220px;
+            margin-top: 10px;
+            overflow-y: auto;
+            border: 1px solid var(--line);
+            list-style: none;
+        }
+        #playlist:empty { display: none; }
+        #playlist li {
+            padding: 7px 10px;
+            border-left: 2px solid transparent;
+            background: var(--bg-dark);
+            color: var(--text-main);
+            font-size: 13px;
+            word-break: break-all;
+            cursor: pointer;
+        }
+        #playlist li + li { border-top: 1px solid var(--line); }
+        #playlist li:hover { background: var(--bg-panel-alt); }
+        #playlist li.active {
+            border-left-color: var(--accent);
+            background: color-mix(in srgb, var(--accent) 14%, var(--bg-dark));
+            color: var(--accent-strong);
+        }
+        .tabs { position: relative; display: flex; flex-wrap: wrap; }
+        .tabs > input { position: absolute; opacity: 0; pointer-events: none; }
+        .tabs > label {
+            position: relative;
+            z-index: 1;
+            margin-bottom: -1px;
+            padding: 11px 12px 9px;
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+        }
+        .tabs > label:hover { color: var(--text-main); }
+        .tabs > input:checked + label { border-bottom-color: var(--accent); color: var(--accent-strong); }
+        .tabs > input:focus-visible + label { outline: 1px solid var(--accent); outline-offset: -1px; }
+        .tabs > .tab-action { display: none; align-self: center; margin: 0 8px 0 auto; padding: 4px 10px; font-size: 11px; }
+        #view-eq:checked ~ .tab-action { display: block; }
+        .tab-panel { display: none; flex-basis: 100%; min-width: 0; padding: 12px; border-top: 1px solid var(--line); }
+        .tabs > input:nth-of-type(1):checked ~ .tab-panel:nth-of-type(1),
+        .tabs > input:nth-of-type(2):checked ~ .tab-panel:nth-of-type(2),
+        .tabs > input:nth-of-type(3):checked ~ .tab-panel:nth-of-type(3) { display: block; }
+        .eq-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+            gap: 8px 24px;
+        }
+        .eq-band { display: grid; grid-template-columns: 52px minmax(0, 1fr) 60px; align-items: center; gap: 8px; }
+        .eq-band label { color: var(--text-muted); font-size: 11px; }
+        .eq-band .gain { color: var(--text-main); font: 11px var(--font-mono); text-align: right; }
+        #event-log { max-height: 220px; overflow-y: auto; color: var(--text-muted); font: 11px/1.6 var(--font-mono); }
+        #event-log:empty::before { content: "No events yet"; }
+        #event-log .error { color: var(--error); }
+        #event-log .info { color: var(--ok); }
+    </style>
+<style>
+.release{flex:1 1 460px;min-width:0}
+.release a{color:var(--accent-strong);text-decoration:none}
+.release a:hover{text-decoration:underline}
+.release-version{color:var(--accent-strong);font:600 12px var(--font-mono)}
+.release-nav{display:flex;gap:14px;margin-left:auto;font-size:12px}
+.release-count{margin-left:6px;padding:0 5px;background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent-strong)}
+.release-docs{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px}
+.release-docs a{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border:1px solid var(--line);background:var(--bg-dark);color:var(--text-main);font-weight:600}
+.release-docs a:hover{border-color:var(--accent);color:var(--accent-strong);text-decoration:none}
+.release-docs span{color:var(--text-muted);font-size:11px;font-weight:400}
+.release-files,.release-crates{list-style:none}
+.release-files li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 16px;padding:8px 0}
+.release-files li+li{border-top:1px solid var(--line)}
+.release-files a{overflow-wrap:anywhere;font:12px var(--font-mono)}
+.release-files code{grid-row:span 2;max-width:12ch;overflow:hidden;color:var(--text-muted);font:11px var(--font-mono);text-overflow:ellipsis;white-space:nowrap;user-select:all}
+.release-files span{color:var(--text-muted);font-size:12px}
+.release-crates{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:0 16px}
+.release-crates li{display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px}
+.release-crates span{flex:1;min-width:0;overflow:hidden;color:var(--text-main);font:12px var(--font-mono);text-overflow:ellipsis;white-space:nowrap}
+.release-foot{padding:8px 12px;border-top:1px solid var(--line);color:var(--text-muted);font-size:11px}
+</style>
+</head>
+<body>
+    <header class="bar">
+        <img class="logo" src="logo.svg" alt="Kithara logo" />
+        <div>
+            <h1>Kithara Play <span>WASM</span></h1>
+            <p class="subtitle">Queue, crossfade, and EQ on the unified AudioPlayer <span id="build-info"></span></p>
+        </div>
+    </header>
+
+    <main class="layout">
+        <div class="player">
+            <section class="panel">
+                <div class="panel-head">
+                    <h2>Transport</h2>
+                    <div id="status">Initializing WASM...</div>
+                </div>
+                <div class="panel-body">
+                    <div class="row">
+                        <button id="play-btn" disabled>Play</button>
+                        <button id="pause-btn" class="ghost" disabled>Pause</button>
+                        <button id="stop-btn" class="ghost" disabled>Stop</button>
+                    </div>
+                    <div class="row">
+                        <span class="time" id="position">0:00</span>
+                        <input type="range" id="seek-slider" min="0" max="100" value="0" step="0.1" disabled>
+                        <span class="time" id="duration">0:00</span>
+                    </div>
+                    <div class="settings">
+                        <div class="row">
+                            <label class="setting-label" for="volume-slider">Volume</label>
+                            <input type="range" id="volume-slider" min="0" max="1" value="0.5" step="0.01" disabled>
+                            <span class="setting-value" id="volume-value">100%</span>
+                        </div>
+                        <div class="row">
+                            <label class="setting-label" for="crossfade-slider">Crossfade</label>
+                            <input type="range" id="crossfade-slider" min="0" max="10" value="5" step="0.1" disabled>
+                            <span class="setting-value" id="crossfade-value">5.0s</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel tabs">
+                <input type="radio" name="player-view" id="view-queue" checked>
+                <label for="view-queue">Queue</label>
+                <input type="radio" name="player-view" id="view-eq">
+                <label for="view-eq">Equalizer</label>
+                <input type="radio" name="player-view" id="view-events">
+                <label for="view-events">Events</label>
+                <button id="eq-reset-btn" class="ghost tab-action" disabled>Reset EQ</button>
+                <div class="tab-panel">
+                    <div class="row">
+                        <input type="text" id="url-input" placeholder="Track URL (.m3u8 / .mp3 / etc)">
+                        <button id="add-btn" disabled>Add To Queue</button>
+                    </div>
+                    <ul id="playlist"></ul>
+                </div>
+                <div class="tab-panel">
+                    <div class="eq-grid" id="eq-grid"></div>
+                </div>
+                <div class="tab-panel">
+                    <div id="event-log"></div>
+                </div>
+            </section>
+        </div>
+    <section id="latest" class="panel release">
+<div class="panel-head"><h2>Release</h2><span class="release-version">0.0.1-alpha5</span>
+<nav class="release-nav"><a href="https://github.com/zvuk/kithara/releases/tag/v0.0.1-alpha5">Notes</a><a href="https://github.com/zvuk/kithara/blob/v0.0.1-alpha5/CHANGELOG.md">Changelog</a><a href="https://github.com/zvuk/kithara">GitHub</a></nav></div>
+<div class="tabs">
+<input type="radio" name="release-view" id="release-docs" checked><label for="release-docs">Docs</label>
+<input type="radio" name="release-view" id="release-downloads"><label for="release-downloads">Downloads</label>
+<input type="radio" name="release-view" id="release-crates"><label for="release-crates">Crates<span class="release-count">43</span></label>
+<div class="tab-panel"><div class="release-docs">
+<a href="docs/android/">Android<span>API reference</span></a>
+<a href="docs/ios/documentation/">iOS<span>API reference</span></a>
+<a href="docs/web/kithara_ffi/">Web<span>API reference</span></a>
+</div></div>
+<div class="tab-panel"><ul class="release-files">
+<li><a href="https://github.com/zvuk/kithara/releases/download/v0.0.1-alpha5/KitharaFFIInternal.xcframework.zip">KitharaFFIInternal.xcframework.zip</a><code title="SHA-256 4ed0af87d1853f869a3d204eb09f7dd3a13b8a3149c9380e46bc74aaa8212b70">4ed0af87d1853f869a3d204eb09f7dd3a13b8a3149c9380e46bc74aaa8212b70</code><span>Swift Package binary target</span></li>
+<li><a href="https://github.com/zvuk/kithara/releases/download/v0.0.1-alpha5/Kithara.xcframework.zip">Kithara.xcframework.zip</a><code title="SHA-256 45eb966ca31b52c4aea8e70b51da1d554d712e176453350d88b58b22656e220e">45eb966ca31b52c4aea8e70b51da1d554d712e176453350d88b58b22656e220e</code><span>XCFramework with the Swift layer</span></li>
+<li><a href="https://github.com/zvuk/kithara/releases/download/v0.0.1-alpha5/kithara-wasm-pages.zip">kithara-wasm-pages.zip</a><code title="SHA-256 820937bd176b4beae2be8958a3cdc0905ff3680560957409d0c3acc7df975a97">820937bd176b4beae2be8958a3cdc0905ff3680560957409d0c3acc7df975a97</code><span>Web demo bundle</span></li>
+<li><a href="https://github.com/zvuk/kithara/releases/download/v0.0.1-alpha5/kithara.aar">kithara.aar</a><code title="SHA-256 dd599ed8881c88fd3a043d0c99def94d0e0fffd2079bdad1311008be311026f3">dd599ed8881c88fd3a043d0c99def94d0e0fffd2079bdad1311008be311026f3</code><span>Platform library</span></li>
+<li><a href="https://github.com/zvuk/kithara/releases/download/v0.0.1-alpha5/kithara-okhttp.aar">kithara-okhttp.aar</a><code title="SHA-256 c18810c9aa39542bec3f9a8dd4a7639366a26b40594a4a1940b5c2dc2cf577d2">c18810c9aa39542bec3f9a8dd4a7639366a26b40594a4a1940b5c2dc2cf577d2</code><span>Platform library</span></li>
+<li><a href="https://github.com/zvuk/kithara/releases/download/v0.0.1-alpha5/kithara-android-docs.zip">kithara-android-docs.zip</a><code title="SHA-256 d1ac7ac5813d43fb34d5a3b8e734f5cedba4533ee3c8d3cd133505fd3e3a377d">d1ac7ac5813d43fb34d5a3b8e734f5cedba4533ee3c8d3cd133505fd3e3a377d</code><span>Android documentation</span></li>
+<li><a href="https://github.com/zvuk/kithara/releases/download/v0.0.1-alpha5/Kithara-docs.zip">Kithara-docs.zip</a><code title="SHA-256 9242fe2a9661efa46ec8c3055a48e66ab638210ac979370a10df24948cb4a581">9242fe2a9661efa46ec8c3055a48e66ab638210ac979370a10df24948cb4a581</code><span>iOS documentation</span></li>
+<li><a href="https://github.com/zvuk/kithara/releases/download/v0.0.1-alpha5/kithara-web-docs.zip">kithara-web-docs.zip</a><code title="SHA-256 dea1b8eb1cee5973e03566e1d13b4307bdd5961b50ddda5f92629ed14e19e5b4">dea1b8eb1cee5973e03566e1d13b4307bdd5961b50ddda5f92629ed14e19e5b4</code><span>Web documentation</span></li>
+</ul></div>
+<div class="tab-panel"><ul class="release-crates">
+<li><span>kithara</span><a href="https://crates.io/crates/kithara/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-abr</span><a href="https://crates.io/crates/kithara-abr/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-abr/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-analysis</span><a href="https://crates.io/crates/kithara-analysis/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-analysis/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-android</span><a href="https://crates.io/crates/kithara-android/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-android/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-apple</span><a href="https://crates.io/crates/kithara-apple/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-apple/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-assets</span><a href="https://crates.io/crates/kithara-assets/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-assets/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-audio</span><a href="https://crates.io/crates/kithara-audio/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-audio/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-beat</span><a href="https://crates.io/crates/kithara-beat/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-beat/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-blob</span><a href="https://crates.io/crates/kithara-blob/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-blob/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-broadcast</span><a href="https://crates.io/crates/kithara-broadcast/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-broadcast/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-bufpool</span><a href="https://crates.io/crates/kithara-bufpool/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-bufpool/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-decode</span><a href="https://crates.io/crates/kithara-decode/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-decode/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-derive</span><a href="https://crates.io/crates/kithara-derive/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-derive/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-devtools</span><a href="https://crates.io/crates/kithara-devtools/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-devtools/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-download</span><a href="https://crates.io/crates/kithara-download/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-download/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-drm</span><a href="https://crates.io/crates/kithara-drm/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-drm/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-effects</span><a href="https://crates.io/crates/kithara-effects/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-effects/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-encode</span><a href="https://crates.io/crates/kithara-encode/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-encode/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-events</span><a href="https://crates.io/crates/kithara-events/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-events/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-file</span><a href="https://crates.io/crates/kithara-file/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-file/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-hls</span><a href="https://crates.io/crates/kithara-hls/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-hls/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-host</span><a href="https://crates.io/crates/kithara-host/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-host/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-mp4</span><a href="https://crates.io/crates/kithara-mp4/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-mp4/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-mpa</span><a href="https://crates.io/crates/kithara-mpa/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-mpa/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-net</span><a href="https://crates.io/crates/kithara-net/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-net/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-output</span><a href="https://crates.io/crates/kithara-output/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-output/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-platform</span><a href="https://crates.io/crates/kithara-platform/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-platform/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-play</span><a href="https://crates.io/crates/kithara-play/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-play/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-queue</span><a href="https://crates.io/crates/kithara-queue/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-queue/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-record</span><a href="https://crates.io/crates/kithara-record/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-record/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-resampler</span><a href="https://crates.io/crates/kithara-resampler/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-resampler/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-ring</span><a href="https://crates.io/crates/kithara-ring/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-ring/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-signal</span><a href="https://crates.io/crates/kithara-signal/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-signal/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-storage</span><a href="https://crates.io/crates/kithara-storage/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-storage/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-stream</span><a href="https://crates.io/crates/kithara-stream/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-stream/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-stretch</span><a href="https://crates.io/crates/kithara-stretch/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-stretch/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-sync</span><a href="https://crates.io/crates/kithara-sync/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-sync/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-test-macros</span><a href="https://crates.io/crates/kithara-test-macros/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-test-macros/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-test-utils</span><a href="https://crates.io/crates/kithara-test-utils/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-test-utils/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-ui</span><a href="https://crates.io/crates/kithara-ui/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-ui/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-warp</span><a href="https://crates.io/crates/kithara-warp/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-warp/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-waveform</span><a href="https://crates.io/crates/kithara-waveform/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-waveform/0.0.1-alpha5">docs.rs</a></li>
+<li><span>kithara-worker</span><a href="https://crates.io/crates/kithara-worker/0.0.1-alpha5">crates.io</a><a href="https://docs.rs/kithara-worker/0.0.1-alpha5">docs.rs</a></li>
+</ul></div>
+</div>
+<p class="release-foot">Built from <a href="https://github.com/zvuk/kithara/tree/v0.0.1-alpha5">v0.0.1-alpha5</a></p>
+</section>
+</main>
+
+    <script src="./coi-serviceworker.js"></script>
+    <script type="module">
+        const $ = id => document.getElementById(id);
+        const fmt = ms => {
+            const s = Math.max(0, Math.floor(ms / 1000));
+            return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        };
+        function log(msg, cls = '') {
+            const div = document.createElement('div');
+            if (cls) div.className = cls;
+            div.textContent = `[${new Date().toISOString().slice(11, 23)}] ${msg}`;
+            $('event-log').appendChild(div);
+            $('event-log').scrollTop = $('event-log').scrollHeight;
+        }
+
+        function setControlsEnabled(on) {
+            for (const id of ['add-btn','play-btn','pause-btn','stop-btn','seek-slider','volume-slider','crossfade-slider','eq-reset-btn'])
+                $(id).disabled = !on;
+        }
+
+        // --- Init WASM ---
+        // `AudioPlayer` is the wasm-bindgen class generated from the
+        // #[wasm_bindgen] impl in src/web/surface.rs. `checkRuntime()` is
+        // appended to kithara-ffi.js by `just tooling xtask wasm postbuild`.
+        // Trunk's injected loader owns `init()`; a second concurrent call
+        // instantiates a second module over the same shared memory.
+        const wasm = await import('./kithara-ffi.js');
+
+        const runtime = wasm.checkRuntime();
+        if (!runtime.ok) {
+            setControlsEnabled(false);
+            $('status').textContent = runtime.waitingForReload
+                ? 'Waiting for cross-origin isolation (service worker reload)...'
+                : 'Environment is not ready for WASM audio playback';
+            log(runtime.reason, runtime.waitingForReload ? 'info' : 'error');
+            throw new Error(runtime.reason);
+        }
+
+        if (!window.wasmBindings) {
+            await new Promise(resolve =>
+                addEventListener('TrunkApplicationStarted', resolve, { once: true }));
+        }
+
+        // One AudioPlayer instance owns the engine worker + queue.
+        const player = new wasm.AudioPlayer();
+        window.__player = player;
+        window.__wasm = wasm;
+
+        $('build-info').textContent = `(${wasm.build_info()})`;
+
+        // --- Queue mirror (idx -> { url, label, id }) ---
+        // The engine owns the canonical queue; this JS list mirrors insertion
+        // order so the UI can map a clicked row to a queue index. Exposed on
+        // window so selenium tests can manipulate the queue.
+        const playlist = window.playlist = [];
+        let currentId = -1;
+        let durationMs = 0;
+        window.__durationMs = 0;
+
+        // setupNetwork wires the shared X-Auth-Token applied to subsequently
+        // inserted tracks.
+        player.setupNetwork('');
+        // The AES key processor is intentionally NOT wired here. setupHlsAes
+        // registers a player-wide rule whose salt header (X-Encrypted-Key) is
+        // currently attached to every fetch, not just key requests on the DRM
+        // domain; the plain MP3/HLS server's CORS (allow-headers: Range) then
+        // rejects the preflight (TypeError: Failed to fetch). The DRM track
+        // below therefore won't decrypt in this demo until the rule headers
+        // are scoped to the rule's domain.
+
+        const seedTracks = [
+            { url: 'https://stream.silvercomet.top/track.mp3', label: 'MP3 Track' },
+            { url: 'https://stream.silvercomet.top/hls/master.m3u8', label: 'HLS Stream' },
+            { url: 'https://stream.silvercomet.top/drm/master.m3u8', label: 'DRM Stream' },
+        ];
+
+        window.renderPlaylist = renderPlaylist;
+        function renderPlaylist() {
+            const ul = $('playlist');
+            ul.textContent = '';
+            playlist.forEach((track, i) => {
+                const li = document.createElement('li');
+                li.textContent = `${i + 1}. ${track.label}`;
+                if (track.id === currentId) li.classList.add('active');
+                li.onclick = () => selectTrack(i);
+                ul.appendChild(li);
+            });
+        }
+
+        // window-exposed for selenium: append a track to the engine queue and
+        // the JS mirror, returning the allocated track id.
+        window.addTrack = addTrack;
+        function addTrack(url, label) {
+            const id = player.append(url);
+            playlist.push({ url, label: label || url, id });
+            renderPlaylist();
+            log(`Added track: ${label || url} (id ${id})`, 'info');
+            return id;
+        }
+
+        // window-exposed for selenium: clear both the engine queue and the JS
+        // mirror so the two stay in sync (the engine owns the canonical queue).
+        window.clearPlaylist = clearPlaylist;
+        function clearPlaylist() {
+            player.removeAllItems();
+            playlist.length = 0;
+            currentId = -1;
+            durationMs = 0;
+            window.__durationMs = 0;
+            renderPlaylist();
+        }
+
+        function selectTrack(index) {
+            const track = playlist[index];
+            if (!track) return;
+            $('status').textContent = `Loading ${track.label}...`;
+            try {
+                player.select(track.id);
+                player.play();
+                $('status').textContent = `Playing ${track.label}`;
+                log(`Track selected: ${track.label}`, 'info');
+            } catch (err) {
+                $('status').textContent = `Track select failed: ${err}`;
+                log(`Track select failed: ${err}`, 'error');
+            }
+        }
+
+        // --- Player observer ---
+        // The surface marshals each FfiPlayerEvent into a plain JS object with
+        // a `kind` discriminant. We log everything and track duration so the
+        // seek slider has a real range.
+        player.setObserver(event => {
+            const kind = event.kind || 'Event';
+            if (kind === 'DurationChanged') {
+                durationMs = event.seconds * 1000;
+                window.__durationMs = durationMs;
+            } else if (kind === 'CurrentItemChanged') {
+                currentId = event.item_id ?? -1;
+                renderPlaylist();
+            }
+            const cls = /error|fail|closed|lagged/i.test(JSON.stringify(event)) ? 'error' : '';
+            log(`${kind} ${JSON.stringify(event)}`, cls);
+        });
+
+        // --- Add track button ---
+        $('add-btn').onclick = () => {
+            const url = $('url-input').value.trim();
+            if (!url) return;
+            addTrack(url, url);
+            $('url-input').value = '';
+        };
+
+        // --- Transport ---
+        $('play-btn').onclick = () => { player.play(); $('status').textContent = 'Playing'; log('Play', 'info'); };
+        $('pause-btn').onclick = () => { player.pause(); $('status').textContent = 'Paused'; log('Pause', 'info'); };
+        $('stop-btn').onclick = () => {
+            // Stop = pause + reset position to 0; the queue is preserved so the
+            // same item can be replayed. Use clearPlaylist to empty the queue.
+            player.stop();
+            $('seek-slider').value = '0';
+            $('position').textContent = '0:00';
+            $('status').textContent = 'Stopped';
+            log('Stop', 'info');
+        };
+
+        // --- Seek ---
+        $('seek-slider').oninput = () => {
+            $('position').textContent = fmt(Number($('seek-slider').value));
+        };
+        $('seek-slider').onchange = () => {
+            const ms = Number($('seek-slider').value);
+            player.seek(ms);
+            log(`Seek to ${fmt(ms)}`, 'info');
+        };
+
+        // --- Volume ---
+        $('volume-slider').oninput = () => {
+            const v = Number($('volume-slider').value);
+            player.setVolume(v);
+            $('volume-value').textContent = `${Math.round(v * 100)}%`;
+        };
+
+        // --- Crossfade ---
+        $('crossfade-slider').oninput = () => {
+            $('crossfade-value').textContent =
+                Number($('crossfade-slider').value) <= 0 ? 'Off'
+                : `${Number($('crossfade-slider').value).toFixed(1)}s`;
+        };
+        $('crossfade-slider').onchange = () => {
+            const settings = player.crossfadeSettings();
+            player.setCrossfadeSettings(Number($('crossfade-slider').value), settings.curve, settings.depth, settings.position);
+        };
+
+        // --- Equalizer ---
+        function renderEq() {
+            const grid = $('eq-grid');
+            grid.textContent = '';
+            const bands = player.eqBandCount();
+            for (let i = 0; i < bands; i++) {
+                const band = document.createElement('div');
+                band.className = 'eq-band';
+                const label = document.createElement('label');
+                label.textContent = `Band ${i + 1}`;
+                const slider = document.createElement('input');
+                Object.assign(slider, {
+                    type: 'range', min: '-24', max: '6', step: '0.1',
+                    value: String(player.eqGain(i)),
+                });
+                const gain = document.createElement('span');
+                gain.className = 'gain';
+                gain.textContent = `${Number(slider.value).toFixed(1)} dB`;
+                slider.oninput = () => {
+                    gain.textContent = `${Number(slider.value).toFixed(1)} dB`;
+                };
+                slider.onchange = () => player.setEqGain(i, Number(slider.value));
+                band.append(label, slider, gain);
+                grid.appendChild(band);
+            }
+        }
+        $('eq-reset-btn').onclick = () => { player.resetEq(); renderEq(); log('EQ reset', 'info'); };
+
+        // --- UI loop (requestAnimationFrame) ---
+        // tick() pumps the worker -> main channel and services DRM key
+        // requests. currentTimeMs() reads the live position cache (60Hz smooth
+        // UI without a worker round-trip); duration comes from the observer.
+        function tick() {
+            player.tick();
+
+            const pos = player.currentTimeMs();
+            $('position').textContent = fmt(pos);
+            $('duration').textContent = fmt(durationMs);
+            if (durationMs > 0) {
+                $('seek-slider').max = String(durationMs);
+                if (!$('seek-slider').matches(':active')) {
+                    $('seek-slider').value = String(Math.min(pos, durationMs));
+                }
+            }
+
+            requestAnimationFrame(tick);
+        }
+
+        // --- Init ---
+        {
+            const initVol = Number($('volume-slider').value);
+            player.setVolume(initVol);
+        }
+        for (const t of seedTracks) addTrack(t.url, t.label);
+        renderEq();
+        $('volume-value').textContent = `${Math.round(player.volume() * 100)}%`;
+        $('crossfade-value').textContent = `${player.crossfadeSettings().duration.toFixed(1)}s`;
+        setControlsEnabled(true);
+        $('status').textContent = 'Ready';
+        log('WASM player initialized', 'info');
+        requestAnimationFrame(tick);
+    </script>
+</body>
+</html>
