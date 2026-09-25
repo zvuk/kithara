@@ -4,10 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased](https://github.com/zvuk/kithara/compare/v0.0.1-alpha4...HEAD)
+## [0.0.1-alpha5](https://github.com/zvuk/kithara/releases/tag/v0.0.1-alpha5) - 2026-09-25
 
 ### Added
 
+- **warp**: Add glide rate backend and bitflag capabilities ([#456](https://github.com/zvuk/kithara/pull/456))
 - **sync**: S2 strict transition contract: modes, strict preparations, recursive transaction, receipt lifecycle ([#432](https://github.com/zvuk/kithara/pull/432))
 - **bufpool**: Back cross-thread PCM rings with pooled memory ([#428](https://github.com/zvuk/kithara/pull/428))
 - **Breaking** — **android**: Run every Android request through the host application's HTTP client ([#420](https://github.com/zvuk/kithara/pull/420))
@@ -92,8 +93,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- **ui**: Keep the workspace hack for desktop builds only
-- **android**: Keep the desktop UI stack out of the workspace-hack base
+- **publish**: Drop workspace-hack references from the published features ([#469](https://github.com/zvuk/kithara/pull/469))
+- **style**: Keep module facades export-only ([#462](https://github.com/zvuk/kithara/pull/462))
+- **audio,hls**: Hold abr until post-seek output ([#451](https://github.com/zvuk/kithara/pull/451))
+- **audio**: Keep a variant switch when the incoming runs out mid-join ([#448](https://github.com/zvuk/kithara/pull/448))
+- **ui**: Build kithara-ui for wasm32 without the tiny-skia renderer ([#443](https://github.com/zvuk/kithara/pull/443))
+- **apple**: Restore advanceToNextItem on KitharaPlayer ([#441](https://github.com/zvuk/kithara/pull/441))
+- **android**: Keep the desktop UI stack out of the workspace-hack base ([#439](https://github.com/zvuk/kithara/pull/439))
 - **file**: Stop reading the whole track to index it, and own the walk in kithara-mp4 ([#414](https://github.com/zvuk/kithara/pull/414))
 - Settle two CI flakes at their causes ([#415](https://github.com/zvuk/kithara/pull/415))
 - **audio**: Preserve consumer readiness notifications ([#418](https://github.com/zvuk/kithara/pull/418))
