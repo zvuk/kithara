@@ -26,6 +26,7 @@ stretch-glide = ["dep:firewheel-core", "dep:kithara-stretch", "kithara-stretch/s
 [dependencies]
 kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true, optional = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }

@@ -30,14 +30,14 @@ where
             .cancel
             .or_else(|| self.player.core.engine.cancel_token())
             .map(|parent| parent.child());
-        let warp = self.player.core.warp.clone();
+        let warp = self.player.core.config.warp.clone();
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
         let stream_shape = self.player.core.engine.stream_shape()?;
         let mut audio = config.audio;
         if let (Some(quantum), Some(shape)) = (warp.render_quantum_frames(), stream_shape) {
             let (preload, ring) =
-                shape.playback_buffers(quantum, self.player.core.response_budget_frames)?;
+                shape.playback_buffers(quantum, self.player.core.config.response_budget_frames)?;
             audio.preload_chunks = Some(preload);
             audio.audio_buffer_chunks = Some(ring.get());
         }
@@ -60,14 +60,14 @@ where
         };
         let decoder = AudioDecoderConfig::builder()
             .backend(config.decoder.backend())
-            .gapless_mode(self.player.core.gapless_mode)
+            .gapless_mode(self.player.core.config.gapless_mode)
             .maybe_resampler(resampler)
             .build();
         Ok(ResourceConfig {
             bus,
             cancel,
-            worker: Some(self.player.core.worker.clone()),
-            block_on_underrun: self.player.core.block_on_underrun,
+            worker: Some(self.player.core.config.worker.clone()),
+            block_on_underrun: self.player.core.config.block_on_underrun,
             audio,
             host_sample_rate,
             decoder,

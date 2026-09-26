@@ -225,9 +225,9 @@ fn player_config_builder() {
         .eq_layout(generate_log_spaced_bands(5))
         .build();
     assert_eq!(config.max_slots, 8);
-    assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
-    assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);
-    assert!((config.prefetch_duration - 7.0).abs() < f32::EPSILON);
+    assert!((config.default_rate.load() - 0.5).abs() < f32::EPSILON);
+    assert!((config.crossfade_duration.load() - 2.5).abs() < f32::EPSILON);
+    assert!((config.prefetch_duration.load() - 7.0).abs() < f32::EPSILON);
     assert_eq!(config.eq_layout.len(), 5);
 }
 

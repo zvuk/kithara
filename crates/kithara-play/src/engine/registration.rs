@@ -11,7 +11,7 @@ impl<S> EngineImpl<S> {
         let registered = self.session.register_player(
             self.config.grid_id,
             self.bus.clone(),
-            self.eq_layout.lock().clone(),
+            self.config.eq_layout.lock().clone(),
             self.pools().clone(),
             self.config.gate_smoothing,
         )?;

@@ -16,10 +16,7 @@ where
 {
     #[must_use]
     pub fn action_at_item_end(&self) -> ActionAtItemEnd {
-        *self
-            .action_at_item_end
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.config.action_at_item_end()
     }
 
     /// The currently playing track entry, if any.
@@ -45,10 +42,7 @@ where
 
     pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
         self.command(|queue| {
-            *queue
-                .action_at_item_end
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = action;
+            queue.config.set_action_at_item_end(action);
             queue
                 .bus
                 .publish(QueueEvent::ActionAtItemEndChanged { action });

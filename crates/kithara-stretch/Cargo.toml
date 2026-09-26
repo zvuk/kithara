@@ -23,6 +23,7 @@ stretch-glide = []
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
 kithara-resampler = { workspace = true, features = ["resample-glide"] }
 kithara-signal = { workspace = true }

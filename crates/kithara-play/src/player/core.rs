@@ -1,19 +1,18 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use delegate::delegate;
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_decode::GaplessMode;
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use kithara_warp::WarpConfig;
 use tracing::{debug, warn};
 
 use super::{
+    PlayerConfig,
     lifecycle::{CloseAdmission, PlayerLifecycle},
     staging::SyncStaging,
-    state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid},
+    state::{ItemQueue, PlayerPhase, TrackGrid},
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus, TrackId},
@@ -22,7 +21,7 @@ use crate::{
     error::PlayError,
     resource::Resource,
     session::SessionBinding,
-    worker::{EngineLoad, PlayWorker},
+    worker::EngineLoad,
 };
 
 type EnqueuedItem = (TrackId, Arc<str>, f64);
@@ -50,27 +49,22 @@ pub(crate) struct PlayerCore<S> {
     /// Host lifecycle explicitly detaches the engine session lane before the
     /// worker owner drops.
     pub(crate) engine: EngineImpl<S>,
-    pub(crate) gapless_mode: GaplessMode,
     /// Undelivered resources unregister before the worker owner drops.
     pub(crate) items: ItemQueue,
+    /// Status kept explicit (not derived from phase): `set_status` emits
+    /// `StatusChanged` only on change and its values are not 1:1 with phase.
+    pub(crate) status: Mutex<PlayerStatus>,
+    /// Construction recipe and injected resources. Its worker drops after
+    /// the engine and undelivered items.
+    pub(crate) config: PlayerConfig<S>,
     /// Where the current item must start when it reaches a processor.
     /// Set by a seek that arrives before the player holds a slot, consumed
     /// by the load that starts playback.
     pub(crate) start_position: Mutex<Option<Duration>>,
-    /// Status kept explicit (not derived from phase): `set_status` emits
-    /// `StatusChanged` only on change and its values are not 1:1 with phase.
-    pub(crate) status: Mutex<PlayerStatus>,
-    pub(crate) response_budget_frames: Option<NonZeroUsize>,
-    /// Explicit shared playback worker. Declared after both resource owners.
-    pub(crate) worker: PlayWorker<S>,
-    pub(crate) params: PlayerParams,
     /// Executor of the preparations the player's group issues for its track.
     pub(crate) staging: SyncStaging,
     /// Geometry this player publishes for the track it holds.
     pub(crate) track_grid: TrackGrid,
-    pub(crate) warp: WarpConfig,
-    /// Player-level underrun policy copied into every prepared resource.
-    pub(crate) block_on_underrun: bool,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -285,7 +279,7 @@ impl<S> PlayerRuntime<S> {
             /// Pre-allocate empty slots so `replace_item` can fill them by index.
             pub fn reserve_slots(&self, count: usize);
         }
-        to self.core.worker {
+        to self.core.config.worker {
             /// Typed pool facade used for resources created by this player.
             #[must_use]
             pub fn pools(&self) -> &PoolRegion<S>;
@@ -299,13 +293,14 @@ mod tests {
     use std::sync::mpsc::{RecvTimeoutError, channel};
 
     use kithara_assets::AssetStore;
+    use kithara_config::Config as _;
     use kithara_decode::GaplessMode;
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
 
     use super::{super::PlayerImpl, *};
     use crate::{
-        PlayWorkerConfig,
+        PlayWorker, PlayWorkerConfig,
         bridge::PlayerCmd,
         mock,
         player::{PlayerConfig, PlayerConfigPatch},
@@ -333,6 +328,59 @@ mod tests {
                 .session(mock::session())
                 .build(),
         )
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn player_config_values_follow_live_controls() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(worker())
+                .session(mock::session())
+                .gapless_mode(GaplessMode::Disabled)
+                .crossfade_duration(2.0)
+                .build(),
+        );
+
+        let values = player.core.config.values();
+        assert_eq!(values.gapless_mode, GaplessMode::Disabled);
+        assert_eq!(values.crossfade_duration, 2.0);
+        assert_eq!(player.crossfade_duration(), 2.0);
+
+        player.set_crossfade_duration(3.0);
+        assert_eq!(player.crossfade_duration(), 3.0);
+        assert_eq!(player.core.config.values().crossfade_duration, 3.0);
+
+        player.set_auto_advance_enabled(false);
+        player.set_default_rate(0.75);
+        player.set_prefetch_duration(4.0);
+        player.set_volume(0.4);
+        player.set_muted(true);
+        let values = player.core.config.values();
+        assert!(!values.auto_advance_enabled);
+        assert_eq!(values.default_rate, 0.75);
+        assert_eq!(values.prefetch_duration, 4.0);
+        assert_eq!(values.volume, 0.4);
+        assert!(values.muted);
+    }
+
+    #[kithara::test]
+    fn checked_crossfade_update_respects_closed_owner() {
+        let player = player();
+        player
+            .try_set_crossfade_duration(2.0)
+            .expect("idle player retains the next slot's setting");
+        assert_eq!(player.core.config.values().crossfade_duration, 2.0);
+
+        player
+            .make_control()
+            .close()
+            .expect("fixture player closes");
+        assert!(matches!(
+            player.try_set_crossfade_duration(3.0),
+            Err(PlayError::Closed)
+        ));
+        assert_eq!(player.core.config.values().crossfade_duration, 2.0);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -560,7 +608,7 @@ mod tests {
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
         player.set_default_rate(0.75);
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
-        assert!((player.core.warp.stretch().speed() - 0.75).abs() < f32::EPSILON);
+        assert!((player.core.config.warp.stretch().speed() - 0.75).abs() < f32::EPSILON);
         assert_eq!(player.rate(), 0.0);
     }
 
@@ -569,7 +617,7 @@ mod tests {
         let player = player();
         player.set_rate(2.0);
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
-        assert!((player.core.warp.stretch().speed() - 2.0).abs() < f32::EPSILON);
+        assert!((player.core.config.warp.stretch().speed() - 2.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
@@ -581,11 +629,11 @@ mod tests {
                 .session(mock::session())
                 .build(),
         );
-        let ptr_before = Arc::as_ptr(player.core.warp.stretch());
+        let ptr_before = Arc::as_ptr(player.core.config.warp.stretch());
         player.play();
         player.pause();
         player.play();
-        let ptr_after = Arc::as_ptr(player.core.warp.stretch());
+        let ptr_after = Arc::as_ptr(player.core.config.warp.stretch());
         assert_eq!(
             ptr_before, ptr_after,
             "timestretch controls must stay address-stable across transitions"
