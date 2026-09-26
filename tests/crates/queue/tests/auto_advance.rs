@@ -66,7 +66,7 @@ async fn render_loop(
 ) -> Vec<f32> {
     let mut pcm = Vec::new();
     for _ in 0..block_budget {
-        let _ = harness.run(queue, |q| q.tick()).await;
+        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         pcm.extend(block);
     }
@@ -108,7 +108,9 @@ async fn crossfade_started_requires_a_live_predecessor() {
 
     let mut saw_playing = false;
     for _ in 0..MAX_BLOCKS {
-        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness
+            .run(&queue, kithara::queue::QueueControl::tick)
+            .await;
         let _ = harness.render(BLOCK_FRAMES).await;
         let is_playing = queue.is_playing();
         saw_playing |= is_playing;
@@ -122,7 +124,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
     );
     assert!(!queue.is_playing(), "the predecessor must reach EOF");
     harness
-        .run(&queue, |q| q.tick())
+        .run(&queue, kithara::queue::QueueControl::tick)
         .await
         .expect("process predecessor EOF");
 
@@ -248,7 +250,9 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
         })
     ));
     for _ in 0..MAX_BLOCKS {
-        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness
+            .run(&queue, kithara::queue::QueueControl::tick)
+            .await;
         let _ = harness.render(BLOCK_FRAMES).await;
         if queue.current().is_some_and(|entry| entry.id == first) {
             break;
@@ -443,14 +447,16 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     let mut item_end_seen = false;
 
     for _ in 0..MAX_BLOCKS {
-        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness
+            .run(&queue, kithara::queue::QueueControl::tick)
+            .await;
         let _ = harness.render(BLOCK_FRAMES).await;
 
         loop {
             match rx.try_recv().map(|env| env.event) {
                 Ok(TestEvent::Player(PlayerEvent::PrefetchRequested)) => prefetch_seen = true,
                 Ok(TestEvent::Player(PlayerEvent::HandoverRequested { .. })) => {
-                    handover_seen = true
+                    handover_seen = true;
                 }
                 Ok(TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { .. })) => item_end_seen = true,
                 Ok(_) => {}
@@ -586,7 +592,9 @@ async fn queue_stops_live_playback_when_last_track_ends() {
 
     let mut saw_queue_ended = false;
     for _ in 0..MAX_BLOCKS {
-        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness
+            .run(&queue, kithara::queue::QueueControl::tick)
+            .await;
         let _ = harness.render(BLOCK_FRAMES).await;
         loop {
             match rx.try_recv().map(|env| env.event) {
@@ -598,7 +606,9 @@ async fn queue_stops_live_playback_when_last_track_ends() {
         }
         if saw_queue_ended {
             for _ in 0..4 {
-                let _ = harness.run(&queue, |q| q.tick()).await;
+                let _ = harness
+                    .run(&queue, kithara::queue::QueueControl::tick)
+                    .await;
                 let _ = harness.render(BLOCK_FRAMES).await;
             }
             break;

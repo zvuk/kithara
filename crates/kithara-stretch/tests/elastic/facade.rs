@@ -704,7 +704,7 @@ fn preserves_tone_pitch_when_source_advance_changes(
     let mut output = vec![0.0; OUTPUT_FRAMES];
 
     engine
-        .process(request, &source, &mut output)
+        .process(request, source, &mut output)
         .expect("the request is supported");
 
     let latency = rate_aware_latency_frames(engine.capabilities(), request);

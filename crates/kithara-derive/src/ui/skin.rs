@@ -112,7 +112,7 @@ mod tests {
         assert!(
             output
                 .find(&frame)
-                .is_some_and(|first| { output[first..].find(&frame_only).is_some() })
+                .is_some_and(|first| output[first..].contains(&frame_only))
         );
         assert_eq!(output.matches(&frame_only).count(), 1);
         assert_eq!(output.matches(&role_only).count(), 1);

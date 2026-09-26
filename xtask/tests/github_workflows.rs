@@ -2246,7 +2246,7 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
 }
 
 /// `wreq` is the backend the Apple desktop app ships, and asking for it
-/// builds BoringSSL through cmake. The Windows guest carries neither that
+/// builds `BoringSSL` through cmake. The Windows guest carries neither that
 /// toolchain nor the product that would use the backend, so the lane names the
 /// one the platform actually carries; without that the suite stops in a build
 /// script, which is where it stopped the first time it ever got that far.
@@ -2269,7 +2269,7 @@ fn the_windows_lane_runs_the_backend_the_platform_ships() {
     );
 }
 
-/// The guest carries FFmpeg and libclang, and the build scripts find them only
+/// The guest carries `FFmpeg` and libclang, and the build scripts find them only
 /// through these. Without `FFMPEG_DIR` the crate falls through to vcpkg and
 /// then pkg-config, the guest has neither; without `LIBCLANG_PATH` bindgen
 /// loads no library. Either way a build script panics before a single test

@@ -60,19 +60,19 @@ fn arrival_order_does_not_change_the_artifacts(analysis_pcm: &'static [f32]) {
     let frames = 12 * usize::try_from(SR).unwrap_or(1);
     let samples = sine(analysis_pcm, frames);
     let ascending = blocks(frames, 12);
-    let want = analyse(&samples, &ascending);
+    let want = analyse(samples, &ascending);
     assert!(!want.1.is_empty(), "the harness must find markers at all");
 
     let shuffled: Vec<_> = [7usize, 0, 11, 3, 9, 1, 5, 10, 2, 8, 4, 6]
         .iter()
         .filter_map(|index| ascending.get(*index).copied())
         .collect();
-    assert_agrees(&want, &analyse(&samples, &shuffled), "shuffled");
+    assert_agrees(&want, &analyse(samples, &shuffled), "shuffled");
 
     let mut duplicated = ascending.clone();
     duplicated.extend(ascending.iter().take(4).copied());
     duplicated.extend(ascending.iter().skip(8).copied());
-    assert_agrees(&want, &analyse(&samples, &duplicated), "duplicated");
+    assert_agrees(&want, &analyse(samples, &duplicated), "duplicated");
 
     // Half-block strides, so every block overlaps its neighbour.
     let per = frames / 12;
@@ -88,5 +88,5 @@ fn arrival_order_does_not_change_the_artifacts(analysis_pcm: &'static [f32]) {
         })
         .filter(|(_, from, to)| to > from)
         .collect();
-    assert_agrees(&want, &analyse(&samples, &overlapped), "overlapping");
+    assert_agrees(&want, &analyse(samples, &overlapped), "overlapping");
 }

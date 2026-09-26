@@ -510,7 +510,7 @@ mod tests {
 
     fn converge_smoother(pools: &Pools, eq: &mut EqEffect, spec: AudioSpec, silence: &[f32]) {
         let samples = silence.to_vec();
-        let chunk = test_chunk(&pools, spec, samples);
+        let chunk = test_chunk(pools, spec, samples);
         let _ = eq.process(chunk);
     }
 
@@ -524,7 +524,7 @@ mod tests {
         let input_rms: f32 =
             (samples.iter().map(|s| s * s).sum::<f32>() / f32::from(num_frames)).sqrt();
 
-        let chunk = test_chunk(&pools, spec, samples.to_vec());
+        let chunk = test_chunk(pools, spec, samples.to_vec());
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 

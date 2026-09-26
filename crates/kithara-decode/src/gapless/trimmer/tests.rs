@@ -41,7 +41,7 @@ fn chunk(spec: AudioSpec, frame_offset: u64, frames: usize, input: &[f32]) -> Au
             frame_offset,
             ..Default::default()
         },
-        sample_buffer(&pcm),
+        sample_buffer(pcm),
     )
 }
 

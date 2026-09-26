@@ -254,7 +254,7 @@ fn decoded(
 ) -> AudioChunk {
     chunk(
         pools,
-        &sine_from(pcm, at, frames.to_usize().unwrap_or(0)),
+        sine_from(pcm, at, frames.to_usize().unwrap_or(0)),
         at,
     )
 }
@@ -320,7 +320,7 @@ where
         let frames = frames.to_usize().unwrap_or(0);
         assert_eq!(
             self.producer
-                .offer(&sine_from(self.pcm, at, frames), spec(), at),
+                .offer(sine_from(self.pcm, at, frames), spec(), at),
             Ok(()),
             "the transport takes a range on its own axis"
         );

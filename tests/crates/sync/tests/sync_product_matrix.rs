@@ -464,7 +464,7 @@ pub(super) const TECHNO_BREAKBEAT_PROVIDER: Provider = Provider::Rhythm(TECHNO_B
 pub(super) const CROSS_STYLE_PROVIDER: Provider = Provider::Rhythm(CROSS_STYLE);
 
 impl Provider {
-    pub(super) const ALL: &[Provider] = &[
+    pub(super) const ALL: &[Self] = &[
         Self::Synthetic,
         Self::Rhythm(CROSS_STYLE),
         Self::HlsSame(HlsProtection::Plain),
@@ -1194,9 +1194,10 @@ fn offline_renderer_publishes_only_complete_recordings() {
     );
 
     let (mut failed_host, failed_request) = offline_render(sample_rate, frames);
-    let failed_sink = AssetPartSink::acquire(&store, &failed_key)
-        .map(FailingPartSink)
-        .unwrap_or_else(|error| panic!("acquire failing sink: {error}"));
+    let failed_sink = AssetPartSink::acquire(&store, &failed_key).map_or_else(
+        |error| panic!("acquire failing sink: {error}"),
+        FailingPartSink,
+    );
     let mut failed = RecordingCore::new(&config, failed_sink, Some(frames))
         .unwrap_or_else(|error| panic!("open failing recording: {error}"));
     assert!(matches!(

@@ -65,7 +65,7 @@ async fn render_loop(
 ) -> Vec<f32> {
     let mut pcm = Vec::with_capacity(block_budget * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..block_budget {
-        let _ = harness.run(queue, |q| q.tick()).await;
+        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
         pcm.extend(harness.render(BLOCK_FRAMES).await);
     }
     pcm
@@ -156,7 +156,11 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
     let id_b = append_loaded(&harness, &queue, &source_b).await;
 
     match initial_start {
-        InitialStart::Play => harness.run(&queue, move |q| q.play()).await,
+        InitialStart::Play => {
+            harness
+                .run(&queue, kithara::queue::QueueControl::play)
+                .await
+        }
         InitialStart::Select => harness
             .run(&queue, move |q| q.select(id_a, Transition::None))
             .await
@@ -204,7 +208,9 @@ async fn play_button_marks_current_loaded_track_consumed() {
     let id_a = append_loaded(&harness, &queue, &source_a).await;
     let _id_b = append_loaded(&harness, &queue, &source_b).await;
 
-    harness.run(&queue, move |q| q.play()).await;
+    harness
+        .run(&queue, kithara::queue::QueueControl::play)
+        .await;
     let _ = render_loop(&queue, &harness, 8).await;
 
     assert_eq!(

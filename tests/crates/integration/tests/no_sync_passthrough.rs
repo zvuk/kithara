@@ -571,7 +571,7 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
     for _ in 0..WARMUP_BLOCKS {
         let started = Instant::now();
         harness
-            .run(&queue, |q| q.tick())
+            .run(&queue, kithara::queue::QueueControl::tick)
             .await
             .expect("tick queue during warmup");
         let _ = harness.render(BLOCK_FRAMES).await;
@@ -582,7 +582,7 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
     for _ in 0..CAPTURE_BLOCKS {
         let started = Instant::now();
         harness
-            .run(&queue, |q| q.tick())
+            .run(&queue, kithara::queue::QueueControl::tick)
             .await
             .expect("tick queue during capture");
         pcm.extend(harness.render(BLOCK_FRAMES).await);

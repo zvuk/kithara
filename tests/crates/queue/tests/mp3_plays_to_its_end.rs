@@ -120,7 +120,7 @@ async fn play_queue(
     for (index, source) in sources.into_iter().enumerate() {
         let config = ResourceConfig::<TestPools>::for_src(source)
             .store(kithara_integration_tests::disk_asset_store(
-                &temp_dir.path().join(format!("track{index}")),
+                temp_dir.path().join(format!("track{index}")),
             ))
             .build();
         let id = harness
@@ -146,7 +146,9 @@ async fn play_queue(
 
     let mut log = QueueLog::default();
     for _ in 0..BLOCK_BUDGET {
-        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness
+            .run(&queue, kithara::queue::QueueControl::tick)
+            .await;
         let _ = harness.render(BLOCK_FRAMES).await;
         while let Ok(envelope) = receiver.try_recv() {
             match envelope.event {

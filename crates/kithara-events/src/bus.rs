@@ -184,7 +184,7 @@ mod tests {
     #[kithara::test(tokio)]
     #[case(TestEvent::EndOfStream)]
     #[case(TestEvent::Error {
-        error: String::from("network".to_string()),
+        error: "network".to_string(),
     })]
     async fn multiple_subscribers_each_receive(#[case] expected: TestEvent) {
         let bus = EventBus::new(16);

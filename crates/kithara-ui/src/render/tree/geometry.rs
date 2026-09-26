@@ -594,7 +594,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        expand::{Binding, BindingKind, BlockSpec, ControlSpec, MeasureSpec},
+        expand::{Binding, BindingKind, ControlSpec, MeasureSpec},
         ids::{InternId, Interner, SourceUri},
         module::{PopoverAlign, PopoverAt},
         size::{DEFAULTS, SnapshotFixture},

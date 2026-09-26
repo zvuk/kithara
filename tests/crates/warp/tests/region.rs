@@ -550,15 +550,15 @@ pub(crate) fn render_configured_grid_with_updates(
             };
         }
         let frames = data.len() / CH;
-        if swap.as_ref().is_some_and(|(at, _)| offset >= u64_of(*at)) {
-            if let Some((_, plan)) = swap.take() {
-                config.plan().install(Some(Arc::new(plan(
-                    fx.rendered_source_end()
-                        .expect("presented source frontier")
-                        .0,
-                    out.len() / CH,
-                ))));
-            }
+        if swap.as_ref().is_some_and(|(at, _)| offset >= u64_of(*at))
+            && let Some((_, plan)) = swap.take()
+        {
+            config.plan().install(Some(Arc::new(plan(
+                fx.rendered_source_end()
+                    .expect("presented source frontier")
+                    .0,
+                out.len() / CH,
+            ))));
         }
         let mut consumed = carried;
         while consumed < frames {

@@ -89,7 +89,7 @@ async fn render_loop(
 ) -> Vec<f32> {
     let mut pcm = Vec::with_capacity(block_budget * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..block_budget {
-        let _ = harness.run(queue, |q| q.tick()).await;
+        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
         pcm.extend(harness.render(BLOCK_FRAMES).await);
     }
     pcm

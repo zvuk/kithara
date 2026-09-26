@@ -35,7 +35,7 @@ async fn delivers_result_on_its_own_thread(analysis_pcm: &'static [f32]) {
     let worker = worker(pools.clone(), &master);
     let (mut rx, _producer) = worker
         .analyze(
-            Box::new(FakeReader::chunked(&pools, &sine(analysis_pcm, 8192), 3)),
+            Box::new(FakeReader::chunked(&pools, sine(analysis_pcm, 8192), 3)),
             "test-track".into(),
             super::fixtures::spec().sample_rate,
             0,
@@ -58,7 +58,7 @@ async fn a_reader_on_another_axis_contributes_nothing(analysis_pcm: &'static [f3
     let axis = NonZeroU32::new(48_000).expect("test rate is non-zero");
     let (mut rx, _producer) = worker
         .analyze(
-            Box::new(FakeReader::chunked(&pools, &sine(analysis_pcm, 8192), 3)),
+            Box::new(FakeReader::chunked(&pools, sine(analysis_pcm, 8192), 3)),
             "test-track".into(),
             axis,
             0,
@@ -90,12 +90,12 @@ async fn preempted_job_sends_nothing_and_next_job_runs(analysis_pcm: &'static [f
     stale_pass.cancel_token().cancel();
     worker.start(
         stale_pass,
-        Box::new(FakeReader::chunked(&pools, &sine(analysis_pcm, 8192), 3)),
+        Box::new(FakeReader::chunked(&pools, sine(analysis_pcm, 8192), 3)),
     );
 
     let (mut live_rx, _live_producer) = worker
         .analyze(
-            Box::new(FakeReader::chunked(&pools, &sine(analysis_pcm, 8192), 3)),
+            Box::new(FakeReader::chunked(&pools, sine(analysis_pcm, 8192), 3)),
             "live-track".into(),
             super::fixtures::spec().sample_rate,
             0,
@@ -128,7 +128,7 @@ async fn pending_job_does_not_block_an_independent_job(analysis_pcm: &'static [f
         .expect("the pass opens");
     let (mut live_rx, _live_producer) = worker
         .analyze(
-            Box::new(FakeReader::chunked(&pools, &sine(analysis_pcm, 8192), 3)),
+            Box::new(FakeReader::chunked(&pools, sine(analysis_pcm, 8192), 3)),
             "live-track".into(),
             super::fixtures::spec().sample_rate,
             0,
@@ -161,7 +161,7 @@ async fn a_pass_publishes_above_the_revision_its_caller_holds(analysis_pcm: &'st
         .expect("the pass opens");
     worker.start(
         pass,
-        Box::new(FakeReader::chunked(&pools, &sine(analysis_pcm, 8192), 3)),
+        Box::new(FakeReader::chunked(&pools, sine(analysis_pcm, 8192), 3)),
     );
 
     rx.changed().await.expect("worker sends a result");

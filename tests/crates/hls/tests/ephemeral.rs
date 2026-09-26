@@ -114,16 +114,15 @@ async fn audio_server(hls_sized_wav_three: Vec<u8>) -> HlsTestServer {
 
     let segment_duration = SawWav::DEFAULT.segment_size as f64
         / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
-    let server = HlsTestServer::new(HlsTestServerConfig {
+
+    HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: SEGMENT_COUNT,
         segment_size: SawWav::DEFAULT.segment_size,
         segment_duration_secs: segment_duration,
         custom_data: Some(Arc::new(wav_data)),
         ..Default::default()
     })
-    .await;
-
-    server
+    .await
 }
 
 #[kithara::test(

@@ -239,10 +239,10 @@ fn leaving_the_timeline_releases_every_host_synced_descendant() {
 
     let released = transition(free_at(&mut root, 96_000));
 
-    let deck_grid = nested(&root, &[deck_id], |deck| deck.snapshot());
+    let deck_grid = nested(&root, &[deck_id], kithara_warp::BeatGrid::snapshot);
     assert!(matches!(deck_grid.state(), BeatGridState::Unavailable(_)));
     assert_eq!(
-        nested(&root, &[deck_id], |deck| deck.mode()),
+        nested(&root, &[deck_id], super::super::state::GroupState::mode),
         SyncMode::HostSync
     );
     assert_eq!(
@@ -706,7 +706,9 @@ fn a_presented_retarget_locks_the_member_on_its_new_map() {
 
     assert_eq!(applied.stamp(), retarget.stamp());
     assert_eq!(
-        group.applied_of(track).map(|lane| lane.map()),
+        group
+            .applied_of(track)
+            .map(super::super::lifecycle::Applied::map),
         Some(map(&retarget))
     );
 }
@@ -827,7 +829,9 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
 
     assert_eq!(group.pending, armed);
     assert_eq!(
-        group.applied_of(track).map(|lane| lane.map()),
+        group
+            .applied_of(track)
+            .map(super::super::lifecycle::Applied::map),
         Some(map(&preparation))
     );
 }

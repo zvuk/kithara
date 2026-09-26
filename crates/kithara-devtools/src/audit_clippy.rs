@@ -5,7 +5,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use cargo_metadata::Message;
+use cargo_metadata::{
+    Message,
+    diagnostic::{Diagnostic, DiagnosticLevel},
+};
 use clap::Args;
 
 use crate::{Ctx, common::report::print_check_block, util::ensure_clean_tree};
@@ -59,8 +62,11 @@ fn run_clippy_passes(mut fix: Option<Command>, mut report: Command, raw: bool) -
     if raw {
         print!("{}", String::from_utf8_lossy(&output.stdout));
     } else {
-        let groups = parse_diagnostics(&output.stdout)?;
-        print_grouped(&groups);
+        let diagnostics = parse_diagnostics(&output.stdout)?;
+        print_grouped(&diagnostics.advisory);
+        for error in &diagnostics.errors {
+            eprint!("{error}");
+        }
     }
     if !output.status.success() {
         bail!(
@@ -71,6 +77,8 @@ fn run_clippy_passes(mut fix: Option<Command>, mut report: Command, raw: bool) -
     Ok(())
 }
 
+/// The report pass keeps going past a target that fails to build, so one sweep
+/// names every broken target instead of only the first few cargo scheduled.
 fn clippy_command(args: &AuditClippyArgs, ctx: &Ctx, fix: bool) -> Command {
     let mut cmd = Command::new("cargo");
     cmd.arg("clippy");
@@ -84,6 +92,9 @@ fn clippy_command(args: &AuditClippyArgs, ctx: &Ctx, fix: bool) -> Command {
         cmd.arg("--message-format=json");
     }
     cmd.arg("--all-targets");
+    if !fix {
+        cmd.arg("--keep-going");
+    }
     if fix && args.allow_dirty {
         cmd.arg("--allow-dirty").arg("--allow-staged");
     }
@@ -110,45 +121,62 @@ fn has_explicit_package_selector(args: &[String]) -> bool {
     })
 }
 
-fn parse_diagnostics(stdout: &[u8]) -> Result<BTreeMap<String, RuleGroup>> {
-    let mut groups = BTreeMap::new();
+fn parse_diagnostics(stdout: &[u8]) -> Result<Diagnostics> {
+    let mut diagnostics = Diagnostics::default();
     for message in Message::parse_stream(Cursor::new(stdout)) {
         match message.context("read cargo clippy JSON stream")? {
-            Message::CompilerMessage(message) => {
-                let diagnostic = message.message;
-                let Some(code) = diagnostic.code.map(|code| code.code) else {
-                    continue;
-                };
-                if !code.starts_with("clippy::") {
-                    continue;
-                }
-                let group = groups.entry(code).or_insert_with(|| RuleGroup {
-                    message: diagnostic.message.clone(),
-                    hits: Vec::new(),
-                });
-                let span = diagnostic
-                    .spans
-                    .iter()
-                    .find(|span| span.is_primary)
-                    .or_else(|| diagnostic.spans.first());
-                let location = span.map_or_else(
-                    || "workspace".to_owned(),
-                    |span| {
-                        format!(
-                            "{}:{}:{}",
-                            span.file_name, span.line_start, span.column_start
-                        )
-                    },
-                );
-                group.hits.push(location);
-            }
+            Message::CompilerMessage(message) => diagnostics.record(message.message),
             Message::TextLine(line) if !line.trim().is_empty() => {
                 bail!("non-JSON output from cargo clippy: {line}");
             }
             _ => {}
         }
     }
-    Ok(groups)
+    Ok(diagnostics)
+}
+
+/// One sweep's compiler output: advisory clippy hits grouped by lint, and the
+/// errors that stopped a target from building. An error is never advisory,
+/// even under a `clippy::` code, because the target it hit was not audited.
+#[derive(Default)]
+struct Diagnostics {
+    advisory: BTreeMap<String, RuleGroup>,
+    errors: Vec<String>,
+}
+
+impl Diagnostics {
+    fn record(&mut self, diagnostic: Diagnostic) {
+        if diagnostic.level == DiagnosticLevel::Error {
+            self.errors
+                .push(diagnostic.rendered.unwrap_or(diagnostic.message));
+            return;
+        }
+        let Some(code) = diagnostic.code.map(|code| code.code) else {
+            return;
+        };
+        if !code.starts_with("clippy::") {
+            return;
+        }
+        let group = self.advisory.entry(code).or_insert_with(|| RuleGroup {
+            message: diagnostic.message.clone(),
+            hits: Vec::new(),
+        });
+        let span = diagnostic
+            .spans
+            .iter()
+            .find(|span| span.is_primary)
+            .or_else(|| diagnostic.spans.first());
+        let location = span.map_or_else(
+            || "workspace".to_owned(),
+            |span| {
+                format!(
+                    "{}:{}:{}",
+                    span.file_name, span.line_start, span.column_start
+                )
+            },
+        );
+        group.hits.push(location);
+    }
 }
 
 struct RuleGroup {
@@ -228,6 +256,35 @@ mod tests {
         Ctx::new(PathBuf::from("/workspace"), config)
     }
 
+    fn diagnostic(level: &str, code: &str) -> Diagnostic {
+        serde_json::from_value(serde_json::json!({
+            "message": "this range is empty so it will yield no values",
+            "code": { "code": code, "explanation": null },
+            "level": level,
+            "spans": [],
+            "children": [],
+            "rendered": format!("{level}: {code}\n"),
+        }))
+        .expect("diagnostic json")
+    }
+
+    #[test]
+    fn a_clippy_error_is_reported_as_a_build_error_not_an_advisory_hit() {
+        let mut diagnostics = Diagnostics::default();
+
+        diagnostics.record(diagnostic("error", "clippy::reversed_empty_ranges"));
+        diagnostics.record(diagnostic("warning", "clippy::redundant_clone"));
+
+        assert_eq!(
+            diagnostics.errors,
+            ["error: clippy::reversed_empty_ranges\n"]
+        );
+        assert_eq!(
+            diagnostics.advisory.keys().collect::<Vec<_>>(),
+            ["clippy::redundant_clone"]
+        );
+    }
+
     #[test]
     fn fix_and_report_commands_share_explicit_scope() {
         let args = AuditClippyArgs {
@@ -262,6 +319,7 @@ mod tests {
                 "clippy",
                 "--message-format=json",
                 "--all-targets",
+                "--keep-going",
                 "-p",
                 "kithara-ui",
                 "--",
@@ -289,6 +347,7 @@ mod tests {
                 "--workspace",
                 "--message-format=json",
                 "--all-targets",
+                "--keep-going",
                 "--",
                 "--force-warn",
                 "clippy::redundant_clone",

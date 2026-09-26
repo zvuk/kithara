@@ -227,11 +227,11 @@ async fn track_src(
                 .expect("create census HLS fixture");
             ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL")
         }
-        Origin::LocalFlac => ResourceSrc::Path(PathBuf::from(
+        Origin::LocalFlac => ResourceSrc::Path(
             flac_asset(pattern)
                 .path()
                 .expect("a stored fixture names its store path"),
-        )),
+        ),
         Origin::RemoteFlac => {
             let handle = server
                 .expect("the remote leg runs against a server")
@@ -353,7 +353,10 @@ async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
     let mut rendered = Vec::new();
 
     for _ in 0..BLOCK_BUDGET {
-        let _ = census.harness.run(&census.queue, |q| q.tick()).await;
+        let _ = census
+            .harness
+            .run(&census.queue, kithara::queue::QueueControl::tick)
+            .await;
         rendered.extend(census.harness.render(BLOCK_FRAMES).await);
 
         if let (Some(index), Some(duration)) = (

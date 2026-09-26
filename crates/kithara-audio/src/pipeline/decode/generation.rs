@@ -733,7 +733,7 @@ mod tests {
         let slots = old_capacity.checked_add(1).expect("test slot limit");
         let join_frames = u64::try_from(slots - 1).expect("test join frame count");
 
-        assert!(generation.staged.len() > 0);
+        assert!(!generation.staged.is_empty());
         assert!(generation.staged.len() < old_capacity);
         assert!(old_capacity < slots);
 

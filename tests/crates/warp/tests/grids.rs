@@ -14,11 +14,13 @@ pub const BEATS: i64 = 400;
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// Frames one beat of `bpm` occupies at `sample_rate`.
+#[must_use]
 pub fn beat_frames(bpm: f64, sample_rate: NonZeroU32) -> f64 {
     f64::from(sample_rate.get()) * SECONDS_PER_MINUTE / bpm
 }
 
 /// One analysed recording at a steady `bpm`, on its own asset axis.
+#[must_use]
 pub fn asset_grid(bpm: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
     let last = beat_frames(bpm, sample_rate) * BEATS.to_f64().unwrap_or_default();
     let marker = |frame: f64, ordinal: i64| {
@@ -54,6 +56,7 @@ pub fn asset_grid(bpm: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
 }
 
 /// One live session grid running at a steady `bpm`.
+#[must_use]
 pub fn session_grid(bpm: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
     let anchor = SessionAnchor::new(
         SessionFrame::new(0),
@@ -72,6 +75,7 @@ pub fn session_grid(bpm: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
 }
 
 /// A plan carrying one recording projected onto a host running at `host_bpm`.
+#[must_use]
 pub fn projected_plan(source_bpm: f64, host_bpm: f64, sample_rate: NonZeroU32) -> WarpPlan {
     let source = asset_grid(source_bpm, sample_rate);
     let target = session_grid(host_bpm, sample_rate);
@@ -85,6 +89,7 @@ pub fn projected_plan(source_bpm: f64, host_bpm: f64, sample_rate: NonZeroU32) -
     WarpPlan::new(map, SessionFrame::new(0)).expect("invariant: initial projection resolves")
 }
 
+#[must_use]
 pub fn asset_grid_over(
     spans: &[(f64, f64, i64)],
     frames: Option<u64>,
@@ -142,6 +147,7 @@ pub fn asset_grid_over(
 }
 
 /// A live session grid whose beats are spaced by frame count.
+#[must_use]
 pub fn session_grid_spaced(frames_per_beat: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
     session_grid(
         f64::from(sample_rate.get()) * SECONDS_PER_MINUTE / frames_per_beat,
@@ -149,6 +155,7 @@ pub fn session_grid_spaced(frames_per_beat: f64, sample_rate: NonZeroU32) -> Bea
     )
 }
 
+#[must_use]
 pub fn plan_over(source: BeatGridSnapshot, target: BeatGridSnapshot) -> WarpPlan {
     let beat = Beat::new(0.0).expect("fixture cue");
     let alignment = BeatAlignment::new(
@@ -160,6 +167,7 @@ pub fn plan_over(source: BeatGridSnapshot, target: BeatGridSnapshot) -> WarpPlan
     WarpPlan::new(map, SessionFrame::new(0)).expect("fixture activation")
 }
 
+#[must_use]
 pub fn spaced_plan(
     spans: &[(f64, f64, i64)],
     host_frames_per_beat: f64,
@@ -172,6 +180,7 @@ pub fn spaced_plan(
 }
 
 /// Explicit replacement-map alignment at the already emitted boundary.
+#[must_use]
 pub fn plan_over_at(
     source: BeatGridSnapshot,
     target: BeatGridSnapshot,

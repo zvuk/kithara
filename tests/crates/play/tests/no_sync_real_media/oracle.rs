@@ -351,16 +351,20 @@ fn estimate_deck_gains(candidate: &[f32], contributions: &[Vec<f32>]) -> Option<
         }
         system.swap(pivot, resolved);
         let divisor = system[pivot][pivot];
-        for column in pivot..=count {
-            system[pivot][column] /= divisor;
+        for value in &mut system[pivot][pivot..=count] {
+            *value /= divisor;
         }
-        for row in 0..count {
+        let pivot_row = system[pivot].clone();
+        for (row, values) in system.iter_mut().enumerate() {
             if row == pivot {
                 continue;
             }
-            let factor = system[row][pivot];
-            for column in pivot..=count {
-                system[row][column] -= factor * system[pivot][column];
+            let factor = values[pivot];
+            for (value, pivot_value) in values[pivot..=count]
+                .iter_mut()
+                .zip(&pivot_row[pivot..=count])
+            {
+                *value -= factor * pivot_value;
             }
         }
     }

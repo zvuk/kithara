@@ -430,8 +430,10 @@ fn assert_response(
     let applied_rate = applied
         .field("applied_rate_bits")
         .and_then(|bits| u32::try_from(bits).ok())
-        .map(f32::from_bits)
-        .unwrap_or_else(|| panic!("{backend} apply probe has no rate"));
+        .map_or_else(
+            || panic!("{backend} apply probe has no rate"),
+            f32::from_bits,
+        );
     if case.smooth_frames > 1 {
         let low = case.initial_rate.min(case.target_rate);
         let high = case.initial_rate.max(case.target_rate);
@@ -717,8 +719,10 @@ fn assert_strict_response(
     let applied_rate = applied
         .field("applied_rate_bits")
         .and_then(|bits| u32::try_from(bits).ok())
-        .map(f32::from_bits)
-        .unwrap_or_else(|| panic!("{backend} apply probe has no rate"));
+        .map_or_else(
+            || panic!("{backend} apply probe has no rate"),
+            f32::from_bits,
+        );
     let consumed_frame = consumed
         .field("output_start")
         .and_then(|frame| i64::try_from(frame).ok())

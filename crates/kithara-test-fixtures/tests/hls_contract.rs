@@ -13,7 +13,7 @@ const LABELS: [&str; 4] = ["slq", "smq", "shq", "slossless"];
 const SEGMENTS: usize = 37;
 const SILVERCOMET: &str = "https://stream.silvercomet.top";
 
-fn bytes<'a>(bundle: &'a HlsBundle, route: &str) -> Vec<u8> {
+fn bytes(bundle: &HlsBundle, route: &str) -> Vec<u8> {
     let resource = bundle
         .get(route)
         .unwrap_or_else(|| panic!("bundle has no `{route}`"));
@@ -137,8 +137,8 @@ fn assert_live_parity(bundle: &HlsBundle, live_root: &str, encrypted: bool) {
         for (generated, live) in generated.segments.values().zip(live.segments.values()) {
             assert_eq!(generated.uri(), live.uri(), "{uri}");
             assert_eq!(
-                generated.map.as_ref().map(|map| map.uri()),
-                live.map.as_ref().map(|map| map.uri()),
+                generated.map.as_ref().map(hls_m3u8::tags::ExtXMap::uri),
+                live.map.as_ref().map(hls_m3u8::tags::ExtXMap::uri),
                 "{uri} {} map",
                 generated.uri()
             );

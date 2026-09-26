@@ -33,14 +33,14 @@ fn encode_in_chunks(
 }
 
 fn chunking_does_not_change_the_encoded_stream(samples: &[f32], backend: StreamBackend) {
-    let whole = encode_in_chunks(backend, &samples, Consts::FRAMES, Consts::SAMPLE_RATE);
+    let whole = encode_in_chunks(backend, samples, Consts::FRAMES, Consts::SAMPLE_RATE);
     let framed = encode_in_chunks(
         backend,
-        &samples,
+        samples,
         StreamEncoder::FRAME_SAMPLES,
         Consts::SAMPLE_RATE,
     );
-    let ragged = encode_in_chunks(backend, &samples, 333, Consts::SAMPLE_RATE);
+    let ragged = encode_in_chunks(backend, samples, 333, Consts::SAMPLE_RATE);
 
     assert!(!whole.is_empty(), "encoder produced no access units");
     assert_eq!(whole, framed);
@@ -58,7 +58,7 @@ fn timestamps_start_at_zero_and_advance_by_one_frame(
 
     for timescale in [Consts::SAMPLE_RATE, 90_000] {
         let rescale = |frames: u64| frames * u64::from(timescale) / u64::from(Consts::SAMPLE_RATE);
-        let units = encode_in_chunks(backend, &samples, StreamEncoder::FRAME_SAMPLES, timescale);
+        let units = encode_in_chunks(backend, samples, StreamEncoder::FRAME_SAMPLES, timescale);
 
         let mut expected_pts = 0;
         for unit in &units {
@@ -98,7 +98,7 @@ fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
         .timescale(TIMESCALE)
         .build()
         .expect("stream encoder");
-    let mut units = encoder.push(&samples).expect("push");
+    let mut units = encoder.push(samples).expect("push");
     units.extend(encoder.finish().expect("finish"));
 
     let mut expected_pts = 0;

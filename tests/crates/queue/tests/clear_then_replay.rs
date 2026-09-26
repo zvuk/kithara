@@ -71,12 +71,12 @@ async fn a_cleared_queue_plays_the_track_appended_after_it(
         .run(move |q| q.append(TrackSource::Config(Box::new(first))))
         .await
         .expect("append the first track");
-    queue.run(move |q| q.play()).await;
+    queue.run(kithara::queue::QueueControl::play).await;
     wait_for_position_event(&mut rx, &queue, 0.2, Duration::from_secs(60))
         .await
         .expect("the first track must play before the queue is emptied");
 
-    queue.run(move |q| q.clear()).await;
+    queue.run(kithara::queue::QueueControl::clear).await;
     assert_eq!(queue.control().len(), 0, "clear must empty the queue");
 
     let mut rx = queue.subscribe();
@@ -89,7 +89,7 @@ async fn a_cleared_queue_plays_the_track_appended_after_it(
         .run(move |q| q.select(replacement, Transition::None))
         .await
         .expect("a cleared queue selects its replacement");
-    queue.run(move |q| q.play()).await;
+    queue.run(kithara::queue::QueueControl::play).await;
 
     let position = wait_for_position_event(&mut rx, &queue, 0.2, Duration::from_secs(60))
         .await

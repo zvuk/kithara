@@ -4,7 +4,6 @@ mod tests {
 
     use kithara_test_utils::kithara;
 
-    use super::*;
     use crate::expand::ControlSpec;
 
     #[kithara::test]

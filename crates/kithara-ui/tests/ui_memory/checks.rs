@@ -34,15 +34,15 @@ impl Budget {
     /// as a multiple of the slack rather than as noise.
     const DRAWS: usize = 24;
     /// Everything the immediate host holds for a settled page. Measured at
-    /// 28_064 KiB, and rounded up to leave room for a driver that rounds
+    /// `28_064` `KiB`, and rounded up to leave room for a driver that rounds
     /// differently.
     const IMMEDIATE_KIB: u64 = 32_768;
     /// The same for the retained host, whose bulk is the compute buffers Vello
-    /// sizes for the target on its first frame. Measured at 14_720 KiB.
+    /// sizes for the target on its first frame. Measured at `14_720` `KiB`.
     ///
     /// It used to be an order larger, because those buffers were fixed
     /// constants covering a target far bigger than a window: a renderer paid
-    /// 165 MiB on its first frame whatever it drew, which on its own broke the
+    /// 165 `MiB` on its first frame whatever it drew, which on its own broke the
     /// ceiling the application is allowed. They are derived from the frame's
     /// tile grid now, and what the pages actually need of them is held down by
     /// the `ui_buffers` binary beside this one.

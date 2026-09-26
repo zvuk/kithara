@@ -279,10 +279,7 @@ fn module_root<'a>(ui: &'a CompiledUi, instance: &str) -> &'a ExpandedNode {
     root
 }
 
-fn cells<'a>(
-    node: &'a ExpandedNode,
-    axis: MeasureAxis,
-) -> Vec<((f32, Option<f32>), &'a ExpandedNode)> {
+fn cells(node: &ExpandedNode, axis: MeasureAxis) -> Vec<((f32, Option<f32>), &ExpandedNode)> {
     let (ExpandedNode::Row {
         measure, children, ..
     }
@@ -355,7 +352,7 @@ fn standing_height(cells: &[((f32, Option<f32>), &CompiledNode)], room: f32) -> 
         .sum()
 }
 
-fn micro_bar<'a>(ui: &'a CompiledUi) -> &'a ExpandedNode {
+fn micro_bar(ui: &CompiledUi) -> &ExpandedNode {
     module_root(ui, "micro-bar")
 }
 

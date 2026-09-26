@@ -170,20 +170,16 @@ mod tests {
 
     #[test]
     fn computed_keyword_name_is_rejected() {
-        for keyword in ["probe_return"] {
-            let input: proc_macro2::TokenStream = format!("{keyword} = self.foo")
-                .parse()
-                .expect("valid tokens");
-            let err = parse_filter(input).expect_err("reserved keyword");
-            let msg = err.to_string();
-            assert!(
-                msg.contains(keyword),
-                "case {keyword}: missing keyword in {msg}"
-            );
-            assert!(
-                msg.contains("reserved keyword"),
-                "case {keyword}: missing 'reserved keyword' in {msg}"
-            );
-        }
+        let keyword = "probe_return";
+        let input: proc_macro2::TokenStream = format!("{keyword} = self.foo")
+            .parse()
+            .expect("valid tokens");
+        let err = parse_filter(input).expect_err("reserved keyword");
+        let msg = err.to_string();
+        assert!(msg.contains(keyword), "missing keyword in {msg}");
+        assert!(
+            msg.contains("reserved keyword"),
+            "missing 'reserved keyword' in {msg}"
+        );
     }
 }

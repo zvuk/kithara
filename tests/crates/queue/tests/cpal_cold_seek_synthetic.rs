@@ -85,7 +85,7 @@ async fn cold_seek_far_segment_hls_offline(
         .run(move |q| q.select(id, Transition::None))
         .await
         .expect("select");
-    queue.run(move |q| q.play()).await;
+    queue.run(kithara::queue::QueueControl::play).await;
 
     let pos_before = wait_for_position_at_least(&queue, 1.5, Duration::from_secs(20))
         .await

@@ -2577,7 +2577,7 @@ fn dispatch_owed_reaches_the_transition_latch() {
 /// A parked read is owed no matter where the projection points: the outgoing
 /// demuxer consumes past the projected byte cursor and waits on segments the
 /// stale owed window refuses to dispatch, leaving the queue head one past the
-/// cap forever (the phase_continuity livelock: `queue_head=27 cap=26`). The
+/// cap forever (the `phase_continuity` livelock: `queue_head=27 cap=26`). The
 /// range the reader waits on is what the splice still consumes, so the owed
 /// window must run through it.
 #[kithara::test]

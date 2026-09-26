@@ -270,7 +270,7 @@ fn an_attached_group_owns_its_track_geometry_as_its_only_member() {
 
     let topology = group.topology().expect("an attached group has a topology");
     assert_eq!(topology.group_grid().id(), deck);
-    let [member] = topology.members().as_ref() else {
+    let [member] = topology.members() else {
         panic!("the group owns exactly its track grid");
     };
     assert!(

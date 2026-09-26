@@ -423,14 +423,14 @@ mod tests {
             &input,
             source_rate,
             target_rate,
-            &trim_silence,
+            trim_silence,
         );
         let rubato = render(
             TestBackend::Rubato,
             &input,
             source_rate,
             target_rate,
-            &trim_silence,
+            trim_silence,
         );
 
         assert_eq!(apple.contract_frames, expected);
