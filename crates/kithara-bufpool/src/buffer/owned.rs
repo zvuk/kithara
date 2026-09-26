@@ -36,7 +36,7 @@ where
     }
 
     pub(super) fn normalize(&mut self) {
-        self.core.normalize(&mut self.value, self.shard_idx);
+        self.core.normalize(&mut self.value);
     }
 
     pub(super) fn renew(&mut self) {

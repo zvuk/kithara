@@ -1045,7 +1045,7 @@ mod tests {
 
         assert_eq!(
             settings.cache_capacity,
-            Some(NonZeroUsize::new(32).expect("nonzero"))
+            Some(Some(NonZeroUsize::new(32).expect("nonzero")))
         );
         assert_eq!(settings.max_bytes, None, "a silent knob stays unset");
     }
@@ -1059,7 +1059,7 @@ mod tests {
 
         assert_eq!(
             settings.processing_gate_poll_interval,
-            Some(Duration::from_millis(250))
+            Some(Some(Duration::from_millis(250)))
         );
     }
 
@@ -1069,7 +1069,7 @@ mod tests {
         let settings: AssetStoreConfigPatch =
             serde_yaml_ng::from_str("backend:\n  kind: memory\n").expect("the document types");
 
-        assert_eq!(settings.backend, Some(StorageBackend::Memory));
+        assert_eq!(settings.backend, Some(Some(StorageBackend::Memory)));
     }
 
     /// Pins ruling 108: `StorageBackend::Memory` is a unit variant, so
@@ -1109,7 +1109,11 @@ mod tests {
 
         let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
-            .maybe_cache_capacity(settings.cache_capacity)
+            .maybe_cache_capacity(
+                settings
+                    .cache_capacity
+                    .expect("the document names a cache capacity"),
+            )
             .build();
 
         let keys: Vec<ResourceKey> = (0..2)
