@@ -78,6 +78,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) file_size: FileSizeThreshold,
     #[serde(default)]
+    pub(crate) firewheel_dsp_facade: FirewheelDspFacadeThreshold,
+    #[serde(default)]
     pub(crate) flat_directory: FlatDirectoryThreshold,
     #[serde(default)]
     pub(crate) fn_arg_count: FnArgCountThreshold,
@@ -692,6 +694,37 @@ impl Default for SmoothingPrimitiveSitesThreshold {
     }
 }
 
+/// Files allowed to name firewheel's DSP helpers directly, and the helper
+/// modules the facade owns.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FirewheelDspFacadeThreshold {
+    #[serde(default)]
+    pub(crate) allowed_files: Vec<String>,
+    #[serde(default = "default_firewheel_facade_modules")]
+    pub(crate) modules: Vec<String>,
+}
+
+fn default_firewheel_facade_modules() -> Vec<String> {
+    [
+        "dsp::fade",
+        "dsp::mix",
+        "dsp::filter::smoothing_filter",
+        "param::smoother",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+impl Default for FirewheelDspFacadeThreshold {
+    fn default() -> Self {
+        Self {
+            allowed_files: Vec::new(),
+            modules: default_firewheel_facade_modules(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TokioDepQuarantineThreshold {
@@ -1144,6 +1177,15 @@ mod tests {
             ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
         );
         assert_eq!(
+            thresholds.firewheel_dsp_facade.modules,
+            [
+                "dsp::fade",
+                "dsp::mix",
+                "dsp::filter::smoothing_filter",
+                "param::smoother"
+            ]
+        );
+        assert_eq!(
             thresholds.tokio_dep_quarantine.quarantined,
             ["tokio", "tokio-util", "tokio-stream"]
         );
@@ -1171,6 +1213,9 @@ exempt_crates = ["kithara-demo"]
 [smoothing_primitive_sites]
 allowed_files = ["crates/demo/src/gain.rs"]
 
+[firewheel_dsp_facade]
+allowed_files = ["crates/demo/src/param.rs"]
+
 [tokio_dep_quarantine]
 allowed_crates = ["kithara-demo"]
 
@@ -1192,6 +1237,15 @@ excluded_subtrees = ["demo/"]
         assert_eq!(
             thresholds.smoothing_primitive_sites.patterns,
             ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
+        );
+        assert_eq!(
+            thresholds.firewheel_dsp_facade.modules,
+            [
+                "dsp::fade",
+                "dsp::mix",
+                "dsp::filter::smoothing_filter",
+                "param::smoother"
+            ]
         );
         assert_eq!(
             thresholds.tokio_dep_quarantine.quarantined,

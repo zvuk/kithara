@@ -199,6 +199,7 @@ kithara = { workspace = true, default-features = false, optional = true, feature
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true, default-features = false, optional = true }
+kithara-dsp = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "hls", "hls-inputs", "signal"] }
 
 assert_no_alloc = { workspace = true }

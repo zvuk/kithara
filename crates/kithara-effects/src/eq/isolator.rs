@@ -1,10 +1,10 @@
 use std::num::NonZeroU32;
 
-use firewheel_core::dsp::{
-    fade::FadeCurve,
-    mix::{Mix, MixDSP},
-};
 use kithara_bufpool::{HasPool, PoolError};
+use kithara_dsp::{
+    fade::FadeCurve,
+    param::{Mix, MixDSP},
+};
 use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
@@ -141,7 +141,7 @@ impl IsolatorEq {
 
 #[cfg(test)]
 mod tests {
-    use firewheel_core::dsp::filter::smoothing_filter::SmoothingFilterCoeff;
+    use kithara_dsp::param::SmoothingFilterCoeff;
     use kithara_test_fixtures::unit_fixtures::eq_impulse;
     use kithara_test_utils::kithara;
 

@@ -9,9 +9,9 @@ use firewheel::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
         NodeError,
     },
-    param::smoother::SmootherConfig,
 };
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_dsp::param::SmootherConfig;
 use kithara_platform::sync::{Arc, Mutex};
 
 use super::processor::{ContextRequirement, PlayerNodeProcessor, StreamShape};

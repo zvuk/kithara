@@ -11,6 +11,7 @@ categories = ["multimedia::audio"]
 
 [dependencies]
 fearless_simd = { workspace = true }
+firewheel-core = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }

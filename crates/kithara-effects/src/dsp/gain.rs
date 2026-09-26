@@ -1,8 +1,7 @@
 use std::{num::NonZeroU32, ops::Index};
 
-use firewheel_core::{
-    dsp::filter::smoothing_filter::{SmoothingFilter, SmoothingFilterCoeff},
-    param::smoother::{DEFAULT_GAIN_SPAN, SmootherConfig},
+use kithara_dsp::param::{
+    DEFAULT_GAIN_SPAN, SmootherConfig, SmoothingFilter, SmoothingFilterCoeff,
 };
 use num_traits::cast::AsPrimitive;
 

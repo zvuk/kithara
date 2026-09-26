@@ -7,7 +7,6 @@
 
 use std::num::NonZeroU32;
 
-use firewheel::dsp::filter::smoothing_filter::{MIN_SETTLE_RATIO, SmoothingFilterCoeff};
 use kithara::{
     assets::AssetStore,
     effects::{GainDb, eq::FilterKind},
@@ -19,6 +18,7 @@ use kithara::{
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
+use kithara_dsp::param::{MIN_SETTLE_RATIO, SmoothingFilterCoeff};
 use kithara_test_fixtures::SignalAsset;
 
 use crate::{

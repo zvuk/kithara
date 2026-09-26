@@ -184,10 +184,21 @@ allowed_files = [
 [smoothing_primitive_sites]
 # Parameter smoothing has one primitive (firewheel `SmoothedParam`, composed
 # as `MixDSP` for A-to-B transitions). A hand-rolled one-pole or a direct
-# `SmoothingFilter` is sanctioned only in the biquad gain bank.
+# `SmoothingFilter` is sanctioned only in the biquad gain bank; the
+# `kithara_dsp::param` facade re-exports the primitive.
 patterns = ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
-allowed_files = ["crates/kithara-effects/src/dsp/gain.rs"]
+allowed_files = [
+  "crates/kithara-effects/src/dsp/gain.rs",
+  "crates/kithara-dsp/src/param.rs",
+]
 exempt_crates = ["kithara-test-utils", "kithara-test-macros", "xtask"]
+
+[firewheel_dsp_facade]
+# The facade modules are the only files that name firewheel's DSP helpers.
+allowed_files = [
+  "crates/kithara-dsp/src/fade.rs",
+  "crates/kithara-dsp/src/param.rs",
+]
 
 [tokio_dep_quarantine]
 # Crates whose direct tokio dependency is never flagged. `kithara-platform` is

@@ -36,6 +36,7 @@ impl Check for SmoothingPrimitiveSites {
 }
 
 const EXPLANATION: &str = "\
-Runtime parameters use firewheel `SmoothedParam`, composed as `MixDSP` for
-A-to-B transitions. `SmoothingFilter` is sanctioned only for the equalizer's
-biquad gain bank; move parameter smoothing to the owning config and primitive.";
+Runtime parameters use `SmoothedParam` from `kithara_dsp::param` (firewheel's
+type), composed as `MixDSP` for A-to-B transitions. `SmoothingFilter` is
+sanctioned only for the equalizer's biquad gain bank and the facade; move
+parameter smoothing to the owning config and primitive.";

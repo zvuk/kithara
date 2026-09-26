@@ -1,10 +1,8 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
-use firewheel::{
-    dsp::filter::smoothing_filter::DEFAULT_SETTLE_RATIO, param::smoother::SmootherConfig,
-};
 use kithara_bufpool::PoolRegion;
+use kithara_dsp::param::{DEFAULT_SETTLE_RATIO, SmootherConfig};
 use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
 use kithara_platform::CancelToken;
 use kithara_warp::BeatGridId;

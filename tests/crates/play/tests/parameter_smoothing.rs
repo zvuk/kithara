@@ -2,7 +2,6 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use firewheel::dsp::filter::smoothing_filter::{DEFAULT_SETTLE_RATIO, DEFAULT_SMOOTH_SECONDS};
 use kithara::{
     assets::AssetStore,
     host::HostConfig,
@@ -15,6 +14,7 @@ use kithara::{
     sync::SyncGroup,
     warp::WarpConfig,
 };
+use kithara_dsp::param::{DEFAULT_SETTLE_RATIO, DEFAULT_SMOOTH_SECONDS};
 use kithara_integration_tests::{
     TestServerHelper, kithara,
     offline::OfflineHostHarness,

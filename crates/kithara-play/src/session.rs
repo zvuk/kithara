@@ -3,8 +3,8 @@
 mod wire {
     use std::num::{NonZeroU32, NonZeroUsize};
 
-    use firewheel::param::smoother::SmootherConfig;
     use kithara_bufpool::PoolRegion;
+    use kithara_dsp::param::SmootherConfig;
     use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_signal::FaderValue;
@@ -239,9 +239,9 @@ mod handle {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use firewheel::param::smoother::SmootherConfig;
     use kithara_audio::ConsumerWakeMode;
     use kithara_bufpool::PoolRegion;
+    use kithara_dsp::param::SmootherConfig;
     use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_platform::{

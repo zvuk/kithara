@@ -10,9 +10,9 @@ use firewheel::{
         AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStore, ProcStreamCtx,
         ProcessStatus,
     },
-    param::smoother::SmootherConfig,
 };
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_dsp::param::SmootherConfig;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;

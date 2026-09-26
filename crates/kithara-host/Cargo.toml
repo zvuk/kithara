@@ -40,6 +40,7 @@ usdt = ["kithara-effects/usdt", "kithara-play/usdt", "kithara-sync/usdt"]
 [dependencies]
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
+kithara-dsp = { workspace = true }
 kithara-effects = { workspace = true }
 kithara-events = { workspace = true }
 kithara-output = { workspace = true }

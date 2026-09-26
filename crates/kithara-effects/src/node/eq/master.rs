@@ -8,10 +8,6 @@ use firewheel::{
     StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
     diff::{Diff, Patch, PatchError},
-    dsp::{
-        fade::FadeCurve,
-        mix::{Mix, MixDSP},
-    },
     event::{NodeEventType, ParamData, ProcEvents},
     mask::MaskType,
     node::{
@@ -20,6 +16,10 @@ use firewheel::{
     },
 };
 use kithara_bufpool::{HasPool, PoolError};
+use kithara_dsp::{
+    fade::FadeCurve,
+    param::{Mix, MixDSP},
+};
 use kithara_test_utils::kithara;
 use tracing::warn;
 

@@ -1,10 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use firewheel_core::{
-    dsp::filter::smoothing_filter::MIN_SETTLE_RATIO,
-    param::smoother::{SmoothedParam, SmootherConfig},
-};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_dsp::param::{MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::{

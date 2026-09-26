@@ -1,6 +1,6 @@
 use bon::Builder;
-use firewheel::{dsp::filter::smoothing_filter::MIN_SETTLE_RATIO, param::smoother::SmootherConfig};
 use kithara_bufpool::PoolRegion;
+use kithara_dsp::param::{MIN_SETTLE_RATIO, SmootherConfig};
 
 const DEFAULT_EQ_SMOOTHING: SmootherConfig = SmootherConfig {
     smooth_seconds: 0.01,

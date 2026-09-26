@@ -1,14 +1,11 @@
 use std::num::NonZeroU32;
 
-use firewheel::{
-    dsp::{
-        fade::FadeCurve,
-        mix::{Mix, MixDSP},
-    },
-    node::ProcBuffers,
-    param::smoother::SmootherConfig,
-};
+use firewheel::node::ProcBuffers;
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_dsp::{
+    fade::FadeCurve,
+    param::{Mix, MixDSP, SmootherConfig},
+};
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;

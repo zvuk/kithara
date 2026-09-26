@@ -23,6 +23,7 @@ usdt = ["kithara-test-utils/usdt"]
 [dependencies]
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default", "ranged"] }
+kithara-dsp = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
@@ -33,7 +34,6 @@ delegate = { workspace = true }
 derive-where = { workspace = true }
 fieldwork = { workspace = true }
 firewheel = { workspace = true }
-firewheel-core = { workspace = true }
 num-traits = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

@@ -96,6 +96,7 @@ kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-drm = { workspace = true }
+kithara-dsp = { workspace = true }
 kithara-effects = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }

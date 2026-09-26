@@ -14,11 +14,12 @@ use super::{
     super::config::ArchConfig, arc_clone_hotspots, args_wrapper_struct, cancel_root_sites,
     canonical_types, cfg_density, dead_exports, direction, duplicate_error_enums,
     field_always_constant, field_always_equals_other_field, field_passthrough, file_density,
-    file_size, flat_directory, fn_arg_count, generic_param_count, god_module, god_struct,
-    god_trait, max_nesting, mixed_entities, module_fan_out, module_layers, multi_constructor,
-    no_lib_statics, platform_layer_hygiene, pub_struct_open_fields, readme_presence,
-    redundant_accessors, redundant_reexport, shared_state, single_impl_size, single_word_filenames,
-    smoothing_primitive_sites, stray_rs_files, tokio_dep_quarantine, trait_impl_count,
+    file_size, firewheel_dsp_facade, flat_directory, fn_arg_count, generic_param_count, god_module,
+    god_struct, god_trait, max_nesting, mixed_entities, module_fan_out, module_layers,
+    multi_constructor, no_lib_statics, platform_layer_hygiene, pub_struct_open_fields,
+    readme_presence, redundant_accessors, redundant_reexport, shared_state, single_impl_size,
+    single_word_filenames, smoothing_primitive_sites, stray_rs_files, tokio_dep_quarantine,
+    trait_impl_count,
 };
 use crate::common::{
     fix::FixOutcome, scope::Scope, violation::Violation, walker::workspace_rs_files_scoped,
@@ -164,6 +165,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(cancel_root_sites::CancelRootSites),
         Box::new(smoothing_primitive_sites::SmoothingPrimitiveSites),
+        Box::new(firewheel_dsp_facade::FirewheelDspFacade),
         Box::new(platform_layer_hygiene::PlatformLayerHygiene),
         Box::new(tokio_dep_quarantine::TokioDepQuarantine),
         Box::new(cfg_density::CfgDensity),

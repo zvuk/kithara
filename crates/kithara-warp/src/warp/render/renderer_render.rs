@@ -1,5 +1,5 @@
-use firewheel_core::param::smoother::SmoothedParam;
 use kithara_bufpool::HasPool;
+use kithara_dsp::param::SmoothedParam;
 use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SampleCount};
 use kithara_stretch::{ElasticCapabilities, ElasticError, ElasticRequest};
 use kithara_test_macros as kithara;

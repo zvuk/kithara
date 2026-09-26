@@ -625,7 +625,7 @@ fn reset_discards_pending_span_before_new_timeline(
 }
 
 fn moving_target_renderer() -> WarpRenderer {
-    use firewheel_core::param::smoother::{SmoothedParam, SmootherConfig};
+    use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 
     let mut fx = renderer(StretchControls::new(1.0));
     fx.applied_speed = Some(SmoothedParam::new(

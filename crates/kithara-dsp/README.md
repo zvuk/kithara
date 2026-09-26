@@ -44,6 +44,10 @@ assert_eq!(interleaved.map(f32::to_bits), [1.0_f32, -1.0, 2.0, -2.0].map(f32::to
 
 <tr><td><code>Accelerate</code></td><td>vDSP and BLAS kernels through <code>kithara-apple</code>; Apple only</td></tr>
 
+<tr><td><code>fade::FadeCurve</code></td><td>firewheel's fade curve, re-exported as the one import path</td></tr>
+
+<tr><td><code>param::*</code></td><td>firewheel's parameter smoother, smoothing filter and A/B mix, re-exported as the one import path</td></tr>
+
 </table>
 
 ## Integration

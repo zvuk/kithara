@@ -17,6 +17,7 @@ pub(crate) mod field_always_equals_other_field;
 pub(crate) mod field_passthrough;
 pub(crate) mod file_density;
 pub(crate) mod file_size;
+pub(crate) mod firewheel_dsp_facade;
 pub(crate) mod flat_directory;
 pub(crate) mod fn_arg_count;
 pub(crate) mod generic_param_count;

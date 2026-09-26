@@ -7,9 +7,9 @@ use firewheel::{
     diff::Memo,
     node::{AudioNode, NodeID},
     nodes::volume::VolumeNode,
-    param::smoother::SmootherConfig,
 };
 use kithara_bufpool::PoolRegion;
+use kithara_dsp::param::SmootherConfig;
 use kithara_effects::{GainDb, LimiterConfig, eq::EqBandConfig};
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
