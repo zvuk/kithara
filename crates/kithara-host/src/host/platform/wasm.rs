@@ -174,12 +174,16 @@ where
         P: PlayerControlSource<Schema = S>,
     {
         self.session.platform().require_remote()?;
+        let track_id = player.sync_track_grid_id();
         let (attachment, control) = self.bind_player(&mut player)?;
         let grid_id = attachment.id();
-        self.attach_member(PlayerMember::new(
+        if let Err(error) = self.attach_member(PlayerMember::new(
             attachment,
             HeldPlayer::new(player.host_level()),
-        ))?;
+        )) {
+            self.retire_sync_member(track_id)?;
+            return Err(error);
+        }
         let resident: Resident = Box::new(move || player.close());
         if let Some(replaced) = self
             .session
@@ -191,7 +195,7 @@ where
                 "wasm player residence changed during insertion".into(),
             ));
         }
-        let owned = self.owned::<P>(grid_id, control);
+        let owned = self.owned::<P>(grid_id, track_id, control);
         if let Err(error) = P::prepare_control(owned.control()) {
             self.remove(&owned)?;
             return Err(error);
@@ -231,14 +235,15 @@ where
         P: PlayerControlSource<Schema = S>,
     {
         self.validate_removal(player)?;
-        self.remove_resident(player.id())
+        self.remove_resident(player.id(), player.track_id())
     }
 
-    fn remove_resident(&mut self, id: BeatGridId) -> Result<(), PlayError> {
+    fn remove_resident(&mut self, id: BeatGridId, track_id: BeatGridId) -> Result<(), PlayError> {
         let close_result = self.session.platform_mut().close_resident(id);
         self.session
             .platform_mut()
             .release_on_session_gone(id, close_result)?;
+        self.retire_sync_member(track_id)?;
         let detach_result = self.detach_member(id);
         self.session
             .platform_mut()

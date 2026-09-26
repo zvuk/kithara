@@ -2,8 +2,9 @@ use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_sync::SyncAttachment;
+use kithara_warp::{BeatGrid, BeatGridId};
 
-use super::{PlaybackView, PlayerImpl, PlayerRuntime};
+use super::{PlaybackView, PlayerImpl, PlayerRuntime, ResidentLoadObservation};
 use crate::{PlayError, SessionBinding};
 
 /// Canonical object-safe protocol implemented by a standalone player and its
@@ -47,6 +48,21 @@ pub trait PlayerControlSource: Player {
 
     /// Typed pool schema shared with the canonical playback session.
     type Schema;
+
+    /// Grid identity of the deck group that owns this player's track.
+    fn sync_group_grid_id(&self) -> BeatGridId;
+
+    /// Grid identity of the direct track whose prepared lane this player owns.
+    fn sync_track_grid_id(&self) -> BeatGridId;
+
+    /// One committed resident load and its matching live render observation.
+    /// The Host validates these facts under its own gate before admission.
+    ///
+    /// # Errors
+    /// Returns an error when the player command capability is closed.
+    fn resident_sync_observation(
+        control: &Self::Control,
+    ) -> Result<Option<ResidentLoadObservation>, PlayError>;
 
     /// Attaches the resident Player to its canonical session exactly once and
     /// hands that owner the player's synchronization attachment: the group
@@ -119,6 +135,20 @@ where
 {
     type Control = crate::player::PlayerControl<S>;
     type Schema = S;
+
+    fn sync_group_grid_id(&self) -> BeatGridId {
+        self.grid_id
+    }
+
+    fn sync_track_grid_id(&self) -> BeatGridId {
+        self.runtime.core.track_grid.id()
+    }
+
+    fn resident_sync_observation(
+        control: &Self::Control,
+    ) -> Result<Option<ResidentLoadObservation>, PlayError> {
+        control.resident_sync_observation()
+    }
 
     fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<SyncAttachment, PlayError> {
         self.runtime.attach_session(binding)?;

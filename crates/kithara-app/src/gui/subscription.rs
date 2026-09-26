@@ -2,6 +2,7 @@ use iced::keyboard::{Key, Modifiers, key::Named};
 use kithara::ui::render::WindowCommand;
 
 use super::message::Message;
+use crate::deck::DeckId;
 
 /// Which iced subscriptions should be active, and at what rate.
 ///
@@ -55,6 +56,14 @@ pub(crate) fn shortcut(key: &Key, modifiers: Modifiers) -> Option<Message> {
         {
             Some(Message::Window(WindowCommand::ToggleFullScreen))
         }
+        Key::Character(pressed) if modifiers.control() && modifiers.shift() => {
+            let deck = match pressed.to_lowercase().as_str() {
+                "a" => DeckId(0),
+                "b" => DeckId(1),
+                _ => return None,
+            };
+            Some(Message::ToggleDeckSync(deck))
+        }
         _ => None,
     }
 }
@@ -97,6 +106,20 @@ mod tests {
             press(Key::Named(Named::Backspace), Modifiers::empty()),
             Some(Message::DeleteFocusedTrack)
         ));
+    }
+
+    #[kithara::test]
+    fn sync_shortcuts_address_both_decks_without_focus() {
+        for (key, deck) in [("A", DeckId(0)), ("B", DeckId(1))] {
+            assert!(matches!(
+                press(
+                    Key::Character(key.into()),
+                    Modifiers::CTRL | Modifiers::SHIFT
+                ),
+                Some(Message::ToggleDeckSync(id)) if id == deck
+            ));
+            assert!(press(Key::Character(key.into()), Modifiers::CTRL).is_none());
+        }
     }
 
     #[kithara::test]

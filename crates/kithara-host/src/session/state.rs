@@ -15,7 +15,10 @@ use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{SessionSampleRate, StreamShape, session::RegisteredPlayer};
-use kithara_sync::{GroupState, SyncError, SyncGroup, SyncGroupSnapshot, SyncStatusSnapshot};
+use kithara_sync::{
+    ControlGuard, GroupState, PermitCell, SyncArbiter, SyncError, SyncGateBinding, SyncGroup,
+    SyncGroupSnapshot, SyncReceipt, SyncStatusSnapshot,
+};
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot};
 use tracing::{debug, warn};
 
@@ -28,16 +31,17 @@ use super::{
 use crate::{
     PlayerMember,
     api::{SessionDuckingMode, SlotId},
-    bridge::SharedEq,
+    bridge::{SharedEq, SyncReceiptRx},
     rt::{LimiterNode, MasterEqNode},
 };
 
-#[derive(Debug)]
 pub(super) struct SlotNodes {
     pub(super) volume_memo: Memo<VolumeNode>,
     pub(super) player_node_id: NodeID,
     pub(super) volume_node_id: NodeID,
     pub(super) slot_id: SlotId,
+    pub(super) sync_receipts: SyncReceiptRx,
+    pub(super) pending_receipt: Option<SyncReceipt>,
 }
 
 pub(super) struct Deck<S> {
@@ -151,6 +155,12 @@ pub(super) enum MixTap {
     Installed(NodeID),
 }
 
+pub(super) struct RegisteredSyncCell {
+    pub(super) group: BeatGridId,
+    pub(super) cell: Arc<PermitCell>,
+    pub(super) pending_gate_receipt: Option<SyncReceipt>,
+}
+
 struct RootSnapshot {
     grid: BeatGridSnapshot,
     stream_shape: Option<StreamShape>,
@@ -212,6 +222,8 @@ impl RootView {
 pub(crate) struct SessionState<T, S> {
     pub(super) graph: GraphRegistry<S>,
     pub(super) root: GroupState<PlayerMember>,
+    pub(super) sync_arbiter: Arc<SyncArbiter>,
+    pub(super) sync_cells: Vec<RegisteredSyncCell>,
     pub(super) limiter: LimiterConfig,
     pub(super) ctx: Option<FirewheelContext>,
     pub(super) mix_tap: Option<MixTap>,
@@ -244,6 +256,42 @@ impl<T, S> Drop for SessionState<T, S> {
     fn drop(&mut self) {
         self.stream.take();
         self.ctx.take();
+        for deck_index in 0..self.graph.len() {
+            let slot_count = self
+                .graph
+                .deck(deck_index)
+                .map_or(0, |deck| deck.slots.len());
+            for slot_index in 0..slot_count {
+                loop {
+                    let receipt = self
+                        .graph
+                        .deck_mut(deck_index)
+                        .and_then(|deck| deck.slots.get_mut(slot_index))
+                        .and_then(|slot| {
+                            slot.pending_receipt
+                                .take()
+                                .or_else(|| slot.sync_receipts.try_pop())
+                        });
+                    let Some(receipt) = receipt else { break };
+                    if let Err(error) = self.root.acknowledge(receipt) {
+                        warn!(?error, ?receipt, "final sync receipt could not be recorded");
+                    }
+                }
+            }
+        }
+        for cell in &mut self.sync_cells {
+            if let Some(receipt) = cell.pending_gate_receipt.take()
+                && let Err(error) = self.root.acknowledge(receipt)
+            {
+                warn!(
+                    ?error,
+                    ?receipt,
+                    "final gate rejection could not be recorded"
+                );
+            }
+        }
+        self.publish_root();
+        self.sync_arbiter.close_quiescent();
     }
 }
 
@@ -273,6 +321,8 @@ impl<T, S> SessionState<T, S> {
             requested_declick_frames,
             limiter,
             root,
+            sync_arbiter: Arc::new(SyncArbiter::new()),
+            sync_cells: Vec::new(),
             root_view,
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
@@ -297,6 +347,44 @@ impl<T, S> SessionState<T, S> {
     pub(super) fn publish_root(&self) {
         self.root_view
             .publish(&self.root, stream_shape(self), sample_rate(self));
+    }
+
+    pub(super) fn register_sync_member(
+        &mut self,
+        group: BeatGridId,
+        member: BeatGridId,
+    ) -> Result<SyncGateBinding, SessionError> {
+        if self
+            .sync_cells
+            .iter()
+            .any(|entry| entry.group == group || entry.cell.member() == member)
+        {
+            return Err(SessionError::SyncMemberAlreadyRegistered(member));
+        }
+        let cell = Arc::new(PermitCell::new(member));
+        self.sync_cells.push(RegisteredSyncCell {
+            group,
+            cell: Arc::clone(&cell),
+            pending_gate_receipt: None,
+        });
+        Ok(SyncGateBinding::new(Arc::clone(&self.sync_arbiter), cell))
+    }
+
+    pub(super) fn retire_sync_member(
+        &mut self,
+        member: BeatGridId,
+        control: &ControlGuard<'_>,
+    ) -> Result<(), SessionError> {
+        let Some(index) = self
+            .sync_cells
+            .iter()
+            .position(|entry| entry.cell.member() == member)
+        else {
+            return Ok(());
+        };
+        control.retire_cell(&self.sync_cells[index].cell)?;
+        self.sync_cells.remove(index);
+        Ok(())
     }
 }
 
@@ -367,6 +455,7 @@ pub(super) fn ensure_ctx<T, S>(
     sample_rate: u32,
 ) -> Result<(), SessionError> {
     ensure_stream_ready(state, sample_rate)?;
+    super::transport::activate_configured_tempo(state)?;
     ensure_session_output(state)
 }
 

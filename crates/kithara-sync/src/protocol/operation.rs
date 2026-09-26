@@ -102,6 +102,12 @@ pub enum SyncOperation<G: SyncGroup> {
         /// caller can still reach up to the first one it can no longer use.
         window: Range<SessionFrame>,
     },
+    /// Withdraws one member after its last audio processor has quiesced and
+    /// the Host has applied every receipt from that processor.
+    WithdrawQuiescedMember {
+        /// Exact direct Track grid whose physical source is gone.
+        target: BeatGridId,
+    },
     /// Commits a new tempo on a group that owns its own beat timeline.
     Tempo {
         /// Stable group grid receiving the tempo.
@@ -126,6 +132,7 @@ impl<G: SyncGroup> SyncOperation<G> {
             | Self::Sync { target, .. }
             | Self::Prepare { target, .. }
             | Self::Relocate { target, .. }
+            | Self::WithdrawQuiescedMember { target }
             | Self::Tempo { target, .. } => *target,
         }
     }

@@ -17,10 +17,10 @@ use super::{
     preparation::{asset_grid, attach_grid, cue, window},
 };
 use crate::{
-    AlignmentSource, ExecutedGroup, LoadGeneration, ParentFact, ReceiptSink, StagePort,
-    SyncAdmission, SyncApplied, SyncAttachment, SyncCapability, SyncEffect, SyncError,
-    SyncExecutionReject, SyncExecutionStamp, SyncExecutor, SyncGroup, SyncIntent, SyncOperation,
-    SyncReceipt,
+    AlignmentSource, ArmPermit, ExecutedGroup, LoadGeneration, ParentFact, PermitCell, ReceiptSink,
+    StagePort, SyncAdmission, SyncApplied, SyncArbiter, SyncAttachment, SyncCapability, SyncEffect,
+    SyncError, SyncExecutionReject, SyncExecutionStamp, SyncExecutor, SyncGroup, SyncIntent,
+    SyncOperation, SyncReceipt, SyncReceiptAck,
 };
 
 /// The first session frame no caller can use.
@@ -42,6 +42,7 @@ impl Drop for Lane {
 struct Port {
     runtime: Handle,
     staged: mpsc::UnboundedSender<oneshot::Receiver<()>>,
+    installed: Arc<Mutex<Vec<Lane>>>,
 }
 
 impl StagePort for Port {
@@ -63,6 +64,17 @@ impl StagePort for Port {
             Ok(Lane(Some(released)))
         }
     }
+
+    fn handoff(
+        self,
+        _media: Self::Media,
+        lane: Self::Lane,
+        _cancel: CancelToken,
+        _permit: ArmPermit,
+    ) -> Result<(), SyncExecutionReject> {
+        self.installed.lock().push(lane);
+        Ok(())
+    }
 }
 
 /// How the fake owner answers receipts.
@@ -79,6 +91,8 @@ struct Owner {
     bound: bool,
     gate: Mutex<Option<blocking::Receiver<()>>>,
     heard: mpsc::UnboundedSender<SyncReceipt>,
+    arbiter: Arc<SyncArbiter>,
+    cell: Arc<PermitCell>,
 }
 
 impl ReceiptSink for Owner {
@@ -86,15 +100,22 @@ impl ReceiptSink for Owner {
         self.bound
     }
 
-    fn acknowledge(&self, receipt: SyncReceipt) -> bool {
+    fn acknowledge(&self, receipt: SyncReceipt) -> SyncReceiptAck {
         let _ = self.heard.send(receipt);
         if let Some(gate) = self.gate.lock().take() {
             let _ = gate.recv();
         }
-        !matches!(
-            (self.answer, receipt),
-            (Answer::RefuseInstalled, SyncReceipt::Installed(_))
-        )
+        match (self.answer, receipt) {
+            (Answer::RefuseInstalled, SyncReceipt::Installed(_)) => SyncReceiptAck::Refused,
+            (_, SyncReceipt::Installed(stamp)) => {
+                let control = self.arbiter.try_control().expect("fake owner enters");
+                let permit = control
+                    .mint_permit(&self.cell, stamp)
+                    .expect("exact permit");
+                SyncReceiptAck::Installed(permit)
+            }
+            _ => SyncReceiptAck::Recorded,
+        }
     }
 }
 
@@ -112,11 +133,14 @@ impl Fixture {
     fn new(answer: Answer, gate: Option<blocking::Receiver<()>>) -> Self {
         let track = BeatGridId::allocate().expect("grid id");
         let (heard_tx, heard) = mpsc::unbounded_channel();
+        let installed = Arc::new(Mutex::new(Vec::new()));
         let owner = Owner {
             answer,
             bound: true,
             gate: Mutex::new(gate),
             heard: heard_tx,
+            arbiter: Arc::new(SyncArbiter::new()),
+            cell: Arc::new(PermitCell::new(track)),
         };
         let executor = SyncExecutor::new(track, Some(Arc::new(owner)), CancelToken::root());
         let (staged_tx, staged) = mpsc::unbounded_channel();
@@ -125,6 +149,7 @@ impl Fixture {
             Some(Port {
                 runtime: Handle::current(),
                 staged: staged_tx,
+                installed,
             }),
         );
         Self {
@@ -223,6 +248,8 @@ async fn a_staged_preparation_needs_an_owner_and_a_stageable_load() {
         bound: false,
         gate: Mutex::new(None),
         heard,
+        arbiter: Arc::new(SyncArbiter::new()),
+        cell: Arc::new(PermitCell::new(track)),
     };
     let refused = |executor: &SyncExecutor<Port>| {
         ExecutedGroup::new(deck_holding(track), executor.execution())
@@ -261,6 +288,8 @@ async fn a_staged_preparation_needs_an_owner_and_a_stageable_load() {
         bound: true,
         gate: Mutex::new(None),
         heard,
+        arbiter: Arc::new(SyncArbiter::new()),
+        cell: Arc::new(PermitCell::new(track)),
     };
     let unstageable = SyncExecutor::<Port>::new(track, Some(Arc::new(owner)), CancelToken::root());
     unstageable.load(1, None);

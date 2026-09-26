@@ -58,26 +58,77 @@ impl PlayerNodeProcessor {
         }
     }
 
-    fn clear_all_tracks(&mut self) {
+    fn clear_all_tracks(&mut self) -> bool {
+        // A queued Clear keeps later commands behind it until every owned
+        // staged object has off-RT custody. Muting first prevents a pending
+        // ticket from claiming while return capacity is temporarily full.
+        self.playback.playing.store(false, Ordering::SeqCst);
+        self.playback.active_sync_map.store(0, Ordering::Release);
+        for (_, track) in self.tracks.iter_mut() {
+            track.stop();
+        }
         let loaded: SmallVec<[TrackSlot; Self::MAX_TRACKS]> =
             self.tracks.iter().map(|(slot, _)| slot).collect();
         for slot in loaded {
             self.unload_slot(slot);
         }
+        self.retire_sync_tail();
+        self.retire_pending_sync(kithara_sync::SyncExecutionReject::Cancelled);
         self.tracks_transitions.clear();
-        self.playback.playing.store(false, Ordering::SeqCst);
         self.playback.position.store(0.0, Ordering::Relaxed);
         self.playback.frontier.store(0.0, Ordering::Relaxed);
         self.playback.cached.store(0.0, Ordering::Relaxed);
         self.playback.duration.store(0.0, Ordering::Relaxed);
+        self.tracks.len() == 0 && self.sync_custody_cleared()
+    }
+
+    fn can_run_track_command(&self, command: &PlayerCmd) -> bool {
+        match command {
+            PlayerCmd::UnloadTrack { item_id } => self
+                .tracks
+                .get(*item_id)
+                .is_none_or(|track| !track.has_sync_lane() || self.can_return_sync()),
+            PlayerCmd::LoadTrack { item_id, .. } => {
+                if self
+                    .tracks
+                    .get(*item_id)
+                    .is_some_and(PlayerTrack::has_sync_lane)
+                {
+                    self.can_return_sync()
+                } else if self.tracks.is_full() {
+                    self.can_return_sync()
+                        || self.tracks.iter().any(|(_, track)| !track.has_sync_lane())
+                } else {
+                    true
+                }
+            }
+            _ => true,
+        }
     }
 
     /// Drain all pending commands from the channel.
     pub fn drain_commands(&mut self) {
-        while let Some(cmd) = self.cmd_rx.try_pop() {
+        while let Some(queued) = self.cmd_rx.try_peek() {
+            if matches!(queued, PlayerCmd::Clear) {
+                if !self.clear_all_tracks() {
+                    break;
+                }
+                let _ = self.cmd_rx.try_pop();
+                continue;
+            }
+            if !self.can_run_track_command(queued) {
+                break;
+            }
+            let Some(cmd) = self.cmd_rx.try_pop() else {
+                unreachable!("sole command consumer lost a peeked command");
+            };
             match cmd {
-                PlayerCmd::LoadTrack { resource, item_id } => {
-                    self.load_track(resource, item_id);
+                PlayerCmd::LoadTrack {
+                    resource,
+                    item_id,
+                    load,
+                } => {
+                    self.load_track(resource, item_id, load);
                 }
                 PlayerCmd::UnloadTrack { item_id } => {
                     if let Some(slot) = self.tracks.slot_of(item_id) {
@@ -85,7 +136,7 @@ impl PlayerNodeProcessor {
                     }
                 }
                 PlayerCmd::Clear => {
-                    self.clear_all_tracks();
+                    unreachable!("Clear is completed before leaving the command ring");
                 }
                 PlayerCmd::Transition(transition) => {
                     self.handle_transition(transition);
@@ -112,6 +163,13 @@ impl PlayerNodeProcessor {
 
     fn handle_transition(&mut self, transition: TrackTransition) {
         let mut leading_changed = false;
+        let selected = self.playback.active_sync_map.load(Ordering::Relaxed);
+        let selected_item = self.tracks.iter().find_map(|(_, track)| {
+            track
+                .sync_map()
+                .is_some_and(|map| u64::from(map) == selected)
+                .then_some(track.item_id())
+        });
 
         if let TrackTransition::FadeIn { item_id, settings } = &transition {
             self.tracks_transitions.clear();
@@ -148,6 +206,9 @@ impl PlayerNodeProcessor {
                             track.seek(0.0);
                         }
                         track.fade_in(*settings);
+                        if selected_item.is_some_and(|selected| selected != item_id) {
+                            playback.active_sync_map.store(0, Ordering::Release);
+                        }
                         playback.position.store(track.position(), Ordering::Relaxed);
                         playback.duration.store(track.duration(), Ordering::Relaxed);
                     }
@@ -167,7 +228,12 @@ impl PlayerNodeProcessor {
         }
     }
 
-    fn load_track(&mut self, resource: Box<PlayerResource>, item_id: TrackId) {
+    fn load_track(
+        &mut self,
+        resource: Box<PlayerResource>,
+        item_id: TrackId,
+        load: kithara_sync::LoadGeneration,
+    ) {
         let src = Arc::clone(resource.src());
         if let Some(slot) = self.tracks.slot_of(item_id) {
             self.unload_slot(slot);
@@ -179,6 +245,7 @@ impl PlayerNodeProcessor {
         let track = PlayerTrack::builder()
             .sample_rate(self.sample_rate)
             .item_id(item_id)
+            .load(load)
             .crossfade(self.crossfade)
             .prefetch_duration(self.prefetch_duration)
             .seek_epoch(self.playback.seek_epoch.load(Ordering::SeqCst))

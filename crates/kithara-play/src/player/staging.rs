@@ -1,8 +1,14 @@
-use kithara_sync::{ReceiptSink, SyncExecutionReject, SyncExecutor, SyncReceipt};
+use kithara_sync::{
+    ReceiptSink, SyncError, SyncExecutionReject, SyncExecutor, SyncReceipt, SyncReceiptAck,
+};
 use kithara_test_utils::kithara;
 use tracing::debug;
 
-use crate::{resource::StagingRecipe, session::SessionHandle};
+use crate::{
+    PlayError,
+    resource::StagingRecipe,
+    session::{SessionError, SessionHandle},
+};
 
 /// Executor of the preparations a player's group issues for its track.
 pub(crate) type SyncStaging = SyncExecutor<StagingRecipe>;
@@ -15,7 +21,7 @@ where
         self.dispatcher().is_ok()
     }
 
-    fn acknowledge(&self, receipt: SyncReceipt) -> bool {
+    fn acknowledge(&self, receipt: SyncReceipt) -> SyncReceiptAck {
         let answer = self.acknowledge_sync(receipt);
         let delivered = match receipt {
             SyncReceipt::Installed(stamp) => Some((stamp, 0)),
@@ -33,7 +39,14 @@ where
         if let Err(error) = &answer {
             debug!(%error, "sync: the owner refused an executor receipt");
         }
-        answer.is_ok()
+        match answer {
+            Ok(answer) => answer,
+            Err(PlayError::Session(
+                SessionError::SyncControlBusy | SessionError::Sync(SyncError::OwnerUnavailable),
+            ))
+            | Err(PlayError::SessionGone { .. }) => SyncReceiptAck::GateFailed,
+            Err(_) => SyncReceiptAck::Refused,
+        }
     }
 }
 
@@ -43,6 +56,7 @@ const fn reject_code(reason: SyncExecutionReject) -> u64 {
         SyncExecutionReject::Geometry => 1,
         SyncExecutionReject::Late => 2,
         SyncExecutionReject::Capacity => 3,
+        SyncExecutionReject::ControlBusy => 6,
         SyncExecutionReject::Cancelled => 4,
         SyncExecutionReject::Media => 5,
         _ => u64::MAX,

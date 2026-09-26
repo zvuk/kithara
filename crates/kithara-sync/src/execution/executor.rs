@@ -11,9 +11,9 @@ use kithara_platform::{
 use kithara_warp::{BeatGridId, supports_playback_rate};
 use tracing::warn;
 
-use super::{ReceiptSink, StagePort, SyncExecution, command::Execute};
+use super::{ReceiptSink, StagePort, SyncExecution, SyncReceiptAck, command::Execute};
 use crate::{
-    SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp,
+    ArmPermit, SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp,
     SyncPreparation, SyncReceipt,
 };
 
@@ -25,6 +25,7 @@ struct Loaded<P: StagePort> {
 struct Held<P: StagePort> {
     stamp: SyncExecutionStamp,
     media: P::Media,
+    port: P,
     cancel: CancelToken,
     runtime: Handle,
     lane: Option<P::Lane>,
@@ -237,6 +238,7 @@ impl<P: StagePort> Execute for Shared<P> {
         state.held = Some(Held {
             stamp,
             media,
+            port: port.clone(),
             cancel: cancel.clone(),
             runtime: runtime.clone(),
             lane: None,
@@ -313,9 +315,45 @@ impl<P: StagePort> Shared<P> {
             let receipt = rejected.map_or(SyncReceipt::Installed(stamp), |reason| {
                 SyncReceipt::Rejected { stamp, reason }
             });
-            if !sink.acknowledge(receipt) && rejected.is_none() {
-                self.retire_refused(stamp);
+            let answer = sink.acknowledge(receipt);
+            if rejected.is_none() {
+                match answer {
+                    SyncReceiptAck::Installed(permit) if permit.stamp() == stamp => {
+                        self.handoff_installed(stamp, permit);
+                    }
+                    SyncReceiptAck::GateFailed => self.retire_failed(stamp),
+                    _ => self.retire_refused(stamp),
+                }
             }
+        }
+    }
+
+    /// Leaves the executor's pre-claim custody only while the same staged
+    /// stamp is still held after the blocking owner acknowledgement.
+    fn handoff_installed(&self, stamp: SyncExecutionStamp, permit: ArmPermit) {
+        let transferred = {
+            let mut state = self.state.lock();
+            state
+                .held
+                .take_if(|held| held.stamp == stamp && held.lane.is_some())
+        };
+        let Some(mut held) = transferred else {
+            return;
+        };
+        let Some(lane) = held.lane.take() else {
+            return;
+        };
+        let runtime = held.runtime.clone();
+        let result = held.port.handoff(held.media, lane, held.cancel, permit);
+        if let Err(reason) = result {
+            let mut state = self.state.lock();
+            let _ = state.commit(
+                Outcome {
+                    stamp,
+                    rejected: Some(reason),
+                },
+                &runtime,
+            );
         }
     }
 
@@ -333,5 +371,16 @@ impl<P: StagePort> Shared<P> {
         }
         drop(state);
         cancel_silently(refused);
+    }
+
+    /// The owner did not record Installed at all. Do not report a second
+    /// rejection through the same failed gate or transfer this lane to audio.
+    fn retire_failed(&self, stamp: SyncExecutionStamp) {
+        let failed = self.state.lock().held.take_if(|held| held.stamp == stamp);
+        cancel_silently(failed);
+        warn!(
+            ?stamp,
+            "sync owner gate failed before Installed acknowledgement"
+        );
     }
 }

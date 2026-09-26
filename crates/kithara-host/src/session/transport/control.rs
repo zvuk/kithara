@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_signal::SessionFrame;
-use kithara_sync::{ParentGridUpdate, SyncError};
+use kithara_sync::{ControlGuard, ParentGridUpdate, SyncError};
 use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
 
 use super::{
@@ -15,7 +15,11 @@ use super::{
 };
 use crate::{
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
-    session::{SessionError, dispatch::stream_died, state::SessionState},
+    session::{
+        SessionError,
+        dispatch::{publish_root_transition, stream_died, with_owner_cut},
+        state::SessionState,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,6 +49,10 @@ pub(crate) struct SessionTransportState {
 enum TransportPhase {
     #[default]
     Unconfigured,
+    /// Tempo accepted before any output stream owns a transport processor.
+    Configured {
+        tempo: Tempo,
+    },
     Stable {
         active: SessionTransportCommit,
     },
@@ -63,7 +71,7 @@ impl SessionTransportState {
     /// The commit the caller has already asked for, pending or not.
     pub(crate) const fn accepted(&self) -> Option<SessionTransportCommit> {
         match self.phase {
-            TransportPhase::Unconfigured => None,
+            TransportPhase::Unconfigured | TransportPhase::Configured { .. } => None,
             TransportPhase::Stable { active } => Some(active),
             TransportPhase::Applying { next, .. } => Some(next),
             TransportPhase::Aborting { previous, .. } => previous,
@@ -73,7 +81,7 @@ impl SessionTransportState {
     /// The commit the graph has actually rendered.
     pub(crate) const fn observed(&self) -> Option<SessionTransportCommit> {
         match self.phase {
-            TransportPhase::Unconfigured => None,
+            TransportPhase::Unconfigured | TransportPhase::Configured { .. } => None,
             TransportPhase::Stable { active } => Some(active),
             TransportPhase::Applying { previous, .. }
             | TransportPhase::Aborting { previous, .. } => previous,
@@ -84,8 +92,21 @@ impl SessionTransportState {
         match self.phase {
             TransportPhase::Applying { next, .. } => Some(next.revision()),
             TransportPhase::Aborting { revision, .. } => Some(revision),
-            TransportPhase::Unconfigured | TransportPhase::Stable { .. } => None,
+            TransportPhase::Unconfigured
+            | TransportPhase::Configured { .. }
+            | TransportPhase::Stable { .. } => None,
         }
+    }
+
+    pub(crate) fn configured_tempo(&self) -> Option<Tempo> {
+        match self.phase {
+            TransportPhase::Configured { tempo } => Some(tempo),
+            _ => self.accepted().map(|commit| commit.tempo()),
+        }
+    }
+
+    pub(crate) fn configure_without_stream(&mut self, tempo: Tempo) {
+        self.phase = TransportPhase::Configured { tempo };
     }
 }
 
@@ -93,6 +114,10 @@ pub(crate) fn set_tempo<T, S>(
     state: &mut SessionState<T, S>,
     tempo: Tempo,
 ) -> Result<(), SessionError> {
+    if state.ctx.is_none() && state.transport_control.is_none() && state.stream.is_none() {
+        state.transport.configure_without_stream(tempo);
+        return Ok(());
+    }
     let _ = refresh_observation(state)?;
     let accepted = state.transport.accepted();
     if accepted.is_some_and(|commit| commit.tempo() == tempo) {
@@ -109,6 +134,18 @@ pub(crate) fn set_tempo<T, S>(
     let stamp =
         TransportCommitStamp::new(state.transport.observed(), next, target_frame, sample_rate);
     schedule_commit(state, next, stamp)
+}
+
+/// Installs the accepted pre-stream tempo when the real graph first exists.
+/// Its phase changes to Applying only after the existing transport owner
+/// admits the scheduled commit.
+pub(crate) fn activate_configured_tempo<T, S>(
+    state: &mut SessionState<T, S>,
+) -> Result<(), SessionError> {
+    let TransportPhase::Configured { tempo } = state.transport.phase else {
+        return Ok(());
+    };
+    set_tempo(state, tempo)
 }
 
 pub(crate) fn set_playing<T, S>(
@@ -218,10 +255,12 @@ pub(crate) fn prepare_route_restart<T, S>(
             .stamp()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
         let sample_rate = NonZeroU32::new(sample_rate).unwrap_or_else(|| axis.sample_rate());
-        state
-            .root
-            .publish_unavailable_grid(stamp, sample_rate, target.epoch())?;
-        state.publish_root();
+        with_owner_cut(state, |state, control| {
+            publish_root_transition(state, control, true, |root| {
+                root.publish_unavailable_grid(stamp, sample_rate, target.epoch())
+            })?;
+            Ok(())
+        })?;
         state.reserved_session_grid = Some(target);
         target
     };
@@ -265,12 +304,12 @@ fn finish_route_restart<T, S>(
         let stamp = promoted
             .stamp()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-        state.root.publish_unavailable_grid(
-            stamp,
-            published_axis.sample_rate(),
-            promoted.epoch(),
-        )?;
-        state.publish_root();
+        with_owner_cut(state, |state, control| {
+            publish_root_transition(state, control, true, |root| {
+                root.publish_unavailable_grid(stamp, published_axis.sample_rate(), promoted.epoch())
+            })?;
+            Ok(())
+        })?;
         state.reserved_session_grid = Some(promoted);
     }
     let observed = state
@@ -330,7 +369,7 @@ fn schedule_commit<T, S>(
     Ok(())
 }
 
-fn commit_boundary<T, S>(
+pub(crate) fn commit_boundary<T, S>(
     state: &SessionState<T, S>,
 ) -> Result<(SessionFrame, NonZeroU32), SessionError> {
     let ctx = state.ctx.as_ref().ok_or(SessionError::NoContext)?;
@@ -428,7 +467,9 @@ fn refresh_observation<T, S>(
         .as_mut()
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
-    publish_committed(state, &observation)?;
+    with_owner_cut(state, |state, control| {
+        publish_committed(state, &observation, control).map_err(SessionError::from)
+    })?;
     if matches!(
         state.transport.phase,
         TransportPhase::Aborting {
@@ -454,15 +495,18 @@ fn refresh_observation<T, S>(
 /// # Errors
 ///
 /// Returns the root group's refusal of the committed session grid.
-pub(crate) fn observe_commits<T, S>(state: &mut SessionState<T, S>) -> Result<(), SyncError> {
+pub(crate) fn observe_commits<T, S>(
+    state: &mut SessionState<T, S>,
+    control: &ControlGuard<'_>,
+) -> Result<(), SyncError> {
     if state.reserved_session_grid.is_some() {
         return Ok(());
     }
-    let Some(control) = state.transport_control.as_mut() else {
+    let Some(transport_control) = state.transport_control.as_mut() else {
         return Ok(());
     };
-    let observation = control.observation();
-    publish_committed(state, &observation)
+    let observation = transport_control.observation();
+    publish_committed(state, &observation, control)
 }
 
 /// Publishes the committed session grid on the root group and records the
@@ -470,17 +514,29 @@ pub(crate) fn observe_commits<T, S>(state: &mut SessionState<T, S>) -> Result<()
 fn publish_committed<T, S>(
     state: &mut SessionState<T, S>,
     observation: &TransportObservation,
+    control: &ControlGuard<'_>,
 ) -> Result<(), SyncError> {
     if let Some(snapshot) = observation.snapshot()
         && state.root.snapshot().stamp() != snapshot.session_grid_stamp()
     {
-        state.root.publish_session(ParentGridUpdate::new(
+        let mut update = ParentGridUpdate::new(
             snapshot.session_grid_stamp(),
             snapshot.session_epoch(),
             snapshot.anchor(),
             None,
-        ))?;
-        state.publish_root();
+        )
+        .with_output_transport(snapshot.revision());
+        if state.ctx.is_some() {
+            let (floor, _) = commit_boundary(state).map_err(|error| match error {
+                SessionError::TransportFrameExhausted => SyncError::ExecutionFrameExhausted,
+                _ => SyncError::OwnerUnavailable,
+            })?;
+            update = update.with_execution_floor(floor);
+        }
+        let axis_changed = state.root.snapshot().axis() != MapAxis::Session(update.axis());
+        publish_root_transition(state, control, axis_changed, |root| {
+            root.publish_session(update)
+        })?;
     }
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);

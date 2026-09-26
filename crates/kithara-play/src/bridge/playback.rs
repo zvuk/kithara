@@ -68,6 +68,9 @@ pub struct PlaybackShared {
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,
+    /// Sole RT-writer selection of the physically active staged map.
+    /// Zero selects ordinary resident bindings.
+    pub(crate) active_sync_map: AtomicU64,
     /// Effective media seconds consumed per output second; `0.0` while paused.
     pub(crate) rate: AtomicF32,
     metrics: RtMetrics,

@@ -35,6 +35,85 @@ fn deck_with_track() -> (Group, BeatGridId) {
     (group, track)
 }
 
+#[kithara::test]
+fn quiesced_member_withdrawal_preserves_another_members_applied_map() {
+    let (mut first_group, first) = deck_with_track();
+    let (mut second_group, second) = deck_with_track();
+    let first_group_id = first_group.id();
+    let second_group_id = second_group.id();
+    let pending = launched(&mut first_group, first, 0);
+    let sounding = launched(&mut second_group, second, 0);
+    let _ = acknowledge(&mut first_group, SyncReceipt::Installed(pending.stamp()));
+    let _ = sound(&mut second_group, &sounding);
+    let old_applied = second_group.applied.clone();
+    let mut root = group_in(SyncMode::Off, SyncMemberKind::Group);
+    attach_group(&mut root, first_group);
+    attach_group(&mut root, second_group);
+
+    let admission = root
+        .transact(SyncOperation::WithdrawQuiescedMember { target: first })
+        .expect("only the quiesced member is withdrawn");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("withdrawal changes owner state");
+    };
+    assert_eq!(transition.withdrawn(), [pending.stamp()]);
+    assert!(nested(&root, &[first_group_id], |group| group
+        .pending
+        .is_empty()));
+    assert_eq!(
+        nested(&root, &[second_group_id], |group| group.applied.clone()),
+        old_applied
+    );
+    assert_eq!(
+        root.acknowledge(SyncReceipt::Installed(pending.stamp())),
+        Err(SyncError::NoPreparedOperation),
+        "an Installed reply arriving after withdrawal cannot revive the ticket"
+    );
+}
+
+#[kithara::test]
+fn quiesced_member_withdrawal_refuses_an_unpaired_armed_receipt() {
+    let (mut group, track) = deck_with_track();
+    let pending = launched(&mut group, track, 0);
+    let _ = acknowledge(&mut group, SyncReceipt::Installed(pending.stamp()));
+    let _ = acknowledge(&mut group, SyncReceipt::Armed(pending.stamp()));
+    let prior = group.pending.clone();
+
+    let refused = group
+        .transact(SyncOperation::WithdrawQuiescedMember { target: track })
+        .expect_err("an Armed map cannot be removed as an unplayed ticket");
+    assert_eq!(
+        refused.error(),
+        &SyncError::ArmedOperation {
+            member_id: track,
+            operation: pending.stamp().operation(),
+        }
+    );
+    assert_eq!(group.pending, prior);
+}
+
+#[kithara::test]
+fn quiesced_member_withdrawal_requires_a_single_track_deck() {
+    let (mut group, first) = deck_with_track();
+    let second = BeatGridId::allocate().expect("second grid id");
+    attach_grid(&mut group, asset_grid(second, 960_000, 24_000));
+    let pending = launched(&mut group, first, 0);
+    let prior = group.pending.clone();
+
+    let refused = group
+        .transact(SyncOperation::WithdrawQuiescedMember { target: first })
+        .expect_err("another direct track still belongs to the deck");
+    assert_eq!(
+        refused.error(),
+        &SyncError::QuiescedMemberNotSoleGrid {
+            group_id: group.id(),
+            member_id: first,
+        }
+    );
+    assert_eq!(group.pending, prior);
+    assert_eq!(prepared(&group, first).stamp(), pending.stamp());
+}
+
 fn launched(group: &mut Group, track: BeatGridId, earliest: i64) -> SyncPreparation {
     match prepare(group, track, cue(0), earliest) {
         SyncAdmission::Prepared(preparation) => preparation,
@@ -245,6 +324,23 @@ fn raw_successor(group: &mut Group, track: BeatGridId) -> SyncPreparation {
         panic!("raw Prepare replaces the first entry: {admission:?}");
     };
     preparation
+}
+
+#[kithara::test]
+fn quiesced_withdrawal_restores_a_replaced_first_entry() {
+    let (mut group, track, _) = pending_public_entry();
+    let successor = raw_successor(&mut group, track);
+    let admission = group
+        .transact(SyncOperation::WithdrawQuiescedMember { target: track })
+        .expect("the only track has quiesced before its entry");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("withdrawal changes owner state");
+    };
+    assert_eq!(transition.withdrawn(), [successor.stamp()]);
+    assert_eq!(group.mode(), SyncMode::Off);
+    assert!(group.before_entry.is_none());
+    assert!(group.pending.is_empty());
+    assert!(group.applied.is_empty());
 }
 
 #[kithara::test]
@@ -592,6 +688,26 @@ fn parent_retarget_preserves_a_mapped_public_entry_new_transport() {
     };
     assert_eq!(carried.source().value(), chosen.source().value());
     assert_eq!(carried.target().value(), chosen.target().value());
+
+    let stale = SyncReceipt::Rejected {
+        stamp: entry.stamp(),
+        reason: SyncExecutionReject::Cancelled,
+    };
+    let error = group
+        .acknowledge(stale)
+        .expect_err("the old parent stamp is no longer held");
+    assert!(error.is_superseded_rejection(stale));
+    assert_eq!(prepared(&group, track).stamp(), successor.stamp());
+
+    let wrong_transport = SyncReceipt::Rejected {
+        stamp: restamped(entry.stamp(), old.stamp().transport()),
+        reason: SyncExecutionReject::Cancelled,
+    };
+    let error = group
+        .acknowledge(wrong_transport)
+        .expect_err("a changed transport is not the old exact preparation");
+    assert!(!error.is_superseded_rejection(wrong_transport));
+    assert_eq!(prepared(&group, track).stamp(), successor.stamp());
 }
 
 #[kithara::test]
@@ -1230,6 +1346,38 @@ fn a_sounding_tempo_retarget_waits_for_the_next_owner_beat_after_preparation_lea
         plan(&next).activation().source(),
         source_at(plan(&old), i64::from(activation)),
         "the old recording reaches the same source frame at the handoff"
+    );
+}
+
+#[kithara::test]
+fn a_processed_parent_retarget_uses_the_current_execution_floor_not_its_old_anchor() {
+    let (mut group, _track, parent) = owning_deck_with_parent();
+    let deck = group.id();
+    let initial = transition(transact(
+        &mut group,
+        sync_at(deck, SyncIntent::Enable, SessionFrame::new(0)),
+    ));
+    let [old] = initial.issued() else {
+        panic!("one initial Host preparation");
+    };
+    let old = old.clone();
+    let _ = sound(&mut group, &old);
+
+    let floor = SessionFrame::new(150_000);
+    let update = parent_update(parent_stamp(parent, 2), anchor_at_rate(2.0, 48_000))
+        .with_execution_floor(floor);
+    let changed = group
+        .accept_parent(update)
+        .expect("processed parent retarget");
+    let [next] = changed.issued() else {
+        panic!("one replacement after the current output end");
+    };
+    let activation = plan(next).activation().output();
+    assert_eq!(activation, SessionFrame::new(168_000));
+    assert!(activation >= SessionFrame::new(152_048));
+    assert_eq!(
+        plan(next).activation().source(),
+        source_at(plan(&old), i64::from(activation))
     );
 }
 

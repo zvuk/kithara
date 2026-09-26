@@ -37,6 +37,10 @@ impl TrackFade {
         self.settings.duration
     }
 
+    pub(super) fn remaining_frames(&self) -> usize {
+        usize::try_from(self.frames.saturating_sub(self.frame)).unwrap_or(usize::MAX)
+    }
+
     pub(super) fn fade_in(&mut self, settings: CrossfadeSettings, sample_rate: NonZeroU32) {
         self.start(Direction::In, settings, sample_rate);
     }
@@ -170,5 +174,65 @@ mod tests {
         assert_eq!(output_l[3], 1.0);
         assert_eq!(output_l, output_r);
         assert!(fade.settled());
+    }
+
+    #[kithara::test]
+    fn correlated_overlap_sums_to_unity_and_old_starvation_does_not_stall_clock() {
+        let rate = NonZeroU32::new(1_000).expect("fixture rate");
+        let settings = CrossfadeSettings::new(0.004, CrossfadeCurve::Linear, 1.0, 0.5)
+            .expect("fixture overlap");
+        let mut incoming = TrackFade::new(settings, rate);
+        incoming.fade_in(settings, rate);
+        let mut outgoing = TrackFade::new(settings, rate);
+        outgoing.fade_out(settings, rate);
+
+        let mut new_left = [0.75; 4];
+        let mut new_right = [0.75; 4];
+        let mut old_left = [0.75; 4];
+        let mut old_right = [0.75; 4];
+        let mut left = [0.0; 4];
+        let mut right = [0.0; 4];
+        incoming.mix_range(
+            &mut [&mut new_left, &mut new_right],
+            &mut [&mut left, &mut right],
+            0..4,
+            4,
+        );
+        outgoing.mix_range(
+            &mut [&mut old_left, &mut old_right],
+            &mut [&mut left, &mut right],
+            0..4,
+            4,
+        );
+        assert!(left.iter().all(|sample| (sample - 0.75).abs() < 1e-6));
+        assert_eq!(right, left);
+        assert!(incoming.settled() && outgoing.settled());
+        assert_eq!(outgoing.remaining_frames(), 0);
+
+        let mut starving = TrackFade::new(settings, rate);
+        starving.fade_out(settings, rate);
+        let mut first = [0.75; 2];
+        let mut first_right = [0.75; 2];
+        let mut first_mix = [0.0; 2];
+        let mut first_mix_right = [0.0; 2];
+        starving.mix_range(
+            &mut [&mut first, &mut first_right],
+            &mut [&mut first_mix, &mut first_mix_right],
+            0..2,
+            2,
+        );
+        let mut silence = [0.0; 2];
+        let mut silence_right = [0.0; 2];
+        let mut second_mix = [0.0; 2];
+        let mut second_mix_right = [0.0; 2];
+        starving.mix_range(
+            &mut [&mut silence, &mut silence_right],
+            &mut [&mut second_mix, &mut second_mix_right],
+            0..2,
+            2,
+        );
+        assert!(starving.settled());
+        assert_eq!(starving.remaining_frames(), 0);
+        assert_eq!(second_mix, [0.0; 2]);
     }
 }

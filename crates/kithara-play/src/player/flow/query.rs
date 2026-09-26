@@ -38,6 +38,7 @@ impl<S> PlayerRuntime<S> {
         Some(ResidentLoadObservation {
             item_id,
             load,
+            requested_speed: f64::from(self.core.warp.stretch().speed()),
             render,
             staging,
         })

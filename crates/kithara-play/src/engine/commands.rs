@@ -38,7 +38,11 @@ impl<S> SlotLoadReservation<'_, S> {
         let render = resource.render_reader();
         if handle
             .cmd_tx
-            .try_push(PlayerCmd::LoadTrack { item_id, resource })
+            .try_push(PlayerCmd::LoadTrack {
+                item_id,
+                load,
+                resource,
+            })
             .is_err()
         {
             unreachable!("reserved load command entry disappeared");

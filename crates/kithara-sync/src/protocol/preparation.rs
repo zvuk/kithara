@@ -30,6 +30,9 @@ pub struct SyncExecutionStamp {
     /// Session transport state the preparation was calculated for.
     #[field(get, copy)]
     transport: TransportRevision,
+    /// Processed output revision this Host-dependent plan requires, if any.
+    #[field(get, copy, with(vis = "pub(crate)"))]
+    output_transport: Option<TransportRevision>,
 }
 
 /// What one preparation asks its executor to do.
@@ -111,6 +114,7 @@ impl SyncExecutionStamp {
             topology,
             load,
             transport,
+            output_transport: None,
         }
     }
 }

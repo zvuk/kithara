@@ -58,7 +58,7 @@ enum ModeEffect {
     Changed {
         timeline: Timeline,
         grid: BeatGridSnapshot,
-        descent: Option<ParentFact>,
+        descent: Box<ParentFact>,
         at: SessionFrame,
         release: Option<TransportRevision>,
     },
@@ -153,7 +153,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     });
                 };
                 (
-                    self.derived_grid(axis.epoch(), local.anchor, local.meter)?
+                    self.derived_grid(axis.epoch(), local.anchor, local.meter, None, None)?
                         .0,
                     Withdrawal::Refused,
                 )
@@ -238,7 +238,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             return Ok(ModeEffect::Unchanged);
         }
         let (grid, descent) = if let Some(parent) = self.parent.and_then(Parent::segment) {
-            self.derived_grid(parent.epoch(), parent.anchor(), parent.meter())?
+            self.derived_grid(
+                parent.epoch(),
+                parent.anchor(),
+                parent.meter(),
+                parent.output_transport(),
+                parent.execution_floor(),
+            )?
         } else {
             let grid = self.withdrawn_grid()?;
             let descent = ParentWithdrawal::new(grid.stamp(), at, None);
@@ -248,7 +254,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         Ok(ModeEffect::Changed {
             timeline: Timeline::Host,
             grid,
-            descent: Some(descent),
+            descent: Box::new(descent),
             at,
             release: None,
         })
@@ -281,7 +287,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     Ok(ModeEffect::Changed {
                         timeline: prior.timeline(),
                         grid,
-                        descent: Some(ParentFact::Withdrawn(descent)),
+                        descent: Box::new(ParentFact::Withdrawn(descent)),
                         at: activation,
                         release: None,
                     })
@@ -361,7 +367,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         Ok(ModeEffect::Changed {
             timeline: Timeline::Off,
             grid,
-            descent: Some(ParentFact::Withdrawn(descent)),
+            descent: Box::new(ParentFact::Withdrawn(descent)),
             at,
             release: Some(transport),
         })
@@ -377,12 +383,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 state: self.grid.state(),
             });
         };
-        let (grid, descent) = self.derived_grid(axis.epoch(), local.anchor, local.meter)?;
+        let (grid, descent) =
+            self.derived_grid(axis.epoch(), local.anchor, local.meter, None, None)?;
         validate_successor(&self.grid, &grid, Withdrawal::Refused)?;
         Ok(ModeEffect::Changed {
             timeline: Timeline::Local(Some(local)),
             grid,
-            descent: Some(descent),
+            descent: Box::new(descent),
             at,
             release: None,
         })
@@ -397,10 +404,18 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         epoch: SessionEpoch,
         anchor: SessionAnchor,
         meter: Option<MeterFacts>,
+        output_transport: Option<TransportRevision>,
+        execution_floor: Option<SessionFrame>,
     ) -> Result<(BeatGridSnapshot, ParentFact), SyncError> {
         let grid =
             BeatGridSnapshot::session(self.grid.id(), self.next_revision()?, epoch, anchor, meter);
-        let segment = ParentGridUpdate::new(grid.stamp(), epoch, anchor, meter);
+        let mut segment = ParentGridUpdate::new(grid.stamp(), epoch, anchor, meter);
+        if let Some(revision) = output_transport {
+            segment = segment.with_output_transport(revision);
+        }
+        if let Some(floor) = execution_floor {
+            segment = segment.with_execution_floor(floor);
+        }
         Ok((grid, ParentFact::Segment(segment)))
     }
 
@@ -412,7 +427,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         ))
     }
 
-    fn reserve_operation(&self) -> Result<SyncOperationId, SyncError> {
+    pub(super) fn reserve_operation(&self) -> Result<SyncOperationId, SyncError> {
         self.next_operation
             .ok_or_else(|| SyncError::OperationIdExhausted {
                 group_id: self.grid.id(),
@@ -442,7 +457,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     commit: Some(at),
                     next_operation,
                 };
-                let mut staged = self.stage(grid, timeline, self.parent, descent, takeover)?;
+                let mut staged =
+                    self.stage(grid, timeline, self.parent, Some(*descent), takeover)?;
                 if let Some((_, prior)) = self.before_entry
                     && timeline == prior.timeline()
                 {

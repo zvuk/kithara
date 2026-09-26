@@ -37,6 +37,7 @@ pub enum ResidentStaging {
 pub struct ResidentLoadObservation {
     pub(crate) item_id: TrackId,
     pub(crate) load: LoadGeneration,
+    pub(crate) requested_speed: f64,
     pub(crate) render: ResidentRender,
     pub(crate) staging: ResidentStaging,
 }
@@ -52,6 +53,12 @@ impl ResidentLoadObservation {
     #[must_use]
     pub const fn load(&self) -> LoadGeneration {
         self.load
+    }
+
+    /// Manual source speed requested by the Player, even while paused.
+    #[must_use]
+    pub const fn requested_speed(&self) -> f64 {
+        self.requested_speed
     }
 
     /// Render evidence bound to this exact item and load.

@@ -9,17 +9,21 @@ use kithara_platform::{
     sync::{Arc, Mutex},
 };
 use kithara_signal::FaderValue;
-use kithara_sync::LoadGeneration;
+use kithara_sync::{LoadGeneration, SyncExecutionReject};
 use kithara_warp::RenderSnapshot;
 use portable_atomic::AtomicF32;
-use ringbuf::traits::Consumer;
+use ringbuf::traits::{Consumer, Observer, Producer};
 use tracing::{debug, info};
 
 use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SessionDuckingMode, SlotId},
-    bridge::{PlaybackShared, PlayerNotification, SlotControl},
+    bridge::{
+        PlaybackShared, PlayerNotification, SlotControl,
+        sync::{SyncReturn, SyncTicket},
+    },
     error::PlayError,
+    resource::StagingRecipe,
     rt::StreamShape,
     session::{RegisteredPlayer, SessionBinding, SessionHandle, SessionSampleRate},
 };
@@ -36,7 +40,7 @@ pub struct EngineImpl<S> {
     pub(super) bus: EventBus,
     pub(super) eq_layout: Mutex<Vec<EqBandConfig>>,
     pub(super) registration: Mutex<Option<RegisteredPlayer>>,
-    pub(super) slots: Mutex<SlotTable>,
+    pub(super) slots: Arc<Mutex<SlotTable>>,
     #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
     #[field(get, vis = "pub(crate)")]
@@ -62,7 +66,7 @@ impl<S> EngineImpl<S> {
             registration: Mutex::default(),
             running: AtomicBool::new(false),
             start_lock: Mutex::new(()),
-            slots: Mutex::new(SlotTable::with_capacity(max_slots)),
+            slots: Arc::new(Mutex::new(SlotTable::with_capacity(max_slots))),
         }
     }
 
@@ -152,7 +156,10 @@ impl<S> EngineImpl<S> {
     pub(crate) fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         self.session.consumer_wake_mode()
     }
+}
 
+// Slot resource binding, return custody, and release share the slot table.
+impl<S> EngineImpl<S> {
     pub(crate) fn drain_slot_trash(&self, slot: SlotId) -> bool {
         self.slots.lock().get_mut(slot).is_some_and(|handle| {
             Self::drain_slot_trash_handle(handle);
@@ -169,6 +176,77 @@ impl<S> EngineImpl<S> {
                 handle.unbind_render(track.item_id(), &render);
             }
         }
+        while let Some(returned) = handle.sync_return_rx.try_pop() {
+            match returned {
+                SyncReturn::Ticket(ticket) => {
+                    if let Some(seek) = ticket.resource.seek_handle() {
+                        handle.unbind_seek(ticket.item_id, &seek);
+                    }
+                    if let Some(render) = ticket.resource.render_reader() {
+                        handle.unbind_render(ticket.item_id, &render);
+                    }
+                }
+                SyncReturn::Track(track) => {
+                    if let Some(seek) = track.seek_handle() {
+                        handle.unbind_seek(track.item_id(), &seek);
+                    }
+                    if let Some(render) = track.render_reader() {
+                        handle.unbind_render(track.item_id(), &render);
+                    }
+                }
+                SyncReturn::Tail(tail) => {
+                    if let Some(seek) = tail.seek_handle() {
+                        handle.unbind_seek(tail.item_id, &seek);
+                    }
+                    if let Some(render) = tail.render_reader() {
+                        handle.unbind_render(tail.item_id, &render);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Bind a staged lane to the same slot and load that received its resident.
+    pub(crate) fn bind_staging(
+        &self,
+        slot: SlotId,
+        recipe: StagingRecipe,
+    ) -> Option<StagingRecipe> {
+        let gate = self.session.sync_gate()?;
+        let slots = Arc::clone(&self.slots);
+        Some(recipe.with_handoff(gate, move |ticket: SyncTicket| {
+            let mut slots = slots.lock();
+            let Some(entry) = slots.entry_mut(slot) else {
+                return Err(SyncExecutionReject::Cancelled);
+            };
+            if entry.closing
+                || entry
+                    .control
+                    .render_binding(ticket.item_id)
+                    .map(|(load, _)| load)
+                    != Some(ticket.load)
+            {
+                return Err(SyncExecutionReject::Cancelled);
+            }
+            if entry.control.sync_tx.vacant_len() == 0 {
+                return Err(SyncExecutionReject::Capacity);
+            }
+            let Some(reader) = ticket.resource.render_reader() else {
+                return Err(SyncExecutionReject::Geometry);
+            };
+            let seek = ticket.resource.seek_handle();
+            let item_id = ticket.item_id;
+            let load = ticket.load;
+            let map = ticket.map;
+            if entry.control.sync_tx.try_push(ticket).is_err() {
+                unreachable!("sole slot sync producer retained its vacancy");
+            }
+            entry
+                .control
+                .bind_sync_resource(item_id, load, map, seek, reader);
+            drop(slots);
+            Ok(())
+        }))
     }
 
     fn emit(&self, event: EngineEvent) {
@@ -213,12 +291,13 @@ impl<S> EngineImpl<S> {
         self.master_volume.load(Ordering::Relaxed)
     }
 
-    pub const fn max_slots(&self) -> usize {
-        self.config.max_slots
-    }
-
-    pub(crate) const fn pools(&self) -> &PoolRegion<S> {
-        &self.config.pools
+    delegate::delegate! {
+        to self.config {
+            #[field]
+            pub const fn max_slots(&self) -> usize;
+            #[field(&pools)]
+            pub(crate) const fn pools(&self) -> &PoolRegion<S>;
+        }
     }
 
     pub(crate) fn pop_slot_notification(&self, slot: SlotId) -> Option<PlayerNotification> {
@@ -254,7 +333,10 @@ impl<S> EngineImpl<S> {
         self.emit(EngineEvent::SlotReleased { slot });
         Ok(())
     }
+}
 
+// Session-level controls and observable engine state.
+impl<S> EngineImpl<S> {
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session.set_player_eq_gain(player_id, band, gain_db)

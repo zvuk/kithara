@@ -6,6 +6,7 @@ mod sink;
 mod triggers;
 
 pub use core::PlayerTrack;
+pub(crate) use core::SyncFadeTail;
 
 pub use feeder::{PlayerResource, ReadOutcome};
 pub use read::TrackReadOutcome;

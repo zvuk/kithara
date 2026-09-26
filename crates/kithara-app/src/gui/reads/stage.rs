@@ -12,18 +12,18 @@ pub(super) struct DeckTempo {
     pub(super) position: f64,
 }
 
-/// The tempo axis: the decks' analysed BPMs against the window the host owns.
+/// The tempo axis: the decks' analysed BPMs against the processed Host tempo.
 /// Moving a window edge really changes the axis the map is drawn on, so the
 /// range beside it is not a decoration.
 pub(super) struct TempoNode<'a> {
     view: &'a StageView,
     targets: Vec<PortalTarget>,
-    master: f32,
+    master: Option<f32>,
 }
 
 impl<'a> TempoNode<'a> {
     pub(super) fn new(view: &'a StageView, decks: &[DeckTempo]) -> Self {
-        let master = focused(decks).and_then(|deck| deck.bpm).unwrap_or_default();
+        let master = view.host_bpm;
         let targets = decks
             .iter()
             .filter_map(|deck| {
@@ -48,7 +48,7 @@ impl<'a, 'b: 'a> Node<'a> for &'a TempoNode<'b> {
             "map" => ReadValue::PortalMap(PortalMapView {
                 min,
                 max,
-                master: self.master,
+                master: self.master?,
                 targets: &self.targets,
             }),
             "window" => ReadValue::Range(ScalarRange {
@@ -92,4 +92,34 @@ impl<'a> Node<'a> for VisNode<'a> {
 
 fn focused(decks: &[DeckTempo]) -> Option<&DeckTempo> {
     decks.iter().find(|deck| deck.focused)
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn tempo_map_uses_only_processed_host_tempo() {
+        let decks = [DeckTempo {
+            bpm: Some(139.0),
+            focused: true,
+            position: 0.0,
+        }];
+        let mut view = StageView::default();
+        let unavailable = TempoNode::new(&view, &decks);
+        assert!((&unavailable).child("map", Scope::default()).is_none());
+
+        view.host_bpm = Some(124.0);
+        let available = TempoNode::new(&view, &decks);
+        let value = (&available)
+            .child("map", Scope::default())
+            .and_then(|node| node.read());
+        let Some(ReadValue::PortalMap(map)) = value else {
+            panic!("processed Host tempo must expose the map");
+        };
+        assert_eq!(map.master, 124.0);
+        assert_eq!(map.targets[0].bpm, 139.0);
+    }
 }

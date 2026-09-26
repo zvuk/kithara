@@ -93,7 +93,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             } => self.transact_tempo(*tempo, *commit, *smoothing),
             SyncOperation::Transport { .. }
             | SyncOperation::Prepare { .. }
-            | SyncOperation::Relocate { .. } => {
+            | SyncOperation::Relocate { .. }
+            | SyncOperation::WithdrawQuiescedMember { .. } => {
                 return self.transact_member(operation);
             }
         };
@@ -156,6 +157,19 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 frontier: *frontier,
                 window: window.clone(),
             }),
+            SyncOperation::WithdrawQuiescedMember { target } => {
+                self.reserve_operation().and_then(|operation| {
+                    let transition = self.withdraw_quiesced_member(*target)?;
+                    self.next_operation = operation.checked_next();
+                    Ok(SyncAdmission::StateChanged {
+                        operation,
+                        topology: self.topology_stamp(),
+                        mode: self.mode(),
+                        grid: self.grid.stamp(),
+                        transition,
+                    })
+                })
+            }
             SyncOperation::Topology { .. }
             | SyncOperation::Sync { .. }
             | SyncOperation::Tempo { .. } => Err(SyncError::CapabilityUnavailable {

@@ -39,6 +39,12 @@ pub struct ParentGridUpdate {
     /// Returns the parent's meter evidence, when it has any.
     #[field(get, copy)]
     meter: Option<MeterFacts>,
+    /// Processed output revision inherited only by Host-following children.
+    #[field(get, copy, with, option_set_some)]
+    output_transport: Option<TransportRevision>,
+    /// Current processed output end, used only as a fresh execution floor.
+    #[field(get, copy, with, option_set_some)]
+    execution_floor: Option<SessionFrame>,
 }
 
 impl ParentGridUpdate {
@@ -55,6 +61,8 @@ impl ParentGridUpdate {
             epoch,
             anchor,
             meter,
+            output_transport: None,
+            execution_floor: None,
         }
     }
 

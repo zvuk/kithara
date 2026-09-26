@@ -1,4 +1,4 @@
-use kithara_signal::SessionFrame;
+use kithara_signal::{SessionFrame, TransportRevision};
 use kithara_warp::{BeatGridSnapshot, BeatGridStamp, MapAxis, WarpMapRevision};
 
 use super::{
@@ -40,6 +40,19 @@ impl Parent {
     }
 }
 
+pub(super) fn output_transport(
+    timeline: Timeline,
+    parent: Option<Parent>,
+) -> Option<TransportRevision> {
+    if matches!(timeline, Timeline::Host) {
+        parent
+            .and_then(Parent::segment)
+            .and_then(|segment| segment.output_transport())
+    } else {
+        None
+    }
+}
+
 /// One group's successor grid together with everything it moves: the
 /// decisions and applied maps of its direct members, the identities they
 /// spend, and the staged change of every direct child group, computed before
@@ -55,6 +68,12 @@ pub(super) struct Staged {
     pub(super) next_map: Option<WarpMapRevision>,
     pub(super) next_operation: Option<SyncOperationId>,
     children: Vec<SyncStaged>,
+}
+
+impl Staged {
+    pub(super) fn output_transport(&self) -> Option<TransportRevision> {
+        output_transport(self.timeline, self.parent)
+    }
 }
 
 /// A parent fact's complete effect on one subtree, computed against that
@@ -95,8 +114,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         self.check_parent_revision(update.parent())?;
         let (grid, descent) = match self.timeline {
             Timeline::Host => {
-                let (grid, descent) =
-                    self.derived_grid(update.epoch(), update.anchor(), update.meter())?;
+                let (grid, descent) = self.derived_grid(
+                    update.epoch(),
+                    update.anchor(),
+                    update.meter(),
+                    update.output_transport(),
+                    update.execution_floor(),
+                )?;
                 validate_successor(&self.grid, &grid, Withdrawal::Refused)?;
                 (grid, Some(descent))
             }
@@ -233,7 +257,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             applied,
             next_map,
             next_operation,
-        } = self.refreshed(&grid, timeline, takeover)?;
+        } = self.refreshed(&grid, timeline, parent, takeover)?;
         let children = match descent {
             Some(fact) => self
                 .members
@@ -276,7 +300,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             // finite window. The accepted preparation is withdrawn and the
             // still-sounding timeline wins this transaction.
             let restored_grid = self.restored_entry_grid(prior)?;
-            let restored = self.refreshed(&restored_grid, prior.timeline(), takeover)?;
+            let restored = self.refreshed(&restored_grid, prior.timeline(), parent, takeover)?;
             staged.grid = restored_grid;
             staged.timeline = prior.timeline();
             staged.pending = restored.pending;

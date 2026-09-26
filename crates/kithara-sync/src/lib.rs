@@ -7,7 +7,9 @@ mod owner;
 mod protocol;
 
 pub use execution::{
-    ExecutedGroup, ReceiptSink, StagePort, SyncAttachment, SyncExecution, SyncExecutor,
+    ArmPermit, AudioClaim, ClaimError, ControlEnterError, ControlError, ControlGuard,
+    ExecutedGroup, PermitCell, PreparedRevocation, ReceiptSink, StagePort, SyncArbiter,
+    SyncAttachment, SyncExecution, SyncExecutor, SyncGateBinding, SyncReceiptAck,
 };
 pub use owner::{GroupState, SyncStaged};
 pub use protocol::{

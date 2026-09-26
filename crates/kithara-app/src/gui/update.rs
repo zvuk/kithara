@@ -4,9 +4,11 @@ use iced::{
 };
 use kithara::{
     effects::{GainDb, eq::EqBandConfig},
+    host::{SyncIntent, SyncMode},
     platform::time::Duration,
     ui::render::{WindowCommand, WindowEdge},
 };
+use num_traits::cast::AsPrimitive;
 use tracing::{error, warn};
 
 use super::{
@@ -55,6 +57,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
         Message::Deck(id, msg) => {
             handle_deck(state, id, &msg);
+            Task::none()
+        }
+        Message::ToggleDeckSync(id) => {
+            toggle_deck_sync(state, id);
             Task::none()
         }
         Message::SetEqMode(mode) => {
@@ -169,6 +175,25 @@ fn delete_focused_track(state: &mut Kithara) {
     handle_deck(state, id, &DeckMsg::DeleteTrack);
 }
 
+fn toggle_deck_sync(state: &Kithara, id: DeckId) {
+    let Some(owned) = state.session.deck(id) else {
+        error!(deck = id.0, "deck SYNC target is unavailable");
+        return;
+    };
+    let host = state.session.host();
+    let result = host.deck_sync_state(&owned.queue).and_then(|snapshot| {
+        let intent = if snapshot.mode == SyncMode::HostSync {
+            SyncIntent::Disable
+        } else {
+            SyncIntent::Enable
+        };
+        host.request_deck_sync(&owned.queue, intent)
+    });
+    if let Err(error) = result {
+        error!(deck = id.0, %error, "deck SYNC request failed");
+    }
+}
+
 fn handle_deck(state: &mut Kithara, id: DeckId, msg: &DeckMsg) {
     if let Some(target) = state.decks.get_mut(id) {
         deck::handle(target, msg);
@@ -281,6 +306,12 @@ fn refresh_snapshots(state: &mut Kithara) {
         deck.ui = deck.controller.snapshot();
     }
     state.ui.cache.refresh(&state.decks, &state.catalog);
+    state.ui.cache.stage.host_bpm = state
+        .session
+        .host()
+        .session_transport()
+        .ok()
+        .map(|snapshot| snapshot.tempo().beats_per_minute().as_());
 }
 
 #[cfg(all(test, not(feature = "broadcast")))]

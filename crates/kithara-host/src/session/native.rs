@@ -8,8 +8,9 @@ use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
 use kithara_effects::LimiterConfig;
 use kithara_platform::{
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex, mpsc, mpsc::RecvTimeoutError},
     thread::spawn_named,
+    time::{Duration, Instant},
 };
 use kithara_play::{SessionSampleRate, StreamShape};
 use kithara_sync::GroupState;
@@ -95,6 +96,17 @@ fn complete_shutdown<T, S>(
     }
 }
 
+fn idle_tick<T, S>(state: &mut SessionState<T, S>)
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    if let HostReply::Play(Reply::Err(error)) = run_host_cmd(state, HostCmd::Play(Cmd::Tick))
+        && !matches!(error, crate::session::SessionError::SyncControlBusy)
+    {
+        warn!(?error, "native session tick failed");
+    }
+}
+
 fn engine_thread<T, S>(
     cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
     root: GroupState<PlayerMember>,
@@ -116,7 +128,16 @@ fn engine_thread<T, S>(
         start_stream_fn,
     );
     debug!("[KITHARA-ROUTE] native session worker started");
-    while let Ok(HostCmdMsg { cmd, reply_tx }) = cmd_rx.recv() {
+    loop {
+        let message = match cmd_rx.recv_timeout(Instant::now() + Duration::from_millis(2)) {
+            Ok(message) => message,
+            Err(RecvTimeoutError::Timeout) => {
+                idle_tick(&mut state);
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+        let HostCmdMsg { cmd, reply_tx } = message;
         if matches!(&cmd, HostCmd::Shutdown) {
             complete_shutdown(cmd_rx, state, &reply_tx);
             debug!("[KITHARA-ROUTE] native session worker stopped");

@@ -10,11 +10,16 @@ use kithara_effects::{
     eq::{EqBandConfig, EqConfig},
 };
 use kithara_output::OutputGroup;
+use kithara_platform::{
+    thread,
+    time::{Duration, WallInstant},
+};
 use kithara_signal::FaderValue;
 use kithara_warp::{BeatGrid, MapAxis};
 use tracing::{debug, warn};
 
 use super::{
+    dispatch::{drain_after_quiescence, publish_root_transition, with_owner_cut},
     protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
     state::{
         Deck, GraphRegistry, MixTap, SessionState, SlotNodes, add_graph_node, ensure_ctx,
@@ -24,7 +29,7 @@ use super::{
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
-    bridge::slot_channels,
+    bridge::{slot_channels, sync_receipts},
     rt::{MasterEqNode, PlayerNode, TapNode},
 };
 /// A level is a linear amplitude, but `Volume::Linear` is a fader taper that
@@ -70,6 +75,44 @@ fn connect_stereo(
         .connect(from, to, &[(0, 0), (1, 1)], false)
         .map(|_| ())
         .map_err(|err| SessionError::Graph(format!("{label} failed: {err}")))
+}
+
+fn remove_node(fw_ctx: &mut FirewheelContext, id: NodeID) -> Result<(), SessionError> {
+    fw_ctx
+        .remove_node(id)
+        .map(|_| ())
+        .map_err(|error| SessionError::Graph(format!("remove audio node {id:?}: {error:?}")))
+}
+
+/// Firewheel's successful update only queues a new schedule. The old player
+/// processor no longer owns its sole receipt producer after the callback has
+/// accepted that schedule and a later update has consumed `DropSchedule`.
+fn wait_for_slot_processors(
+    fw_ctx: &mut FirewheelContext,
+    slots: &[SlotNodes],
+) -> Result<(), SessionError> {
+    if slots.iter().all(|slot| slot.sync_receipts.producer_gone()) {
+        return Ok(());
+    }
+    let info = fw_ctx.stream_info().ok_or(SessionError::NoContext)?;
+    let callback_nanos = (u64::from(info.max_block_frames.get()) * 2_000_000_000)
+        .div_ceil(u64::from(info.sample_rate.get()));
+    // A queued schedule can arrive just after a callback. Allow its next
+    // callback and the following Host update to return the old processor.
+    let deadline =
+        WallInstant::now() + Duration::from_nanos(callback_nanos).max(Duration::from_millis(20));
+    while slots.iter().any(|slot| !slot.sync_receipts.producer_gone()) {
+        fw_ctx.update().map_err(|error| {
+            SessionError::Graph(format!("audio graph retirement update failed: {error:?}"))
+        })?;
+        if WallInstant::now() >= deadline
+            && slots.iter().any(|slot| !slot.sync_receipts.producer_gone())
+        {
+            return Err(SessionError::CallbackQuiescencePending);
+        }
+        thread::yield_now();
+    }
+    Ok(())
 }
 
 pub(super) mod tap {
@@ -234,6 +277,7 @@ pub(super) mod lifecycle {
         state: &mut SessionState<T, S>,
         idx: usize,
     ) -> Result<(), SessionError> {
+        let had_slots = !deck_at_mut(&mut state.graph, idx)?.slots.is_empty();
         {
             let (ctx, graph) = (&mut state.ctx, &mut state.graph);
             let player = deck_at_mut(graph, idx)?;
@@ -241,18 +285,23 @@ pub(super) mod lifecycle {
                 return Err(SessionError::NotRunning(player.player_id));
             }
             if let Some(fw_ctx) = ctx {
-                remove_player_graph(fw_ctx, player);
-                if let Err(err) = fw_ctx.update() {
-                    warn!(
-                        player_id = player.player_id,
-                        "graph update after player stop failed: {err:?}"
-                    );
-                }
-            } else {
-                clear_player_graph_state(player);
+                remove_player_graph(fw_ctx, player)?;
+                fw_ctx.update().map_err(|error| {
+                    SessionError::Graph(format!("graph update after player stop failed: {error:?}"))
+                })?;
+                wait_for_slot_processors(fw_ctx, &player.slots)?;
             }
-            player.started = false;
         }
+        if state.ctx.is_none() && state.stream.is_some() {
+            return Err(graph_state(
+                "player stream still owns a callback without a graph context",
+            ));
+        }
+        let group = had_slots.then_some(deck_at_mut(&mut state.graph, idx)?.grid_id);
+        drain_after_quiescence(state, group)?;
+        let player = deck_at_mut(&mut state.graph, idx)?;
+        clear_player_graph_state(player);
+        player.started = false;
         shutdown_if_idle(state)?;
         debug!("[KITHARA-ROUTE] player stopped");
         Ok(())
@@ -299,12 +348,16 @@ pub(super) mod lifecycle {
                 ));
             };
             let sample_rate = axis.sample_rate();
-            state.root.publish_unavailable_grid(
-                session_stamp,
-                sample_rate,
-                session_grid_generation.epoch(),
-            )?;
-            state.publish_root();
+            with_owner_cut(state, |state, control| {
+                publish_root_transition(state, control, true, |root| {
+                    root.publish_unavailable_grid(
+                        session_stamp,
+                        sample_rate,
+                        session_grid_generation.epoch(),
+                    )
+                })?;
+                Ok(())
+            })?;
             state.reserved_session_grid = Some(session_grid_generation);
             state
                 .ctx
@@ -316,36 +369,37 @@ pub(super) mod lifecycle {
             state.publish_root();
             state.transport_control = None;
             state.mix_tap = None;
+            let tempo = state.transport.configured_tempo();
             state.transport = SessionTransportState::default();
+            if let Some(tempo) = tempo {
+                state.transport.configure_without_stream(tempo);
+            }
             state.session_output_node_id = None;
             state.session_output_memo = None;
             state.session_limiter_node_id = None;
         }
         Ok(())
     }
-    pub(super) fn remove_player_graph<S>(fw_ctx: &mut FirewheelContext, player: &mut Deck<S>) {
-        let player_id = player.player_id;
-        for slot in player.slots.drain(..) {
-            if let Err(err) = fw_ctx.remove_node(slot.volume_node_id) {
-                warn!(player_id, ?err, "failed to remove slot volume node");
-            }
-            if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
-                warn!(player_id, ?err, "failed to remove slot player node");
-            }
+    pub(super) fn remove_player_graph<S>(
+        fw_ctx: &mut FirewheelContext,
+        player: &Deck<S>,
+    ) -> Result<(), SessionError> {
+        for slot in &player.slots {
+            remove_node(fw_ctx, slot.volume_node_id)?;
+            remove_node(fw_ctx, slot.player_node_id)?;
         }
-        if let Some(master_id) = player.master_volume_node_id.take()
-            && let Err(err) = fw_ctx.remove_node(master_id)
-        {
-            warn!(player_id, ?err, "failed to remove player master vol node");
+        if let Some(master_id) = player.master_volume_node_id {
+            remove_node(fw_ctx, master_id)?;
         }
-        if let Some(master_eq_id) = player.master_eq_node_id.take()
-            && let Err(err) = fw_ctx.remove_node(master_eq_id)
-        {
-            warn!(player_id, ?err, "failed to remove player master eq node");
+        if let Some(master_eq_id) = player.master_eq_node_id {
+            remove_node(fw_ctx, master_eq_id)?;
         }
-        clear_player_graph_state(player);
+        Ok(())
     }
     pub(super) fn clear_player_graph_state<S>(player: &mut Deck<S>) {
+        player.slots.clear();
+        player.master_volume_node_id = None;
+        player.master_eq_node_id = None;
         player.master_eq_memo = None;
         player.master_volume_memo = None;
     }
@@ -377,8 +431,13 @@ pub(super) mod slots {
         player.next_slot_id += 1;
         let shared_eq = player.shared_eq.clone();
         let (inputs, control) = slot_channels(shared_eq);
-        let player_node = PlayerNode::new(inputs, player.pools.clone(), player.gate_smoothing)
-            .with_session_context();
+        let (receipt_tx, receipt_rx) = sync_receipts();
+        let player_node = PlayerNode::new(
+            inputs.with_sync_receipts(receipt_tx),
+            player.pools.clone(),
+            player.gate_smoothing,
+        )
+        .with_session_context();
         let player_node_id = add_graph_node(fw_ctx, player_node)?;
         let slot_volume = VolumeNode::from_linear(1.0);
         let slot_volume_memo = Memo::new(slot_volume);
@@ -399,6 +458,8 @@ pub(super) mod slots {
             player_node_id,
             volume_memo: slot_volume_memo,
             volume_node_id: slot_volume_id,
+            sync_receipts: receipt_rx,
+            pending_receipt: None,
         });
         debug!(
             player_id,
@@ -408,7 +469,7 @@ pub(super) mod slots {
             slots = player.slots.len(),
             "[KITHARA-ROUTE] player slot allocated"
         );
-        let reply = Reply::SlotAllocated(AllocatedSlot::new(control, slot_id));
+        let reply = Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot_id)));
         Ok(reply)
     }
     pub(in crate::session) fn release_slot<T, S>(
@@ -418,45 +479,38 @@ pub(super) mod slots {
     ) -> Result<(), SessionError> {
         debug!(player_id, ?slot, "[KITHARA-ROUTE] releasing player slot");
         let idx = player_index(state, player_id)?;
-        let slot_nodes = {
-            let player = deck_at_mut(&mut state.graph, idx)?;
-            if !player.started {
-                return Err(SessionError::NotRunning(player_id));
-            }
-            take_slot(player, slot)?
-        };
-        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        remove_slot_graph(fw_ctx, player_id, &slot_nodes);
+        let (ctx, graph) = (&mut state.ctx, &mut state.graph);
+        let player = deck_at_mut(graph, idx)?;
+        if !player.started {
+            return Err(SessionError::NotRunning(player_id));
+        }
+        let slot_index = player
+            .slots
+            .iter()
+            .position(|candidate| candidate.slot_id == slot)
+            .ok_or(SessionError::SlotNotFound(slot))?;
+        let fw_ctx = ctx.as_mut().ok_or(SessionError::NoContext)?;
+        let last_slot = (player.slots.len() == 1).then_some(player.grid_id);
+        remove_slot_graph(fw_ctx, &player.slots[slot_index])?;
+        drain_after_quiescence(state, last_slot)?;
+        let slot_nodes = deck_at_mut(&mut state.graph, idx)?.slots.remove(slot_index);
         debug!(
             player_id,
-            ?slot_nodes,
+            ?slot_nodes.slot_id,
             "[KITHARA-ROUTE] player slot released"
         );
         Ok(())
     }
-    pub(super) fn take_slot<S>(
-        player: &mut Deck<S>,
-        slot: SlotId,
-    ) -> Result<SlotNodes, SessionError> {
-        let Some(slot_idx) = player.slots.iter().position(|s| s.slot_id == slot) else {
-            return Err(SessionError::SlotNotFound(slot));
-        };
-        Ok(player.slots.remove(slot_idx))
-    }
     pub(super) fn remove_slot_graph(
         fw_ctx: &mut FirewheelContext,
-        player_id: PlayerId,
         slot: &SlotNodes,
-    ) {
-        if let Err(err) = fw_ctx.remove_node(slot.volume_node_id) {
-            warn!(player_id, ?err, "failed to remove slot volume node");
-        }
-        if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
-            warn!(player_id, ?err, "failed to remove slot player node");
-        }
-        if let Err(err) = fw_ctx.update() {
-            warn!(player_id, "graph update after slot release failed: {err:?}");
-        }
+    ) -> Result<(), SessionError> {
+        remove_node(fw_ctx, slot.volume_node_id)?;
+        remove_node(fw_ctx, slot.player_node_id)?;
+        fw_ctx.update().map_err(|error| {
+            SessionError::Graph(format!("graph update after slot release failed: {error:?}"))
+        })?;
+        wait_for_slot_processors(fw_ctx, std::slice::from_ref(slot))
     }
 }
 
@@ -874,6 +928,35 @@ mod tests {
         stop(&mut state, player_id);
 
         assert!(state.ctx.is_none());
+    }
+
+    #[kithara::test]
+    fn configured_tempo_waits_for_the_stream_and_survives_idle_restart() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = test_state(start_test_stream);
+        let tempo = Tempo::new(120.0).expect("fixture tempo");
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::SetSessionTempo { tempo }),
+            Reply::Ok
+        ));
+        assert!(state.ctx.is_none(), "configuration does not open output");
+        assert!(!deliver_one_block(), "the output device remains idle");
+
+        let player_id = register(&mut state);
+        for cycle in 0..2 {
+            start(&mut state, player_id);
+            assert!(deliver_one_block(), "the transport commit is processed");
+            let snapshot = match run_cmd(&mut state, Cmd::QuerySessionTransport) {
+                Reply::SessionTransport(snapshot) => snapshot,
+                _ => panic!("cycle {cycle} did not return a transport snapshot"),
+            };
+            assert_eq!(snapshot.tempo(), tempo);
+            stop(&mut state, player_id);
+            assert!(
+                state.ctx.is_none(),
+                "idle output closes after cycle {cycle}"
+            );
+        }
     }
 
     #[kithara::test]

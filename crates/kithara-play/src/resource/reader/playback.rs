@@ -248,6 +248,24 @@ impl Resource {
         resource
     }
 
+    /// Keep the staged reader's existing publication, priority, and cancel
+    /// owners together when its concrete reader is erased.
+    pub(crate) fn from_staged_reader<R: AudioReader + 'static>(
+        reader: R,
+        src: Arc<str>,
+        publisher: RenderPublisher,
+        priority: TrackPriority,
+        cancel: CancelToken,
+        stretch: Arc<StretchControls>,
+    ) -> Self {
+        let mut resource = Self::from_reader(reader, Some(src));
+        resource.render_publisher = Some(publisher);
+        resource.priority = Some(priority);
+        resource.reader.0 = CancelGuard(Some(cancel));
+        resource.playback_rate = PlaybackRate::for_warp(stretch);
+        resource
+    }
+
     /// Create a resource from a concrete stream-backed audio config.
     ///
     /// Generic over any [`StreamType`] whose config carries an optional

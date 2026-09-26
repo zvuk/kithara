@@ -31,7 +31,10 @@ use kithara::{
     },
     queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
     signal::SessionFrame,
-    sync::{AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncOperation},
+    sync::{
+        AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncMode, SyncOperation,
+        SyncStatusSnapshot,
+    },
     warp::{
         AssetFrame, Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition,
         PresentationFrontier,
@@ -296,6 +299,14 @@ const TEMPO_DOWN_30: SyncCase =
         .ride(TempoRide::Down, 30);
 pub(super) const ONE_DECK: SyncCase =
     SyncCase::running("one-deck-runtime", 1, 48_000, OperationOrder::PlaySyncSeek);
+const PUBLIC_SYNTHETIC_ENABLE: SyncCase = SyncCase::running(
+    "public-synthetic-enable",
+    1,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.gridded()
+.hold(120.0);
 /// A paused deck on a host whose rate differs from the fixtures' 48 kHz.
 pub(super) const STAGED_CUE: SyncCase =
     SyncCase::running("staged-cue", 1, 44_100, OperationOrder::SyncPlaySeek)
@@ -556,7 +567,7 @@ pub(super) enum HlsProtection {
 }
 
 pub(super) struct ProductHarness {
-    pub(super) decks: Vec<HostOwned<Queue<TestPools>>>,
+    pub(super) decks: Vec<Arc<HostOwned<Queue<TestPools>>>>,
     pub(super) failures: Vec<String>,
     block_frames: usize,
     pub(super) host: OfflineHostHarness<TestPools>,
@@ -774,7 +785,7 @@ impl ProductHarness {
                 .run(move || control.append(TrackSource::Config(Box::new(config))))
                 .await
                 .unwrap_or_else(|error| panic!("{}: append deck {index}: {error}", case.id));
-            decks.push(deck);
+            decks.push(Arc::new(deck));
             ids.push(id);
         }
         let mut harness = Self {
@@ -1401,6 +1412,460 @@ async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
         case.id,
         failures.join("\n"),
     );
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(90))
+)]
+async fn public_synthetic_enable_presents_matching_pcm() {
+    let case = PUBLIC_SYNTHETIC_ENABLE;
+    let sources = prepared_sources(Provider::Synthetic).await;
+    let mut harness = ProductHarness::new_for_block(
+        case,
+        &sources,
+        Start::Seconds(0.0),
+        Audible::Deck(0),
+        BLOCK_FRAMES,
+    )
+    .await;
+    let deck = Arc::clone(&harness.decks[0]);
+    harness
+        .host
+        .with(move |host| host.request_deck_sync(&deck, SyncIntent::Enable))
+        .await
+        .expect("public Host Enable accepts the resident synthetic track");
+
+    let deck = Arc::clone(&harness.decks[0]);
+    let state = harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("accepted deck state");
+    assert_eq!(state.mode, SyncMode::HostSync);
+    let SyncStatusSnapshot::Prepared {
+        operation,
+        activation,
+        ..
+    } = state.status
+    else {
+        panic!(
+            "public Enable must issue one preparation, got {:?}",
+            state.status
+        );
+    };
+
+    let mut presented = None;
+    let mut sounding_peak = 0.0_f32;
+    for _ in 0..(3 * 48_000 / BLOCK_FRAMES) {
+        let pcm = harness.render(case, BLOCK_FRAMES).await;
+        let deck = Arc::clone(&harness.decks[0]);
+        let state = harness
+            .host
+            .with(move |host| host.deck_sync_state(&deck))
+            .await
+            .expect("post-render deck state");
+        if let SyncStatusSnapshot::Converging { applied, .. }
+        | SyncStatusSnapshot::Locked { applied, .. } = state.status
+        {
+            assert_eq!(applied.stamp().operation(), operation);
+            assert_eq!(
+                applied.frontier().output(),
+                SessionFrame::new(i64::from(activation) + 1),
+                "Presented must name the first consumed mapped PCM frame"
+            );
+            presented = Some(applied);
+        }
+        if let Some(applied) = presented
+            && harness.output_frames
+                > u64::try_from(i64::from(applied.frontier().output()) + 2 * BLOCK_FRAMES as i64)
+                    .expect("positive presentation frame")
+        {
+            sounding_peak = sounding_peak.max(
+                pcm.iter()
+                    .fold(0.0_f32, |peak, sample| peak.max(sample.abs())),
+            );
+            if sounding_peak > 0.0 {
+                break;
+            }
+        }
+    }
+    assert!(
+        presented.is_some(),
+        "Host must drain the exact RT Armed/Presented pair"
+    );
+    assert!(
+        sounding_peak > 0.0,
+        "mapped synthetic PCM must continue after the handoff"
+    );
+
+    let first = presented.expect("first mapped presentation");
+    harness.set_tempo(case, 124.0, true).await;
+    let mut replacement = None;
+    let mut pending = None;
+    let mut last_status = state.status;
+    for _ in 0..(4 * 48_000 / BLOCK_FRAMES) {
+        let _ = harness.render(case, BLOCK_FRAMES).await;
+        let deck = Arc::clone(&harness.decks[0]);
+        let state = harness
+            .host
+            .with(move |host| host.deck_sync_state(&deck))
+            .await
+            .expect("retarget deck state");
+        last_status = state.status;
+        match state.status {
+            SyncStatusSnapshot::Prepared {
+                operation,
+                activation,
+                ..
+            } => {
+                pending = Some((operation, activation));
+            }
+            SyncStatusSnapshot::Converging { applied, .. }
+            | SyncStatusSnapshot::Locked { applied, .. }
+                if applied.stamp().group().revision() > first.stamp().group().revision() =>
+            {
+                replacement = Some(applied);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let retargeted = replacement.unwrap_or_else(|| {
+        panic!("processed Host tempo must present a replacement, last state {last_status:?}")
+    });
+    let (operation, activation) = pending.expect("Host retarget issues a future preparation");
+    assert_eq!(retargeted.stamp().operation(), operation);
+    assert_eq!(
+        retargeted.frontier().output(),
+        SessionFrame::new(i64::from(activation) + 1),
+        "retarget presents at the selected future execution boundary"
+    );
+    let processed = harness.transport_revision(case).await;
+    assert_eq!(retargeted.stamp().output_transport(), Some(processed));
+    assert!(
+        harness.failures.is_empty(),
+        "public Enable and retarget reported no harness failure: {:?}",
+        harness.failures
+    );
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(120))
+)]
+async fn public_activation_matches_the_selected_frame_across_rates_and_blocks() {
+    let sources = prepared_sources(Provider::Synthetic).await;
+    for (sample_rate, block_frames) in [
+        (44_100, 128),
+        (44_100, 256),
+        (44_100, 512),
+        (48_000, 128),
+        (48_000, 256),
+        (48_000, 512),
+    ] {
+        let case = SyncCase {
+            sample_rate,
+            ..PUBLIC_SYNTHETIC_ENABLE
+        };
+        let mut harness = ProductHarness::new_for_block(
+            case,
+            &sources,
+            Start::Seconds(0.0),
+            Audible::Deck(0),
+            block_frames,
+        )
+        .await;
+        let deck = Arc::clone(&harness.decks[0]);
+        harness
+            .host
+            .with(move |host| host.request_deck_sync(&deck, SyncIntent::Enable))
+            .await
+            .expect("public Host Enable accepts the resident synthetic track");
+
+        let deck = Arc::clone(&harness.decks[0]);
+        let state = harness
+            .host
+            .with(move |host| host.deck_sync_state(&deck))
+            .await
+            .expect("accepted deck state");
+        let SyncStatusSnapshot::Prepared {
+            operation,
+            activation,
+            ..
+        } = state.status
+        else {
+            panic!("{sample_rate}/{block_frames}: expected a prepared public entry");
+        };
+
+        let mut presented = None;
+        let mut sounding_peak = 0.0_f32;
+        for _ in
+            0..(3 * usize::try_from(sample_rate).expect("sample rate fits usize") / block_frames)
+        {
+            let pcm = harness.render(case, block_frames).await;
+            let deck = Arc::clone(&harness.decks[0]);
+            let state = harness
+                .host
+                .with(move |host| host.deck_sync_state(&deck))
+                .await
+                .expect("post-render deck state");
+            if let SyncStatusSnapshot::Converging { applied, .. }
+            | SyncStatusSnapshot::Locked { applied, .. } = state.status
+                && applied.stamp().operation() == operation
+            {
+                assert_eq!(
+                    applied.frontier().output(),
+                    SessionFrame::new(i64::from(activation) + 1),
+                    "{sample_rate}/{block_frames}: first Presented frame must follow activation"
+                );
+                assert!(applied.frontier().source() > 0);
+                presented = Some(applied);
+            }
+            if let Some(applied) = presented
+                && harness.output_frames
+                    > u64::try_from(
+                        i64::from(applied.frontier().output()) + 2 * BLOCK_FRAMES as i64,
+                    )
+                    .expect("positive presentation frame")
+            {
+                sounding_peak = sounding_peak.max(
+                    pcm.iter()
+                        .fold(0.0_f32, |peak, sample| peak.max(sample.abs())),
+                );
+                if sounding_peak > 0.0 {
+                    break;
+                }
+            }
+        }
+        assert!(
+            presented.is_some() && sounding_peak > 0.0 && harness.failures.is_empty(),
+            "{sample_rate}/{block_frames}: first mapped PCM must present and keep sounding"
+        );
+    }
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(90))
+)]
+async fn local_ticket_presents_after_an_unrelated_host_commit_and_rejected_request() {
+    let case = PUBLIC_SYNTHETIC_ENABLE;
+    let sources = prepared_sources(Provider::Synthetic).await;
+    let mut harness = ProductHarness::new_for_block(
+        case,
+        &sources,
+        Start::Seconds(0.0),
+        Audible::Deck(0),
+        BLOCK_FRAMES,
+    )
+    .await;
+    let before = harness.transport_revision(case).await;
+    let deck = Arc::clone(&harness.decks[0]);
+    harness
+        .host
+        .with(move |host| host.request_deck_sync(&deck, SyncIntent::Enable))
+        .await
+        .expect("Host mode first maps the sounding deck");
+    let mut host_presented = false;
+    for _ in 0..(2 * 48_000 / BLOCK_FRAMES) {
+        let _ = harness.render(case, BLOCK_FRAMES).await;
+        let deck = Arc::clone(&harness.decks[0]);
+        let state = harness
+            .host
+            .with(move |host| host.deck_sync_state(&deck))
+            .await
+            .expect("Host deck presentation state");
+        if matches!(
+            state.status,
+            SyncStatusSnapshot::Converging { .. } | SyncStatusSnapshot::Locked { .. }
+        ) {
+            host_presented = true;
+            break;
+        }
+    }
+    assert!(
+        host_presented,
+        "the Host map must sound before Disable latches Local"
+    );
+    let deck = Arc::clone(&harness.decks[0]);
+    harness
+        .host
+        .with(move |host| host.request_deck_sync(&deck, SyncIntent::Disable))
+        .await
+        .expect("public Disable accepts the sounding deck");
+    let deck = Arc::clone(&harness.decks[0]);
+    let state = harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("accepted Local deck state");
+    assert_eq!(state.mode, SyncMode::LocalSync);
+    let SyncStatusSnapshot::Prepared {
+        operation,
+        activation,
+        ..
+    } = state.status
+    else {
+        panic!(
+            "Local must prepare a first mapped lane, got {:?}",
+            state.status
+        );
+    };
+
+    harness.set_tempo(case, 124.0, true).await;
+    let rejected_tempo = Tempo::new(130.0).expect("fixture tempo");
+    assert!(
+        harness
+            .host
+            .with(move |host| host.set_tempo(rejected_tempo))
+            .await
+            .is_err(),
+        "a second transport update cannot overtake the pending commit"
+    );
+
+    let mut presented = None;
+    let mut last_status = state.status;
+    for _ in 0..(3 * 48_000 / BLOCK_FRAMES) {
+        let _ = harness.render(case, BLOCK_FRAMES).await;
+        let deck = Arc::clone(&harness.decks[0]);
+        let state = harness
+            .host
+            .with(move |host| host.deck_sync_state(&deck))
+            .await
+            .expect("post-render Local deck state");
+        last_status = state.status;
+        if let SyncStatusSnapshot::Converging { applied, .. }
+        | SyncStatusSnapshot::Locked { applied, .. } = state.status
+            && applied.stamp().operation() == operation
+        {
+            presented = Some(applied);
+            break;
+        }
+    }
+    let applied = presented.unwrap_or_else(|| {
+        panic!("output-independent Local ticket must present, last state {last_status:?}")
+    });
+    assert_eq!(applied.stamp().output_transport(), None);
+    assert_eq!(
+        applied.frontier().output(),
+        SessionFrame::new(i64::from(activation) + 1)
+    );
+    let processed = harness
+        .host
+        .with(|host| host.session_transport())
+        .await
+        .expect("processed session transport");
+    assert!(processed.revision() > before);
+    assert_eq!(processed.tempo().beats_per_minute(), 124.0);
+    assert!(harness.failures.is_empty());
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(90))
+)]
+async fn host_drains_the_winning_pair_before_publishing_the_same_block_retarget() {
+    let case = PUBLIC_SYNTHETIC_ENABLE;
+    let sources = prepared_sources(Provider::Synthetic).await;
+    let mut harness = ProductHarness::new_for_block(
+        case,
+        &sources,
+        Start::Seconds(0.0),
+        Audible::Deck(0),
+        BLOCK_FRAMES,
+    )
+    .await;
+    let before = harness.transport_revision(case).await;
+    let deck = Arc::clone(&harness.decks[0]);
+    harness
+        .host
+        .with(move |host| host.request_deck_sync(&deck, SyncIntent::Enable))
+        .await
+        .expect("public Enable accepts the resident");
+    let deck = Arc::clone(&harness.decks[0]);
+    let state = harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("initial preparation");
+    let SyncStatusSnapshot::Prepared {
+        operation: first_operation,
+        activation,
+        ..
+    } = state.status
+    else {
+        panic!("the first Host map must be pending, got {:?}", state.status);
+    };
+    let activation_frame = u64::try_from(i64::from(activation)).expect("positive activation");
+    assert!(activation_frame > harness.output_frames);
+    while harness.output_frames + BLOCK_FRAMES as u64 <= activation_frame {
+        let _ = harness.render(case, BLOCK_FRAMES).await;
+    }
+    harness.set_tempo(case, 124.0, true).await;
+
+    let mut replacement = None;
+    let mut last_status = state.status;
+    for _ in 0..4 {
+        let _ = harness.render(case, BLOCK_FRAMES).await;
+        let deck = Arc::clone(&harness.decks[0]);
+        let state = harness
+            .host
+            .with(move |host| host.deck_sync_state(&deck))
+            .await
+            .expect("same-block retarget state");
+        last_status = state.status;
+        if let SyncStatusSnapshot::Prepared { operation, .. } = state.status
+            && operation != first_operation
+        {
+            replacement = Some(operation);
+            break;
+        }
+    }
+    let operation = replacement.unwrap_or_else(|| {
+        panic!("the old Armed/Presented pair must be recorded before parent publication, got {last_status:?}")
+    });
+    let processed = harness.transport_revision(case).await;
+    assert!(processed > before);
+
+    let mut applied = None;
+    for _ in 0..(3 * 48_000 / BLOCK_FRAMES) {
+        let _ = harness.render(case, BLOCK_FRAMES).await;
+        let deck = Arc::clone(&harness.decks[0]);
+        let state = harness
+            .host
+            .with(move |host| host.deck_sync_state(&deck))
+            .await
+            .expect("replacement presentation state");
+        last_status = state.status;
+        if let SyncStatusSnapshot::Converging { applied: lane, .. }
+        | SyncStatusSnapshot::Locked { applied: lane, .. } = state.status
+            && lane.stamp().operation() == operation
+        {
+            applied = Some(lane);
+            break;
+        }
+    }
+    let lane = applied
+        .unwrap_or_else(|| panic!("the same-block retarget must present, got {last_status:?}"));
+    assert_eq!(lane.stamp().output_transport(), Some(processed));
+    assert!(harness.failures.is_empty());
 }
 
 #[kithara::test(

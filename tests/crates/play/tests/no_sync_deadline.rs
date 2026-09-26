@@ -102,6 +102,7 @@ fn load_tracks(
         send(
             control,
             PlayerCmd::LoadTrack {
+                load: kithara::sync::LoadGeneration::first(),
                 resource: Box::new(
                     PlayerResource::new(resource, Arc::clone(src), &pools)
                         .expect("player resource fits the test pool budget"),

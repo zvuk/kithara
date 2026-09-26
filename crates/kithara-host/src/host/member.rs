@@ -2,8 +2,8 @@ use std::fmt;
 
 use kithara_sync::{
     ExecutedGroup, GroupState, ParentFact, SyncAdmission, SyncAttachment, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncOperation, SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot,
-    SyncTransition,
+    SyncGroupSnapshot, SyncMode, SyncOperation, SyncReceipt, SyncRejected, SyncStaged,
+    SyncStatusSnapshot, SyncTransition,
 };
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 
@@ -63,6 +63,7 @@ impl SyncGroup for PlayerMember {
         to self.group {
             fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
             fn status(&self) -> SyncStatusSnapshot;
+            fn mode(&self) -> SyncMode;
             fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
             fn transact(

@@ -4,13 +4,14 @@ use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    PlayError, SessionBinding, SessionDispatcher, Tempo, player::PlayerControlSource,
+    PlayError, SessionBinding, SessionDispatcher, SessionTransportSnapshot, Tempo,
+    player::PlayerControlSource,
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
     GroupState, ParentFact, SyncAdmission, SyncAttachment, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncRejected, SyncStaged,
-    SyncStatusSnapshot, SyncTransition, TopologyOperation,
+    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncRejected,
+    SyncStaged, SyncStatusSnapshot, SyncTransition, TopologyOperation,
 };
 use kithara_warp::{BeatGrid, BeatGridId};
 
@@ -22,9 +23,10 @@ use super::{
 };
 use crate::{
     PlayerMember,
-    api::HostLevel,
+    api::{DeckSyncState, HostLevel},
     session::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
+        protocol::SyncCmd,
     },
 };
 
@@ -35,6 +37,8 @@ pub struct HostOwned<P: PlayerControlSource> {
     host_id: BeatGridId,
     #[field(get, copy)]
     id: BeatGridId,
+    #[field(get, copy, vis = "pub(super)")]
+    track_id: BeatGridId,
     #[field(get)]
     control: P::Control,
     marker: PhantomData<fn() -> P>,
@@ -157,16 +161,45 @@ impl<S> Host<S> {
         P: PlayerControlSource<Schema = S>,
     {
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
-        let attachment = player.attach_session(SessionBinding::new(
-            dispatcher,
-            self.requested_sample_rate(),
-        ))?;
+        let group_id = player.sync_group_grid_id();
+        let track_id = player.sync_track_grid_id();
+        let gate = match self.dispatcher.exec(Cmd::RegisterSyncMember {
+            group: group_id,
+            member: track_id,
+        })? {
+            Reply::SyncGate(gate) => gate,
+            Reply::Err(error) => return Err(error.into()),
+            _ => {
+                return Err(PlayError::Internal(
+                    "unexpected sync-member registration reply".into(),
+                ));
+            }
+        };
+        let attachment = match player.attach_session(
+            SessionBinding::new(dispatcher, self.requested_sample_rate()).with_sync_gate(gate),
+        ) {
+            Ok(attachment) => attachment,
+            Err(error) => {
+                self.retire_sync_member(track_id)?;
+                return Err(error);
+            }
+        };
         Ok((attachment, player.control()))
     }
 
     pub(super) fn detach_member(&self, member: BeatGridId) -> Result<(), PlayError> {
         let operations = Box::new([TopologyOperation::Detach { member }]);
         require_topology_change(self.dispatcher.transact_current(operations))
+    }
+
+    pub(super) fn retire_sync_member(&self, member: BeatGridId) -> Result<(), PlayError> {
+        match self.dispatcher.exec(Cmd::RetireSyncMember { member })? {
+            Reply::Ok => Ok(()),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected sync-member retirement reply".into(),
+            )),
+        }
     }
 
     /// Removes the post-limiter output group.
@@ -217,12 +250,18 @@ impl<S> Host<S> {
         })
     }
 
-    pub(super) fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>
+    pub(super) fn owned<P>(
+        &self,
+        id: BeatGridId,
+        track_id: BeatGridId,
+        control: P::Control,
+    ) -> HostOwned<P>
     where
         P: PlayerControlSource,
     {
         HostOwned {
             id,
+            track_id,
             control,
             host_id: self.id,
             marker: PhantomData,
@@ -261,6 +300,84 @@ impl<S> Host<S> {
             Reply::Err(error) => Err(error.into()),
             _ => Err(PlayError::Internal(
                 "unexpected host reply for sample-rate query".into(),
+            )),
+        }
+    }
+
+    /// Reads the processed Host tempo and transport, once its first commit
+    /// has reached the callback.
+    ///
+    /// # Errors
+    /// Returns an error while the transport has no processed observation or
+    /// when the session cannot answer the query.
+    pub fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
+        match self.dispatcher.exec(Cmd::QuerySessionTransport)? {
+            Reply::SessionTransport(snapshot) => Ok(snapshot),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for session transport query".into(),
+            )),
+        }
+    }
+
+    /// Reads one attached deck's accepted mode and actual executor evidence.
+    ///
+    /// # Errors
+    /// Returns an error for a foreign or detached deck, or when the canonical
+    /// session cannot answer the query.
+    pub fn deck_sync_state<P>(&self, deck: &HostOwned<P>) -> Result<DeckSyncState, PlayError>
+    where
+        P: PlayerControlSource<Schema = S>,
+    {
+        if deck.host_id != self.id {
+            return Err(PlayError::ForeignSession);
+        }
+        match self
+            .dispatcher
+            .exec_host(HostCmd::Sync(SyncCmd::QueryDeckState { target: deck.id() }))?
+        {
+            HostReply::DeckSyncState(snapshot) => Ok(snapshot),
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for deck sync query".into(),
+            )),
+        }
+    }
+
+    /// Asks the Host to align one deck using its committed load and render
+    /// observation. The Host selects the musical boundary on its own clock.
+    ///
+    /// # Errors
+    /// Returns the owner's refusal when the deck is foreign, unavailable, or
+    /// no longer matches its current session observation.
+    pub fn request_deck_sync<P>(
+        &self,
+        deck: &HostOwned<P>,
+        intent: SyncIntent,
+    ) -> Result<(), PlayError>
+    where
+        P: PlayerControlSource<Schema = S>,
+    {
+        if deck.host_id != self.id {
+            return Err(PlayError::ForeignSession);
+        }
+        let observation = P::resident_sync_observation(deck.control())?;
+        match self
+            .dispatcher
+            .exec_host(HostCmd::Sync(SyncCmd::RequestDeckSync {
+                target: deck.id(),
+                member: deck.track_id,
+                intent,
+                observation,
+            }))? {
+            HostReply::Admission(Ok(_)) => Ok(()),
+            HostReply::Admission(Err(rejected)) => {
+                let (reason, _) = <(SyncError, SyncOperation<PlayerMember>)>::from(rejected);
+                Err(SessionError::Sync(reason).into())
+            }
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for deck sync request".into(),
             )),
         }
     }
@@ -396,6 +513,10 @@ impl<S: Send + Sync + 'static> BeatGrid for Host<S> {
 impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
     type NestedGroup = PlayerMember;
 
+    fn mode(&self) -> SyncMode {
+        SyncMode::Off
+    }
+
     /// The Host's session transport owns its axis and tempo; no parent fact
     /// can reach it.
     fn stage_fact(&self, _fact: ParentFact) -> Result<SyncStaged, SyncError> {
@@ -419,8 +540,15 @@ impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
             fn status(&self) -> SyncStatusSnapshot;
         }
-        to self.dispatcher {
-            fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
+    }
+
+    fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
+        match self
+            .dispatcher
+            .exec_host(HostCmd::Play(Cmd::AcknowledgeSync { receipt }))
+        {
+            Ok(HostReply::Play(Reply::SyncAcknowledged(_))) => Ok(self.root_view.status()),
+            _ => Err(SyncError::OwnerUnavailable),
         }
     }
 }

@@ -301,6 +301,7 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            load: kithara_sync::LoadGeneration::first(),
             resource: warped_player_resource(&pools, &controls, &first, half.clone()),
             item_id: first_id,
         })
@@ -350,6 +351,7 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            load: kithara_sync::LoadGeneration::first(),
             resource: warped_player_resource(&pools, &controls, &next, half),
             item_id: next_id,
         })

@@ -1,17 +1,20 @@
 use firewheel::FirewheelContext;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
-use kithara_play::PlayError;
 pub(crate) use kithara_play::{
     AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
     SessionSampleRate,
 };
+use kithara_play::{PlayError, player::ResidentLoadObservation};
 use kithara_sync::{
-    SyncAdmission, SyncError, SyncOperation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
-    TopologyOperation,
+    SyncAdmission, SyncError, SyncIntent, SyncOperation, SyncRejected, TopologyOperation,
 };
+use kithara_warp::BeatGridId;
 
-use crate::{PlayerMember, api::HostLevel};
+use crate::{
+    PlayerMember,
+    api::{DeckSyncState, HostLevel},
+};
 
 /// Opens the audio stream a session runs on and hands back the object that
 /// owns it. Firewheel no longer holds the backend, so the session keeps the
@@ -30,13 +33,21 @@ pub(crate) enum HostCmd<S> {
 pub(crate) enum SyncCmd {
     Transact(SyncOperation<PlayerMember>),
     TransactCurrent(Box<[TopologyOperation<PlayerMember>]>),
-    Acknowledge(SyncReceipt),
+    QueryDeckState {
+        target: BeatGridId,
+    },
+    RequestDeckSync {
+        target: BeatGridId,
+        member: BeatGridId,
+        intent: SyncIntent,
+        observation: Option<ResidentLoadObservation>,
+    },
 }
 
 pub(crate) enum HostReply {
     Play(Reply),
     Admission(Result<SyncAdmission, SyncRejected<PlayerMember>>),
-    Acknowledged(Result<SyncStatusSnapshot, SyncError>),
+    DeckSyncState(DeckSyncState),
     Ok,
     Err(PlayError),
 }
@@ -80,22 +91,6 @@ impl<S> From<HostDispatchError<S>> for (PlayError, Option<Box<HostCmd<S>>>) {
 }
 
 pub(crate) trait HostDispatcher<S>: SessionDispatcher<S> {
-    fn acknowledge(&self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
-        match self.exec_host(HostCmd::Sync(SyncCmd::Acknowledge(receipt))) {
-            Ok(HostReply::Acknowledged(result)) => result,
-            Err(error) => {
-                let (reason, command) = error.into();
-                if command.as_deref().is_some_and(|command| {
-                    matches!(command, HostCmd::Sync(SyncCmd::Acknowledge(_)))
-                }) {
-                    return Err(SyncError::OwnerUnavailable);
-                }
-                owner_thread_fail_fast(&reason)
-            }
-            Ok(_) => owner_thread_fail_fast("unexpected acknowledgement reply"),
-        }
-    }
-
     fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>>;
 
     fn transact(

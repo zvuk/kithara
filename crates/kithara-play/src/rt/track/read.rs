@@ -7,11 +7,12 @@ use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
 use super::{
-    PlayerTrack, ReadOutcome, RtSink,
+    PlayerTrack, ReadOutcome, RtSink, SyncFadeTail,
     triggers::{TrackTriggers, TriggerInput, TriggerTrack},
 };
 use crate::bridge::{
     PlaybackFault, PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState,
+    sync::PreparedFirst,
 };
 
 struct TrackReadContext<'a> {
@@ -54,6 +55,31 @@ pub enum TrackReadOutcome {
 }
 
 impl PlayerTrack {
+    /// Consume the already-decoded activation frame before the gate is released.
+    pub(crate) fn render_first(
+        &mut self,
+        first: &PreparedFirst,
+        context: &RenderContext,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        at: usize,
+        sink: &mut RtSink<'_>,
+    ) {
+        scratch_bufs[0][at] = first.stereo[0];
+        scratch_bufs[1][at] = first.stereo[1];
+        self.fade.mix_range(scratch_bufs, mix_bufs, at..at + 1, 1);
+        self.advance_media_clock(1);
+        self.resource.publish_render(
+            context,
+            PresentationFrontier::builder()
+                .source(first.source.end())
+                .output(context.output().output_frames().end)
+                .build()
+                .with_warp_map(first.source.mapping_revision().map(WarpMapRevision::from)),
+        );
+        self.update_after_mix(sink.notifications);
+    }
+
     /// Advance the media clock by `frames` of mixed output.
     ///
     /// The mix output runs on the output clock; one output frame carries the
@@ -262,7 +288,10 @@ impl PlayerTrack {
             self.state_dirty = false;
         }
     }
+}
 
+// Read and render entrypoints keep each callback's source publication together.
+impl PlayerTrack {
     /// Read audio from this track into scratch/mix buffers.
     pub fn read(
         &mut self,
@@ -385,19 +414,41 @@ impl PlayerTrack {
             self.handle_failed_end(sink.notifications, fault);
             return TrackReadOutcome::Failed(fault);
         };
-        if let Some(source) = self
-            .resource
-            .presentation_source_end(context.output().sample_rate())
+        if self.sync_map.is_none()
+            && let Some(source) = self
+                .resource
+                .presentation_source_end(context.output().sample_rate())
         {
             self.resource.publish_render(
                 &context,
                 presentation_frontier(&context, source.frame())
                     .with_warp_map(source.mapping_revision().map(WarpMapRevision::from)),
             );
-        } else {
+        } else if self.sync_map.is_none() {
             self.resource.clear_render();
         }
-        self.read_with_context(Some(&context), scratch_bufs, mix_bufs, range, sink)
+        let outcome = self.read_with_context(Some(&context), scratch_bufs, mix_bufs, range, sink);
+        let consumed = match &outcome {
+            TrackReadOutcome::Full { frames, .. } | TrackReadOutcome::Partial { frames, .. } => {
+                *frames
+            }
+            TrackReadOutcome::Eof | TrackReadOutcome::Failed(_) => 0,
+        };
+        if self.sync_map.is_some()
+            && consumed > 0
+            && let Some(source) = self.resource.consumed_source_end()
+            && let Some(actual) = context.for_output_range(0..consumed)
+        {
+            self.resource.publish_render(
+                &actual,
+                PresentationFrontier::builder()
+                    .source(source.frame())
+                    .output(actual.output().output_frames().end)
+                    .build()
+                    .with_warp_map(source.mapping_revision().map(WarpMapRevision::from)),
+            );
+        }
+        outcome
     }
 
     fn update_after_mix(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
@@ -428,6 +479,64 @@ impl PlayerTrack {
             current => current,
         };
         self.set_state(new_state);
+    }
+}
+
+impl SyncFadeTail {
+    /// Read only the remaining overlap from the old lane. Both gains advance
+    /// on output frames even when the old reader starves or reaches EOF.
+    pub(crate) fn render(
+        &mut self,
+        context: &RenderContext,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        metrics: &RtMetrics,
+    ) {
+        if range.is_empty() {
+            return;
+        }
+        let Some(segment) = context.for_output_range(range.clone()) else {
+            return;
+        };
+        for channel in scratch_bufs.iter_mut().take(2) {
+            channel[range.clone()].fill(0.0);
+        }
+        let reading = range.start..range.start + self.fade.remaining_frames().min(range.len());
+        let frames = if reading.is_empty() {
+            0
+        } else {
+            let Some(read_context) = context.for_output_range(reading.clone()) else {
+                return;
+            };
+            let (left, right) = scratch_bufs.split_at_mut(1);
+            let mut planes = [
+                &mut left[0][reading.clone()],
+                &mut right[0][reading.clone()],
+            ];
+            match self.resource.read_with_context(
+                Some(&read_context),
+                &mut planes,
+                0..reading.len(),
+                metrics,
+            ) {
+                ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
+                ReadOutcome::Eof | ReadOutcome::Failed(_) => 0,
+            }
+        };
+        self.fade
+            .mix_range(scratch_bufs, mix_bufs, range.clone(), range.len());
+        if frames > 0
+            && let Some(source) = self.resource.consumed_source_end()
+            && let Some(actual) = segment.for_output_range(0..frames)
+        {
+            let frontier = PresentationFrontier::builder()
+                .source(source.frame())
+                .output(actual.output().output_frames().end)
+                .build()
+                .with_warp_map(source.mapping_revision().map(WarpMapRevision::from));
+            self.resource.publish_render(&actual, frontier);
+        }
     }
 }
 

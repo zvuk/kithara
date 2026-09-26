@@ -2,12 +2,12 @@ use kithara_warp::{BeatGridId, BeatGridQuery, BeatGridStamp, WarpMapRevision, Wa
 use num_traits::ToPrimitive;
 
 use super::{
-    preparation::{Pending, Phase},
+    preparation::{Pending, Phase, transition},
     state::GroupState,
 };
 use crate::{
     SyncApplied, SyncEffect, SyncError, SyncExecutionStamp, SyncGroup, SyncPreparation,
-    SyncReceipt, SyncStatusSnapshot,
+    SyncReceipt, SyncStatusSnapshot, SyncTransition,
 };
 
 /// The map one direct member sounds through, as its executor presented it.
@@ -54,6 +54,69 @@ impl Applied {
 }
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
+    /// Withdraw one member after its last audio processor has left the callback.
+    ///
+    /// The Host has drained that processor's receipts before calling this. An
+    /// Armed preparation therefore signals a broken receipt or quiescence
+    /// contract and must not be discarded as an unplayed lane.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown member, an Armed preparation, or a
+    /// prior timeline that cannot be restored.
+    pub(super) fn withdraw_quiesced_member(
+        &mut self,
+        member: BeatGridId,
+    ) -> Result<SyncTransition, SyncError> {
+        if self.direct_grid(member).is_none() {
+            return Err(SyncError::MemberNotFound {
+                group_id: self.grid.id(),
+                member_id: member,
+            });
+        }
+        if self.members.len() != 1 {
+            return Err(SyncError::QuiescedMemberNotSoleGrid {
+                group_id: self.grid.id(),
+                member_id: member,
+            });
+        }
+        if let Some(pending) = self
+            .pending
+            .iter()
+            .find(|pending| pending.member() == member && pending.armed())
+        {
+            return Err(SyncError::ArmedOperation {
+                member_id: member,
+                operation: pending.operation(),
+            });
+        }
+
+        let restored = self
+            .before_entry
+            .filter(|(operation, _)| {
+                self.pending
+                    .iter()
+                    .any(|pending| pending.member() == member && pending.operation() == *operation)
+            })
+            .map(|(_, prior)| self.restored_entry_grid(prior).map(|grid| (prior, grid)))
+            .transpose()?;
+        let mut remaining = self.pending.clone();
+        remaining.retain(|pending| pending.member() != member);
+        let transition = transition(&self.pending, &remaining);
+        self.blocked = None;
+        self.pending = remaining;
+        self.applied.retain(|lane| lane.member() != member);
+        if let Some((prior, grid)) = restored {
+            for lane in &mut self.applied {
+                lane.restore_local_lock(prior.grid(), grid.stamp());
+            }
+            self.timeline = prior.timeline();
+            self.grid = grid;
+            self.before_entry = None;
+            self.blocked = None;
+        }
+        Ok(transition)
+    }
+
     /// Records one executor receipt for a preparation this group issued to a
     /// direct member.
     ///

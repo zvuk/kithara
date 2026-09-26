@@ -3,11 +3,33 @@ use std::num::NonZeroU32;
 use bon::bon;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_warp::RenderReader;
+use kithara_signal::SourceSpan;
+use kithara_sync::LoadGeneration;
+use kithara_warp::{RenderReader, WarpMapRevision};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
 use crate::{CrossfadeSettings, bridge::TrackState, worker::ServiceClass};
+
+/// The previous reader held through the short physical switch overlap.
+pub(crate) struct SyncFadeTail {
+    pub(crate) resource: Box<PlayerResource>,
+    pub(super) fade: TrackFade,
+    pub(crate) item_id: TrackId,
+}
+
+impl SyncFadeTail {
+    pub(crate) fn settled(&self) -> bool {
+        self.fade.settled()
+    }
+
+    delegate::delegate! {
+        to self.resource {
+            pub(crate) fn render_reader(&self) -> Option<RenderReader>;
+            pub(crate) fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
+        }
+    }
+}
 
 /// Per-track state in the processor arena.
 ///
@@ -17,9 +39,14 @@ use crate::{CrossfadeSettings, bridge::TrackState, worker::ServiceClass};
 #[fieldwork(opt_in, get)]
 pub struct PlayerTrack {
     pub(super) resource: Box<PlayerResource>,
+    #[field(get(name = sync_map, copy, vis = "pub(crate)"))]
+    pub(super) sync_map: Option<WarpMapRevision>,
     pub(super) fade: TrackFade,
     #[field(get, copy)]
     pub(super) item_id: TrackId,
+    /// Exact load admitted into this callback, when this track has a session owner.
+    #[field(get, copy)]
+    pub(super) load: Option<LoadGeneration>,
     #[field(get, copy)]
     pub(super) state: TrackState,
     pub(super) triggers: TrackTriggers,
@@ -51,6 +78,7 @@ pub struct PlayerTrack {
     /// decoder's pre-buffered position (which can be ~200 ms ahead of the
     /// mixer thanks to `PlayerResource`'s scratch buffer).
     pub(super) served_media_frames: f64,
+    #[field(get(name = output_sample_rate, copy, vis = "pub(crate)"))]
     pub(super) sample_rate: u32,
     /// Slot seek epoch this track has been re-based onto.
     ///
@@ -73,6 +101,7 @@ impl PlayerTrack {
         #[builder(finish_fn)] resource: Box<PlayerResource>,
         sample_rate: NonZeroU32,
         item_id: TrackId,
+        load: Option<LoadGeneration>,
         #[builder(default)] crossfade: CrossfadeSettings,
         #[builder(default)] prefetch_duration: f32,
         /// Slot seek epoch already published when this track loaded — a track
@@ -83,7 +112,9 @@ impl PlayerTrack {
         let observed_duration = resource.duration();
         let track = Self {
             resource,
+            sync_map: None,
             item_id,
+            load,
             observed_duration,
             seek_epoch,
             state: TrackState::Preloading,
@@ -194,6 +225,10 @@ impl PlayerTrack {
             .set_service_class(service_class_for_state(state));
     }
 
+    pub(crate) fn has_sync_lane(&self) -> bool {
+        self.sync_map.is_some()
+    }
+
     delegate::delegate! {
         to self.resource {
             /// Cached span in seconds: how much of the source is on disk.
@@ -209,7 +244,6 @@ impl PlayerTrack {
             /// Control-plane handle used to begin this track's seeks off the audio thread.
             #[must_use]
             pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
-            pub(crate) fn render_reader(&self) -> Option<RenderReader>;
             /// Source identifier.
             #[must_use]
             pub fn src(&self) -> &Arc<str>;
@@ -219,12 +253,50 @@ impl PlayerTrack {
             /// Apply a playback-rate target directly to this track's Warp controls.
             #[call(apply_playback_rate)]
             pub fn set_playback_rate(&mut self, rate: f32);
+            pub(crate) fn frames_until_eof(&self) -> Option<usize>;
+            pub(crate) fn render_reader(&self) -> Option<RenderReader>;
         }
+    }
+
+    /// Replace only this exact resident's reader after the audio claim wins.
+    pub(crate) fn activate_sync(
+        &mut self,
+        resource: Box<PlayerResource>,
+        source: SourceSpan,
+        map: WarpMapRevision,
+        sample_rate: NonZeroU32,
+        settings: CrossfadeSettings,
+    ) -> SyncFadeTail {
+        let old = SyncFadeTail {
+            resource: std::mem::replace(&mut self.resource, resource),
+            fade: {
+                let mut fade = TrackFade::new(settings, sample_rate);
+                fade.fade_out(settings, sample_rate);
+                fade
+            },
+            item_id: self.item_id,
+        };
+        self.sync_map = Some(map);
+        self.served_media_frames =
+            source_frame_on_output_clock(source.start(), source.sample_rate(), sample_rate);
+        self.fade.fade_in(settings, sample_rate);
+        self.set_state(TrackState::FadingIn);
+        self.update_service_class(TrackState::FadingIn);
+        old
     }
 }
 
 fn observed_duration(observed: f64, resource: f64) -> f64 {
     if observed > 0.0 { observed } else { resource }
+}
+
+fn source_frame_on_output_clock(
+    source_frame: u64,
+    source_rate: NonZeroU32,
+    output_rate: NonZeroU32,
+) -> f64 {
+    let frame: f64 = AsPrimitive::as_(source_frame);
+    frame * f64::from(output_rate.get()) / f64::from(source_rate.get())
 }
 
 fn seek_frame_index(seconds: f64, sample_rate: u32, duration: f64) -> u64 {
@@ -266,6 +338,20 @@ mod tests {
         assert_eq!(seek_frame_index(f64::INFINITY, 44_100, 10.0), 441_000);
         assert_eq!(seek_frame_index(f64::INFINITY, 44_100, 0.0), 0);
         assert_eq!(seek_frame_index(f64::NAN, 44_100, 10.0), 0);
+    }
+
+    #[kithara::test]
+    #[case(44_100, 48_000)]
+    #[case(48_000, 44_100)]
+    fn activation_position_preserves_source_seconds_across_rates(
+        #[case] source_hz: u32,
+        #[case] output_hz: u32,
+    ) {
+        let source_rate = NonZeroU32::new(source_hz).expect("fixture source rate");
+        let output_rate = NonZeroU32::new(output_hz).expect("fixture output rate");
+        let frame = u64::from(source_hz) * 37;
+        let served = source_frame_on_output_clock(frame, source_rate, output_rate);
+        assert_eq!(served / f64::from(output_hz), 37.0);
     }
 
     #[kithara::test]

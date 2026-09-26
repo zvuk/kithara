@@ -48,6 +48,8 @@ pub enum SyncExecutionReject {
     /// The executor holds no free worker, pool, or output capacity for
     /// another prepared lane.
     Capacity,
+    /// The Host could not complete the bounded owner acknowledgement.
+    ControlBusy,
     /// The executor dropped the preparation before it was ready, such as when
     /// its track was unloaded or its session closed.
     Cancelled,

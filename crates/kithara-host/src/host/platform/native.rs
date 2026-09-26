@@ -91,10 +91,16 @@ where
     where
         P: PlayerControlSource<Schema = S>,
     {
+        let track_id = player.sync_track_grid_id();
         let (attachment, control) = self.bind_player(&mut player)?;
         let grid_id = attachment.id();
-        self.attach_member(PlayerMember::new(attachment, HeldPlayer::new(player)))?;
-        let owned = self.owned::<P>(grid_id, control);
+        if let Err(error) =
+            self.attach_member(PlayerMember::new(attachment, HeldPlayer::new(player)))
+        {
+            self.retire_sync_member(track_id)?;
+            return Err(error);
+        }
+        let owned = self.owned::<P>(grid_id, track_id, control);
         if let Err(error) = P::prepare_control(owned.control()) {
             self.remove(&owned)?;
             return Err(error);
@@ -113,6 +119,7 @@ where
     {
         self.validate_removal(player)?;
         P::close_control(player.control())?;
+        self.retire_sync_member(player.track_id())?;
         self.detach_member(player.id())
     }
 }

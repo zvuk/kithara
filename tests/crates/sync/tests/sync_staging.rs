@@ -2,9 +2,15 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    platform::time::{Duration, Instant},
+    platform::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
     signal::SessionFrame,
-    sync::{AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation},
+    sync::{
+        AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation,
+        SyncStatusSnapshot,
+    },
     warp::AssetFrame,
 };
 use kithara_integration_tests::{grid::Start, kithara, usdt_trace};
@@ -24,7 +30,6 @@ const RECEIPT: &str = "sync_receipt_delivered";
 /// Probe codes of the receipts these scenarios expect.
 const INSTALLED: u64 = 0;
 const CAPACITY: u64 = 3;
-const CANCELLED: u64 = 4;
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Longer than a lane's ring holds, so the sounding lane has to keep decoding.
 const LISTEN_FRAMES: usize = 48_000 * 6;
@@ -89,7 +94,13 @@ async fn render_until(
 /// Syncs the deck, then asks its group to prepare the track from the exact
 /// recording frame `seconds` in: a launch the executor stages beside
 /// whatever the deck plays. Returns the operation the preparation carries.
-async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, rate: f64, cue: Start) -> u64 {
+async fn prepare_cue(
+    harness: &mut ProductHarness,
+    case: SyncCase,
+    rate: f64,
+    cue: Start,
+    defer_frames: usize,
+) -> u64 {
     let seconds = harness.start_seconds(0, cue);
     harness.request_sync_intent(case, SyncIntent::Enable).await;
     let deck = harness.decks[0].id();
@@ -115,7 +126,9 @@ async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, rate: f64, cu
         .transport_revision()
         .await
         .unwrap_or_else(|error| panic!("{}: query Host transport: {error}", case.id()));
-    let now = SessionFrame::new(i64::try_from(harness.host.position()).unwrap_or(i64::MAX));
+    let now = i64::try_from(harness.host.position()).unwrap_or(i64::MAX);
+    let window_start =
+        SessionFrame::new(now.saturating_add(i64::try_from(defer_frames).unwrap_or(i64::MAX)));
     let cue = AssetFrame::new(seconds * rate).expect("fixture cue is finite");
     let admission = harness
         .host
@@ -125,7 +138,7 @@ async fn prepare_cue(harness: &mut ProductHarness, case: SyncCase, rate: f64, cu
                 load: LoadGeneration::first(),
                 transport,
                 source: AlignmentSource::Prepared(cue),
-                window: now..SessionFrame::new(i64::MAX),
+                window: window_start..SessionFrame::new(i64::MAX),
             })
         })
         .await
@@ -171,7 +184,7 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     #[case] case: SyncCase,
 ) {
     let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
-    let operation = prepare_cue(&mut harness, case, rate, cue).await;
+    let operation = prepare_cue(&mut harness, case, rate, cue, 0).await;
 
     let receipts = render_until(&mut harness, case, operation, INSTALLED).await;
     assert_eq!(
@@ -197,37 +210,74 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
 #[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
 #[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE)]
 #[case::newtechno(newtechno_sources().await, NEWTECHNO_RATE, NEWTECHNO_PHRASE)]
-async fn unloading_the_track_reports_its_installed_lane_cancelled(
+async fn unloading_the_track_retires_its_installed_lane_without_a_stale_receipt(
     #[case] sources: PreparedSources,
     #[case] rate: f64,
     #[case] cue: Start,
 ) {
     let case = STAGED_CUE_BESIDE_A_DECK;
     let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
-    let operation = prepare_cue(&mut harness, case, rate, cue).await;
-    let _ = render_until(&mut harness, case, operation, INSTALLED).await;
+    let operation = prepare_cue(&mut harness, case, rate, cue, LISTEN_FRAMES + BLOCK_FRAMES).await;
+    let installed = render_until(&mut harness, case, operation, INSTALLED).await;
+    let deck = Arc::clone(&harness.decks[0]);
+    let before = harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("read installed deck state");
+    assert!(
+        matches!(before.status, SyncStatusSnapshot::Prepared { operation: pending, .. } if u64::from(pending) == operation),
+        "the installed lane is pending until its first PCM"
+    );
+    let SyncStatusSnapshot::Prepared { activation, .. } = before.status else {
+        panic!("the prepared lane has a future activation");
+    };
+    assert!(
+        i64::from(activation)
+            > i64::try_from(harness.host.position()).expect("fixture output fits")
+                + i64::try_from(BLOCK_FRAMES * 8).expect("fixture span fits"),
+        "the unplayed ticket stays ahead of the clear and follow-up render"
+    );
 
     let control = harness.decks[0].control().clone();
     harness.host.run(move || control.clear()).await;
-    let receipts = render_until(&mut harness, case, operation, CANCELLED).await;
+    let after_withdrawal = delivered();
+    assert!(
+        after_withdrawal.starts_with(&installed),
+        "the Installed receipt remains recorded through clear"
+    );
     harness.settle(case, 8).await;
+    let deck = Arc::clone(&harness.decks[0]);
+    let after = harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("read cleared deck state");
 
+    assert!(
+        !matches!(
+            after.status,
+            SyncStatusSnapshot::Prepared { .. } | SyncStatusSnapshot::WaitingForGrid { .. }
+        ),
+        "{}: cleared track cannot retain any pending preparation",
+        case.id()
+    );
+    assert_eq!(harness.decks[0].len(), 0, "cleared deck has no resident");
+    assert!(harness.decks[0].playback_view().buffered.is_none());
     assert_eq!(
         delivered(),
-        receipts,
-        "{}: a dropped lane reports once and nothing follows it",
+        after_withdrawal,
+        "no receipt after clear returns"
+    );
+    let after_clear = render_frames(&mut harness, case, BLOCK_FRAMES * 8).await;
+    assert!(
+        after_clear
+            .iter()
+            .all(|sample| sample.abs() <= f32::EPSILON),
+        "{}: cleared deck produces no PCM after custody returns",
         case.id()
     );
-    assert_eq!(
-        receipts.last(),
-        Some(&Delivered {
-            operation,
-            rejected: CANCELLED,
-            accepted: true,
-        }),
-        "{}: the owner takes the cancellation of its installed preparation",
-        case.id()
-    );
+    assert_eq!(delivered(), after_withdrawal, "no late receipt after clear");
 }
 
 #[kithara::test(
@@ -238,34 +288,52 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
     flash(false),
     timeout(Duration::from_secs(60))
 )]
-#[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
-#[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE)]
-#[case::newtechno(newtechno_sources().await, NEWTECHNO_RATE, NEWTECHNO_PHRASE)]
+#[case::tunnel(tunnel_sources().await, TUNNEL_CUE)]
+#[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_WEAK_CUE)]
+#[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
 async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
     #[case] sources: PreparedSources,
-    #[case] rate: f64,
     #[case] cue: Start,
 ) {
     let case = STAGED_WITHOUT_CAPACITY;
     let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
-    let operation = prepare_cue(&mut harness, case, rate, cue).await;
-
-    let receipts = render_until(&mut harness, case, operation, CAPACITY).await;
-    assert!(
-        receipts.iter().all(|receipt| *receipt
-            == Delivered {
-                operation,
-                rejected: CAPACITY,
-                accepted: true,
-            }),
-        "{}: nothing is installed without a slot: {receipts:?}",
+    let deck = Arc::clone(&harness.decks[0]);
+    harness
+        .host
+        .with(move |host| host.request_deck_sync(&deck, SyncIntent::Enable))
+        .await
+        .expect("public Enable accepts the sounding deck");
+    let deadline = Instant::now() + RECEIPT_TIMEOUT;
+    let receipts = loop {
+        let receipts = delivered();
+        if receipts.iter().any(|receipt| receipt.rejected == CAPACITY) {
+            break receipts;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{}: no capacity refusal reached Host",
+            case.id()
+        );
+        let _ = harness.render(case, BLOCK_FRAMES).await;
+    };
+    assert_eq!(
+        receipts.len(),
+        1,
+        "{}: one public request issues one lane",
         case.id()
     );
+    assert_eq!(receipts[0].rejected, CAPACITY);
+    assert!(receipts[0].accepted, "Host records the capacity refusal");
     let sounding = render_frames(&mut harness, case, LISTEN_FRAMES).await;
     assert!(
         sounding.iter().any(|sample| sample.abs() > f32::EPSILON),
         "{}: the sounding deck keeps its slot and plays on",
         case.id()
+    );
+    assert_eq!(
+        delivered(),
+        receipts,
+        "the refused lane emits no later receipt"
     );
 }
 
@@ -307,8 +375,30 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     let mut harness =
         ProductHarness::new_for_block(case, &sources, cue, Audible::Deck(0), BLOCK_FRAMES).await;
     harness.mark("staged cue, then a superseding cue");
-    let superseded = prepare_cue(&mut harness, case, rate, cue).await;
-    let successor = prepare_cue(&mut harness, case, rate, superseding).await;
+    let after_listening = LISTEN_FRAMES + BLOCK_FRAMES;
+    let superseded = prepare_cue(&mut harness, case, rate, cue, after_listening).await;
+    let successor = prepare_cue(&mut harness, case, rate, superseding, after_listening).await;
+    let deck = Arc::clone(&harness.decks[0]);
+    let state = harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("read the superseding preparation");
+    let SyncStatusSnapshot::Prepared {
+        operation,
+        activation,
+        ..
+    } = state.status
+    else {
+        panic!("the successor is prepared before the listening capture");
+    };
+    assert_eq!(u64::from(operation), successor);
+    assert!(
+        i64::from(activation)
+            > i64::try_from(harness.host.position()).expect("fixture output fits")
+                + i64::try_from(LISTEN_FRAMES).expect("fixture capture fits"),
+        "the successor cannot begin sounding during the bitwise comparison"
+    );
     let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
     let receipts = render_until(&mut harness, case, successor, INSTALLED).await;
     assert!(

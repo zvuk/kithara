@@ -23,6 +23,8 @@ pub struct PlayerResource {
     #[field(get, deref = false)]
     src: Arc<str>,
     failed: Option<DecodeErrorKind>,
+    /// Last source coordinate consumed by a read; pair with that read's nonzero frame count.
+    #[field(get(name = consumed_source_end, copy, vis = "pub(crate)"))]
     last_source_end: Option<SourceEnd>,
     source_spans: VecDeque<SourceWindow>,
     resource: WasmSend<Resource>,

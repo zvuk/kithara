@@ -18,6 +18,8 @@ pub(crate) enum Message {
     Ui(UiEvent),
     /// Event addressed to one deck.
     Deck(DeckId, super::deck::DeckMsg),
+    /// Toggle one deck's accepted synchronization intent through the Host.
+    ToggleDeckSync(DeckId),
     /// Replace the EQ topology of every deck.
     SetEqMode(EqMode),
     /// Session-mix edit (crossfader, trim).

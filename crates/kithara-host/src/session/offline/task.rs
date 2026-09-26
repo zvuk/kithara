@@ -14,8 +14,8 @@ use tracing::warn;
 
 use super::{
     super::{
-        dispatch::run_host_cmd,
-        protocol::{HostCmd, HostCmdMsg, HostReply},
+        dispatch::{pump_before_work, run_host_cmd},
+        protocol::{Cmd, HostCmd, HostCmdMsg, HostReply, Reply, SessionError},
         state::{RootView, SessionState, ensure_ctx},
     },
     OfflineSessionClient,
@@ -71,15 +71,19 @@ where
                 maximum: self.max_block_frames.get(),
             });
         }
+        let next_position = self
+            .position
+            .checked_add(u64::from(frames))
+            .ok_or(OfflineSessionError::TimelineOverflow)?;
         let state = self
             .state
             .as_mut()
             .ok_or(OfflineSessionError::SessionGone)?;
         let output = render_block(state, frames, self.position, &self.pools)?;
-        self.position = self
-            .position
-            .checked_add(u64::from(frames))
-            .ok_or(OfflineSessionError::TimelineOverflow)?;
+        // The callback has consumed this block even if its owner receipt
+        // cannot be recorded. Never offer the same PCM range a second time.
+        self.position = next_position;
+        pump_before_work(state).map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
         Ok(output)
     }
 
@@ -93,7 +97,20 @@ where
             }
             return TickResult::Done;
         }
-        let reply = self.state.as_mut().map_or_else(
+        let retirement_retry = match &cmd {
+            HostCmd::Play(Cmd::StopPlayer { player_id }) => Some(Cmd::StopPlayer {
+                player_id: *player_id,
+            }),
+            HostCmd::Play(Cmd::ReleaseSlot { player_id, slot }) => Some(Cmd::ReleaseSlot {
+                player_id: *player_id,
+                slot: *slot,
+            }),
+            HostCmd::Play(Cmd::UnregisterPlayer { player_id }) => Some(Cmd::UnregisterPlayer {
+                player_id: *player_id,
+            }),
+            _ => None,
+        };
+        let mut reply = self.state.as_mut().map_or_else(
             || {
                 HostReply::Err(PlayError::SessionGone {
                     reason: "offline session state is unavailable",
@@ -101,6 +118,20 @@ where
             },
             |state| run_host_cmd(state, cmd),
         );
+        if matches!(
+            reply,
+            HostReply::Play(Reply::Err(SessionError::CallbackQuiescencePending))
+        ) && let Some(retry) = retirement_retry
+            && let Some(state) = self.state.as_mut()
+        {
+            reply = match state.stream.as_mut().map(OfflineStream::poll_control) {
+                Some(Ok(())) => run_host_cmd(state, HostCmd::Play(retry)),
+                Some(Err(error)) => {
+                    HostReply::Play(Reply::Err(SessionError::Graph(error.to_string())))
+                }
+                None => HostReply::Play(Reply::Err(SessionError::NoContext)),
+            };
+        }
         if reply_tx.send(reply).is_err() {
             warn!("offline Host command reply receiver dropped");
         }

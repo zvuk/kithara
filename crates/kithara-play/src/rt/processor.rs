@@ -15,18 +15,27 @@ use firewheel::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
+use kithara_sync::SyncExecutionReject;
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
-use ringbuf::{HeapCons, HeapProd, traits::Producer};
+use ringbuf::{
+    HeapCons, HeapProd,
+    traits::{Consumer, Observer, Producer},
+};
 use smallvec::SmallVec;
 
-use super::{context::read_render_context, track::PlayerTrack};
+use super::{
+    context::read_render_context,
+    track::{PlayerTrack, SyncFadeTail},
+};
 use crate::{
     bridge::{
-        NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
+        NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, SyncReceiptTx, TrackState,
+        TrackTransition,
+        sync::{SyncReturn, SyncTicket},
     },
-    rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots},
+    rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots, render::SyncRender},
     session::SessionError,
 };
 
@@ -56,6 +65,12 @@ pub struct PlayerNodeProcessor {
     pub(super) prefetch_duration: f32,
     context_requirement: ContextRequirement,
     trash_tx: HeapProd<PlayerTrack>,
+    /// The sole producer stays alive until the callback processor is dropped.
+    sync_receipts: Option<SyncReceiptTx>,
+    sync_rx: HeapCons<SyncTicket>,
+    sync_return_tx: HeapProd<SyncReturn>,
+    sync_tail: Option<SyncFadeTail>,
+    sync_return_held: Option<SyncReturn>,
     /// Last effective rate successfully delivered to the control thread.
     last_notified_rate: f32,
 }
@@ -162,6 +177,14 @@ impl PlayerNodeProcessor {
         };
 
         for (slot, _) in finished.iter().filter(|(slot, _)| Some(*slot) != retain) {
+            if self
+                .tracks
+                .at_mut(*slot)
+                .is_some_and(|track| track.has_sync_lane())
+                && !self.can_return_sync()
+            {
+                continue;
+            }
             if let Some(track) = self.tracks.remove_at(*slot) {
                 let item_id = track.item_id();
                 let src = Arc::clone(track.src());
@@ -178,8 +201,80 @@ impl PlayerNodeProcessor {
     }
 
     pub(super) fn discard_track(&mut self, track: PlayerTrack) {
+        if track.sync_map().is_some_and(|map| {
+            self.playback.active_sync_map.load(Ordering::Relaxed) == u64::from(map)
+        }) {
+            self.playback.active_sync_map.store(0, Ordering::Release);
+        }
+        if track.has_sync_lane() {
+            self.return_sync(SyncReturn::Track(track));
+            return;
+        }
         if self.trash_tx.try_push(track).is_err() {
             self.playback.metrics().record_trash_overflow();
+        }
+    }
+
+    pub(super) fn can_return_sync(&self) -> bool {
+        self.sync_return_tx.vacant_len() > 0 || self.sync_return_held.is_none()
+    }
+
+    pub(super) fn sync_custody_cleared(&mut self) -> bool {
+        self.sync_tail.is_none()
+            && self.sync_rx.try_peek().is_none()
+            && self.sync_return_held.is_none()
+    }
+
+    fn return_sync(&mut self, returned: SyncReturn) {
+        if let Err(returned) = self.sync_return_tx.try_push(returned) {
+            assert!(
+                self.sync_return_held.is_none(),
+                "one deck exceeded bounded sync return custody"
+            );
+            self.sync_return_held = Some(returned);
+        }
+    }
+
+    fn maintain_sync_mailboxes(&mut self) {
+        if let Some(returned) = self.sync_return_held.take()
+            && let Err(returned) = self.sync_return_tx.try_push(returned)
+        {
+            self.sync_return_held = Some(returned);
+        }
+        if self.sync_tail.as_ref().is_some_and(SyncFadeTail::settled)
+            && self.can_return_sync()
+            && let Some(tail) = self.sync_tail.take()
+        {
+            self.return_sync(SyncReturn::Tail(tail));
+        }
+    }
+
+    pub(super) fn retire_pending_sync(&mut self, reason: SyncExecutionReject) {
+        if !self.can_return_sync() {
+            return;
+        }
+        let Some(ticket) = self.sync_rx.try_peek() else {
+            return;
+        };
+        if ticket.gate.still_permits(&ticket.permit) {
+            let Some(receipts) = self.sync_receipts.as_mut() else {
+                return;
+            };
+            if !receipts.publish_rejected(ticket.permit.stamp(), reason) {
+                return;
+            }
+        }
+        let Some(ticket) = self.sync_rx.try_pop() else {
+            unreachable!("sole sync consumer lost a peeked ticket");
+        };
+        self.return_sync(SyncReturn::Ticket(ticket));
+    }
+
+    pub(super) fn retire_sync_tail(&mut self) {
+        if self.can_return_sync()
+            && let Some(tail) = self.sync_tail.take()
+        {
+            self.return_sync(SyncReturn::Tail(tail));
         }
     }
 
@@ -188,6 +283,7 @@ impl PlayerNodeProcessor {
             let Some((slot, state)) = self
                 .tracks
                 .iter()
+                .filter(|(_, track)| !track.has_sync_lane() || self.can_return_sync())
                 .min_by_key(|(_, track)| super::render::eviction_priority(track.state()))
                 .map(|(slot, track)| (slot, track.state()))
             else {
@@ -269,6 +365,13 @@ impl PlayerNodeProcessor {
                 notification_tx: &mut self.notif_tx,
                 metrics: self.playback.metrics(),
                 seek_epoch: self.playback.seek_epoch.load(Ordering::SeqCst),
+                sync: SyncRender {
+                    pending: &mut self.sync_rx,
+                    tail: &mut self.sync_tail,
+                    receipts: &mut self.sync_receipts,
+                    returns: &mut self.sync_return_tx,
+                    playback: &self.playback,
+                },
             },
             buffers,
             frames,
@@ -292,6 +395,14 @@ impl PlayerNodeProcessor {
     }
 
     pub(super) fn unload_slot(&mut self, slot: TrackSlot) {
+        if self
+            .tracks
+            .at_mut(slot)
+            .is_some_and(|track| track.has_sync_lane())
+            && !self.can_return_sync()
+        {
+            return;
+        }
         if let Some(track) = self.tracks.remove_at(slot) {
             self.retire(track);
         }
@@ -370,6 +481,11 @@ impl PlayerNodeProcessor {
             cmd_rx: inputs.cmd_rx,
             notif_tx: inputs.notif_tx,
             trash_tx: inputs.trash_tx,
+            sync_receipts: inputs.sync_receipts,
+            sync_rx: inputs.sync_rx,
+            sync_return_tx: inputs.sync_return_tx,
+            sync_tail: None,
+            sync_return_held: None,
             playback: inputs.playback,
             sample_rate: shape.sample_rate,
             render: RenderPass::new(pools, shape, gate_smoothing),
@@ -414,6 +530,8 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         self.drain_commands();
 
+        self.maintain_sync_mailboxes();
+
         self.cleanup_finished_tracks();
 
         let is_playing = self.playback.playing.load(Ordering::SeqCst);
@@ -442,19 +560,32 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
     use firewheel::{
         clock::InstantSamples,
         mask::{ConnectedMask, ConstantMask, SilenceMask},
         node::{ProcStore, StreamStatus},
     };
+    use kithara_audio::mock::{AudioControlMock, AudioReadMock, AudioSessionMock};
+    use kithara_events::EventBus;
     use kithara_platform::time::Duration;
-    use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
-    use kithara_warp::RenderContext;
+    use kithara_signal::{
+        AudioSpec, OutputContext, SessionEpoch, SessionFrame, SourceSpan, TransportRevision,
+    };
+    use kithara_sync::{LoadGeneration, PermitCell, SyncArbiter, SyncGateBinding, SyncReceipt};
+    use kithara_warp::{BeatGridId, RenderContext, WarpMapRevision};
     use ringbuf::traits::{Consumer, Producer};
+    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
-        bridge::{SharedEq, slot_channels},
+        bridge::{
+            SharedEq, slot_channels,
+            sync::{PreparedFirst, sync_receipts},
+        },
+        resource::Resource,
+        rt::sync_owner_fixture::prepared_entry,
         test_pools::pools,
     };
 
@@ -490,6 +621,229 @@ mod tests {
             PlayerNodeProcessor::new(inputs, shape, &pools(), crate::DEFAULT_GATE_SMOOTHING),
             control,
         )
+    }
+
+    fn sync_resource(track: bool) -> Box<super::super::track::PlayerResource> {
+        let rate = NonZeroU32::new(44_100).expect("fixture rate");
+        let event_bus = AudioSessionMock::event_bus
+            .each_call(matching!())
+            .answers(&|mock| mock.make_ref(EventBus::new(1)));
+        let spec = AudioReadMock::spec
+            .each_call(matching!())
+            .returns(AudioSpec::new(2, rate));
+        let preload = AudioControlMock::preload
+            .next_call(matching!())
+            .returns(Ok(()));
+        let reader = if track {
+            let duration = AudioSessionMock::duration
+                .each_call(matching!())
+                .returns(Some(Duration::from_secs(1)));
+            Unimock::new((event_bus, duration, spec, preload))
+        } else {
+            Unimock::new((event_bus, spec, preload))
+        };
+        let src: Arc<str> = Arc::from("clear-fixture");
+        let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
+        Box::new(
+            super::super::track::PlayerResource::new(resource, src, &pools())
+                .expect("fixture resource fits pool"),
+        )
+    }
+
+    fn sync_track_and_tail(item_id: TrackId) -> (PlayerTrack, SyncFadeTail) {
+        let rate = NonZeroU32::new(44_100).expect("fixture rate");
+        let mut track = PlayerTrack::builder()
+            .sample_rate(rate)
+            .item_id(item_id)
+            .load(LoadGeneration::first())
+            .build(sync_resource(true));
+        track.play();
+        let tail = track.activate_sync(
+            sync_resource(false),
+            SourceSpan::new(0, 1, rate, 1).expect("source span"),
+            WarpMapRevision::first(),
+            rate,
+            crate::CrossfadeSettings::default(),
+        );
+        (track, tail)
+    }
+
+    fn pending_ticket(item_id: TrackId) -> SyncTicket {
+        let rate = NonZeroU32::new(44_100).expect("fixture rate");
+        let member = BeatGridId::allocate().expect("member id");
+        let group = BeatGridId::allocate().expect("group id");
+        let (stamp, map) = prepared_entry(
+            member,
+            group,
+            LoadGeneration::first(),
+            TransportRevision::first(),
+            Some(TransportRevision::first()),
+            rate,
+        );
+        let arbiter = Arc::new(SyncArbiter::new());
+        let cell = Arc::new(PermitCell::new(member));
+        let owner = arbiter.try_control().expect("owner phase");
+        let permit = owner.mint_permit(&cell, stamp).expect("exact permit");
+        drop(owner);
+        SyncTicket {
+            item_id,
+            load: LoadGeneration::first(),
+            resource: sync_resource(false),
+            first: PreparedFirst {
+                stereo: [0.0, 0.0],
+                source: SourceSpan::new(0, 1, rate, 1)
+                    .expect("source span")
+                    .with_mapping_revision(Some(NonZeroU64::MIN)),
+            },
+            permit,
+            gate: SyncGateBinding::new(arbiter, cell),
+            activation: SessionFrame::new(32),
+            source_start: 0,
+            epoch: SessionEpoch::new(1),
+            output_rate: rate,
+            map,
+        }
+    }
+
+    #[kithara::test]
+    fn pressured_clear_keeps_command_and_sync_custody_until_host_drains() {
+        let (mut processor, mut control) = processor();
+        let (receipt_tx, mut receipt_rx) = sync_receipts();
+        processor.sync_receipts = Some(receipt_tx);
+        let item_id = TrackId::allocate();
+        let (active, first_tail) = sync_track_and_tail(item_id);
+        assert!(processor.tracks.insert(active).is_none());
+        let second_id = TrackId::allocate();
+        let held_id = TrackId::allocate();
+        let (_, second_tail) = sync_track_and_tail(second_id);
+        let (_, held_tail) = sync_track_and_tail(held_id);
+        assert!(
+            processor
+                .sync_return_tx
+                .try_push(SyncReturn::Tail(first_tail))
+                .is_ok()
+        );
+        assert!(
+            processor
+                .sync_return_tx
+                .try_push(SyncReturn::Tail(second_tail))
+                .is_ok()
+        );
+        processor.sync_return_held = Some(SyncReturn::Tail(held_tail));
+        let pending = pending_ticket(item_id);
+        let pending_stamp = pending.permit.stamp();
+        assert!(control.sync_tx.try_push(pending).is_ok());
+        assert!(control.cmd_tx.try_push(PlayerCmd::Clear).is_ok());
+        assert!(
+            control
+                .cmd_tx
+                .try_push(PlayerCmd::SetPrefetchDuration(0.25))
+                .is_ok()
+        );
+        let mut returned = Vec::new();
+
+        processor.drain_commands();
+        assert_eq!(processor.tracks.len(), 1);
+        assert!(processor.sync_rx.try_peek().is_some());
+        assert!(matches!(
+            processor.cmd_rx.try_peek(),
+            Some(PlayerCmd::Clear)
+        ));
+        assert!(!processor.playback.playing.load(Ordering::SeqCst));
+        assert_eq!(processor.prefetch_duration, 0.0);
+        assert!(receipt_rx.try_pop().is_none());
+
+        returned.push(control.sync_return_rx.try_pop().expect("first return"));
+        processor.maintain_sync_mailboxes();
+        processor.drain_commands();
+        assert_eq!(processor.tracks.len(), 0);
+        assert!(processor.sync_rx.try_peek().is_some());
+        assert!(matches!(
+            processor.sync_return_held.as_ref(),
+            Some(SyncReturn::Track(_))
+        ));
+        assert!(matches!(
+            processor.cmd_rx.try_peek(),
+            Some(PlayerCmd::Clear)
+        ));
+        assert_eq!(processor.prefetch_duration, 0.0);
+
+        returned.push(control.sync_return_rx.try_pop().expect("second return"));
+        processor.maintain_sync_mailboxes();
+        processor.drain_commands();
+        assert!(processor.sync_rx.try_peek().is_none());
+        assert!(matches!(
+            processor.sync_return_held.as_ref(),
+            Some(SyncReturn::Ticket(_))
+        ));
+        assert!(matches!(
+            processor.cmd_rx.try_peek(),
+            Some(PlayerCmd::Clear)
+        ));
+        assert_eq!(processor.prefetch_duration, 0.0);
+
+        returned.push(control.sync_return_rx.try_pop().expect("third return"));
+        processor.maintain_sync_mailboxes();
+        processor.drain_commands();
+        assert!(processor.sync_rx.try_peek().is_none());
+        assert!(processor.sync_return_held.is_none());
+        assert!(processor.cmd_rx.try_peek().is_none());
+        assert!(!processor.playback.playing.load(Ordering::SeqCst));
+        assert_eq!(processor.prefetch_duration, 0.25);
+        assert!(matches!(receipt_rx.try_pop(), Some(SyncReceipt::Rejected {
+            stamp,
+            reason: SyncExecutionReject::Cancelled,
+        }) if stamp == pending_stamp));
+        assert!(receipt_rx.try_pop().is_none());
+
+        while let Some(value) = control.sync_return_rx.try_pop() {
+            returned.push(value);
+        }
+        assert_eq!(returned.len(), 5);
+        let mut tails = Vec::new();
+        let mut tracks = Vec::new();
+        let mut tickets = Vec::new();
+        for value in &returned {
+            match value {
+                SyncReturn::Tail(tail) => tails.push(tail.item_id),
+                SyncReturn::Track(track) => tracks.push(track.item_id()),
+                SyncReturn::Ticket(ticket) => tickets.push(ticket.permit.stamp()),
+            }
+        }
+        assert_eq!(tails.len(), 3);
+        for id in [item_id, second_id, held_id] {
+            assert_eq!(
+                tails
+                    .iter()
+                    .filter(|&&returned_id| returned_id == id)
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(tracks.as_slice(), &[item_id]);
+        assert_eq!(tickets.as_slice(), &[pending_stamp]);
+
+        let withdrawn = pending_ticket(item_id);
+        let withdrawn_stamp = withdrawn.permit.stamp();
+        let owner = withdrawn.gate.arbiter().try_control().expect("owner phase");
+        owner
+            .preflight_revoke(withdrawn.gate.cell())
+            .expect("fixture permit revision")
+            .revoke();
+        drop(owner);
+        assert!(control.sync_tx.try_push(withdrawn).is_ok());
+        assert!(control.cmd_tx.try_push(PlayerCmd::Clear).is_ok());
+        processor.drain_commands();
+        assert!(processor.sync_rx.try_peek().is_none());
+        assert!(processor.cmd_rx.try_peek().is_none());
+        assert!(
+            receipt_rx.try_pop().is_none(),
+            "withdrawal already belongs to the owner"
+        );
+        assert!(matches!(
+            control.sync_return_rx.try_pop(),
+            Some(SyncReturn::Ticket(ticket)) if ticket.permit.stamp() == withdrawn_stamp
+        ));
     }
 
     fn session_processor() -> PlayerNodeProcessor {

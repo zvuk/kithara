@@ -3,6 +3,7 @@ use std::fmt;
 use kithara_audio::DecodeErrorKind;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
+use kithara_sync::LoadGeneration;
 
 use crate::rt::track::PlayerResource;
 
@@ -12,6 +13,7 @@ pub enum PlayerCmd {
     LoadTrack {
         resource: Box<PlayerResource>,
         item_id: TrackId,
+        load: LoadGeneration,
     },
     /// Unload a track by its queue-item identity.
     UnloadTrack { item_id: TrackId },
@@ -33,9 +35,14 @@ pub enum PlayerCmd {
 impl fmt::Debug for PlayerCmd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::LoadTrack { item_id, resource } => f
+            Self::LoadTrack {
+                item_id,
+                load,
+                resource,
+            } => f
                 .debug_struct("LoadTrack")
                 .field("item_id", item_id)
+                .field("load", load)
                 .field("src", resource.src())
                 .finish_non_exhaustive(),
             Self::UnloadTrack { item_id } => f

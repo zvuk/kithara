@@ -7,7 +7,7 @@ use kithara_warp::{
 };
 
 use super::{
-    descent::{Staged, Takeover},
+    descent::{Parent, Staged, Takeover, output_transport},
     lifecycle::Applied,
     placement::{
         Missing, Placement, carry, continue_on, entry_window, place, place_mapped, project,
@@ -183,6 +183,7 @@ struct Mint<'a> {
     topology: TopologyStamp,
     load: LoadGeneration,
     transport: TransportRevision,
+    output_transport: Option<TransportRevision>,
     entry: Entry,
     replaces: Option<WarpMapRevision>,
 }
@@ -272,6 +273,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             topology: self.topology_stamp(),
             load: request.load,
             transport: request.transport,
+            output_transport: staged.output_transport(),
             entry,
             replaces,
         }
@@ -419,6 +421,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             topology,
             load,
             transport,
+            output_transport: output_transport(self.timeline, self.parent),
             entry,
             replaces,
         }
@@ -492,29 +495,21 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         &self,
         grid: &BeatGridSnapshot,
         timeline: Timeline,
+        parent: Option<Parent>,
         takeover: Takeover,
     ) -> Result<Refreshed, SyncError> {
         let Takeover {
             commit,
             mut next_operation,
         } = takeover;
+        if let Some(refreshed) = self.refreshed_without_replan(grid, next_operation) {
+            return Ok(refreshed);
+        }
         let mut next_map = self.next_map;
-        if grid.stamp() == self.grid.stamp() {
-            return Ok(Refreshed {
-                pending: self.pending.clone(),
-                applied: self.applied.clone(),
-                next_map,
-                next_operation,
-            });
-        }
-        if grid.axis() != self.grid.axis() {
-            return Ok(Refreshed {
-                pending: Vec::new(),
-                applied: Vec::new(),
-                next_map,
-                next_operation,
-            });
-        }
+        let output_transport = output_transport(timeline, parent);
+        let execution_floor = parent
+            .and_then(Parent::segment)
+            .and_then(|segment| segment.execution_floor());
         let live = !matches!(timeline, Timeline::Off) && grid.state() == BeatGridState::Live;
         let mut pending: Vec<Pending> = Vec::with_capacity(self.pending.len());
         for member in self.members.iter().filter_map(|member| match member {
@@ -526,8 +521,15 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 (Some(held), _) if held.armed() => Some(held.clone()),
                 (Some(held), _) if !live => handoff(held).cloned(),
                 (_, Some(lane)) if live => {
-                    let replanned =
-                        public_on_host(held, timeline, grid, &member, Some(lane), &mut next_map)?;
+                    let replanned = public_on_host(
+                        held,
+                        timeline,
+                        grid,
+                        &member,
+                        Some(lane),
+                        output_transport,
+                        &mut next_map,
+                    )?;
                     let public_missed = matches!(replanned, Some(None));
                     let first_entry = public_missed
                         && self.before_entry.is_some_and(|(operation, _)| {
@@ -565,7 +567,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                         let activation = if leaves_host_for_local {
                             Ok(commit)
                         } else {
-                            retarget_boundary(grid, commit, lane.applied().frontier().output())
+                            retarget_boundary(
+                                grid,
+                                commit.max(execution_floor.unwrap_or(commit)),
+                                lane.applied().frontier().output(),
+                            )
                         };
                         let planned = activation
                             .and_then(|activation| {
@@ -581,6 +587,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                             topology: self.topology_stamp(),
                             load,
                             transport,
+                            output_transport,
                             entry: Entry::Replace,
                             replaces: Some(lane.map()),
                         };
@@ -589,21 +596,23 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 }
                 (Some(waiting @ Pending::Waiting { .. }), None) => Some(waiting.clone()),
                 (
-                    Some(Pending::Prepared {
-                        preparation,
-                        entry: Entry::Public { source, window },
-                        ..
-                    }),
+                    Some(
+                        held @ Pending::Prepared {
+                            entry: Entry::Public { .. },
+                            ..
+                        },
+                    ),
                     None,
-                ) if live && matches!(timeline, Timeline::Host) => replan_public(
+                ) if live && matches!(timeline, Timeline::Host) => public_on_host(
+                    Some(held),
+                    timeline,
                     grid,
                     &member,
-                    preparation,
-                    *source,
-                    window,
                     None,
+                    output_transport,
                     &mut next_map,
-                )?,
+                )?
+                .flatten(),
                 (
                     Some(Pending::Prepared {
                         preparation,
@@ -611,29 +620,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                         ..
                     }),
                     None,
-                ) if preparation.stamp().member() == member.stamp() => {
-                    let SyncEffect::Projection { alignment, .. } = preparation.effect() else {
-                        continue;
-                    };
-                    let planned = match carry(grid, &member, *alignment, window) {
-                        Ok(Some(placement)) => map_revision(grid, next_map)
-                            .and_then(|revision| project(grid, &member, placement, revision)),
-                        Ok(None) => continue,
-                        Err(missing) => Err(missing),
-                    };
-                    let stamp = preparation.stamp();
-                    let mint = Mint {
-                        owner: grid,
-                        member: &member,
-                        operation: stamp.operation(),
-                        topology: stamp.topology(),
-                        load: stamp.load(),
-                        transport: stamp.transport(),
-                        entry: Entry::Launch(window.clone()),
-                        replaces: None,
-                    };
-                    Some(mint.pending(planned, &mut next_map)?)
-                }
+                ) if preparation.stamp().member() == member.stamp() => Self::carry_launch(
+                    grid,
+                    &member,
+                    preparation,
+                    window,
+                    output_transport,
+                    &mut next_map,
+                )?,
                 _ => None,
             };
             pending.extend(decided);
@@ -644,6 +638,62 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             next_map,
             next_operation,
         })
+    }
+
+    fn refreshed_without_replan(
+        &self,
+        grid: &BeatGridSnapshot,
+        next_operation: Option<SyncOperationId>,
+    ) -> Option<Refreshed> {
+        if grid.stamp() == self.grid.stamp() {
+            Some(Refreshed {
+                pending: self.pending.clone(),
+                applied: self.applied.clone(),
+                next_map: self.next_map,
+                next_operation,
+            })
+        } else if grid.axis() != self.grid.axis() {
+            Some(Refreshed {
+                pending: Vec::new(),
+                applied: Vec::new(),
+                next_map: self.next_map,
+                next_operation,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn carry_launch(
+        owner: &BeatGridSnapshot,
+        member: &BeatGridSnapshot,
+        preparation: &SyncPreparation,
+        window: &Range<SessionFrame>,
+        output_transport: Option<TransportRevision>,
+        next_map: &mut Option<WarpMapRevision>,
+    ) -> Result<Option<Pending>, SyncError> {
+        let SyncEffect::Projection { alignment, .. } = preparation.effect() else {
+            return Ok(None);
+        };
+        let planned = match carry(owner, member, *alignment, window) {
+            Ok(Some(placement)) => map_revision(owner, *next_map)
+                .and_then(|revision| project(owner, member, placement, revision)),
+            Ok(None) => return Ok(None),
+            Err(missing) => Err(missing),
+        };
+        let stamp = preparation.stamp();
+        let mint = Mint {
+            owner,
+            member,
+            operation: stamp.operation(),
+            topology: stamp.topology(),
+            load: stamp.load(),
+            transport: stamp.transport(),
+            output_transport,
+            entry: Entry::Launch(window.clone()),
+            replaces: None,
+        };
+        Ok(Some(mint.pending(planned, next_map)?))
     }
 
     /// Releases every sounding member of a group that leaves its timeline at
@@ -748,6 +798,7 @@ fn public_on_host(
     owner: &BeatGridSnapshot,
     member: &BeatGridSnapshot,
     lane: Option<&Applied>,
+    output_transport: Option<TransportRevision>,
     next_map: &mut Option<WarpMapRevision>,
 ) -> Result<Option<Option<Pending>>, SyncError> {
     let Some(Pending::Prepared {
@@ -761,29 +812,15 @@ fn public_on_host(
     if !matches!(timeline, Timeline::Host) {
         return Ok(None);
     }
-    replan_public(owner, member, preparation, *source, window, lane, next_map).map(Some)
-}
-
-/// Replans a public entry from its actual source after a Host grid revision.
-/// A missed bounded window withdraws that entry without changing its old lane.
-fn replan_public(
-    owner: &BeatGridSnapshot,
-    member: &BeatGridSnapshot,
-    preparation: &SyncPreparation,
-    source: AlignmentSource,
-    window: &Range<SessionFrame>,
-    lane: Option<&Applied>,
-    next_map: &mut Option<WarpMapRevision>,
-) -> Result<Option<Pending>, SyncError> {
     let placement = lane.map_or_else(
-        || place(owner, member, source, window),
-        |lane| place_mapped(owner, member, source, window, lane.plan()),
+        || place(owner, member, *source, window),
+        |lane| place_mapped(owner, member, *source, window, lane.plan()),
     );
     let planned = placement
         .and_then(|placement| project(owner, member, placement, map_revision(owner, *next_map)?));
     let planned = match planned {
         Ok(planned) => planned,
-        Err(Missing::Refused(SyncError::NoAdmissibleBoundary { .. })) => return Ok(None),
+        Err(Missing::Refused(SyncError::NoAdmissibleBoundary { .. })) => return Ok(Some(None)),
         Err(Missing::Coverage(_)) => {
             return Err(SyncError::GridCoverageUnavailable {
                 member_id: member.id(),
@@ -799,14 +836,15 @@ fn replan_public(
         topology: stamp.topology(),
         load: stamp.load(),
         transport: stamp.transport(),
+        output_transport,
         entry: Entry::Public {
-            source,
+            source: *source,
             window: window.clone(),
         },
         replaces: lane.map(Applied::map),
     }
     .pending(Ok(planned), next_map)?;
-    Ok(Some(pending))
+    Ok(Some(Some(pending)))
 }
 
 /// The preparations `next` issues and withdraws compared with `held`: each
@@ -873,7 +911,8 @@ impl Mint<'_> {
                             self.topology,
                             self.load,
                             self.transport,
-                        ),
+                        )
+                        .with_output_transport(self.output_transport),
                         SyncEffect::Projection {
                             alignment,
                             plan,

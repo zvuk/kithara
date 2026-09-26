@@ -4,6 +4,8 @@ mod node;
 mod processor;
 mod render;
 mod slots;
+#[cfg(test)]
+mod sync_owner_fixture;
 pub mod track;
 
 pub use context::{

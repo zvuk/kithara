@@ -319,6 +319,7 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
             fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
             #[call(route)]
             fn transact(&mut self, operation: SyncOperation<G>) -> Result<SyncAdmission, SyncRejected<G>>;
+            fn mode(&self) -> SyncMode;
         }
     }
 

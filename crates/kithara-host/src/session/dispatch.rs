@@ -3,13 +3,21 @@ use std::num::NonZeroU32;
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
+use kithara_platform::sync::Arc;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
-use kithara_play::{PlayError, StreamShape};
-use kithara_sync::{
-    SyncCapability, SyncError, SyncGroup, SyncOperation, SyncReceipt, SyncRejected,
-    SyncStatusSnapshot, TopologyOperation,
+use kithara_play::{
+    PlayError, StreamShape,
+    player::{ResidentRender, ResidentStaging},
 };
+use kithara_signal::SessionFrame;
+use kithara_sync::{
+    AlignmentSource, ArmPermit, ControlEnterError, ControlGuard, GroupState, PermitCell,
+    PreparedRevocation, SyncAdmission, SyncCapability, SyncError, SyncExecutionReject, SyncGroup,
+    SyncIntent, SyncMode, SyncOperation, SyncReceipt, SyncReceiptAck, SyncRejected, SyncTransition,
+    TopologyOperation,
+};
+use kithara_warp::{BeatGrid, BeatGridId};
 use tracing::{debug, trace, warn};
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -24,46 +32,436 @@ use super::{
     transport,
     transport::RouteRestartStatus,
 };
-use crate::{PlayerMember, api::HostLevel};
+use crate::{
+    PlayerMember,
+    api::{DeckSyncState, HostLevel},
+};
 
 pub(crate) fn run_host_cmd<T, S>(state: &mut SessionState<T, S>, cmd: HostCmd<S>) -> HostReply
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     match cmd {
-        HostCmd::Play(cmd) => HostReply::Play(run_cmd(state, cmd)),
-        HostCmd::Sync(cmd) => run_sync_cmd(state, cmd),
+        HostCmd::Play(Cmd::AcknowledgeSync { receipt }) => {
+            let arbiter = state.sync_arbiter.clone();
+            let control = match arbiter.enter_host_control() {
+                Ok(control) => control,
+                Err(error) => {
+                    if error == ControlEnterError::Busy
+                        && let Err(queue_error) = queue_failed_gate_receipt(state, receipt)
+                    {
+                        return HostReply::Play(Reply::Err(queue_error));
+                    }
+                    return control_failure_reply(
+                        HostCmd::<S>::Play(Cmd::AcknowledgeSync { receipt }),
+                        error,
+                    );
+                }
+            };
+            if let Err(error) = drain_audio_receipts(state, &control) {
+                return HostReply::Play(Reply::Err(error));
+            }
+            if let Err(error) = drain_failed_gate_receipts(state) {
+                return HostReply::Play(Reply::Err(error));
+            }
+            if let Err(error) = transport::observe_commits(state, &control) {
+                return HostReply::Play(Reply::Err(error.into()));
+            }
+            HostReply::Play(match acknowledge_root(state, receipt, &control) {
+                Ok(answer) => Reply::SyncAcknowledged(answer),
+                Err(error) => Reply::Err(error),
+            })
+        }
+        HostCmd::Play(Cmd::RetireSyncMember { member }) => {
+            let arbiter = state.sync_arbiter.clone();
+            let control = match arbiter.enter_host_control() {
+                Ok(control) => control,
+                Err(error) => {
+                    return control_failure_reply(
+                        HostCmd::<S>::Play(Cmd::RetireSyncMember { member }),
+                        error,
+                    );
+                }
+            };
+            if let Err(error) = drain_audio_receipts(state, &control) {
+                return HostReply::Play(Reply::Err(error));
+            }
+            if let Err(error) = drain_failed_gate_receipts(state) {
+                return HostReply::Play(Reply::Err(error));
+            }
+            HostReply::Play(
+                state
+                    .retire_sync_member(member, &control)
+                    .map_or_else(Reply::Err, |()| Reply::Ok),
+            )
+        }
+        HostCmd::Play(cmd) => match pump_before_work(state) {
+            Ok(()) => HostReply::Play(run_cmd(state, cmd)),
+            Err(error) => HostReply::Play(Reply::Err(error)),
+        },
+        HostCmd::Sync(cmd) => {
+            let arbiter = state.sync_arbiter.clone();
+            let _control = match arbiter.enter_host_control() {
+                Ok(control) => control,
+                Err(error) => return control_failure_reply(HostCmd::<S>::Sync(cmd), error),
+            };
+            if let Err(error) = drain_audio_receipts(state, &_control) {
+                return HostReply::Err(error.into());
+            }
+            if let Err(error) = drain_failed_gate_receipts(state) {
+                return HostReply::Err(error.into());
+            }
+            run_sync_cmd(state, cmd, &_control)
+        }
         HostCmd::ApplyMix { levels } => {
+            if let Err(error) = pump_before_work(state) {
+                return HostReply::Err(error.into());
+            }
             apply_mix(state, &levels).map_or_else(HostReply::Err, |()| HostReply::Ok)
         }
-        HostCmd::EnableOutput { outputs } => tap::enable(state, outputs)
-            .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
+        HostCmd::EnableOutput { outputs } => {
+            if let Err(error) = pump_before_work(state) {
+                return HostReply::Err(error.into());
+            }
+            tap::enable(state, outputs)
+                .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok)
+        }
         HostCmd::Shutdown => HostReply::Ok,
     }
 }
 
-fn run_sync_cmd<T, S>(state: &mut SessionState<T, S>, cmd: SyncCmd) -> HostReply {
+fn enter_error(error: ControlEnterError) -> SessionError {
+    match error {
+        ControlEnterError::Busy => SessionError::SyncControlBusy,
+        ControlEnterError::Closed => SessionError::Sync(SyncError::OwnerUnavailable),
+    }
+}
+
+/// Pump the Host's RT mailboxes under one short owner cut before any backend
+/// or stream work. The backend operation itself runs after this guard drops.
+pub(super) fn pump_before_work<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+    let arbiter = state.sync_arbiter.clone();
+    let control = arbiter.enter_host_control().map_err(enter_error)?;
+    drain_audio_receipts(state, &control)?;
+    drain_failed_gate_receipts(state)?;
+    transport::observe_commits(state, &control)?;
+    Ok(())
+}
+
+/// Enter only for a canonical owner publication. The caller's Firewheel or
+/// stream work must happen before or after this short cut.
+pub(super) fn with_owner_cut<T, S, R>(
+    state: &mut SessionState<T, S>,
+    publish: impl FnOnce(&mut SessionState<T, S>, &ControlGuard<'_>) -> Result<R, SessionError>,
+) -> Result<R, SessionError> {
+    let arbiter = state.sync_arbiter.clone();
+    let control = arbiter.enter_host_control().map_err(enter_error)?;
+    drain_audio_receipts(state, &control)?;
+    drain_failed_gate_receipts(state)?;
+    publish(state, &control)
+}
+
+/// Commit one root grid publication while RT claims are excluded. Preflight
+/// every cell before the owner changes, then revoke only transitions that
+/// actually replace a ticket, except a new axis/epoch which fences all cells.
+pub(super) fn publish_root_transition<T, S>(
+    state: &mut SessionState<T, S>,
+    control: &ControlGuard<'_>,
+    axis_changed: bool,
+    publish: impl FnOnce(&mut GroupState<PlayerMember>) -> Result<SyncTransition, SyncError>,
+) -> Result<(), SyncError> {
+    let cells: Vec<_> = state
+        .sync_cells
+        .iter()
+        .filter(|entry| {
+            axis_changed
+                || state.root.with_group(entry.group, SyncGroup::mode) == Some(SyncMode::HostSync)
+        })
+        .map(|entry| Arc::clone(&entry.cell))
+        .collect();
+    let prepared = cells
+        .iter()
+        .map(|cell| control.preflight_revoke(cell))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(SyncError::ExecutionControl)?;
+    let transition = publish(&mut state.root)?;
+    for (cell, revoke) in cells.iter().zip(prepared) {
+        if axis_changed || transition_replaces_ticket(&transition, cell.member()) {
+            revoke.revoke();
+        }
+    }
+    state.publish_root();
+    Ok(())
+}
+
+/// Final owner drain after graph retirement and before a slot receiver is
+/// destroyed. A deck whose last processor is gone also withdraws only that
+/// track's remaining decisions. Backend teardown has already completed
+/// outside this short cut.
+pub(super) fn drain_after_quiescence<T, S>(
+    state: &mut SessionState<T, S>,
+    quiesced_deck: Option<BeatGridId>,
+) -> Result<(), SessionError> {
+    let arbiter = state.sync_arbiter.clone();
+    let control = arbiter.enter_host_control().map_err(enter_error)?;
+    drain_audio_receipts(state, &control)?;
+    drain_failed_gate_receipts(state)?;
+    let Some(group) = quiesced_deck else {
+        return Ok(());
+    };
+    let Some(cell) = state
+        .sync_cells
+        .iter()
+        .find(|entry| entry.group == group)
+        .map(|entry| Arc::clone(&entry.cell))
+    else {
+        return Ok(());
+    };
+    let revocation = control
+        .preflight_revoke(&cell)
+        .map_err(SyncError::ExecutionControl)?;
+    let _admission = state
+        .root
+        .transact(SyncOperation::WithdrawQuiescedMember {
+            target: cell.member(),
+        })
+        .map_err(|rejected| SessionError::Sync(rejected.error().clone()))?;
+    revocation.revoke();
+    state.publish_root();
+    Ok(())
+}
+
+/// A timed-out Installed never reached the owner. The Host retains one
+/// terminal rejection for that member, then applies it on the next Control
+/// cut after the in-flight audio claim completes. The executor drops its lane
+/// immediately and cannot accidentally arm it.
+fn queue_failed_gate_receipt<T, S>(
+    state: &mut SessionState<T, S>,
+    receipt: SyncReceipt,
+) -> Result<(), SessionError> {
+    let terminal = match receipt {
+        SyncReceipt::Installed(stamp) => SyncReceipt::Rejected {
+            stamp,
+            reason: SyncExecutionReject::ControlBusy,
+        },
+        rejected @ SyncReceipt::Rejected { .. } => rejected,
+        _ => return Err(SessionError::Graph("executor sent an audio receipt".into())),
+    };
+    let member = match terminal {
+        SyncReceipt::Rejected { stamp, .. } => stamp.member().grid_id(),
+        _ => {
+            return Err(SessionError::Graph(
+                "missing terminal rejection stamp".into(),
+            ));
+        }
+    };
+    let entry = state
+        .sync_cells
+        .iter_mut()
+        .find(|entry| entry.cell.member() == member)
+        .ok_or(SessionError::SyncMemberNotRegistered(member))?;
+    match entry.pending_gate_receipt {
+        Some(existing) if existing == terminal => Ok(()),
+        Some(_) => Err(SessionError::Graph(
+            "member already has an undrained gate failure".into(),
+        )),
+        None => {
+            entry.pending_gate_receipt = Some(terminal);
+            Ok(())
+        }
+    }
+}
+
+fn drain_failed_gate_receipts<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+    for index in 0..state.sync_cells.len() {
+        let Some(receipt) = state.sync_cells[index].pending_gate_receipt else {
+            continue;
+        };
+        if let Err(error) = state.root.acknowledge(receipt)
+            && !error.is_superseded_rejection(receipt)
+        {
+            return Err(error.into());
+        }
+        state.sync_cells[index].pending_gate_receipt = None;
+        state.publish_root();
+    }
+    Ok(())
+}
+
+/// Sole consumer of the per-slot callback receipts. A failed owner update
+/// keeps the popped receipt in its fixed slot for a later owner cut.
+fn drain_audio_receipts<T, S>(
+    state: &mut SessionState<T, S>,
+    control: &ControlGuard<'_>,
+) -> Result<(), SessionError> {
+    for deck_index in 0..state.graph.len() {
+        let slots = state
+            .graph
+            .deck(deck_index)
+            .map_or(0, |deck| deck.slots.len());
+        for slot_index in 0..slots {
+            loop {
+                let receipt = state
+                    .graph
+                    .deck_mut(deck_index)
+                    .and_then(|deck| deck.slots.get_mut(slot_index))
+                    .and_then(|slot| {
+                        slot.pending_receipt
+                            .take()
+                            .or_else(|| slot.sync_receipts.try_pop())
+                    });
+                let Some(receipt) = receipt else { break };
+                let result = match receipt {
+                    SyncReceipt::Armed(_)
+                    | SyncReceipt::Presented(_)
+                    | SyncReceipt::Rejected { .. } => {
+                        acknowledge_root(state, receipt, control).map(|_| ())
+                    }
+                    _ => Err(SessionError::Graph(
+                        "RT mailbox carried a non-audio sync receipt".into(),
+                    )),
+                };
+                if let Err(error) = result {
+                    if let Some(slot) = state
+                        .graph
+                        .deck_mut(deck_index)
+                        .and_then(|deck| deck.slots.get_mut(slot_index))
+                    {
+                        slot.pending_receipt = Some(receipt);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn control_failure_reply<S>(cmd: HostCmd<S>, failure: ControlEnterError) -> HostReply {
+    let sync_error = match failure {
+        ControlEnterError::Busy => SyncError::ControlBusy,
+        ControlEnterError::Closed => SyncError::OwnerUnavailable,
+    };
+    let session_error = match failure {
+        ControlEnterError::Busy => SessionError::SyncControlBusy,
+        ControlEnterError::Closed => SessionError::Sync(SyncError::OwnerUnavailable),
+    };
+    match cmd {
+        HostCmd::Sync(SyncCmd::Transact(operation)) => {
+            HostReply::Admission(Err(SyncRejected::new(sync_error, operation)))
+        }
+        HostCmd::Play(_) => HostReply::Play(Reply::Err(session_error)),
+        HostCmd::Shutdown => HostReply::Ok,
+        HostCmd::Sync(SyncCmd::TransactCurrent(_))
+        | HostCmd::Sync(SyncCmd::QueryDeckState { .. })
+        | HostCmd::Sync(SyncCmd::RequestDeckSync { .. })
+        | HostCmd::ApplyMix { .. }
+        | HostCmd::EnableOutput { .. } => HostReply::Err(session_error.into()),
+    }
+}
+
+fn run_sync_cmd<T, S>(
+    state: &mut SessionState<T, S>,
+    cmd: SyncCmd,
+    control: &ControlGuard<'_>,
+) -> HostReply {
     let operation = match cmd {
-        SyncCmd::Transact(operation) => match transport::observe_commits(state) {
+        SyncCmd::RequestDeckSync {
+            target,
+            member,
+            intent,
+            observation,
+        } => {
+            if let Err(error) = transport::observe_commits(state, control) {
+                return HostReply::Err(SessionError::from(error).into());
+            }
+            let Some(resident) = observation else {
+                return HostReply::Err(PlayError::NotReady);
+            };
+            if matches!(intent, SyncIntent::Enable | SyncIntent::AlignNow)
+                && resident.staging() != ResidentStaging::Available
+            {
+                return HostReply::Err(PlayError::NotReady);
+            }
+            let ResidentRender::Snapshot(snapshot) = resident.render() else {
+                return HostReply::Err(PlayError::NotReady);
+            };
+            let Some(processed) = state
+                .transport_control
+                .as_mut()
+                .and_then(|transport| transport.observation().snapshot())
+            else {
+                return HostReply::Err(SessionError::TransportNotProcessed.into());
+            };
+            let output = snapshot.context().output();
+            if output.session_epoch() != processed.session_epoch()
+                || output.transport_revision() != Some(processed.revision())
+                || output.sample_rate() != processed.session_grid().axis().sample_rate()
+            {
+                return HostReply::Err(PlayError::NotReady);
+            }
+            if !state
+                .sync_cells
+                .iter()
+                .any(|entry| entry.cell.member() == member)
+            {
+                return HostReply::Err(SessionError::SyncMemberNotRegistered(member).into());
+            }
+            let (boundary, _) = match transport::commit_boundary(state) {
+                Ok(boundary) => boundary,
+                Err(error) => return HostReply::Err(error.into()),
+            };
+            let lower_bound = boundary.max(output.output_frames().end);
+            let Some(activation) = i64::from(lower_bound).checked_add(2048) else {
+                return HostReply::Err(SessionError::TransportFrameExhausted.into());
+            };
+            SyncOperation::Sync {
+                target,
+                load: resident.load(),
+                transport: processed.revision(),
+                source: AlignmentSource::Audible {
+                    frontier: snapshot.frontier(),
+                    speed: resident.requested_speed(),
+                },
+                activation: SessionFrame::new(activation),
+                intent,
+            }
+        }
+        SyncCmd::QueryDeckState { target } => {
+            return state
+                .root
+                .with_group(target, |group| DeckSyncState {
+                    mode: group.mode(),
+                    status: group.status(),
+                })
+                .map_or_else(
+                    || {
+                        HostReply::Err(
+                            SessionError::from(SyncError::GroupNotFound { group_id: target })
+                                .into(),
+                        )
+                    },
+                    HostReply::DeckSyncState,
+                );
+        }
+        SyncCmd::Transact(operation) => match transport::observe_commits(state, control) {
             Ok(()) => operation,
             Err(error) => return HostReply::Admission(Err(SyncRejected::new(error, operation))),
         },
         SyncCmd::TransactCurrent(operations) => {
-            let topology =
-                match transport::observe_commits(state).and_then(|()| state.root.topology()) {
-                    Ok(topology) => topology,
-                    Err(error) => return HostReply::Err(SessionError::from(error).into()),
-                };
+            let topology = match transport::observe_commits(state, control)
+                .and_then(|()| state.root.topology())
+            {
+                Ok(topology) => topology,
+                Err(error) => return HostReply::Err(SessionError::from(error).into()),
+            };
             SyncOperation::Topology {
                 operations,
                 base: topology.stamp(),
             }
         }
-        SyncCmd::Acknowledge(receipt) => {
-            return HostReply::Acknowledged(acknowledge_root(state, receipt));
-        }
     };
-    let result = transact_root(state, operation);
+    let result = transact_root(state, operation, control);
     if result.is_ok() {
         state.publish_root();
     }
@@ -75,19 +473,40 @@ fn run_sync_cmd<T, S>(state: &mut SessionState<T, S>, cmd: SyncCmd) -> HostReply
 fn acknowledge_root<T, S>(
     state: &mut SessionState<T, S>,
     receipt: SyncReceipt,
-) -> Result<SyncStatusSnapshot, SyncError> {
-    transport::observe_commits(state)?;
-    let result = state.root.acknowledge(receipt);
-    if result.is_ok() {
-        state.publish_root();
+    control: &ControlGuard<'_>,
+) -> Result<SyncReceiptAck, SessionError> {
+    let permit: Option<ArmPermit> = match receipt {
+        SyncReceipt::Installed(stamp) => {
+            let member = stamp.member().grid_id();
+            let cell = state
+                .sync_cells
+                .iter()
+                .find(|entry| entry.cell.member() == member)
+                .ok_or(SessionError::SyncMemberNotRegistered(member))?;
+            Some(control.mint_permit(&cell.cell, stamp)?)
+        }
+        _ => None,
+    };
+    if let Err(error) = state.root.acknowledge(receipt)
+        && !error.is_superseded_rejection(receipt)
+    {
+        return Err(error.into());
     }
-    result
+    state.publish_root();
+    Ok(permit.map_or(SyncReceiptAck::Recorded, SyncReceiptAck::Installed))
 }
 
 fn transact_root<T, S>(
     state: &mut SessionState<T, S>,
     operation: SyncOperation<PlayerMember>,
-) -> Result<kithara_sync::SyncAdmission, SyncRejected<PlayerMember>> {
+    control: &ControlGuard<'_>,
+) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
+    if let SyncOperation::WithdrawQuiescedMember { target } = &operation {
+        return Err(SyncRejected::new(
+            SyncError::QuiescenceRequired { member_id: *target },
+            operation,
+        ));
+    }
     if topology_conflicts_with_graph(state, &operation) {
         return Err(SyncRejected::new(
             SyncError::CapabilityUnavailable {
@@ -96,7 +515,96 @@ fn transact_root<T, S>(
             operation,
         ));
     }
-    state.root.transact(operation)
+    let affected = affected_cells(state, &operation);
+    let mut prepared: Vec<PreparedRevocation<'_, '_, '_>> = Vec::with_capacity(affected.len());
+    for cell in &affected {
+        let revoke = match control.preflight_revoke(cell) {
+            Ok(revoke) => revoke,
+            Err(error) => {
+                return Err(SyncRejected::new(
+                    SyncError::ExecutionControl(error),
+                    operation,
+                ));
+            }
+        };
+        prepared.push(revoke);
+    }
+    let admission = state.root.transact(operation)?;
+    for (cell, revoke) in affected.iter().zip(prepared) {
+        if admission_replaces_ticket(&admission, cell.member()) {
+            revoke.revoke();
+        }
+    }
+    Ok(admission)
+}
+
+/// Only cells belonging to the transaction's affected deck or subtree are
+/// preflighted. An unrelated deck's reserved source never blocks this edit.
+fn affected_cells<T, S>(
+    state: &SessionState<T, S>,
+    operation: &SyncOperation<PlayerMember>,
+) -> Vec<Arc<PermitCell>> {
+    let mut targets: Vec<BeatGridId> = Vec::new();
+    match operation {
+        SyncOperation::Topology { operations, .. } => {
+            for edit in operations {
+                match edit {
+                    TopologyOperation::Attach { member } => targets.push(member.id()),
+                    TopologyOperation::Detach { member } => targets.push(*member),
+                    TopologyOperation::Replace {
+                        member,
+                        replacement,
+                    } => {
+                        targets.push(*member);
+                        targets.push(replacement.id());
+                    }
+                }
+            }
+        }
+        SyncOperation::Tempo { target, .. } if *target == state.root.id() => {
+            return state
+                .sync_cells
+                .iter()
+                .filter(|entry| {
+                    state.root.with_group(entry.group, SyncGroup::mode) == Some(SyncMode::HostSync)
+                })
+                .map(|entry| Arc::clone(&entry.cell))
+                .collect();
+        }
+        _ => targets.push(operation.target()),
+    }
+    state
+        .sync_cells
+        .iter()
+        .filter(|entry| {
+            targets
+                .iter()
+                .any(|target| *target == entry.group || *target == entry.cell.member())
+        })
+        .map(|entry| Arc::clone(&entry.cell))
+        .collect()
+}
+
+fn admission_replaces_ticket(admission: &SyncAdmission, member: BeatGridId) -> bool {
+    match admission {
+        SyncAdmission::Prepared(preparation) => preparation.stamp().member().grid_id() == member,
+        SyncAdmission::StateChanged { transition, .. }
+        | SyncAdmission::TopologyChanged { transition, .. } => {
+            transition_replaces_ticket(transition, member)
+        }
+        _ => false,
+    }
+}
+
+fn transition_replaces_ticket(transition: &SyncTransition, member: BeatGridId) -> bool {
+    transition
+        .issued()
+        .iter()
+        .any(|preparation| preparation.stamp().member().grid_id() == member)
+        || transition
+            .withdrawn()
+            .iter()
+            .any(|stamp| stamp.member().grid_id() == member)
 }
 
 fn topology_conflicts_with_graph<T, S>(
@@ -124,6 +632,9 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     match cmd {
+        Cmd::RegisterSyncMember { group, member } => state
+            .register_sync_member(group, member)
+            .map_or_else(Reply::Err, Reply::SyncGate),
         Cmd::RegisterPlayer {
             grid_id,
             bus,
@@ -244,10 +755,9 @@ where
         }
         Cmd::QueryStreamShape => Reply::StreamShape(stream_shape(state)),
         Cmd::Tick => tick_session(state),
-        Cmd::AcknowledgeSync { receipt } => match acknowledge_root(state, receipt) {
-            Ok(_) => Reply::Ok,
-            Err(error) => Reply::Err(SessionError::Sync(error)),
-        },
+        Cmd::AcknowledgeSync { .. } | Cmd::RetireSyncMember { .. } => {
+            Reply::Err(SessionError::SyncControlBusy)
+        }
     }
 }
 
@@ -595,7 +1105,7 @@ mod tests {
         })
     }
 
-    fn register_command(grid_id: kithara_warp::BeatGridId, sample_rate: u32) -> Cmd<TestPools> {
+    fn register_command(grid_id: BeatGridId, sample_rate: u32) -> Cmd<TestPools> {
         Cmd::RegisterPlayer {
             grid_id,
             sample_rate,
@@ -740,7 +1250,7 @@ mod tests {
     #[kithara::test]
     fn registration_rejects_a_player_before_canonical_attachment() {
         let mut state = test_state(start_route_loss_stream);
-        let grid_id = kithara_warp::BeatGridId::allocate().expect("fixture player grid id");
+        let grid_id = BeatGridId::allocate().expect("fixture player grid id");
 
         let reply = run_cmd(
             &mut state,
@@ -812,10 +1322,52 @@ mod tests {
         let operation = detach(&state);
         assert!(matches!(
             run_host_cmd(&mut state, HostCmd::Sync(SyncCmd::Transact(operation))),
-            HostReply::Admission(Ok(kithara_sync::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(SyncAdmission::TopologyChanged { .. }))
         ));
         assert_eq!(member_count(&state), 0);
         assert_eq!(deck_count(&state), 0);
+    }
+
+    #[kithara::test]
+    fn public_transactions_cannot_withdraw_a_live_slot() {
+        let mut state = test_state(start_route_loss_stream);
+        let player_id = register_player(&mut state);
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                start_command(player_id, TestState::DEFAULT_SAMPLE_RATE),
+            ),
+            Reply::Ok
+        ));
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            Reply::SlotAllocated(..)
+        ));
+        let group = deck_by_player_id(&state, player_id).grid_id;
+        let member = state
+            .root
+            .with_group(group, |group| {
+                group.topology().expect("deck topology").members()[0]
+                    .grid()
+                    .id()
+            })
+            .expect("registered deck group");
+        let prior = state.root.with_group(group, SyncGroup::status);
+
+        let HostReply::Admission(Err(rejected)) = run_host_cmd(
+            &mut state,
+            HostCmd::Sync(SyncCmd::Transact(SyncOperation::WithdrawQuiescedMember {
+                target: member,
+            })),
+        ) else {
+            panic!("public withdrawal is refused while the slot is live");
+        };
+        assert_eq!(
+            rejected.error(),
+            &SyncError::QuiescenceRequired { member_id: member }
+        );
+        assert_eq!(state.root.with_group(group, SyncGroup::status), prior);
+        assert_eq!(deck_by_player_id(&state, player_id).slots.len(), 1);
     }
 
     #[kithara::test]
@@ -832,13 +1384,13 @@ mod tests {
 
         assert!(matches!(
             run_host_cmd(&mut state, detach(first)),
-            HostReply::Admission(Ok(kithara_sync::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(SyncAdmission::TopologyChanged { .. }))
         ));
         let after_first = state.root.topology().expect("updated topology").stamp();
         assert_ne!(after_first, before);
         assert!(matches!(
             run_host_cmd(&mut state, detach(second)),
-            HostReply::Admission(Ok(kithara_sync::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(SyncAdmission::TopologyChanged { .. }))
         ));
 
         let after_second = state.root.topology().expect("updated topology");
@@ -1394,7 +1946,7 @@ mod tests {
         let known = register_player(&mut state);
         start_player_cmd(&mut state, known);
         let known_grid = deck_by_player_id(&state, known).grid_id;
-        let unknown_grid = kithara_warp::BeatGridId::allocate().expect("foreign fixture grid id");
+        let unknown_grid = BeatGridId::allocate().expect("foreign fixture grid id");
 
         assert!(matches!(
             run_host_cmd(

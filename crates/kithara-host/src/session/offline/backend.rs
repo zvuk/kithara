@@ -38,6 +38,13 @@ pub(super) struct OfflineStream {
 }
 
 impl OfflineStream {
+    /// Apply a queued graph schedule without rendering PCM or moving the
+    /// offline clock. This lets a synchronous deck stop observe processor
+    /// retirement while another deck's stream remains active.
+    pub(super) fn poll_control(&mut self) -> Result<(), OfflineSessionError> {
+        self.render(0, 0, &mut [])
+    }
+
     pub(super) fn render(
         &mut self,
         position: u64,

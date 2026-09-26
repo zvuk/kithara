@@ -1,7 +1,7 @@
 use kithara_bufpool::HasPool;
 use kithara_play::{
-    PlayError, SeekOutcome, SessionBinding,
-    player::{PlaybackView, Player, PlayerControlSource},
+    BeatGridId, PlayError, SeekOutcome, SessionBinding,
+    player::{PlaybackView, Player, PlayerControlSource, ResidentLoadObservation},
 };
 use kithara_sync::SyncAttachment;
 
@@ -38,6 +38,23 @@ where
     type Control = super::QueueControl<S>;
     type Schema = S;
 
+    delegate::delegate! {
+        to self.player {
+            fn attach_session(
+                &mut self,
+                binding: SessionBinding<S>,
+            ) -> Result<SyncAttachment, PlayError>;
+            fn sync_group_grid_id(&self) -> BeatGridId;
+            fn sync_track_grid_id(&self) -> BeatGridId;
+        }
+    }
+
+    fn resident_sync_observation(
+        control: &Self::Control,
+    ) -> Result<Option<ResidentLoadObservation>, PlayError> {
+        control.player.resident_sync_observation()
+    }
+
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {
         control.close()
     }
@@ -48,14 +65,5 @@ where
 
     fn prepare_control(control: &Self::Control) -> Result<(), PlayError> {
         control.with_open_result(|queue| queue.player.prepare())
-    }
-
-    delegate::delegate! {
-        to self.player {
-            fn attach_session(
-                &mut self,
-                binding: SessionBinding<S>,
-            ) -> Result<SyncAttachment, PlayError>;
-        }
     }
 }

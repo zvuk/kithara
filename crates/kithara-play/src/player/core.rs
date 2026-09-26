@@ -152,7 +152,10 @@ impl<S> PlayerRuntime<S> {
         drop(last_load);
 
         self.phase.lock().set_abr_handle(item.abr_handle);
-        self.core.staging.load((item.item_id, load), item.staging);
+        let staging = item
+            .staging
+            .and_then(|recipe| self.core.engine.bind_staging(slot, recipe));
+        self.core.staging.load((item.item_id, load), staging);
         let rate = self.core.engine.master_sample_rate();
         if let Some(sample_rate) = NonZeroU32::new(rate) {
             self.core.track_grid.load(

@@ -6,7 +6,8 @@ use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 use super::SyncExecution;
 use crate::{
     GroupState, ParentFact, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember,
-    SyncOperation, SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
+    SyncMode, SyncOperation, SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot,
+    SyncTransition,
 };
 
 /// What a player hands the owner of its synchronization group: the group's
@@ -111,6 +112,7 @@ impl<G: SyncGroup> SyncGroup for ExecutedGroup<G> {
         to self.group {
             fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
             fn status(&self) -> SyncStatusSnapshot;
+            fn mode(&self) -> SyncMode;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
             fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
         }

@@ -76,6 +76,7 @@ fn load(control: &mut SlotControl, src: &str, input: &'static [u8]) -> TrackId {
     push(
         control,
         PlayerCmd::LoadTrack {
+            load: kithara::sync::LoadGeneration::first(),
             resource: track(src, input),
             item_id,
         },

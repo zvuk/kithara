@@ -3,6 +3,7 @@ pub mod eq;
 pub mod metrics;
 pub mod playback;
 pub mod protocol;
+pub mod sync;
 
 pub use channels::{MixTapWriter, NodeInputs, SlotControl, slot_channels};
 pub use eq::SharedEq;
@@ -12,6 +13,7 @@ pub use protocol::{
     PlaybackFault, PlayerCmd, PlayerNotification, TrackPlaybackStopReason, TrackState,
     TrackTransition,
 };
+pub use sync::{SyncReceiptRx, SyncReceiptTx, sync_receipts};
 
 pub use crate::session::{
     AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionBinding, SessionDispatcher,

@@ -1,4 +1,4 @@
-use kithara_signal::SessionFrame;
+use kithara_signal::{SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState, SessionAnchor,
@@ -125,6 +125,27 @@ fn prepared_deck() -> (Group, BeatGridId, BeatGridId) {
     (group, parent, track)
 }
 
+#[kithara::test]
+fn a_host_preparation_requires_the_parent_processed_output_revision() {
+    let parent = BeatGridId::allocate().expect("grid id");
+    let revision = TransportRevision::first();
+    let mut group = group_in(SyncMode::HostSync, SyncMemberKind::Grid);
+    group
+        .accept_parent(
+            parent_update(parent_stamp(parent, 1), anchor_at_rate(2.0, 48_000))
+                .with_output_transport(revision),
+        )
+        .expect("the processed parent segment is live");
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let _ = prepare(&mut group, track, frontier(30_000, 30_000), 0);
+
+    assert_eq!(
+        prepared(&group, track).stamp().output_transport(),
+        Some(revision)
+    );
+}
+
 /// Asserts the group beat `beat` at the activation frame is the beat the
 /// member enters on, up to one frame of rounding.
 fn assert_on_beat(beat: f64, preparation: &SyncPreparation) {
@@ -242,6 +263,8 @@ fn a_local_tempo_commit_moves_the_pending_member() {
 #[kithara::test]
 fn a_root_tempo_reaches_the_pending_member_two_levels_down() {
     let mut root = group_in(SyncMode::LocalSync, SyncMemberKind::Group);
+    let external_parent = BeatGridId::allocate().expect("parent id");
+    let revision = TransportRevision::first();
     let mut middle = group_in(SyncMode::HostSync, SyncMemberKind::Group);
     let deck = group_in(SyncMode::HostSync, SyncMemberKind::Grid);
     let (middle_id, deck_id) = (middle.id(), deck.id());
@@ -261,6 +284,14 @@ fn a_root_tempo_reaches_the_pending_member_two_levels_down() {
             }]),
         })
         .expect("the root routes the attach to the deck");
+    root.accept_parent(
+        parent_update(
+            parent_stamp(external_parent, 1),
+            anchor_at_rate(2.0, 48_000),
+        )
+        .with_output_transport(revision),
+    )
+    .expect("the Local root accepts but does not inherit parent timing");
     let _ = root
         .transact(tempo_at(root.id(), 120.0, SessionFrame::new(0)))
         .expect("the root owns its tempo");
@@ -273,6 +304,11 @@ fn a_root_tempo_reaches_the_pending_member_two_levels_down() {
         })
     };
     let (planned, _, _) = read(&root);
+    assert_eq!(
+        planned.stamp().output_transport(),
+        None,
+        "a Local root breaks the global output-transport dependency"
+    );
 
     let admission = root
         .transact(tempo_at(root.id(), 150.0, SessionFrame::new(36_000)))
@@ -290,8 +326,76 @@ fn a_root_tempo_reaches_the_pending_member_two_levels_down() {
     assert_eq!(moved.stamp().member().grid_id(), track);
     assert_eq!(moved.stamp().operation(), planned.stamp().operation());
     assert_eq!(moved.stamp().group(), deck_grid);
+    assert_eq!(moved.stamp().output_transport(), None);
     assert_on_beat(beat, &moved);
     assert!(activation(&moved).1 < activation(&planned).1);
+}
+
+#[kithara::test]
+fn a_host_parent_output_revision_reaches_a_grandchild_preparation() {
+    let external_parent = BeatGridId::allocate().expect("parent id");
+    let revision = TransportRevision::first();
+    let mut root = group_in(SyncMode::HostSync, SyncMemberKind::Group);
+    let mut middle = group_in(SyncMode::HostSync, SyncMemberKind::Group);
+    let deck = group_in(SyncMode::HostSync, SyncMemberKind::Grid);
+    let (middle_id, deck_id) = (middle.id(), deck.id());
+    attach_group(&mut middle, deck);
+    attach_group(&mut root, middle);
+    let track = BeatGridId::allocate().expect("track id");
+    let _ = root
+        .transact(crate::SyncOperation::Topology {
+            base: nested(&root, &[middle_id, deck_id], |deck| {
+                deck.topology().expect("topology").stamp()
+            }),
+            operations: Box::new([crate::TopologyOperation::Attach {
+                member: crate::SyncMember::Grid {
+                    alignment: None,
+                    grid: Box::new(super::TestGrid(asset_grid(track, 480_000, 24_000))),
+                },
+            }]),
+        })
+        .expect("the root routes the attach to the deck");
+    root.accept_parent(
+        parent_update(
+            parent_stamp(external_parent, 1),
+            anchor_at_rate(2.0, 48_000),
+        )
+        .with_output_transport(revision),
+    )
+    .expect("the host parent segment reaches descendants");
+    let _ = prepare(&mut root, track, frontier(30_000, 30_000), 0);
+    let prior = nested(&root, &[middle_id, deck_id], |deck| {
+        prepared(deck, deck.pending[0].member())
+    });
+
+    let child_revision = nested(&root, &[middle_id], |middle| {
+        middle
+            .parent
+            .and_then(super::super::descent::Parent::segment)
+            .and_then(|segment| segment.output_transport())
+    });
+    let grandchild_revision = nested(&root, &[middle_id, deck_id], |deck| {
+        prepared(deck, deck.pending[0].member())
+            .stamp()
+            .output_transport()
+    });
+    assert_eq!(child_revision, Some(revision));
+    assert_eq!(grandchild_revision, Some(revision));
+
+    let next_revision = revision.checked_next().expect("transport revision");
+    root.accept_parent(
+        parent_update(
+            parent_stamp(external_parent, 2),
+            anchor_at_rate(2.0, 48_000),
+        )
+        .with_output_transport(next_revision),
+    )
+    .expect("the next processed parent revision reaches descendants");
+    let reissued = nested(&root, &[middle_id, deck_id], |deck| {
+        prepared(deck, deck.pending[0].member())
+    });
+    assert_eq!(reissued.stamp().operation(), prior.stamp().operation());
+    assert_eq!(reissued.stamp().output_transport(), Some(next_revision));
 }
 
 #[kithara::test]

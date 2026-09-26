@@ -8,7 +8,7 @@ mod wire {
     use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_signal::FaderValue;
-    use kithara_sync::{SyncError, SyncReceipt};
+    use kithara_sync::{ControlError, SyncError, SyncGateBinding, SyncReceipt, SyncReceiptAck};
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
     use crate::{
@@ -31,6 +31,14 @@ mod wire {
     pub enum SessionError {
         #[error("player not found: {0}")]
         PlayerNotFound(PlayerId),
+        #[error("sync member is already registered: {0:?}")]
+        SyncMemberAlreadyRegistered(BeatGridId),
+        #[error("sync member is not registered: {0:?}")]
+        SyncMemberNotRegistered(BeatGridId),
+        #[error("sync control: {0}")]
+        SyncControl(#[from] ControlError),
+        #[error("sync control is busy with an audio claim")]
+        SyncControlBusy,
         #[error("invalid session sample rate: {0}")]
         InvalidSampleRate(u32),
         #[error("player identity space is exhausted")]
@@ -53,6 +61,8 @@ mod wire {
         StreamStart(String),
         #[error("graph edit failed: {0}")]
         Graph(String),
+        #[error("removed audio node is awaiting callback quiescence")]
+        CallbackQuiescencePending,
         #[error("session mix tap already has a consumer")]
         MixTapActive,
         #[error("session transport has not been processed")]
@@ -156,6 +166,15 @@ mod wire {
         QuerySampleRate,
         QueryStreamShape,
         Tick,
+        /// Allocate the stable claim cell for a track before player attachment.
+        RegisterSyncMember {
+            group: BeatGridId,
+            member: BeatGridId,
+        },
+        /// Retire one player's claim cell after its callback users quiesce.
+        RetireSyncMember {
+            member: BeatGridId,
+        },
         /// Reports one executor outcome to the group that issued the
         /// preparation; answered with the owner's own acknowledgement result.
         AcknowledgeSync {
@@ -184,7 +203,9 @@ mod wire {
         Ok,
         PlayerRegistered(RegisteredPlayer),
         SessionTransport(SessionTransportSnapshot),
-        SlotAllocated(AllocatedSlot),
+        SlotAllocated(Box<AllocatedSlot>),
+        SyncGate(SyncGateBinding),
+        SyncAcknowledged(SyncReceiptAck),
         SampleRate(SessionSampleRate),
         StreamShape(Option<StreamShape>),
         Err(SessionError),
@@ -248,7 +269,7 @@ mod handle {
         maybe_send::{MaybeSend, MaybeSync},
         sync::{Arc, Mutex},
     };
-    use kithara_sync::SyncReceipt;
+    use kithara_sync::{SyncGateBinding, SyncReceipt, SyncReceiptAck};
     use kithara_warp::BeatGridId;
 
     use super::wire::{
@@ -305,9 +326,13 @@ mod handle {
     /// The dispatcher is deliberately inaccessible: decorators may only pass
     /// this capability down to their resident Player.
     #[derive_where::derive_where(Clone)]
+    #[derive(fieldwork::Fieldwork)]
+    #[fieldwork(opt_in, with)]
     pub struct SessionBinding<S> {
         dispatcher: Arc<dyn SessionDispatcher<S>>,
         requested_sample_rate: NonZeroU32,
+        #[field(with, option_set_some)]
+        sync_gate: Option<SyncGateBinding>,
     }
 
     impl<S> SessionBinding<S> {
@@ -325,7 +350,13 @@ mod handle {
             Self {
                 dispatcher,
                 requested_sample_rate,
+                sync_gate: None,
             }
+        }
+
+        #[must_use]
+        pub(crate) fn sync_gate(&self) -> Option<SyncGateBinding> {
+            self.sync_gate.clone()
         }
 
         #[must_use]
@@ -355,7 +386,7 @@ mod handle {
 
         pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
             match self.exec_ok(Cmd::AllocateSlot { player_id })? {
-                Reply::SlotAllocated(allocated) => Ok(allocated),
+                Reply::SlotAllocated(allocated) => Ok(*allocated),
                 _ => Err(PlayError::Internal(
                     "unexpected reply for session allocate slot".into(),
                 )),
@@ -389,6 +420,16 @@ mod handle {
                 .as_ref()
                 .map(|binding| Arc::clone(&binding.dispatcher))
                 .ok_or(PlayError::SessionUnbound)
+        }
+
+        /// Stable Host gate for the attached track, when this is a Host binding.
+        #[must_use]
+        pub fn sync_gate(&self) -> Option<SyncGateBinding> {
+            self.0
+                .binding
+                .lock()
+                .as_ref()
+                .and_then(SessionBinding::sync_gate)
         }
 
         pub fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
@@ -574,8 +615,13 @@ mod handle {
         ///
         /// Returns [`PlayError::SessionUnbound`] before the player joins a
         /// session, and the owner's refusal of a stale or unknown receipt.
-        pub fn acknowledge_sync(&self, receipt: SyncReceipt) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::AcknowledgeSync { receipt }).map(|_| ())
+        pub fn acknowledge_sync(&self, receipt: SyncReceipt) -> Result<SyncReceiptAck, PlayError> {
+            match self.exec_ok(Cmd::AcknowledgeSync { receipt })? {
+                Reply::SyncAcknowledged(answer) => Ok(answer),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for sync acknowledgement".into(),
+                )),
+            }
         }
 
         pub fn unregister_player(&self, player_id: PlayerId) -> Result<(), PlayError> {

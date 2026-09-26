@@ -4,9 +4,21 @@ pub use kithara_play::{
     SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo, TempoError,
     TransportRevision,
 };
+pub use kithara_sync::{SyncIntent, SyncMode, SyncStatusSnapshot};
 use kithara_warp::BeatGridId;
 
 use crate::error::PlayError;
+
+/// One deck's accepted Sync intent and actual executor evidence from the
+/// canonical Host-owned group.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DeckSyncState {
+    /// Mode the deck owner accepted.
+    pub mode: SyncMode,
+    /// Preparation or mapped execution evidence currently held by the owner.
+    pub status: SyncStatusSnapshot,
+}
 
 /// One canonical Host member's desired linear mix level.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]

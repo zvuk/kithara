@@ -92,6 +92,7 @@ impl SyncGroup for TestGroup {
             fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
             fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
             fn status(&self) -> SyncStatusSnapshot;
+            fn mode(&self) -> SyncMode;
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
             fn transact(
                 &mut self,

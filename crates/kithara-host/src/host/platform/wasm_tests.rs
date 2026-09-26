@@ -102,7 +102,10 @@ impl HostDispatcher<TestPools> for Dispatcher {
     }
 }
 
-fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<RefCell<usize>>) {
+fn fixture(
+    close: Outcome,
+    detach: Outcome,
+) -> (Host<TestPools>, BeatGridId, BeatGridId, Rc<RefCell<usize>>) {
     let SessionRoot {
         id: host_id,
         sample_rate,
@@ -111,6 +114,12 @@ fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<
     } = Host::<TestPools>::session_root(NonZeroU32::new(44_100).expect("fixture sample rate"))
         .expect("fixture Host session");
     let resident_id = BeatGridId::allocate().expect("fixture resident grid id");
+    let member = fixture_member(resident_id, sample_rate);
+    let topology = member.topology().expect("fixture player topology");
+    let [track] = topology.members().as_ref() else {
+        panic!("fixture player has one track grid")
+    };
+    let track_id = track.grid().stamp().grid_id();
     let base = root.topology().expect("fixture root topology").stamp();
     let admission = root
         .transact(SyncOperation::Topology {
@@ -118,7 +127,7 @@ fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<
             operations: Box::new([TopologyOperation::Attach {
                 member: SyncMember::Group {
                     alignment: None,
-                    group: Box::new(fixture_member(resident_id, sample_rate)),
+                    group: Box::new(member),
                 },
             }]),
         })
@@ -143,14 +152,15 @@ fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<
         owns_session: false,
         session: SessionRuntime::realtime(platform),
     };
-    (host, resident_id, drops)
+    (host, resident_id, track_id, drops)
 }
 
 #[kithara::test(wasm, flash(false))]
 fn successful_remove_releases_resident() {
-    let (mut host, resident, drops) = fixture(Outcome::Ok, Outcome::Ok);
+    let (mut host, resident, track, drops) = fixture(Outcome::Ok, Outcome::Ok);
 
-    host.remove_resident(resident).expect("remove resident");
+    host.remove_resident(resident, track)
+        .expect("remove resident");
 
     assert_eq!(*drops.borrow(), 1);
 }
@@ -159,10 +169,10 @@ fn successful_remove_releases_resident() {
 #[case::closing(Outcome::SessionGone, Outcome::Ok)]
 #[case::detaching(Outcome::Ok, Outcome::SessionGone)]
 fn session_gone_releases_resident(#[case] close: Outcome, #[case] detach: Outcome) {
-    let (mut host, resident, drops) = fixture(close, detach);
+    let (mut host, resident, track, drops) = fixture(close, detach);
 
     assert!(matches!(
-        host.remove_resident(resident),
+        host.remove_resident(resident, track),
         Err(PlayError::SessionGone { .. })
     ));
     assert_eq!(*drops.borrow(), 1);
@@ -174,10 +184,10 @@ fn other_errors_retain_resident() {
         (Outcome::OtherError, Outcome::Ok),
         (Outcome::Ok, Outcome::OtherError),
     ] {
-        let (mut host, resident, drops) = fixture(close, detach);
+        let (mut host, resident, track, drops) = fixture(close, detach);
 
         assert!(matches!(
-            host.remove_resident(resident),
+            host.remove_resident(resident, track),
             Err(PlayError::Internal(_))
         ));
         assert_eq!(*drops.borrow(), 0);

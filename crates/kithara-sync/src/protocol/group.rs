@@ -5,9 +5,10 @@ use kithara_warp::{
 };
 
 use crate::{
-    LoadGeneration, ParentFact, SyncAdmission, SyncApplied, SyncCapability, SyncExecutionStamp,
-    SyncGroupSnapshot, SyncGroupTopologyError, SyncMemberKind, SyncMode, SyncOperation,
-    SyncOperationId, SyncReceipt, SyncRejected, SyncStaged, SyncTransition, TopologyStamp,
+    ControlError, LoadGeneration, ParentFact, SyncAdmission, SyncApplied, SyncCapability,
+    SyncExecutionStamp, SyncGroupSnapshot, SyncGroupTopologyError, SyncMemberKind, SyncMode,
+    SyncOperation, SyncOperationId, SyncReceipt, SyncRejected, SyncStaged, SyncTransition,
+    TopologyStamp,
 };
 
 /// Canonical synchronization state observed from one live group.
@@ -50,6 +51,15 @@ pub enum SyncError {
     /// The canonical group owner stopped before accepting an operation.
     #[error("canonical synchronization-group owner is unavailable")]
     OwnerUnavailable,
+    /// The execution gate could not fence a proposed owner mutation.
+    #[error("synchronization execution control: {0}")]
+    ExecutionControl(#[from] ControlError),
+    /// An audio claim did not finish within the owner's bounded wait.
+    #[error("synchronization owner could not enter while audio claim remained active")]
+    ControlBusy,
+    /// The Host output clock cannot reserve another reachable execution frame.
+    #[error("synchronization execution frame space is exhausted")]
+    ExecutionFrameExhausted,
     /// This group does not implement the requested operation yet.
     #[error("synchronization capability {capability:?} is unavailable")]
     CapabilityUnavailable { capability: SyncCapability },
@@ -225,9 +235,43 @@ pub enum SyncError {
         member_id: BeatGridId,
         operation: SyncOperationId,
     },
+    /// Quiesced source retirement belongs to one leaf Deck and its sole Track.
+    #[error("member {member_id} is not the sole direct track of group {group_id}")]
+    QuiescedMemberNotSoleGrid {
+        group_id: BeatGridId,
+        member_id: BeatGridId,
+    },
+    /// A live public transaction cannot assert that a callback has quiesced.
+    #[error("member {member_id} can be withdrawn only after callback quiescence")]
+    QuiescenceRequired { member_id: BeatGridId },
     /// A group owner cannot mint another warp-map revision.
     #[error("warp-map revision space is exhausted for group {group_id}")]
     WarpMapRevisionExhausted { group_id: BeatGridId },
+}
+
+impl SyncError {
+    /// Whether a terminal rejection belongs to a preparation the owner has
+    /// already superseded, leaving the current preparation untouched.
+    #[must_use]
+    pub fn is_superseded_rejection(&self, receipt: SyncReceipt) -> bool {
+        let SyncReceipt::Rejected { stamp, .. } = receipt else {
+            return false;
+        };
+        match self {
+            Self::NoPreparedOperation => true,
+            Self::StaleAcknowledgement { expected, given } => given < expected,
+            Self::ReceiptMismatch { expected, given } if **given == stamp => {
+                expected.operation() == given.operation()
+                    && expected.member() == given.member()
+                    && expected.group().grid_id() == given.group().grid_id()
+                    && given.group().revision() < expected.group().revision()
+                    && expected.topology() == given.topology()
+                    && expected.load() == given.load()
+                    && expected.transport() == given.transport()
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Live owner protocol for a recursive group of beat grids.
@@ -267,6 +311,9 @@ pub trait SyncGroup: BeatGrid {
 
     /// Returns the canonical control-plane view of this group's sync state.
     fn status(&self) -> SyncStatusSnapshot;
+
+    /// Returns the accepted timeline mode independently of applied PCM.
+    fn mode(&self) -> SyncMode;
 
     /// Returns one immutable topology snapshot for a complete calculation.
     ///

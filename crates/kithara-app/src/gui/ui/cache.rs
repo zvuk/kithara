@@ -41,6 +41,7 @@ pub(crate) struct ViewCache {
 pub(in crate::gui) struct StageView {
     pub(in crate::gui) window: (f32, f32),
     pub(in crate::gui) preset: u32,
+    pub(in crate::gui) host_bpm: Option<f32>,
 }
 
 impl Default for StageView {
@@ -48,6 +49,7 @@ impl Default for StageView {
         Self {
             preset: 0,
             window: (0.0, 1.0),
+            host_bpm: None,
         }
     }
 }
