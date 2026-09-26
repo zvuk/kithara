@@ -11,6 +11,7 @@ use super::{
     lifecycle::Applied,
     placement::{
         Missing, Placement, carry, continue_on, entry_window, place, place_mapped, project,
+        retarget_boundary,
     },
     state::GroupState,
     timeline::Timeline,
@@ -480,9 +481,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// An armed preparation is kept as it is. A launch keeps its operation
     /// and the beats that sound together and gets a new map on the new grid;
     /// one whose activation leaves its window, or whose member grid changed
-    /// since, is withdrawn. A sounding member is retargeted from the commit
-    /// frame on, continuing the recording its applied map plays there; a
-    /// relocation it held is withdrawn, and the retarget is a new operation. A
+    /// since, is withdrawn. A sounding member is retargeted at the selected
+    /// activation, continuing the recording its applied map plays there; a
+    /// relocation it held is withdrawn, and the retarget is a new operation.
+    /// A Host-to-Local handoff uses the exact latch cut instead of choosing a
+    /// later beat, so the Local timeline and replacement map start together. A
     /// timeline without geometry withdraws every decision but a handoff, and
     /// a new axis withdraws everything, applied maps too.
     pub(super) fn refreshed(
@@ -542,6 +545,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                             && self.before_entry.is_some_and(|(entry, _)| {
                                 held.is_some_and(|pending| pending.operation() == entry)
                             });
+                        let leaves_host_for_local = matches!(self.timeline, Timeline::Host)
+                            && matches!(timeline, Timeline::Local(_));
                         let stamp = lane.applied().stamp();
                         let (operation, load, transport) = match held {
                             Some(held)
@@ -557,12 +562,18 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                                 stamp.transport(),
                             ),
                         };
-                        let activation = commit.max(lane.applied().frontier().output());
-                        let planned = continue_on(grid, &member, lane.plan(), activation).and_then(
-                            |placement| {
+                        let activation = if leaves_host_for_local {
+                            Ok(commit)
+                        } else {
+                            retarget_boundary(grid, commit, lane.applied().frontier().output())
+                        };
+                        let planned = activation
+                            .and_then(|activation| {
+                                continue_on(grid, &member, lane.plan(), activation)
+                            })
+                            .and_then(|placement| {
                                 project(grid, &member, placement, map_revision(grid, next_map)?)
-                            },
-                        );
+                            });
                         let mint = Mint {
                             owner: grid,
                             member: &member,

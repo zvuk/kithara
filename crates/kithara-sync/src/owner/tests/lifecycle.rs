@@ -2,8 +2,9 @@ use kithara_platform::sync::{Arc, Mutex};
 use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
-    BeatGridState, PresentationFrontier, SessionAxis, WarpMapRevision, WarpPlan,
+    Beat, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
+    BeatGridState, MapPoint, MapPosition, PresentationFrontier, SessionAxis, WarpMapRevision,
+    WarpPlan,
 };
 use num_traits::ToPrimitive;
 
@@ -371,7 +372,21 @@ fn a_raw_replacement_presentation_ends_first_entry_custody() {
     let deck = group.id();
     let admission = transact(
         &mut group,
-        sync_at(deck, SyncIntent::Disable, SessionFrame::new(48_000)),
+        SyncOperation::Sync {
+            target: deck,
+            load: successor.stamp().load(),
+            transport: successor.stamp().transport(),
+            source: AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .warp_map(map(&successor))
+                    .source(source_at(plan(&successor), 48_000))
+                    .output(SessionFrame::new(48_000))
+                    .build(),
+                speed: 1.0,
+            },
+            activation: SessionFrame::new(48_000),
+            intent: SyncIntent::Disable,
+        },
     );
     assert!(matches!(admission, SyncAdmission::StateChanged { .. }));
     assert_eq!(group.mode(), SyncMode::LocalSync);
@@ -1185,6 +1200,40 @@ fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
 }
 
 #[kithara::test]
+fn a_sounding_tempo_retarget_waits_for_the_next_owner_beat_after_preparation_lead() {
+    let (mut group, track) = deck_with_track();
+    let old = launched(&mut group, track, 0);
+    let _ = sound(&mut group, &old);
+
+    let _ = commit_tempo(&mut group);
+    let next = prepared(&group, track);
+    let activation = plan(&next).activation().output();
+    let earliest = SessionFrame::new(98_048);
+    assert!(
+        activation >= earliest,
+        "the replacement has 2048 frames of lead"
+    );
+
+    let grid = group.snapshot();
+    let BeatGridQuery::Resolved(under) =
+        grid.beat_at(MapPoint::new(grid.stamp(), MapPosition::Session(earliest)))
+    else {
+        panic!("the successor covers the preparation boundary");
+    };
+    let whole = Beat::new(f64::from(*under.value().value()).ceil()).expect("finite whole beat");
+    let BeatGridQuery::Resolved(position) = grid.position_at(MapPoint::new(grid.stamp(), whole))
+    else {
+        panic!("the successor covers its next beat");
+    };
+    assert_eq!(*position.value().value(), MapPosition::Session(activation));
+    assert_eq!(
+        plan(&next).activation().source(),
+        source_at(plan(&old), i64::from(activation)),
+        "the old recording reaches the same source frame at the handoff"
+    );
+}
+
+#[kithara::test]
 fn a_rejected_retarget_returns_the_member_to_its_applied_map() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
@@ -1249,8 +1298,12 @@ fn a_tempo_commit_retargets_only_the_member_holding_no_prepared_map() {
         };
         assert_eq!(*replaces, Some(map(applied)));
         assert!(next.activation().revision() > map(applied));
-        assert_eq!(next.activation().output(), SessionFrame::new(96_000));
-        assert_eq!(next.activation().source(), source_at(plan(applied), 96_000));
+        let activation = next.activation().output();
+        assert!(activation >= SessionFrame::new(98_048));
+        assert_eq!(
+            next.activation().source(),
+            source_at(plan(applied), i64::from(activation))
+        );
     }
     let carried = prepared(&group, tracks[2]);
     assert_eq!(carried.stamp().operation(), silent.stamp().operation());

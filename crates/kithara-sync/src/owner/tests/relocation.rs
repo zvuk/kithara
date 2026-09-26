@@ -364,9 +364,12 @@ fn a_tempo_commit_withdraws_the_relocation_and_retargets_under_a_new_operation()
     let retarget = prepared(&group, track);
     assert_eq!(transition.issued(), [retarget.clone()]);
     assert_ne!(retarget.stamp().operation(), relocation.stamp().operation());
+    let activation = plan(&retarget).activation().output();
+    assert!(activation >= SessionFrame::new(98_048));
     assert_eq!(
-        plan(&retarget).activation().output(),
-        SessionFrame::new(96_000)
+        plan(&retarget).activation().source(),
+        heard_at(&launch, i64::from(activation)).source(),
+        "the replacement continues the sounding source at its chosen beat"
     );
 
     let held = group.pending.clone();

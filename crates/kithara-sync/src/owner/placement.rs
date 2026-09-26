@@ -264,6 +264,27 @@ pub(super) fn continue_on(
     })
 }
 
+/// Gives a sounding replacement its preparation lead and selects the next
+/// owner beat without changing the source motion of its applied map.
+pub(super) fn retarget_boundary(
+    owner: &BeatGridSnapshot,
+    commit: SessionFrame,
+    frontier: SessionFrame,
+) -> Result<SessionFrame, Missing> {
+    let earliest = i64::from(commit.max(frontier))
+        .checked_add(2_048)
+        .map(SessionFrame::new)
+        .ok_or_else(|| Missing::Refused(outside(owner)))?;
+    let at = MapPosition::Session(earliest);
+    let under = owner_beat_at(owner, at)?;
+    let beat = first_boundary(owner, under, earliest, None, 0.0)?;
+    let activation = session_frame(owner, beat, at)?;
+    if activation < earliest {
+        return Err(Missing::Refused(outside(owner)));
+    }
+    Ok(activation)
+}
+
 /// Freezes `placement` as map revision `revision` and its activation plan.
 pub(super) fn project(
     owner: &BeatGridSnapshot,

@@ -1,7 +1,7 @@
 use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_warp::{
-    BeatGridQuery, BeatGridSnapshot, BeatGridStamp, BeatsPerMinute, MapAxis, MapPoint, MapPosition,
-    MapRegion, MeterFacts, SessionAnchor, SessionBeat,
+    BeatGridQuery, BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute, MapAxis,
+    MapPoint, MapPosition, MapRegion, MeterFacts, SessionAnchor, SessionBeat, WarpPlan,
 };
 
 use super::{
@@ -175,7 +175,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         self.reserve_operation()?;
         let effect = match intent {
             SyncIntent::Enable | SyncIntent::AlignNow => self.follow_parent(activation)?,
-            SyncIntent::Disable => self.latch(activation)?,
+            SyncIntent::Disable => self.latch(load, source, activation)?,
             SyncIntent::Free => self.leave_timeline(activation, transport)?,
         };
         let entry =
@@ -256,17 +256,22 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
 
     /// Fixes the beat and tempo actually playing at `activation` as the
     /// group's own timeline, including mid-way through a tempo approach.
-    fn latch(&self, activation: SessionFrame) -> Result<ModeEffect, SyncError> {
+    fn latch(
+        &self,
+        load: LoadGeneration,
+        source: AlignmentSource,
+        activation: SessionFrame,
+    ) -> Result<ModeEffect, SyncError> {
         if matches!(self.timeline, Timeline::Local(_)) {
             return Ok(ModeEffect::Unchanged);
         }
+        if let Some(armed) = self.pending.iter().find(|pending| pending.armed()) {
+            return Err(SyncError::ArmedOperation {
+                member_id: armed.member(),
+                operation: armed.operation(),
+            });
+        }
         if let Some((_, prior)) = self.before_entry {
-            if let Some(armed) = self.pending.iter().find(|pending| pending.armed()) {
-                return Err(SyncError::ArmedOperation {
-                    member_id: armed.member(),
-                    operation: armed.operation(),
-                });
-            }
             return match prior {
                 PriorTimeline::Local(Some(local), _) => self.local_effect(local, activation),
                 PriorTimeline::Off(_) | PriorTimeline::Local(None, _) => {
@@ -283,12 +288,63 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 }
             };
         }
-        let Some(local) = latch_at(&self.grid, activation)? else {
+        let local = match source {
+            AlignmentSource::Audible { frontier, .. } if frontier.warp_map().is_some() => {
+                let lane = self
+                    .applied
+                    .iter()
+                    .find(|lane| Some(lane.map()) == frontier.warp_map())
+                    .ok_or_else(|| self.unmatched_applied(frontier.warp_map()))?;
+                let applied = lane.applied();
+                if applied.stamp().load() != load {
+                    return Err(SyncError::LoadMismatch {
+                        member_id: lane.member(),
+                        expected: applied.stamp().load(),
+                        given: load,
+                    });
+                }
+                if frontier.output() < applied.frontier().output() || frontier.output() > activation
+                {
+                    return Err(SyncError::PresentationMismatch {
+                        operation: applied.stamp().operation(),
+                        expected: Some(lane.map()),
+                        given: frontier,
+                    });
+                }
+                latch_plan_at(lane.plan(), activation)?
+            }
+            // An empty group owns only a logical timeline; it has no audio
+            // member whose unplayed accepted grid could be mistaken for sound.
+            _ if self.members.is_empty() => latch_at(&self.grid, activation)?,
+            _ if matches!(self.grid.state(), BeatGridState::Unavailable(_)) => None,
+            AlignmentSource::Audible { frontier, .. } => {
+                return Err(self.unmatched_applied(frontier.warp_map()));
+            }
+            AlignmentSource::Prepared(_) | AlignmentSource::Cued(_) => {
+                return Err(SyncError::CapabilityUnavailable {
+                    capability: SyncCapability::Alignment,
+                });
+            }
+        };
+        let Some(local) = local else {
             return Ok(ModeEffect::Deferred {
                 required: MapRegion::point(MapPosition::Session(activation)),
             });
         };
         self.local_effect(local, activation)
+    }
+
+    fn unmatched_applied(&self, given: Option<kithara_warp::WarpMapRevision>) -> SyncError {
+        let [lane] = self.applied.as_slice() else {
+            return SyncError::CapabilityUnavailable {
+                capability: SyncCapability::Alignment,
+            };
+        };
+        SyncError::AudibleMapMismatch {
+            member_id: lane.member(),
+            expected: Some(lane.map()),
+            given,
+        }
     }
 
     fn leave_timeline(
@@ -331,7 +387,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             release: None,
         })
     }
+}
 
+impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// The next grid revision following `anchor`, and the segment it hands
     /// every direct child group.
     pub(super) fn derived_grid(
@@ -513,6 +571,34 @@ fn latch_at(
         frame,
         SessionBeat::new(f64::from(*beat.value().value()))?,
         f64::from(*tempo.value()) / SECONDS_PER_MINUTE,
+        axis.sample_rate(),
+    )?;
+    Ok(Some(LocalTimeline { anchor, meter }))
+}
+
+/// Reads only the immutable target trajectory whose map the executor has
+/// already presented. A newer accepted group grid may not have sounded yet.
+fn latch_plan_at(plan: &WarpPlan, frame: SessionFrame) -> Result<Option<LocalTimeline>, SyncError> {
+    let Some(MapAxis::Session(axis)) = plan.output_axis() else {
+        return Ok(None);
+    };
+    let (BeatGridQuery::Resolved(beat), BeatGridQuery::Resolved(tempo)) =
+        (plan.target_beat_at(frame), plan.target_tempo_at(frame))
+    else {
+        return Ok(None);
+    };
+    let meter = match plan.target_meter_at(*beat.value()) {
+        BeatGridQuery::Resolved(meter) => Some(MeterFacts::new(
+            *meter.value(),
+            meter.evidence(),
+            meter.uncertainty(),
+        )),
+        _ => None,
+    };
+    let anchor = SessionAnchor::new(
+        frame,
+        SessionBeat::new(f64::from(*beat.value().value()))?,
+        f64::from(tempo) / SECONDS_PER_MINUTE,
         axis.sample_rate(),
     )?;
     Ok(Some(LocalTimeline { anchor, meter }))

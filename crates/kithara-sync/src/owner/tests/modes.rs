@@ -6,15 +6,16 @@ use kithara_test_utils::kithara;
 use kithara_warp::{
     AssetAxis, AssetExtent, AssetFrame, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision,
     BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute, MapAxis, MapPoint, MapPosition,
-    PresentationFrontier, SessionAnchor, SessionAxis, SessionBeat,
+    PresentationFrontier, SessionAnchor, SessionAxis, SessionBeat, WarpPlan,
 };
+use num_traits::ToPrimitive;
 
 use super::{Accept, TestGrid, TestGroup, preparation::asset_grid, session_grid};
 use crate::{
     AlignmentSource, GroupState, LoadGeneration, ParentGridUpdate, SessionAxisUpdate,
-    SyncAdmission, SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncGroup,
-    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt,
-    SyncStatusSnapshot, TopologyOperation, owner::descent::Parent,
+    SyncAdmission, SyncApplied, SyncCapability, SyncEffect, SyncError, SyncExecutionReject,
+    SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncPreparation,
+    SyncReceipt, SyncStatusSnapshot, TopologyOperation, owner::descent::Parent,
 };
 
 /// Time constant the tempo fixtures approach a new target with.
@@ -190,6 +191,90 @@ fn grid_tempo_at(group: &Group, frame: i64) -> f64 {
         panic!("a live local grid resolves its tempo");
     };
     f64::from(*estimate.value())
+}
+
+fn projected_plan(preparation: &SyncPreparation) -> &WarpPlan {
+    let SyncEffect::Projection { plan, .. } = preparation.effect() else {
+        panic!("a sounding Host entry has a projected plan");
+    };
+    plan
+}
+
+fn plan_source_at(plan: &WarpPlan, frame: i64) -> u64 {
+    let BeatGridQuery::Resolved(source) = plan.source_at(SessionFrame::new(frame)) else {
+        panic!("the sounding plan covers output frame {frame}");
+    };
+    f64::from(source)
+        .round()
+        .to_u64()
+        .expect("finite source frame")
+}
+
+fn presented_host_entry(group: &mut Group) -> SyncPreparation {
+    let admission = group
+        .transact(sync_at(
+            group.id(),
+            SyncIntent::Enable,
+            SessionFrame::new(2_048),
+        ))
+        .expect("Host entry is accepted");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("Host entry changes the timeline: {admission:?}");
+    };
+    let [preparation] = transition.issued() else {
+        panic!("one track enters the Host timeline");
+    };
+    let preparation = preparation.clone();
+    present_preparation(group, &preparation);
+    preparation
+}
+
+fn present_preparation(group: &mut Group, preparation: &SyncPreparation) {
+    let plan = projected_plan(preparation);
+    let _ = group
+        .acknowledge(SyncReceipt::Installed(preparation.stamp()))
+        .expect("the entry is installed");
+    let _ = group
+        .acknowledge(SyncReceipt::Armed(preparation.stamp()))
+        .expect("the entry is armed");
+    let _ = group
+        .acknowledge(SyncReceipt::Presented(
+            SyncApplied::builder()
+                .stamp(preparation.stamp())
+                .frontier(
+                    PresentationFrontier::builder()
+                        .warp_map(plan.activation().revision())
+                        .source(plan.activation().source())
+                        .output(plan.activation().output())
+                        .build(),
+                )
+                .build(),
+        ))
+        .expect("the Host map is presented");
+}
+
+fn disable_from_presented(
+    group: &Group,
+    preparation: &SyncPreparation,
+    observed: i64,
+    activation: i64,
+) -> SyncOperation<TestGroup> {
+    let plan = projected_plan(preparation);
+    SyncOperation::Sync {
+        target: group.id(),
+        load: preparation.stamp().load(),
+        transport: preparation.stamp().transport(),
+        source: AlignmentSource::Audible {
+            frontier: PresentationFrontier::builder()
+                .warp_map(plan.activation().revision())
+                .source(plan_source_at(plan, observed))
+                .output(SessionFrame::new(observed))
+                .build(),
+            speed: 1.0,
+        },
+        activation: SessionFrame::new(activation),
+        intent: SyncIntent::Disable,
+    }
 }
 
 pub(super) fn grid_beat_at(group: &Group, frame: i64) -> f64 {
@@ -540,6 +625,177 @@ fn disable_before_enable_claim_restores_the_previous_local_timeline() {
     assert_eq!(group.mode(), SyncMode::LocalSync);
     assert_eq!((group.tempo(), grid_beat_at(&group, 48_000)), before);
     assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
+}
+
+#[kithara::test]
+fn disable_after_pending_host_retarget_latches_the_presented_map() {
+    let (mut group, track, parent) = owning_deck_with_parent();
+    let old = presented_host_entry(&mut group);
+    let SyncEffect::Projection { alignment, .. } = old.effect() else {
+        panic!("the presented entry has an alignment");
+    };
+    assert_ne!(
+        alignment.source().value(),
+        alignment.target().value(),
+        "the source and Host beats must differ so phase cannot come from the projection's source beat"
+    );
+    let retarget = group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 2),
+            anchor_at_rate(132.0 / 60.0, 48_000),
+        ))
+        .expect("the newer Host tempo is accepted");
+    let [pending] = retarget.issued() else {
+        panic!("the 132 BPM replacement remains pending");
+    };
+    assert_eq!(group.tempo().map(f64::from), Some(132.0));
+    assert_eq!(
+        group.applied_of(track).map(|lane| lane.map()),
+        Some(projected_plan(&old).activation().revision())
+    );
+
+    let request = disable_from_presented(&group, &old, 48_000, 96_000);
+    let admission = group
+        .transact(request)
+        .expect("Disable latches the map still sounding");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("Disable takes local ownership: {admission:?}");
+    };
+    assert!(
+        transition.withdrawn().is_empty(),
+        "the existing operation is carried onto its Local successor"
+    );
+    let [local] = transition.issued() else {
+        panic!("the old sounding map gets one local successor");
+    };
+    assert_eq!(local.stamp().operation(), pending.stamp().operation());
+    assert_ne!(local.stamp(), pending.stamp());
+    assert_eq!(group.pending.len(), 1);
+    assert_eq!(
+        group.pending[0].preparation().map(SyncPreparation::stamp),
+        Some(local.stamp()),
+        "the old Host preparation is no longer the owner's pending map"
+    );
+    let cut = SessionFrame::new(96_000);
+    assert_eq!(projected_plan(local).activation().output(), cut);
+    assert_eq!(
+        projected_plan(local).target_tempo_at(cut),
+        projected_plan(&old).target_tempo_at(cut),
+        "the Local map starts at the tempo that sounded at its physical cut"
+    );
+    assert_eq!(group.mode(), SyncMode::LocalSync);
+    assert_eq!(group.tempo().map(f64::from), Some(120.0));
+    assert!((grid_beat_at(&group, 96_000) - 4.0).abs() < 1e-9);
+    for frame in [96_000, 120_000] {
+        assert_eq!(
+            projected_plan(&old).source_at(SessionFrame::new(frame)),
+            projected_plan(local).source_at(SessionFrame::new(frame)),
+            "the recording stays continuous at and after the latch"
+        );
+    }
+}
+
+#[kithara::test]
+fn disable_waits_for_an_armed_retarget_to_present() {
+    let (mut group, _, parent) = owning_deck_with_parent();
+    let old = presented_host_entry(&mut group);
+    let retarget = group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 2),
+            anchor_at_rate(132.0 / 60.0, 48_000),
+        ))
+        .expect("the newer Host tempo is accepted");
+    let [pending] = retarget.issued() else {
+        panic!("one replacement is pending");
+    };
+    let _ = group
+        .acknowledge(SyncReceipt::Installed(pending.stamp()))
+        .expect("replacement installed");
+    let _ = group
+        .acknowledge(SyncReceipt::Armed(pending.stamp()))
+        .expect("replacement crossed the claim gate");
+    let before = group.snapshot().stamp();
+
+    let request = disable_from_presented(&group, &old, 48_000, 96_000);
+    let rejected = group
+        .transact(request)
+        .expect_err("Disable cannot withdraw an armed replacement");
+    assert_eq!(
+        *rejected.error(),
+        SyncError::ArmedOperation {
+            member_id: pending.stamp().member().grid_id(),
+            operation: pending.stamp().operation(),
+        }
+    );
+    assert_eq!(group.mode(), SyncMode::HostSync);
+    assert_eq!(group.snapshot().stamp(), before);
+    assert_eq!(group.tempo().map(f64::from), Some(132.0));
+}
+
+#[kithara::test]
+fn disable_after_pending_retarget_latches_the_presented_ramp_instant() {
+    let (mut group, _, parent) = owning_deck_with_parent();
+    let _ = presented_host_entry(&mut group);
+    let ramp = anchor_at_rate(2.0, 48_000)
+        .retarget(SessionFrame::new(0), 3.0, 2.0)
+        .expect("two-second approach to 180 BPM");
+    let ramp_change = group
+        .accept_parent(parent_update(parent_stamp(parent, 2), ramp))
+        .expect("the Host ramp is accepted");
+    let [old] = ramp_change.issued() else {
+        panic!("one ramp replacement is prepared");
+    };
+    let old = old.clone();
+    present_preparation(&mut group, &old);
+    let retarget = group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 3),
+            anchor_at_rate(132.0 / 60.0, 48_000),
+        ))
+        .expect("the 132 BPM target is accepted but not presented");
+    assert_eq!(retarget.issued().len(), 1);
+    let observed = projected_plan(&old).activation().output();
+    let at = SessionFrame::new(i64::from(observed) + 2_048);
+    let BeatGridQuery::Resolved(beat) = projected_plan(&old).target_beat_at(at) else {
+        panic!("the presented ramp covers the latch beat");
+    };
+    let expected_beat = f64::from(*beat.value().value());
+    let BeatGridQuery::Resolved(tempo) = projected_plan(&old).target_tempo_at(at) else {
+        panic!("the presented ramp covers the latch tempo");
+    };
+    let expected_tempo = f64::from(tempo);
+    assert!(expected_tempo > 120.0 && expected_tempo < 180.0);
+
+    let request = disable_from_presented(&group, &old, i64::from(observed), i64::from(at));
+    let admission = group
+        .transact(request)
+        .expect("Disable latches the sounding ramp");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("Disable owns the sounding ramp instant: {admission:?}");
+    };
+    let [local] = transition.issued() else {
+        panic!("the ramp gets one local successor");
+    };
+    assert_eq!(
+        projected_plan(local).activation().output(),
+        at,
+        "latch and Local activation must use the same physical cut"
+    );
+    assert_eq!(
+        projected_plan(&old).source_at(at),
+        projected_plan(local).source_at(at),
+        "the source is continuous at the mid-ramp latch"
+    );
+    assert_eq!(
+        projected_plan(&old).target_tempo_at(at),
+        projected_plan(local).target_tempo_at(at),
+        "the applied target tempo at the cut must become the Local tempo"
+    );
+    assert_eq!(group.mode(), SyncMode::LocalSync);
+    assert!((grid_beat_at(&group, i64::from(at)) - expected_beat).abs() < 1e-9);
+    for frame in [i64::from(at), i64::from(at) + 48_000] {
+        assert!((grid_tempo_at(&group, frame) - expected_tempo).abs() < 1e-9);
+    }
 }
 
 #[kithara::test]
