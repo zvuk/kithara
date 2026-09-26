@@ -314,6 +314,9 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
     ]
 }
 
+/// Runs one stage without the runner's own `CARGO_PKG_NAME`, which `cargo run`
+/// sets for the xtask binary. A cargo subcommand that sees it takes itself for
+/// a plain binary: `cargo machete` walked `machete` as a path and failed.
 fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path) -> StageResult {
     let cmdline = format!("{} {}", stage.program, stage.args.join(" "));
     let log_path = logs_dir.join(format!("{idx:02}-{}.log", stage.name));
@@ -344,6 +347,7 @@ fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path) -> StageResult {
     let start = Instant::now();
     let status_result = Command::new(stage.program)
         .args(&stage.args)
+        .env_remove("CARGO_PKG_NAME")
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(stderr_file))
         .status();
@@ -630,6 +634,16 @@ mod tests {
                     });
             }
         }
+    }
+
+    #[test]
+    fn stage_does_not_inherit_the_runner_package_identity() {
+        let stage = Stage::new("env", "sh", &["-c", "test -z \"${CARGO_PKG_NAME+set}\""]);
+        let logs_dir = std::env::temp_dir();
+
+        let result = run_stage(COUNTER.fetch_add(1, Ordering::Relaxed), &stage, &logs_dir);
+
+        assert!(matches!(result.status, Status::Pass), "{:?}", result.note);
     }
 
     #[test]
