@@ -95,7 +95,6 @@ compatible native software stack.
 
 <tr><td><code>backend-cpal</code></td><td>no</td><td>Native CPAL backend forwarded to play and queue when <code>queue</code> is enabled</td></tr>
 
-
 <tr><td><code>flash</code></td><td>no</td><td>Virtual-time test/platform mode forwarded to <code>kithara-platform</code> and test macro utilities</td></tr>
 
 <tr><td><code>tokio-net</code></td><td>no</td><td>Tokio networking helpers forwarded to <code>kithara-platform</code></td></tr>

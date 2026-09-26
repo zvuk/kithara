@@ -162,7 +162,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **stream**: Cap resampled-path position writes at the duration budget ([#96](https://github.com/zvuk/kithara/pull/96))
 - **apple**: Pass seek completion closure in demo after wrapper API change ([#93](https://github.com/zvuk/kithara/pull/93))
 
-
 ## [0.0.1-alpha4](https://github.com/zvuk/kithara/releases/tag/v0.0.1-alpha4) - 2026-07-01
 
 ### Added
@@ -268,4 +267,3 @@ First public alpha. Pre-release: public APIs may shift between alpha tags.
 - `kithara-ui` and `kithara-tui` crates (collapsed into `kithara-app::gui` / `kithara-app::tui` modules behind feature flags).
 - `DownloadState`, `HlsSegmentView`, `commit_variant_layout`, the file-side demand machinery, and `ResourceConfig` chain shims; semantic mapping is now owned by `HlsCoord`, byte availability by `AssetStore`.
 - White-box `test_helpers`; tests now use only the public API.
-

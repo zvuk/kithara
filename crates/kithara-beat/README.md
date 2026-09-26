@@ -66,11 +66,11 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
   SHA-256, so the first build with a cold cache needs network. The int8 model
   is quantized locally and has to be placed in the cache by hand.
 
-  | feature | size | mean octave-folded error over 40 tracks |
-  |---|---|---|
-  | `embed-small-model` | 10.1 MB | 1.72 BPM |
-  | `embed-full-model` | 79 MB | 0.38 BPM |
-  | `embed-full-int8-model` | 22.6 MB | 0.35 BPM |
+| feature | size | mean octave-folded error over 40 tracks |
+|---|---|---|
+| `embed-small-model` | 10.1 MB | 1.72 BPM |
+| `embed-full-model` | 79 MB | 0.38 BPM |
+| `embed-full-int8-model` | 22.6 MB | 0.35 BPM |
 
 ## Integration
 
