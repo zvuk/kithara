@@ -23,6 +23,19 @@ pub(crate) fn status_error(url: Url, status: u16, body: &Bytes) -> NetError {
     }
 }
 
+/// The `content-encoding` value when it names any coding besides `identity`:
+/// a success body that carries one reached the caller still encoded.
+pub(crate) fn non_identity_content_encoding(pairs: &[(String, String)]) -> Option<&str> {
+    pairs.iter().find_map(|(key, value)| {
+        (key.eq_ignore_ascii_case("content-encoding")
+            && value
+                .split(',')
+                .map(str::trim)
+                .any(|coding| !coding.eq_ignore_ascii_case("identity")))
+        .then_some(value.as_str())
+    })
+}
+
 /// A 206 to a probe states the representation total in content-range alone.
 pub(crate) fn normalize_head_headers(mut headers: Headers) -> Headers {
     if headers.get("content-length").is_none()

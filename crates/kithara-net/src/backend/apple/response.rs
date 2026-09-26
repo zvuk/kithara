@@ -8,7 +8,10 @@ use kithara_platform::{sync::Mutex, tokio::sync::oneshot};
 use url::Url;
 
 use crate::{
-    backend::pooled::{ByteBuffers, pooled_bytes},
+    backend::{
+        common::non_identity_content_encoding,
+        pooled::{ByteBuffers, pooled_bytes},
+    },
     error::NetError,
     types::{AcceptEncodingPolicy, Headers},
 };
@@ -133,22 +136,12 @@ fn has_content_encoding(pairs: &[(String, String)]) -> bool {
         .any(|(key, _)| key.eq_ignore_ascii_case("content-encoding"))
 }
 
-fn non_identity_content_encoding(pairs: &[(String, String)]) -> Option<&str> {
-    pairs.iter().find_map(|(key, value)| {
-        (key.eq_ignore_ascii_case("content-encoding")
-            && value
-                .split(',')
-                .map(str::trim)
-                .any(|coding| !coding.eq_ignore_ascii_case("identity")))
-        .then_some(value.as_str())
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{has_content_encoding, non_identity_content_encoding};
+    use super::has_content_encoding;
+    use crate::backend::common::non_identity_content_encoding;
 
     #[kithara::test(native, flash(false))]
     fn content_encoding_detection_is_ascii_case_insensitive() {
