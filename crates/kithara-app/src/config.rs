@@ -180,9 +180,7 @@ pub struct AppConfig {
     ///
     /// Three sources name it, most specific first: `--ui-package` on the
     /// command line, then the document's `app.ui_package`, then the package a
-    /// release lays out beside the executable. `main` resolves that order
-    /// before the merge, so a document key never overrides the flag a person
-    /// just typed.
+    /// release lays out beside the executable.
     pub ui_package: Option<PathBuf>,
     /// What the document's `queue:` section says about every deck's queue,
     /// carried as a patch for the same reason [`AppConfig::player`] is.

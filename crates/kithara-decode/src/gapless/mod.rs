@@ -1,30 +1,15 @@
 mod heuristic;
 mod info;
-#[cfg(any(
-    test,
-    feature = "symphonia",
-    all(feature = "android", target_os = "android"),
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
+#[cfg(any(test, symphonia_demuxer))]
 mod mp3;
 mod mp4;
-#[cfg(any(
-    feature = "symphonia",
-    all(feature = "android", target_os = "android"),
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
+#[cfg(symphonia_demuxer)]
 mod probe;
 mod trimmer;
 
 pub use heuristic::{GaplessMode, SilenceTrimParams};
 pub use info::{GaplessInfo, GaplessTailCompensation};
 pub use mp4::probe_mp4_gapless;
-#[cfg(any(
-    feature = "symphonia",
-    all(feature = "android", target_os = "android"),
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
+#[cfg(symphonia_demuxer)]
 pub(crate) use probe::scoped_probe;
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-pub(crate) use probe::scoped_startup_probe;
 pub use trimmer::{GaplessOutput, GaplessTrimmer};

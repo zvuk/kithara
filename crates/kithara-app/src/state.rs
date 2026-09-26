@@ -3,7 +3,6 @@ use std::{num::NonZeroU32, ops::Range};
 use kithara::{
     abr::{AbrHandle, AbrMode, VariantInfo},
     analysis::{BeatGridModel, BeatSnapshot, RawBeatGrid, TrackAnalysis},
-    effects::GainDb,
     events::{Envelope, EventReceiver, SlotId, TrackId},
     platform::{
         CancelToken,
@@ -44,18 +43,14 @@ pub struct UiState {
     pub engine_load: EngineLoadSnapshot,
     pub current_track_index: Option<usize>,
     pub current_variant: Option<usize>,
-    pub selected_variant: Option<usize>,
+    pub abr_mode: Option<AbrMode>,
     pub track_name: String,
     pub abr_variants: Vec<AbrVariant>,
-    pub eq_bands: Vec<GainDb>,
     pub tracks: Vec<TrackEntry>,
-    pub abr_mode_is_auto: bool,
-    pub is_seeking: bool,
     pub playing: bool,
     pub volume: f32,
     pub duration: f64,
     pub position: f64,
-    pub seek_position: f64,
     pub(crate) analysis: Option<TrackArtifacts>,
 }
 
@@ -74,18 +69,14 @@ impl UiState {
             beat_marks,
             downbeat_marks,
             abr_variants: Vec::new(),
-            abr_mode_is_auto: true,
-            selected_variant: None,
+            abr_mode: None,
             current_variant: None,
             playing: queue.is_playing(),
             position: queue.position_seconds().unwrap_or(0.0),
             duration: queue.duration_seconds().unwrap_or(0.0),
             volume: queue.volume(),
-            eq_bands: vec![GainDb::default(); queue.eq_band_count()],
             analysis: None,
             unready_ranges: Arc::default(),
-            is_seeking: false,
-            seek_position: 0.0,
             engine_load: EngineLoadSnapshot::default(),
         }
     }
@@ -98,21 +89,17 @@ impl UiState {
             beat_marks,
             downbeat_marks,
             current_track_index: None,
-            selected_variant: None,
             current_variant: None,
+            abr_mode: None,
             track_name: String::new(),
             abr_variants: Vec::new(),
-            eq_bands: Vec::new(),
             tracks: Vec::new(),
             analysis: None,
             unready_ranges: Arc::default(),
-            abr_mode_is_auto: true,
-            is_seeking: false,
             playing: false,
             volume: 1.0,
             duration: 0.0,
             position: 0.0,
-            seek_position: 0.0,
             engine_load: EngineLoadSnapshot::default(),
         }
     }
@@ -276,14 +263,20 @@ impl StateController {
     }
 
     /// Apply a closure under the lock. Returns the closure's result.
-    /// Used for UI-driven optimistic mutations (seek scrub, crossfade,
-    /// abr selection) that must outlive the next event echo.
     pub fn mutate<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut UiState) -> R,
     {
         let mut st = self.state.lock();
         f(&mut st)
+    }
+
+    /// Reads the state under the lock.
+    pub fn read<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&UiState) -> R,
+    {
+        f(&self.state.lock())
     }
 
     /// Pull the continuous values (position, duration, volume, tracks,
@@ -310,35 +303,16 @@ impl StateController {
             .as_ref()
             .map(|info| info.variant_index.get());
         st.abr_variants = variants.iter().map(AbrVariant::from).collect();
-        st.abr_mode_is_auto = match mode {
-            Some(AbrMode::Manual(_)) => false,
-            Some(AbrMode::Auto(_)) | None => true,
-        };
+        st.abr_mode = mode;
         let snapshot = st.clone();
         drop(st);
         self.publish_dj_events(&snapshot);
-    }
-
-    /// Cheap clone of the current state — UI consumers call this once
-    /// per frame and render off the snapshot.
-    #[must_use]
-    pub fn snapshot(&self) -> UiState {
-        self.state.lock().clone()
     }
 }
 
 #[cfg(test)]
 pub(crate) mod test_fixture {
     use super::*;
-
-    pub(crate) fn controller(
-        queue: AppQueueControl,
-        timestretch: Arc<StretchControls>,
-        cancel: CancelToken,
-    ) -> Arc<StateController> {
-        let state = Arc::new(Mutex::new(UiState::new(&queue)));
-        controller_on(queue, timestretch, cancel, state)
-    }
 
     /// A controller over a state someone else writes into - the listener task,
     /// as the running deck has it.
@@ -347,14 +321,14 @@ pub(crate) mod test_fixture {
         timestretch: Arc<StretchControls>,
         cancel: CancelToken,
         state: Arc<Mutex<UiState>>,
-    ) -> Arc<StateController> {
-        Arc::new(StateController {
+    ) -> StateController {
+        StateController {
             queue,
             state,
             timestretch,
             cancel,
             beat_clock: Mutex::new(BeatClockState::default()),
-        })
+        }
     }
 }
 
@@ -572,8 +546,6 @@ pub(crate) fn apply_event(event: &AnalysisEvent, queue: &AppQueueControl, state:
             st.track_name = current_index
                 .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
                 .unwrap_or_default();
-            st.selected_variant = None;
-            st.is_seeking = false;
         }
         AnalysisEvent::Player(PlayerEvent::RateChanged { rate }) => {
             state.lock().playing = rate > 0.0;
@@ -612,7 +584,7 @@ fn shown_index(current: Option<usize>, shown: Option<usize>, len: usize) -> Opti
 
 /// One rung of the ABR ladder as the UI names it: the short label a control
 /// shows and the fuller one it explains the rung with.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct AbrVariant {
     pub detail: String,
@@ -668,6 +640,7 @@ fn variant_short_label(v: &VariantInfo) -> String {
 #[cfg(test)]
 mod tests {
     use ::kithara::{
+        abr::AbrMode,
         analysis::{BeatArtifact, BeatGridState, BeatSnapshot, BeatState},
         platform::{
             CancelToken,
@@ -795,6 +768,7 @@ mod tests {
 
         host.call(|(_, queue)| queue.set_eq_gain(0, -6.0).expect("set the deck EQ"))
             .await;
+        state.lock().abr_mode = Some(AbrMode::manual(1));
         queue.bus().publish(PlayerEvent::RateChanged { rate: 1.0 });
         queue
             .bus()
@@ -809,6 +783,18 @@ mod tests {
         );
         assert!(state.lock().playing, "the rate event reaches the UI");
 
+        controller_on(
+            queue.clone(),
+            StretchControls::new(1.0),
+            cancel.child(),
+            Arc::clone(&state),
+        )
+        .refresh_continuous();
+        assert_eq!(
+            state.lock().abr_mode,
+            None,
+            "a new track shows the mode of its own ladder"
+        );
         drop(first);
         cancel.cancel();
         host.close().await;
@@ -1027,7 +1013,7 @@ mod tests {
             .expect("the pass publishes");
         wait_for_revision(&state, 1).await;
         controller.mutate(|st| st.position = 1.0);
-        controller.publish_dj_events(&controller.snapshot());
+        controller.publish_dj_events(&controller.read(UiState::clone));
 
         let announced = match events.try_recv().expect("the deck announces a tempo").event {
             DjEvent::BpmDetected { info, .. } => info,
@@ -1056,7 +1042,7 @@ mod tests {
             .expect("the pass publishes again");
         wait_for_revision(&state, 2).await;
         controller.mutate(|st| st.position = 2.0);
-        controller.publish_dj_events(&controller.snapshot());
+        controller.publish_dj_events(&controller.read(UiState::clone));
 
         assert_eq!(
             ticks(&mut events),

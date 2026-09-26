@@ -1,7 +1,7 @@
 use kithara_bufpool::HasPool;
 use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
-    thread::assert_main_thread,
+    thread::{assert_main_thread, assert_not_main_thread},
 };
 use kithara_warp::BeatGridId;
 
@@ -70,8 +70,13 @@ pub fn worker_host_channel<S: HasPool<f32> + Send + Sync + 'static>(
 }
 
 /// Connects a Worker facade to the main thread's canonical Host owner.
+///
+/// # Panics
+/// Panics on the main thread, which answers the facade's calls and so cannot
+/// wait on them.
 #[must_use]
 pub fn remote_host<S: HasPool<f32> + Send + Sync + 'static>(sender: HostSender<S>) -> Host<S> {
+    assert_not_main_thread("remote_host");
     let dispatcher = host_session::remote(sender.tx, sender.root_view.clone());
     Host::remote(sender.id, sender.root_view, dispatcher)
 }

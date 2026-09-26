@@ -54,7 +54,7 @@ Do not depend on this crate directly from application code — use the platform-
 - `src/native/asset/` — Rust-owned native layout registry and shareable asset-store lifetime.
 - `src/web/` — wasm-bindgen / Web Worker bindings (compiled only for `target_arch = "wasm32"`).
 - `uniffi.toml` — UniFFI configuration consumed by the xtask build flows.
-- `Trunk.toml` / `index.html` / `_headers` / `coi-serviceworker.js` — wasm demo app shell (used by `just platform wasm build` and selenium tests).
+- `Trunk.toml` / `index.html` / `_headers` / `coi-serviceworker.js` - wasm demo app shell (used by `just platform wasm build` and selenium tests); the `kithara-app` web shell copies the same `_headers` and `coi-serviceworker.js`.
 
 The browser surface is the cross-platform [`AudioPlayer`](src/player/facade.rs) facade with a `#[wasm_bindgen] impl` in [`src/web/surface.rs`](src/web/surface.rs).
 

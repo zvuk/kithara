@@ -1,3 +1,4 @@
+use arc_swap::ArcSwap;
 use iced::{
     Color, Event as IcedEvent, Subscription, Task, Theme, event,
     event::Status,
@@ -5,123 +6,88 @@ use iced::{
     theme::{Base, Style},
     time as iced_time, window,
 };
-use kithara::platform::{sync::Arc, time::Duration};
+use kithara::platform::{sync::Arc, time::Duration, tokio::sync::mpsc::UnboundedSender};
+use tracing::warn;
 
 use super::{
-    deck::DeckUi, frontend::window_settings, message::Message, subscription,
-    subscription::subscription_config, theme, ui::AppUi,
+    frontend::{Boot, window_settings},
+    message::Message,
+    overlay::Overlay,
+    subscription,
+    subscription::subscription_config,
+    theme,
+    ui::AppUi,
 };
 use crate::{
     catalog::Catalog,
-    config::AppConfig,
-    deck::{DeckId, DeckSet, EqMode},
-    state::StateController,
+    engine::{Command, EngineSnapshot, Envelope},
     theme::gui,
 };
 
 /// Main GUI application state.
-///
-/// Each deck owns its shared model ([`crate::state::StateController`]) and its
-/// own snapshot; the session mix is owned by [`DeckSet`]. This struct adds only
-/// what belongs to no single deck: the highlighted catalog row and the app
-/// window.
 pub(crate) struct Kithara {
-    /// Needed to build a track source when the catalog loads onto a deck.
-    pub(crate) config: AppConfig,
     /// The compiled UI and its host-owned view state.
     pub(crate) ui: AppUi,
-    pub(crate) broadcast: crate::broadcast::Broadcaster,
+    pub(crate) snapshot: Arc<EngineSnapshot>,
     /// The app's track list; decks load from it.
     pub(crate) catalog: Catalog,
-    pub(crate) session: DeckSet,
-    pub(crate) decks: Decks,
-    /// One EQ topology shared by every deck.
-    pub(crate) eq_mode: EqMode,
-
     pub(crate) palette: gui::GuiPalette,
     /// The app window; window-chrome commands execute against it.
     pub(crate) window_id: window::Id,
     /// Highlighted catalog row, shared by every deck's load buttons.
     pub(crate) selected_track: Option<usize>,
-}
-
-/// A non-empty set of deck view-models, addressed by id.
-pub(crate) struct Decks {
-    items: Vec<DeckUi>,
-}
-
-impl Decks {
-    /// Returns `None` for an empty session — a GUI without a deck has nothing
-    /// to render.
-    pub(crate) fn new(controllers: Vec<(DeckId, Arc<StateController>)>) -> Option<Self> {
-        let items: Vec<DeckUi> = controllers
-            .into_iter()
-            .map(|(id, controller)| DeckUi::new(id, controller))
-            .collect();
-        (!items.is_empty()).then_some(Self { items })
-    }
-
-    pub(crate) fn get(&self, id: DeckId) -> Option<&DeckUi> {
-        self.items.iter().find(|deck| deck.id == id)
-    }
-
-    pub(crate) fn get_mut(&mut self, id: DeckId) -> Option<&mut DeckUi> {
-        self.items.iter_mut().find(|deck| deck.id == id)
-    }
-
-    delegate::delegate! {
-        to self.items {
-            pub(crate) fn iter(&self) -> impl Iterator<Item = &DeckUi>;
-            pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut DeckUi>;
-            pub(crate) const fn len(&self) -> usize;
-        }
-    }
+    published: Arc<EngineSnapshot>,
+    snapshots: Arc<ArcSwap<EngineSnapshot>>,
+    overlay: Overlay,
+    commands: UnboundedSender<Envelope>,
+    seq: u64,
 }
 
 impl Kithara {
     /// Boot function for `iced::daemon()`. Opens the app window.
-    pub(crate) fn new(
-        session: DeckSet,
-        decks: Decks,
-        catalog: Catalog,
-        config: AppConfig,
-        ui: AppUi,
-        broadcast: crate::broadcast::Broadcaster,
-    ) -> (Self, Task<Message>) {
-        let (window_id, open) = window::open(window_settings(ui.window_min()));
-
-        (
-            Self::mounted(session, decks, catalog, config, ui, broadcast, window_id),
-            open.discard(),
-        )
+    pub(crate) fn new(boot: Boot) -> (Self, Task<Message>) {
+        let (window_id, open) = window::open(window_settings(boot.ui.window_min()));
+        (Self::mounted(boot, window_id), open.discard())
     }
 
     /// The same state without a window of iced's: a host that owns its own
     /// window mounts the application through here.
-    pub(crate) fn mounted(
-        session: DeckSet,
-        decks: Decks,
-        catalog: Catalog,
-        config: AppConfig,
-        ui: AppUi,
-        broadcast: crate::broadcast::Broadcaster,
-        window_id: window::Id,
-    ) -> Self {
-        let palette = config.palette.into();
+    pub(crate) fn mounted(boot: Boot, window_id: window::Id) -> Self {
+        let published = boot.snapshots.load_full();
         let mut state = Self {
-            broadcast,
-            session,
-            decks,
-            catalog,
-            config,
-            ui,
-            palette,
+            snapshot: Arc::clone(&published),
+            published,
+            snapshots: boot.snapshots,
+            commands: boot.commands,
+            catalog: boot.catalog,
+            ui: boot.ui,
+            palette: boot.palette.into(),
             window_id,
-            eq_mode: EqMode::default(),
+            overlay: Overlay::default(),
             selected_track: None,
+            seq: 0,
         };
-        state.ui.cache.refresh(&state.decks, &state.catalog);
+        state.refresh();
         state
+    }
+
+    pub(crate) fn refresh(&mut self) {
+        self.published = self.snapshots.load_full();
+        self.overlay.retire(self.published.applied_seq);
+        self.snapshot = self.overlay.over(&self.published);
+        self.ui.cache.refresh(&self.snapshot, &self.catalog);
+    }
+
+    pub(crate) fn send(&mut self, command: Command) {
+        self.seq += 1;
+        self.overlay.record(self.seq, &command);
+        let envelope = Envelope {
+            command,
+            seq: self.seq,
+        };
+        if let Err(error) = self.commands.send(envelope) {
+            warn!(seq = error.0.seq, "the engine stopped taking commands");
+        }
     }
 
     /// The window paints no ground of its own: the document lays down the page
@@ -138,7 +104,7 @@ impl Kithara {
     /// interval scales with playback state to save CPU while idle.
     pub(crate) fn subscription(&self) -> Subscription<Message> {
         const SUBSCRIPTION_CAPACITY: usize = 4;
-        let playing = self.decks.iter().any(|deck| deck.ui.playing);
+        let playing = self.snapshot.decks.iter().any(|deck| deck.playing);
         let cfg = subscription_config(playing);
         let mut subs: Vec<Subscription<Message>> = Vec::with_capacity(SUBSCRIPTION_CAPACITY);
         subs.push(
@@ -165,11 +131,5 @@ impl Kithara {
     /// Window title.
     pub(crate) fn title(_state: &Self, _window: window::Id) -> String {
         "Kithara".to_string()
-    }
-}
-
-impl Drop for Kithara {
-    fn drop(&mut self) {
-        self.broadcast.release(self.session.host());
     }
 }

@@ -3,48 +3,27 @@ use iced::{
     window::{Direction, Mode},
 };
 use kithara::{
-    effects::{GainDb, eq::EqBandConfig},
     platform::time::Duration,
     ui::render::{WindowCommand, WindowEdge},
 };
-use tracing::{error, warn};
+use tracing::warn;
 
 use super::{
     app::Kithara,
     deck::{self, DeckMsg},
     message::Message,
-    mix,
     subscription::subscription_config,
     ui,
 };
 use crate::{
-    catalog,
-    deck::{DeckId, EqMode},
-    state::StateController,
+    deck::DeckId,
+    engine::{AppCmd, Command, DeckCmd},
 };
-
-struct EqModeChange<'a> {
-    controller: &'a StateController,
-    id: DeckId,
-    gains: Vec<GainDb>,
-    next: Vec<EqBandConfig>,
-    previous: Vec<EqBandConfig>,
-}
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
-        Message::BroadcastToggle => state
-            .broadcast
-            .toggle(state.session.host())
-            .map_or_else(Task::none, stop_broadcast),
-        Message::BroadcastStopped(duration) => {
-            state.broadcast.complete_stop();
-            if let Some(duration) = duration {
-                tracing::info!(
-                    elapsed_ms = duration.as_secs_f64() * 1_000.0,
-                    "broadcast stopped"
-                );
-            }
+        Message::BroadcastToggle => {
+            state.send(Command::App(AppCmd::BroadcastToggle));
             Task::none()
         }
         Message::Ui(event) => {
@@ -58,11 +37,11 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::SetEqMode(mode) => {
-            set_eq_mode(state, mode);
+            state.send(Command::App(AppCmd::SetEqMode(mode)));
             Task::none()
         }
-        Message::Mix(msg) => {
-            mix::handle(state, msg);
+        Message::Mix(cmd) => {
+            state.send(Command::Mix(cmd));
             Task::none()
         }
         Message::DeleteFocusedTrack => {
@@ -90,20 +69,21 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Window(command) => window_task(state, command),
-        Message::WindowCloseRequested => iced::exit(),
+        Message::WindowCloseRequested => close(state),
     };
 
-    refresh_snapshots(state);
+    state.refresh();
     task
 }
 
-fn stop_broadcast(stop: crate::broadcast::BroadcastStop) -> Task<Message> {
-    Task::perform(stop.run(), Message::BroadcastStopped)
+fn close(state: &mut Kithara) -> Task<Message> {
+    state.send(Command::App(AppCmd::Shutdown));
+    iced::exit()
 }
 
 /// The app draws its own window chrome, so the app executes what the bar
 /// asks against the window it opened.
-fn window_task(state: &Kithara, command: WindowCommand) -> Task<Message> {
+fn window_task(state: &mut Kithara, command: WindowCommand) -> Task<Message> {
     match command {
         WindowCommand::Drag => window::drag(state.window_id),
         WindowCommand::Resize(edge) => direction(edge).map_or_else(Task::none, |direction| {
@@ -112,7 +92,7 @@ fn window_task(state: &Kithara, command: WindowCommand) -> Task<Message> {
         WindowCommand::Minimize => window::minimize(state.window_id, true),
         WindowCommand::ToggleMaximize => window::toggle_maximize(state.window_id),
         WindowCommand::ToggleFullScreen => toggle_full_screen(state.window_id),
-        WindowCommand::Close => iced::exit(),
+        WindowCommand::Close => close(state),
         other => {
             warn!(?other, "unhandled window command");
             Task::none()
@@ -150,96 +130,37 @@ const fn direction(edge: WindowEdge) -> Option<Direction> {
 /// A deck the app no longer lays out keeps its queue but stops playing.
 fn pause_hidden_decks(state: &mut Kithara) {
     let hidden: Vec<DeckId> = state
-        .session
-        .decks()
+        .snapshot
+        .decks
         .iter()
         .skip(state.ui.cache.laid_out_decks())
         .map(|deck| deck.id)
         .collect();
     for id in hidden {
-        handle_deck(state, id, &DeckMsg::Pause);
+        state.send(Command::Deck {
+            cmd: DeckCmd::Pause,
+            deck: id,
+        });
     }
 }
 
 fn delete_focused_track(state: &mut Kithara) {
     let focus = state.ui.cache.focus_deck();
-    let Some(id) = state.session.decks().get(focus).map(|deck| deck.id) else {
+    let Some(id) = state.snapshot.decks.get(focus).map(|deck| deck.id) else {
         return;
     };
     handle_deck(state, id, &DeckMsg::DeleteTrack);
 }
 
 fn handle_deck(state: &mut Kithara, id: DeckId, msg: &DeckMsg) {
-    if let Some(target) = state.decks.get_mut(id) {
-        deck::handle(target, msg);
-    }
-}
-
-fn set_eq_mode(state: &mut Kithara, mode: EqMode) {
-    let current_mode = state.eq_mode;
-    if current_mode == mode {
+    let Some(cmd) = state
+        .snapshot
+        .deck(id)
+        .and_then(|shown| deck::command(shown, state.snapshot.eq_mode, msg))
+    else {
         return;
-    }
-
-    let mut changes: Vec<EqModeChange<'_>> = Vec::new();
-    for deck in state.decks.iter() {
-        let current = deck
-            .controller
-            .mutate(|deck_state| deck_state.eq_bands.clone());
-        let Some(gains) = current_mode.remap(mode, &current) else {
-            error!(
-                deck = deck.id.0,
-                current = ?current_mode,
-                requested = ?mode,
-                bands = current.len(),
-                "EQ mode state does not match its band layout"
-            );
-            return;
-        };
-        changes.push(EqModeChange {
-            id: deck.id,
-            controller: deck.controller.as_ref(),
-            previous: current_mode.layout(&current),
-            next: mode.layout(&gains),
-            gains,
-        });
-    }
-
-    for (applied, change) in changes.iter().enumerate() {
-        if let Err(err) = change.controller.queue().set_eq_layout(change.next.clone()) {
-            error!(
-                deck = change.id.0,
-                requested = ?mode,
-                error = ?err,
-                "set shared EQ layout failed"
-            );
-            rollback_eq_mode(&changes[..applied]);
-            return;
-        }
-    }
-
-    for change in changes {
-        change
-            .controller
-            .mutate(|deck_state| deck_state.eq_bands = change.gains);
-    }
-    state.eq_mode = mode;
-}
-
-fn rollback_eq_mode(changes: &[EqModeChange<'_>]) {
-    for change in changes.iter().rev() {
-        if let Err(err) = change
-            .controller
-            .queue()
-            .set_eq_layout(change.previous.clone())
-        {
-            error!(
-                deck = change.id.0,
-                error = ?err,
-                "rollback shared EQ layout failed"
-            );
-        }
-    }
+    };
+    state.send(Command::Deck { cmd, deck: id });
 }
 
 /// Clicking a row highlights it; a deck gets the row by dragging it there, so
@@ -252,35 +173,15 @@ fn handle_load(state: &mut Kithara, index: usize, id: DeckId) {
     let Some(entry) = state.catalog.get(index) else {
         return;
     };
-    let Some(deck) = state.decks.get(id) else {
-        return;
-    };
-    if let Err(e) = catalog::load_onto(deck.controller.queue(), entry, &state.config) {
-        error!(index, deck = id.0, error = %e, "load onto deck failed");
-    }
+    let source = entry.url.clone();
+    state.send(Command::LoadOntoDeck { source, deck: id });
 }
 
-/// Every deck advances on the same tick: a deck the user is not looking at
-/// still plays, streams and needs its continuous values pulled.
 fn handle_tick(state: &mut Kithara) {
-    let playing = state.decks.iter().any(|deck| deck.ui.playing);
+    let playing = state.snapshot.decks.iter().any(|deck| deck.playing);
     state.ui.advance(Duration::from_millis(
         subscription_config(playing).tick_interval_ms,
     ));
-    state.broadcast.poll(state.session.host());
-    for deck in state.decks.iter() {
-        let _ = deck.controller.queue().tick();
-        deck.controller.refresh_continuous();
-    }
-}
-
-/// One consistent snapshot per deck per frame, taken after the update. The
-/// view cache re-derives its renderer-borrowed state from the snapshots.
-fn refresh_snapshots(state: &mut Kithara) {
-    for deck in state.decks.iter_mut() {
-        deck.ui = deck.controller.snapshot();
-    }
-    state.ui.cache.refresh(&state.decks, &state.catalog);
 }
 
 #[cfg(all(test, not(feature = "broadcast")))]
@@ -295,10 +196,16 @@ mod tests {
     use kithara_test_utils::{kithara, off_thread::OffThread};
 
     use super::*;
-    use crate::gui::{test_fixture, ui::cache::DeckLayout};
+    use crate::{
+        deck::EqMode,
+        engine::Envelope,
+        gui::{rig::Rig, ui::cache::DeckLayout},
+    };
 
-    fn apply(state: &mut Kithara, message: Message) {
-        assert_eq!(update(state, message).units(), 0);
+    fn apply(rig: &mut Rig, message: Message) {
+        rig.message(message);
+        rig.pump();
+        rig.ui.refresh();
     }
 
     #[kithara::test(native, flash(false))]
@@ -322,7 +229,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn every_window_command_schedules_host_work() {
-        let state = test_fixture::state();
+        let mut rig = Rig::offline();
         let commands = [
             WindowCommand::Drag,
             WindowCommand::Resize(WindowEdge::North),
@@ -333,157 +240,130 @@ mod tests {
         ];
 
         for command in commands {
-            assert_eq!(window_task(&state, command).units(), 1, "{command:?}");
+            assert_eq!(window_task(&mut rig.ui, command).units(), 1, "{command:?}");
         }
     }
 
     #[kithara::test(native, tokio, flash(false))]
     async fn update_routes_messages_and_refreshes_their_state() {
-        let state = OffThread::spawn("app-host", || Ok::<_, Infallible>(test_fixture::state()))
+        let rig = OffThread::spawn("app-host", || Ok::<_, Infallible>(Rig::offline()))
             .await
-            .expect("app state fixture is infallible");
-        state
-            .call(|state| {
-                assert_eq!(
-                    update(
-                        state,
-                        Message::Ui(UiEvent::Control {
-                            path: "mixer/xfade".to_string(),
-                            action: ControlAction::SetScalar(1.0),
-                        }),
-                    )
-                    .units(),
-                    0
-                );
-                assert_eq!(state.session.mix().position, 1.0);
+            .expect("rig fixture is infallible");
+        rig.call(|rig| {
+            apply(
+                rig,
+                Message::Ui(UiEvent::Control {
+                    action: ControlAction::SetScalar(1.0),
+                    path: "mixer/xfade".to_string(),
+                }),
+            );
+            assert_eq!(rig.snapshots.load().mix.position, 1.0);
+            assert_eq!(rig.ui.snapshot.mix.position, 1.0);
 
-                assert_eq!(
-                    update(
-                        state,
-                        Message::Ui(UiEvent::LibraryQuery("local".to_string())),
-                    )
-                    .units(),
-                    0
-                );
-                assert_eq!(state.ui.cache.library.query, "local");
+            apply(rig, Message::Ui(UiEvent::LibraryQuery("local".to_string())));
+            assert_eq!(rig.ui.ui.cache.library.query, "local");
 
-                apply(state, Message::SelectCatalogTrack(1));
-                assert_eq!(state.selected_track, Some(1));
+            apply(rig, Message::SelectCatalogTrack(1));
+            assert_eq!(rig.ui.selected_track, Some(1));
 
-                apply(
-                    state,
-                    Message::Deck(DeckId(0), DeckMsg::SetTempo(80.0.into())),
-                );
-                let deck = state.decks.get(DeckId(0)).expect("deck A");
-                assert_eq!(f32::from(deck.view.timestretch.tempo), 50.0);
+            apply(
+                rig,
+                Message::Deck(DeckId(0), DeckMsg::SetTempo(80.0.into())),
+            );
+            let deck = rig.ui.snapshot.deck(DeckId(0)).expect("deck A");
+            assert_eq!(f32::from(deck.tempo), 50.0);
 
-                apply(state, Message::LoadOntoDeck(usize::MAX, DeckId(0)));
-                let tracks = {
-                    let queue = state
-                        .decks
-                        .get(DeckId(0))
-                        .expect("deck A")
-                        .controller
-                        .queue();
-                    queue.append("https://example.test/pending.mp3").unwrap();
-                    queue.tracks()
-                };
-                let deck = state.decks.get_mut(DeckId(0)).expect("deck A");
-                deck.ui.tracks = tracks;
-                deck.ui.current_track_index = Some(0);
-                apply(state, Message::DeleteFocusedTrack);
-                assert!(
-                    state
-                        .decks
-                        .get(DeckId(0))
-                        .expect("deck A")
-                        .controller
-                        .queue()
-                        .tracks()
-                        .is_empty()
-                );
+            apply(rig, Message::LoadOntoDeck(usize::MAX, DeckId(0)));
+            let queue = rig.queues[0].clone();
+            queue.append("https://example.test/pending.mp3").unwrap();
+            rig.shows(DeckId(0), |deck| {
+                deck.tracks = queue.tracks();
+                deck.current_track_index = Some(0);
+            });
+            apply(rig, Message::DeleteFocusedTrack);
+            assert!(queue.tracks().is_empty());
 
-                state.ui.cache.set_layout(DeckLayout::Single);
-                let hidden = state
-                    .decks
-                    .get(DeckId(1))
-                    .expect("deck B")
-                    .controller
-                    .clone();
-                apply(state, Message::PauseHiddenDecks);
-                assert!(!hidden.queue().is_playing());
+            rig.ui.ui.cache.set_layout(DeckLayout::Single);
+            rig.message(Message::PauseHiddenDecks);
+            let queued: Vec<Envelope> =
+                std::iter::from_fn(|| rig.commands.try_recv().ok()).collect();
+            assert!(
+                matches!(
+                    queued.as_slice(),
+                    [Envelope {
+                        command: Command::Deck {
+                            deck: DeckId(1),
+                            cmd: DeckCmd::Pause,
+                        },
+                        ..
+                    }]
+                ),
+                "only the hidden deck is paused: {queued:?}"
+            );
 
-                apply(state, Message::WindowResized(Size::new(640.0, 480.0)));
-                assert!(state.ui.cache.window.caption().starts_with("640 × 480"));
+            apply(rig, Message::WindowResized(Size::new(640.0, 480.0)));
+            assert!(rig.ui.ui.cache.window.caption().starts_with("640 × 480"));
 
-                assert_eq!(
-                    update(state, Message::Ui(UiEvent::Window(WindowCommand::Minimize)),).units(),
-                    1
-                );
-                assert_eq!(update(state, Message::Tick).units(), 0);
-                assert_eq!(update(state, Message::BroadcastToggle).units(), 0);
-                assert_eq!(update(state, Message::BroadcastToggle).units(), 0);
-                assert_eq!(
-                    update(
-                        state,
-                        Message::BroadcastStopped(Some(Duration::from_millis(10))),
-                    )
-                    .units(),
-                    0
-                );
-                assert_eq!(update(state, Message::WindowCloseRequested).units(), 1);
-            })
-            .await;
-        state.close().await;
+            assert_eq!(
+                update(
+                    &mut rig.ui,
+                    Message::Ui(UiEvent::Window(WindowCommand::Minimize))
+                )
+                .units(),
+                1
+            );
+            assert_eq!(update(&mut rig.ui, Message::Tick).units(), 0);
+            apply(rig, Message::BroadcastToggle);
+            apply(rig, Message::BroadcastToggle);
+            assert_eq!(
+                update(&mut rig.ui, Message::WindowCloseRequested).units(),
+                1
+            );
+        })
+        .await;
+        rig.close().await;
     }
 
     #[kithara::test(native, flash(false))]
     fn eq_mode_changes_every_deck_as_one_transaction() {
-        let mut state = test_fixture::state();
+        let mut rig = Rig::offline();
         let initial = [
             [-6.0f32, 2.0, 5.0].map(GainDb::from),
             [1.0f32, 3.0, 7.0].map(GainDb::from),
         ];
-        for (deck, gains) in state.decks.iter().zip(initial) {
-            deck.controller
-                .mutate(|snapshot| snapshot.eq_bands = gains.to_vec());
+        for (id, gains) in [DeckId(0), DeckId(1)].into_iter().zip(initial) {
+            for (band, gain) in gains.into_iter().enumerate() {
+                apply(
+                    &mut rig,
+                    Message::Deck(id, DeckMsg::EqBandChanged(band, gain)),
+                );
+            }
         }
 
-        apply(&mut state, Message::SetEqMode(EqMode::FourBand));
-        assert_eq!(state.eq_mode, EqMode::FourBand);
-        for (deck, gains) in state.decks.iter().zip(initial) {
+        apply(&mut rig, Message::SetEqMode(EqMode::FourBand));
+        assert_eq!(rig.ui.snapshot.eq_mode, EqMode::FourBand);
+        for ((deck, queue), gains) in rig.ui.snapshot.decks.iter().zip(&rig.queues).zip(initial) {
             let expected = vec![gains[0], gains[1], gains[1], gains[2]];
-            assert_eq!(deck.controller.snapshot().eq_bands, expected);
-            assert_eq!(deck.controller.queue().eq_band_count(), 4);
+            assert_eq!(deck.eq_bands, expected);
+            assert_eq!(queue.eq_band_count(), 4);
         }
 
-        apply(&mut state, Message::SetEqMode(EqMode::FourBand));
-        apply(&mut state, Message::SetEqMode(EqMode::ThreeBand));
-        assert_eq!(state.eq_mode, EqMode::ThreeBand);
-        for (deck, gains) in state.decks.iter().zip(initial) {
-            assert_eq!(deck.controller.snapshot().eq_bands, gains);
-            assert_eq!(deck.controller.queue().eq_band_count(), 3);
+        apply(&mut rig, Message::SetEqMode(EqMode::FourBand));
+        apply(&mut rig, Message::SetEqMode(EqMode::ThreeBand));
+        assert_eq!(rig.ui.snapshot.eq_mode, EqMode::ThreeBand);
+        for ((deck, queue), gains) in rig.ui.snapshot.decks.iter().zip(&rig.queues).zip(initial) {
+            assert_eq!(deck.eq_bands, gains);
+            assert_eq!(queue.eq_band_count(), 3);
         }
     }
 
     #[kithara::test(native, flash(false))]
     fn invalid_eq_snapshot_keeps_the_shared_mode_unchanged() {
-        let mut state = test_fixture::state();
-        state
-            .decks
-            .get(DeckId(0))
-            .expect("deck A")
-            .controller
-            .mutate(|snapshot| snapshot.eq_bands.clear());
+        let mut rig = Rig::offline_with(|config| config.eq_bands = 2);
 
-        apply(&mut state, Message::SetEqMode(EqMode::FourBand));
+        apply(&mut rig, Message::SetEqMode(EqMode::FourBand));
 
-        assert_eq!(state.eq_mode, EqMode::ThreeBand);
-        assert!(
-            state
-                .decks
-                .iter()
-                .all(|deck| deck.controller.queue().eq_band_count() == 3)
-        );
+        assert_eq!(rig.ui.snapshot.eq_mode, EqMode::ThreeBand);
+        assert!(rig.queues.iter().all(|queue| queue.eq_band_count() == 2));
     }
 }

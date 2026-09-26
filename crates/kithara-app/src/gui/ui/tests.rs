@@ -481,8 +481,7 @@ fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
                 ((350.0, None), "micro-bar/wave"),
                 ((670.0, None), "micro-bar/speaker"),
                 ((440.0, None), "micro-bar/remain"),
-                ((0.0, None), "micro-bar/before-window"),
-                ((0.0, None), "micro-bar/window"),
+                ((0.0, None), "micro-bar/window-block"),
             ],
             "{layout:?}",
         );
@@ -529,8 +528,7 @@ fn the_bar_reveals_its_telemetry_as_the_window_widens() {
                 ((0.0, None), "bar/drag"),
                 ((1120.0, None), "bar/cpu-block"),
                 ((0.0, None), "bar/broadcast-block"),
-                ((0.0, None), "bar/before-window"),
-                ((0.0, None), "bar/window"),
+                ((0.0, None), "bar/window-block"),
             ],
             "{layout:?}",
         );
@@ -1344,6 +1342,35 @@ fn every_air_control_hides_with_the_packager() {
             assert!(
                 guarded.contains(&path),
                 "{layout:?}: `{path}` must hide with the packager, guarded: {guarded:?}",
+            );
+        }
+    }
+}
+
+#[kithara::test]
+fn every_window_control_hides_with_the_chrome() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let mut windows = Vec::new();
+        each_node(&ui, &mut |node| {
+            if let ExpandedNode::Control {
+                path,
+                spec: ControlSpec::WindowControls { .. },
+                ..
+            } = node
+            {
+                windows.push(ui.resolve(*path));
+            }
+        });
+        windows.sort_unstable();
+        windows.dedup();
+        assert_eq!(windows, ["bar/window", "micro-bar/window"], "{layout:?}");
+
+        let guarded = guarded_by(&ui, "ui.window.chrome_hidden@window=1");
+        for path in windows {
+            assert!(
+                guarded.contains(&path),
+                "{layout:?}: `{path}` must hide with the chrome, guarded: {guarded:?}",
             );
         }
     }

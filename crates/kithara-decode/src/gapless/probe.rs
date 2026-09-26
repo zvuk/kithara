@@ -1,25 +1,14 @@
 use std::io::SeekFrom;
 
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-use super::mp3::{read_cbr_duration, read_xing_duration};
 use super::{
     GaplessInfo,
     mp3::{read_lame_trim, skip_id3v2},
     mp4::probe_mp4_gapless_dyn,
 };
 use crate::traits::{DecoderInput, InputReadOutcome};
-
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-#[derive(Default)]
-pub(crate) struct StartupProbe {
-    pub(crate) duration: Option<Duration>,
-    pub(crate) gapless: Option<GaplessInfo>,
-}
 
 /// Rewind `source` to byte 0, run [`probe_codec_gapless`], then rewind
 /// again so the caller can hand the same source to a demuxer.
@@ -46,38 +35,6 @@ where
     Ok(info)
 }
 
-/// Rewind `source`, read only the startup prefix needed for metadata that
-/// must be available before decode startup, then rewind again for the demuxer.
-///
-/// A Xing/Info frame count is authoritative; without one, duration comes from a CBR stream's byte
-/// length. `read_cbr_duration` refuses VBR streams. See `CONTEXT.md`, "MP3 duration".
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-pub(crate) fn scoped_startup_probe<S>(
-    source: &mut dyn DecoderInput,
-    codec: AudioCodec,
-    total_bytes: Option<u64>,
-    pools: &PoolRegion<S>,
-) -> crate::error::DecodeResult<StartupProbe>
-where
-    S: HasPool<u8>,
-{
-    if !matches!(codec, AudioCodec::Mp3) {
-        return Ok(StartupProbe::default());
-    }
-
-    source.seek(SeekFrom::Start(0))?;
-    let (buffer, base) = read_mp3_probe_prefix(source, pools)?;
-    source.seek(SeekFrom::Start(0))?;
-
-    let gapless = read_lame_trim(&buffer).map(|trim| GaplessInfo {
-        leading_frames: u64::from(trim.enc_delay),
-        trailing_frames: u64::from(trim.enc_padding),
-    });
-    let duration = read_xing_duration(&buffer)
-        .or_else(|| total_bytes.and_then(|total| read_cbr_duration(&buffer, base, total)));
-    Ok(StartupProbe { duration, gapless })
-}
-
 /// Probe ENCODER-side priming/padding for one codec from the underlying source. Returns
 /// `Some` only when real encoder metadata exists (MP4 `udta`/`iTunSMPB`/`elst` for AAC,
 /// Xing/Info+LAME for MP3); `None` otherwise. Decoder-side algorithmic delay is added
@@ -99,7 +56,7 @@ where
             }
         }
         AudioCodec::Mp3 => {
-            let (buffer, _base) = read_mp3_probe_prefix(source, pools)?;
+            let buffer = read_mp3_probe_prefix(source, pools)?;
             Ok(read_lame_trim(&buffer).map(|trim| GaplessInfo {
                 leading_frames: u64::from(trim.enc_delay),
                 trailing_frames: u64::from(trim.enc_padding),
@@ -116,25 +73,25 @@ where
 fn read_mp3_probe_prefix<S>(
     source: &mut dyn DecoderInput,
     pools: &PoolRegion<S>,
-) -> crate::error::DecodeResult<(ByteBuffer, u64)>
+) -> crate::error::DecodeResult<ByteBuffer>
 where
     S: HasPool<u8>,
 {
     let buffer = read_probe_window(source, pools)?;
     let audio_start = skip_id3v2(&buffer);
     if buffer.len() < Consts::WINDOW_BYTES || audio_start < Consts::WINDOW_BYTES {
-        return Ok((buffer, 0));
+        return Ok(buffer);
     }
 
     let repositioned = u64::try_from(audio_start)
         .ok()
         .filter(|offset| source.seek(SeekFrom::Start(*offset)).is_ok());
     match repositioned {
-        Some(offset) => {
+        Some(_) => {
             drop(buffer);
-            Ok((read_probe_window(source, pools)?, offset))
+            read_probe_window(source, pools)
         }
-        None => Ok((buffer, 0)),
+        None => Ok(buffer),
     }
 }
 
@@ -199,8 +156,7 @@ mod tests {
     fn probe_window_starts_at_the_audio_behind_an_oversized_id3_tag() {
         let mut source = Cursor::new(mp3_behind_id3(32 * 1024));
 
-        let (buffer, _base) =
-            read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
+        let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 
         assert_eq!(buffer.first().copied(), Some(0xFF));
         assert_eq!(buffer.get(1).copied(), Some(0xFB));
@@ -212,8 +168,7 @@ mod tests {
         data.truncate(4 * 1024);
         let mut source = Cursor::new(data);
 
-        let (buffer, _base) =
-            read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
+        let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 
         assert_eq!(buffer.first().copied(), Some(b'I'));
         assert_eq!(buffer.len(), 4 * 1024);
@@ -224,8 +179,7 @@ mod tests {
         let tag_bytes = 10 + 1024;
         let mut source = Cursor::new(mp3_behind_id3(1024));
 
-        let (buffer, _base) =
-            read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
+        let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 
         assert_eq!(buffer.first().copied(), Some(b'I'));
         assert_eq!(buffer.get(tag_bytes).copied(), Some(0xFF));

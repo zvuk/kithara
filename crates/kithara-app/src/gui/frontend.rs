@@ -1,52 +1,32 @@
-use std::{error::Error, num::NonZeroUsize};
+use std::{error::Error, path::Path};
 
+use arc_swap::ArcSwap;
+#[cfg(target_arch = "wasm32")]
+use iced::window::settings::PlatformSpecific;
 use iced::{Size, window::Settings};
 use kithara::{
     platform::{
         sync::{Arc, Mutex},
-        time::Duration,
-        tokio::task,
+        tokio::sync::mpsc::UnboundedSender,
     },
-    ui::render::fonts,
-    worker::{DispatcherConfig, TaskConfig},
+    ui::{render::fonts, source::UiConfig},
 };
-#[cfg(feature = "masonry")]
-use num_traits::cast::AsPrimitive;
 
 use super::{
-    app::{Decks, Kithara},
+    app::Kithara,
     ui::{AppUi, package::Package, window::WINDOW_SIZE},
     update, view,
 };
 use crate::{
-    analysis::AnalysisService,
     catalog::Catalog,
-    config::AppConfig,
-    deck::{DeckId, DeckSet},
-    state::StateController,
-    wave_cache::{AnalysisPersistence, persistence::AnalysisPersistenceConfig},
+    engine::{EngineSnapshot, Envelope},
+    theme::Palette,
 };
 
 /// Error returned by the GUI frontend.
 pub type FrontendError = Box<dyn Error + Send + Sync>;
 
-/// Which host draws the studio.
-///
-/// The retained host is a build the `masonry` feature turns on; without it
-/// there is only one host to pick. Both read the same documents and the same
-/// state, so the choice is the shell and nothing else.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
-pub enum Host {
-    /// iced: the tree is rebuilt from the state on every message.
-    #[cfg_attr(not(feature = "masonry"), default)]
-    Immediate,
-    /// masonry and Vello: the tree is kept and told what changed.
-    #[cfg(feature = "masonry")]
-    #[default]
-    Retained,
-}
-
-fn immediate(boot: Boot) -> Result<(), FrontendError> {
+pub(crate) fn immediate(boot: Boot) -> Result<(), FrontendError> {
     let boot = Mutex::new(Some(boot));
     let daemon = iced::daemon(
         move || {
@@ -54,14 +34,7 @@ fn immediate(boot: Boot) -> Result<(), FrontendError> {
                 .lock()
                 .take()
                 .expect("invariant: iced boots the application exactly once");
-            Kithara::new(
-                boot.session,
-                boot.decks,
-                boot.catalog,
-                boot.config,
-                boot.ui,
-                boot.broadcast,
-            )
+            Kithara::new(boot)
         },
         update::update,
         view::view,
@@ -79,31 +52,9 @@ fn immediate(boot: Boot) -> Result<(), FrontendError> {
 }
 
 #[cfg(feature = "masonry")]
-fn retained(boot: Boot) -> Result<(), FrontendError> {
-    super::retained::run(super::retained::Studio::new(
-        boot.session,
-        boot.decks,
-        boot.catalog,
-        boot.config,
-        boot.ui,
-        boot.broadcast,
-    ))?;
+pub(crate) fn retained(boot: Boot) -> Result<(), FrontendError> {
+    super::retained::run(super::retained::Studio::new(boot))?;
     Ok(())
-}
-
-#[cfg(feature = "masonry")]
-pub(crate) fn window_size() -> (u32, u32) {
-    (whole(WINDOW_SIZE.width), whole(WINDOW_SIZE.height))
-}
-
-#[cfg(feature = "masonry")]
-pub(crate) fn window_min(min: Size) -> (u32, u32) {
-    (whole(min.width), whole(min.height))
-}
-
-#[cfg(feature = "masonry")]
-fn whole(value: f32) -> u32 {
-    value.as_()
 }
 
 pub(crate) fn window_settings(min: Size) -> Settings {
@@ -113,132 +64,88 @@ pub(crate) fn window_settings(min: Size) -> Settings {
         decorations: false,
         exit_on_close_request: false,
         transparent: true,
+        #[cfg(target_arch = "wasm32")]
+        platform_specific: PlatformSpecific {
+            target: Some("kithara".to_owned()),
+        },
         ..Settings::default()
     }
 }
 
-struct Boot {
-    config: AppConfig,
-    ui: AppUi,
-    broadcast: crate::broadcast::Broadcaster,
-    catalog: Catalog,
-    session: DeckSet,
-    decks: Decks,
+pub(crate) struct Boot {
+    pub(super) ui: AppUi,
+    pub(super) snapshots: Arc<ArcSwap<EngineSnapshot>>,
+    pub(super) catalog: Catalog,
+    pub(super) palette: Palette,
+    #[cfg(feature = "masonry")]
+    pub(super) settings: UiConfig,
+    pub(super) commands: UnboundedSender<Envelope>,
 }
 
-/// GUI frontend for the studio.
-pub struct GuiFrontend {
-    config: AppConfig,
-    host: Host,
-    broadcast: Option<crate::broadcast::Broadcaster>,
-}
-
-impl GuiFrontend {
-    /// Creates the GUI frontend from application configuration.
-    ///
-    /// # Errors
-    /// Returns an error if GUI initialization fails.
-    pub fn new(config: &AppConfig, host: Host) -> Result<Self, FrontendError> {
+#[bon::bon]
+impl Boot {
+    #[builder]
+    pub(crate) fn new(
+        package: Option<&Path>,
+        settings: &UiConfig,
+        tracks: Vec<String>,
+        palette: Palette,
+        snapshots: Arc<ArcSwap<EngineSnapshot>>,
+        commands: UnboundedSender<Envelope>,
+        #[builder(default)] chrome_hidden: bool,
+    ) -> Result<Self, FrontendError> {
+        let mut ui = AppUi::new(Package::load(package)?, settings)?;
+        ui.cache.window.set_chrome_hidden(chrome_hidden);
         Ok(Self {
-            host,
-            broadcast: None,
-            config: config.clone(),
+            snapshots,
+            palette,
+            commands,
+            ui,
+            catalog: Catalog::new(tracks),
+            #[cfg(feature = "masonry")]
+            settings: settings.clone(),
         })
     }
+}
 
-    /// Gives the bar's REC cell a session to put on air.
-    pub fn attach_broadcast(&mut self) {
-        self.broadcast = self
-            .config
-            .broadcast
-            .clone()
-            .map(crate::broadcast::Broadcaster::new);
+#[cfg(test)]
+mod tests {
+    use ::kithara::{
+        platform::tokio::sync::mpsc,
+        ui::render::{ReadValue, Reads, Walk},
+    };
+    use iced::window::Id;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::gui::reads::ReadRoot;
+
+    fn booted(chrome_hidden: bool) -> Kithara {
+        let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
+        let (commands, _) = mpsc::unbounded_channel();
+        let boot = Boot::builder()
+            .settings(&UiConfig::default())
+            .tracks(Vec::new())
+            .palette(Palette::default())
+            .snapshots(snapshots)
+            .commands(commands)
+            .chrome_hidden(chrome_hidden)
+            .build()
+            .unwrap();
+        Kithara::mounted(boot, Id::unique())
     }
 
-    /// Runs the GUI event loop until the application exits.
-    ///
-    /// # Errors
-    /// Returns an error if the event loop fails.
-    ///
-    /// # Panics
-    /// Panics if iced boots the application more than once; the boot
-    /// state is handed over exactly once by construction.
-    pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
-        let config = self.config.clone();
-        let ui = AppUi::new(Package::load(config.ui_package.as_deref())?, &config.ui)?;
-        let base_worker = config
-            .base_worker
-            .clone()
-            .ok_or("GUI analysis persistence requires the app base worker")?;
-        let mut dispatcher = DispatcherConfig::builder()
-            .name("kithara-analysis-persistence")
-            .build();
-        dispatcher.apply(config.dispatcher.clone());
-        let persistence = AnalysisPersistence::new(AnalysisPersistenceConfig::new(
-            base_worker,
-            config.worker.pools().clone(),
-            NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
-            Duration::from_secs(u64::from(config.analysis_chunk_seconds.get())),
-            dispatcher,
-            TaskConfig::new(),
-        ))?;
-        let (analysis, handle) =
-            AnalysisService::new(&config, persistence, config.shutdown.child());
-        task::spawn(analysis.run());
+    #[kithara::test]
+    fn the_root_decides_whether_the_window_chrome_is_hidden() {
+        for chrome_hidden in [true, false] {
+            let state = booted(chrome_hidden);
+            let root = ReadRoot::new(&state);
+            let reads = Walk::new(&root);
 
-        if let Some(first) = session.decks().first() {
-            first
-                .queue
-                .set_tracks(crate::sources::build_sources(&config));
+            assert_eq!(
+                reads.get("ui.window.chrome_hidden@window=1"),
+                Some(ReadValue::Bool(chrome_hidden)),
+            );
         }
-        let controllers: Vec<(DeckId, Arc<StateController>)> = session
-            .decks()
-            .iter()
-            .map(|deck| {
-                let controller = Arc::new(StateController::new(
-                    deck.queue.control().clone(),
-                    Arc::clone(&deck.timestretch),
-                    deck.cancel_child(),
-                    handle.clone(),
-                ));
-                (deck.id, controller)
-            })
-            .collect();
-
-        let boot = Boot {
-            session,
-            ui,
-            broadcast: self
-                .broadcast
-                .take()
-                .ok_or("broadcast service was not configured")?,
-            decks: Decks::new(controllers).ok_or("no decks to render")?,
-            catalog: Catalog::new(config.tracks.clone()),
-            config: config.clone(),
-        };
-        let result = match self.host {
-            Host::Immediate => immediate(boot),
-            #[cfg(feature = "masonry")]
-            Host::Retained => retained(boot),
-        };
-
-        config.shutdown.cancel();
-        result
-    }
-
-    /// Completes GUI shutdown.
-    ///
-    /// # Errors
-    /// Returns an error if shutdown fails.
-    pub fn shutdown(&mut self) -> Result<(), FrontendError> {
-        Ok(())
-    }
-
-    /// Prepares the GUI frontend for the deck session.
-    ///
-    /// # Errors
-    /// Returns an error if startup fails.
-    pub fn start(&mut self, _decks: &DeckSet) -> Result<(), FrontendError> {
-        Ok(())
     }
 }

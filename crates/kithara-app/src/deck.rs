@@ -65,6 +65,18 @@ impl EqMode {
     }
 }
 
+#[cfg(feature = "gui")]
+#[derive(Debug, Clone, Copy, PartialEq, kithara_derive::Ranged)]
+#[ranged(min = -50.0, max = 50.0, default = 0.0, clamp)]
+pub(crate) struct TempoPercent(pub(crate) f32);
+
+#[cfg(feature = "gui")]
+impl TempoPercent {
+    pub(crate) fn speed(self) -> f32 {
+        1.0 + self.0 / 100.0
+    }
+}
+
 /// The gain halfway between two bands, for the four-to-three fold where two
 /// mids collapse into one.
 #[cfg(feature = "gui")]
@@ -188,6 +200,19 @@ impl DeckSet {
         Ok(())
     }
 
+    pub(crate) fn close(&mut self) {
+        for deck in self.decks.drain(..) {
+            if let Err(error) = self.host.remove(&deck.queue) {
+                tracing::error!(
+                    deck_id = deck.id.0,
+                    ?error,
+                    "failed to remove deck during shutdown"
+                );
+            }
+        }
+        self.mix = self.mix.resized(0);
+    }
+
     /// Actuate `next` in one session batch, storing it only on success.
     ///
     /// # Errors
@@ -295,15 +320,7 @@ impl DeckSet {
 
 impl Drop for DeckSet {
     fn drop(&mut self) {
-        for deck in &self.decks {
-            if let Err(error) = self.host.remove(&deck.queue) {
-                tracing::error!(
-                    deck_id = deck.id.0,
-                    ?error,
-                    "failed to remove deck during shutdown"
-                );
-            }
-        }
+        self.close();
     }
 }
 
@@ -370,6 +387,25 @@ mod tests {
             .map(|index| one_deck(DeckId(index), &mut host, &worker))
             .collect();
         DeckSet::new(host, decks)
+    }
+
+    #[kithara::test]
+    #[cfg(feature = "gui")]
+    fn speed_is_one_percent_per_tempo_point() {
+        let speed = |tempo| TempoPercent::from(tempo).speed();
+
+        assert!((speed(0.0) - 1.0).abs() < f32::EPSILON);
+        assert!((speed(TempoPercent::MAX.0) - 1.5).abs() < 1e-6);
+        assert!((speed(TempoPercent::MIN.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[kithara::test]
+    #[cfg(feature = "gui")]
+    fn tempo_percent_clamps_controls_and_rejects_non_finite_documents() {
+        assert_eq!(TempoPercent::from(-80.0), TempoPercent::MIN);
+        assert_eq!(TempoPercent::from(80.0), TempoPercent::MAX);
+        assert_eq!(TempoPercent::from(f32::NAN), TempoPercent::DEFAULT);
+        assert!(TempoPercent::checked(f32::INFINITY).is_none());
     }
 
     #[kithara::test(native, flash(false))]

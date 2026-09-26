@@ -1,5 +1,3 @@
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-use std::sync::atomic::Ordering;
 use std::{
     io::{Read, Seek},
     num::{NonZeroU32, NonZeroU64},
@@ -22,7 +20,7 @@ use super::probe::{
     ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
     resolve_codec_container, sniff_container_from_source,
 };
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(apple_backend)]
 use crate::GaplessInfo;
 use crate::{
     Decoder,
@@ -33,8 +31,8 @@ use crate::{
 
 #[cfg(not(any(
     feature = "symphonia",
-    all(feature = "apple", any(target_os = "macos", target_os = "ios")),
-    all(feature = "android", target_os = "android"),
+    apple_backend,
+    android_backend,
     all(target_arch = "wasm32", feature = "webcodecs"),
 )))]
 compile_error!(
@@ -60,28 +58,13 @@ compile_error!(
 #[serde(rename_all = "snake_case")]
 pub enum DecoderBackend {
     /// Apple `AudioToolbox` (macOS/iOS, requires the `apple` feature).
-    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-    #[cfg_attr(
-        all(
-            not(feature = "symphonia"),
-            feature = "apple",
-            any(target_os = "macos", target_os = "ios")
-        ),
-        default
-    )]
+    #[cfg(apple_backend)]
+    #[cfg_attr(all(apple_backend, not(feature = "symphonia")), default)]
     #[display("apple")]
     Apple,
     /// Android `MediaCodec` (Android, requires the `android` feature).
-    #[cfg(all(feature = "android", target_os = "android"))]
-    #[cfg_attr(
-        all(
-            not(feature = "symphonia"),
-            feature = "android",
-            target_os = "android",
-            not(all(feature = "apple", any(target_os = "macos", target_os = "ios")))
-        ),
-        default
-    )]
+    #[cfg(android_backend)]
+    #[cfg_attr(all(android_backend, not(feature = "symphonia")), default)]
     #[display("android")]
     Android,
     /// Browser `AudioDecoder` (wasm32, requires the `webcodecs` feature).
@@ -260,9 +243,9 @@ impl DecoderFactory {
         );
 
         match config.backend {
-            #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+            #[cfg(apple_backend)]
             DecoderBackend::Apple => create_apple(source, codec, container, config),
-            #[cfg(all(feature = "android", target_os = "android"))]
+            #[cfg(android_backend)]
             DecoderBackend::Android => create_android(source, codec, container, config),
             #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
             DecoderBackend::WebCodecs => create_webcodecs(source, codec, container, config),
@@ -405,7 +388,7 @@ where
     crate::resampled::wrap(Box::new(decoder), resampler, &pools)
 }
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(apple_backend)]
 fn create_apple<B, S>(
     source: BoxedSource,
     codec: AudioCodec,
@@ -442,6 +425,25 @@ where
         }
     }
 
+    if matches!(
+        (codec, container),
+        (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio))
+    ) {
+        tracing::debug!("apple-mpeg: routing via the MPEG audio demuxer");
+        let target_output_rate = decoder_embedded_target_output_rate(&config);
+        let gapless = config.gapless;
+        return build_mpeg_decoder(source, config, |demuxer| {
+            use crate::demuxer::Demuxer;
+
+            let output_track =
+                track_with_output_domain_gapless(demuxer.track_info(), target_output_rate)?;
+            if output_track.gapless.is_some() {
+                demuxer.set_gapless(output_track.gapless);
+            }
+            AppleCodec::open_with_config(&output_track, gapless, target_output_rate)
+        });
+    }
+
     if crate::apple::AppleAudioFileDemuxer::supports(codec, container) {
         tracing::debug!(
             ?codec,
@@ -460,9 +462,7 @@ where
     }
 }
 
-/// A plain CBR MP3's resource length is the only record it keeps of its own duration, and the
-/// handle already carries that length for the streaming open.
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(apple_backend)]
 fn build_apple_standalone_decoder<B, S>(
     mut source: BoxedSource,
     codec: AudioCodec,
@@ -477,20 +477,10 @@ where
         apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
-        gapless::{scoped_probe, scoped_startup_probe},
+        gapless::scoped_probe,
     };
-    let total_bytes = config
-        .byte_len_handle
-        .as_ref()
-        .map(|handle| handle.load(Ordering::Acquire))
-        .filter(|len| *len > 0);
-    let startup_probe = scoped_startup_probe(&mut *source, codec, total_bytes, &config.pools)?;
     let probed_gapless = if config.gapless {
-        if matches!(codec, AudioCodec::Mp3) {
-            startup_probe.gapless
-        } else {
-            scoped_probe(&mut *source, codec, &config.pools)?
-        }
+        scoped_probe(&mut *source, codec, &config.pools)?
     } else {
         None
     };
@@ -504,7 +494,6 @@ where
         codec,
         container,
         open_mode,
-        startup_probe.duration,
         &config.pools,
     )?;
     demuxer.set_byte_len_handle(config.byte_len_handle.clone());
@@ -531,7 +520,7 @@ where
     crate::resampled::wrap(Box::new(decoder), resampler, &pools)
 }
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(apple_backend)]
 fn decoder_embedded_target_output_rate<B, S>(config: &DecoderConfig<B, S>) -> Option<u32>
 where
     B: ResamplerBackend,
@@ -544,7 +533,7 @@ where
     )
 }
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(apple_backend)]
 fn track_with_output_domain_gapless(
     track: &crate::demuxer::TrackInfo,
     target_output_rate: Option<u32>,
@@ -558,7 +547,7 @@ fn track_with_output_domain_gapless(
     Ok(output_track)
 }
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(apple_backend)]
 fn scale_gapless_for_output_domain(
     gapless: Option<GaplessInfo>,
     source_rate: u32,
@@ -588,7 +577,7 @@ fn scale_gapless_for_output_domain(
     }))
 }
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(apple_backend)]
 fn round_scaled_frames(count: u64, source_rate: u32, output_rate: u32) -> DecodeResult<u64> {
     let numerator = u128::from(count)
         .saturating_mul(u128::from(output_rate))
@@ -599,7 +588,7 @@ fn round_scaled_frames(count: u64, source_rate: u32, output_rate: u32) -> Decode
     })
 }
 
-#[cfg(all(feature = "android", target_os = "android"))]
+#[cfg(android_backend)]
 fn create_android<B, S>(
     source: BoxedSource,
     codec: AudioCodec,
@@ -639,7 +628,7 @@ where
     Err(DecodeError::UnsupportedCodec { codec })
 }
 
-#[cfg(all(feature = "android", target_os = "android"))]
+#[cfg(android_backend)]
 fn android_standalone_supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
     matches!(
         (codec, container),
@@ -657,7 +646,7 @@ fn android_standalone_supports(codec: AudioCodec, container: Option<ContainerFor
     )
 }
 
-#[cfg(all(feature = "android", target_os = "android"))]
+#[cfg(android_backend)]
 fn build_android_standalone_decoder<B, S>(
     mut source: BoxedSource,
     codec: AudioCodec,
@@ -677,7 +666,9 @@ where
         gapless::probe_mp4_gapless,
     };
     if codec == AudioCodec::Mp3 {
-        return build_android_mpeg_decoder(source, config);
+        return build_mpeg_decoder(source, config, |demuxer| {
+            AndroidCodec::open_with_config(demuxer.track_info())
+        });
     }
     let gapless = if config.gapless
         && matches!(
@@ -722,12 +713,17 @@ where
     crate::resampled::wrap(Box::new(decoder), resampler, &pools)
 }
 
-#[cfg(all(feature = "android", target_os = "android"))]
-fn build_android_mpeg_decoder<B, S>(
+/// MPEG audio through the demuxer that rolls a packet read back when it meets bytes still in
+/// flight, so a stalled read resumes at the same packet and a seek reads only from where it lands.
+#[cfg(any(android_backend, apple_backend))]
+fn build_mpeg_decoder<C, F, B, S>(
     mut source: BoxedSource,
     config: DecoderConfig<B, S>,
+    open_codec: F,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
+    C: crate::codec::FrameCodec + 'static,
+    F: FnOnce(&mut crate::symphonia::SymphoniaDemuxer) -> DecodeResult<C>,
     B: ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
@@ -738,9 +734,7 @@ where
     };
 
     use crate::{
-        android::AndroidCodec,
         composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::Demuxer,
         gapless::scoped_probe,
         symphonia::{SymphoniaDemuxer, adapter::ReadSeekAdapter},
     };
@@ -750,21 +744,19 @@ where
     } else {
         None
     };
-    let adapter = ReadSeekAdapter::new(source, config.byte_len_handle, false);
+    let adapter = ReadSeekAdapter::new(source, config.byte_len_handle, true);
     let byte_len_handle = adapter.byte_len_handle();
     let byte_pos_handle = adapter.byte_pos_handle();
-    let seek_enabled = adapter.seek_enabled_handle();
     let stream = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
     let reader =
         MpaReader::try_new(stream, FormatOptions::default()).map_err(DecodeError::backend)?;
-    seek_enabled.store(true, std::sync::atomic::Ordering::Release);
     let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
         Box::new(reader),
         Some(byte_pos_handle),
         config.byte_map,
     )?;
     demuxer.set_gapless(gapless);
-    let codec = AndroidCodec::open_with_config(demuxer.track_info())?;
+    let codec = open_codec(&mut demuxer)?;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec,
@@ -994,7 +986,7 @@ mod tests {
 /// RED (device repro): on the size-reduced apple-only build (no symphonia
 /// fallback), `MediaInfo { codec: AacLc, container: None }` over real fMP4
 /// bytes must resolve the shared container hint before backend dispatch.
-#[cfg(all(test, feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(all(test, apple_backend))]
 mod apple_factory_tests {
     use std::{io::Cursor, num::NonZeroU32};
 
@@ -1295,18 +1287,12 @@ mod apple_factory_tests {
 }
 
 /// LABA-417 (device repro): an audiobook encoded as plain CBR MP3 carries no
-/// Xing/Info frame, so the startup probe has no frame count to read. The
-/// streaming Apple open reports no `packet_count` by design, which leaves
-/// `TrackInfo.duration` at `None` — a seek then has nothing to scale a byte
-/// offset from, `landed_byte` comes back `None`, and `pipeline/seek/emit.rs`
-/// never moves the stream's byte cursor. On device the slider snapped back and
-/// playback continued from the pre-seek offset.
-///
-/// The duration itself is pinned at the demuxer in `apple::audio_file_demuxer`
-/// and the arithmetic in `gapless::mp3`. What only the factory owns is handing
-/// the resource length from `config.byte_len_handle` to the startup probe, so
-/// that is all this test asserts.
-#[cfg(all(test, feature = "apple", any(target_os = "macos", target_os = "ios")))]
+/// Xing/Info frame, so only the resource length over the bitrate gives its
+/// duration. Without one a seek has nothing to scale a byte offset from, and
+/// `pipeline/seek/emit.rs` never moves the stream's byte cursor. What only the
+/// factory owns is handing the resource length from `config.byte_len_handle`
+/// to the MPEG demuxer while it opens, so that is all this test asserts.
+#[cfg(all(test, apple_backend))]
 mod apple_headerless_cbr_mp3_tests {
     use std::{io::Cursor, sync::atomic::AtomicU64};
 
@@ -1319,7 +1305,7 @@ mod apple_headerless_cbr_mp3_tests {
     use crate::test_pools::{TestPools, pools};
 
     #[kithara::test]
-    fn factory_gives_the_startup_probe_the_length_behind_a_headerless_cbr_mp3() {
+    fn factory_gives_the_mpeg_demuxer_the_length_behind_a_headerless_cbr_mp3() {
         let bytes = without_xing_frame(signal_mp3_track_sine440_187s().bytes());
         let total = u64::try_from(bytes.len()).expect("fixture length fits u64");
         let media_info = MediaInfo::builder()
