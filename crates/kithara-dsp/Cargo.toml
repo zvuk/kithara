@@ -1,0 +1,39 @@
+[package]
+name = "kithara-dsp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Vector DSP kernels over planar f32 slices: Accelerate on Apple, fearless_simd elsewhere."
+keywords = ["audio", "dsp", "simd", "accelerate"]
+categories = ["multimedia::audio"]
+
+[dependencies]
+fearless_simd = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara-apple = { workspace = true, features = ["accelerate"] }
+
+[dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false }
+kithara-test-utils = { workspace = true }
+
+fearless_simd = { workspace = true, features = ["force_support_fallback"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+assert_no_alloc = { workspace = true }
+criterion = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "kernels"
+harness = false

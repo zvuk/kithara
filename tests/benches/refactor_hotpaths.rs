@@ -34,6 +34,7 @@ use kithara::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
+    signal::{AudioSpec, FrameCount, InterleavedView, PlanarBuffer},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -52,6 +53,11 @@ impl Consts {
     const HLS_READ_TARGET_BYTES: usize = 196_608;
     const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
 }
+
+/// Frames per planar layout pass: one large device block.
+const LAYOUT_FRAMES: usize = 4096;
+/// Sample rate of the layout benches.
+const LAYOUT_RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("48 kHz is non-zero");
 
 /// The generated full-length MPEG clip the benchmark server and decoders read.
 fn test_mp3_bytes() -> &'static [u8] {
@@ -440,10 +446,45 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
     group.finish();
 }
 
+/// Planar ↔ interleaved layout in `kithara-signal`.
+fn bench_layout(c: &mut Criterion) {
+    let mut group = c.benchmark_group("refactor_layout");
+    let pools = pools();
+    let frames = FrameCount::new(LAYOUT_FRAMES);
+    for channels in [2_u16, 6] {
+        let spec = AudioSpec::new(channels, LAYOUT_RATE);
+        let width = usize::from(channels);
+        let planar = PlanarBuffer::new(&pools, spec, frames)
+            .unwrap_or_else(|err| panic!("bench planar storage: {err}"));
+        let mut interleaved = vec![0.0_f32; LAYOUT_FRAMES * width];
+        group.bench_function(format!("interleave_{channels}ch"), |b| {
+            b.iter(|| {
+                planar
+                    .view()
+                    .interleave_into(black_box(&mut interleaved))
+                    .is_ok()
+            });
+        });
+        let source = vec![0.25_f32; LAYOUT_FRAMES * width];
+        let view = InterleavedView::new(&source, spec, frames)
+            .unwrap_or_else(|err| panic!("bench interleaved view: {err}"));
+        let mut planes = vec![vec![0.0_f32; LAYOUT_FRAMES]; width];
+        let mut destinations: Vec<&mut [f32]> = planes.iter_mut().map(Vec::as_mut_slice).collect();
+        group.bench_function(format!("deinterleave_{channels}ch"), |b| {
+            b.iter(|| {
+                view.deinterleave_channels_into_at(black_box(&mut destinations), 0)
+                    .is_ok()
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_resampler_process,
     bench_audio_file_new_and_read,
-    bench_hls_stream_seek_read
+    bench_hls_stream_seek_read,
+    bench_layout
 );
 criterion_main!(benches);

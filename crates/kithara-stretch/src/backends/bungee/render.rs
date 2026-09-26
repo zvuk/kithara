@@ -108,6 +108,16 @@ impl StreamCore {
         self.render_inner(None, request, 1.0, None, true)
     }
 
+    /// Output frames between the previous grain centre and the next one.
+    ///
+    /// Bungee resamples its output by the pitch and ramps that ratio linearly
+    /// between adjacent grains, so the span is the next grain's `unit_hop`
+    /// scaled by `2 * pitch / (previous_pitch + pitch)`.
+    fn grain_output_hop(&self, unit_hop: f64) -> f64 {
+        let pitch = self.request.pitch;
+        unit_hop * 2.0 * pitch / (self.grain_pitch + pitch)
+    }
+
     fn rate_aware_offset(&self, rate: f64) -> Result<f64, ElasticError> {
         let native_center = (self.max_input_frames() / 2)
             .to_f64()
@@ -292,7 +302,8 @@ impl StreamCore {
             let previous_position = self.request.position;
             let rate = self.request.speed;
             self.native.next(&mut self.request);
-            let output_hop = (self.request.position - previous_position) / rate;
+            let output_hop =
+                self.grain_output_hop((self.request.position - previous_position) / rate);
             if !output_hop.is_finite() || output_hop <= 0.0 {
                 return Err(ElasticError::EnginePreparation(
                     "Bungee reported an invalid anchored grain hop",
@@ -316,6 +327,7 @@ impl StreamCore {
             self.request.position = desired_position.clamp(minimum_position, maximum_position);
             self.request.reset = 0;
         }
+        self.grain_pitch = self.request.pitch;
         self.input.set_requested(self.native.specify(&self.request));
         self.request_pending = true;
         self.synthesise(true, end_of_input)

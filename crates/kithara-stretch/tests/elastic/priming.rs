@@ -315,6 +315,60 @@ fn repeated_adjacent_rate_and_pitch_corrections_remain_continuous(
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn sustained_pitch_alternation_renders_only_admitted_source(
+    #[case] backend: StretchKind,
+    stretch_pcm: &'static StretchPcm,
+) {
+    const MAX_FRAMES: usize = 65_536;
+    const TRANSITIONS: usize = 1024;
+
+    let mut engine = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
+    let latency = engine.capabilities().latency();
+    let warmup = warmup_request(engine.capabilities(), 1.0);
+    let history = continuous_tone(stretch_pcm, latency.source_frames(), 0);
+    let lookahead = continuous_tone(
+        stretch_pcm,
+        latency.source_frames(),
+        latency.source_frames(),
+    );
+    let warm_offset = latency.source_frames().saturating_mul(2);
+    let warm_source = continuous_tone(stretch_pcm, warmup.source_frames(), warm_offset);
+    let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
+    engine
+        .prime(warmup, &history, &lookahead, &warm_source, &mut discarded)
+        .expect("the continuous fixture primes at unity");
+
+    let request =
+        ElasticRequest::new(CONTROL_QUANTUM, CONTROL_QUANTUM).expect("unity quantum is non-empty");
+    let mut source_position = warm_offset.saturating_add(warmup.source_frames());
+    for transition in 0..TRANSITIONS {
+        let pitch = if transition.is_multiple_of(2) {
+            2.0
+        } else {
+            1.0
+        };
+        engine
+            .set_pitch(pitch)
+            .expect("the alternating pitch stays inside the common range");
+        let source = continuous_tone(stretch_pcm, CONTROL_QUANTUM, source_position);
+        let mut output = vec![f32::NAN; CONTROL_QUANTUM * CHANNELS];
+        if let Err(error) = engine.process(request, &source, &mut output) {
+            panic!("transition {transition} of {backend:?} left the admitted source: {error}");
+        }
+        assert!(
+            output.iter().all(|sample| sample.is_finite()),
+            "transition {transition} produced a non-finite sample"
+        );
+        source_position = source_position.saturating_add(CONTROL_QUANTUM);
+    }
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn source_history_conditions_the_cue_boundary(
     #[case] backend: StretchKind,
     stretch_pcm: &'static StretchPcm,

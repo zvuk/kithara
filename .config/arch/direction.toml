@@ -20,6 +20,7 @@ crates = [
   "kithara-blob",
   "kithara-bufpool",
   "kithara-drm",
+  "kithara-dsp",
   "kithara-events",
   "kithara-net",
   "kithara-ring",

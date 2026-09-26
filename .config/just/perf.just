@@ -57,33 +57,42 @@ compare *ARGS:
 
 bench MODE="build":
     #!/usr/bin/env bash
-    set -uo pipefail
-    benches=(abr_estimator bufpool perf_audit refactor_hotpaths rt_block_budget)
+    set -euo pipefail
+    targets=(
+      "kithara-dsp:kernels:"
+      "kithara-integration-tests:abr_estimator:"
+      "kithara-integration-tests:bufpool:"
+      "kithara-integration-tests:perf_audit:"
+      "kithara-integration-tests:refactor_hotpaths:"
+      "kithara-integration-tests:rt_block_budget:"
+      "kithara-resampler:resampler_backends:resample-glide,resample-rubato"
+    )
+    bench() {
+      local package bench features
+      IFS=: read -r package bench features <<<"$1"
+      shift
+      cargo bench -p "$package" --bench "$bench" ${features:+--features "$features"} "$@"
+    }
     case "{{ MODE }}" in
       build)
-        for b in "${benches[@]}"; do
-          cargo bench -p kithara-integration-tests --bench "$b" --no-run
-        done
+        for t in "${targets[@]}"; do bench "$t" --no-run; done
         ;;
       run)
         sample_size="${BENCH_SAMPLE_SIZE:-20}"
-        for b in "${benches[@]}"; do
-          cargo bench -p kithara-integration-tests --bench "$b" -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt
+        for t in "${targets[@]}"; do
+          bench "$t" -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt
         done
         ;;
       ci)
-        for b in "${benches[@]}"; do
-          cargo bench -p kithara-integration-tests --bench "$b" --no-run
-        done
+        for t in "${targets[@]}"; do bench "$t" --no-run; done
         if [[ "${RUN_BENCHMARKS:-0}" != "1" ]]; then
           echo "==> benchmark execution skipped (set RUN_BENCHMARKS=1 to execute)" | tee bench-results.txt
           exit 0
         fi
         sample_size="${BENCH_SAMPLE_SIZE:-20}"
         candidate_name="${BENCH_CANDIDATE_NAME:-ci}"
-        for b in "${benches[@]}"; do
-          cargo bench -p kithara-integration-tests --bench "$b" \
-            -- --sample-size "$sample_size" --save-baseline "$candidate_name" 2>&1 | tee -a bench-results.txt
+        for t in "${targets[@]}"; do
+          bench "$t" -- --sample-size "$sample_size" --save-baseline "$candidate_name" 2>&1 | tee -a bench-results.txt
         done
         if [[ -n "${BENCH_COMPARE_BASELINE_NAME:-}" ]]; then
           if ! command -v critcmp >/dev/null 2>&1; then

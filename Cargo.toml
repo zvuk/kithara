@@ -19,6 +19,7 @@ members = [
     "crates/kithara-devtools",
     "crates/kithara-download",
     "crates/kithara-drm",
+    "crates/kithara-dsp",
     "crates/kithara-effects",
     "crates/kithara-encode",
     "crates/kithara-events",
@@ -92,6 +93,7 @@ default-members = [
     "crates/kithara-config",
     "crates/kithara-decode",
     "crates/kithara-drm",
+    "crates/kithara-dsp",
     "crates/kithara-effects",
     "crates/kithara-encode",
     "crates/kithara-events",
@@ -287,6 +289,7 @@ kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha5", def
 kithara-devtools = { path = "crates/kithara-devtools", version = "0.0.1-alpha5" }
 kithara-download = { path = "crates/kithara-download", version = "0.0.1-alpha5", default-features = false }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha5" }
+kithara-dsp = { path = "crates/kithara-dsp", version = "0.0.1-alpha5" }
 kithara-effects = { path = "crates/kithara-effects", version = "0.0.1-alpha5", default-features = false }
 kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha5", default-features = false }
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha5", default-features = false }
@@ -381,6 +384,7 @@ derive_more = { version = "2.1", features = ["debug", "deref", "deref_mut", "dis
 fast-interleave = "0.1"
 fdk-aac = "0.8.0"
 fdk-aac-sys = "0.5.0"
+fearless_simd = "1.0"
 ffmpeg-next = "8.1.0"
 fieldwork = "0.5"
 firewheel = { version = "0.14.0", default-features = false, features = ["scheduled_events", "std", "tracing"] }

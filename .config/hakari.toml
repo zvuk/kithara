@@ -62,5 +62,9 @@ third-party = [
 # C crypto library into Apple builds that never use it. Excluding reqwest from
 # the generated manifest keeps it in traversal (so its own feature union is
 # still computed) while leaving it out of the shared surface.
+# kithara-dsp's tests and benches turn on fearless_simd's
+# `force_support_fallback` to pin the scalar level; in the hack that test-only
+# feature would add a fallback arm to every production `dispatch!`, so
+# fearless_simd stays out of the shared surface too.
 [final-excludes]
-third-party = [{ name = "reqwest" }]
+third-party = [{ name = "reqwest" }, { name = "fearless_simd" }]

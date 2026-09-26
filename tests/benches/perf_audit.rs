@@ -282,7 +282,10 @@ fn assert_complete_analysis(worker: &AnalysisWorker, progress: &AnalysisProgress
 
 fn bench_analysis_worker(c: &mut Criterion) {
     let rt = make_runtime();
-    let file_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
+    let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+    let file_path = temp_dir.path().join("audit-analysis.mp3");
+    fs::write(&file_path, test_mp3_bytes())
+        .unwrap_or_else(|e| panic!("failed to write bench mp3: {e}"));
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
