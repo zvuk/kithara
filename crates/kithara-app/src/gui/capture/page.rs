@@ -4,7 +4,7 @@ use std::fmt::{self, Display};
 
 use kithara::ui::{capture::Geometry, draw::PoolStats};
 
-use crate::gui::{frontend::window_size, ui::cache::DeckLayout};
+use crate::gui::{retained::window_size, ui::cache::DeckLayout};
 
 /// The window the studio opens at, which is what both hosts are photographed
 /// at so the two sets can be compared at all.

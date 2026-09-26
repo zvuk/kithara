@@ -37,7 +37,7 @@ tracing = { workspace = true, optional = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "hang", "tls-rustls"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "hang", "tls-rustls", "subscriber"] }
 kithara-worker = { path = ".", default-features = false, features = ["usdt"] }
 
 tracing = { workspace = true }

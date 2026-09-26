@@ -4,10 +4,11 @@ use kithara_platform::time::Duration;
 use kithara_ui::{
     app,
     app::{Config, Ui},
+    backends::paint_color,
     builtin,
     capture::{Film, Geometry, Locate, Offscreen, Stage, shoot_part, shoot_set},
-    draw::Rect,
 };
+use kurbo::Rect;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -123,7 +124,14 @@ impl<'config> Masonry<'config> {
 
 impl Locate for Masonry<'_> {
     fn locate(&self, path: &str) -> Option<Rect> {
-        self.page.as_ref()?.rect_of(path)
+        let rect = self.page.as_ref()?.rect_of(path)?;
+        let (x, y) = (f64::from(rect.x), f64::from(rect.y));
+        Some(Rect::new(
+            x,
+            y,
+            x + f64::from(rect.w),
+            y + f64::from(rect.h),
+        ))
     }
 }
 
@@ -140,7 +148,7 @@ impl Stage for Masonry<'_> {
             .as_mut()
             .ok_or_else(|| "no page is open: turn to one before photographing".to_owned())?;
         let drawn = page.render().map_err(|error| format!("draw: {error}"))?;
-        let background = page.background().into();
+        let background = paint_color(page.background());
         self.off
             .rasterise(&drawn, self.frame.scale, background, &mut self.pixels)?;
         Ok(&self.pixels)

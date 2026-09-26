@@ -20,9 +20,9 @@ use iced_wgpu::{
         TextureFormat,
     },
 };
+use kithara_ui_capture::Geometry;
 use num_traits::cast::AsPrimitive;
 
-use super::geometry::Geometry;
 use crate::render::fonts::{FONT_BYTES, SANS};
 
 /// Photographs a page through iced with no window and no display.

@@ -260,8 +260,9 @@ impl AppleCodec {
     /// Whether the Apple `AudioConverter` accepts this codec at the
     /// codec layer alone (i.e. without an external container parser).
     ///
-    /// Scope: AAC-LC and FLAC over fMP4 (HLS), plus standalone WAV/PCM,
-    /// MP3, and ALAC paired with [`super::AppleAudioFileDemuxer`]. PCM
+    /// Scope: AAC-LC and FLAC over fMP4 (HLS), standalone MP3 behind the
+    /// MPEG audio demuxer, plus standalone WAV/PCM and ALAC paired with
+    /// [`super::AppleAudioFileDemuxer`]. PCM
     /// requires the demuxer to stash the source ASBD as a serialized
     /// 40-byte blob in `TrackInfo.extra_data`; ALAC requires the magic
     /// cookie in the same field.

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    document::{FontFamily, FontWeight},
+    FontFamily, FontWeight,
     palette::ColorRole,
     primitives::{
         FaceSkin, FrameSkin, ShadowSkin, StateColors, TextRoleSkin, TickSkin, ToneColors,

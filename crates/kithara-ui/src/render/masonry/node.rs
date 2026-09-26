@@ -18,7 +18,7 @@ use tracing::{Span, trace_span};
 use super::{
     Repaint,
     custom::HostAction,
-    leaf::{Leaf, cursor_icon},
+    leaf::Leaf,
     mount::NodeLayout,
     picker::{HostedEngine, local_ime_area, sync_ime_area},
     spot::Spot,
@@ -30,7 +30,7 @@ use crate::{
     interact::{
         CursorShape, Hit, Hover, Input, MOUSE, PointerInput, PointerOwnership, PointerPhase,
         masonry::{
-            pointer_button, pointer_position, portable_modifiers, portable_scroll,
+            cursor_icon, pointer_button, pointer_position, portable_modifiers, portable_scroll,
             portable_text_input,
         },
         recognizers::{StepEvent, Stepper},
@@ -210,7 +210,7 @@ impl Node {
     }
 
     /// The colour this node writes its text in right now, where it writes any.
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub(crate) fn ink(&self) -> Option<Rgba> {
         match &self.layout {
             NodeLayout::Leaf(leaf) => leaf.ink(),
@@ -600,12 +600,6 @@ impl Node {
     pub(crate) fn spot_at(&self) -> Option<Pt> {
         self.spot.as_ref().map(Spot::at)
     }
-
-    /// Where this node draws, relative to the box the layout gave it.
-    #[cfg(test)]
-    pub(super) const fn transform(&self) -> Transform {
-        self.transform
-    }
 }
 
 impl AllowRawMut for Node {}
@@ -855,18 +849,6 @@ impl Widget for Node {
         {
             engine.clear_focus();
         }
-    }
-}
-
-#[cfg(test)]
-impl Node {
-    pub(crate) fn set_child_stashed(
-        this: &mut masonry::core::WidgetMut<'_, Self>,
-        child: usize,
-        stashed: bool,
-    ) {
-        this.ctx
-            .set_stashed(&mut this.widget.children[child], stashed);
     }
 }
 

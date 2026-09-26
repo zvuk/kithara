@@ -78,9 +78,6 @@ impl<'a> Node<'a> for AppNode {
     }
 }
 
-/// The app runs one window, so the menu's window list is that window: its
-/// layout, its size, and the modules it lays out. It is always the active one
-/// and never closable.
 #[derive(Clone, Copy)]
 struct WindowNode<'a> {
     window: &'a WindowState,
@@ -92,6 +89,7 @@ impl_child_node!(WindowNode<'a>, |this, segment, scope| {
         "count" => ReadValue::Text("1 WINDOW"),
         "active" => ReadValue::Bool(only),
         "close_hidden" => ReadValue::Bool(true),
+        "chrome_hidden" => ReadValue::Bool(this.window.chrome_hidden()),
         "title" => ReadValue::Text(this.window.title()),
         "caption" => ReadValue::Text(this.window.caption()),
         _ => return None,

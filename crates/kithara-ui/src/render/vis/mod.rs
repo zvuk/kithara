@@ -1,5 +1,7 @@
 //! Visualiser reads, uniform packing, and toolkit-specific GPU adapters.
 
+#[cfg(all(test, any(feature = "gpu", feature = "masonry")))]
+mod fixture;
 mod frame;
 #[cfg(feature = "iced")]
 mod iced;

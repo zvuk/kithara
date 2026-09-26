@@ -1,18 +1,14 @@
 use std::collections::BTreeSet;
 
 use kithara::{analysis::Waveform, ui::render::WaveBucket};
-use num_traits::cast::{AsPrimitive, ToPrimitive};
+use num_traits::cast::ToPrimitive;
 
 use super::{menu::MenuState, modules::Modules, scope::deck_letter, window::WindowState};
 use crate::{
     analysis::{TrackArtifacts, WaveformId},
     catalog::{Catalog, CatalogEntry, is_loaded},
-    gui::{
-        app::Decks,
-        deck::DeckUi,
-        view::{playhead, track_subtitle},
-    },
-    state::UiState,
+    engine::{DeckSnapshot, EngineSnapshot},
+    gui::view::track_subtitle,
 };
 
 #[derive(Default, fieldwork::Fieldwork)]
@@ -193,7 +189,9 @@ pub(in crate::gui) struct DeckViewState {
 }
 
 #[derive(Default)]
-pub(in crate::gui) struct CatalogRowMarks(Vec<String>);
+pub(in crate::gui) struct CatalogRowMarks {
+    rows: Vec<String>,
+}
 
 #[derive(Default)]
 pub(in crate::gui) struct CollapsedModules(BTreeSet<String>);
@@ -221,12 +219,13 @@ impl ViewCache {
         self.layout.decks()
     }
 
-    pub(crate) fn refresh(&mut self, decks: &Decks, catalog: &Catalog) {
-        self.decks.resize_with(decks.len(), Default::default);
-        for (cache, deck) in self.decks.iter_mut().zip(decks.iter()) {
+    pub(crate) fn refresh(&mut self, snapshot: &EngineSnapshot, catalog: &Catalog) {
+        self.decks
+            .resize_with(snapshot.decks.len(), Default::default);
+        for (cache, deck) in self.decks.iter_mut().zip(&snapshot.decks) {
             cache.refresh(deck);
         }
-        self.deck_marks.refresh(decks, catalog);
+        self.deck_marks.refresh(&snapshot.decks, catalog);
         self.window.refresh(self.layout, &self.modules);
     }
 
@@ -273,14 +272,13 @@ impl ViewCache {
 }
 
 impl DeckCache {
-    fn refresh(&mut self, deck: &DeckUi) {
-        let ts = deck.view.timestretch;
-        self.tempo = format!("{:+.1}%", f32::from(ts.tempo));
-        self.bpm = format_bpm(analysis_bpm(&deck.ui), ts.speed());
-        self.remain = format_remain(&deck.ui);
-        self.subtitle = track_subtitle(&deck.ui);
-        self.quality = format_quality(&deck.ui);
-        self.refresh_wave(deck.ui.analysis.as_ref());
+    fn refresh(&mut self, deck: &DeckSnapshot) {
+        self.tempo = format!("{:+.1}%", f32::from(deck.tempo));
+        self.bpm = format_bpm(deck.analysis.bpm, deck.tempo.speed());
+        self.remain = format_remain(deck);
+        self.subtitle = track_subtitle(deck);
+        self.quality = format_quality(deck);
+        self.refresh_wave(deck.analysis.artifacts.as_ref());
     }
 
     fn refresh_wave(&mut self, analysis: Option<&TrackArtifacts>) {
@@ -300,12 +298,12 @@ impl DeckCache {
 
 impl CatalogRowMarks {
     pub(in crate::gui) fn get(&self, row: usize) -> Option<&String> {
-        self.0.get(row)
+        self.rows.get(row)
     }
 
-    fn refresh(&mut self, decks: &Decks, catalog: &Catalog) {
-        self.0.clear();
-        self.0.extend(
+    fn refresh(&mut self, decks: &[DeckSnapshot], catalog: &Catalog) {
+        self.rows.clear();
+        self.rows.extend(
             catalog
                 .entries()
                 .iter()
@@ -326,34 +324,25 @@ impl CollapsedModules {
     }
 }
 
-fn loaded_deck_letters(entry: &CatalogEntry, decks: &Decks) -> String {
+fn loaded_deck_letters(entry: &CatalogEntry, decks: &[DeckSnapshot]) -> String {
     decks
         .iter()
         .enumerate()
-        .filter(|(_, deck)| is_loaded(deck.controller.queue(), entry))
+        .filter(|(_, deck)| is_loaded(&deck.tracks, entry))
         .filter_map(|(at, _)| deck_letter(at))
         .map(|letter| letter.to_ascii_uppercase())
         .collect()
 }
 
-/// The tempo the deck shows, read from the published grid: the same value the
-/// DJ surface announces, and absent rather than zero when the pass proved no
-/// tempo at all.
-pub(in crate::gui) fn analysis_bpm(ui: &UiState) -> Option<f32> {
-    let bpm: f32 = ui.analysis.as_ref()?.grid()?.as_raw().bpm.as_();
-    Some(bpm)
-}
-
-fn format_quality(ui: &UiState) -> String {
-    let rung = ui
-        .current_variant
-        .or(ui.selected_variant)
-        .and_then(|index| {
-            ui.abr_variants
-                .iter()
-                .find(|variant| variant.index == index)
-        });
-    match (ui.abr_mode_is_auto, rung) {
+fn format_quality(deck: &DeckSnapshot) -> String {
+    let stream = &deck.stream;
+    let rung = stream.current.or(stream.selected).and_then(|index| {
+        stream
+            .variants
+            .iter()
+            .find(|variant| variant.index == index)
+    });
+    match (stream.is_auto, rung) {
         (true, Some(rung)) => format!("AUTO\u{b7}{}", rung.label),
         (true, None) => "AUTO".to_owned(),
         (false, Some(rung)) => rung.label.clone(),
@@ -367,10 +356,10 @@ fn format_bpm(source: Option<f32>, speed: f32) -> String {
     source.map_or_else(|| EM_DASH.to_string(), |bpm| format!("{:.1}", bpm * speed))
 }
 
-fn format_remain(ui: &UiState) -> String {
+fn format_remain(deck: &DeckSnapshot) -> String {
     const MINUS_SIGN: char = '\u{2212}';
 
-    let left = (ui.duration - playhead(ui)).max(0.0);
+    let left = (deck.duration - deck.position).max(0.0);
     let total = left.floor().to_u64().unwrap_or(0);
     format!("{MINUS_SIGN}{:02}:{:02}", total / 60, total % 60)
 }
@@ -387,17 +376,22 @@ fn waveform_buckets(wave: &Waveform) -> impl Iterator<Item = WaveBucket> + '_ {
 mod tests {
     use std::num::NonZeroU32;
 
-    use ::kithara::platform::{
-        CancelToken,
-        sync::{Arc, Mutex},
-        tokio::task,
+    use ::kithara::{
+        abr::AbrMode,
+        platform::{
+            CancelToken,
+            sync::{Arc, Mutex},
+            tokio::task,
+        },
     };
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
         analysis::{AnalysisHandle, fixtures},
-        state::{AbrVariant, listen},
+        deck::DeckId,
+        engine::DeckSettings,
+        state::{AbrVariant, UiState, listen},
         waveform::TrackAnalysis,
     };
 
@@ -499,6 +493,10 @@ mod tests {
         assert_ne!(cache.wave_revision, named, "the empty run is a run too");
     }
 
+    fn shown(ui: &UiState, settings: &DeckSettings) -> DeckSnapshot {
+        DeckSnapshot::new(DeckId(0), ui, settings)
+    }
+
     fn ladder() -> Vec<AbrVariant> {
         vec![
             AbrVariant {
@@ -517,22 +515,22 @@ mod tests {
     #[kithara::test]
     fn the_cell_marks_the_rung_the_ladder_chose_and_names_the_one_the_user_pinned() {
         let mut ui = UiState::empty();
+        let settings = DeckSettings::new(0);
         ui.abr_variants = ladder();
         ui.current_variant = Some(1);
 
-        assert_eq!(format_quality(&ui), "AUTO\u{b7}320k");
+        assert_eq!(format_quality(&shown(&ui, &settings)), "AUTO\u{b7}320k");
 
-        ui.abr_mode_is_auto = false;
-        ui.selected_variant = Some(0);
+        ui.abr_mode = Some(AbrMode::manual(0));
         ui.current_variant = Some(0);
-        assert_eq!(format_quality(&ui), "128k");
+        assert_eq!(format_quality(&shown(&ui, &settings)), "128k");
     }
 
     #[kithara::test]
     fn a_stream_with_no_rung_yet_still_reports_its_mode() {
         let ui = UiState::empty();
 
-        assert_eq!(format_quality(&ui), "AUTO");
+        assert_eq!(format_quality(&shown(&ui, &DeckSettings::new(0))), "AUTO");
     }
 
     #[kithara::test]

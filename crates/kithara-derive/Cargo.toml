@@ -16,6 +16,7 @@ proc-macro = true
 
 [features]
 built-default = []
+config = []
 control = []
 control-painter = []
 default = []
@@ -34,13 +35,15 @@ view-control = []
 [dependencies]
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
-syn = { workspace = true, features = ["extra-traits"] }
+syn = { workspace = true, features = ["extra-traits", "visit"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 kithara-test-utils = { workspace = true }
+
+humantime-serde = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_yaml_ng = { workspace = true }
 
@@ -61,3 +64,7 @@ required-features = ["mirror"]
 [[test]]
 name = "vocabulary"
 required-features = ["enum-str", "variants"]
+
+[[test]]
+name = "patch"
+required-features = ["patch"]

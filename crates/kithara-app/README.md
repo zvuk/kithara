@@ -29,6 +29,18 @@ cargo run -p kithara-app -- <TRACK_URL_1> <TRACK_URL_2>
 If no tracks are provided, the app loads built-in defaults that include MP3, HLS,
 and DRM-HLS examples.
 
+### Browser
+
+```bash
+just platform wasm build --package kithara-app
+```
+
+Builds `dist/` for a WebGPU browser. Serve it with cross-origin isolation
+(`Cross-Origin-Opener-Policy: same-origin`,
+`Cross-Origin-Embedder-Policy: require-corp`); `dist/_headers` names both for
+hosts that read it. The browser build carries `app.web.yaml` over `app.yaml`:
+no DRM providers and a playlist of cross-origin streams.
+
 ## Features
 
 - `gui` — desktop GUI player (iced).

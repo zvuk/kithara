@@ -9,5 +9,5 @@ mod ready;
 #[cfg(test)]
 mod unmeasured;
 
-pub(crate) use broadcaster::{BroadcastStop, Broadcaster};
+pub(crate) use broadcaster::Broadcaster;
 pub(crate) use packager::{BroadcastResult, Packager};

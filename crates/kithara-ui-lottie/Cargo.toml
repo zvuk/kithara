@@ -1,0 +1,37 @@
+[package]
+name = "kithara-ui-lottie"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The Lottie artwork kithara-ui ships and the emitter that draws it into the neutral draw list."
+keywords = ["ui", "lottie", "animation", "vector", "render"]
+categories = ["gui", "graphics"]
+autotests = false
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
+[dependencies]
+kithara-ui-draw = { workspace = true, features = ["list"] }
+
+fieldwork = { workspace = true }
+num-traits = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+velato = { workspace = true }
+
+# The same desktop-only gate `kithara-ui` carries.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true }
+
+[[test]]
+name = "lottie"
+path = "tests/lottie/main.rs"
+
+[lints]
+workspace = true

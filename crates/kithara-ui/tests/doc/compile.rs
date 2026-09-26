@@ -1,0 +1,2910 @@
+use kithara_test_utils::kithara;
+use kithara_ui::{
+    builtin,
+    compile::{CompiledNode, CompiledUi, compile},
+    error::UiDocError,
+    expand::{Binding, BindingKind, ControlSpec, ExpandedNode, MeasureSpec},
+    layout::FrameCorners,
+    module::{ChromeStyle, IconName, PopoverAt},
+    registry::{EndpointCategory, EndpointDesc, ValueKind},
+    render::{
+        ReadValue, Reads,
+        document::{Clock, Ctx},
+    },
+    size::{Dim, SizeSpec},
+    source::{Limits, MemResolver, UiConfig},
+    view::{self, ViewState},
+};
+
+fn resolver() -> MemResolver {
+    builtin::resolver()
+}
+
+fn table_resolver(module: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "table.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "table",
+            root: Module(instance: "table", source: "table.kmodule.ron"))"#,
+    );
+    resolver.insert("table.kmodule.ron", module);
+    resolver
+}
+
+/// Same shape, but the layout hands the module a column list, so the module
+/// body reads `columns: "$columns"`.
+fn parameterised_table_resolver(columns: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    let columns = columns.replace('"', "\\\"");
+    resolver.insert(
+        "table.klayout.ron",
+        &format!(
+            r#"(schema: "kithara.layout", version: 1, id: "table",
+            root: Module(instance: "table", source: "table.kmodule.ron",
+                with: {{ "columns": "{columns}" }}))"#
+        ),
+    );
+    resolver.insert(
+        "table.kmodule.ron",
+        r##"(schema: "kithara.module", version: 1, id: "table",
+            parameters: ["columns"],
+            root: Table(
+                id: "tracks",
+                columns: "$columns",
+                read: Model(id: "library.visible_tracks"),
+            ))"##,
+    );
+    resolver
+}
+
+#[kithara::test]
+fn compiles_micro_layout_end_to_end() {
+    let ui = compile(
+        "micro.klayout.ron",
+        &resolver(),
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module { instance, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    assert_eq!(ui.resolve(*instance), "deck-a");
+}
+
+#[kithara::test]
+fn crossfader_compiles_with_scalar_read_and_write_bindings() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "mixer.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "mixer",
+            root: Module(instance: "mixer", source: "mixer.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "mixer.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Crossfader(
+                id: "xfade",
+                read: Parameter(id: "mixer.xfade"),
+                write: Parameter(id: "mixer.xfade"),
+            ))"#,
+    );
+    let mut registry = crate::common::registry::player_registry();
+    registry.insert(
+        EndpointCategory::Parameter,
+        "mixer.xfade",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+
+    let ui = compile(
+        "mixer.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Crossfader { ticks: false },
+        read: Some(Binding {
+            kind: BindingKind::Parameter,
+            ..
+        }),
+        write: Some(Binding {
+            kind: BindingKind::Parameter,
+            ..
+        }),
+        ..
+    } = &**root
+    else {
+        panic!("expected compiled crossfader");
+    };
+}
+
+fn shader_resolver(source: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "shader.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "shader",
+            root: Module(instance: "meter", source: "panels/meter.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "panels/meter.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "meter",
+            root: Shader(
+                id: "meter",
+                source: "../shaders/meter.wgsl",
+                uniforms: { "level": Telemetry(id: "player.output.levels") },
+            ))"#,
+    );
+    resolver.insert("shaders/meter.wgsl", source);
+    resolver
+}
+
+#[kithara::test]
+fn shader_source_and_uniforms_compile_through_the_document_pipeline() {
+    let resolver = shader_resolver(
+        r#"
+@fragment
+fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return vec4<f32>(position.xy / kithara.viewport.xy, kithara.level.x, 1.0);
+}
+"#,
+    );
+
+    let ui = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    assert!(matches!(
+        &**root,
+        ExpandedNode::Control {
+            spec: ControlSpec::Shader(_),
+            read: None,
+            write: None,
+            ..
+        }
+    ));
+}
+
+#[kithara::test]
+fn malformed_shader_reports_the_resolved_source() {
+    let resolver = shader_resolver("@fragment fn fs_main(");
+
+    let error = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        UiDocError::Shader { origin, path, .. }
+            if origin.0 == "shaders/meter.wgsl" && path == "meter/meter"
+    ));
+}
+
+#[kithara::test]
+fn shader_uniforms_reject_non_numeric_endpoint_values() {
+    let resolver = shader_resolver(
+        r#"
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+    return vec4<f32>(kithara.level.x);
+}
+"#,
+    );
+    let mut registry = crate::common::registry::player_registry();
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "player.output.levels",
+        EndpointDesc::new(ValueKind::Text),
+    );
+
+    let error = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, UiDocError::Shader { .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("expected Bool, Scalar, or Stereo")
+    );
+}
+
+#[kithara::test]
+fn meter_reads_a_scalar_and_refuses_any_other_kind() {
+    let module = |endpoint| {
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "bar",
+                root: Meter(id: "load", read: Telemetry(id: "{endpoint}")))"#
+        )
+    };
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "bar.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "bar",
+            root: Module(instance: "bar", source: "bar.kmodule.ron"))"#,
+    );
+    let mut registry = crate::common::registry::player_registry();
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "engine.load",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+
+    resolver.insert("bar.kmodule.ron", &module("engine.load"));
+    let ui = compile(
+        "bar.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    assert!(matches!(
+        &**root,
+        ExpandedNode::Control {
+            spec: ControlSpec::Meter,
+            read: Some(Binding {
+                kind: BindingKind::Telemetry,
+                ..
+            }),
+            ..
+        }
+    ));
+
+    resolver.insert("bar.kmodule.ron", &module("deck.playback.playing"));
+    let error = compile(
+        "bar.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, UiDocError::BindingType { .. }));
+}
+
+#[kithara::test]
+fn vis_compiles_with_scalar_read_and_select_index_write() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "vis.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "vis",
+            root: Module(instance: "vis", source: "vis.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "vis.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "vis",
+            root: Vis(
+                id: "shader",
+                read: Model(id: "vis.preset"),
+                write: Parameter(id: "vis.preset"),
+            ))"#,
+    );
+    let mut registry = crate::common::registry::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "vis.preset",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    registry.insert(
+        EndpointCategory::Parameter,
+        "vis.preset",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+
+    let ui = compile(
+        "vis.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Vis,
+        read: Some(Binding {
+            kind: BindingKind::Model,
+            ..
+        }),
+        write: Some(Binding {
+            kind: BindingKind::Parameter,
+            ..
+        }),
+        ..
+    } = &**root
+    else {
+        panic!("expected compiled VIS control");
+    };
+}
+
+#[kithara::test]
+fn vis_rejects_non_scalar_read_and_write_bindings() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "vis.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "vis",
+            root: Module(instance: "vis", source: "vis.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "vis.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "vis",
+            root: Vis(
+                id: "shader",
+                read: Model(id: "vis.preset"),
+                write: Parameter(id: "vis.preset"),
+            ))"#,
+    );
+    let mut registry = crate::common::registry::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "vis.preset",
+        EndpointDesc::new(ValueKind::Text),
+    );
+    registry.insert(
+        EndpointCategory::Parameter,
+        "vis.preset",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+
+    let read_error = compile(
+        "vis.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        read_error,
+        UiDocError::BindingType { id, expected, got, .. }
+            if id == "vis.preset" && expected == "Scalar" && got == "Text"
+    ));
+
+    registry.insert(
+        EndpointCategory::Model,
+        "vis.preset",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    let write_error = compile(
+        "vis.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        write_error,
+        UiDocError::BindingType { id, expected, got, .. }
+            if id == "vis.preset" && expected == "Scalar" && got == "Bool"
+    ));
+}
+
+#[kithara::test]
+fn table_accepts_arbitrary_text_columns() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "people",
+                columns: [
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                    (id: "note", label: "NOTE", style: Secondary, width: 240.0),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    compile(
+        "table.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .expect("a table must not require track-specific columns");
+}
+
+#[kithara::test]
+fn a_column_list_may_arrive_as_an_include_parameter() {
+    compile(
+        "table.klayout.ron",
+        &parameterised_table_resolver(
+            r#"[(id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true), (id: "note", label: "NOTE", style: Secondary, width: 200.0)]"#,
+        ),
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .expect("a substituted column list must compile like a literal one");
+}
+
+#[kithara::test]
+fn a_parameterised_column_list_can_use_non_music_ids() {
+    compile(
+        "table.klayout.ron",
+        &parameterised_table_resolver(
+            r#"[(id: "status", label: "STATUS", style: Badge, width: 80.0)]"#,
+        ),
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .expect("parameterized tables must accept arbitrary column identifiers");
+}
+
+#[kithara::test]
+fn table_compiles_typed_columns_and_optional_state_prefix() {
+    let resolver = table_resolver(
+        r##"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "rank", label: "#", style: Index, width: 28.0),
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                    (id: "score", label: "SCORE", style: Metric, width: 70.0),
+                ],
+                columns_state: Some(Model(id: "ui.table.columns")),
+                read: Model(id: "library.visible_tracks"),
+            ))"##,
+    );
+    let mut registry = crate::common::registry::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.table.columns.name",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+
+    let ui = compile(
+        "table.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec:
+            ControlSpec::Table {
+                columns,
+                columns_state,
+                ..
+            },
+        ..
+    } = &**root
+    else {
+        panic!("expected table control");
+    };
+
+    assert_eq!(columns[0].id(), "rank");
+    assert_eq!(columns[1].id(), "name");
+    assert_eq!(columns[2].id(), "score");
+    let Some(Binding {
+        kind: BindingKind::Model,
+        id,
+        ..
+    }) = columns_state
+    else {
+        panic!("expected model state prefix");
+    };
+    assert_eq!(ui.resolve(*id), "ui.table.columns");
+}
+
+#[kithara::test]
+fn a_table_column_label_resolves_through_the_catalog() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@track_list.column.deck", style: Badge, width: 44.0),
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let ui = compile(
+        "table.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Table { columns, .. },
+        ..
+    } = &**root
+    else {
+        panic!("expected table control");
+    };
+
+    assert_eq!(columns[0].label(), "DECK");
+}
+
+#[kithara::test]
+fn a_table_column_label_written_as_plain_text_stays_that_text() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@track_list.column.deck", style: Badge, width: 44.0),
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let ui = compile(
+        "table.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Table { columns, .. },
+        ..
+    } = &**root
+    else {
+        panic!("expected table control");
+    };
+
+    assert_eq!(columns[1].label(), "NAME");
+}
+
+#[kithara::test]
+fn a_table_column_naming_a_missing_key_is_a_compile_error() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@missing.key", style: Badge, width: 44.0),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let error = compile(
+        "table.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .expect_err("a column caption naming no catalog entry must not compile");
+
+    let UiDocError::UnknownTextKey { key, path, .. } = error else {
+        panic!("expected an unknown-key error, got {error:?}");
+    };
+    assert_eq!(key, "missing.key");
+    assert!(
+        path.ends_with("/columns/0/label"),
+        "the error must name the column that carried the key, got {path}"
+    );
+}
+
+#[kithara::test]
+fn present_table_column_state_endpoint_must_be_bool() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [(id: "name", label: "NAME", style: Primary, width: 180.0)],
+                columns_state: Some(Model(id: "ui.table.columns")),
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+    let mut registry = crate::common::registry::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.table.columns.name",
+        EndpointDesc::new(ValueKind::Text),
+    );
+
+    let error = compile(
+        "table.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        UiDocError::BindingType { id, expected, got, .. }
+            if id == "ui.table.columns.name" && expected == "Bool" && got == "Text"
+    ));
+}
+
+#[kithara::test]
+fn layout_module_size_override_wins_over_computed_size() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "override.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "override",
+            root: Module(
+                instance: "deck-a",
+                source: "module.kmodule.ron",
+                size: Some((w: Fixed(100.0), h: Fixed(50.0))),
+            ))"#,
+    );
+    resolver.insert(
+        "module.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "module",
+            root: Button(id: "play", label: "PLAY"))"#,
+    );
+
+    let ui = compile(
+        "override.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let expected = SizeSpec::new(Dim::Fixed(100.0), Dim::Fixed(50.0));
+    let CompiledNode::Module { size, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+
+    assert_eq!(*size, expected);
+    assert_eq!(ui.size, expected);
+}
+
+#[kithara::test]
+fn module_shell_metadata_compiles_into_the_module_node() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "shell.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "shell",
+            root: Module(
+                instance: "deck-a",
+                source: "shell.kmodule.ron",
+                with: { "deck": "a" },
+                frame: (top: true, right: false, bottom: true, left: false),
+                corners: true,
+            ))"#,
+    );
+    resolver.insert(
+        "shell.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "deck", parameters: ["deck"],
+            title: Some("Deck"), chip: Some("DECK"), assign: ["A", "B"], chrome: Full,
+            footer: Some(Telemetry(id: "deck.track.title", with: { "deck": "$deck" })),
+            root: Text(id: "label"))"#,
+    );
+
+    let ui = compile(
+        "shell.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module {
+        module,
+        title,
+        chip,
+        assign,
+        chrome,
+        frame,
+        corners,
+        footer,
+        collapsed,
+        ..
+    } = &ui.root
+    else {
+        panic!("expected module root");
+    };
+
+    assert_eq!(ui.resolve(*module), "deck");
+    assert_eq!(title.map(|id| ui.resolve(id)), Some("Deck"));
+    assert_eq!(chip.map(|id| ui.resolve(id)), Some("DECK"));
+    assert_eq!(
+        assign.iter().map(|id| ui.resolve(*id)).collect::<Vec<_>>(),
+        ["A", "B"]
+    );
+    assert_eq!(*chrome, ChromeStyle::Full);
+    assert!(frame.top);
+    assert!(!frame.right);
+    assert!(frame.bottom);
+    assert!(!frame.left);
+    assert!(*corners);
+    assert_eq!(ui.resolve(*collapsed), "ui.module.deck.collapsed");
+    let Some(Binding {
+        kind: BindingKind::Telemetry,
+        id,
+        key,
+        with,
+        ..
+    }) = footer
+    else {
+        panic!("expected telemetry footer");
+    };
+    assert_eq!(ui.resolve(*id), "deck.track.title");
+    assert_eq!(ui.resolve(*key), "deck.track.title@deck=a");
+    assert_eq!(
+        with.iter()
+            .map(|(key, value)| (ui.resolve(*key), ui.resolve(*value)))
+            .collect::<Vec<_>>(),
+        vec![("deck", "a")]
+    );
+}
+
+#[kithara::test]
+fn module_footer_requires_a_text_read_endpoint() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "shell.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "shell",
+            root: Module(instance: "deck-a", source: "shell.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "shell.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "deck",
+            footer: Some(Parameter(id: "player.output.volume")),
+            root: Text(id: "label"))"#,
+    );
+
+    let error = compile(
+        "shell.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            UiDocError::BindingType { expected, got, .. }
+                if expected == "Text" && got == "Scalar"
+        ),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn unknown_endpoint_fails_with_module_origin_and_path() {
+    let mut resolver = resolver();
+    resolver.insert(
+        "modules/deck/transport.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "transport", parameters: ["deck"],
+            root: Button(id: "play", label: "PLAY",
+                write: Command(id: "deck.transport.typo", with: { "deck": "$deck" })))"#,
+    );
+    let error = compile(
+        "player.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        &error,
+        UiDocError::UnknownEndpoint { id, .. } if id == "deck.transport.typo"
+    ));
+    let message = error.to_string();
+    assert!(
+        message.contains("modules/deck/transport.kmodule.ron"),
+        "{message}"
+    );
+    assert!(message.contains("deck-a/transport/play"), "{message}");
+}
+
+#[kithara::test]
+fn node_limit_is_enforced() {
+    let mut limits = Limits::default();
+    limits.max_nodes = 1;
+    let error = compile(
+        "micro.klayout.ron",
+        &resolver(),
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::builder().limits(limits).build(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+    assert!(matches!(error, UiDocError::NodesExceeded { max: 1, .. }));
+}
+
+#[kithara::test]
+fn layout_parameter_reference_is_unresolved() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "layout.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "layout",
+            root: Module(instance: "deck-a", source: "deck.kmodule.ron", with: {
+                "deck": "$deck",
+            }))"#,
+    );
+    resolver.insert(
+        "deck.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "deck", parameters: ["deck"],
+            root: Text(id: "title"))"#,
+    );
+
+    let error = compile(
+        "layout.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        UiDocError::UnresolvedParam { origin, name, path }
+            if origin.0 == "layout.klayout.ron" && name == "deck" && path == "deck-a"
+    ));
+}
+
+#[kithara::test]
+fn layout_doubled_dollar_passes_literal_dollar() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "literal.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "literal",
+            root: Module(instance: "literal", source: "literal.kmodule.ron", with: {
+                "x": "$$lit",
+            }))"#,
+    );
+    resolver.insert(
+        "literal.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "literal", parameters: ["x"],
+            root: Chip(id: "text", label: "$x"))"#,
+    );
+
+    let ui = compile(
+        "literal.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Chip { label, .. },
+        ..
+    } = &**root
+    else {
+        panic!("expected control");
+    };
+    assert_eq!(ui.resolve(*label), "$lit");
+}
+
+#[kithara::test]
+fn oversized_layout_source_is_rejected() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "large.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "large",
+            root: Module(instance: "deck-a", source: "deck.kmodule.ron"))"#,
+    );
+    let mut limits = Limits::default();
+    limits.max_bytes = 32;
+
+    let error = compile(
+        "large.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::builder().limits(limits).build(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        UiDocError::TooLarge {
+            origin,
+            bytes,
+            max: 32,
+        } if origin.0 == "large.klayout.ron" && bytes > 32
+    ));
+}
+
+#[kithara::test]
+fn fifty_empty_columns_exceed_node_limit() {
+    let children = vec!["Column(children: [])"; 50].join(",");
+    let root = format!("Column(children: [{children}])");
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "nested.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "nested",
+            root: Module(instance: "nested", source: "nested.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "nested.kmodule.ron",
+        &format!(r#"(schema: "kithara.module", version: 1, id: "nested", root: {root})"#),
+    );
+    let mut limits = Limits::default();
+    limits.max_nodes = 10;
+
+    let error = compile(
+        "nested.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::builder().limits(limits).build(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            UiDocError::NodesExceeded {
+                count: 11,
+                max: 10,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn knob_caption_is_document_text_and_optional() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "knobs.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "knobs",
+            root: Module(instance: "deck-a", source: "knobs.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "knobs.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "knobs",
+            root: Row(children: [
+                Knob(id: "low", label: Some("LOW")),
+                Knob(id: "mid"),
+            ]))"#,
+    );
+
+    let ui = compile(
+        "knobs.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module");
+    };
+    let ExpandedNode::Row { children, .. } = &**root else {
+        panic!("expected row");
+    };
+    let captions: Vec<Option<&str>> = children
+        .iter()
+        .map(|child| {
+            let ExpandedNode::Control {
+                spec: ControlSpec::Knob { label },
+                ..
+            } = child
+            else {
+                panic!("expected knob");
+            };
+            label.map(|id| ui.resolve(id))
+        })
+        .collect();
+
+    assert_eq!(captions, vec![Some("LOW"), None]);
+}
+
+fn block_registry() -> crate::common::registry::TestRegistry {
+    let mut registry = crate::common::registry::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.block.hidden",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.block.deck_hidden",
+        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.menu.open",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "ui.menu.toggle",
+        EndpointDesc::new(ValueKind::Trigger),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.measure",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    registry
+}
+
+fn block_resolver(module: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "blocks.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "blocks",
+            root: Module(instance: "mixer", source: "blocks.kmodule.ron"))"#,
+    );
+    resolver.insert("blocks.kmodule.ron", module);
+    resolver
+}
+
+fn compile_blocks(resolver: &MemResolver, entry: &str) -> Result<CompiledUi, UiDocError> {
+    compile(
+        entry,
+        resolver,
+        &block_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+}
+
+#[kithara::test]
+fn an_adaptive_node_leaves_no_segment_of_its_own_in_a_control_address() {
+    const ADAPTIVE_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "mixer",
+    root: Adaptive(
+        id: "bank",
+        measure: Read(Model(id: "ui.measure")),
+        base: Row(id: "narrow", children: [Knob(id: "low")]),
+        steps: [
+            (from: 4.0, node: Row(id: "wide", children: [Knob(id: "low"), Knob(id: "high")])),
+        ],
+    ))"#;
+
+    let resolver = block_resolver(ADAPTIVE_MODULE);
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Adaptive {
+        measure,
+        base,
+        steps,
+        ..
+    } = &**root
+    else {
+        panic!("expected an adaptive root");
+    };
+    let MeasureSpec::Read(measure) = measure else {
+        panic!("expected a read measure");
+    };
+    assert_eq!(ui.resolve(measure.id), "ui.measure");
+
+    let path_of = |node: &ExpandedNode| {
+        let ExpandedNode::Row { children, .. } = node else {
+            panic!("expected a row branch");
+        };
+        let ExpandedNode::Control { path, .. } = &children[0] else {
+            panic!("expected a control");
+        };
+        ui.resolve(*path).to_owned()
+    };
+
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].0, 4.0);
+    assert_eq!(path_of(base), "mixer/low");
+    assert_eq!(path_of(&steps[0].1), "mixer/low");
+}
+
+#[kithara::test]
+fn a_reveal_leaves_no_segment_of_its_own_in_a_control_address() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Row(
+                id: "bar",
+                measure: Width,
+                size: (w: Fill, h: Fixed(42.0)),
+                children: [
+                    Knob(id: "low"),
+                    Reveal(from: 440.0, child: Knob(id: "high")),
+                ],
+            ))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Row { children, .. } = &**root else {
+        panic!("expected a row root");
+    };
+    let ExpandedNode::Reveal { from, child, .. } = &children[1] else {
+        panic!("expected a reveal, got {:?}", children[1]);
+    };
+    let ExpandedNode::Control { path, .. } = &**child else {
+        panic!("expected a control under the reveal");
+    };
+
+    assert_eq!(*from, 440.0);
+    assert_eq!(ui.resolve(*path), "mixer/high");
+}
+
+#[kithara::test]
+fn a_self_measured_layout_is_the_box_it_declares() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "deck",
+            root: Row(id: "body", children: [Knob(id: "low")]))"#,
+    );
+    resolver.insert(
+        "wide.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "wide",
+            root: Adaptive(
+                id: "body",
+                measure: Width,
+                size: (w: Fill, h: Fill),
+                base: Module(instance: "deck-a", source: "blocks.kmodule.ron"),
+                steps: [
+                    (from: 1100.0, node: Split(axis: Horizontal, children: [
+                        (node: Module(instance: "deck-a", source: "blocks.kmodule.ron")),
+                        (node: Module(instance: "deck-b", source: "blocks.kmodule.ron")),
+                    ])),
+                ],
+            ))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "wide.klayout.ron").unwrap();
+
+    assert_eq!(ui.size, SizeSpec::new(Dim::Fill, Dim::Fill));
+    let CompiledNode::Adaptive { steps, .. } = &ui.root else {
+        panic!("expected an adaptive root, got {:?}", ui.root);
+    };
+    assert_eq!(steps.len(), 1);
+}
+
+#[kithara::test]
+fn an_adaptive_measure_must_read_a_scalar() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Adaptive(
+                id: "bank",
+                measure: Read(Model(id: "ui.block.hidden")),
+                base: Knob(id: "low"),
+                steps: [(from: 4.0, node: Knob(id: "high"))],
+            ))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
+            if expected == "Scalar" && got == "Bool" && path == "mixer/bank"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+#[case::two_blocks(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Knob(id: "low")),
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Knob(id: "high")),
+        ]))"#,
+    "eq"
+)]
+#[case::block_and_control(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
+                child: Knob(id: "high")),
+            Knob(id: "low"),
+        ]))"#,
+    "low"
+)]
+#[case::controls_under_a_block(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Row(children: [
+                    Knob(id: "low"),
+                    Knob(id: "low"),
+                ])),
+        ]))"#,
+    "low"
+)]
+fn a_duplicate_id_in_a_module_is_rejected(#[case] module: &str, #[case] rejected: &str) {
+    let resolver = block_resolver(module);
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::DuplicateId { id, .. } if id == rejected),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_block_id_carrying_an_address_separator_is_rejected() {
+    for id in ["mixer.eq", "eq@deck=a"] {
+        let resolver = block_resolver(&format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Column(children: [
+                    Optional(id: "{id}", hidden: Model(id: "ui.block.hidden"),
+                        child: Knob(id: "low")),
+                ]))"#
+        ));
+
+        let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::InvalidId { id: invalid, .. } if invalid == id),
+            "`{id}`: {error:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn a_layout_block_id_may_not_collide_with_an_instance() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "collide.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "collide",
+            root: Split(axis: Horizontal, children: [
+                (node: Module(instance: "mixer", source: "blocks.kmodule.ron")),
+                (node: Optional(id: "mixer", hidden: Model(id: "ui.block.hidden"),
+                    node: Module(instance: "other", source: "blocks.kmodule.ron"))),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "collide.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "mixer"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_module_block_compiles_to_its_expanded_path_and_binding() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Column { children, .. } = &**root else {
+        panic!("expected a column");
+    };
+    let ExpandedNode::Optional { block, child } = &children[0] else {
+        panic!("expected an optional block");
+    };
+
+    assert_eq!(ui.resolve(block.path), "mixer/eq");
+    assert_eq!(ui.resolve(block.hidden.id), "ui.block.hidden");
+    assert!(matches!(**child, ExpandedNode::Control { .. }));
+}
+
+#[kithara::test]
+fn a_layout_block_compiles_around_the_node_it_wraps() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "wrapped.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "wrapped",
+            root: Split(axis: Horizontal, children: [
+                (node: Optional(id: "sidebar", hidden: Model(id: "ui.block.hidden"),
+                    node: Module(instance: "mixer", source: "blocks.kmodule.ron"))),
+            ]))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "wrapped.klayout.ron").unwrap();
+
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected a split root");
+    };
+    let CompiledNode::Optional { block, child } = &children[0].node else {
+        panic!("expected an optional block");
+    };
+
+    assert_eq!(ui.resolve(block.path), "sidebar");
+    assert_eq!(ui.resolve(block.hidden.id), "ui.block.hidden");
+    assert!(matches!(**child, CompiledNode::Module { .. }));
+}
+
+#[kithara::test]
+fn an_unknown_hidden_endpoint_is_rejected() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Model(id: "ui.block.absent"),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::UnknownEndpoint { id, path, .. }
+            if id == "ui.block.absent" && path == "mixer/eq"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_hidden_endpoint_that_is_not_a_bool_is_rejected() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Model(id: "deck.view.zoom"),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
+            if expected == "Bool" && got == "Scalar" && path == "mixer/eq"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_command_endpoint_on_hidden_is_a_direction_error() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Command(id: "deck.view.zoom_in", with: { "deck": "a" }),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::BindingDirection { id, .. } if id == "deck.view.zoom_in"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn parameter_substitution_reaches_the_hidden_binding() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "decks.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "decks",
+            root: Module(instance: "deck-b", source: "deck.kmodule.ron", with: { "deck": "b" }))"#,
+    );
+    resolver.insert(
+        "deck.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "deck", parameters: ["deck"],
+            root: Column(children: [
+                Optional(id: "eq", hidden: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "decks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Column { children, .. } = &**root else {
+        panic!("expected a column");
+    };
+    let ExpandedNode::Optional { block, .. } = &children[0] else {
+        panic!("expected an optional block");
+    };
+
+    assert_eq!(ui.resolve(block.path), "deck-b/eq");
+    assert_eq!(ui.resolve(block.hidden.key), "deck.playback.playing@deck=b");
+}
+
+#[kithara::test]
+fn an_optional_at_a_layout_root_is_rejected() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "root.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "root",
+            root: Optional(id: "sidebar", hidden: Model(id: "ui.block.hidden"),
+                node: Module(instance: "mixer", source: "blocks.kmodule.ron")))"#,
+    );
+
+    let error = compile_blocks(&resolver, "root.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RootBlock { id, .. } if id == "sidebar"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+#[case::at_the_module_root(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+            child: Knob(id: "low")))"#,
+    "eq"
+)]
+#[case::directly_under_an_optional(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
+                    child: Knob(id: "gain"))),
+        ]))"#,
+    "low"
+)]
+fn an_optional_is_rejected(#[case] module: &str, #[case] rejected: &str) {
+    let resolver = block_resolver(module);
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RootBlock { id, .. } if id == rejected),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_layout_optional_directly_under_an_optional_is_rejected() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "nested.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "nested",
+            root: Split(axis: Horizontal, children: [
+                (node: Optional(id: "outer", hidden: Model(id: "ui.block.hidden"),
+                    node: Optional(id: "inner", hidden: Model(id: "ui.block.hidden"),
+                        node: Module(instance: "mixer", source: "blocks.kmodule.ron")))),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "nested.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RootBlock { id, .. } if id == "inner"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn an_address_separator_in_a_block_prefix_is_rejected() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "prefixed.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "prefixed",
+            root: Module(instance: "mixer.a", source: "blocks.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "blocks.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Column(children: [
+                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                    child: Knob(id: "low")),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "prefixed.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::InvalidId { id, .. } if id == "mixer.a/eq"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn an_unresolved_parameter_in_a_layout_block_binding_is_rejected() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "scoped.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "scoped",
+            root: Split(axis: Horizontal, children: [
+                (node: Optional(id: "sidebar",
+                    hidden: Model(id: "ui.block.deck_hidden", with: { "deck": "$deck" }),
+                    node: Module(instance: "mixer", source: "blocks.kmodule.ron"))),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "scoped.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::UnresolvedParam { name, .. } if name == "deck"),
+        "{error:?}"
+    );
+}
+
+const POPOVER_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "app-menu",
+    root: Row(children: [
+        Popover(
+            id: "menu",
+            open: Model(id: "ui.menu.open"),
+            anchor: Pressable(
+                id: "burger",
+                press: Command(id: "ui.menu.toggle"),
+                child: Row(id: "burger-cell", size: (w: Fixed(36.0), h: Fill), children: [
+                    Glyph(id: "burger-icon", icon: Menu, style: MenuBurger, color: TextDim),
+                ]),
+            ),
+            content: Column(id: "pop", size: (w: Fixed(298.0), h: Shrink), children: [
+                Text(id: "brand", style: BrandSmall, label: "KITHARA"),
+                Optional(id: "modules", hidden: Model(id: "ui.block.hidden"),
+                    child: Text(id: "modules-label", style: Mono, color: Text, label: "MODULES")),
+            ]),
+        ),
+    ]))"#;
+
+#[kithara::test]
+fn a_popover_compiles_with_its_anchor_and_its_content_subtree() {
+    let resolver = block_resolver(POPOVER_MODULE);
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Row { children, .. } = &**root else {
+        panic!("expected a row");
+    };
+    let ExpandedNode::Popover {
+        path,
+        open,
+        anchor,
+        content,
+        ..
+    } = &children[0]
+    else {
+        panic!("expected a popover");
+    };
+
+    assert_eq!(ui.resolve(*path), "mixer/menu");
+    assert_eq!(ui.resolve(open.id), "ui.menu.open");
+
+    let ExpandedNode::Pressable { path, press, child } = &**anchor else {
+        panic!("expected a pressable anchor");
+    };
+    assert_eq!(ui.resolve(*path), "mixer/burger");
+    assert_eq!(ui.resolve(press.id), "ui.menu.toggle");
+    assert!(matches!(**child, ExpandedNode::Row { .. }));
+
+    let ExpandedNode::Column { children, .. } = &**content else {
+        panic!("expected the pop column");
+    };
+    assert!(matches!(children[1], ExpandedNode::Optional { .. }));
+}
+
+#[kithara::test]
+fn a_popover_carries_its_declared_geometry_into_the_compiled_tree() {
+    let pointer = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Row(children: [
+                Popover(id: "menu", open: Model(id: "ui.menu.open"), at: Pointer,
+                    anchor: Row(id: "row", children: []),
+                    content: Row(id: "pop", children: [])),
+            ]))"#,
+    );
+
+    for (resolver, want) in [
+        (block_resolver(POPOVER_MODULE), PopoverAt::Anchor),
+        (pointer, PopoverAt::Pointer),
+    ] {
+        let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+        let CompiledNode::Module { root, .. } = &ui.root else {
+            panic!("expected a module root");
+        };
+        let ExpandedNode::Row { children, .. } = &**root else {
+            panic!("expected a row");
+        };
+        let ExpandedNode::Popover { at, .. } = &children[0] else {
+            panic!("expected a popover");
+        };
+
+        assert_eq!(*at, want);
+    }
+}
+
+#[kithara::test]
+fn a_popover_open_endpoint_must_be_a_bool() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Row(children: [
+                Popover(id: "menu", open: Model(id: "deck.view.zoom"),
+                    anchor: Row(id: "burger", children: []),
+                    content: Row(id: "pop", children: [])),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
+            if expected == "Bool" && got == "Scalar" && path == "mixer/menu"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_popover_inside_another_popovers_content_is_rejected() {
+    let direct = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Row(children: [
+                Popover(id: "menu", open: Model(id: "ui.menu.open"),
+                    anchor: Row(id: "burger", children: []),
+                    content: Popover(id: "submenu", open: Model(id: "ui.menu.open"),
+                        anchor: Row(id: "sub-anchor", children: []),
+                        content: Row(id: "sub-pop", children: []))),
+            ]))"#,
+    );
+    let mut included = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Row(children: [
+                Popover(id: "menu", open: Model(id: "ui.menu.open"),
+                    anchor: Row(id: "burger", children: []),
+                    content: Include(id: "sub", source: "sub.kmodule.ron")),
+            ]))"#,
+    );
+    included.insert(
+        "sub.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "sub",
+            root: Popover(id: "submenu", open: Model(id: "ui.menu.open"),
+                anchor: Row(id: "sub-anchor", children: []),
+                content: Row(id: "sub-pop", children: [])))"#,
+    );
+
+    for (resolver, nested) in [(direct, "mixer/submenu"), (included, "mixer/sub/submenu")] {
+        let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::InvalidId { id, reason, .. }
+                if id == nested && reason.contains("popover")),
+            "{nested}: {error:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn a_pressable_press_endpoint_must_be_a_trigger() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Row(children: [
+                Pressable(id: "row", press: Parameter(id: "player.output.volume"),
+                    child: Row(id: "inner", children: [])),
+            ]))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
+            if expected == "Trigger" && got == "Scalar" && path == "mixer/row"),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_popover_takes_the_size_of_its_anchor_alone() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "app-menu",
+            root: Popover(id: "menu", open: Model(id: "ui.menu.open"),
+                anchor: Row(id: "burger", size: (w: Fixed(36.0), h: Fixed(36.0)), children: []),
+                content: Row(id: "pop", size: (w: Fixed(300.0), h: Fixed(400.0)), children: [])))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { size, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    assert_eq!(*size, SizeSpec::new(Dim::Fixed(36.0), Dim::Fixed(36.0)));
+}
+
+#[kithara::test]
+fn an_active_binding_on_a_row_or_a_glyph_must_be_a_bool() {
+    let cases = [
+        (
+            r#"Row(id: "row", active: Model(id: "deck.view.zoom"), children: [])"#,
+            "mixer/row",
+        ),
+        (
+            r#"Row(active: Model(id: "deck.view.zoom"), children: [])"#,
+            "mixer",
+        ),
+        (
+            r#"Glyph(id: "icon", icon: Menu, style: Menu, active: Model(id: "deck.view.zoom"))"#,
+            "mixer/icon",
+        ),
+    ];
+
+    for (node, at) in cases {
+        let resolver = block_resolver(&format!(
+            r#"(schema: "kithara.module", version: 1, id: "app-menu",
+                root: Column(children: [{node}]))"#
+        ));
+
+        let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::BindingType { expected, got, path, .. }
+                if expected == "Bool" && got == "Scalar" && path == at),
+            "{node}: {error:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn an_escaped_dollar_in_a_layout_block_binding_stays_a_literal() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "escaped.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "escaped",
+            root: Split(axis: Horizontal, children: [
+                (node: Optional(id: "sidebar",
+                    hidden: Model(id: "ui.block.deck_hidden", with: { "deck": "$$deck" }),
+                    node: Module(instance: "mixer", source: "blocks.kmodule.ron"))),
+            ]))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "escaped.klayout.ron").unwrap();
+
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected a split root");
+    };
+    let CompiledNode::Optional { block, .. } = &children[0].node else {
+        panic!("expected an optional block");
+    };
+
+    assert_eq!(
+        ui.resolve(block.hidden.key),
+        "ui.block.deck_hidden@deck=$deck"
+    );
+}
+
+fn glyph_resolver(row: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "menu.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "menu",
+            root: Module(instance: "menu", source: "menu.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "menu.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "menu",
+            root: Row(children: [
+                Include(id: "one", source: "row.kmodule.ron", with: { "glyph": "Monitor" }),
+                Include(id: "two", source: "row.kmodule.ron", with: { "glyph": "Disc" }),
+            ]))"#,
+    );
+    resolver.insert("row.kmodule.ron", row);
+    resolver
+}
+
+fn compile_glyphs(resolver: &MemResolver) -> Result<CompiledUi, UiDocError> {
+    compile(
+        "menu.klayout.ron",
+        resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+}
+
+fn glyph_icons(ui: &CompiledUi) -> Vec<IconName> {
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Row { children, .. } = &**root else {
+        panic!("expected a row root");
+    };
+    children
+        .iter()
+        .map(|child| {
+            let ExpandedNode::Control {
+                spec: ControlSpec::Glyph { icon, .. },
+                ..
+            } = child
+            else {
+                panic!("expected a glyph");
+            };
+            *icon
+        })
+        .collect()
+}
+
+#[kithara::test]
+fn one_template_carries_a_different_glyph_per_include() {
+    let ui = compile_glyphs(&glyph_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "row", parameters: ["glyph"],
+            root: Glyph(id: "icon", icon: "$glyph"))"#,
+    ))
+    .unwrap();
+
+    assert_eq!(glyph_icons(&ui), [IconName::Monitor, IconName::Disc]);
+}
+
+#[kithara::test]
+fn a_misspelled_icon_is_rejected_and_never_read_as_a_parameter() {
+    let error = compile_glyphs(&glyph_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "row", parameters: ["glyph"],
+            root: Glyph(id: "icon", icon: Loudspeaker))"#,
+    ))
+    .unwrap_err();
+
+    let message = error.to_string();
+    assert!(message.contains("Loudspeaker"), "{message}");
+}
+
+#[kithara::test]
+fn an_argument_that_names_no_icon_is_rejected_where_it_is_spent() {
+    let mut resolver = glyph_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "row", parameters: ["glyph"],
+            root: Glyph(id: "icon", icon: "$glyph"))"#,
+    );
+    resolver.insert(
+        "menu.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "menu",
+            root: Row(children: [
+                Include(id: "one", source: "row.kmodule.ron", with: { "glyph": "Trombone" }),
+            ]))"#,
+    );
+
+    let error = compile_glyphs(&resolver).unwrap_err();
+
+    let message = error.to_string();
+    assert!(message.contains("Trombone"), "{message}");
+    assert!(message.contains("menu/one/icon"), "{message}");
+}
+
+#[kithara::test]
+fn one_template_reads_a_different_endpoint_per_include() {
+    let mut resolver = glyph_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "row", parameters: ["endpoint"],
+            root: Glyph(id: "icon", icon: Disc, active: Model(id: "$endpoint")))"#,
+    );
+    resolver.insert(
+        "menu.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "menu",
+            root: Row(children: [
+                Include(id: "one", source: "row.kmodule.ron", with: { "endpoint": "ui.prefs.mono" }),
+                Include(id: "two", source: "row.kmodule.ron", with: { "endpoint": "ui.prefs.autogain" }),
+            ]))"#,
+    );
+    let mut registry = crate::common::registry::player_registry();
+    for id in ["ui.prefs.mono", "ui.prefs.autogain"] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(ValueKind::Bool),
+        );
+    }
+
+    let ui = compile(
+        "menu.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Row { children, .. } = &**root else {
+        panic!("expected a row root");
+    };
+    let keys: Vec<_> = children
+        .iter()
+        .map(|child| {
+            let ExpandedNode::Control {
+                spec:
+                    ControlSpec::Glyph {
+                        active: Some(active),
+                        ..
+                    },
+                ..
+            } = child
+            else {
+                panic!("expected a glyph with an active binding");
+            };
+            ui.resolve(active.key)
+        })
+        .collect();
+
+    assert_eq!(keys, ["ui.prefs.mono", "ui.prefs.autogain"]);
+}
+
+#[kithara::test]
+fn a_template_may_not_read_an_endpoint_the_registry_does_not_know() {
+    let mut resolver = glyph_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "row", parameters: ["endpoint"],
+            root: Glyph(id: "icon", icon: Disc, active: Model(id: "$endpoint")))"#,
+    );
+    resolver.insert(
+        "menu.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "menu",
+            root: Row(children: [
+                Include(id: "one", source: "row.kmodule.ron", with: { "endpoint": "ui.prefs.nope" }),
+            ]))"#,
+    );
+
+    let error = compile_glyphs(&resolver).unwrap_err();
+
+    assert!(
+        matches!(error, UiDocError::UnknownEndpoint { .. }),
+        "{error}"
+    );
+}
+
+#[kithara::test]
+fn an_adaptive_step_may_not_start_below_what_its_branch_needs() {
+    let branch = r#"Row(id: "wide", gap: 0.0, pad: 0.0,
+        children: [Knob(id: "low"), Knob(id: "high")])"#;
+    let module = |measure: &str| {
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Adaptive(
+                    id: "bank",
+                    measure: {measure},
+                    base: Knob(id: "low"),
+                    steps: [(from: 4.0, node: {branch})],
+                ))"#
+        )
+    };
+
+    let error = compile_blocks(
+        &block_resolver(&module("Width, size: (w: Fill, h: Fixed(42.0))")),
+        "blocks.klayout.ron",
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::AdaptiveStepRoom { from, needs, axis, .. }
+            if *from == 4.0 && *needs == 56.0 && *axis == "width"),
+        "{error:?}"
+    );
+    compile_blocks(
+        &block_resolver(&module(r#"Read(Model(id: "ui.measure"))"#)),
+        "blocks.klayout.ron",
+    )
+    .expect("a read measure counts what its endpoint counts, which is no width");
+}
+
+#[kithara::test]
+fn a_layout_step_may_not_start_below_what_its_modules_need() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "deck",
+            root: Row(id: "body", gap: 0.0, pad: 0.0, children: [Knob(id: "low")]))"#,
+    );
+    resolver.insert(
+        "wide.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "wide",
+            root: Adaptive(
+                id: "body",
+                measure: Width,
+                size: (w: Fill, h: Fill),
+                base: Module(instance: "deck-a", source: "blocks.kmodule.ron"),
+                steps: [
+                    (from: 40.0, node: Split(axis: Horizontal, children: [
+                        (node: Module(instance: "deck-a", source: "blocks.kmodule.ron")),
+                        (node: Module(instance: "deck-b", source: "blocks.kmodule.ron")),
+                    ])),
+                ],
+            ))"#,
+    );
+
+    let error = compile_blocks(&resolver, "wide.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::AdaptiveStepRoom { from, needs, .. }
+            if *from == 40.0 && *needs == 56.0),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_threshold_may_not_promise_room_the_container_does_not_have() {
+    let bar = |from: f32| {
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Row(
+                    id: "bar",
+                    measure: Width,
+                    size: (w: Fill, h: Fixed(42.0)),
+                    gap: 0.0,
+                    pad: 0.0,
+                    children: [
+                        Knob(id: "low"),
+                        Reveal(from: {from}, child: Knob(id: "high", size: (w: Fixed(200.0), h: Fill))),
+                    ],
+                ))"#
+        )
+    };
+
+    let error = compile_blocks(&block_resolver(&bar(100.0)), "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RevealRoom { room, needs, axis, .. }
+            if *room == 100.0 && *needs == 228.0 && *axis == "width"),
+        "{error:?}"
+    );
+    compile_blocks(&block_resolver(&bar(300.0)), "blocks.klayout.ron")
+        .expect("a threshold above what the cells take promises room they fit in");
+}
+
+fn cell_resolver(cells: &[(&str, f32)], layout: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert("cells.klayout.ron", layout);
+    for (name, width) in cells {
+        resolver.insert(
+            &format!("{name}.kmodule.ron"),
+            &format!(
+                r#"(schema: "kithara.module", version: 1, id: "{name}",
+                    root: Knob(id: "{name}", size: (w: Fixed({width}), h: Fixed(20.0))))"#
+            ),
+        );
+    }
+    resolver
+}
+
+#[kithara::test]
+fn a_measuring_split_needs_the_room_its_standing_cells_settle_on() {
+    const BAR_CELLS: [(&str, f32); 5] = [
+        ("menu", 40.0),
+        ("play", 38.0),
+        ("strip", 36.0),
+        ("wave", 60.0),
+        ("window", 80.0),
+    ];
+
+    let bar = |head: &str, strip: &str, wave: &str| {
+        format!(
+            r#"(schema: "kithara.layout", version: 1, id: "cells",
+                root: Split(axis: Horizontal, {head} children: [
+                    (node: Module(instance: "menu", source: "menu.kmodule.ron")),
+                    (node: Module(instance: "play", source: "play.kmodule.ron")),
+                    (node: Module(instance: "strip", source: "strip.kmodule.ron"){strip}),
+                    (node: Module(instance: "wave", source: "wave.kmodule.ron"){wave}),
+                    (node: Module(instance: "window", source: "window.kmodule.ron")),
+                ]))"#
+        )
+    };
+    let measured = bar(
+        "measure: Width, size: (w: Fill, h: Fixed(42.0)),",
+        ", until: Some(350.0)",
+        ", from: 350.0",
+    );
+    let plain = bar("", "", "");
+
+    let ui = compile_blocks(&cell_resolver(&BAR_CELLS, &measured), "cells.klayout.ron").unwrap();
+
+    assert_eq!(
+        ui.min,
+        SizeSpec::new(Dim::Fixed(194.0), Dim::Fixed(42.0)),
+        "the strip stands at the narrowest the bar gets, and the box holds its height",
+    );
+    let ui = compile_blocks(&cell_resolver(&BAR_CELLS, &plain), "cells.klayout.ron").unwrap();
+
+    assert_eq!(
+        ui.min,
+        SizeSpec::new(Dim::Fixed(254.0), Dim::Fixed(20.0)),
+        "a split reading no room needs every cell it holds",
+    );
+}
+
+#[kithara::test]
+fn a_split_band_may_not_promise_room_the_cell_does_not_fit() {
+    let bar = |from: f32| {
+        format!(
+            r#"(schema: "kithara.layout", version: 1, id: "cells",
+                root: Split(axis: Horizontal, measure: Width, size: (w: Fill, h: Fixed(42.0)),
+                    children: [
+                        (node: Module(instance: "menu", source: "menu.kmodule.ron")),
+                        (node: Module(instance: "wide", source: "wide.kmodule.ron"), from: {from}),
+                    ]))"#
+        )
+    };
+    let cells = [("menu", 40.0), ("wide", 200.0)];
+
+    let error =
+        compile_blocks(&cell_resolver(&cells, &bar(100.0)), "cells.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RevealRoom { room, needs, axis, .. }
+            if *room == 100.0 && *needs == 240.0 && *axis == "width"),
+        "{error:?}"
+    );
+    compile_blocks(&cell_resolver(&cells, &bar(300.0)), "cells.klayout.ron")
+        .expect("a band above what the cells take promises room they fit in");
+}
+
+#[kithara::test]
+fn a_declared_box_raises_the_room_a_split_holds_its_bands_against() {
+    let bar = |room: f32| {
+        format!(
+            r#"(schema: "kithara.layout", version: 1, id: "cells",
+                root: Split(axis: Horizontal, measure: Width,
+                    size: (w: Fixed({room}), h: Fixed(42.0)),
+                    children: [
+                        (node: Module(instance: "menu", source: "menu.kmodule.ron")),
+                        (node: Module(instance: "wide", source: "wide.kmodule.ron"), from: 100.0),
+                    ]))"#
+        )
+    };
+    let cells = [("menu", 40.0), ("wide", 250.0)];
+
+    compile_blocks(&cell_resolver(&cells, &bar(300.0)), "cells.klayout.ron")
+        .expect("a box holding every cell standing in it leaves its bands nothing to promise");
+    let error =
+        compile_blocks(&cell_resolver(&cells, &bar(120.0)), "cells.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RevealRoom { room, needs, .. }
+            if *room == 120.0 && *needs == 290.0),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_declared_box_may_not_be_smaller_than_what_it_holds() {
+    let bar = |cell: &str| {
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Row(
+                    id: "bar",
+                    gap: 0.0,
+                    pad: 0.0,
+                    size: (w: Fill, h: Fixed(42.0)),
+                    children: [Knob(id: "low", size: {cell})],
+                ))"#
+        )
+    };
+
+    let error = compile_blocks(
+        &block_resolver(&bar("(w: Fixed(80.0), h: Fixed(120.0))")),
+        "blocks.klayout.ron",
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::DeclaredRoom { room, needs, axis, .. }
+            if *room == 42.0 && *needs == 120.0 && *axis == "height"),
+        "{error:?}"
+    );
+    compile_blocks(
+        &block_resolver(&bar("(w: Fixed(80.0), h: Fixed(20.0))")),
+        "blocks.klayout.ron",
+    )
+    .expect("a box above what the content takes is the floor the node keeps");
+}
+
+#[kithara::test]
+fn a_slot_and_an_adaptive_answer_for_the_box_they_declare() {
+    let tall = r#"Knob(id: "low", size: (w: Fixed(80.0), h: Fixed(120.0)))"#;
+    let modules = [
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Slot(id: "well", size: (w: Fill, h: Fixed(42.0)), default: [{tall}]))"#
+        ),
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Adaptive(
+                    id: "bank",
+                    measure: Width,
+                    size: (w: Fill, h: Fixed(42.0)),
+                    base: {tall},
+                    steps: [(from: 400.0, node: Knob(id: "high"))],
+                ))"#
+        ),
+    ];
+
+    for module in modules {
+        let error = compile_blocks(&block_resolver(&module), "blocks.klayout.ron").unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::DeclaredRoom { room, needs, axis, .. }
+                if *room == 42.0 && *needs == 120.0 && *axis == "height"),
+            "{error:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn a_layout_box_may_not_be_smaller_than_the_node_standing_in_it() {
+    let module = r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Row(
+            id: "bar",
+            gap: 0.0,
+            pad: 0.0,
+            children: [Knob(id: "low", size: (w: Fixed(80.0), h: Fixed(120.0)))],
+        ))"#;
+    let layouts = |room: f32| {
+        [
+            (
+                "root/Module(mixer)",
+                format!(
+                    r#"(schema: "kithara.layout", version: 1, id: "boxed",
+                        root: Module(
+                            instance: "mixer",
+                            source: "blocks.kmodule.ron",
+                            size: (w: Fill, h: Fixed({room})),
+                        ))"#
+                ),
+            ),
+            (
+                "root/Adaptive(bank)",
+                format!(
+                    r#"(schema: "kithara.layout", version: 1, id: "boxed",
+                        root: Adaptive(
+                            id: "bank",
+                            measure: Width,
+                            size: (w: Fill, h: Fixed({room})),
+                            base: Module(instance: "mixer", source: "blocks.kmodule.ron"),
+                            steps: [(
+                                from: 400.0,
+                                node: Module(instance: "mixer", source: "blocks.kmodule.ron"),
+                            )],
+                        ))"#
+                ),
+            ),
+        ]
+    };
+    let compile_layout = |layout: &str| {
+        let mut resolver = block_resolver(module);
+        resolver.insert("boxed.klayout.ron", layout);
+        compile_blocks(&resolver, "boxed.klayout.ron")
+    };
+
+    for (at, layout) in layouts(42.0) {
+        let error = compile_layout(&layout).unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::DeclaredRoom { path, room, needs, axis, .. }
+                if path == at && *room == 42.0 && *needs == 120.0 && *axis == "height"),
+            "{error:?}"
+        );
+    }
+    for (_, layout) in layouts(120.0) {
+        compile_layout(&layout).expect("a box the node fills exactly is a box it fits in");
+    }
+}
+
+/// A window split into three stacked modules: a window corner belongs to the
+/// module at one end of the split, and to nothing standing between the ends.
+fn stacked_resolver() -> MemResolver {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "stacked.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "stacked",
+            root: Split(axis: Vertical, children: [
+                (node: Module(instance: "top", source: "blocks.kmodule.ron")),
+                (node: Module(instance: "middle", source: "blocks.kmodule.ron")),
+                (node: Module(instance: "bottom", source: "blocks.kmodule.ron")),
+            ]))"#,
+    );
+    resolver
+}
+
+/// The window corners the module in cell `index` of the stacked layout stands
+/// at.
+fn stacked_round(index: usize) -> FrameCorners {
+    let ui = compile_blocks(&stacked_resolver(), "stacked.klayout.ron")
+        .expect("the stacked fixture compiles");
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected a split root");
+    };
+    let CompiledNode::Module { round, .. } = &children[index].node else {
+        panic!("expected a module in every cell");
+    };
+    *round
+}
+
+/// A module of a stacked split takes the window corners at its end of the
+/// stack, and a module between the ends stands at none.
+#[kithara::test]
+#[case::top(0, FrameCorners::ALL.top())]
+#[case::middle(1, FrameCorners::EMPTY)]
+#[case::bottom(2, FrameCorners::ALL.bottom())]
+fn a_stacked_module_takes_the_window_corners_at_its_end(
+    #[case] index: usize,
+    #[case] corners: FrameCorners,
+) {
+    assert_eq!(stacked_round(index), corners);
+}
+
+#[kithara::test]
+fn a_layout_of_one_module_gives_it_every_window_corner() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { round, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    assert_eq!(*round, FrameCorners::ALL);
+}
+
+/// The pools live on the configuration, so the document a host compiles draws
+/// from the family the host handed it rather than from one of its own.
+#[kithara::test]
+fn a_document_draws_from_the_pools_its_configuration_carries() {
+    let config = UiConfig::default();
+    drop(config.draw_buffers.text("held"));
+
+    let ui = compile(
+        "micro.klayout.ron",
+        &resolver(),
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &config,
+        &view::EMPTY,
+    )
+    .unwrap();
+
+    assert_eq!(ui.draw_pool_stats(), config.draw_buffers.stats());
+}
+
+/// A host compiles a second screen, and compiles the first one again whenever
+/// it is redressed. Every one of those joins the family already in use instead
+/// of starting an empty one.
+#[kithara::test]
+fn a_document_compiled_after_the_first_joins_the_same_family() {
+    let config = UiConfig::default();
+    let screen = |()| {
+        compile(
+            "micro.klayout.ron",
+            &resolver(),
+            &crate::common::registry::player_registry(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            &config,
+            &view::EMPTY,
+        )
+        .unwrap()
+    };
+    let _first = screen(());
+    let second = screen(());
+
+    drop(config.draw_buffers.text("held"));
+
+    assert_eq!(second.draw_pool_stats(), config.draw_buffers.stats());
+}
+
+/// A stage whose children the caller writes, so a test says only what it is
+/// about: what the placements of one scene declare.
+fn stage_resolver(children: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "scene.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "scene",
+            root: Module(instance: "scene", source: "scene.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "scene.kmodule.ron",
+        &format!(
+            r#"(schema: "kithara.module", version: 1, id: "scene",
+            root: Stage(id: "stage", children: [{children}]))"#
+        ),
+    );
+    resolver
+}
+
+fn compile_stage(children: &str) -> Result<CompiledUi, UiDocError> {
+    let mut registry = crate::common::registry::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "scene.at",
+        EndpointDesc::new(ValueKind::Point),
+    );
+    registry.insert(
+        EndpointCategory::Parameter,
+        "scene.at",
+        EndpointDesc::new(ValueKind::Point),
+    );
+    compile(
+        "scene.klayout.ron",
+        &stage_resolver(children),
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+}
+
+/// The point of a carried placement is the application's, so one that publishes
+/// a drag has to read the point back or it stands still while the model moves.
+#[kithara::test]
+fn a_placement_that_writes_without_reading_is_rejected() {
+    let error = compile_stage(
+        r#"Placed(id: "carry", at: (0.0, 0.0),
+            write: Parameter(id: "scene.at"),
+            child: Knob(id: "one"))"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::PlacedUnread { path, .. } if path == "root/Stage(stage)/[0]/Placed(carry)"),
+        "{error:?}"
+    );
+}
+
+/// A magnet pulls where a drag ends, so a placement no pointer carries never
+/// has an occasion to snap.
+#[kithara::test]
+fn a_magnet_on_a_placement_nobody_carries_is_rejected() {
+    let error = compile_stage(
+        r#"Placed(id: "dock", at: (0.0, 0.0), child: Knob(id: "one")),
+        Placed(id: "still", at: (40.0, 0.0),
+            magnet: (to: ["dock"], within: 64.0),
+            child: Knob(id: "two"))"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::MagnetUncarried { path, .. } if path == "root/Stage(stage)/[1]/Placed(still)"),
+        "{error:?}"
+    );
+}
+
+/// A magnet names placements of its own stage; anything else names nothing that
+/// stands anywhere.
+#[kithara::test]
+fn a_magnet_naming_no_placement_of_the_stage_is_rejected() {
+    let error = compile_stage(
+        r#"Placed(id: "carry", at: (0.0, 0.0),
+            read: Model(id: "scene.at"),
+            write: Parameter(id: "scene.at"),
+            magnet: (to: ["absent"], within: 64.0),
+            child: Knob(id: "one"))"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::MagnetUnknown { path, target, .. }
+            if path == "root/Stage(stage)/[0]/Placed(carry)" && target == "absent"),
+        "{error:?}"
+    );
+}
+
+/// A reach no distance is under is a magnet that never pulls, whichever way the
+/// document wrote it.
+#[kithara::test]
+fn a_magnet_reach_no_distance_is_under_is_rejected() {
+    for within in ["0.0", "-1.0"] {
+        let error = compile_stage(&format!(
+            r#"Placed(id: "dock", at: (0.0, 0.0), child: Knob(id: "one")),
+            Placed(id: "carry", at: (40.0, 0.0),
+                read: Model(id: "scene.at"),
+                write: Parameter(id: "scene.at"),
+                magnet: (to: ["dock"], within: {within}),
+                child: Knob(id: "two"))"#
+        ))
+        .unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::MagnetReach { path, .. } if path == "root/Stage(stage)/[1]/Placed(carry)"),
+            "`{within}`: {error:?}"
+        );
+    }
+}
+
+/// A placement is a point inside a scene, so it means nothing under a container
+/// that puts its children where it likes.
+#[kithara::test]
+fn a_placement_outside_a_stage_is_rejected() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "scene.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "scene",
+            root: Module(instance: "scene", source: "scene.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "scene.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "scene",
+            root: Column(children: [
+                Placed(id: "loose", at: (0.0, 0.0), child: Knob(id: "one")),
+            ]))"#,
+    );
+
+    let error = compile(
+        "scene.klayout.ron",
+        &resolver,
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::PlacedOutsideStage { path, .. } if path == "root/[0]/Placed(loose)"),
+        "{error:?}"
+    );
+}
+
+/// A `Tabs` and the presses that turn it, with the layout's own text under the
+/// caller's control so one fixture serves every way of getting it wrong.
+fn tabbed(tabs: &str) -> MemResolver {
+    let mut resolver = builtin::resolver();
+    resolver.insert(
+        "tabbed.klayout.ron",
+        &format!(
+            r#"(schema: "kithara.layout", version: 1, id: "tabbed",
+                root: Split(axis: Vertical, children: [
+                    (weight: 1.0, node: Module(instance: "nav", source: "nav.kmodule.ron")),
+                    (weight: 1.0, node: {tabs}),
+                ]))"#
+        ),
+    );
+    resolver.insert(
+        "nav.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "nav",
+            root: NavItem(id: "two", label: "TWO", icon: "Disc",
+                read: Page(id: "/shown", name: "two"),
+                write: Page(id: "/shown", name: "two")))"#,
+    );
+    for (source, id) in [("one.kmodule.ron", "one"), ("two.kmodule.ron", "two")] {
+        resolver.insert(
+            source,
+            &format!(
+                r#"(schema: "kithara.module", version: 1, id: "{id}",
+                    root: Row(children: [
+                        Spacer(id: "body", size: Some((w: Fixed(30.0), h: Fixed(10.0)))),
+                    ]))"#
+            ),
+        );
+    }
+    resolver
+}
+
+const TABS: &str = r#"Tabs(state: "shown", initial: "one", pages: {
+    "one": Module(instance: "one", source: "one.kmodule.ron"),
+    "two": Module(instance: "two", source: "two.kmodule.ron"),
+})"#;
+
+fn tabbed_error(tabs: &str) -> UiDocError {
+    compile(
+        "tabbed.klayout.ron",
+        &tabbed(tabs),
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .expect_err("the invalid tabs fixture is rejected")
+}
+
+/// A nav in one module turns a `Tabs` in another, which the two can only do
+/// through the screen's own state: neither instance holds the other.
+#[kithara::test]
+fn a_tabs_compiles_the_page_it_stands_at() {
+    let ui = compile(
+        "tabbed.klayout.ron",
+        &tabbed(TABS),
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+
+    assert_eq!(
+        ui.views().pages()["shown"].shown,
+        "one",
+        "a state standing nowhere must show the page the document calls initial"
+    );
+    assert_eq!(
+        ui.views().at("nav/two").map(|(state, _)| state),
+        Some("shown"),
+        "a press naming the screen's state must write the screen's state, not the module's"
+    );
+}
+
+/// The page a `Tabs` calls initial is the page it shows before anything is
+/// pressed, so a name that is not one of its pages is a screen that could never
+/// be drawn.
+#[kithara::test]
+fn a_tabs_refuses_an_initial_page_it_does_not_offer() {
+    let error = tabbed_error(
+        r#"Tabs(state: "shown", initial: "three",
+            pages: {
+                "one": Module(instance: "one", source: "one.kmodule.ron"),
+                "two": Module(instance: "two", source: "two.kmodule.ron"),
+            })"#,
+    );
+
+    assert!(
+        matches!(&error, UiDocError::UnknownPage { id, page, .. }
+            if id == "shown" && page == "three"),
+        "{error}"
+    );
+}
+
+/// A press naming a page no `Tabs` offers leaves the state standing where no
+/// document can show it. The name is refused where it is written rather than
+/// answered with some other page.
+#[kithara::test]
+fn a_press_refuses_a_page_no_tabs_offers() {
+    let error = tabbed_error(
+        r#"Tabs(state: "shown", initial: "one",
+            pages: {"one": Module(instance: "one", source: "one.kmodule.ron")})"#,
+    );
+
+    assert!(
+        matches!(&error, UiDocError::UnknownPage { id, page, path, .. }
+            if id == "shown" && page == "two" && path == "nav/two"),
+        "{error}"
+    );
+}
+
+/// A press naming a state no `Tabs` follows turns nothing at all, which is a
+/// misspelt name rather than a screen.
+#[kithara::test]
+fn a_press_refuses_a_state_no_tabs_follows() {
+    let error = tabbed_error(
+        r#"Tabs(state: "elsewhere", initial: "one",
+            pages: {
+                "one": Module(instance: "one", source: "one.kmodule.ron"),
+                "two": Module(instance: "two", source: "two.kmodule.ron"),
+            })"#,
+    );
+
+    assert!(
+        matches!(&error, UiDocError::UnknownPage { id, page, .. }
+            if id == "shown" && page == "two"),
+        "{error}"
+    );
+}
+
+/// A nav item lights the page standing: the read side of a `Page` binding
+/// answers whether the page it names is the one the screen shows, so the light
+/// under a tab costs the application no endpoint either.
+#[kithara::test]
+fn a_page_binding_reads_whether_its_page_stands() {
+    let ui = compile(
+        "tabbed.klayout.ron",
+        &tabbed(TABS),
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected split root");
+    };
+    let CompiledNode::Module { root, .. } = &children[0].node else {
+        panic!("expected the nav module");
+    };
+    let ExpandedNode::Control {
+        read: Some(binding),
+        ..
+    } = &**root
+    else {
+        panic!("expected the nav item");
+    };
+    let clock = Clock::default();
+
+    assert_eq!(
+        Ctx::new(&ui, &Silent, &view::EMPTY, builtin::skin_doc(), clock).read(binding),
+        Some(ReadValue::Bool(false)),
+        "a screen standing at its initial page must not light the tab of another"
+    );
+
+    let mut turned = ViewState::default();
+    turned.stand("shown", "two");
+
+    assert_eq!(
+        Ctx::new(&ui, &Silent, &turned, builtin::skin_doc(), clock).read(binding),
+        Some(ReadValue::Bool(true)),
+        "the tab of the page standing must be the one lit"
+    );
+}
+
+/// An application that answers nothing at all, so a tab lit below is lit by the
+/// screen's own state rather than something the test quietly supplied.
+struct Silent;
+
+impl Reads for Silent {
+    fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+        None
+    }
+}
+
+/// A page is a layout of its own rather than one module: a page that is a split
+/// of several modules stands exactly where a page that is one module stands.
+/// A screen is rarely one module, so a `Tabs` that could only offer one would
+/// send every richer page back to code that swaps whole documents.
+#[kithara::test]
+fn a_page_may_be_a_split_of_modules() {
+    let ui = compile(
+        "tabbed.klayout.ron",
+        &tabbed(
+            r#"Tabs(state: "shown", initial: "one", pages: {
+                "one": Split(axis: Horizontal, children: [
+                    (weight: 1.0, node: Module(instance: "left", source: "one.kmodule.ron")),
+                    (weight: 1.0, node: Module(instance: "right", source: "two.kmodule.ron")),
+                ]),
+                "two": Module(instance: "two", source: "two.kmodule.ron"),
+            })"#,
+        ),
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected split root");
+    };
+    let CompiledNode::Split { children, .. } = &children[1].node else {
+        panic!("expected the page to be the split it was written as");
+    };
+
+    assert_eq!(
+        children.len(),
+        2,
+        "every module the page splits into must stand, not the first alone"
+    );
+}
+
+/// Two pages never stand at once, so both may name the same instance. Refusing
+/// that would make a document rename what a page calls its body for no reason
+/// a reader could see.
+#[kithara::test]
+fn two_pages_may_name_the_same_instance() {
+    compile(
+        "tabbed.klayout.ron",
+        &tabbed(
+            r#"Tabs(state: "shown", initial: "one", pages: {
+                "one": Module(instance: "body", source: "one.kmodule.ron"),
+                "two": Module(instance: "body", source: "two.kmodule.ron"),
+            })"#,
+        ),
+        &crate::common::registry::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+}

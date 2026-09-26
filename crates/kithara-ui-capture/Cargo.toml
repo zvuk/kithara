@@ -1,0 +1,36 @@
+[package]
+name = "kithara-ui-capture"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Photograph sets of UI pages into files and compare two sets pixel by pixel."
+keywords = ["ui", "screenshot", "png", "diff", "testing"]
+categories = ["development-tools::testing", "multimedia::images"]
+autotests = false
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
+[dependencies]
+kurbo = { workspace = true }
+num-traits = { workspace = true }
+png = { workspace = true }
+
+# The same desktop-only gate `kithara-ui` carries: this crate is part of the UI
+# surface no device closure builds.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true }
+
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "capture"
+path = "tests/capture/main.rs"

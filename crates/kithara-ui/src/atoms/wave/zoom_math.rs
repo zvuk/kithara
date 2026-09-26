@@ -10,11 +10,6 @@ use crate::render::WaveBucket;
 pub struct Zoom(f32);
 
 pub const DEFAULT_ZOOM: f32 = Zoom::DEFAULT.0;
-#[cfg(test)]
-pub(crate) const MAX_ZOOM: f32 = Zoom::MAX.0;
-#[cfg(test)]
-pub(crate) const MIN_ZOOM: f32 = Zoom::MIN.0;
-
 const BUTTON_FACTOR: f32 = 0.7;
 
 /// Bars tile the track from its origin, so a bar's content never depends on
@@ -165,10 +160,10 @@ mod tests {
         let narrow = window_bounds(-1.0, 0.0);
         let wide = window_bounds(2.0, 2.0);
 
-        assert_near(narrow.start, -MIN_ZOOM / 2.0);
-        assert_near(narrow.end, MIN_ZOOM / 2.0);
-        assert_near(wide.start, 1.0 - MAX_ZOOM / 2.0);
-        assert_near(wide.end, 1.0 + MAX_ZOOM / 2.0);
+        assert_near(narrow.start, -Zoom::MIN.0 / 2.0);
+        assert_near(narrow.end, Zoom::MIN.0 / 2.0);
+        assert_near(wide.start, 1.0 - Zoom::MAX.0 / 2.0);
+        assert_near(wide.end, 1.0 + Zoom::MAX.0 / 2.0);
     }
 
     #[kithara::test]
@@ -284,16 +279,16 @@ mod tests {
     fn wheel_uses_canonical_factors_and_clamps() {
         assert_near(zoom_for_wheel(0.12, 1.0), 0.15);
         assert_near(zoom_for_wheel(0.12, -1.0), 0.096);
-        assert_near(zoom_for_wheel(MAX_ZOOM, 1.0), MAX_ZOOM);
-        assert_near(zoom_for_wheel(MIN_ZOOM, -1.0), MIN_ZOOM);
+        assert_near(zoom_for_wheel(Zoom::MAX.0, 1.0), Zoom::MAX.0);
+        assert_near(zoom_for_wheel(Zoom::MIN.0, -1.0), Zoom::MIN.0);
     }
 
     #[kithara::test]
     fn buttons_step_wider_than_a_detent_and_clamp() {
         assert_near(zoom_in(DEFAULT_ZOOM.into()), 0.084);
         assert_near(zoom_out(DEFAULT_ZOOM.into()), 0.171_428_57);
-        assert_near(zoom_in(MIN_ZOOM.into()), MIN_ZOOM);
-        assert_near(zoom_out(MAX_ZOOM.into()), MAX_ZOOM);
+        assert_near(zoom_in(Zoom::MIN.0.into()), Zoom::MIN.0);
+        assert_near(zoom_out(Zoom::MAX.0.into()), Zoom::MAX.0);
     }
 
     #[kithara::test]

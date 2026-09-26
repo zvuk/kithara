@@ -13,4 +13,4 @@ port = 8080
 [[hooks]]
 stage = "post_build"
 command = "cargo"
-command_arguments = ["xtask", "wasm", "postbuild"]
+command_arguments = ["xtask", "wasm", "postbuild", "--package", "kithara-ffi"]

@@ -61,7 +61,7 @@ web-sys = { workspace = true }
 
 [dev-dependencies]
 kithara-platform = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "subscriber"] }
 
 assert_no_alloc = { workspace = true }
 # Which sink a census line reaches is only observable through a subscriber; the

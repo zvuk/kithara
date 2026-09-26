@@ -79,8 +79,19 @@
                     ),
                 ],
             )),
-            Divider(id: "before-window"),
-            WindowControls(id: "window", style: Standard),
+            Optional(
+                id: "window-block",
+                hidden: Model(id: "ui.window.chrome_hidden", with: { "window": "1" }),
+                child: Row(
+                    id: "window-group",
+                    gap: 0.0,
+                    size: (w: Shrink, h: Fill),
+                    children: [
+                        Divider(id: "before-window"),
+                        WindowControls(id: "window", style: Standard),
+                    ],
+                ),
+            ),
         ],
     ),
 )

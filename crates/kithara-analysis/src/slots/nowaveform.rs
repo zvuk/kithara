@@ -1,12 +1,14 @@
-use std::num::NonZeroU32;
+use std::{convert::Infallible, num::NonZeroU32};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_waveform::WaveformResume;
 
 use crate::{BlobError, Waveform};
 
+/// A slot that never holds a waveform pass: this build has no waveform
+/// analysis.
 #[derive(Default)]
-pub(crate) struct Slot;
+pub(crate) struct Slot(Option<Infallible>);
 
 impl<S> TryFrom<(usize, NonZeroU32, &PoolRegion<S>)> for Slot
 where
@@ -15,7 +17,7 @@ where
     type Error = PoolError;
 
     fn try_from(_: (usize, NonZeroU32, &PoolRegion<S>)) -> Result<Self, Self::Error> {
-        Ok(Self)
+        Ok(Self(None))
     }
 }
 

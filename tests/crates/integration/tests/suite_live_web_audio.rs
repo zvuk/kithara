@@ -10,19 +10,19 @@
 //!
 //! `wasm-bindgen-test` picks its thread from a link-section flag that covers a
 //! whole binary, and `kithara::test` sets that flag to a dedicated worker. The
-//! product web session opens its `AudioContext` on the main thread only, so it
-//! gets a binary whose flag says so, and stays the only session in it.
+//! product web session opens its `AudioContext` on the main thread only, so its
+//! tests get a binary whose flag says so and open one session at a time.
 
 use std::num::NonZeroU32;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    host::{Host, HostConfig, wasm},
+    host::{CrossfaderBus, Host, HostConfig, HostOwned, crossfader_gain, wasm},
     output::OutputGroup,
     platform::{
         sync::{
             Arc,
-            atomic::{AtomicU64, Ordering},
+            atomic::{AtomicU32, AtomicU64, Ordering},
         },
         thread::{keep_worker_alive, spawn_named},
         time::{Duration, sleep},
@@ -300,6 +300,262 @@ async fn live_web_audio_plays_at_session_rate() {
         (MIN_RMS..=MAX_RMS).contains(&level),
         "full-scale sine plays at RMS {level:.4}, outside {MIN_RMS}..={MAX_RMS}"
     );
+}
+
+const DECK_TONES_HZ: [f64; 2] = [440.0, 880.0];
+const DECK_ASSETS: [SignalAsset; 2] = [SignalAsset::MP3_SINE440_60S, SignalAsset::MP3_SINE880_30S];
+
+struct DeckPair {
+    requested: AtomicU32,
+    applied: AtomicU32,
+    positions: [AtomicU64; 2],
+    stage: AtomicU64,
+}
+
+impl DeckPair {
+    const UNAPPLIED: u32 = u32::MAX;
+    const STAGES: [&str; 4] = [
+        "spawning the Worker",
+        "opening both decks",
+        "ticking both decks",
+        "past the tick loop",
+    ];
+
+    fn new(position: f32) -> Self {
+        Self {
+            requested: AtomicU32::new(position.to_bits()),
+            applied: AtomicU32::new(Self::UNAPPLIED),
+            positions: [AtomicU64::new(0), AtomicU64::new(0)],
+            stage: AtomicU64::new(0),
+        }
+    }
+
+    fn is_applied(&self, position: f32) -> bool {
+        self.applied.load(Ordering::Acquire) == position.to_bits()
+    }
+
+    fn positions(&self) -> [f64; 2] {
+        [0, 1].map(|deck| f64::from_bits(self.positions[deck].load(Ordering::Relaxed)))
+    }
+
+    fn stage(&self) -> &'static str {
+        usize::try_from(self.stage.load(Ordering::Relaxed))
+            .ok()
+            .and_then(|index| Self::STAGES.get(index))
+            .copied()
+            .unwrap_or("an unknown stage")
+    }
+}
+
+async fn open_deck(
+    host: &mut Host<TestPools>,
+    server: &TestServerHelper,
+    worker: &PlayWorker<TestPools>,
+    store: &AssetStore<TestPools>,
+    asset: SignalAsset,
+) -> HostOwned<PlayerImpl<TestPools>> {
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(host.requested_sample_rate())
+            .worker(worker.clone())
+            .build(),
+    );
+    let owner = host.insert(player).expect("insert the deck into the Host");
+    let control = owner.control().clone();
+    control.set_crossfade_duration(0.0);
+    let url = server.signal(asset);
+    let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
+        ResourceSrc::parse(url.as_str()).expect("the fixture URL parses as a resource source"),
+    )
+    .worker(worker.clone())
+    .store(store.clone())
+    .build();
+    let mut resource = Resource::new(config)
+        .await
+        .expect("open the fixture as a product resource");
+    resource.preload().await.expect("preload the fixture");
+    control.insert(resource, TrackId(0), None);
+    control
+        .select_item(0, kithara::play::SelectionPlayback::Pause)
+        .expect("select the fixture");
+    owner
+}
+
+fn spawn_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<DeckPair>) {
+    spawn_named("live-web-audio-decks", move || {
+        keep_worker_alive();
+        task::spawn(async move {
+            pair.stage.store(1, Ordering::Relaxed);
+            let mut host = wasm::remote_host(sender);
+            let region = pools();
+            let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
+            let store = AssetStore::builder(region)
+                .backend(StorageBackend::Memory)
+                .build();
+            let server = TestServerHelper::new().await;
+            let mut decks = Vec::with_capacity(DECK_ASSETS.len());
+            for asset in DECK_ASSETS {
+                decks.push(open_deck(&mut host, &server, &worker, &store, asset).await);
+            }
+            pair.stage.store(2, Ordering::Relaxed);
+
+            let mut applied = DeckPair::UNAPPLIED;
+            loop {
+                let requested = pair.requested.load(Ordering::Acquire);
+                if requested != applied {
+                    let position = f32::from_bits(requested);
+                    let levels = [CrossfaderBus::A, CrossfaderBus::B]
+                        .map(|bus| crossfader_gain(bus, position).expect("a valid position"));
+                    host.apply_mix(
+                        decks
+                            .iter()
+                            .zip(levels)
+                            .map(|(deck, level)| deck.level(level)),
+                    )
+                    .expect("apply the crossfader batch");
+                    if applied == DeckPair::UNAPPLIED {
+                        for deck in &decks {
+                            deck.control().play();
+                        }
+                    }
+                    applied = requested;
+                    pair.applied.store(applied, Ordering::Release);
+                }
+                for (deck, position) in decks.iter().zip(&pair.positions) {
+                    if deck.control().tick().is_err() {
+                        pair.stage.store(3, Ordering::Relaxed);
+                        return;
+                    }
+                    let seconds = deck.control().position_seconds().unwrap_or_default();
+                    position.store(seconds.to_bits(), Ordering::Relaxed);
+                }
+                sleep(WORKER_TICK).await;
+            }
+        });
+    });
+}
+
+async fn hear(
+    receiver: &wasm::HostReceiver<TestPools>,
+    tap: &mut HeapCons<f32>,
+    frames: usize,
+    deadline: f64,
+) -> Vec<f32> {
+    let page = web_sys::window().expect("the browser main thread owns a window");
+    let document = page.document().expect("the runner page owns a document");
+    let target = frames * CHANNELS;
+    let mut window: Vec<f32> = Vec::with_capacity(target);
+    while js_sys::Date::now() < deadline && window.len() < target {
+        wasm::tick_and_poll(receiver);
+        let click = web_sys::Event::new("click").expect("build a click event");
+        document.dispatch_event(&click).expect("dispatch the click");
+        next_frame(&page).await;
+        collect_tap(tap, &mut window);
+    }
+    window
+}
+
+async fn until_applied(
+    receiver: &wasm::HostReceiver<TestPools>,
+    pair: &DeckPair,
+    position: f32,
+    deadline: f64,
+) {
+    let page = web_sys::window().expect("the browser main thread owns a window");
+    while js_sys::Date::now() < deadline && !pair.is_applied(position) {
+        wasm::tick_and_poll(receiver);
+        next_frame(&page).await;
+    }
+    assert!(
+        pair.is_applied(position),
+        "the Worker did not apply crossfader position {position} while it was {}",
+        pair.stage()
+    );
+}
+
+fn tone_and_level(window: &[f32], measured: u32) -> (f64, f32) {
+    let half = usize::try_from(measured).unwrap() / 2 * CHANNELS;
+    let steady = &window[half.min(window.len())..];
+    (
+        zero_crossing_hz(&deinterleave_left(steady, CHANNELS), f64::from(measured)),
+        rms(steady),
+    )
+}
+
+#[wasm_bindgen_test]
+async fn two_decks_in_one_host_follow_the_crossfader() {
+    init_diagnostics();
+
+    let host: Host<TestPools> = Host::new(HostConfig::builder().sample_rate_hint(RATE).build())
+        .expect("build the product web Host");
+    let (sender, receiver) = wasm::worker_host_channel(&host).expect("open the Worker route");
+    wasm::warm_up_audio(&host).expect("warm up the audio context");
+
+    let (pcm_tx, mut pcm_rx) = HeapRb::<f32>::new(TAP_CAPACITY).split();
+    let drops = Arc::new(AtomicU64::new(0));
+    let mut outputs = OutputGroup::new();
+    outputs.push(MixTapWriter::new(pcm_tx, Arc::clone(&drops)));
+    host.enable_outputs(outputs).expect("install the mix tap");
+
+    let pair = Arc::new(DeckPair::new(0.0));
+    spawn_deck_pair_worker(sender, Arc::clone(&pair));
+    let deadline = js_sys::Date::now() + 2.0 * AUDIO_BUDGET_MS;
+    let second = usize::try_from(RATE.get()).unwrap();
+
+    until_applied(&receiver, &pair, 0.0, deadline).await;
+    let toward_a = hear(&receiver, &mut pcm_rx, second, deadline).await;
+    let at_a = pair.positions();
+
+    pair.requested.store(1.0_f32.to_bits(), Ordering::Release);
+    until_applied(&receiver, &pair, 1.0, deadline).await;
+    let _ = pcm_rx.pop_iter().count();
+    let toward_b = hear(&receiver, &mut pcm_rx, second, deadline).await;
+    let at_b = pair.positions();
+
+    let dropped = drops.load(Ordering::Relaxed);
+    let rates = host.sample_rate().expect("read the session output rate");
+    assert_eq!(
+        (rates.requested, rates.measured),
+        (RATE.get(), Some(RATE.get())),
+        "the session lost the rate it asked for while the Worker was {}",
+        pair.stage()
+    );
+    let measured = rates.output();
+    for (label, window) in [("A", &toward_a), ("B", &toward_b)] {
+        assert!(
+            window.len() / CHANNELS >= second,
+            "toward {label} the tap carried {} frames of {second}, {dropped} dropped, while the \
+             Worker was {}",
+            window.len() / CHANNELS,
+            pair.stage()
+        );
+    }
+    assert_eq!(dropped, 0, "tap dropped samples");
+
+    for ((label, window), expected) in [("A", &toward_a), ("B", &toward_b)]
+        .into_iter()
+        .zip(DECK_TONES_HZ)
+    {
+        let (tone, level) = tone_and_level(window, measured);
+        tracing::info!(label, tone, level, "crossfader window");
+        assert!(
+            (tone - expected).abs() <= expected * TONE_TOLERANCE,
+            "toward {label} the tap carries {tone:.1} Hz, not {expected} Hz"
+        );
+        assert!(
+            (MIN_RMS..=MAX_RMS).contains(&level),
+            "toward {label} one full-scale deck plays at RMS {level:.4}, outside \
+             {MIN_RMS}..={MAX_RMS}"
+        );
+    }
+    for deck in 0..2 {
+        assert!(
+            at_a[deck] > 0.0 && at_b[deck] > at_a[deck],
+            "deck {deck} position went {} -> {} across the crossfade",
+            at_a[deck],
+            at_b[deck]
+        );
+    }
 }
 
 /// A diagnostic that spans several `String.fromCharCode` calls and puts a

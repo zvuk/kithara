@@ -48,7 +48,7 @@ emits the same probe records through `tracing`.
 
 <tr><th>Module</th><th>Feature</th><th>Role</th></tr>
 
-<tr><td><code>test</code></td><td>always on</td><td>Re-exports <code>kithara_test_macros::test</code>; <code>init_tracing</code>, <code>setup_tracing</code>, <code>setup_tracing_with_filter</code> helpers</td></tr>
+<tr><td><code>test</code></td><td>always on; the tracing helpers need <code>subscriber</code> on <code>wasm32</code></td><td>Re-exports <code>kithara_test_macros::test</code>; <code>init_tracing</code>, <code>setup_tracing</code>, <code>setup_tracing_with_filter</code> helpers</td></tr>
 
 <tr><td><code>hang</code></td><td><code>hang</code> (default)</td><td>Hang-watchdog primitives used by <code>#[kithara::test]</code>; <code>noop</code> fallback when the feature is off</td></tr>
 
@@ -77,6 +77,8 @@ emits the same probe records through `tracing`.
 <tr><td><code>hang</code></td><td>yes</td><td>Real hang-watchdog implementation (otherwise no-op)</td></tr>
 
 <tr><td><code>mock</code></td><td>no</td><td>Pulls <code>unimock</code> into the dependency graph; enables real <code>kithara::mock</code> expansion</td></tr>
+
+<tr><td><code>subscriber</code></td><td>no</td><td>The test log subscriber on <code>wasm32</code>, where <code>setup_tracing</code> and its siblings exist only with it; native builds always carry it</td></tr>
 
 <tr><td><code>usdt</code></td><td>no</td><td>Enables USDT probe emission: native DTrace on macOS and <code>tracing</code> on other targets (otherwise no-op)</td></tr>
 

@@ -322,20 +322,6 @@ impl HostedEngine {
         targets
     }
 
-    #[cfg(test)]
-    pub(super) fn tree_picture(&self, path: &str) -> Option<(usize, String)> {
-        self.targets.iter().find_map(|target| {
-            let HostedControlPlan::Tree(plan) = &target.plan else {
-                return None;
-            };
-            if plan.path != path {
-                return None;
-            }
-            let picture = plan.picture();
-            Some((picture.row_count(), picture.query().to_owned()))
-        })
-    }
-
     delegate::delegate! {
         to self.engine.borrow_mut() {
             pub(super) fn clear_focus(&self);

@@ -46,6 +46,10 @@ impl<P: Packager> Broadcaster<P> {
         matches!(self.phase, Phase::Running { .. })
     }
 
+    pub(crate) const fn is_pending(&self) -> bool {
+        matches!(self.phase, Phase::Requested | Phase::Stopping)
+    }
+
     pub(crate) fn poll(&mut self, host: &AppHost) {
         if matches!(&self.phase, Phase::Running { live } if !P::is_live(live)) {
             if let Err(error) = P::release(host) {
@@ -78,17 +82,30 @@ impl<P: Packager> Broadcaster<P> {
         }
     }
 
+    pub(crate) fn shut_down(&mut self, host: &AppHost) -> Option<BroadcastStop<P>> {
+        match mem::replace(&mut self.phase, Phase::Off) {
+            Phase::Off | Phase::Requested => None,
+            Phase::Running { live } => Some(self.stop(host, live)),
+            Phase::Stopping => {
+                self.phase = Phase::Stopping;
+                None
+            }
+        }
+    }
+
+    fn stop(&mut self, host: &AppHost, live: P::Live) -> BroadcastStop<P> {
+        if let Err(error) = P::release(host) {
+            tracing::error!(%error, "failed to release broadcast output group");
+        }
+        self.phase = Phase::Stopping;
+        BroadcastStop(live)
+    }
+
     pub(crate) fn toggle(&mut self, host: &AppHost) -> Option<BroadcastStop<P>> {
         match mem::replace(&mut self.phase, Phase::Off) {
             Phase::Off => self.phase = Phase::Requested,
             Phase::Requested => {}
-            Phase::Running { live } => {
-                if let Err(error) = P::release(host) {
-                    tracing::error!(%error, "failed to release broadcast output group");
-                }
-                self.phase = Phase::Stopping;
-                return Some(BroadcastStop(live));
-            }
+            Phase::Running { live } => return Some(self.stop(host, live)),
             Phase::Stopping => self.phase = Phase::Stopping,
         }
         None
@@ -103,13 +120,14 @@ impl<P: Packager> Broadcaster<P> {
 }
 
 impl<P: Packager> BroadcastStop<P> {
+    pub(crate) fn drain(self) -> Duration {
+        let started = Instant::now();
+        P::stop(self.0);
+        started.elapsed()
+    }
+
     pub(crate) async fn run(self) -> Option<Duration> {
-        let drain = task::spawn_blocking(move || {
-            let started = Instant::now();
-            P::stop(self.0);
-            started.elapsed()
-        });
-        match drain.await {
+        match task::spawn_blocking(move || self.drain()).await {
             Ok(duration) => Some(duration),
             Err(error) => {
                 tracing::error!(%error, "broadcast stop worker failed");
