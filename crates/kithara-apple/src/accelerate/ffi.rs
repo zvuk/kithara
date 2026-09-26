@@ -2,6 +2,20 @@ pub(super) type VdspBiquadSetup = *mut std::ffi::c_void;
 pub(super) type VdspLength = usize;
 pub(super) type VdspStride = isize;
 
+/// One interleaved complex sample: vDSP's `DSPComplex`.
+#[repr(C)]
+pub(super) struct DspComplex {
+    real: f32,
+    imag: f32,
+}
+
+/// Two planar arrays viewed as split complex data: vDSP's `DSPSplitComplex`.
+#[repr(C)]
+pub(super) struct DspSplitComplex {
+    pub(super) realp: *mut f32,
+    pub(super) imagp: *mut f32,
+}
+
 #[link(name = "Accelerate", kind = "framework")]
 unsafe extern "C" {
     pub(super) fn cblas_scopy(n: i32, x: *const f32, inc_x: i32, y: *mut f32, inc_y: i32);
@@ -22,6 +36,14 @@ unsafe extern "C" {
     ) -> VdspBiquadSetup;
 
     pub(super) fn vDSP_biquad_DestroySetup(setup: VdspBiquadSetup);
+
+    pub(super) fn vDSP_ctoz(
+        c: *const DspComplex,
+        ic: VdspStride,
+        split: *const DspSplitComplex,
+        split_stride: VdspStride,
+        n: VdspLength,
+    );
 
     pub(super) fn vDSP_vclr(c: *mut f32, ic: VdspStride, n: VdspLength);
 
@@ -49,6 +71,14 @@ unsafe extern "C" {
         a: *const f32,
         b: *const f32,
         c: *mut f32,
+        ic: VdspStride,
+        n: VdspLength,
+    );
+
+    pub(super) fn vDSP_ztoc(
+        split: *const DspSplitComplex,
+        split_stride: VdspStride,
+        c: *mut DspComplex,
         ic: VdspStride,
         n: VdspLength,
     );
