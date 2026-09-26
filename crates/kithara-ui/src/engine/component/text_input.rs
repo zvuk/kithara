@@ -5,10 +5,11 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::retained::Component;
 use crate::{
+    draw::Rect,
     engine::model::{EngineEvent, Kind},
     interact::{
         CursorShape, Hit, Input, InputMethod, InputMethodRequest, Key, Modifiers, Outcome,
-        PointerPhase, PreeditRef, Rect, TextInputLayout,
+        PointerPhase, PreeditRef, TextInputLayout,
     },
 };
 

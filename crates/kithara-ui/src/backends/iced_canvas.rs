@@ -26,7 +26,7 @@ use crate::{
         Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Image, ImageId, LineCap, LineJoin, Needs,
         Paint, Pen, Pt, Rect, Rgba, Transform, Verb,
     },
-    shaping::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
+    shaping::{FontId, GlyphFace, GlyphRun, GlyphSegment, TextResources},
     skin::{FontFamily, FontWeight},
 };
 
@@ -277,7 +277,7 @@ fn draw_segment(
 }
 
 pub(crate) const fn font(family: FontFamily, weight: FontWeight) -> Font {
-    let face = select(family, weight);
+    let face = FontId::select(family, weight);
     let weight = match weight {
         FontWeight::Normal => Weight::Normal,
         FontWeight::Medium => Weight::Medium,
@@ -404,12 +404,6 @@ impl OutlinePen for IcedOutline<'_> {
     fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
         self.builder
             .quadratic_curve_to(self.point(cx0, cy0), self.point(x, y));
-    }
-}
-
-impl From<Pt> for Point {
-    fn from(point: Pt) -> Self {
-        Self::new(point.x, point.y)
     }
 }
 

@@ -26,16 +26,15 @@ use super::{
         WindowTracker,
     },
     custom::HostAction,
-    leaf::cursor_icon,
     node::Node,
     picker::{self, HostedEngine},
 };
-#[cfg(any(test, feature = "capture"))]
+#[cfg(feature = "capture")]
 use crate::draw::Rgba;
 use crate::{
     backends::VelloBackend,
     draw::{Pt, Rect, replay},
-    interact::CursorShape,
+    interact::{CursorShape, masonry::cursor_icon},
     render::{
         DragGhost, Skin, UiEvent, WindowCommand, WindowSurface, shader::ShaderDeclaration,
         vis::VisDeclaration,
@@ -216,7 +215,7 @@ where
     }
 
     /// The colour the node `id` writes its text in right now.
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub(crate) fn ink_of(&self, id: WidgetId) -> Option<Rgba> {
         self.root.get_widget(id)?.downcast::<Node>()?.ink()
     }
@@ -361,13 +360,6 @@ where
     /// Takes non-layer, non-action signals for the platform runner.
     pub fn take_platform_signals(&mut self) -> Vec<RenderRootSignal> {
         std::mem::take(&mut self.platform)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn tree_picture(&self, path: &str) -> Option<(usize, String)> {
-        self.engines
-            .iter()
-            .find_map(|engine| engine.tree_picture(path))
     }
 
     pub(crate) fn vis_declarations(&self) -> Vec<VisDeclaration> {

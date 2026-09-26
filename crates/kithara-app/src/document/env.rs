@@ -43,9 +43,6 @@ pub(crate) fn expand(
     }
 }
 
-/// `path` spells the position the way `build.rs::collect_refs` does -- a dot
-/// before a mapping key, `[i]` for a sequence index -- so a reference reads the
-/// same whether the build refused it or the startup did.
 fn walk(
     value: &mut Value,
     path: &str,

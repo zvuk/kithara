@@ -26,7 +26,7 @@ use crate::{
 enum SizeMode {
     /// Total length is unknown (no `Content-Length`). `AudioFile` gets no
     /// `get_size` proc and a tail probe is answered with EOF; reads run to
-    /// the source's natural end. Used for MP3 streaming.
+    /// the source's natural end.
     Unknown,
     /// A known total length. For a complete local file
     /// ([`AppleAudioFile::open`]) it is the file size; for a streamed source
@@ -80,7 +80,7 @@ impl AppleAudioFile {
     /// the size is frozen ([`SizeMode::Snapshot`]) and the packet count /
     /// max packet size are resolved eagerly — for VBR formats with no on-disk
     /// index (FLAC) that triggers a full-file scan, so streamed sources must
-    /// use [`Self::open_sized_streaming`] / [`Self::open_streaming`] instead.
+    /// use [`Self::open_sized_streaming`] instead.
     pub(crate) fn open(source: BoxedSource, hint: Option<u32>) -> DecodeResult<Self> {
         let (source, end) = Self::probe_end(source)?;
         let size = match end {
@@ -146,8 +146,7 @@ impl AppleAudioFile {
     /// codec treat a not-ready read as a transient `Pending` (not EOF) and
     /// resolve seeks by size-estimation instead of an O(N) forward frame-scan.
     /// If the source reports no length (no `Content-Length`, not yet
-    /// committed), falls back to the size-less [`SizeMode::Unknown`] path
-    /// ([`Self::open_streaming`]).
+    /// committed), falls back to the size-less [`SizeMode::Unknown`] path.
     ///
     /// The source must report its TRUE total here, never a partial in-flight
     /// length: `AudioFileServices` never reads past the size `get_size`
@@ -164,21 +163,6 @@ impl AppleAudioFile {
             .map_err(DecodeError::backend)?;
         let size = match end {
             Some(end) => SizeMode::Snapshot(i64::try_from(end).map_err(DecodeError::backend)?),
-            None => SizeMode::Unknown,
-        };
-        Self::open_inner(source, hint, size, false)
-    }
-
-    pub(crate) fn open_streaming(
-        mut source: BoxedSource,
-        hint: Option<u32>,
-        known_size: Option<u64>,
-    ) -> DecodeResult<Self> {
-        source
-            .seek(SeekFrom::Start(0))
-            .map_err(DecodeError::backend)?;
-        let size = match known_size {
-            Some(known) => SizeMode::Snapshot(i64::try_from(known).map_err(DecodeError::backend)?),
             None => SizeMode::Unknown,
         };
         Self::open_inner(source, hint, size, false)
@@ -245,7 +229,7 @@ impl AppleAudioFile {
     /// Read one VBR packet at `starting_packet` into `buf`. Returns
     /// `Ok(Some((bytes_written, packet_desc)))` or `Ok(None)` at EOF.
     /// Use for codecs whose decoder needs per-packet descriptors
-    /// (MP3 / ALAC).
+    /// (ALAC, FLAC, AAC).
     ///
     /// A not-ready streamed read is masked by `AudioFile` as either a graceful EOF or a truncated
     /// packet with a stashed callback error, for compressed formats.

@@ -1,10 +1,9 @@
 use kithara_apple::audio_toolbox::{
     AUDIO_CONVERTER_ERR_NO_DATA_NOW, AUDIO_FILE_AAC_ADTS_TYPE, AUDIO_FILE_CAF_TYPE,
-    AUDIO_FILE_FLAC_TYPE, AUDIO_FILE_M4A_TYPE, AUDIO_FILE_MP3_TYPE, AUDIO_FILE_WAVE_TYPE,
-    AUDIO_FORMAT_APPLE_LOSSLESS, AUDIO_FORMAT_FLAC, AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PACKED,
-    AUDIO_FORMAT_LINEAR_PCM, AUDIO_FORMAT_MPEG_LAYER3, AUDIO_FORMAT_MPEG4_AAC,
-    AUDIO_FORMAT_PROPERTY_FORMAT_LIST, AudioFormatFlags, AudioFormatID, NO_ERR, OSStatus,
-    os_status_to_string as format_os_status,
+    AUDIO_FILE_FLAC_TYPE, AUDIO_FILE_M4A_TYPE, AUDIO_FILE_WAVE_TYPE, AUDIO_FORMAT_APPLE_LOSSLESS,
+    AUDIO_FORMAT_FLAC, AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PACKED, AUDIO_FORMAT_LINEAR_PCM,
+    AUDIO_FORMAT_MPEG_LAYER3, AUDIO_FORMAT_MPEG4_AAC, AUDIO_FORMAT_PROPERTY_FORMAT_LIST,
+    AudioFormatFlags, AudioFormatID, NO_ERR, OSStatus, os_status_to_string as format_os_status,
 };
 
 pub(crate) struct Consts;
@@ -25,8 +24,6 @@ impl Consts {
     pub(crate) const FILE_FLAC_TYPE: u32 = AUDIO_FILE_FLAC_TYPE;
     /// `'m4af'` — M4A (ALAC / AAC) file-type hint.
     pub(crate) const FILE_M4A_TYPE: u32 = AUDIO_FILE_M4A_TYPE;
-    /// `'MPG3'` — MPEG-1/2 Layer 3 file-type hint.
-    pub(crate) const FILE_MP3_TYPE: u32 = AUDIO_FILE_MP3_TYPE;
     /// `'WAVE'` — RIFF WAV file-type hint for `audio_file_open_with_callbacks`.
     pub(crate) const FILE_WAVE_TYPE: u32 = AUDIO_FILE_WAVE_TYPE;
     /// Bytes prepended to STREAMINFO in the Apple FLAC magic cookie:

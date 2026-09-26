@@ -13,8 +13,6 @@ use iced::{
 };
 
 use super::contract::WindowLayerProgram;
-#[cfg(test)]
-use crate::{draw::Pt, render::HostLayer, shaping::TextResources, solve::Size as SolveSize};
 use crate::{
     draw::Rect,
     interact::{Input, Outcome, PointerId, PointerOwnership, PointerPhase, iced as iced_interact},
@@ -223,9 +221,11 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        draw::DrawList,
+        draw::{DrawList, Pt},
         interact::{CursorShape, Hit},
-        render::{LayerHit, WindowCommand, fonts::SANS},
+        render::{HostLayer, LayerHit, WindowCommand, fonts::SANS},
+        shaping::TextResources,
+        solve::Size as SolveSize,
     };
 
     struct TestProgram {

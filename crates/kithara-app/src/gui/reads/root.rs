@@ -8,10 +8,7 @@ use super::{
     stage::{DeckTempo, TempoNode, VisNode},
     ui::{DragNode, UiNode},
 };
-use crate::{
-    broadcast::Broadcaster,
-    gui::{app::Kithara, ui::cache::analysis_bpm, view::playhead},
-};
+use crate::{broadcast::Broadcaster, gui::app::Kithara};
 
 pub(in crate::gui) struct ReadRoot<'a> {
     broadcast: BroadcastNode<'a>,
@@ -36,24 +33,25 @@ impl<'a> ReadRoot<'a> {
             &cache.library,
         );
         let focus = cache.focus_deck();
-        let decks: Vec<DeckNode<'a>> = state
+        let snapshot = &*state.snapshot;
+        let decks: Vec<DeckNode<'a>> = snapshot
             .decks
             .iter()
             .zip(cache.decks())
             .enumerate()
             .map(|(at, (deck, deck_cache))| {
-                DeckNode::new(&deck.ui, deck.view, deck_cache, state.eq_mode, at == focus)
+                DeckNode::new(deck, deck_cache, snapshot.eq_mode, at == focus)
             })
             .collect();
         let engine = EngineNode::new(&decks);
-        let tempos: Vec<DeckTempo> = state
+        let tempos: Vec<DeckTempo> = snapshot
             .decks
             .iter()
             .enumerate()
             .map(|(at, deck)| DeckTempo {
-                bpm: analysis_bpm(&deck.ui),
+                bpm: deck.analysis.bpm,
                 focused: at == focus,
-                position: playhead(&deck.ui).max(0.0),
+                position: deck.position.max(0.0),
             })
             .collect();
         let drag = DragNode::new(
@@ -67,13 +65,13 @@ impl<'a> ReadRoot<'a> {
             decks,
             engine,
             broadcast: BroadcastNode::new(
-                state.broadcast.is_on_air(),
-                state.broadcast.url().unwrap_or_default(),
+                snapshot.broadcast.is_on_air,
+                &snapshot.broadcast.url,
                 Broadcaster::is_available(),
             ),
-            mix: MixNode::new(state.session.mix()),
-            mixer: StripsNode::new(state.session.mix()),
-            player: PlayerNode::new(state.session.mix()),
+            mix: MixNode::new(&snapshot.mix),
+            mixer: StripsNode::new(&snapshot.mix),
+            player: PlayerNode::new(&snapshot.mix),
             tempo: TempoNode::new(&cache.stage, &tempos),
             vis: VisNode::new(&cache.stage, &tempos),
             ui: UiNode::new(
@@ -110,6 +108,7 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
 #[cfg(test)]
 mod tests {
     use ::kithara::{
+        abr::AbrMode,
         effects::GainDb,
         ui::render::{ReadValue, Reads, Walk},
     };
@@ -119,19 +118,16 @@ mod tests {
     use super::*;
     use crate::{
         catalog::Catalog,
-        deck::EqMode,
-        gui::{
-            deck::DeckView,
-            ui::{
-                cache::{
-                    CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout, LibraryView,
-                    StageView,
-                },
-                endpoints::readable_endpoints,
-                menu::MenuState,
-                modules::Modules,
-                window::WindowState,
+        deck::{DeckId, EqMode},
+        engine::{DeckSettings, DeckSnapshot},
+        gui::ui::{
+            cache::{
+                CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout, LibraryView, StageView,
             },
+            endpoints::readable_endpoints,
+            menu::MenuState,
+            modules::Modules,
+            window::WindowState,
         },
         mix::MixState,
         state::{AbrVariant, UiState, covered},
@@ -147,7 +143,7 @@ mod tests {
         mix: MixState,
         modules: Modules,
         stage: StageView,
-        decks: Vec<(UiState, DeckCache)>,
+        decks: Vec<(UiState, DeckSettings, DeckCache)>,
         window: WindowState,
         broadcast_available: bool,
     }
@@ -170,25 +166,24 @@ mod tests {
             }
         }
 
-        fn root(&self) -> ReadRoot<'_> {
+        fn root<'a>(&'a self, shown: &'a [DeckSnapshot]) -> ReadRoot<'a> {
             let library = LibraryNode::new(&self.catalog, &self.marks, Some(0), &self.library);
-            let decks: Vec<DeckNode<'_>> = self
-                .decks
+            let decks: Vec<DeckNode<'_>> = shown
                 .iter()
+                .zip(&self.decks)
                 .enumerate()
-                .map(|(at, (ui, cache))| {
-                    DeckNode::new(ui, DeckView::default(), cache, self.eq_mode, at == 0)
+                .map(|(at, (deck, (_, _, cache)))| {
+                    DeckNode::new(deck, cache, self.eq_mode, at == 0)
                 })
                 .collect();
             let engine = EngineNode::new(&decks);
-            let tempos: Vec<DeckTempo> = self
-                .decks
+            let tempos: Vec<DeckTempo> = shown
                 .iter()
                 .enumerate()
-                .map(|(at, (ui, _))| DeckTempo {
-                    bpm: analysis_bpm(ui),
+                .map(|(at, deck)| DeckTempo {
+                    bpm: deck.analysis.bpm,
                     focused: at == 0,
-                    position: playhead(ui).max(0.0),
+                    position: deck.position.max(0.0),
                 })
                 .collect();
             let drag = DragNode::new(library.title(0), Some(1), decks.len());
@@ -213,6 +208,14 @@ mod tests {
                 ),
             }
         }
+
+        fn shown(&self) -> Vec<DeckSnapshot> {
+            self.decks
+                .iter()
+                .enumerate()
+                .map(|(at, (ui, settings, _))| DeckSnapshot::new(DeckId(at), ui, settings))
+                .collect()
+        }
     }
 
     fn hls_ladder() -> Vec<AbrVariant> {
@@ -230,10 +233,9 @@ mod tests {
         ]
     }
 
-    fn deck(tempo: &str) -> (UiState, DeckCache) {
+    fn deck(tempo: &str) -> (UiState, DeckSettings, DeckCache) {
         let mut ui = UiState::empty();
         ui.track_name = "Loaded".to_string();
-        ui.eq_bands = vec![GainDb::default(); 3];
         ui.duration = 120.0;
         ui.abr_variants = hls_ladder();
         let mut cache = DeckCache::default();
@@ -241,14 +243,14 @@ mod tests {
         cache.remain = "-02:00".to_string();
         cache.subtitle = "file".to_string();
         cache.view.zoom = Some(1.0);
-        (ui, cache)
+        (ui, DeckSettings::new(3), cache)
     }
 
     fn fixture_in(mode: EqMode) -> Fixture {
         let mut fixture = Fixture::new(["+2.0%", "-1.0%"]);
         fixture.eq_mode = mode;
-        for (ui, _) in &mut fixture.decks {
-            ui.eq_bands = vec![GainDb::default(); mode.bands().len()];
+        for (_, settings, _) in &mut fixture.decks {
+            settings.eq_bands = vec![GainDb::default(); mode.bands().len()];
         }
         fixture
     }
@@ -264,7 +266,8 @@ mod tests {
         fixture.decks[1]
             .0
             .set_analysis(Some(covered(&[(0, 1_000)], Some(1_000)).into()));
-        let root = fixture.root();
+        let shown = fixture.shown();
+        let root = fixture.root(&shown);
         let walk = Walk::new(&root);
 
         let Some(ReadValue::Waveform(partial)) = walk.get("deck.playback.waveform@deck=a") else {
@@ -281,9 +284,9 @@ mod tests {
     #[kithara::test]
     fn the_menu_marks_the_rung_in_force_and_hides_the_slots_the_ladder_lacks() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
-        fixture.decks[0].0.abr_mode_is_auto = false;
-        fixture.decks[0].0.selected_variant = Some(1);
-        let root = fixture.root();
+        fixture.decks[0].0.abr_mode = Some(AbrMode::manual(1));
+        let shown = fixture.shown();
+        let root = fixture.root(&shown);
         let walk = Walk::new(&root);
 
         assert_eq!(
@@ -335,14 +338,16 @@ mod tests {
         let mut unowned: Vec<String> = documented.chain(synthesized).collect();
         for mode in [EqMode::ThreeBand, EqMode::FourBand] {
             let fixture = fixture_in(mode);
-            let root = fixture.root();
+            let shown = fixture.shown();
+            let root = fixture.root(&shown);
             let walk = Walk::new(&root);
             unowned.retain(|key| walk.get(key).is_none());
         }
         assert!(unowned.is_empty(), "no owner answers {unowned:?}");
 
         let fixture = Fixture::new(["+2.0%", "-1.0%"]);
-        let root = fixture.root();
+        let shown = fixture.shown();
+        let root = fixture.root(&shown);
         let walk = Walk::new(&root);
         assert_eq!(
             walk.get("deck.playback.tempo@deck=a"),
@@ -362,7 +367,8 @@ mod tests {
     #[kithara::test]
     fn the_air_controls_hide_when_the_build_carries_no_packager() {
         let fixture = Fixture::new(["+0.0%", "+0.0%"]);
-        let root = fixture.root();
+        let shown = fixture.shown();
+        let root = fixture.root(&shown);
 
         assert_eq!(
             Walk::new(&root).get("broadcast.hidden"),
@@ -372,7 +378,8 @@ mod tests {
 
         let mut fixture = fixture;
         fixture.broadcast_available = true;
-        let root = fixture.root();
+        let shown = fixture.shown();
+        let root = fixture.root(&shown);
 
         assert_eq!(
             Walk::new(&root).get("broadcast.hidden"),
@@ -384,7 +391,8 @@ mod tests {
     fn the_menu_states_what_the_only_window_draws() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
         {
-            let root = fixture.root();
+            let shown = fixture.shown();
+            let root = fixture.root(&shown);
             let walk = Walk::new(&root);
 
             assert_eq!(
@@ -409,7 +417,8 @@ mod tests {
         fixture.modules.toggle("ov");
         fixture.window.set_size(Size::new(1600.0, 900.0));
         fixture.window.refresh(DeckLayout::Single, &fixture.modules);
-        let root = fixture.root();
+        let shown = fixture.shown();
+        let root = fixture.root(&shown);
 
         assert_eq!(
             Walk::new(&root).get("ui.window.caption@window=1"),
@@ -421,7 +430,8 @@ mod tests {
     fn a_module_the_menu_switches_off_leaves_the_layout() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
         {
-            let root = fixture.root();
+            let shown = fixture.shown();
+            let root = fixture.root(&shown);
             let walk = Walk::new(&root);
 
             assert_eq!(
@@ -440,7 +450,8 @@ mod tests {
         }
 
         fixture.modules.toggle("ov");
-        let root = fixture.root();
+        let shown = fixture.shown();
+        let root = fixture.root(&shown);
         let walk = Walk::new(&root);
 
         assert_eq!(
@@ -466,7 +477,8 @@ mod tests {
     fn the_menu_reads_its_own_state_and_the_layout_in_force() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
         fixture.menu.toggle_layouts();
-        let root = fixture.root();
+        let shown = fixture.shown();
+        let root = fixture.root(&shown);
         let walk = Walk::new(&root);
 
         assert_eq!(
@@ -505,7 +517,8 @@ mod tests {
     fn every_deck_reads_the_shared_eq_mode() {
         for (mode, bands) in [(EqMode::ThreeBand, 3.0), (EqMode::FourBand, 4.0)] {
             let fixture = fixture_in(mode);
-            let root = fixture.root();
+            let shown = fixture.shown();
+            let root = fixture.root(&shown);
             let walk = Walk::new(&root);
 
             for deck in ["a", "b"] {
@@ -528,7 +541,8 @@ mod tests {
     #[kithara::test]
     fn a_three_band_app_has_no_mid_band_gains() {
         let fixture = fixture_in(EqMode::ThreeBand);
-        let root = fixture.root();
+        let shown = fixture.shown();
+        let root = fixture.root(&shown);
         let walk = Walk::new(&root);
 
         for deck in ["a", "b"] {

@@ -44,6 +44,19 @@ enum ExternalName {
     Renamed,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct Narrow {
+    kept: u8,
+}
+
+#[derive(Mirror)]
+#[mirror(into = Narrow)]
+struct Wide {
+    kept: u8,
+    #[mirror(skip)]
+    dropped: u8,
+}
+
 #[derive(Mirror)]
 #[mirror(into = ExternalName)]
 enum LocalName {
@@ -90,4 +103,14 @@ fn mirrors_into_an_explicitly_renamed_variant() {
         ExternalName::from(LocalName::Local),
         ExternalName::Renamed
     ));
+}
+
+#[kithara::test(native, flash(false))]
+fn mirrors_into_a_struct_without_its_skipped_fields() {
+    let wide = Wide {
+        kept: 2,
+        dropped: 9,
+    };
+    assert_eq!(wide.dropped, 9);
+    assert_eq!(Narrow::from(wide), Narrow { kept: 2 });
 }

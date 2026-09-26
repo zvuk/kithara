@@ -80,7 +80,7 @@ portable-atomic = { workspace = true }
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["usdt", "mock"] }
 kithara-bufpool = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "subscriber"] }
 wasm-bindgen-test = { workspace = true }
 
 [lints]

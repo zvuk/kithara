@@ -1,8 +1,7 @@
-pub use config::{
-    DrawPoolLimits, DrawPoolLimitsPatch, Limits, LimitsPatch, SCREEN_CACHE, UiConfig, UiConfigPatch,
-};
+pub use config::{Limits, LimitsPatch, SCREEN_CACHE, UiConfig, UiConfigPatch};
 #[cfg(not(target_arch = "wasm32"))]
 pub use file::FileResolver;
+pub use kithara_ui_draw::{DrawPoolLimits, DrawPoolLimitsPatch};
 pub use mem::MemResolver;
 pub use overlay::OverlayResolver;
 pub use uri::{LoadedBytes, LoadedSource, SourceResolver};

@@ -3,10 +3,7 @@ use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 use kithara_bufpool::PoolError;
 use kithara_signal::SignalError;
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, VariantChangeError};
-#[cfg(any(
-    all(feature = "apple", any(target_os = "macos", target_os = "ios")),
-    all(feature = "android", target_os = "android")
-))]
+#[cfg(any(apple_backend, android_backend))]
 use kithara_stream::{NotReadyCause, StreamPending};
 
 /// Errors that can occur during audio decoding.
@@ -158,9 +155,9 @@ where
     L: Fn(&(dyn StdError + 'static)) -> bool,
 {
     let io_hit = err.downcast_ref::<io::Error>().map(check_io);
-    #[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
+    #[cfg(symphonia_demuxer)]
     let symphonia_hit = crate::symphonia::echain::inspect(err, check_io, check_leaf);
-    #[cfg(not(any(feature = "symphonia", all(feature = "android", target_os = "android"))))]
+    #[cfg(not(symphonia_demuxer))]
     let symphonia_hit: Option<bool> = None;
     let leaf_hit = check_leaf(err);
     match (io_hit, symphonia_hit, leaf_hit) {
@@ -287,10 +284,7 @@ impl DecodeError {
     /// never `Err`. Mirrors the Symphonia demuxer's not-ready guard
     /// (including the bare-`Interrupted` → `SourcePending` default).
     #[must_use]
-    #[cfg(any(
-        all(feature = "apple", any(target_os = "macos", target_os = "ios")),
-        all(feature = "android", target_os = "android")
-    ))]
+    #[cfg(any(apple_backend, android_backend))]
     pub(crate) fn pending_reason(&self) -> Option<PendingReason> {
         let io_err = match self {
             Self::Io { source } => source,

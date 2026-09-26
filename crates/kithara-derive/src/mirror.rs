@@ -306,11 +306,17 @@ fn into_struct(data: &DataStruct, target: &Path) -> syn::Result<TokenStream2> {
             let values = fields
                 .named
                 .iter()
-                .map(|field| {
+                .filter_map(|field| {
                     let source = field.ident.as_ref().expect("named field");
-                    let options = member_options(&field.attrs)?;
+                    let options = match member_options(&field.attrs) {
+                        Ok(options) => options,
+                        Err(error) => return Some(Err(error)),
+                    };
+                    if options.skip {
+                        return None;
+                    }
                     let target = options.rename.unwrap_or_else(|| source.clone());
-                    Ok(quote!(#target: value.#source))
+                    Some(Ok(quote!(#target: value.#source)))
                 })
                 .collect::<syn::Result<Vec<_>>>()?;
             Ok(quote!(#target { #(#values,)* }))

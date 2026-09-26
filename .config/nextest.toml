@@ -17,7 +17,7 @@
 # `.config/xtask.toml` `[test.lanes.fixtures]` and `[test.lanes.harness]` run
 # these under `profile.support`, which opts back in.
 #
-# The last two terms are the UI, which owns a graphics-backed pipeline of its
+# The last four terms are the UI, which owns a graphics-backed pipeline of its
 # own: `[test.lanes.ui]` opts out of this filter with `--ignore-default-filter`
 # and runs exactly that set on the GPU runner.
 [profile.default]
@@ -27,6 +27,8 @@ not (
     + binary_id(=kithara-platform::flash_spawn)
     + binary_id(=kithara-integration-tests)
     + package(kithara-ui)
+    + package(kithara-ui-input)
+    + package(kithara-ui-shaping)
     + (package(kithara-app) & test(/^gui::/))
 )
 """

@@ -782,10 +782,11 @@ mod tests {
         }];
         let rows = (0..4)
             .map(|index| {
-                TableRowData::new(
-                    vec![("title".to_owned(), TableCell::Text(format!("Row {index}")))],
+                let title = format!("Row {index}");
+                TableRowData::from(&crate::render::TableRow::new(
+                    vec![crate::render::TableCell::text("title", &title)],
                     false,
-                )
+                ))
             })
             .collect();
         let picture = TableFace::new(rows, columns.clone(), skin);

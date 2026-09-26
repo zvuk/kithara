@@ -401,6 +401,12 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Model,
+        id: "ui.window.chrome_hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::WINDOW,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
         id: "ui.window.title",
         value: ValueKind::Text,
         scopes: Endpoint::WINDOW,

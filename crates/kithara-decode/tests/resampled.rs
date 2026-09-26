@@ -1,4 +1,4 @@
-#![cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
+#![cfg(any(feature = "symphonia", android_backend))]
 #![forbid(unsafe_code)]
 
 use std::{
