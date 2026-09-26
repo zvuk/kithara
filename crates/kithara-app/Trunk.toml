@@ -1,0 +1,16 @@
+[build]
+target = "index.html"
+dist = "dist"
+filehash = false
+
+[serve]
+port = 8080
+# SharedArrayBuffer, which the module's shared memory needs, requires
+# cross-origin isolation.
+headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder-Policy" = "require-corp" }
+
+# Strip integrity/crossorigin attrs that break under COEP require-corp.
+[[hooks]]
+stage = "post_build"
+command = "cargo"
+command_arguments = ["xtask", "wasm", "postbuild", "--package", "kithara-app"]

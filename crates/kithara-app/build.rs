@@ -14,7 +14,7 @@
 //! non-empty value): an upfront pass then validates every reference in
 //! `app.yaml` and fails the build listing all missing variables.
 //!
-//! `app.yaml` and an existing `.env` are both `rerun-if-changed`.
+//! `app.yaml`, `app.web.yaml` and an existing `.env` are `rerun-if-changed`.
 
 use std::{
     collections::HashMap,
@@ -24,7 +24,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde_yaml_ng::Value;
+#[path = "src/document/bake.rs"]
+mod bake;
+#[path = "src/document/merge.rs"]
+mod merge;
 
 fn main() {
     let manifest_dir =
@@ -39,25 +42,29 @@ fn main() {
         println!("cargo:rerun-if-changed={}", dotenv_path.display());
     }
 
+    let web_yaml_path = manifest_dir.join("app.web.yaml");
+    println!("cargo:rerun-if-changed={}", web_yaml_path.display());
     let yaml_src = fs::read_to_string(&app_yaml_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", app_yaml_path.display()));
-
-    let document: Value = serde_yaml_ng::from_str(&yaml_src)
-        .unwrap_or_else(|e| panic!("parse {}: {e}", app_yaml_path.display()));
+    let web_src = fs::read_to_string(&web_yaml_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", web_yaml_path.display()));
 
     let env_map = load_env(&dotenv_path);
+    let target_arch =
+        env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH is set by cargo");
+    let baked = bake::bake(&target_arch, &yaml_src, &web_src, &env_map)
+        .unwrap_or_else(|e| panic!("bake the configuration document: {e}"));
     println!("cargo:rerun-if-env-changed=KITHARA_DRM_REQUIRE");
 
-    let mut env_refs = Vec::new();
-    collect_refs(&document, "", &mut env_refs);
-    for (_, name) in &env_refs {
+    for (_, name) in &baked.refs {
         println!("cargo:rerun-if-env-changed={name}");
     }
     if env_map
         .get("KITHARA_DRM_REQUIRE")
         .is_some_and(|v| !v.is_empty())
     {
-        let missing: Vec<String> = env_refs
+        let missing: Vec<String> = baked
+            .refs
             .iter()
             .filter(|(_, name)| env_map.get(name).is_none_or(String::is_empty))
             .map(|(label, name)| format!("{label}: `{name}`"))
@@ -71,51 +78,14 @@ fn main() {
     }
 
     let mut code = String::new();
-    emit_document(&mut code, &yaml_src);
-    emit_env_table(&mut code, &env_refs, &env_map);
+    emit_document(&mut code, &baked.document);
+    emit_env_table(&mut code, &baked.resolved);
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
     let out_path = out_dir.join("app_config_baked.rs");
     fs::write(&out_path, code).unwrap_or_else(|e| panic!("write {}: {e}", out_path.display()));
 
     emit_ui_documents(&manifest_dir, &out_dir);
-}
-
-/// Every `$VAR` / `${VAR}` reference in the document, labelled by where it sits.
-/// Untyped on purpose: a section added to the schema needs no change here.
-fn collect_refs(value: &Value, path: &str, refs: &mut Vec<(String, String)>) {
-    match value {
-        Value::String(text) => {
-            if let Some(name) = text.strip_prefix('$').filter(|_| !text.contains("${")) {
-                refs.push((path.to_string(), name.to_string()));
-                return;
-            }
-            let mut rest = text.as_str();
-            while let Some(start) = rest.find("${") {
-                let tail = &rest[start + 2..];
-                let Some(end) = tail.find('}') else { break };
-                refs.push((path.to_string(), tail[..end].to_string()));
-                rest = &tail[end + 1..];
-            }
-        }
-        Value::Sequence(items) => {
-            for (index, item) in items.iter().enumerate() {
-                collect_refs(item, &format!("{path}[{index}]"), refs);
-            }
-        }
-        Value::Mapping(entries) => {
-            for (key, entry) in entries {
-                let key = key.as_str().unwrap_or("?");
-                let child = if path.is_empty() {
-                    key.to_string()
-                } else {
-                    format!("{path}.{key}")
-                };
-                collect_refs(entry, &child, refs);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// Embed the document verbatim. The application parses this same text at
@@ -133,15 +103,7 @@ fn emit_document(code: &mut String, yaml_src: &str) {
 /// else, so a name it had nothing for reaches the startup unresolved and is
 /// named there. Values are wrapped with `obfstr!()` so a shipped secret is not
 /// a plain run of bytes in `strings` output.
-fn emit_env_table(code: &mut String, refs: &[(String, String)], env_map: &HashMap<String, String>) {
-    let mut names: Vec<&String> = refs.iter().map(|(_, name)| name).collect();
-    names.sort_unstable();
-    names.dedup();
-    let resolved: Vec<(&String, &String)> = names
-        .into_iter()
-        .filter_map(|name| Some((name, env_map.get(name).filter(|value| !value.is_empty())?)))
-        .collect();
-
+fn emit_env_table(code: &mut String, resolved: &[(String, String)]) {
     // A build that resolved nothing -- every lane without credentials -- has no
     // table to match against, and a `match` left with one wildcard arm is not a
     // table either.

@@ -1,0 +1,21 @@
+# What the browser build lays over `app.yaml`. `build.rs` merges the two for
+# wasm32 and bakes the result: the module every visitor downloads carries an
+# empty provider list and an empty reference table. The playlist holds the
+# streams that answer cross-origin requests, and the asset store lives in the
+# page's memory.
+
+drm:
+  providers: []
+
+playlist:
+  tracks:
+    - https://stream.silvercomet.top/track.mp3
+    - https://stream.silvercomet.top/hls/master.m3u8
+    - https://stream.silvercomet.top/drm/master.m3u8
+    - https://stream.silvercomet.top/tones/master.m3u8
+
+assets_store:
+  backend:
+    kind: memory
+  cache_capacity: 128
+  max_bytes: 134217728

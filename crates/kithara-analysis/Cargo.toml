@@ -73,7 +73,7 @@ kithara-events = { workspace = true }
 kithara-resampler = { workspace = true, features = ["resample-rubato"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "subscriber"] }
 
 serde_json = { workspace = true }
 unimock = { workspace = true }

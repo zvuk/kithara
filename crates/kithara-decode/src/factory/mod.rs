@@ -5,6 +5,8 @@
 //! `DecodeError::BackendUnavailable`, one that rejects the codec/container returns
 //! `DecodeError::UnsupportedCodec`, both terminal.
 
+#[cfg(all(test, apple_backend, feature = "symphonia"))]
+mod apple_mp3_tests;
 mod inner;
 mod probe;
 

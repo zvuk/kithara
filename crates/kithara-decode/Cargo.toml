@@ -24,6 +24,8 @@ apple = [
     "dep:core-foundation",
     "dep:core-foundation-sys",
     "dep:kithara-apple",
+    "dep:kithara-mpa",
+    "dep:symphonia-core",
     "kithara-apple/audio-toolbox",
 ]
 # Select Apple codec-embedded resampling as the default decoder placement.
@@ -102,7 +104,7 @@ kithara-bufpool = { workspace = true }
 kithara-decode = { path = ".", default-features = false, features = ["usdt"] }
 kithara-storage = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "subscriber"] }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
