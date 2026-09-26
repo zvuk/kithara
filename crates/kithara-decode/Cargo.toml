@@ -24,6 +24,8 @@ apple = [
     "dep:core-foundation",
     "dep:core-foundation-sys",
     "dep:kithara-apple",
+    "dep:kithara-mpa",
+    "dep:symphonia-core",
     "kithara-apple/audio-toolbox",
 ]
 # Select Apple codec-embedded resampling as the default decoder placement.

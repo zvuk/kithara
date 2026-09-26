@@ -529,7 +529,7 @@ impl DecoderRuntime<crate::test_pools::TestPools> {
 }
 
 #[cfg(test)]
-#[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
+#[cfg(any(feature = "symphonia", android_backend))]
 mod default_priming_tests {
     use std::io::Cursor;
 
@@ -573,7 +573,7 @@ mod default_priming_tests {
         ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test())
     }
 
-    #[cfg(all(not(feature = "symphonia"), feature = "android", target_os = "android"))]
+    #[cfg(all(android_backend, not(feature = "symphonia")))]
     pub(super) fn build_mp3_decoder(
         tone_mp3: &[u8],
     ) -> ComposedDecoder<
@@ -734,7 +734,7 @@ fn frames_to_trim(frame_pts: Duration, target: Duration, sample_rate: u32) -> u6
 }
 
 #[cfg(test)]
-#[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
+#[cfg(any(feature = "symphonia", android_backend))]
 mod smoke_tests {
 
     #[cfg(feature = "symphonia")]

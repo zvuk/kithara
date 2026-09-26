@@ -65,6 +65,7 @@ impl<R: Seek> ReadSeekAdapter<R> {
         Some(end)
     }
 
+    #[cfg(feature = "symphonia")]
     pub(crate) fn seek_enabled_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.seek_enabled)
     }
@@ -116,6 +117,12 @@ mod tests {
 
         assert_eq!(adapter.byte_len(), Some(5000));
         assert!(!adapter.is_seekable());
+    }
+
+    #[cfg(feature = "symphonia")]
+    #[kithara::test]
+    fn seek_enabled_handle_turns_seeking_on() {
+        let adapter = ReadSeekAdapter::new(Cursor::new(vec![0u8; 5000]), None, false);
 
         adapter.seek_enabled_handle().store(true, Ordering::Release);
         assert!(adapter.is_seekable());
