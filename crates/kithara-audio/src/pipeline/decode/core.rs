@@ -464,7 +464,8 @@ impl ActiveDecode {
     }
 }
 
-fn panic_message(payload: Box<dyn Any + Send>) -> String {
+/// Text of a caught decoder panic, for the warning that replaces the crash.
+pub(crate) fn panic_message(payload: Box<dyn Any + Send>) -> String {
     match payload.downcast::<String>() {
         Ok(message) => *message,
         Err(payload) => payload.downcast::<&'static str>().map_or_else(

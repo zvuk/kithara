@@ -17,7 +17,10 @@ use kithara_stream::{
 use tracing::warn;
 
 use crate::pipeline::{
-    decode::{core::DecoderFactory, generation::DecoderGeneration},
+    decode::{
+        core::{DecoderFactory, panic_message},
+        generation::DecoderGeneration,
+    },
     rebuild::{
         policy::classify,
         state::{
@@ -319,14 +322,4 @@ fn run<T: StreamType>(job: PendingJob<T>) {
         }
     }
     deps.wake.wake();
-}
-
-fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    match payload.downcast::<String>() {
-        Ok(message) => *message,
-        Err(payload) => payload.downcast::<&'static str>().map_or_else(
-            |_| "unknown panic payload".to_string(),
-            |message| (*message).to_string(),
-        ),
-    }
 }

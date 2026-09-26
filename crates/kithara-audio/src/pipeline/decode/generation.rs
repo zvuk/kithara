@@ -16,6 +16,7 @@ use kithara_test_utils::kithara;
 use tracing::warn;
 
 use crate::pipeline::{
+    decode::core::panic_message,
     gapless::GaplessStage,
     seek::{ResumeState, SeekContext},
 };
@@ -423,16 +424,6 @@ fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFailure {
     StageFailure {
         chunk,
         error: DecodeError::InvalidData { detail },
-    }
-}
-
-fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    match payload.downcast::<String>() {
-        Ok(message) => *message,
-        Err(payload) => payload.downcast::<&'static str>().map_or_else(
-            |_| "unknown panic payload".to_string(),
-            |message| (*message).to_string(),
-        ),
     }
 }
 
