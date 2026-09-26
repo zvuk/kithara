@@ -11,7 +11,7 @@ use super::{
     lifecycle::Applied,
     mutation::{materialize_topology, routed_group},
     preparation::Pending,
-    timeline::{Blocked, Timeline},
+    timeline::{Blocked, PriorTimeline, Timeline},
 };
 use crate::{
     ParentFact, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup,
@@ -28,6 +28,7 @@ use crate::{
 pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     pub(super) grid: BeatGridSnapshot,
     pub(super) timeline: Timeline,
+    pub(super) before_entry: Option<(SyncOperationId, PriorTimeline)>,
     pub(super) parent: Option<Parent>,
     pub(super) next_operation: Option<SyncOperationId>,
     pub(super) blocked: Option<Blocked>,
@@ -48,6 +49,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             grid,
             member_kind,
             timeline: Timeline::Off,
+            before_entry: None,
             parent: None,
             members: Vec::new(),
             next_operation: Some(SyncOperationId::first()),
@@ -230,6 +232,47 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         TopologyStamp::new(self.grid.id(), self.topology_revision)
     }
 
+    /// Keeps an unpresented leaf entry's prior timeline only while one
+    /// pending decision on the same physical axis and load still owns it.
+    /// A same-load replacement inherits custody; an axis or owner change
+    /// severs it before a late rejection can restore an obsolete timeline.
+    pub(super) fn reconcile_before_entry(
+        &self,
+        grid: &BeatGridSnapshot,
+        timeline: Timeline,
+        pending: &[Pending],
+        custody: Option<(SyncOperationId, PriorTimeline)>,
+    ) -> Option<(SyncOperationId, PriorTimeline)> {
+        let (operation, prior) = custody?;
+        if grid.axis() != self.grid.axis() || !matches!(timeline, Timeline::Host) {
+            return None;
+        }
+        if pending
+            .iter()
+            .any(|held| held.operation() == operation && held.enters_map())
+        {
+            return Some((operation, prior));
+        }
+        let previous = self
+            .pending
+            .iter()
+            .find(|held| held.operation() == operation)?;
+        pending
+            .iter()
+            .find(|held| {
+                held.member() == previous.member()
+                    && held.load() == previous.load()
+                    && held
+                        .preparation()
+                        .zip(previous.preparation())
+                        .is_some_and(|(next, old)| {
+                            next.stamp().transport() == old.stamp().transport()
+                        })
+                    && held.enters_map()
+            })
+            .map(|held| (held.operation(), prior))
+    }
+
     /// The state of the latest map a member sounds through: locked while it
     /// follows the current group grid, converging while the grid moved on.
     fn applied_status(&self, topology: TopologyStamp) -> SyncStatusSnapshot {
@@ -241,7 +284,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             return SyncStatusSnapshot::Off { topology };
         };
         let (applied, phase_error_frames) = (lane.applied(), lane.phase_error_frames());
-        if applied.stamp().group() == self.grid.stamp() {
+        if lane.locked_grid() == self.grid.stamp() {
             SyncStatusSnapshot::Locked {
                 applied,
                 phase_error_frames,

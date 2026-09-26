@@ -18,4 +18,4 @@ pub use control::PlayerControl;
 pub use flow::SelectTransition;
 pub use player_impl::PlayerImpl;
 pub use protocol::{Player, PlayerControlSource};
-pub use view::PlaybackView;
+pub use view::{PlaybackView, ResidentLoadObservation, ResidentRender, ResidentStaging};

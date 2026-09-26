@@ -2,28 +2,29 @@ use kithara_platform::sync::{Arc, Mutex};
 use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
-    BeatGridState, PresentationFrontier, SessionAxis, WarpMapRevision, WarpPlan,
+    Beat, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
+    BeatGridState, MapPoint, MapPosition, PresentationFrontier, SessionAxis, WarpMapRevision,
+    WarpPlan,
 };
 use num_traits::ToPrimitive;
 
 use super::{
     Accept,
     modes::{
-        Group, attach_group, group_in, nested, rate, sync_at, synced_deck, tempo_at,
-        transport_unavailable,
+        Group, anchor_at_rate, attach_group, group_in, nested, owning_deck_with_parent, parent_id,
+        parent_stamp, parent_update, rate, sync_at, synced_deck, tempo_at, transport_unavailable,
     },
     preparation::{
-        asset_grid, asset_segments_from, attach_grid, cue, prepare, prepare_in, replace_grid,
-        window,
+        asset_grid, asset_segments_from, attach_grid, building, cue, four_four, observed, prepare,
+        prepare_in, replace_grid, window,
     },
     refresh::{pending_members, prepared},
 };
 use crate::{
-    AlignmentSource, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncEffect, SyncError,
-    SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncIntent, SyncMember, SyncMemberKind,
-    SyncMode, SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt, SyncStatusSnapshot,
-    SyncTransition, TopologyOperation, TopologyRevision, TopologyStamp,
+    AlignmentSource, LoadGeneration, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncEffect,
+    SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncIntent, SyncMember,
+    SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt,
+    SyncStatusSnapshot, SyncTransition, TopologyOperation, TopologyRevision, TopologyStamp,
 };
 
 /// A deck at 120 BPM holding one track grid.
@@ -221,6 +222,588 @@ fn transition(admission: SyncAdmission) -> SyncTransition {
         SyncAdmission::StateChanged { transition, .. } => transition,
         admission => panic!("expected a state change, got {admission:?}"),
     }
+}
+
+/// An accepted first Host entry that the executor has not claimed yet.
+fn pending_public_entry() -> (Group, BeatGridId, SyncPreparation) {
+    let (mut group, track, _) = owning_deck_with_parent();
+    let deck = group.id();
+    let admission = transact(
+        &mut group,
+        sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)),
+    );
+    let transition = transition(admission);
+    let [entry] = transition.issued() else {
+        panic!("the public ON issues one first entry");
+    };
+    (group, track, entry.clone())
+}
+
+fn raw_successor(group: &mut Group, track: BeatGridId) -> SyncPreparation {
+    let admission = prepare(group, track, cue(0), 0);
+    let SyncAdmission::Prepared(preparation) = admission else {
+        panic!("raw Prepare replaces the first entry: {admission:?}");
+    };
+    preparation
+}
+
+#[kithara::test]
+fn a_raw_replacement_rejection_restores_the_prior_manual_mode() {
+    let (mut group, track, first) = pending_public_entry();
+    let successor = raw_successor(&mut group, track);
+    assert_ne!(first.stamp().operation(), successor.stamp().operation());
+    assert_eq!(
+        group.before_entry.map(|(operation, _)| operation),
+        Some(successor.stamp().operation()),
+        "same-load replacement inherits the first entry's custody"
+    );
+
+    let status = acknowledge(
+        &mut group,
+        SyncReceipt::Rejected {
+            stamp: successor.stamp(),
+            reason: SyncExecutionReject::Capacity,
+        },
+    );
+    assert_eq!(group.mode(), SyncMode::Off);
+    assert!(matches!(status, SyncStatusSnapshot::Off { .. }));
+    assert!(group.before_entry.is_none());
+}
+
+#[kithara::test]
+fn an_uncovered_raw_replacement_keeps_the_first_public_entry_addressable() {
+    let (mut group, track, _) = owning_deck_with_parent();
+    replace_grid(
+        &mut group,
+        building(
+            track,
+            asset_segments_from(480_000, 240_000, 24_000, 0, observed(four_four())),
+        ),
+    );
+    let deck = group.id();
+    let admission = transact(
+        &mut group,
+        sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)),
+    );
+    let transition = transition(admission);
+    let [first] = transition.issued() else {
+        panic!("one first entry within published coverage");
+    };
+    let next_operation = group.next_operation;
+
+    let error = prepare_in(&mut group, track, cue(360_000), window(0, 440_000))
+        .expect_err("a waiting replacement cannot orphan an accepted first entry");
+    assert!(matches!(error, SyncError::GridCoverageUnavailable { .. }));
+    assert_eq!(group.mode(), SyncMode::HostSync);
+    assert_eq!(group.next_operation, next_operation);
+    assert_eq!(
+        group.before_entry.map(|(operation, _)| operation),
+        Some(first.stamp().operation())
+    );
+    assert!(matches!(
+        group.status(),
+        SyncStatusSnapshot::Prepared { .. }
+    ));
+}
+
+#[kithara::test]
+fn a_new_load_or_transport_cannot_inherit_unclaimed_entry_custody() {
+    let (mut group, track, first) = pending_public_entry();
+    let next_operation = group.next_operation;
+    let changed_load = LoadGeneration::first().checked_next().expect("load");
+    let changed_transport = TransportRevision::first()
+        .checked_next()
+        .expect("transport");
+    for (load, transport) in [
+        (changed_load, TransportRevision::first()),
+        (LoadGeneration::first(), changed_transport),
+    ] {
+        let rejected = group
+            .transact(SyncOperation::Prepare {
+                target: track,
+                load,
+                transport,
+                source: cue(0),
+                window: window(0, 96_000),
+            })
+            .expect_err("a different source identity needs a new public decision");
+        assert!(matches!(
+            rejected.error(),
+            SyncError::EntryIdentityMismatch { .. }
+        ));
+        assert_eq!(group.next_operation, next_operation);
+        assert_eq!(
+            group.before_entry.map(|(operation, _)| operation),
+            Some(first.stamp().operation())
+        );
+        assert!(matches!(
+            group.status(),
+            SyncStatusSnapshot::Prepared { .. }
+        ));
+    }
+    let deck = group.id();
+    let rejected = group
+        .transact(SyncOperation::Sync {
+            target: deck,
+            load: first.stamp().load(),
+            transport: changed_transport,
+            source: cue(0),
+            activation: SessionFrame::new(4_096),
+            intent: SyncIntent::AlignNow,
+        })
+        .expect_err("public AlignNow also refuses an obsolete transport identity");
+    assert!(matches!(
+        rejected.error(),
+        SyncError::EntryIdentityMismatch { .. }
+    ));
+    assert_eq!(group.next_operation, next_operation);
+    assert_eq!(group.mode(), SyncMode::HostSync);
+}
+
+#[kithara::test]
+fn a_raw_replacement_presentation_ends_first_entry_custody() {
+    let (mut group, track, first) = pending_public_entry();
+    let successor = raw_successor(&mut group, track);
+    assert_ne!(first.stamp().operation(), successor.stamp().operation());
+    let status = sound(&mut group, &successor);
+    assert!(matches!(status, SyncStatusSnapshot::Locked { .. }));
+    assert!(group.before_entry.is_none());
+
+    let deck = group.id();
+    let admission = transact(
+        &mut group,
+        SyncOperation::Sync {
+            target: deck,
+            load: successor.stamp().load(),
+            transport: successor.stamp().transport(),
+            source: AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .warp_map(map(&successor))
+                    .source(source_at(plan(&successor), 48_000))
+                    .output(SessionFrame::new(48_000))
+                    .build(),
+                speed: 1.0,
+            },
+            activation: SessionFrame::new(48_000),
+            intent: SyncIntent::Disable,
+        },
+    );
+    assert!(matches!(admission, SyncAdmission::StateChanged { .. }));
+    assert_eq!(group.mode(), SyncMode::LocalSync);
+    assert!(
+        group.applied_of(track).is_some(),
+        "the presented map is sounding"
+    );
+}
+
+#[kithara::test]
+fn local_off_before_a_mapped_host_claim_keeps_the_old_local_audio() {
+    let (mut group, track) = deck_with_track();
+    group
+        .accept_parent(parent_update(
+            parent_stamp(parent_id(), 1),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("Host geometry");
+    let old = launched(&mut group, track, 0);
+    let _ = sound(&mut group, &old);
+    let playing = source_at(plan(&old), 48_000);
+    let local_tempo = group.tempo();
+    let deck = group.id();
+    let admission = transact(
+        &mut group,
+        SyncOperation::Sync {
+            target: deck,
+            load: old.stamp().load(),
+            transport: old.stamp().transport(),
+            source: AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .warp_map(map(&old))
+                    .source(playing)
+                    .output(SessionFrame::new(48_000))
+                    .build(),
+                speed: 1.0,
+            },
+            activation: SessionFrame::new(50_048),
+            intent: SyncIntent::Enable,
+        },
+    );
+    let host_transition = transition(admission);
+    let [host] = host_transition.issued() else {
+        panic!("one mapped Host entry");
+    };
+
+    let disabled = transact(
+        &mut group,
+        sync_at(deck, SyncIntent::Disable, SessionFrame::new(52_000)),
+    );
+    let transition = transition(disabled);
+    assert_eq!(transition.withdrawn(), [host.stamp()]);
+    assert_eq!(group.mode(), SyncMode::LocalSync);
+    assert_eq!(group.tempo(), local_tempo);
+    assert_eq!(
+        group.applied_of(track).map(|lane| lane.map()),
+        Some(map(&old))
+    );
+    assert!(group.before_entry.is_none());
+    let [local] = transition.issued() else {
+        panic!("the still-sounding local map gets one local successor");
+    };
+    assert_ne!(local.stamp().operation(), host.stamp().operation());
+    let status = sound(&mut group, local);
+    assert!(matches!(status, SyncStatusSnapshot::Locked { .. }));
+}
+
+#[kithara::test]
+fn rejecting_a_mapped_host_entry_keeps_the_exact_prior_local_lock() {
+    let (mut group, track) = deck_with_track();
+    group
+        .accept_parent(parent_update(
+            parent_stamp(parent_id(), 1),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("Host geometry");
+    let old = launched(&mut group, track, 0);
+    let _ = sound(&mut group, &old);
+    let deck = group.id();
+    let admission = transact(
+        &mut group,
+        SyncOperation::Sync {
+            target: deck,
+            load: old.stamp().load(),
+            transport: old.stamp().transport(),
+            source: AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .warp_map(map(&old))
+                    .source(source_at(plan(&old), 48_000))
+                    .output(SessionFrame::new(48_000))
+                    .build(),
+                speed: 1.0,
+            },
+            activation: SessionFrame::new(50_048),
+            intent: SyncIntent::Enable,
+        },
+    );
+    let host_transition = transition(admission);
+    let [entry] = host_transition.issued() else {
+        panic!("one mapped Host entry");
+    };
+    let status = acknowledge(
+        &mut group,
+        SyncReceipt::Rejected {
+            stamp: entry.stamp(),
+            reason: SyncExecutionReject::Capacity,
+        },
+    );
+    assert_eq!(group.mode(), SyncMode::LocalSync);
+    assert_eq!(
+        group.applied_of(track).map(|lane| lane.map()),
+        Some(map(&old))
+    );
+    assert!(matches!(
+        status,
+        SyncStatusSnapshot::Locked { applied, .. } if applied.stamp() == old.stamp()
+    ));
+    assert!(group.pending.is_empty());
+    let retarget = transition(commit_tempo(&mut group));
+    let [local] = retarget.issued() else {
+        panic!("a genuinely new Local tempo issues a new map");
+    };
+    let status = acknowledge(
+        &mut group,
+        SyncReceipt::Rejected {
+            stamp: local.stamp(),
+            reason: SyncExecutionReject::Capacity,
+        },
+    );
+    assert!(matches!(
+        status,
+        SyncStatusSnapshot::Converging { applied, .. } if applied.stamp() == old.stamp()
+    ));
+}
+
+#[kithara::test]
+fn parent_retarget_preserves_a_mapped_public_entry_new_transport() {
+    let (mut group, track) = deck_with_track();
+    let parent = parent_id();
+    group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 1),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("first Host segment");
+    let old = launched(&mut group, track, 0);
+    let _ = sound(&mut group, &old);
+    let transport = old
+        .stamp()
+        .transport()
+        .checked_next()
+        .expect("new transport");
+    let deck = group.id();
+    let admission = transact(
+        &mut group,
+        SyncOperation::Sync {
+            target: deck,
+            load: old.stamp().load(),
+            transport,
+            source: AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .warp_map(map(&old))
+                    .source(source_at(plan(&old), 48_000))
+                    .output(SessionFrame::new(48_000))
+                    .build(),
+                speed: 1.0,
+            },
+            activation: SessionFrame::new(50_048),
+            intent: SyncIntent::Enable,
+        },
+    );
+    let transition = transition(admission);
+    let [entry] = transition.issued() else {
+        panic!("one mapped Host entry");
+    };
+    assert_eq!(entry.stamp().transport(), transport);
+    let SyncEffect::Projection {
+        alignment: chosen, ..
+    } = entry.effect()
+    else {
+        panic!("mapped ON has a musical alignment");
+    };
+    assert!(entry.activation().1 >= SessionFrame::new(50_048));
+
+    let refreshed = group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 2),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("Host retarget carries the pending entry");
+    let [successor] = refreshed.issued() else {
+        panic!("one reprojected Host entry");
+    };
+    assert_eq!(successor.stamp().operation(), entry.stamp().operation());
+    assert_eq!(successor.stamp().load(), entry.stamp().load());
+    assert_eq!(successor.stamp().transport(), transport);
+    assert_eq!(successor.activation().1, entry.activation().1);
+    let SyncEffect::Projection {
+        alignment: carried, ..
+    } = successor.effect()
+    else {
+        panic!("the pending ON keeps its musical alignment");
+    };
+    assert_eq!(carried.source().value(), chosen.source().value());
+    assert_eq!(carried.target().value(), chosen.target().value());
+}
+
+#[kithara::test]
+fn parent_revision_keeps_same_mode_align_now_inside_its_requested_window() {
+    let (mut group, track) = deck_with_track();
+    let deck = group.id();
+    let parent = parent_id();
+    group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 1),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("first Host segment");
+    let local = launched(&mut group, track, 0);
+    let _ = sound(&mut group, &local);
+    let enable = transact(
+        &mut group,
+        SyncOperation::Sync {
+            target: deck,
+            load: local.stamp().load(),
+            transport: local.stamp().transport(),
+            source: AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .warp_map(map(&local))
+                    .source(source_at(plan(&local), 48_000))
+                    .output(SessionFrame::new(48_000))
+                    .build(),
+                speed: 1.0,
+            },
+            activation: SessionFrame::new(50_048),
+            intent: SyncIntent::Enable,
+        },
+    );
+    let enabled = transition(enable);
+    let [host] = enabled.issued() else {
+        panic!("one Host entry");
+    };
+    let _ = sound(&mut group, host);
+    assert_eq!(group.mode(), SyncMode::HostSync);
+    assert!(group.before_entry.is_none());
+
+    let frontier = plan(host).activation();
+    let align = transact(
+        &mut group,
+        SyncOperation::Sync {
+            target: deck,
+            load: host.stamp().load(),
+            transport: host.stamp().transport(),
+            source: AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .warp_map(map(host))
+                    .source(frontier.source())
+                    .output(frontier.output())
+                    .build(),
+                speed: 1.0,
+            },
+            activation: SessionFrame::new(100_048),
+            intent: SyncIntent::AlignNow,
+        },
+    );
+    let aligned = transition(align);
+    let [entry] = aligned.issued() else {
+        panic!("one explicit realignment");
+    };
+    let SyncEffect::Projection {
+        alignment: chosen, ..
+    } = entry.effect()
+    else {
+        panic!("AlignNow projects a musical target");
+    };
+    assert!(entry.activation().1 >= SessionFrame::new(100_048));
+
+    let refreshed = group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 2),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("benign parent revision carries AlignNow");
+    let [successor] = refreshed.issued() else {
+        panic!("one carried realignment");
+    };
+    assert_eq!(successor.stamp().operation(), entry.stamp().operation());
+    assert_eq!(successor.activation().1, entry.activation().1);
+    let SyncEffect::Projection {
+        alignment: carried, ..
+    } = successor.effect()
+    else {
+        panic!("the same-mode alignment is preserved");
+    };
+    assert_eq!(carried.source().value(), chosen.source().value());
+    assert_eq!(carried.target().value(), chosen.target().value());
+
+    let shifted = group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 3),
+            anchor_at_rate(0.1, 48_000),
+        ))
+        .expect("a missed AlignNow window cannot veto the parent tempo");
+    assert!(
+        shifted
+            .withdrawn()
+            .iter()
+            .any(|old| old.operation() == successor.stamp().operation()),
+        "the missed explicit alignment is terminally withdrawn"
+    );
+    let [retarget] = shifted.issued() else {
+        panic!("the still-sounding lane follows the new Host tempo");
+    };
+    assert_ne!(retarget.stamp().operation(), successor.stamp().operation());
+    assert_eq!(group.mode(), SyncMode::HostSync);
+}
+
+#[kithara::test]
+fn mapped_reenable_uses_actual_frontier_phase_through_a_tempo_ramp() {
+    let (mut group, track) = deck_with_track();
+    let deck = group.id();
+    let _ = transact(
+        &mut group,
+        SyncOperation::Tempo {
+            target: deck,
+            tempo: kithara_warp::BeatsPerMinute::try_from(119.0).expect("tempo"),
+            commit: SessionFrame::new(0),
+            smoothing: 1.0,
+        },
+    );
+    group
+        .accept_parent(parent_update(
+            parent_stamp(parent_id(), 1),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("Host segment");
+    let old = launched(&mut group, track, 0);
+    let previous = plan(&old).activation();
+    assert_eq!(previous.output(), SessionFrame::new(0));
+    let actual_source = previous.source() + 200;
+    let actual = PresentationFrontier::builder()
+        .warp_map(map(&old))
+        .source(actual_source)
+        .output(previous.output())
+        .build();
+    let _ = acknowledge(&mut group, SyncReceipt::Installed(old.stamp()));
+    let _ = acknowledge(&mut group, SyncReceipt::Armed(old.stamp()));
+    let status = acknowledge(
+        &mut group,
+        SyncReceipt::Presented(
+            SyncApplied::builder()
+                .stamp(old.stamp())
+                .frontier(actual)
+                .build(),
+        ),
+    );
+    assert!(matches!(
+        status,
+        SyncStatusSnapshot::Locked { phase_error_frames, .. } if phase_error_frames > 199.0
+    ));
+    let BeatGridQuery::Resolved(expected) = plan(&old).source_at(SessionFrame::new(24_000)) else {
+        panic!("old ramp covers the Host boundary");
+    };
+    assert!(f64::from(expected) < 24_000.0);
+    assert!(f64::from(expected) + 200.0 > 24_000.0);
+    let BeatGridQuery::Resolved(speed) = plan(&old).rate_at(previous.output()) else {
+        panic!("old ramp has a starting rate");
+    };
+
+    let admission = transact(
+        &mut group,
+        SyncOperation::Sync {
+            target: deck,
+            load: old.stamp().load(),
+            transport: old.stamp().transport(),
+            source: AlignmentSource::Audible {
+                frontier: actual,
+                speed,
+            },
+            activation: SessionFrame::new(20_000),
+            intent: SyncIntent::Enable,
+        },
+    );
+    let transition = transition(admission);
+    let [entry] = transition.issued() else {
+        panic!("one mapped Host entry");
+    };
+    let SyncEffect::Projection { alignment, .. } = entry.effect() else {
+        panic!("mapped ON projects the new phase");
+    };
+    assert_eq!(entry.activation().1, SessionFrame::new(24_000));
+    assert_eq!(f64::from(*alignment.source().value()), 2.0);
+    assert_eq!(f64::from(*alignment.target().value()), 1.0);
+
+    let slower = group
+        .accept_parent(parent_update(
+            parent_stamp(parent_id(), 2),
+            anchor_at_rate(0.9, 48_000),
+        ))
+        .expect("a changed Host tempo replans the mapped source");
+    let [replanned] = slower.issued() else {
+        panic!("one phase-correct mapped entry");
+    };
+    let live_source = source_at(plan(&old), i64::from(replanned.activation().1)) + 200;
+    assert!(
+        plan(entry).activation().source() < live_source,
+        "the old fixed source beat would replay at the delayed boundary"
+    );
+    assert!(
+        plan(replanned).activation().source() >= live_source,
+        "the changed-tempo boundary cannot replay source behind the old lane"
+    );
+    let SyncEffect::Projection { alignment, .. } = replanned.effect() else {
+        panic!("the mapped entry remains a projection");
+    };
+    assert_eq!(f64::from(*alignment.source().value()).fract(), 0.0);
+    assert_eq!(f64::from(*alignment.target().value()).fract(), 0.0);
 }
 
 #[kithara::test]
@@ -617,6 +1200,40 @@ fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
 }
 
 #[kithara::test]
+fn a_sounding_tempo_retarget_waits_for_the_next_owner_beat_after_preparation_lead() {
+    let (mut group, track) = deck_with_track();
+    let old = launched(&mut group, track, 0);
+    let _ = sound(&mut group, &old);
+
+    let _ = commit_tempo(&mut group);
+    let next = prepared(&group, track);
+    let activation = plan(&next).activation().output();
+    let earliest = SessionFrame::new(98_048);
+    assert!(
+        activation >= earliest,
+        "the replacement has 2048 frames of lead"
+    );
+
+    let grid = group.snapshot();
+    let BeatGridQuery::Resolved(under) =
+        grid.beat_at(MapPoint::new(grid.stamp(), MapPosition::Session(earliest)))
+    else {
+        panic!("the successor covers the preparation boundary");
+    };
+    let whole = Beat::new(f64::from(*under.value().value()).ceil()).expect("finite whole beat");
+    let BeatGridQuery::Resolved(position) = grid.position_at(MapPoint::new(grid.stamp(), whole))
+    else {
+        panic!("the successor covers its next beat");
+    };
+    assert_eq!(*position.value().value(), MapPosition::Session(activation));
+    assert_eq!(
+        plan(&next).activation().source(),
+        source_at(plan(&old), i64::from(activation)),
+        "the old recording reaches the same source frame at the handoff"
+    );
+}
+
+#[kithara::test]
 fn a_rejected_retarget_returns_the_member_to_its_applied_map() {
     let (mut group, track) = deck_with_track();
     let preparation = launched(&mut group, track, 0);
@@ -681,8 +1298,12 @@ fn a_tempo_commit_retargets_only_the_member_holding_no_prepared_map() {
         };
         assert_eq!(*replaces, Some(map(applied)));
         assert!(next.activation().revision() > map(applied));
-        assert_eq!(next.activation().output(), SessionFrame::new(96_000));
-        assert_eq!(next.activation().source(), source_at(plan(applied), 96_000));
+        let activation = next.activation().output();
+        assert!(activation >= SessionFrame::new(98_048));
+        assert_eq!(
+            next.activation().source(),
+            source_at(plan(applied), i64::from(activation))
+        );
     }
     let carried = prepared(&group, tracks[2]);
     assert_eq!(carried.stamp().operation(), silent.stamp().operation());
@@ -1019,9 +1640,29 @@ fn installed_free_receipt_is_consumed_once() {
     );
 
     let id = group.id();
+    group
+        .accept_parent(parent_update(
+            parent_stamp(parent_id(), 1),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("the replacement needs a live Host grid");
     let _ = transact(
         &mut group,
-        sync_at(id, SyncIntent::Enable, SessionFrame::new(96_000)),
+        SyncOperation::Sync {
+            target: id,
+            load: preparation.stamp().load(),
+            transport: preparation.stamp().transport(),
+            source: AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .source(source_at(plan(&preparation), 96_000))
+                    .output(SessionFrame::new(96_000))
+                    .warp_map(map(&preparation))
+                    .build(),
+                speed: 1.0,
+            },
+            activation: SessionFrame::new(96_000),
+            intent: SyncIntent::Enable,
+        },
     );
     let released = free_at(&mut group, 120_000);
 

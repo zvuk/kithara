@@ -7,6 +7,7 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use kithara_sync::LoadGeneration;
 use kithara_warp::WarpConfig;
 use tracing::{debug, warn};
 
@@ -16,7 +17,7 @@ use super::{
     state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid},
 };
 use crate::{
-    api::{PlayerEvent, PlayerStatus, TrackId},
+    api::{CrossfadeSettings, PlayerEvent, PlayerStatus, TrackId},
     bridge::PlayerCmd,
     engine::EngineImpl,
     error::PlayError,
@@ -25,7 +26,7 @@ use crate::{
     worker::{EngineLoad, PlayWorker},
 };
 
-type EnqueuedItem = (TrackId, Arc<str>, f64);
+type EnqueuedItem = (TrackId, LoadGeneration, Arc<str>, f64);
 
 /// Decoded frames a load of `duration_seconds` covers on a `rate` axis.
 ///
@@ -66,6 +67,8 @@ pub(crate) struct PlayerCore<S> {
     pub(crate) params: PlayerParams,
     /// Executor of the preparations the player's group issues for its track.
     pub(crate) staging: SyncStaging,
+    /// Last load accepted by this player's slot, across stops and reloads.
+    pub(crate) last_load: Mutex<Option<LoadGeneration>>,
     /// Geometry this player publishes for the track it holds.
     pub(crate) track_grid: TrackGrid,
     pub(crate) warp: WarpConfig,
@@ -117,10 +120,23 @@ impl<S> PlayerRuntime<S> {
     pub(crate) fn enqueue_to_processor(
         &self,
         index: usize,
+        transition: Option<CrossfadeSettings>,
     ) -> Result<Option<EnqueuedItem>, PlayError>
     where
         S: HasPool<f32>,
     {
+        if !self.core.items.has_resource(index) {
+            return Ok(None);
+        }
+        let slot = self.slot().ok_or(PlayError::NoActiveSlot)?;
+        let command = self.core.engine.reserve_slot_load(slot, transition)?;
+        let mut last_load = self.core.last_load.lock();
+        let load = (*last_load)
+            .map_or_else(
+                || Some(LoadGeneration::first()),
+                LoadGeneration::checked_next,
+            )
+            .ok_or_else(|| PlayError::Internal("load generation exhausted".into()))?;
         let Some(item) = self.core.items.take_for_load(
             index,
             self.core.engine.master_sample_rate(),
@@ -130,8 +146,13 @@ impl<S> PlayerRuntime<S> {
         else {
             return Ok(None);
         };
+        let src = Arc::clone(item.player_resource.src());
+        command.send(item.item_id, load, Box::new(item.player_resource));
+        *last_load = Some(load);
+        drop(last_load);
+
         self.phase.lock().set_abr_handle(item.abr_handle);
-        self.core.staging.load(item.item_id, item.staging);
+        self.core.staging.load((item.item_id, load), item.staging);
         let rate = self.core.engine.master_sample_rate();
         if let Some(sample_rate) = NonZeroU32::new(rate) {
             self.core.track_grid.load(
@@ -140,12 +161,7 @@ impl<S> PlayerRuntime<S> {
                 track_frames(item.duration_seconds, rate),
             );
         }
-        let src = Arc::clone(item.player_resource.src());
-        let _ = self.send_to_slot(PlayerCmd::LoadTrack {
-            item_id: item.item_id,
-            resource: Box::new(item.player_resource),
-        });
-        Ok(Some((item.item_id, src, item.duration_seconds)))
+        Ok(Some((item.item_id, load, src, item.duration_seconds)))
     }
 
     /// Terminal teardown: close the player and cancel its subtree.

@@ -5,7 +5,7 @@ use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::Arc;
 
-use super::{PlayerRuntime, SelectTransition};
+use super::{PlayerRuntime, ResidentLoadObservation, SelectTransition};
 use crate::{
     EngineLoadSnapshot, EqBandConfig, InterruptionKind, PlayError, PlaybackSnapshot, PlayerStatus,
     Resource, ResourceConfig, SelectionPlayback, SessionDuckingMode, bridge::RtMetricsSnapshot,
@@ -107,6 +107,15 @@ where
     /// Drain pending player notifications.
     pub fn process_notifications(&self) {
         self.command(PlayerRuntime::process_notifications);
+    }
+
+    /// Observe the load selected for this deck and its exact render context.
+    ///
+    /// # Errors
+    /// Returns `Closed` when the owning player has closed.
+    pub fn resident_sync_observation(&self) -> Result<Option<ResidentLoadObservation>, PlayError> {
+        self.runtime
+            .with_open(PlayerRuntime::resident_sync_observation)
     }
 
     /// Remove every queued player resource.

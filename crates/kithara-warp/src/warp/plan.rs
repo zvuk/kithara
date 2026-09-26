@@ -55,6 +55,12 @@ impl WarpPlan {
         to self.map {
             /// Absolute source endpoint on the map's session axis.
             pub fn source_at(&self, output: SessionFrame) -> BeatGridQuery<AssetFrame>;
+            /// Tempo of the target trajectory frozen in this applied plan.
+            pub fn target_tempo_at(&self, output: SessionFrame) -> BeatGridQuery<crate::BeatsPerMinute>;
+            /// Beat of the target trajectory frozen in this applied plan.
+            pub fn target_beat_at(&self, output: SessionFrame) -> BeatGridQuery<crate::BeatEstimate<crate::MapPoint<crate::Beat>>>;
+            /// Meter carried by a beat on the plan's frozen target grid.
+            pub fn target_meter_at(&self, beat: crate::MapPoint<crate::Beat>) -> BeatGridQuery<crate::BeatEstimate<crate::Meter>>;
             /// Source frames per session output frame, including sample rates.
             pub fn rate_at(&self, output: SessionFrame) -> BeatGridQuery<f64>;
             /// Source axis carried by this immutable map.

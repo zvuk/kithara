@@ -1,4 +1,5 @@
 use kithara_platform::sync::Arc;
+use kithara_sync::LoadGeneration;
 
 #[cfg(test)]
 use super::super::PlayerImpl;
@@ -41,6 +42,7 @@ pub(crate) struct PendingNext {
     pub(crate) src: Arc<str>,
     pub(crate) state: PendingNextState,
     pub(crate) item_id: TrackId,
+    pub(crate) load: LoadGeneration,
     pub(crate) duration_seconds: f64,
     pub(crate) index: usize,
 }
@@ -72,16 +74,19 @@ pub(crate) enum PlayerPhase {
     Idle,
     Loading {
         slot: SlotId,
+        resident: Option<(TrackId, LoadGeneration)>,
         abr_handle: Option<kithara_abr::AbrHandle>,
         pending: Option<PendingNext>,
     },
     Playing {
         slot: SlotId,
+        resident: Option<(TrackId, LoadGeneration)>,
         abr_handle: Option<kithara_abr::AbrHandle>,
         pending: Option<PendingNext>,
     },
     Paused {
         slot: SlotId,
+        resident: Option<(TrackId, LoadGeneration)>,
         abr_handle: Option<kithara_abr::AbrHandle>,
         pending: Option<PendingNext>,
     },
@@ -117,27 +122,31 @@ impl PlayerPhase {
     }
 
     pub(crate) fn enter_loading_with_slot(&mut self, slot: SlotId) {
-        let (abr_handle, pending) = match std::mem::replace(self, Self::Idle) {
+        let (resident, abr_handle, pending) = match std::mem::replace(self, Self::Idle) {
             Self::Loading {
+                resident,
                 abr_handle,
                 pending,
                 ..
             }
             | Self::Playing {
+                resident,
                 abr_handle,
                 pending,
                 ..
             }
             | Self::Paused {
+                resident,
                 abr_handle,
                 pending,
                 ..
-            } => (abr_handle, pending),
-            Self::Stopped { abr_handle, .. } => (abr_handle, None),
-            Self::Idle => (None, None),
+            } => (resident, abr_handle, pending),
+            Self::Stopped { abr_handle, .. } => (None, abr_handle, None),
+            Self::Idle => (None, None, None),
         };
         *self = Self::Loading {
             slot,
+            resident,
             abr_handle,
             pending,
         };
@@ -147,20 +156,24 @@ impl PlayerPhase {
         *self = match std::mem::replace(self, Self::Idle) {
             Self::Loading {
                 slot,
+                resident,
                 abr_handle,
                 pending,
             }
             | Self::Playing {
                 slot,
+                resident,
                 abr_handle,
                 pending,
             }
             | Self::Paused {
                 slot,
+                resident,
                 abr_handle,
                 pending,
             } => Self::Paused {
                 slot,
+                resident,
                 abr_handle,
                 pending,
             },
@@ -169,6 +182,7 @@ impl PlayerPhase {
                 abr_handle,
             } => Self::Paused {
                 slot,
+                resident: None,
                 abr_handle,
                 pending: None,
             },
@@ -180,20 +194,24 @@ impl PlayerPhase {
         *self = match std::mem::replace(self, Self::Idle) {
             Self::Loading {
                 slot,
+                resident,
                 abr_handle,
                 pending,
             }
             | Self::Playing {
                 slot,
+                resident,
                 abr_handle,
                 pending,
             }
             | Self::Paused {
                 slot,
+                resident,
                 abr_handle,
                 pending,
             } => Self::Playing {
                 slot,
+                resident,
                 abr_handle,
                 pending,
             },
@@ -202,6 +220,7 @@ impl PlayerPhase {
                 abr_handle,
             } => Self::Playing {
                 slot,
+                resident: None,
                 abr_handle,
                 pending: None,
             },
@@ -218,6 +237,25 @@ impl PlayerPhase {
 
     const fn is_paused(&self) -> bool {
         matches!(self, Self::Paused { .. })
+    }
+
+    /// The load selected for this deck's output, independent of the queue cursor.
+    pub(crate) const fn resident(&self) -> Option<(TrackId, LoadGeneration)> {
+        match self {
+            Self::Loading { resident, .. }
+            | Self::Playing { resident, .. }
+            | Self::Paused { resident, .. } => *resident,
+            Self::Idle | Self::Stopped { .. } => None,
+        }
+    }
+
+    pub(crate) fn set_resident(&mut self, load: (TrackId, LoadGeneration)) {
+        match self {
+            Self::Loading { resident, .. }
+            | Self::Playing { resident, .. }
+            | Self::Paused { resident, .. } => *resident = Some(load),
+            Self::Idle | Self::Stopped { .. } => {}
+        }
     }
 
     /// Shared read access to the armed-next slot, if any.
@@ -366,6 +404,7 @@ mod tests {
         assert_eq!(
             PlayerPhase::Loading {
                 slot,
+                resident: None,
                 abr_handle: None,
                 pending: None,
             }
@@ -375,6 +414,7 @@ mod tests {
         assert_eq!(
             PlayerPhase::Playing {
                 slot,
+                resident: None,
                 abr_handle: None,
                 pending: None,
             }
@@ -384,6 +424,7 @@ mod tests {
         assert_eq!(
             PlayerPhase::Paused {
                 slot,
+                resident: None,
                 abr_handle: None,
                 pending: None,
             }

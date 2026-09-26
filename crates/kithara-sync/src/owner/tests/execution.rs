@@ -7,19 +7,20 @@ use kithara_platform::{
         sync::{mpsc, oneshot},
     },
 };
-use kithara_signal::TransportRevision;
+use kithara_signal::{SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
-use kithara_warp::{BeatGridId, WarpPlan};
+use kithara_warp::{BeatGrid, BeatGridId, BeatGridQuery, PresentationFrontier, WarpPlan};
 
 use super::{
     TestGrid, TestGroup,
-    modes::{Group, rate, synced_deck},
+    modes::{Group, anchor_at_rate, parent_id, parent_stamp, parent_update, rate, synced_deck},
     preparation::{asset_grid, attach_grid, cue, window},
 };
 use crate::{
-    ExecutedGroup, LoadGeneration, ReceiptSink, StagePort, SyncAdmission, SyncAttachment,
-    SyncCapability, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncExecutor, SyncGroup,
-    SyncOperation, SyncReceipt,
+    AlignmentSource, ExecutedGroup, LoadGeneration, ParentFact, ReceiptSink, StagePort,
+    SyncAdmission, SyncApplied, SyncAttachment, SyncCapability, SyncEffect, SyncError,
+    SyncExecutionReject, SyncExecutionStamp, SyncExecutor, SyncGroup, SyncIntent, SyncOperation,
+    SyncReceipt,
 };
 
 /// The first session frame no caller can use.
@@ -230,11 +231,29 @@ async fn a_staged_preparation_needs_an_owner_and_a_stageable_load() {
             .error()
             .clone()
     };
+    let refused_sync = |executor: &SyncExecutor<Port>| {
+        let deck = deck_holding(track);
+        let target = deck.id();
+        ExecutedGroup::new(deck, executor.execution())
+            .transact(SyncOperation::Sync {
+                target,
+                load: LoadGeneration::first(),
+                transport: TransportRevision::first(),
+                source: cue(24_000),
+                activation: SessionFrame::new(0),
+                intent: SyncIntent::Enable,
+            })
+            .expect_err("the executor refuses public Enable")
+            .error()
+            .clone()
+    };
 
     let orphan = SyncExecutor::<Port>::new(track, None, CancelToken::root());
     assert_eq!(refused(&orphan), SyncError::OwnerUnavailable);
+    assert_eq!(refused_sync(&orphan), SyncError::OwnerUnavailable);
     let detached = SyncExecutor::<Port>::new(track, Some(Arc::new(unbound)), CancelToken::root());
     assert_eq!(refused(&detached), SyncError::OwnerUnavailable);
+    assert_eq!(refused_sync(&detached), SyncError::OwnerUnavailable);
 
     let (heard, _) = mpsc::unbounded_channel();
     let owner = Owner {
@@ -250,6 +269,136 @@ async fn a_staged_preparation_needs_an_owner_and_a_stageable_load() {
         SyncError::CapabilityUnavailable {
             capability: SyncCapability::Alignment,
         }
+    );
+    assert_eq!(
+        refused_sync(&unstageable),
+        SyncError::CapabilityUnavailable {
+            capability: SyncCapability::Alignment,
+        }
+    );
+}
+
+#[kithara::test(tokio)]
+async fn mapped_public_reenable_stages_a_replacement_after_a_tempo_ramp() {
+    let mut fixture = Fixture::new(Answer::Record, None);
+    let deck = fixture.group.id();
+    let _ = fixture
+        .group
+        .transact(SyncOperation::Tempo {
+            target: deck,
+            tempo: kithara_warp::BeatsPerMinute::try_from(180.0).expect("tempo"),
+            commit: SessionFrame::new(0),
+            smoothing: 1.0,
+        })
+        .expect("a one-second local ramp is admitted");
+    let initial = fixture
+        .group
+        .transact(cue_at(fixture.track, 0))
+        .expect("initial local map is prepared");
+    let SyncAdmission::Prepared(initial) = initial else {
+        panic!("one initial projection: {initial:?}");
+    };
+    let _ = fixture.staged.recv().await.expect("initial lane stages");
+    assert_eq!(
+        fixture.next_receipt().await,
+        SyncReceipt::Installed(initial.stamp())
+    );
+    let _ = fixture
+        .group
+        .acknowledge(SyncReceipt::Installed(initial.stamp()))
+        .expect("owner installs the initial lane");
+    let _ = fixture
+        .group
+        .acknowledge(SyncReceipt::Armed(initial.stamp()))
+        .expect("initial lane is claimed");
+    let SyncEffect::Projection { plan: old, .. } = initial.effect() else {
+        panic!("initial decision must be a projection");
+    };
+    let previous = old.activation();
+    let _ = fixture
+        .group
+        .acknowledge(SyncReceipt::Presented(
+            SyncApplied::builder()
+                .stamp(initial.stamp())
+                .frontier(
+                    PresentationFrontier::builder()
+                        .warp_map(previous.revision())
+                        .source(previous.source())
+                        .output(previous.output())
+                        .build(),
+                )
+                .build(),
+        ))
+        .expect("the ramped local map is sounding");
+    let parent = parent_id();
+    let staged = fixture
+        .group
+        .stage_fact(ParentFact::Segment(parent_update(
+            parent_stamp(parent, 1),
+            anchor_at_rate(2.0, 48_000),
+        )))
+        .expect("parent is staged");
+    let _ = fixture.group.apply_staged(staged);
+    let BeatGridQuery::Resolved(rate) = old.rate_at(previous.output()) else {
+        panic!("the sounding ramp has a rate");
+    };
+    let admission = fixture
+        .group
+        .transact(SyncOperation::Sync {
+            target: deck,
+            load: initial.stamp().load(),
+            transport: initial.stamp().transport(),
+            source: AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .warp_map(previous.revision())
+                    .source(previous.source())
+                    .output(previous.output())
+                    .build(),
+                speed: rate,
+            },
+            activation: SessionFrame::new(96_000),
+            intent: SyncIntent::Enable,
+        })
+        .expect("mapped public ON is admitted");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("mapped public ON issues a replacement: {admission:?}");
+    };
+    let [replacement] = transition.issued() else {
+        panic!("one replacement");
+    };
+    let SyncEffect::Projection {
+        alignment,
+        replaces: Some(map),
+        ..
+    } = replacement.effect()
+    else {
+        panic!("the mapped ON must project over its sounding map");
+    };
+    assert_eq!(*map, previous.revision());
+    let activation = replacement.activation().1;
+    let BeatGridQuery::Resolved(future_source) = old.source_at(activation) else {
+        panic!("the old ramp covers the replacement boundary");
+    };
+    let true_next_beat = (f64::from(future_source) / 24_000.0).ceil();
+    let scalar_source = previous.source() as f64
+        + (i64::from(activation) - i64::from(previous.output())) as f64 * rate;
+    let scalar_next_beat = (scalar_source / 24_000.0).ceil();
+    assert_ne!(
+        true_next_beat, scalar_next_beat,
+        "the active ramp must distinguish source_at from scalar extrapolation"
+    );
+    assert_eq!(f64::from(*alignment.source().value()), true_next_beat);
+    assert_eq!(f64::from(*alignment.target().value()), 4.0);
+    let _ = kithara_platform::time::timeout(
+        kithara_platform::time::Duration::from_secs(2),
+        fixture.staged.recv(),
+    )
+    .await
+    .expect("the mapped replacement reaches its staging port")
+    .expect("the staging port stays open");
+    assert_eq!(
+        fixture.next_receipt().await,
+        SyncReceipt::Installed(replacement.stamp())
     );
 }
 

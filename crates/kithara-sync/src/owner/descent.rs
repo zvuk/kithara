@@ -5,7 +5,7 @@ use super::{
     lifecycle::Applied,
     preparation::{Pending, Refreshed, transition},
     state::{GroupState, Withdrawal, validate_successor},
-    timeline::Timeline,
+    timeline::{PriorTimeline, Timeline},
     transaction::take_operation,
 };
 use crate::{
@@ -48,11 +48,12 @@ impl Parent {
 pub(super) struct Staged {
     pub(super) grid: BeatGridSnapshot,
     timeline: Timeline,
+    pub(super) before_entry: Option<(SyncOperationId, PriorTimeline)>,
     parent: Option<Parent>,
     pub(super) pending: Vec<Pending>,
-    applied: Vec<Applied>,
-    next_map: Option<WarpMapRevision>,
-    next_operation: Option<SyncOperationId>,
+    pub(super) applied: Vec<Applied>,
+    pub(super) next_map: Option<WarpMapRevision>,
+    pub(super) next_operation: Option<SyncOperationId>,
     children: Vec<SyncStaged>,
 }
 
@@ -244,16 +245,56 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 .collect::<Result<_, _>>()?,
             None => Vec::new(),
         };
-        Ok(Staged {
+        let mut staged = Staged {
             grid,
             timeline,
+            before_entry: self.before_entry,
             parent,
             pending,
             applied,
             next_map,
             next_operation,
             children,
-        })
+        };
+        if let Some((operation, prior)) = self.before_entry
+            && matches!(staged.timeline, Timeline::Host)
+            && staged.grid.axis() == self.grid.axis()
+            && self
+                .reconcile_before_entry(
+                    &staged.grid,
+                    staged.timeline,
+                    &staged.pending,
+                    staged.before_entry,
+                )
+                .is_none()
+            && let Some(member) = self
+                .pending
+                .iter()
+                .find(|held| held.operation() == operation)
+        {
+            // A successor Host grid pushed an unclaimed entry beyond its
+            // finite window. The accepted preparation is withdrawn and the
+            // still-sounding timeline wins this transaction.
+            let restored_grid = self.restored_entry_grid(prior)?;
+            let restored = self.refreshed(&restored_grid, prior.timeline(), takeover)?;
+            staged.grid = restored_grid;
+            staged.timeline = prior.timeline();
+            staged.pending = restored.pending;
+            if self.applied_of(member.member()).is_none() {
+                staged
+                    .pending
+                    .retain(|held| held.member() != member.member());
+            }
+            staged.applied = restored.applied;
+            for lane in &mut staged.applied {
+                lane.restore_local_lock(prior.grid(), staged.grid.stamp());
+            }
+            staged.next_map = restored.next_map;
+            staged.next_operation = restored.next_operation;
+            staged.before_entry = None;
+            staged.children.clear();
+        }
+        Ok(staged)
     }
 
     /// Commits a change staged on this unchanged subtree, and returns every
@@ -263,8 +304,15 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             return SyncTransition::default();
         };
         let mut committed = transition(&self.pending, &staged.pending);
+        let before_entry = self.reconcile_before_entry(
+            &staged.grid,
+            staged.timeline,
+            &staged.pending,
+            staged.before_entry,
+        );
         self.grid = staged.grid;
         self.timeline = staged.timeline;
+        self.before_entry = before_entry;
         self.parent = staged.parent;
         self.pending = staged.pending;
         self.applied = staged.applied;

@@ -92,6 +92,9 @@ where
         if pending.index >= self.item_count() {
             return;
         }
+        self.phase
+            .lock()
+            .set_resident((pending.item_id, pending.load));
         let index = pending.index;
         self.publish_current_track_snapshot(pending.duration_seconds);
         self.core.items.set_current(index);
@@ -182,8 +185,7 @@ where
     /// published seek revives the track (`apply_seek`), and delivering the
     /// stale end would hand the queue an `ItemDidPlayToEnd` it answers with
     /// an auto-advance out from under the accepted seek. Compared with `!=`,
-    /// not `<`: epochs wrap, and `withdraw_seek_epoch` legally steps the
-    /// published value back. `Stop` and `Failed` are never fenced — a broken
+    /// not `<`: epochs wrap. `Stop` and `Failed` are never fenced — a broken
     /// source stays broken across a seek, and a slot without playback state
     /// has nothing to outrank the end.
     fn natural_end_outranked_by_seek(
@@ -363,11 +365,13 @@ mod tests {
         };
         *pending = Some(PendingNext {
             item_id,
+            load: kithara_sync::LoadGeneration::first(),
             src: Arc::from(src),
             state: PendingNextState::ActivatedReady,
             index: 1,
             duration_seconds: 60.0,
         });
+        phase.set_resident((item_id, kithara_sync::LoadGeneration::first()));
     }
 
     fn stop_notification(

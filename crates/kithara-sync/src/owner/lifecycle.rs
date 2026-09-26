@@ -1,4 +1,4 @@
-use kithara_warp::{BeatGridId, BeatGridQuery, WarpMapRevision, WarpPlan};
+use kithara_warp::{BeatGridId, BeatGridQuery, BeatGridStamp, WarpMapRevision, WarpPlan};
 use num_traits::ToPrimitive;
 
 use super::{
@@ -23,6 +23,9 @@ pub(super) struct Applied {
     /// How far the presented source lies from the map, in output frames.
     #[field(get, copy)]
     phase_error_frames: f64,
+    /// The owner grid this unchanged presented map is proven to follow.
+    #[field(get, copy)]
+    locked_grid: BeatGridStamp,
 }
 
 /// What one receipt does to the preparation its member holds.
@@ -39,6 +42,14 @@ impl Applied {
 
     pub(super) fn map(&self) -> WarpMapRevision {
         self.plan.activation().revision()
+    }
+
+    /// A rejected first Host entry returns to the exact Local trajectory
+    /// this map already followed; only that prior stamp may be carried over.
+    pub(super) fn restore_local_lock(&mut self, prior: BeatGridStamp, restored: BeatGridStamp) {
+        if self.locked_grid == prior {
+            self.locked_grid = restored;
+        }
     }
 }
 
@@ -119,6 +130,12 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 given: expected.member(),
             });
         }
+        let restoration = match (self.before_entry, &step) {
+            (Some((held, prior)), Step::Drop) if held == operation => {
+                Some((prior, self.restored_entry_grid(prior)?))
+            }
+            _ => None,
+        };
         match step {
             Step::Phase(next) => {
                 if let Some(Pending::Prepared { phase, .. }) = self.pending.get_mut(index) {
@@ -127,12 +144,24 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             }
             Step::Drop => {
                 self.pending.remove(index);
+                if let Some((prior, grid)) = restoration {
+                    for lane in &mut self.applied {
+                        lane.restore_local_lock(prior.grid(), grid.stamp());
+                    }
+                    self.timeline = prior.timeline();
+                    self.grid = grid;
+                    self.before_entry = None;
+                    self.blocked = None;
+                }
             }
             Step::Present(applied) => {
                 let lane = presented(preparation, applied)?;
                 self.pending.remove(index);
                 self.applied.retain(|held| held.member() != member);
                 self.applied.extend(lane);
+                if self.before_entry.is_some_and(|(held, _)| held == operation) {
+                    self.before_entry = None;
+                }
             }
         }
         Ok(self.status())
@@ -181,5 +210,6 @@ fn presented(
         applied,
         plan: plan.clone(),
         phase_error_frames: (heard - f64::from(source)) / rate,
+        locked_grid: preparation.stamp().group(),
     }))
 }

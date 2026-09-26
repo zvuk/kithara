@@ -1,7 +1,10 @@
+use kithara_platform::sync::Arc;
+
 use super::WarpCursor;
 use crate::{
-    AssetFrame, BeatAlignment, BeatGridQuery, BeatGridSnapshot, BeatGridUnavailable,
-    GridProjectionError, MapAxis, MapPoint, MapPosition, SessionFrame, WarpMapRevision,
+    AssetFrame, Beat, BeatAlignment, BeatEstimate, BeatGridQuery, BeatGridSnapshot,
+    BeatGridUnavailable, BeatsPerMinute, GridProjectionError, MapAxis, MapPoint, MapPosition,
+    Meter, SessionFrame, WarpMapRevision,
 };
 
 /// One immutable session-output-to-source map revision.
@@ -9,7 +12,7 @@ use crate::{
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct WarpMap {
-    projection: Option<ProjectedMap>,
+    projection: Option<Arc<ProjectedMap>>,
     /// Immutable owner-assigned map revision.
     #[field(get, copy)]
     revision: WarpMapRevision,
@@ -19,6 +22,7 @@ pub struct WarpMap {
 struct ProjectedMap {
     grid: BeatGridSnapshot,
     source: BeatGridSnapshot,
+    target: BeatGridSnapshot,
 }
 
 impl WarpMap {
@@ -51,6 +55,44 @@ impl WarpMap {
             })
     }
 
+    /// Tempo of the immutable target trajectory actually carried by this map
+    /// at one output frame. A later owner-grid target cannot change it.
+    pub fn target_tempo_at(&self, output: SessionFrame) -> BeatGridQuery<BeatsPerMinute> {
+        let Some(projection) = &self.projection else {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
+        };
+        projection
+            .target
+            .tempo_at(MapPoint::new(
+                projection.target.stamp(),
+                MapPosition::Session(output),
+            ))
+            .and_then(|estimate| BeatGridQuery::Resolved(*estimate.value()))
+    }
+
+    /// Beat of the immutable target trajectory actually carried by this map
+    /// at one output frame. A later owner-grid revision cannot move it.
+    pub fn target_beat_at(
+        &self,
+        output: SessionFrame,
+    ) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>> {
+        let Some(projection) = &self.projection else {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
+        };
+        projection.target.beat_at(MapPoint::new(
+            projection.target.stamp(),
+            MapPosition::Session(output),
+        ))
+    }
+
+    /// Meter frozen with the target beat rather than a later owner grid.
+    pub fn target_meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>> {
+        let Some(projection) = &self.projection else {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
+        };
+        projection.target.meter_at(beat)
+    }
+
     /// The session axis of a projected map.
     #[must_use]
     pub fn output_axis(&self) -> Option<MapAxis> {
@@ -69,10 +111,14 @@ impl WarpMap {
         alignment: BeatAlignment,
         revision: WarpMapRevision,
     ) -> Result<Self, GridProjectionError> {
-        let grid = BeatGridSnapshot::projection(source.clone(), target, alignment)?;
+        let grid = BeatGridSnapshot::projection(source.clone(), target.clone(), alignment)?;
         Ok(Self {
             revision,
-            projection: Some(ProjectedMap { grid, source }),
+            projection: Some(Arc::new(ProjectedMap {
+                grid,
+                source,
+                target,
+            })),
         })
     }
 

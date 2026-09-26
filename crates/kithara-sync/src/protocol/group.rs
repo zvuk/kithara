@@ -1,4 +1,4 @@
-use kithara_signal::SessionFrame;
+use kithara_signal::{SessionFrame, TransportRevision};
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridSnapshotError, BeatGridStamp, BeatGridState, CoordinateError,
     GridProjectionError, MapAxis, MapRegion, PresentationFrontier, WarpMapRevision,
@@ -166,6 +166,10 @@ pub enum SyncError {
         first: SessionFrame,
         end: SessionFrame,
     },
+    /// Public deck sync cannot preserve an entry request whose required beat
+    /// geometry has not arrived; the caller may retry after publication.
+    #[error("beat geometry for member {member_id} is not available yet")]
+    GridCoverageUnavailable { member_id: BeatGridId },
     /// A finished grid proves the requested position or beat lies outside it.
     #[error("grid {grid_id} places nothing at the requested coordinate")]
     OutsideGrid { grid_id: BeatGridId },
@@ -199,6 +203,16 @@ pub enum SyncError {
         member_id: BeatGridId,
         expected: LoadGeneration,
         given: LoadGeneration,
+    },
+    /// A replacement of an unclaimed public entry named a different media
+    /// load or transport from the one whose prior timeline is still sounding.
+    #[error("member {member_id} changed load or transport before its first sync entry")]
+    EntryIdentityMismatch {
+        member_id: BeatGridId,
+        expected_load: LoadGeneration,
+        given_load: LoadGeneration,
+        expected_transport: TransportRevision,
+        given_transport: TransportRevision,
     },
     /// The member grid does not cover a relocation cue yet; a relocation is
     /// refused rather than left waiting, since its cue ages with the frontier.

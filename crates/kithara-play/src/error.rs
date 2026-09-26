@@ -18,6 +18,9 @@ pub enum PlayError {
     #[error("slot command channel full: {slot:?}")]
     SlotChannelFull { slot: SlotId },
 
+    #[error("slot has an active command reservation: {slot:?}")]
+    SlotBusy { slot: SlotId },
+
     #[error("item {index} has no resource (already consumed)")]
     ItemConsumed { index: usize },
 

@@ -99,6 +99,7 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             engine,
             params,
             staging,
+            last_load: Mutex::default(),
             track_grid,
             worker: config.worker,
             engine_load: Arc::new(EngineLoad::default()),

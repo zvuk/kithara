@@ -81,8 +81,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 intent,
                 activation,
                 transport,
+                load,
+                source,
                 ..
-            } => self.transact_intent(*intent, *activation, *transport),
+            } => self.transact_intent(*intent, *load, *transport, *source, *activation),
             SyncOperation::Tempo {
                 tempo,
                 commit,
@@ -226,8 +228,28 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             Ok(joins) => joins,
             Err(error) => return Err(reject(error, operations)),
         };
+        let restoration = match self.before_entry {
+            Some((operation, prior))
+                if self
+                    .pending
+                    .iter()
+                    .any(|held| held.operation() == operation && !held.armed()) =>
+            {
+                match self.restored_entry_grid(prior) {
+                    Ok(grid) => Some((prior, grid)),
+                    Err(error) => return Err(reject(error, operations)),
+                }
+            }
+            _ => None,
+        };
         apply_topology_operations(&mut self.members, operations);
         let mut transition = self.retain_current_pending();
+        if let Some((prior, grid)) = restoration {
+            self.grid = grid;
+            self.timeline = prior.timeline();
+            self.before_entry = None;
+            self.blocked = None;
+        }
         for (id, staged) in joins {
             if let Some(SyncMember::Group { group, .. }) = self
                 .members

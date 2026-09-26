@@ -1,17 +1,18 @@
 use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_warp::{
-    BeatGridQuery, BeatGridSnapshot, BeatsPerMinute, MapAxis, MapPoint, MapPosition, MapRegion,
-    MeterFacts, SessionAnchor, SessionBeat,
+    BeatGridQuery, BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute, MapAxis,
+    MapPoint, MapPosition, MapRegion, MeterFacts, SessionAnchor, SessionBeat, WarpPlan,
 };
 
 use super::{
     descent::{Parent, Takeover},
+    preparation::SyncEntry,
     state::{GroupState, Withdrawal, validate_successor},
     transaction::take_operation,
 };
 use crate::{
-    ParentFact, ParentGridUpdate, ParentWithdrawal, SyncAdmission, SyncCapability, SyncError,
-    SyncGroup, SyncIntent, SyncMode, SyncOperationId,
+    AlignmentSource, LoadGeneration, ParentFact, ParentGridUpdate, ParentWithdrawal, SyncAdmission,
+    SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMode, SyncOperationId,
 };
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
@@ -25,6 +26,14 @@ pub(super) enum Timeline {
     Local(Option<LocalTimeline>),
     /// The parent's accepted segment, recorded on the group state.
     Host,
+}
+
+/// The timeline a leaf deck still sounds through before its first Host entry
+/// is presented. An already-Host entry has no prior mode to restore.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum PriorTimeline {
+    Off(BeatGridStamp),
+    Local(Option<LocalTimeline>, BeatGridStamp),
 }
 
 /// A local tempo trajectory together with the meter it carries.
@@ -68,6 +77,14 @@ enum Committed {
 }
 
 impl Timeline {
+    const fn prior(self, grid: BeatGridStamp) -> Option<PriorTimeline> {
+        match self {
+            Self::Off => Some(PriorTimeline::Off(grid)),
+            Self::Local(local) => Some(PriorTimeline::Local(local, grid)),
+            Self::Host => None,
+        }
+    }
+
     pub(super) const fn without_geometry(mode: SyncMode) -> Self {
         match mode {
             SyncMode::Off => Self::Off,
@@ -103,21 +120,72 @@ impl Timeline {
     }
 }
 
+impl PriorTimeline {
+    pub(super) const fn timeline(self) -> Timeline {
+        match self {
+            Self::Off(_) => Timeline::Off,
+            Self::Local(local, _) => Timeline::Local(local),
+        }
+    }
+
+    pub(super) const fn grid(self) -> BeatGridStamp {
+        match self {
+            Self::Off(grid) | Self::Local(_, grid) => grid,
+        }
+    }
+}
+
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
+    /// Rebuilds the still-sounding timeline at a new monotonic grid revision
+    /// when the executor rejects an entry before its audio claim.
+    pub(super) fn restored_entry_grid(
+        &self,
+        prior: PriorTimeline,
+    ) -> Result<BeatGridSnapshot, SyncError> {
+        let (grid, withdrawal) = match prior {
+            PriorTimeline::Off(_) | PriorTimeline::Local(None, _) => {
+                (self.withdrawn_grid()?, Withdrawal::Allowed)
+            }
+            PriorTimeline::Local(Some(local), _) => {
+                let MapAxis::Session(axis) = self.grid.axis() else {
+                    return Err(SyncError::InvalidGroupGridState {
+                        state: self.grid.state(),
+                    });
+                };
+                (
+                    self.derived_grid(axis.epoch(), local.anchor, local.meter)?
+                        .0,
+                    Withdrawal::Refused,
+                )
+            }
+        };
+        validate_successor(&self.grid, &grid, withdrawal)?;
+        Ok(grid)
+    }
+
     /// Applies one mode intent addressed to this group.
     pub(super) fn transact_intent(
         &mut self,
         intent: SyncIntent,
-        activation: SessionFrame,
+        load: LoadGeneration,
         transport: TransportRevision,
+        source: AlignmentSource,
+        activation: SessionFrame,
     ) -> Result<SyncAdmission, SyncError> {
         self.reserve_operation()?;
         let effect = match intent {
             SyncIntent::Enable | SyncIntent::AlignNow => self.follow_parent(activation)?,
-            SyncIntent::Disable => self.latch(activation)?,
+            SyncIntent::Disable => self.latch(load, source, activation)?,
             SyncIntent::Free => self.leave_timeline(activation, transport)?,
         };
-        self.commit(effect)
+        let entry =
+            matches!(intent, SyncIntent::Enable | SyncIntent::AlignNow).then_some(SyncEntry {
+                load,
+                transport,
+                source,
+                activation,
+            });
+        self.commit(effect, entry)
     }
 
     /// Commits a tempo on a group that owns its timeline.
@@ -162,7 +230,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         };
         self.reserve_operation()?;
         let effect = self.local_effect(local, commit)?;
-        self.commit(effect)
+        self.commit(effect, None)
     }
 
     fn follow_parent(&self, at: SessionFrame) -> Result<ModeEffect, SyncError> {
@@ -188,16 +256,95 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
 
     /// Fixes the beat and tempo actually playing at `activation` as the
     /// group's own timeline, including mid-way through a tempo approach.
-    fn latch(&self, activation: SessionFrame) -> Result<ModeEffect, SyncError> {
+    fn latch(
+        &self,
+        load: LoadGeneration,
+        source: AlignmentSource,
+        activation: SessionFrame,
+    ) -> Result<ModeEffect, SyncError> {
         if matches!(self.timeline, Timeline::Local(_)) {
             return Ok(ModeEffect::Unchanged);
         }
-        let Some(local) = latch_at(&self.grid, activation)? else {
+        if let Some(armed) = self.pending.iter().find(|pending| pending.armed()) {
+            return Err(SyncError::ArmedOperation {
+                member_id: armed.member(),
+                operation: armed.operation(),
+            });
+        }
+        if let Some((_, prior)) = self.before_entry {
+            return match prior {
+                PriorTimeline::Local(Some(local), _) => self.local_effect(local, activation),
+                PriorTimeline::Off(_) | PriorTimeline::Local(None, _) => {
+                    let grid = self.withdrawn_grid()?;
+                    validate_successor(&self.grid, &grid, Withdrawal::Allowed)?;
+                    let descent = ParentWithdrawal::new(grid.stamp(), activation, None);
+                    Ok(ModeEffect::Changed {
+                        timeline: prior.timeline(),
+                        grid,
+                        descent: Some(ParentFact::Withdrawn(descent)),
+                        at: activation,
+                        release: None,
+                    })
+                }
+            };
+        }
+        let local = match source {
+            AlignmentSource::Audible { frontier, .. } if frontier.warp_map().is_some() => {
+                let lane = self
+                    .applied
+                    .iter()
+                    .find(|lane| Some(lane.map()) == frontier.warp_map())
+                    .ok_or_else(|| self.unmatched_applied(frontier.warp_map()))?;
+                let applied = lane.applied();
+                if applied.stamp().load() != load {
+                    return Err(SyncError::LoadMismatch {
+                        member_id: lane.member(),
+                        expected: applied.stamp().load(),
+                        given: load,
+                    });
+                }
+                if frontier.output() < applied.frontier().output() || frontier.output() > activation
+                {
+                    return Err(SyncError::PresentationMismatch {
+                        operation: applied.stamp().operation(),
+                        expected: Some(lane.map()),
+                        given: frontier,
+                    });
+                }
+                latch_plan_at(lane.plan(), activation)?
+            }
+            // An empty group owns only a logical timeline; it has no audio
+            // member whose unplayed accepted grid could be mistaken for sound.
+            _ if self.members.is_empty() => latch_at(&self.grid, activation)?,
+            _ if matches!(self.grid.state(), BeatGridState::Unavailable(_)) => None,
+            AlignmentSource::Audible { frontier, .. } => {
+                return Err(self.unmatched_applied(frontier.warp_map()));
+            }
+            AlignmentSource::Prepared(_) | AlignmentSource::Cued(_) => {
+                return Err(SyncError::CapabilityUnavailable {
+                    capability: SyncCapability::Alignment,
+                });
+            }
+        };
+        let Some(local) = local else {
             return Ok(ModeEffect::Deferred {
                 required: MapRegion::point(MapPosition::Session(activation)),
             });
         };
         self.local_effect(local, activation)
+    }
+
+    fn unmatched_applied(&self, given: Option<kithara_warp::WarpMapRevision>) -> SyncError {
+        let [lane] = self.applied.as_slice() else {
+            return SyncError::CapabilityUnavailable {
+                capability: SyncCapability::Alignment,
+            };
+        };
+        SyncError::AudibleMapMismatch {
+            member_id: lane.member(),
+            expected: Some(lane.map()),
+            given,
+        }
     }
 
     fn leave_timeline(
@@ -240,7 +387,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             release: None,
         })
     }
+}
 
+impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// The next grid revision following `anchor`, and the segment it hands
     /// every direct child group.
     pub(super) fn derived_grid(
@@ -274,7 +423,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     ///
     /// The operation itself takes the first identity; retargets and handoffs
     /// its staging mints take the ones after it.
-    fn commit(&mut self, effect: ModeEffect) -> Result<SyncAdmission, SyncError> {
+    fn commit(
+        &mut self,
+        effect: ModeEffect,
+        entry: Option<SyncEntry>,
+    ) -> Result<SyncAdmission, SyncError> {
         let mut next_operation = self.next_operation;
         let operation = take_operation(self.grid.id(), &mut next_operation)?;
         let (effect, staged) = match effect {
@@ -290,12 +443,67 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     next_operation,
                 };
                 let mut staged = self.stage(grid, timeline, self.parent, descent, takeover)?;
+                if let Some((_, prior)) = self.before_entry
+                    && timeline == prior.timeline()
+                {
+                    for lane in &mut staged.applied {
+                        lane.restore_local_lock(prior.grid(), staged.grid.stamp());
+                    }
+                }
+                if !matches!(timeline, Timeline::Host)
+                    && let Some((held, _)) = self.before_entry
+                    && let Some(member) = self
+                        .pending
+                        .iter()
+                        .find(|pending| pending.operation() == held)
+                    && self.applied_of(member.member()).is_none()
+                {
+                    staged
+                        .pending
+                        .retain(|pending| pending.member() != member.member());
+                }
                 if let Some(transport) = release {
                     staged.pending = self.handoffs(&staged.grid, operation, transport, at)?;
                 }
+                if let Some(entry) = entry {
+                    if let Some(issued) = self.stage_sync_entry(&mut staged, entry)? {
+                        staged.before_entry = self
+                            .before_entry
+                            .map(|(_, prior)| (issued, prior))
+                            .or_else(|| {
+                                self.timeline
+                                    .prior(self.grid.stamp())
+                                    .map(|prior| (issued, prior))
+                            });
+                    }
+                } else if !matches!(timeline, Timeline::Host) {
+                    staged.before_entry = None;
+                }
                 (Committed::Changed(timeline), Some(staged))
             }
-            ModeEffect::Unchanged => (Committed::Unchanged, None),
+            ModeEffect::Unchanged => {
+                if let Some(entry) = entry {
+                    let takeover = Takeover {
+                        commit: None,
+                        next_operation,
+                    };
+                    let mut staged = self.stage(
+                        self.grid.clone(),
+                        self.timeline,
+                        self.parent,
+                        None,
+                        takeover,
+                    )?;
+                    if let Some(issued) = self.stage_sync_entry(&mut staged, entry)? {
+                        staged.before_entry = self.before_entry.map(|(_, prior)| (issued, prior));
+                        (Committed::Changed(self.timeline), Some(staged))
+                    } else {
+                        (Committed::Unchanged, None)
+                    }
+                } else {
+                    (Committed::Unchanged, None)
+                }
+            }
             ModeEffect::Deferred { required } => (Committed::Deferred(required), None),
         };
         let topology = self.topology_stamp();
@@ -363,6 +571,34 @@ fn latch_at(
         frame,
         SessionBeat::new(f64::from(*beat.value().value()))?,
         f64::from(*tempo.value()) / SECONDS_PER_MINUTE,
+        axis.sample_rate(),
+    )?;
+    Ok(Some(LocalTimeline { anchor, meter }))
+}
+
+/// Reads only the immutable target trajectory whose map the executor has
+/// already presented. A newer accepted group grid may not have sounded yet.
+fn latch_plan_at(plan: &WarpPlan, frame: SessionFrame) -> Result<Option<LocalTimeline>, SyncError> {
+    let Some(MapAxis::Session(axis)) = plan.output_axis() else {
+        return Ok(None);
+    };
+    let (BeatGridQuery::Resolved(beat), BeatGridQuery::Resolved(tempo)) =
+        (plan.target_beat_at(frame), plan.target_tempo_at(frame))
+    else {
+        return Ok(None);
+    };
+    let meter = match plan.target_meter_at(*beat.value()) {
+        BeatGridQuery::Resolved(meter) => Some(MeterFacts::new(
+            *meter.value(),
+            meter.evidence(),
+            meter.uncertainty(),
+        )),
+        _ => None,
+    };
+    let anchor = SessionAnchor::new(
+        frame,
+        SessionBeat::new(f64::from(*beat.value().value()))?,
+        f64::from(tempo) / SECONDS_PER_MINUTE,
         axis.sample_rate(),
     )?;
     Ok(Some(LocalTimeline { anchor, meter }))

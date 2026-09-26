@@ -1,7 +1,10 @@
 use delegate::delegate;
 use kithara_events::{EventBus, EventReceiver, EventSet};
 
-use super::super::core::PlayerRuntime;
+use super::super::{
+    core::PlayerRuntime,
+    view::{ResidentLoadObservation, ResidentRender, ResidentStaging},
+};
 use crate::{
     EngineLoadSnapshot, PlayWorker,
     api::PlayerStatus,
@@ -10,6 +13,36 @@ use crate::{
 };
 
 impl<S> PlayerRuntime<S> {
+    /// The committed deck load and render evidence bound to that exact load.
+    pub(crate) fn resident_sync_observation(&self) -> Option<ResidentLoadObservation> {
+        let phase = self.phase.lock();
+        let slot = phase.slot()?;
+        let (item_id, load) = phase.resident()?;
+        drop(phase);
+
+        let render = match self.core.engine.slot_render_binding(slot, item_id) {
+            Some((bound_load, _)) if bound_load != load => ResidentRender::Stale { bound_load },
+            Some((_, Some(snapshot))) => ResidentRender::Snapshot(snapshot),
+            Some((_, None)) | None => ResidentRender::Missing,
+        };
+        let staging = match self.core.staging.stageable_media() {
+            Some((staged_id, staged_load)) if (staged_id, staged_load) == (item_id, load) => {
+                ResidentStaging::Available
+            }
+            Some((staged_id, staged_load)) => ResidentStaging::DifferentLoad {
+                item_id: staged_id,
+                load: staged_load,
+            },
+            None => ResidentStaging::Unavailable,
+        };
+        Some(ResidentLoadObservation {
+            item_id,
+            load,
+            render,
+            staging,
+        })
+    }
+
     /// ABR handle of the currently loaded item, if any.
     ///
     /// Reads the stash populated by `enqueue_to_processor` — stays valid for

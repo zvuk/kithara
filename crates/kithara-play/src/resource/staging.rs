@@ -8,7 +8,7 @@ use kithara_platform::{
     sync::Arc,
     tokio::runtime::Handle,
 };
-use kithara_sync::{StagePort, SyncExecutionReject};
+use kithara_sync::{LoadGeneration, StagePort, SyncExecutionReject};
 use kithara_warp::{WarpPlan, supports_playback_rate};
 use kithara_worker::TaskError;
 use tracing::warn;
@@ -102,7 +102,7 @@ impl StagingRecipe {
 }
 
 impl StagePort for StagingRecipe {
-    type Media = TrackId;
+    type Media = (TrackId, LoadGeneration);
     type Lane = StagedLane;
 
     fn runtime(&self) -> &Handle {

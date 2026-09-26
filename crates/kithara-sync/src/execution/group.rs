@@ -102,9 +102,8 @@ impl<G: SyncGroup> SyncGroup for ExecutedGroup<G> {
         if let Err(error) = self.execution.admit(&operation) {
             return Err(SyncRejected::new(error, operation));
         }
-        let relocation = matches!(operation, SyncOperation::Relocate { .. });
         let admission = self.group.transact(operation)?;
-        self.execution.follow_admission(&admission, relocation);
+        self.execution.follow_admission(&admission);
         Ok(admission)
     }
 

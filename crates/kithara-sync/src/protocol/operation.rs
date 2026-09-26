@@ -221,6 +221,8 @@ pub enum SyncCapability {
     Transport,
     /// Grid-to-grid tempo and phase alignment.
     Alignment,
+    /// Leaving a mapped lane for an unsynchronized manual source.
+    Free,
 }
 
 /// Result of validating and admitting one operation on the control plane.
@@ -250,7 +252,7 @@ pub enum SyncAdmission {
     },
     /// One member's decision is prepared for one exact render boundary.
     Prepared(SyncPreparation),
-    /// The group's mode or beat timeline changed.
+    /// The group's mode, beat timeline, or direct member preparation changed.
     StateChanged {
         /// Identity of the admitted operation.
         operation: SyncOperationId,

@@ -47,7 +47,7 @@ pub use kithara_net::Headers;
 pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, StretchControls};
 pub use player::{
     DEFAULT_CROSSFADE_DURATION, DEFAULT_PLAYING_RATE, PlayerConfig, PlayerConfigPatch, PlayerImpl,
-    SelectTransition,
+    ResidentLoadObservation, ResidentRender, ResidentStaging, SelectTransition,
 };
 pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, MAX_ARTIFACT_BYTES,

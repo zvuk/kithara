@@ -39,6 +39,35 @@ pub(super) struct Placement {
     pub(super) activation: SessionFrame,
 }
 
+/// The first admissible beat or proven bar must fit in this finite musical
+/// window. One complete owner bar plus one beat after `start` also covers a
+/// member-supplied meter when the owner has no meter of its own.
+pub(super) fn entry_window(
+    owner: &BeatGridSnapshot,
+    member: &BeatGridSnapshot,
+    source: AlignmentSource,
+    start: SessionFrame,
+) -> Result<Range<SessionFrame>, Missing> {
+    let heard = match source {
+        AlignmentSource::Prepared(cue) | AlignmentSource::Cued(cue) => MapPosition::Asset(cue),
+        AlignmentSource::Audible { frontier, .. } => {
+            MapPosition::Asset(asset_frame(member, frontier.source())?)
+        }
+    };
+    let member_beat = whole_beat(member, member_beat_at_or_next(member, heard)?)?;
+    let member_meter = bar_of(member, member_beat, heard)?;
+    let at = MapPosition::Session(start);
+    let owner_beat = owner_beat_at(owner, at)?;
+    let owner_meter = owner_bar(owner, owner_beat, member_meter, at)?;
+    let last = Beat::new(f64::from(owner_beat) + bar_length(owner_meter) + 1.0)
+        .map_err(|_| outside(owner))?;
+    let end = session_frame(owner, last, at)?;
+    if end <= start {
+        return Err(outside(owner).into());
+    }
+    Ok(start..end)
+}
+
 /// Places `member` on the first admissible `owner` beat inside `window`.
 ///
 /// A member whose grid proves its bars enters on a downbeat in its own bar
@@ -51,6 +80,29 @@ pub(super) fn place(
     member: &BeatGridSnapshot,
     source: AlignmentSource,
     window: &Range<SessionFrame>,
+) -> Result<Placement, Missing> {
+    place_with_previous(owner, member, source, window, None)
+}
+
+/// Re-enters the parent's beat phase from a mapped audible lane. The previous
+/// plan, rather than a scalar rate, gives the source actually playing at the
+/// future activation through a tempo ramp.
+pub(super) fn place_mapped(
+    owner: &BeatGridSnapshot,
+    member: &BeatGridSnapshot,
+    source: AlignmentSource,
+    window: &Range<SessionFrame>,
+    previous: &WarpPlan,
+) -> Result<Placement, Missing> {
+    place_with_previous(owner, member, source, window, Some(previous))
+}
+
+fn place_with_previous(
+    owner: &BeatGridSnapshot,
+    member: &BeatGridSnapshot,
+    source: AlignmentSource,
+    window: &Range<SessionFrame>,
+    previous: Option<&WarpPlan>,
 ) -> Result<Placement, Missing> {
     let (owner_beat, member_beat) = match source {
         AlignmentSource::Prepared(cue) => {
@@ -90,7 +142,10 @@ pub(super) fn place(
             let owner_meter = owner_bar(owner, under, member_meter, at)?;
             let owner_beat = first_boundary(owner, under, lower, owner_meter, 0.0)?;
             let activation = session_frame(owner, owner_beat, at)?;
-            let live = live_source(owner, member, frontier, speed, activation)?;
+            let live = match previous {
+                Some(plan) => mapped_live_source(member, frontier, plan, activation)?,
+                None => live_source(owner, member, frontier, speed, activation)?,
+            };
             let live = MapPosition::Asset(live);
             let live_beat = whole_beat(member, member_beat_at_or_next(member, live)?)?;
             let owner_phase = bar_phase(owner_beat, owner_meter).ok_or_else(|| outside(owner))?;
@@ -207,6 +262,27 @@ pub(super) fn continue_on(
         ),
         activation,
     })
+}
+
+/// Gives a sounding replacement its preparation lead and selects the next
+/// owner beat without changing the source motion of its applied map.
+pub(super) fn retarget_boundary(
+    owner: &BeatGridSnapshot,
+    commit: SessionFrame,
+    frontier: SessionFrame,
+) -> Result<SessionFrame, Missing> {
+    let earliest = i64::from(commit.max(frontier))
+        .checked_add(2_048)
+        .map(SessionFrame::new)
+        .ok_or_else(|| Missing::Refused(outside(owner)))?;
+    let at = MapPosition::Session(earliest);
+    let under = owner_beat_at(owner, at)?;
+    let beat = first_boundary(owner, under, earliest, None, 0.0)?;
+    let activation = session_frame(owner, beat, at)?;
+    if activation < earliest {
+        return Err(Missing::Refused(outside(owner)));
+    }
+    Ok(activation)
 }
 
 /// Freezes `placement` as map revision `revision` and its activation plan.
@@ -361,6 +437,29 @@ fn live_source(
         .map(|source| source + (span * speed * ratio).ceil())
         .ok_or_else(|| Missing::Refused(outside(member)))?;
     AssetFrame::new(advanced).map_err(|_| Missing::Refused(outside(member)))
+}
+
+/// Carries the actual presented source through the applied map's integrated
+/// motion, including both a tempo ramp and any measured presentation offset.
+fn mapped_live_source(
+    member: &BeatGridSnapshot,
+    frontier: PresentationFrontier,
+    plan: &WarpPlan,
+    activation: SessionFrame,
+) -> Result<AssetFrame, Missing> {
+    let at_frontier = resolve(
+        member,
+        plan.source_at(frontier.output()),
+        MapPosition::Session(frontier.output()),
+    )?;
+    let at_activation = resolve(
+        member,
+        plan.source_at(activation),
+        MapPosition::Session(activation),
+    )?;
+    let actual = asset_frame(member, frontier.source())?;
+    AssetFrame::new(f64::from(actual) + f64::from(at_activation) - f64::from(at_frontier))
+        .map_err(|_| Missing::Refused(outside(member)))
 }
 
 fn whole_beat(grid: &BeatGridSnapshot, beat: Beat) -> Result<Beat, Missing> {

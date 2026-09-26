@@ -3,22 +3,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PoolRegion;
 use kithara_effects::eq::EqBandConfig;
-use kithara_events::{EventBus, EventReceiver, EventSet};
+use kithara_events::{EventBus, EventReceiver, EventSet, TrackId};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 use kithara_signal::FaderValue;
+use kithara_sync::LoadGeneration;
 use kithara_warp::RenderSnapshot;
 use portable_atomic::AtomicF32;
-use ringbuf::traits::{Consumer, Producer};
+use ringbuf::traits::Consumer;
 use tracing::{debug, info};
 
 use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SessionDuckingMode, SlotId},
-    bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SlotControl},
+    bridge::{PlaybackShared, PlayerNotification, SlotControl},
     error::PlayError,
     rt::StreamShape,
     session::{RegisteredPlayer, SessionBinding, SessionHandle, SessionSampleRate},
@@ -36,7 +36,7 @@ pub struct EngineImpl<S> {
     pub(super) bus: EventBus,
     pub(super) eq_layout: Mutex<Vec<EqBandConfig>>,
     pub(super) registration: Mutex<Option<RegisteredPlayer>>,
-    slots: Mutex<SlotTable>,
+    pub(super) slots: Mutex<SlotTable>,
     #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
     #[field(get, vis = "pub(crate)")]
@@ -71,6 +71,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
+        let _start = self.start_lock.lock();
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
         }
@@ -98,14 +99,6 @@ impl<S> EngineImpl<S> {
         self.session.bind(binding)
     }
 
-    pub(crate) fn begin_slot_seek(&self, slot: SlotId, position: Duration) {
-        let slots = self.slots.lock();
-        if let Some(handle) = slots.get(slot) {
-            handle.begin_seek(position);
-        }
-        drop(slots);
-    }
-
     pub(crate) fn cancel(&self) {
         if let Some(cancel) = &self.config.cancel {
             cancel.cancel();
@@ -128,7 +121,14 @@ impl<S> EngineImpl<S> {
         };
 
         if self.running.load(Ordering::Acquire) {
-            self.session.stop_player(player_id)?;
+            self.slots
+                .lock()
+                .begin_close_all()
+                .map_err(|slot| PlayError::SlotBusy { slot })?;
+            if let Err(error) = self.session.stop_player(player_id) {
+                self.slots.lock().abort_close_all();
+                return Err(error);
+            }
             self.slots.lock().clear();
             self.running.store(false, Ordering::Release);
             self.emit(EngineEvent::Stopped);
@@ -232,17 +232,22 @@ impl<S> EngineImpl<S> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
         }
-
-        {
-            let slots = self.slots.lock();
-            if !slots.contains(slot) {
-                return Err(PlayError::SlotNotFound(slot));
-            }
-        }
-
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
-        self.session.release_slot(player_id, slot)?;
-
+        {
+            let mut slots = self.slots.lock();
+            let entry = slots.entry_mut(slot).ok_or(PlayError::SlotNotFound(slot))?;
+            if entry.reserved_cmds != 0 || entry.closing {
+                return Err(PlayError::SlotBusy { slot });
+            }
+            entry.closing = true;
+            drop(slots);
+        }
+        if let Err(error) = self.session.release_slot(player_id, slot) {
+            if let Some(entry) = self.slots.lock().entry_mut(slot) {
+                entry.closing = false;
+            }
+            return Err(error);
+        }
         let _ = self.slots.lock().remove(slot);
 
         debug!(?slot, player_id, "slot released");
@@ -250,40 +255,6 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
-    /// A resource crossing to the audio thread leaves its seek handle here, since seeking takes
-    /// locks. Bindings apply only once the command is accepted; the resource releases when it
-    /// returns as trash.
-    pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
-        let mut slots = self.slots.lock();
-        let result = match slots.get_mut(slot) {
-            Some(handle) => {
-                let bindings = match &cmd {
-                    PlayerCmd::LoadTrack { resource, item_id } => {
-                        Some((*item_id, resource.seek_handle(), resource.render_reader()))
-                    }
-                    _ => None,
-                };
-                let result = handle
-                    .cmd_tx
-                    .try_push(cmd)
-                    .map_err(|_| PlayError::SlotChannelFull { slot });
-                if result.is_ok()
-                    && let Some((item_id, seek, render)) = bindings
-                {
-                    if let Some(seek) = seek {
-                        handle.bind_seek(item_id, seek);
-                    }
-                    if let Some(render) = render {
-                        handle.bind_render(item_id, render);
-                    }
-                }
-                result
-            }
-            None => Err(PlayError::SlotNotFound(slot)),
-        };
-        drop(slots);
-        result
-    }
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session.set_player_eq_gain(player_id, band, gain_db)
@@ -341,12 +312,20 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn stop(&self) -> Result<(), PlayError> {
+        let _start = self.start_lock.lock();
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
         }
 
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
-        self.session.stop_player(player_id)?;
+        self.slots
+            .lock()
+            .begin_close_all()
+            .map_err(|slot| PlayError::SlotBusy { slot })?;
+        if let Err(error) = self.session.stop_player(player_id) {
+            self.slots.lock().abort_close_all();
+            return Err(error);
+        }
 
         self.slots.lock().clear();
 
@@ -394,6 +373,12 @@ impl<S> EngineImpl<S> {
             pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
             #[call(render_snapshot)]
             pub(crate) fn slot_render_snapshot(&self, slot: SlotId) -> Option<RenderSnapshot>;
+            #[call(render_binding)]
+            pub(crate) fn slot_render_binding(
+                &self,
+                slot: SlotId,
+                item_id: TrackId,
+            ) -> Option<(LoadGeneration, Option<RenderSnapshot>)>;
         }
     }
 }
